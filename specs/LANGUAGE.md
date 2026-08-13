@@ -3971,10 +3971,18 @@ counter with the program's own, and the two collided: a program's
 `new Runnable() { … }` stopped converting to the interface it plainly
 implements. The compatibility-page manifest caught that within a run.
 
-One narrowness remains: an inline LAMBDA argument to `andThen` is untyped,
-because three different interfaces declare that name with different parameter
-types and the lambda pass keys its target lookup on the method NAME alone. A
-named argument or a method reference works, which is the common form.
+The lambda pass keyed its argument target-typing on the method NAME alone, so
+three interfaces declaring `andThen` with different parameter types disagreed
+and left an inline lambda untyped. It now asks a (class, method) map first,
+using the receiver's declared type — which also makes every other same-name,
+different-signature pair resolvable.
+
+What is still erased is the lambda's own PARAMETER type through a combinator:
+`f.andThen(n -> n + 1)` on a `Function<String, Integer>` sees `n` as `Object`,
+because the bundled interface's SAM takes `Object` and nothing propagates the
+receiver's `R` into it. `f.andThen(g)` with a declared `g` works, as does a
+method reference. This is the same family as the element erasing after
+`map` — recovering it means threading type arguments through the lambda pass.
 
 ### An interface has no initializer block (2026-08-13)
 

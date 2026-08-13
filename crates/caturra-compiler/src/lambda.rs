@@ -37,6 +37,7 @@ pub fn desugar_lambdas(
     let sams = functional_interfaces(units);
     // Signatures for single-candidate method-argument target typing.
     let methods = method_signatures(units);
+    let methods_in_class = method_signatures_by_class(units);
     // Constructor signatures per class, for `new T(…, lambda)` target typing.
     let constructors = constructor_signatures(units);
     let static_methods = static_method_names(units);
@@ -90,6 +91,7 @@ pub fn desugar_lambdas(
                 let mut ctx = Ctx {
                     sams: &sams,
                     methods: &methods,
+                    methods_in_class: &methods_in_class,
                     constructors: &constructors,
                     static_methods: &static_methods,
                     class_names: &class_names,
@@ -115,6 +117,7 @@ pub fn desugar_lambdas(
                     let mut ctx = Ctx {
                         sams: &sams,
                         methods: &methods,
+                        methods_in_class: &methods_in_class,
                         constructors: &constructors,
                         static_methods: &static_methods,
                         class_names: &class_names,
@@ -146,6 +149,10 @@ pub fn desugar_lambdas(
 struct Ctx<'a> {
     sams: &'a HashMap<String, Sam>,
     methods: &'a HashMap<String, Vec<Vec<TypeRef>>>,
+    /// The same, keyed by (class, method), for when the receiver's class is
+    /// known — the name-only map cannot separate two interfaces that declare
+    /// one method name with different parameter types.
+    methods_in_class: &'a HashMap<(String, String), Vec<Vec<TypeRef>>>,
     /// Class name -> its constructors' parameter-type lists, for target
     /// typing a lambda passed to `new T(…)`.
     constructors: &'a HashMap<String, Vec<Vec<TypeRef>>>,
@@ -404,6 +411,69 @@ fn constructor_signatures(
                     out.entry(class.name.clone())
                         .or_default()
                         .push(method.params.iter().map(|p| p.ty.clone()).collect());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The same signatures, keyed by (class, method). The name-only map cannot
+/// tell `__UnaryOperator.andThen` from `__Consumer.andThen` — three interfaces
+/// declare that name with different parameter types, so they disagree and the
+/// argument goes untyped. When the receiver's class is known, ask this first.
+/// The class a call's receiver denotes, when that is knowable from its
+/// declared type — a local, or `this`. Library and computed receivers stay
+/// unknown and fall back to the name-only lookup.
+fn receiver_class_name(receiver: &Expr, ctx: &Ctx) -> Option<String> {
+    let Expr::Name { path, .. } = receiver else {
+        return None;
+    };
+    if path.len() != 1 {
+        return None;
+    }
+    let declared = ctx.lookup(&path[0])?;
+    let base = match &declared {
+        TypeRef::Named(name) => name.clone(),
+        TypeRef::Generic { base, .. } => base.clone(),
+        _ => return None,
+    };
+    let simple = simple_base(&base).to_owned();
+    Some(functional_erased_name(&simple).unwrap_or(simple))
+}
+
+/// The bundled interface a `java.util.function` name aliases, mirroring
+/// codegen's own mapping.
+fn functional_erased_name(simple: &str) -> Option<String> {
+    Some(String::from(match simple {
+        "Comparator" => "__Comparator",
+        "Function" | "UnaryOperator" => "__UnaryOperator",
+        "BiFunction" | "BinaryOperator" => "__BiFunction",
+        "Predicate" => "__Predicate",
+        "Consumer" => "__Consumer",
+        "BiConsumer" => "__BiConsumer",
+        "Supplier" => "__Supplier",
+        "Runnable" => "__Runnable",
+        _ => return None,
+    }))
+}
+
+fn method_signatures_by_class(
+    units: &[(String, CompilationUnit)],
+) -> HashMap<(String, String), Vec<Vec<TypeRef>>> {
+    let mut out: HashMap<(String, String), Vec<Vec<TypeRef>>> = HashMap::new();
+    for (_, unit) in units {
+        for class in &unit.classes {
+            for method in &class.methods {
+                if method.is_constructor {
+                    continue;
+                }
+                let sig: Vec<TypeRef> = method.params.iter().map(|p| p.ty.clone()).collect();
+                let entry = out
+                    .entry((class.name.clone(), method.name.clone()))
+                    .or_default();
+                if !entry.contains(&sig) {
+                    entry.push(sig);
                 }
             }
         }
@@ -1131,7 +1201,13 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // it was previously out of reach, because this insisted the method
             // be declared exactly once. Overloads that disagree at a position
             // leave it untyped, as before.
-            let param_types = ctx.methods.get(method).and_then(|sigs| {
+            let owner = receiver
+                .as_deref()
+                .and_then(|r| receiver_class_name(r, ctx));
+            let sigs_for_call = owner
+                .and_then(|class| ctx.methods_in_class.get(&(class, method.clone())))
+                .or_else(|| ctx.methods.get(method));
+            let param_types = sigs_for_call.and_then(|sigs| {
                 let mut matching = sigs.iter().filter(|params| params.len() == args.len());
                 let first = matching.next()?;
                 matching

@@ -25151,6 +25151,13 @@ public class Combinators {
         Consumer<String> second = s -> System.out.println("|" + s);
         first.andThen(second).accept("x");
 
+        // An INLINE lambda argument: the target now comes from the receiver's
+        // class, so `andThen` declared on three different interfaces no longer
+        // leaves it untyped.
+        first.andThen(s -> System.out.println("/" + s)).accept("y");
+        System.out.println(shout.compose((String s) -> s + "?").apply("b"));
+        System.out.println(empty.and(s -> true).test(""));
+
         BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;
         Function<Integer, Integer> twice = n -> n * 2;
         System.out.println(add.andThen(twice).apply(1, 2));
