@@ -3843,6 +3843,31 @@ clean — evaluation order including `a[i++] = i++` and compound-assignment
 targets evaluated once, and shadowing including a private method not being
 overridden.
 
+### `Math`'s transcendentals are FDLIBM's, not the platform's (2026-08-13)
+
+A program that prints `Math.atan2(y, x)` prints every digit, so these have to
+agree with a JDK 11 bit for bit. Java's are FDLIBM-derived; Rust's are the
+platform libm, and the two differ in the last ulp often enough to matter.
+
+**Measured over 17 100 calls** (19 functions × 900 pseudo-random inputs):
+
+| function | wrong | | function | wrong |
+|---|---|---|---|---|
+| `atan2` | 25.2% | | `asin` | 4.8% |
+| `hypot` | 12.4% → **0** | | `log10` | 3.8% |
+| `cosh` | 8.8% | | `exp` | 0.3% |
+| `cbrt` | 8.3% → **0** | | `sin`, `pow` | 0.2% |
+| `acos` | 8.1% | | `tan`, `atan` | 0.1% |
+
+Exact already, and now pinned so they cannot drift: `sqrt`, `cos`, `log`,
+`log1p`, `expm1`, `sinh`, `tanh`.
+
+`cbrt` and `hypot` are FDLIBM ports, transcribed with the algorithm's own
+variable names so the transcription can be checked against the original, and
+each verified to **0 divergences** on the 900-input corpus. The remaining
+functions are the same kind of work — each is a self-contained, individually
+verifiable routine — and the table above says which are worth it.
+
 ### `printf` digits, and an `Object` argument (2026-08-13)
 
 Two defects on the formatting path, found by probing the neighbours of the

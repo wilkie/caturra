@@ -422,6 +422,147 @@ fn format_digits(digits: &[u8], point: i32) -> String {
     }
 }
 
+/// `StrictMath.cbrt` — FDLIBM's algorithm, which is what a JDK 11 runs.
+/// Rust's `f64::cbrt` is the platform libm and differs in the last ulp on
+/// about 8% of inputs.
+#[allow(clippy::excessive_precision)] // FDLIBM's published constants, verbatim
+#[allow(clippy::many_single_char_names)] // FDLIBM's own names, so the transcription can be checked against it
+pub(crate) fn java_cbrt(x: f64) -> f64 {
+    const B1: u32 = 715_094_163; // B1 = (1023-1023/3-0.03306235651)*2**20
+    const B2: u32 = 696_219_795; // B2 = (1023-1023/3-54/3-0.03306235651)*2**20
+    const C: f64 = 5.428_571_428_571_428_159_06e-01;
+    const D: f64 = -7.053_061_224_489_796_110_50e-01;
+    const E: f64 = 1.414_285_714_285_714_368_19e+00;
+    const F: f64 = 1.607_142_857_142_857_206_30e+00;
+    const G: f64 = 3.571_428_571_428_571_507_87e-01;
+
+    let bits = x.to_bits();
+    let sign = bits & 0x8000_0000_0000_0000;
+    let hx = ((bits >> 32) as u32) & 0x7fff_ffff;
+    // NaN and infinity return themselves; so does a zero (with its sign).
+    if hx >= 0x7ff0_0000 {
+        return x + x;
+    }
+    if hx == 0 && (bits as u32) == 0 {
+        return x;
+    }
+    let magnitude = f64::from_bits(bits & 0x7fff_ffff_ffff_ffff);
+
+    // First approximation: divide the exponent by three.
+    let mut t = if hx < 0x0010_0000 {
+        // Subnormal: scale by 2^54 first.
+        let scaled = f64::from_bits(0x4350_0000_0000_0000) * magnitude;
+        let high = ((scaled.to_bits() >> 32) as u32) / 3 + B2;
+        f64::from_bits(u64::from(high) << 32)
+    } else {
+        f64::from_bits(u64::from(hx / 3 + B1) << 32)
+    };
+
+    // New cbrt to 23 bits.
+    let r = t * t / magnitude;
+    let s = C + r * t;
+    t *= G + F / (s + E + D / s);
+
+    // Round t away from zero to 23 bits, then one Newton step to 53.
+    t = f64::from_bits((t.to_bits() & 0xffff_ffff_0000_0000) + 0x0000_0001_0000_0000);
+    let s = t * t;
+    let mut r = magnitude / s;
+    let w = t + t;
+    r = (r - t) / (w + r);
+    t += t * r;
+
+    f64::from_bits(t.to_bits() | sign)
+}
+
+/// `StrictMath.hypot` — FDLIBM's algorithm. Rust's `f64::hypot` is the platform
+/// libm and differs in the last ulp on about 12% of inputs.
+///
+/// The point of the dance is accuracy without overflow: the operands are
+/// scaled into a safe range, then the larger is split into a high part with an
+/// exact square and a low correction, so `sqrt` sees a rounding-error-free sum.
+#[allow(clippy::many_single_char_names)] // FDLIBM's own names, so the transcription can be checked against it
+pub(crate) fn java_hypot(x: f64, y: f64) -> f64 {
+    let high = |v: f64| (v.to_bits() >> 32) as u32;
+    let low = |v: f64| v.to_bits() as u32;
+    let with_high = |v: f64, h: u32| f64::from_bits((u64::from(h) << 32) | u64::from(low(v)));
+
+    let mut ha = high(x) & 0x7fff_ffff;
+    let mut hb = high(y) & 0x7fff_ffff;
+    let (mut a, mut b) = if hb > ha {
+        std::mem::swap(&mut ha, &mut hb);
+        (y, x)
+    } else {
+        (x, y)
+    };
+    a = with_high(a, ha); // |a|
+    b = with_high(b, hb); // |b|
+    if (ha - hb) > 0x3c0_0000 {
+        return a + b; // a/b > 2^60: b is lost in the rounding
+    }
+
+    let mut k = 0i32;
+    if ha > 0x5f30_0000 {
+        // a > 2^500
+        if ha >= 0x7ff0_0000 {
+            // infinity or NaN
+            let mut w = a + b;
+            if ((ha & 0xf_ffff) | low(a)) == 0 {
+                w = a;
+            }
+            if ((hb ^ 0x7ff0_0000) | low(b)) == 0 {
+                w = b;
+            }
+            return w;
+        }
+        ha -= 0x2580_0000;
+        hb -= 0x2580_0000;
+        k += 600;
+        a = with_high(a, ha);
+        b = with_high(b, hb);
+    }
+    if hb < 0x20b0_0000 {
+        // b < 2^-500
+        if hb <= 0x000f_ffff {
+            // subnormal b, or zero
+            if (hb | low(b)) == 0 {
+                return a;
+            }
+            let tiny = f64::from_bits(0x7fd0_0000_0000_0000); // 2^1022
+            b *= tiny;
+            a *= tiny;
+            k -= 1022;
+            ha = high(a) & 0x7fff_ffff;
+            hb = high(b) & 0x7fff_ffff;
+        } else {
+            ha += 0x2580_0000;
+            hb += 0x2580_0000;
+            k -= 600;
+            a = with_high(a, ha);
+            b = with_high(b, hb);
+        }
+    }
+
+    // Medium-sized a and b: split so the squares add without rounding error.
+    let mut w = a - b;
+    if w > b {
+        let t1 = f64::from_bits(u64::from(ha) << 32);
+        let t2 = a - t1;
+        w = (t1 * t1 - (b * (-b) - t2 * (a + t1))).sqrt();
+    } else {
+        a += a;
+        let y1 = f64::from_bits(u64::from(hb) << 32);
+        let y2 = b - y1;
+        let t1 = f64::from_bits(u64::from(ha + 0x0010_0000) << 32);
+        let t2 = a - t1;
+        w = (t1 * y1 - (w * (-w) - (t1 * y2 + t2 * b))).sqrt();
+    }
+    if k == 0 {
+        return w;
+    }
+    let scale = f64::from_bits(u64::from(high(1.0).wrapping_add(k.cast_unsigned() << 20)) << 32);
+    scale * w
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

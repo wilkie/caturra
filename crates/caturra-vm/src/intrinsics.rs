@@ -5223,9 +5223,9 @@ fn math_static(
         }
         ("abs", [JValue::Double(v)]) => d(v.abs()),
         ("sqrt", [JValue::Double(v)]) => d(v.sqrt()),
-        ("cbrt", [JValue::Double(v)]) => d(v.cbrt()),
+        ("cbrt", [JValue::Double(v)]) => d(crate::floatdec::java_cbrt(*v)),
         ("pow", [JValue::Double(a), JValue::Double(b)]) => d(java_pow(*a, *b)),
-        ("hypot", [JValue::Double(a), JValue::Double(b)]) => d(a.hypot(*b)),
+        ("hypot", [JValue::Double(a), JValue::Double(b)]) => d(crate::floatdec::java_hypot(*a, *b)),
         ("max", [JValue::Int(a), JValue::Int(b)]) => i((*a).max(*b)),
         ("max", [JValue::Double(a), JValue::Double(b)]) => d(java_double_max(*a, *b)),
         ("min", [JValue::Int(a), JValue::Int(b)]) => i((*a).min(*b)),
