@@ -12693,6 +12693,38 @@ impl BodyGen<'_> {
             // An empty protected range is illegal in the table; with
             // nothing to throw, the catches are dead anyway. The
             // finally still runs.
+            //
+            // Their bodies are still TYPE-CHECKED though, which javac does
+            // regardless of reachability. Skipping that made every error
+            // inside such a catch invisible — `try { } catch (Exception e) {
+            // int n = "text"; }` compiled here. The bodies are emitted into a
+            // jumped-over region, the same shape `assert` desugars to.
+            let skip = self.code.new_label();
+            self.code.branch(op::GOTO, skip, 0);
+            for (clause, kinds) in catches.iter().zip(&resolved) {
+                if kinds.is_empty() {
+                    continue;
+                }
+                self.scopes.push(Vec::new());
+                let ty = self.catch_variable_type(kinds);
+                let slot = self.next_slot;
+                self.next_slot += 1;
+                self.scopes.last_mut().expect("scope pushed").push((
+                    clause.name.clone(),
+                    LocalVar {
+                        slot,
+                        ty,
+                        is_final: clause.types.len() > 1,
+                        assigned: true,
+                        const_val: None,
+                    },
+                ));
+                for stmt in &clause.body {
+                    self.statement(stmt);
+                }
+                self.scopes.pop();
+            }
+            self.code.bind(skip);
             self.restore_assigned(&before_flags);
             if let Some(finally_stmts) = finally_body {
                 self.finally_stack.pop();

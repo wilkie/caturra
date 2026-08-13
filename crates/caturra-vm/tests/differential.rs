@@ -24867,3 +24867,75 @@ public class QualifiedLambdas {
 }
 "#
 );
+
+// A `catch` body is TYPE-CHECKED whether or not the guarded region can throw.
+// caturra emitted no handler when the try body could not throw — correct for
+// codegen, but it skipped the body entirely, so every error inside such a
+// catch was invisible and the program ran.
+differential_reject!(
+    an_unreachable_catch_body_is_still_checked,
+    "DeadCatch",
+    r#"
+public class DeadCatch {
+    public static void main(String[] args) {
+        try {
+        } catch (RuntimeException e) {
+            int wrong = "text";
+            System.out.println(wrong);
+        }
+    }
+}
+"#
+);
+
+// A modifier may appear at most once (JLS §8.1.1). Setting the flag twice made
+// `public public void f()` compile.
+differential_reject!(
+    a_modifier_may_not_repeat,
+    "RepeatedModifier",
+    r"
+public class RepeatedModifier {
+    public public static void main(String[] args) {
+        System.out.println(1);
+    }
+}
+"
+);
+
+// ...and the shapes those two checks must NOT break: an empty try whose catch
+// is fine, and every modifier used once.
+differential_test!(
+    diff_empty_try_and_ordinary_modifiers,
+    "StillFine",
+    r#"
+public class StillFine {
+    private static final int LIMIT = 3;
+
+    public static void main(String[] args) {
+        try {
+        } catch (RuntimeException e) {
+            System.out.println("caught " + e.getMessage());
+        } finally {
+            System.out.println("finally");
+        }
+
+        try {
+            throw new IllegalStateException("boom");
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            System.out.println("multi " + e.getMessage());
+        }
+
+        // A single-type catch parameter may be reassigned; a multi-catch one
+        // may not, and that rule is unchanged.
+        try {
+            throw new RuntimeException("x");
+        } catch (RuntimeException e) {
+            e = new RuntimeException("y");
+            System.out.println(e.getMessage());
+        }
+
+        System.out.println(LIMIT);
+    }
+}
+"#
+);

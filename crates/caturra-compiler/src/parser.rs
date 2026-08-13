@@ -707,36 +707,60 @@ impl Parser<'_> {
     /// Modifier keywords before a class or member. Returns
     /// `(is_public, is_static)`; other modifiers parse and are ignored
     /// for now.
+    /// A modifier may appear at most once (JLS §8.1.1): `public public void
+    /// f()` is "repeated modifier" to javac, and setting the flag twice made
+    /// it compile here.
     fn modifiers(&mut self) -> Modifiers {
         let mut modifiers = Modifiers::default();
         self.pending_annotations.clear();
         loop {
             match self.peek() {
                 Some(TokenKind::Keyword(Keyword::Public)) => {
+                    if modifiers.is_public {
+                        self.error_here("repeated modifier");
+                    }
                     modifiers.is_public = true;
                     self.pos += 1;
                 }
                 Some(TokenKind::Keyword(Keyword::Static)) => {
+                    if modifiers.is_static {
+                        self.error_here("repeated modifier");
+                    }
                     modifiers.is_static = true;
                     self.pos += 1;
                 }
                 Some(TokenKind::Keyword(Keyword::Private)) => {
+                    if modifiers.is_private {
+                        self.error_here("repeated modifier");
+                    }
                     modifiers.is_private = true;
                     self.pos += 1;
                 }
                 Some(TokenKind::Keyword(Keyword::Final)) => {
+                    if modifiers.is_final {
+                        self.error_here("repeated modifier");
+                    }
                     modifiers.is_final = true;
                     self.pos += 1;
                 }
                 Some(TokenKind::Keyword(Keyword::Abstract)) => {
+                    if modifiers.is_abstract {
+                        self.error_here("repeated modifier");
+                    }
                     modifiers.is_abstract = true;
                     self.pos += 1;
                 }
                 Some(TokenKind::Keyword(Keyword::Protected)) => {
+                    if modifiers.is_protected {
+                        self.error_here("repeated modifier");
+                    }
                     modifiers.is_protected = true;
                     self.pos += 1;
                 }
                 Some(TokenKind::Keyword(Keyword::Default)) => {
+                    if modifiers.is_default {
+                        self.error_here("repeated modifier");
+                    }
                     modifiers.is_default = true;
                     self.pos += 1;
                 }

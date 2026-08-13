@@ -3955,9 +3955,19 @@ accepts-invalid, and the fix for one of them exposed a fourth defect.
   matching — a nested user type keeps its qualifier, since flattening that
   could collide with a library name.
 
-The other two accepts-invalid are recorded but not fixed: assigning to a
-multi-catch parameter (`catch (A | B e) { e = null; }`), and a repeated
-modifier (`public public void f()`).
+Both remaining accepts-invalid are now **fixed**, and the first turned out to
+be much wider than it looked:
+
+- **A `catch` body was not type-checked when the guarded region could not
+  throw.** caturra emits no handler in that case — correct for codegen — but it
+  skipped the body entirely, so EVERY error inside such a catch was invisible:
+  `try { } catch (Exception e) { int n = "text"; }` compiled and ran. The
+  bodies are now emitted into a jumped-over region, the same shape `assert`
+  desugars to. (The multi-catch assignment I was chasing was already refused;
+  it only *looked* accepted because my probe's `try` body was empty, which is
+  what exposed the real bug.)
+- **A modifier may appear at most once** (JLS §8.1.1). Setting the flag twice
+  made `public public void f()` compile.
 
 ### Diagnostic wording (2026-08-13)
 
