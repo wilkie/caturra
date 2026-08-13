@@ -896,15 +896,34 @@ fn shortest_decimal(value: f64) -> (Vec<u8>, i32) {
     if value == 0.0 {
         return (vec![], 0);
     }
-    let text = format!("{:e}", value.abs());
-    let (mantissa, exponent) = text.split_once('e').expect("exponential form");
-    let exponent: i32 = exponent.parse().expect("numeric exponent");
-    let digits: Vec<u8> = mantissa
+    // The digits `Double.toString` would print, NOT the shortest round-trip
+    // ones. OpenJDK 11 derives `%f`/`%e`/`%g` from the same `FloatingDecimal`
+    // digits as `toString`, so `%f` of 1e23 is `99999999999999990000000.000000`
+    // — reading Rust's shortest form here printed a different NUMBER, padded
+    // with the wrong zeros.
+    let text = crate::floatdec::java_double_to_string(value.abs());
+    let (mantissa, exponent) = match text.split_once('E') {
+        Some((mantissa, exponent)) => {
+            (mantissa, exponent.parse::<i32>().expect("numeric exponent"))
+        }
+        None => (text.as_str(), 0),
+    };
+    let integral = mantissa.split('.').next().unwrap_or("");
+    let mut digits: Vec<u8> = mantissa
         .bytes()
         .filter(u8::is_ascii_digit)
         .map(|b| b - b'0')
         .collect();
-    (digits, exponent + 1)
+    // `0.digits × 10^point`, so the point starts after the integral part.
+    let mut point = i32::try_from(integral.len()).expect("short") + exponent;
+    while digits.first() == Some(&0) {
+        digits.remove(0);
+        point -= 1;
+    }
+    while digits.last() == Some(&0) && digits.len() > 1 {
+        digits.pop();
+    }
+    (digits, point)
 }
 
 /// Round the (most-significant-first) digits `HALF_UP` at `keep` digits,

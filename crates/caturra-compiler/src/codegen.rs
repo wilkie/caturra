@@ -17907,9 +17907,20 @@ impl BodyGen<'_> {
             // own null rendering: `%b` says "false", `%d` says "null"), so
             // the coercion is guarded: null skips it and rides through as the
             // null reference.
+            // An `Object`-typed argument keeps its REFERENCE. The formatter
+            // decides by the runtime class — `%f` of an Object holding a
+            // Double formats the number — and `unwrap_boxed` there already
+            // does exactly that for the statically-boxed case above.
+            // Converting to a String here made every such argument a String,
+            // so `String.format("%d", someObject)` threw
+            // IllegalFormatConversionException for a program the JDK runs.
+            if matches!(ty, JType::Object(_)) {
+                tags.push_str("Ljava/lang/Object;");
+                width += 1;
+                continue;
+            }
             let ty = match ty {
-                JType::Object(_)
-                | JType::List(_)
+                JType::List(_)
                 | JType::Stack(_)
                 | JType::Map { .. }
                 | JType::Set(_)

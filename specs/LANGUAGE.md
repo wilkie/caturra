@@ -3843,6 +3843,30 @@ clean — evaluation order including `a[i++] = i++` and compound-assignment
 targets evaluated once, and shadowing including a private method not being
 overridden.
 
+### `printf` digits, and an `Object` argument (2026-08-13)
+
+Two defects on the formatting path, found by probing the neighbours of the
+`Double.toString` fix — `%f`/`%e`/`%g` render on their own path, so that fix
+did not reach them.
+
+- **The digits came from the shortest round-trip decimal.** OpenJDK derives
+  `%f` from the same `FloatingDecimal` as `toString`, so `%f` of 1e23 is
+  `99999999999999990000000.000000`; caturra printed
+  `100000000000000000000000.000000` — a different NUMBER, padded with the
+  wrong zeros. One helper now asks the JDK-11 renderer, and all four call
+  sites follow.
+- **An `Object`-typed argument was converted to a String at the call site.**
+  The formatter decides by the RUNTIME class — `%d` of an `Object` holding an
+  Integer formats the number, which the statically-boxed case already relied
+  on. Coercing first made every such argument a String, so
+  `String.format("%d", someObject)` threw `IllegalFormatConversionException`
+  for a program the JDK runs. This is the shape a generic helper has:
+  `String show(String format, Object argument)`.
+
+Checked on 14 231 formatted fields — ten specifiers across random bit
+patterns, simple ratios and powers of ten with their neighbours — all
+identical to a real JDK 11.
+
 ### `Double.toString` is JDK 11's, not the shortest decimal (2026-08-13)
 
 OpenJDK 11 does **not** print the shortest round-trip decimal — Ryū arrived in

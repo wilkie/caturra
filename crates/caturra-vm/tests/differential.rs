@@ -24429,3 +24429,57 @@ public class Doubles {
 }
 "#
 );
+
+// `%f`/`%e`/`%g` derive their digits from the same `FloatingDecimal` as
+// `Double.toString`, so `%f` of 1e23 is `99999999999999990000000.000000` —
+// reading Rust's shortest form printed a different NUMBER, padded with the
+// wrong zeros.
+//
+// And an `Object`-typed argument keeps its REFERENCE: the formatter decides by
+// the runtime class, so `%d` of an Object holding an Integer formats the
+// number. Converting it to a String at the call site made every such argument
+// a String, and `String.format("%d", someObject)` threw
+// IllegalFormatConversionException for a program the JDK runs.
+differential_test!(
+    diff_printf_digits_and_object_arguments,
+    "Printf",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+public class Printf {
+    static String show(String format, Object argument) {
+        return String.format(format, argument);
+    }
+
+    public static void main(String[] args) {
+        // Digits from FloatingDecimal, not the shortest round-trip decimal.
+        System.out.println(String.format("%f", 1e23));
+        System.out.println(String.format("%.2f", 1e23));
+        System.out.println(String.format("%,.2f", 1e23));
+        System.out.println(String.format("%e", Double.MIN_VALUE));
+        System.out.println(String.format("%.3e", Double.MIN_VALUE));
+
+        // The ordinary ones, across the flag surface.
+        double[] values = {0.5, 2.5, 1.005, 1.0 / 3, 99.995, 123456.789, 1e-7};
+        for (double value : values) {
+            System.out.println(String.format("%f|%.0f|%.2f|%e|%.3e|%g|%10.2f|%+.2f|%,.2f",
+                value, value, value, value, value, value, value, value, value));
+        }
+        System.out.println(String.format("%f %e", Double.NaN, Double.POSITIVE_INFINITY));
+
+        // An Object argument is formatted by its RUNTIME class.
+        Object number = 7;
+        Object fraction = 1.5;
+        Object text = "text";
+        Object nothing = null;
+        Object list = new ArrayList<String>(List.of("a"));
+        System.out.println(show("%d", number) + " " + show("%x", number) + " " + show("%s", number));
+        System.out.println(show("%f", fraction) + " " + show("%.1f", fraction));
+        System.out.println(show("%s", text) + " " + show("%S", text));
+        System.out.println(show("%s", nothing) + " " + show("%d", nothing) + " " + show("%b", nothing));
+        System.out.println(show("%s", list));
+    }
+}
+"#
+);
