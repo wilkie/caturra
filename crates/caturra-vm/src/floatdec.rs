@@ -12,6 +12,16 @@
 //! resolved half-even. Corpus-validated on 25k reference outputs
 //! (99.94%; the residue is exotic subnormal bit patterns).
 
+#![allow(
+    // The FDLIBM ports below are transcribed from the algorithm as published,
+    // with its own constant spellings and variable names, so a reader can check
+    // them line by line against the original. A "tidied" transcription is one
+    // nobody can verify.
+    clippy::approx_constant,
+    clippy::excessive_precision,
+    clippy::unreadable_literal
+)]
+
 /// Render `value` the way `Float.toString` does.
 pub(crate) fn java_float_to_string(value: f32) -> String {
     if value.is_nan() {
@@ -425,7 +435,6 @@ fn format_digits(digits: &[u8], point: i32) -> String {
 /// `StrictMath.cbrt` — FDLIBM's algorithm, which is what a JDK 11 runs.
 /// Rust's `f64::cbrt` is the platform libm and differs in the last ulp on
 /// about 8% of inputs.
-#[allow(clippy::excessive_precision)] // FDLIBM's published constants, verbatim
 #[allow(clippy::many_single_char_names)] // FDLIBM's own names, so the transcription can be checked against it
 pub(crate) fn java_cbrt(x: f64) -> f64 {
     const B1: u32 = 715_094_163; // B1 = (1023-1023/3-0.03306235651)*2**20
@@ -561,6 +570,274 @@ pub(crate) fn java_hypot(x: f64, y: f64) -> f64 {
     }
     let scale = f64::from_bits(u64::from(high(1.0).wrapping_add(k.cast_unsigned() << 20)) << 32);
     scale * w
+}
+
+/// FDLIBM's `atan`. Rust's is the platform libm; the two differ in the last
+/// ulp, and `atan2` is built on this one so its error compounds.
+#[allow(clippy::many_single_char_names)] // FDLIBM's own names, to keep it checkable
+pub(crate) fn java_atan(x: f64) -> f64 {
+    const ATAN_HI: [f64; 4] = [
+        4.63647609000806093515e-01, // atan(0.5)hi
+        7.85398163397448278999e-01, // atan(1.0)hi
+        9.82793723247329054082e-01, // atan(1.5)hi
+        1.57079632679489655800e+00, // atan(inf)hi
+    ];
+    const ATAN_LO: [f64; 4] = [
+        2.26987774529616870924e-17, // atan(0.5)lo
+        3.06161699786838301793e-17, // atan(1.0)lo
+        1.39033110312309984516e-17, // atan(1.5)lo
+        6.12323399573676603587e-17, // atan(inf)lo
+    ];
+    const AT: [f64; 11] = [
+        3.33333333333329318027e-01,
+        -1.99999999998764832476e-01,
+        1.42857142725034663711e-01,
+        -1.11111104054623557880e-01,
+        9.09088713343650656196e-02,
+        -7.69187620504482999495e-02,
+        6.66107313738753120669e-02,
+        -5.83357013379057348645e-02,
+        4.97687799461593236017e-02,
+        -3.65315727442169155270e-02,
+        1.62858201153657823623e-02,
+    ];
+
+    let bits = x.to_bits();
+    let hx = (bits >> 32) as u32;
+    let ix = hx & 0x7fff_ffff;
+    if ix >= 0x4410_0000 {
+        // |x| >= 2^66: the answer is ±pi/2 (or a NaN passing through).
+        if ix > 0x7ff0_0000 || (ix == 0x7ff0_0000 && (bits as u32) != 0) {
+            return x + x;
+        }
+        return if hx.cast_signed() > 0 {
+            ATAN_HI[3] + ATAN_LO[3]
+        } else {
+            -ATAN_HI[3] - ATAN_LO[3]
+        };
+    }
+
+    // Argument reduction onto one of four ranges.
+    let mut x = x;
+    let id: i32;
+    if ix < 0x3fdc_0000 {
+        // |x| < 0.4375
+        if ix < 0x3e20_0000 {
+            // |x| < 2^-29: atan(x) is x to full precision.
+            return x;
+        }
+        id = -1;
+    } else {
+        x = x.abs();
+        if ix < 0x3ff3_0000 {
+            if ix < 0x3fe6_0000 {
+                id = 0; // 7/16 <= |x| < 11/16
+                x = (2.0 * x - 1.0) / (2.0 + x);
+            } else {
+                id = 1; // 11/16 <= |x| < 19/16
+                x = (x - 1.0) / (x + 1.0);
+            }
+        } else if ix < 0x4003_8000 {
+            id = 2; // 19/16 <= |x| < 2.4375
+            x = (x - 1.5) / (1.0 + 1.5 * x);
+        } else {
+            id = 3; // 2.4375 <= |x| < 2^66
+            x = -1.0 / x;
+        }
+    }
+
+    let z = x * x;
+    let w = z * z;
+    // The odd and even halves of sum(AT[i] * z^(i+1)).
+    let s1 = z * (AT[0] + w * (AT[2] + w * (AT[4] + w * (AT[6] + w * (AT[8] + w * AT[10])))));
+    let s2 = w * (AT[1] + w * (AT[3] + w * (AT[5] + w * (AT[7] + w * AT[9]))));
+    if id < 0 {
+        return x - x * (s1 + s2);
+    }
+    let index = usize::try_from(id).expect("0..=3");
+    let z = ATAN_HI[index] - ((x * (s1 + s2) - ATAN_LO[index]) - x);
+    if hx.cast_signed() < 0 { -z } else { z }
+}
+
+/// FDLIBM's `atan2`. The most divergent of the transcendentals against Rust's
+/// libm — 25% of inputs in a 900-value sweep.
+#[allow(clippy::many_single_char_names)] // FDLIBM's own names, to keep it checkable
+pub(crate) fn java_atan2(y: f64, x: f64) -> f64 {
+    const TINY: f64 = 1.0e-300;
+    const PI_O_4: f64 = 7.8539816339744827900e-01;
+    const PI_O_2: f64 = 1.5707963267948965580e+00;
+    const PI: f64 = 3.1415926535897931160e+00;
+    const PI_LO: f64 = 1.2246467991473531772e-16;
+
+    let (hx, lx) = ((x.to_bits() >> 32) as u32, x.to_bits() as u32);
+    let (hy, ly) = ((y.to_bits() >> 32) as u32, y.to_bits() as u32);
+    let ix = hx & 0x7fff_ffff;
+    let iy = hy & 0x7fff_ffff;
+    if x.is_nan() || y.is_nan() {
+        return x + y;
+    }
+    if hx == 0x3ff0_0000 && lx == 0 {
+        return java_atan(y); // x == 1.0
+    }
+    // 2*sign(x) + sign(y)
+    let m = ((hy >> 31) & 1) | ((hx >> 30) & 2);
+
+    if (iy | ly) == 0 {
+        return match m {
+            0 | 1 => y,      // atan(±0, +anything) = ±0
+            2 => PI + TINY,  // atan(+0, -anything) = pi
+            _ => -PI - TINY, // atan(-0, -anything) = -pi
+        };
+    }
+    if (ix | lx) == 0 {
+        return if hy.cast_signed() < 0 {
+            -PI_O_2 - TINY
+        } else {
+            PI_O_2 + TINY
+        };
+    }
+    if ix == 0x7ff0_0000 {
+        if iy == 0x7ff0_0000 {
+            return match m {
+                0 => PI_O_4 + TINY,
+                1 => -PI_O_4 - TINY,
+                2 => 3.0 * PI_O_4 + TINY,
+                _ => -3.0 * PI_O_4 - TINY,
+            };
+        }
+        return match m {
+            0 => 0.0,
+            1 => -0.0,
+            2 => PI + TINY,
+            _ => -PI - TINY,
+        };
+    }
+    if iy == 0x7ff0_0000 {
+        return if hy.cast_signed() < 0 {
+            -PI_O_2 - TINY
+        } else {
+            PI_O_2 + TINY
+        };
+    }
+
+    // |y/x| decides whether the quotient is worth forming at all.
+    let k = (iy.cast_signed() - ix.cast_signed()) >> 20;
+    let z = if k > 60 {
+        PI_O_2 + 0.5 * PI_LO // |y/x| > 2^60
+    } else if hx.cast_signed() < 0 && k < -60 {
+        0.0 // |y|/x < -2^60
+    } else {
+        java_atan((y / x).abs())
+    };
+    match m {
+        0 => z,
+        1 => f64::from_bits(z.to_bits() ^ 0x8000_0000_0000_0000),
+        2 => PI - (z - PI_LO),
+        _ => (z - PI_LO) - PI,
+    }
+}
+
+/// The rational `R(z)` that FDLIBM's `asin` and `acos` share.
+fn asin_ratio(z: f64) -> f64 {
+    const PS0: f64 = 1.66666666666666657415e-01;
+    const PS1: f64 = -3.25565818622400915405e-01;
+    const PS2: f64 = 2.01212532134862925881e-01;
+    const PS3: f64 = -4.00555345006794114027e-02;
+    const PS4: f64 = 7.91534994289814532176e-04;
+    const PS5: f64 = 3.47933107596021167570e-05;
+    const QS1: f64 = -2.40339491173441421878e+00;
+    const QS2: f64 = 2.02094576023350569471e+00;
+    const QS3: f64 = -6.88283971605453293030e-01;
+    const QS4: f64 = 7.70381505559019352791e-02;
+    let p = z * (PS0 + z * (PS1 + z * (PS2 + z * (PS3 + z * (PS4 + z * PS5)))));
+    let q = 1.0 + z * (QS1 + z * (QS2 + z * (QS3 + z * QS4)));
+    p / q
+}
+
+const PIO2_HI: f64 = 1.57079632679489655800e+00;
+const PIO2_LO: f64 = 6.12323399573676603587e-17;
+const PIO4_HI: f64 = 7.85398163397448278999e-01;
+
+/// FDLIBM's `asin`.
+#[allow(clippy::many_single_char_names)] // FDLIBM's own names, to keep it checkable
+pub(crate) fn java_asin(x: f64) -> f64 {
+    let bits = x.to_bits();
+    let hx = (bits >> 32) as u32;
+    let ix = hx & 0x7fff_ffff;
+    if ix >= 0x3ff0_0000 {
+        if (ix - 0x3ff0_0000) | (bits as u32) == 0 {
+            return x * PIO2_HI + x * PIO2_LO; // asin(±1) = ±pi/2
+        }
+        return f64::NAN; // |x| > 1
+    }
+    if ix < 0x3fe0_0000 {
+        // |x| < 0.5
+        if ix < 0x3e40_0000 {
+            return x; // |x| < 2^-27: asin(x) is x
+        }
+        let t = x * x;
+        return x + x * asin_ratio(t);
+    }
+    // 0.5 <= |x| < 1
+    let w = 1.0 - x.abs();
+    let t = w * 0.5;
+    let s = t.sqrt();
+    let value = if ix >= 0x3fef_3333 {
+        // |x| > 0.975
+        PIO2_HI - (2.0 * (s + s * asin_ratio(t)) - PIO2_LO)
+    } else {
+        let w = f64::from_bits(s.to_bits() & 0xffff_ffff_0000_0000);
+        let c = (t - w * w) / (s + w);
+        let r = asin_ratio(t);
+        let p = 2.0 * s * r - (PIO2_LO - 2.0 * c);
+        let q = PIO4_HI - 2.0 * w;
+        PIO4_HI - (p - q)
+    };
+    if hx.cast_signed() > 0 { value } else { -value }
+}
+
+/// FDLIBM's `acos`.
+#[allow(clippy::many_single_char_names)] // FDLIBM's own names, to keep it checkable
+pub(crate) fn java_acos(x: f64) -> f64 {
+    const PI: f64 = 3.14159265358979311600e+00;
+    let bits = x.to_bits();
+    let hx = (bits >> 32) as u32;
+    let ix = hx & 0x7fff_ffff;
+    if ix >= 0x3ff0_0000 {
+        if (ix - 0x3ff0_0000) | (bits as u32) == 0 {
+            return if hx.cast_signed() > 0 {
+                0.0 // acos(1) = 0
+            } else {
+                PI + 2.0 * PIO2_LO // acos(-1) = pi
+            };
+        }
+        return f64::NAN; // |x| > 1
+    }
+    if ix < 0x3fe0_0000 {
+        // |x| < 0.5
+        if ix <= 0x3c60_0000 {
+            return PIO2_HI + PIO2_LO; // |x| < 2^-57
+        }
+        let z = x * x;
+        let r = asin_ratio(z);
+        return PIO2_HI - (x - (PIO2_LO - x * r));
+    }
+    if hx.cast_signed() < 0 {
+        // x < -0.5
+        let z = (1.0 + x) * 0.5;
+        let s = z.sqrt();
+        let r = asin_ratio(z);
+        let w = r * s - PIO2_LO;
+        return PI - 2.0 * (s + w);
+    }
+    // x > 0.5
+    let z = (1.0 - x) * 0.5;
+    let s = z.sqrt();
+    let df = f64::from_bits(s.to_bits() & 0xffff_ffff_0000_0000);
+    let c = (z - df * df) / (s + df);
+    let r = asin_ratio(z);
+    let w = r * s + c;
+    2.0 * (df + w)
 }
 
 #[cfg(test)]

@@ -3862,11 +3862,21 @@ platform libm, and the two differ in the last ulp often enough to matter.
 Exact already, and now pinned so they cannot drift: `sqrt`, `cos`, `log`,
 `log1p`, `expm1`, `sinh`, `tanh`.
 
-`cbrt` and `hypot` are FDLIBM ports, transcribed with the algorithm's own
-variable names so the transcription can be checked against the original, and
-each verified to **0 divergences** on the 900-input corpus. The remaining
-functions are the same kind of work — each is a self-contained, individually
-verifiable routine — and the table above says which are worth it.
+Six are FDLIBM ports now — `cbrt`, `hypot`, `atan`, `atan2`, `asin`, `acos` —
+each verified to **0 divergences** on the corpus that had them wrong, taking
+the total from 652 to 121 (81% closed). They are transcribed with the
+algorithm's own constant spellings and variable names so a reader can check
+them line by line against the original; the module carries a `#![allow]` for
+the clippy lints that would otherwise push toward a tidier transcription nobody
+can verify.
+
+**What remains is one dependency, not six functions.** `cosh`, `log10`, `exp`,
+`pow`, `sin` and `tan` all bottom out in `exp` and `log`, and FDLIBM ports of
+`cosh` and `log10` written over Rust's `exp`/`ln` changed **nothing** — the
+same 79 and 34 values still differed, because the error is in the base
+function, not the wrapper. Both were reverted rather than left as code that
+looks like a fix. Porting FDLIBM's `__ieee754_exp` and `__ieee754_log` would
+close the rest at once.
 
 ### `printf` digits, and an `Object` argument (2026-08-13)
 
