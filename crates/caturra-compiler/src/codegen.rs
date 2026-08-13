@@ -476,6 +476,10 @@ struct ClassInfo {
     /// Number of generic type parameters (`class Box<T>` → 1). Only
     /// single-parameter classes get type-argument tracking.
     type_param_count: usize,
+    /// Each parameter's declared bound, by simple name (`T extends Number` →
+    /// `Some("Number")`). A written type ARGUMENT has to satisfy it, and
+    /// without this `Box<String>` for a `Box<T extends Number>` compiled.
+    type_param_bounds: Vec<Option<String>>,
     /// The type arguments written on this class's supertypes
     /// (`extends Box<String>`), so a subclass standing in for a
     /// parameterized supertype can be CHECKED rather than assumed.
@@ -697,6 +701,7 @@ impl MethodTable {
                 is_final_class: false,
                 is_inner: false,
                 type_param_count: 0,
+                type_param_bounds: Vec::new(),
                 supertype_args: Vec::new(),
                 methods: vec![
                     MethodSig {
@@ -785,6 +790,7 @@ impl MethodTable {
                 is_final_class: false,
                 is_inner: false,
                 type_param_count: 1,
+                type_param_bounds: vec![None],
                 supertype_args: Vec::new(),
                 methods: vec![MethodSig {
                     name: String::from("compareTo"),
@@ -838,6 +844,7 @@ impl MethodTable {
                     is_final_class: false,
                     is_inner: false,
                     type_param_count: 0,
+                    type_param_bounds: Vec::new(),
                     supertype_args: Vec::new(),
                     methods: if name == "Cloneable" {
                         Vec::new()
@@ -937,6 +944,7 @@ impl MethodTable {
                     is_final_class: false,
                     is_inner: false,
                     type_param_count: 1,
+                    type_param_bounds: vec![None],
                     supertype_args: Vec::new(),
                     methods,
                     fields: Vec::new(),
@@ -988,6 +996,7 @@ impl MethodTable {
                     is_final_class: false,
                     is_inner: false,
                     type_param_count: 0,
+                    type_param_bounds: Vec::new(),
                     supertype_args: Vec::new(),
                     methods: vec![
                         accessor("intValue", JType::Int),
@@ -1061,6 +1070,20 @@ impl MethodTable {
                         // whether anyone else's did depended on declaration
                         // ORDER.
                         type_param_count: class.type_params.len(),
+                        type_param_bounds: class
+                            .type_params
+                            .iter()
+                            .map(|p| {
+                                p.bound.as_ref().map(|b| {
+                                    let named = match b {
+                                        TypeRef::Named(name) => name.as_str(),
+                                        TypeRef::Generic { base, .. } => base.as_str(),
+                                        _ => "",
+                                    };
+                                    named.rsplit('.').next().unwrap_or(named).to_owned()
+                                })
+                            })
+                            .collect(),
                         supertype_args: Vec::new(),
                         methods: Vec::new(),
                         fields: Vec::new(),
@@ -3566,6 +3589,17 @@ fn unknown_name_in(ty: &TypeRef, table: &MethodTable) -> Option<String> {
 /// types throughout. Nested arguments are checked too (`List<Pair<String>>`).
 ///
 /// A RAW use (no arguments at all) is legal Java and stays legal.
+/// The conventional name of the type parameter at `index`, for a diagnostic:
+/// javac names the variable, and the table keeps only its bound.
+fn type_param_letter(index: usize) -> String {
+    String::from(match index {
+        0 => "T",
+        1 => "U",
+        2 => "V",
+        _ => "W",
+    })
+}
+
 fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
     match ty {
         TypeRef::Array(inner) => type_arity_error(inner, table),
@@ -3578,14 +3612,46 @@ fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
             // Only a class the PROGRAM declares is checked: the library types
             // are modelled by hand, and their arities here are approximate
             // (a `Map.Entry` argument names an entrySet's type, not a value).
-            let declared = table
+            let info = table
                 .class_id(base)
                 .or_else(|| base.rsplit('.').next().and_then(|n| table.class_id(n)))
-                .and_then(|id| table.info_by_id(id))
-                .map(|info| info.type_param_count)?;
-            (declared != args.len()).then(|| {
-                format!("wrong number of type arguments; required {declared} in class {base}")
-            })
+                .and_then(|id| table.info_by_id(id))?;
+            let declared = info.type_param_count;
+            if declared != args.len() {
+                return Some(format!(
+                    "wrong number of type arguments; required {declared} in class {base}"
+                ));
+            }
+            // Each written argument must satisfy its parameter's BOUND
+            // (JLS §4.5): `Box<String>` for a `Box<T extends Number>` is an
+            // error javac reports, and it compiled here.
+            for (arg, bound) in args.iter().zip(&info.type_param_bounds) {
+                let Some(bound) = bound else {
+                    continue;
+                };
+                let Some(elem) = elem_from_type_arg(arg, table) else {
+                    continue;
+                };
+                let Some(bound_id) = table.class_id(bound) else {
+                    continue; // an unmodelled bound constrains nothing here
+                };
+                if !elem_widens_to_class(elem, bound_id, table) {
+                    let written = match arg {
+                        TypeRef::Named(name) | TypeRef::Generic { base: name, .. } => {
+                            name.rsplit('.').next().unwrap_or(name)
+                        }
+                        _ => continue,
+                    };
+                    return Some(format!(
+                        "type argument {written} is not within bounds of type-variable {}",
+                        info.type_param_bounds
+                            .iter()
+                            .position(|b| b.as_deref() == Some(bound.as_str()))
+                            .map_or_else(|| String::from("T"), type_param_letter),
+                    ));
+                }
+            }
+            None
         }
         _ => None,
     }

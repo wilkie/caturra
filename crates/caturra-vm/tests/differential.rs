@@ -25180,3 +25180,70 @@ public class Combinators {
 }
 "#
 );
+
+// A written type ARGUMENT must satisfy its parameter's bound (JLS §4.5).
+// `Box<String>` for a `Box<T extends Number>` is an error javac reports, and
+// it compiled here — the table recorded the parameter COUNT but not its bound.
+differential_reject!(
+    a_type_argument_must_satisfy_its_bound,
+    "OutOfBounds",
+    r"
+public class OutOfBounds {
+    static class Box<T extends Number> {
+        T value;
+    }
+
+    public static void main(String[] args) {
+        Box<String> wrong = new Box<>();
+        System.out.println(wrong);
+    }
+}
+"
+);
+
+// ...and the arguments that DO satisfy it, plus an unbounded parameter, so the
+// new check cannot over-reach.
+differential_test!(
+    diff_bounded_type_arguments,
+    "InBounds",
+    r#"
+public class InBounds {
+    static class Box<T extends Number> {
+        T value;
+        void set(T v) { value = v; }
+        T get() { return value; }
+    }
+
+    static class Plain<T> {
+        T value;
+    }
+
+    static class Pair<K, V> {
+        K key;
+        V value;
+    }
+
+    public static void main(String[] args) {
+        // A bounded T still READS as its bound (`Number`), so this prints the
+        // value rather than doing arithmetic on it — a separate, documented
+        // erasure, not what this test is about.
+        Box<Integer> counted = new Box<>();
+        counted.set(7);
+        System.out.println(counted.get());
+
+        Box<Double> measured = new Box<>();
+        measured.set(1.5);
+        System.out.println(measured.get());
+
+        Plain<String> anything = new Plain<>();
+        anything.value = "text";
+        System.out.println(anything.value.toUpperCase());
+
+        Pair<String, Integer> both = new Pair<>();
+        both.key = "k";
+        both.value = 2;
+        System.out.println(both.key + both.value);
+    }
+}
+"#
+);

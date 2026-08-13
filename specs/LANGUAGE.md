@@ -3937,6 +3937,20 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### A type argument must satisfy its bound (2026-08-13)
+
+A fifth diagnostic catalogue (31 more programs, 206 in all) found three more
+accepts-invalid. The one fixed here is the substantial one: **a written type
+argument was never checked against its parameter's bound** (JLS §4.5), so
+`Box<String>` for a `Box<T extends Number>` compiled. The class table recorded
+each parameter's COUNT but not its bound; it now records both, and the check
+sits beside the existing arity validation.
+
+Recorded, not fixed: a class implementing `I<String>` without the right method
+signature, and a cast from a FINAL class to an interface it cannot implement
+(caturra throws `ClassCastException` at run time where javac refuses at compile
+time — the same shape as the `String` cast fixed earlier, one level out).
+
 ### A functional interface's result has a type (2026-08-13)
 
 A fourth diagnostic catalogue found a **compiler panic** — the one failure mode
