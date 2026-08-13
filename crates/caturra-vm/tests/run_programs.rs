@@ -6451,6 +6451,20 @@ fn stage6_compile_errors_match_javac_wording() {
             "import java.util.stream.*; class M { static void f() { Collectors c = null; } }",
             "java.util.stream.Collectors is not supported by caturra",
         ),
+        // Every object HAS `toString`, so "cannot find symbol" was a false
+        // statement about a Scanner. What caturra does not model is its TEXT:
+        // the JDK's is a dump of the delimiters, position and locale
+        // separators. Concatenating one already said so, and the two spellings
+        // of the same thing have to agree — otherwise `"" + scanner` is
+        // refused while `scanner.toString()` invents an answer.
+        (
+            "import java.util.*; class M { static void f(Scanner s) { String t = s.toString(); } }",
+            "the text of a Scanner is an implementation detail caturra does not model",
+        ),
+        (
+            "import java.util.*; class M { static void f(Scanner s) { String t = \"\" + s; } }",
+            "concatenating a Scanner is not supported",
+        ),
     ];
     for (source, expected) in cases {
         let result = caturra_compiler::compile(&[caturra_compiler::SourceFile {

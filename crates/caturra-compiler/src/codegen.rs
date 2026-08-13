@@ -8463,6 +8463,10 @@ const OPTIONALDOUBLE_METHODS: &[BuiltinMethod] = &[
 ];
 
 const FILE_METHODS: &[BuiltinMethod] = &[
+    // `File.toString()` IS `getPath()` (the JDK says so), and concatenating a
+    // File already produced that text — but the method itself was missing, so
+    // the two spellings of one thing disagreed.
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     BuiltinMethod {
         name: "exists",
         params: &[],
@@ -10544,6 +10548,35 @@ fn empty_collection_kind(receiver: &Expr) -> Option<EmptyKind> {
     }
 }
 
+/// `Optional.empty()` as a RECEIVER. It types as `null` so it assigns to an
+/// `Optional` of any element (`Optional<String> o = Optional.empty()`), but it
+/// is a real empty Optional, so a method called straight on one — javac infers
+/// `Optional<Object>` there — has to resolve against the general face.
+fn is_empty_optional(receiver: &Expr) -> bool {
+    matches!(
+        receiver,
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } if method == "empty"
+            && args.is_empty()
+            && matches!(owner.as_ref(), Expr::Name { path, .. }
+                if path.last().is_some_and(|name| name == "Optional"))
+    )
+}
+
+/// Whether caturra models this type's `toString` text. The three I/O types
+/// whose JDK text is a dump of internal state do not: a `Scanner`'s lists its
+/// delimiters, position and locale separators. Concatenating one is refused
+/// for the same reason, and the two refusals have to agree — a program that
+/// cannot write `"" + scanner` must not be able to write `scanner.toString()`
+/// and get an invented answer.
+fn renders_as_text(ty: JType) -> bool {
+    !matches!(ty, JType::Scanner | JType::Writer | JType::Reader)
+}
+
 /// The intrinsic method table and JVM class for a receiver type.
 fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match ty {
@@ -11126,7 +11159,39 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
 
 /// Overload selection for intrinsic methods: applicable-by-widening
 /// with exact match preferred (mirrors user-method resolution).
+/// The methods `Object` declares, so every reference has them. Each builtin
+/// table used to repeat them by hand, and the ones that forgot answered
+/// "cannot find symbol: method `getClass()` in class Scanner" for a method every
+/// Java object has. Consulted only when the receiver's own table has no match,
+/// so a type that overrides one (a list's value-based `equals`) still wins.
+///
+/// `toString` is NOT here: its text is per-type, and a type whose text caturra
+/// does not model must keep refusing rather than invent one.
+const OBJECT_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+];
+
 fn pick_builtin<'m>(
+    methods: &'m [BuiltinMethod],
+    name: &str,
+    args: &[JType],
+    type_args: TypeArgs,
+    table: &MethodTable,
+) -> Option<&'m BuiltinMethod> {
+    if !methods.iter().any(|m| m.name == name) {
+        return pick_builtin_in(OBJECT_METHODS, name, args, type_args, table);
+    }
+    pick_builtin_in(methods, name, args, type_args, table)
+}
+
+fn pick_builtin_in<'m>(
     methods: &'m [BuiltinMethod],
     name: &str,
     args: &[JType],
@@ -13157,6 +13222,10 @@ impl BodyGen<'_> {
                         key: object,
                         value: object,
                     },
+                    // javac infers `Optional<Object>` here, the same way it
+                    // infers `List<Object>` for `List.of()` — the context-free
+                    // form of a type that otherwise adopts its context.
+                    ("Optional", "empty") => JType::Optional(object),
                     _ => JType::Null,
                 };
             }
@@ -16908,6 +16977,9 @@ impl BodyGen<'_> {
                         },
                         MAP_METHODS,
                     ),
+                    None if is_empty_optional(receiver) => {
+                        (JType::Optional(general), OPTIONAL_METHODS)
+                    }
                     None => {
                         self.error(span, "cannot call methods on null");
                         return None;
@@ -17265,6 +17337,20 @@ impl BodyGen<'_> {
                     format!(
                         "no suitable method found for {method}({}) in class {}",
                         describe_types(&arg_types, self.table),
+                        receiver_ty.describe(self.table)
+                    ),
+                );
+            } else if method == "toString" && !renders_as_text(receiver_ty) {
+                // Every object has `toString`, so "cannot find symbol" is a
+                // false statement about a Scanner. What caturra does not model
+                // is its TEXT: the JDK's is a dump of the delimiters, position
+                // and locale separators — implementation detail a program
+                // cannot depend on. Say that, the same way concatenating one
+                // already does.
+                self.error(
+                    span,
+                    format!(
+                        "the text of a {} is an implementation detail caturra does not model",
                         receiver_ty.describe(self.table)
                     ),
                 );
@@ -21296,13 +21382,22 @@ impl BodyGen<'_> {
                         .and_then(|m| bret_type(m.ret, TypeArgs::default(), self.table))
                         .unwrap_or(JType::Error);
                     }
-                    // `Path`/`Paths`/`Files` are static-call classes handled
-                    // inline (not in a table), so name them here as the emit
-                    // path does — else their result would be typed by a guess.
+                    // `Path`/`Paths`/`Files`/`Optional` are static-call classes
+                    // handled inline (not in a table), so name them here as the
+                    // emit path does — else their result would be typed by a
+                    // guess. Without `Optional`, the `class == "Optional"` arm
+                    // below was DEAD CODE: the name typed as an expression,
+                    // which is an error, and `type_of` gave up before reaching
+                    // it. `Optional.of(x)` emitted fine and had no type, so
+                    // `var o = Optional.of(x)` could not infer and passing one
+                    // as an argument was refused.
                     Some(Expr::Name { path, .. })
                         if path.len() == 1
                             && self.lookup(&path[0]).is_none()
-                            && matches!(path[0].as_str(), "Path" | "Paths" | "Files") =>
+                            && matches!(
+                                path[0].as_str(),
+                                "Path" | "Paths" | "Files" | "Optional"
+                            ) =>
                     {
                         path[0].clone()
                     }

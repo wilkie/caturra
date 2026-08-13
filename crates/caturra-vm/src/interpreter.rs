@@ -6419,6 +6419,29 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<Answered, VmError> {
         use crate::value::HeapObject;
+        // `Object`'s `equals`/`hashCode` for the kinds routed from here that do
+        // NOT override them (a PriorityQueue does not — `AbstractCollection`
+        // leaves both alone). Answered before the routing, because each
+        // per-kind dispatcher below ends in its own "unknown native member",
+        // and a kind that forgot these aborted a call the compiler had already
+        // accepted. The value-based kinds are excluded by
+        // `uses_identity_equality`, so a map or a set still compares contents.
+        if let Some(object) = self.heap.get(receiver)
+            && intrinsics::uses_identity_equality(object)
+        {
+            match (method_name, args) {
+                ("hashCode", []) => {
+                    return Ok(Answered::Value(JValue::Int(intrinsics::identity_hash(
+                        receiver,
+                    ))));
+                }
+                ("equals", [argument]) => {
+                    let equal = matches!(argument, JValue::Ref(Some(other)) if *other == receiver);
+                    return Ok(Answered::Value(JValue::Int(i32::from(equal))));
+                }
+                _ => {}
+            }
+        }
         // A TreeMap flows through the same arms: its methods reach the map
         // helpers, which route a TreeMap to comparison-based lookup and its
         // sorted vector. The sorted-only navigation methods are handled below.
@@ -8107,6 +8130,30 @@ impl<'run> Interpreter<'run> {
                 Some(present) => present,
                 None => self.call_apply_supplier(*supplier)?,
             },
+            // An Optional is VALUE-based: two present Optionals are equal when
+            // their values are, two empty ones always, and the hash is the
+            // value's (0 when empty). Identity would have been wrong, which is
+            // why the general Object fallback does not cover it.
+            ("hashCode", []) => match value {
+                Some(present) => JValue::Int(self.java_hash_code(present)?),
+                None => JValue::Int(0),
+            },
+            ("equals", [argument]) => {
+                let equal = match argument {
+                    JValue::Ref(Some(other)) => match self.heap.get(*other) {
+                        Some(crate::value::HeapObject::Optional { value: theirs, .. }) => {
+                            match (value, *theirs) {
+                                (None, None) => true,
+                                (Some(mine), Some(theirs)) => self.java_equals(mine, theirs)?,
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                JValue::Int(i32::from(equal))
+            }
             _ => {
                 return Err(VmError::UnknownIntrinsic(format!(
                     "Optional.{method}{descriptor}"
@@ -8718,6 +8765,14 @@ impl<'run> Interpreter<'run> {
             }
             ("collect", [JValue::Ref(Some(collector))]) => {
                 self.stream_collect(elements, *collector)?
+            }
+            // A stream overrides none of `Object`'s methods, so `equals` is
+            // identity — and must not CONSUME the pipeline, the same reason
+            // `toString`/`hashCode` are answered before the elements are
+            // pulled.
+            ("equals", [argument]) => {
+                let equal = matches!(argument, JValue::Ref(Some(other)) if *other == receiver);
+                JValue::Int(i32::from(equal))
             }
             _ => {
                 return Err(VmError::UnknownIntrinsic(format!(
@@ -10891,6 +10946,42 @@ impl<'run> Interpreter<'run> {
                     let text = stack_frame_text(&declaring, &method, file.as_deref(), line);
                     Some(JValue::Ref(Some(self.heap.alloc_string(&text))))
                 }
+                // A StackTraceElement is VALUE-based: the JDK compares all
+                // four pieces, so two frames for the same line are equal and
+                // hash alike. Identity would have been wrong here, which is
+                // why the general Object fallback deliberately does not cover
+                // it.
+                "hashCode" => {
+                    let mut hash = intrinsics::java_string_hash(&declaring);
+                    hash = hash
+                        .wrapping_mul(31)
+                        .wrapping_add(intrinsics::java_string_hash(&method));
+                    hash = hash
+                        .wrapping_mul(31)
+                        .wrapping_add(file.as_deref().map_or(0, intrinsics::java_string_hash));
+                    Some(JValue::Int(hash.wrapping_mul(31).wrapping_add(line)))
+                }
+                "equals" => {
+                    let equal = match args.first() {
+                        Some(JValue::Ref(Some(other))) => {
+                            *other == frame_ref
+                                || matches!(
+                                    self.heap.get(*other),
+                                    Some(crate::value::HeapObject::StackFrame {
+                                        declaring: d,
+                                        method: m,
+                                        file: f,
+                                        line: l,
+                                    }) if *d == declaring
+                                        && *m == method
+                                        && *f == file
+                                        && *l == line
+                                )
+                        }
+                        _ => false,
+                    };
+                    Some(JValue::Int(i32::from(equal)))
+                }
                 _ => None,
             };
             if let Some(answer) = answer {
@@ -11454,6 +11545,17 @@ impl<'run> Interpreter<'run> {
                 list,
                 ..
             }) => String::from(self.cursor_class_name(*source, *writes, *list)),
+            // The I/O and reflection kinds. Reachable since `getClass` became
+            // an `Object` method every receiver answers rather than one each
+            // table had to remember — before that a File's `getClass()` could
+            // not be written, and once it could it said `java.lang.Object`.
+            // All five names recorded from a real JDK.
+            Some(HeapObject::File(_)) => String::from("java/io/File"),
+            Some(HeapObject::Scanner { .. }) => String::from("java/util/Scanner"),
+            Some(HeapObject::Reader { .. }) => String::from("java/io/BufferedReader"),
+            Some(HeapObject::Writer { .. }) => String::from("java/io/PrintWriter"),
+            Some(HeapObject::StackFrame { .. }) => String::from("java/lang/StackTraceElement"),
+            Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
             }

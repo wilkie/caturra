@@ -3569,6 +3569,48 @@ file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
 friendly message for now.
 
+### Object's methods on every reference (2026-08-12)
+
+`getClass`, `hashCode` and `equals` are declared on `Object`, so every
+reference has them — there is no type for which `x.getClass()` is "cannot find
+symbol". Both halves of caturra made each receiver kind repeat them by hand,
+and both drifted:
+
+- **The compiler**: each builtin method table listed `getClass` itself, and a
+  Scanner's listed none of the three. They come from one shared
+  `OBJECT_METHODS`, consulted when a receiver's own table has no match — so a
+  type that overrides one (a list's value-based `equals`) still wins.
+- **The VM**: each receiver kind answered them in its own arms, and a
+  `PriorityQueue`, a `Comparator`, a `Scanner` and a stream aborted the run
+  with "unknown native member" for a call the compiler had accepted.
+
+**Which semantics apply is per class, and that is the half a blanket default
+gets wrong.** A `File`, an `Optional` and a `StackTraceElement` compare by
+VALUE; a `PriorityQueue`, a `Scanner`, a `StringBuilder` and a stream compare
+by IDENTITY. The identity kinds are listed explicitly rather than defaulted,
+so a value-based class added later cannot silently fall in and compare by
+identity behind the program's back.
+
+Two things are refused rather than answered, because their text is genuinely
+unmodelled:
+
+- **A Scanner's `toString`**. The JDK's is a dump of its delimiters, position
+  and locale separators. Concatenating one was already refused; saying "cannot
+  find symbol" for the method was a false statement about the same thing, and
+  the two spellings now give one honest reason.
+- A `Comparator` built by `naturalOrder`/`comparing`/a lambda has no text a
+  program can depend on — a real JDK prints its lambda class, which differs
+  between runs — so caturra answers in `Object`'s shape and does not pretend to
+  match. A comparator the program declared is an ordinary object and prints its
+  own `toString`.
+
+Found alongside: **`Optional.of(x)` emitted fine and had no type.** `Optional`
+is a static-call class handled inline rather than through a table, so
+`type_of` typed the name as an expression, failed, and gave up before reaching
+its own `Optional.of` rule — which was therefore dead code. This is precisely
+the `var` self-check's shape (an expression `println` accepts but `var` cannot
+infer), and it survived because the catalogue had no `Optional` in it.
+
 ### `Iterable` as a type, and parameterization checks (2026-08-12)
 
 `Iterable<T>` was fixed in the PARAMETER position (`<T> int f(Iterable<T>)`)

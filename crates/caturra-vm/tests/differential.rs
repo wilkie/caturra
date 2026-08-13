@@ -23813,3 +23813,106 @@ public class RawLaunder {
 }
 "
 );
+
+// `getClass`/`hashCode`/`equals` are declared on Object, so EVERY reference
+// answers them — there is no type for which `x.getClass()` is "cannot find
+// symbol". Each builtin method table repeated them by hand, and the ones that
+// forgot refused a method every Java object has (a Scanner answered none of
+// them); on the VM side each receiver kind repeated them too, and the ones
+// that forgot aborted the run with "unknown native member" for a call the
+// compiler had already accepted.
+//
+// Which semantics apply is per class, and that is the half a blanket default
+// would get wrong: a File, an Optional and a StackTraceElement compare by
+// VALUE, while a PriorityQueue, a Scanner and a stream compare by IDENTITY.
+differential_test!(
+    diff_object_methods_on_every_reference,
+    "ObjectContract",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class ObjectContract {
+    public static void main(String[] args) {
+        // Value-based: a File is its path.
+        java.io.File f = new java.io.File("dir/f.txt");
+        java.io.File same = new java.io.File("dir/f.txt");
+        java.io.File other = new java.io.File("dir/other.txt");
+        System.out.println(f.toString() + " " + f.equals(same) + " " + f.equals(other));
+        System.out.println(f.hashCode() == same.hashCode());
+        System.out.println(f.getClass().getName());
+
+        // Value-based: an Optional is its contents.
+        Optional<String> present = Optional.of("x");
+        System.out.println(present.equals(Optional.of("x")));
+        System.out.println(present.equals(Optional.of("y")));
+        System.out.println(present.equals(Optional.empty()));
+        System.out.println(Optional.empty().equals(Optional.empty()));
+        System.out.println(present.hashCode() == "x".hashCode());
+        System.out.println(Optional.empty().hashCode());
+
+        // Value-based: a frame is its four pieces.
+        StackTraceElement frame = new RuntimeException("q").getStackTrace()[0];
+        System.out.println(frame.equals(frame) + " " + (frame.hashCode() == frame.hashCode()));
+        System.out.println(frame.getClass().getName());
+
+        // Identity: none of these override equals/hashCode.
+        PriorityQueue<String> queue = new PriorityQueue<>();
+        System.out.println(queue.equals(queue) + " " + queue.equals(new PriorityQueue<String>()));
+        StringBuilder builder = new StringBuilder("a");
+        System.out.println(builder.equals(new StringBuilder("a")) + " " + builder.equals(builder));
+        Scanner scanner = new Scanner("x");
+        System.out.println(scanner.equals(scanner) + " " + scanner.getClass().getName());
+        System.out.println(scanner.hashCode() == scanner.hashCode());
+        Stream<String> stream = List.of("a").stream();
+        System.out.println(stream.equals(stream));
+        RuntimeException failure = new IllegalStateException("z");
+        System.out.println(failure.equals(failure));
+        System.out.println(failure.equals(new IllegalStateException("z")));
+
+        // ...and the value-based collections still compare contents, which a
+        // blanket identity default would have broken.
+        List<String> list = new ArrayList<>(List.of("a"));
+        System.out.println(list.equals(new ArrayList<>(List.of("a"))) + " " + list.hashCode());
+        Map<String, Integer> map = new HashMap<>();
+        map.put("k", 1);
+        System.out.println(map.equals(new HashMap<>(map)));
+        System.out.println(String.class.getClass().getName());
+    }
+}
+"#
+);
+
+// `Optional.of(x)` emitted fine and had NO TYPE: the arm that types it was
+// unreachable, because `Optional` is a static-call class handled inline rather
+// than through a table, so `type_of` typed the NAME as an expression, failed,
+// and gave up first. The `var` self-check is exactly this shape — an
+// expression `println` accepts but `var` cannot infer — and it went unnoticed
+// because the catalogue had no `Optional` in it.
+differential_test!(
+    diff_optional_has_a_type_where_it_has_a_value,
+    "OptionalTyped",
+    r#"
+import java.util.*;
+
+public class OptionalTyped {
+    public static void main(String[] args) {
+        var present = Optional.of("y");
+        System.out.println(present + " " + present.get());
+        var nullable = Optional.ofNullable("z");
+        System.out.println(nullable.isPresent());
+        var empty = Optional.empty();
+        System.out.println(empty + " " + empty.isPresent());
+
+        // As an argument, and as a receiver on the spot.
+        System.out.println(Optional.of("x").equals(Optional.of("y")));
+        System.out.println(Optional.empty().isPresent());
+        System.out.println(Optional.of("a").get().toUpperCase());
+
+        // The context-adopting assignment still works.
+        Optional<String> declared = Optional.empty();
+        System.out.println(declared.orElse("fallback"));
+    }
+}
+"#
+);

@@ -605,6 +605,25 @@ pub fn invoke_virtual(
         let value = *value;
         return boxed_virtual(heap, &class_name, value, method, args);
     }
+    // `Object`'s `equals`/`hashCode`, for the classes that do not override
+    // them. Every receiver kind used to have to remember these in its own
+    // arms, and the ones that forgot — a PriorityQueue, a Comparator, a
+    // Scanner, a Stream — were an "unknown native member" abort for a call
+    // the compiler had already accepted.
+    //
+    // The kinds are listed rather than defaulted, so that a VALUE-based class
+    // added later (its `equals` compares contents) cannot silently fall in
+    // here and compare by identity instead.
+    if uses_identity_equality(receiver_object) {
+        match (method, args) {
+            ("hashCode", []) => return Ok(Some(JValue::Int(identity_hash(receiver)))),
+            ("equals", [argument]) => {
+                let equal = matches!(argument, JValue::Ref(Some(other)) if *other == receiver);
+                return Ok(Some(JValue::Int(i32::from(equal))));
+            }
+            _ => {}
+        }
+    }
     match (receiver_object, method) {
         (HeapObject::PrintStream(stream), "printf") => {
             let stream = *stream;
@@ -753,6 +772,33 @@ pub fn invoke_virtual(
             Some(value) => Ok(Some(value)),
             None => list_method(heap, receiver, method, descriptor, args),
         },
+        // A comparator built by `naturalOrder`/`comparing`/a lambda has no
+        // text a program can depend on: a real JDK prints its LAMBDA class,
+        // `Main$$Lambda$14/0x00000008000c9440@2f4d3709`, which differs between
+        // runs and between JVMs (`Comparator.naturalOrder()` prints the enum
+        // constant `INSTANCE` instead). So this is answerable but not
+        // matchable, and it is written in `Object`'s shape — a class name and
+        // an identity hash — rather than invented to look like a JDK's.
+        // A comparator the PROGRAM declared is an ordinary instance and prints
+        // its own `toString`; this covers only the ones caturra synthesized.
+        (HeapObject::Comparator(_), "toString") => {
+            let text = format!("java.util.Comparator$$Lambda@{:x}", identity_hash(receiver));
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        // Two Files naming one path are equal (the JDK compares the abstract
+        // pathname). Answered here rather than in `file_method`, which reads
+        // no arguments.
+        (HeapObject::File(path), "equals") => {
+            let path = path.clone();
+            let equal = match args.first() {
+                Some(JValue::Ref(Some(other))) => {
+                    matches!(heap.get(*other), Some(HeapObject::File(theirs)) if *theirs == path)
+                }
+                _ => false,
+            };
+            Ok(Some(JValue::Int(i32::from(equal))))
+        }
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
         (HeapObject::Path(_), _) => path_method(heap, receiver, method),
         (
@@ -880,6 +926,51 @@ pub fn invoke_virtual(
             "{class}.{method}{descriptor}"
         ))),
     }
+}
+
+/// Whether this object inherits `Object`'s IDENTITY `equals`/`hashCode` —
+/// its Java class does not override them.
+///
+/// Deliberately a list and not a default. The value-based classes (`String`,
+/// every collection, `Optional`, `File`, `StackTraceElement`, `Map.Entry`)
+/// answer in their own arms, and a new one that forgot would rather be an
+/// honest abort than compare by identity behind the program's back.
+///
+/// A user `Instance` is absent on purpose: its `equals` may be overridden in
+/// the program's own source, which virtual dispatch resolves before any
+/// intrinsic is consulted.
+/// `String.hashCode` (JLS: `s[0]*31^(n-1) + ...`), over UTF-16 units.
+pub(crate) fn java_string_hash_units(units: &[u16]) -> i32 {
+    units.iter().fold(0i32, |hash, unit| {
+        hash.wrapping_mul(31).wrapping_add(i32::from(*unit))
+    })
+}
+
+/// `String.hashCode` of a Rust string, for the value-based classes whose hash
+/// the JDK builds out of its fields' hashes.
+pub(crate) fn java_string_hash(text: &str) -> i32 {
+    text.encode_utf16().fold(0i32, |hash, unit| {
+        hash.wrapping_mul(31).wrapping_add(i32::from(unit))
+    })
+}
+
+pub(crate) fn uses_identity_equality(object: &HeapObject) -> bool {
+    matches!(
+        object,
+        HeapObject::Scanner { .. }
+            | HeapObject::Reader { .. }
+            | HeapObject::Writer { .. }
+            | HeapObject::PrintStream(_)
+            | HeapObject::InputStream
+            | HeapObject::PriorityQueue { .. }
+            | HeapObject::Stream { .. }
+            | HeapObject::Comparator(_)
+            | HeapObject::Collector(_)
+            | HeapObject::SummaryStats { .. }
+            | HeapObject::StringBuilder(_)
+            | HeapObject::Exception { .. }
+            | HeapObject::Iterator { .. }
+    )
 }
 
 fn throw(message: impl Into<String>) -> VmError {
@@ -1334,13 +1425,7 @@ fn string_method(
                 *ignore_case != 0,
             )))))
         }
-        ("hashCode", []) => {
-            let mut hash: i32 = 0;
-            for unit in &units {
-                hash = hash.wrapping_mul(31).wrapping_add(i32::from(*unit));
-            }
-            Ok(Some(JValue::Int(hash)))
-        }
+        ("hashCode", []) => Ok(Some(JValue::Int(java_string_hash_units(&units)))),
         ("indexOf", [JValue::Int(ch)]) => Ok(Some(JValue::Int(index_of_char(&units, *ch, 0)))),
         ("indexOf", [JValue::Int(ch), JValue::Int(from)]) => {
             Ok(Some(JValue::Int(index_of_char(&units, *ch, *from))))
@@ -4044,6 +4129,11 @@ fn file_method(
             let reference = heap.alloc_string(&path);
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // `UnixFileSystem.hashCode`: the path's hash, xor a constant. A File
+        // is VALUE-based (`equals` is handled by the caller, which has the
+        // argument), so two Files naming one path hash alike — what lets a
+        // program keep them in a Set.
+        "hashCode" => Ok(Some(JValue::Int(java_string_hash(&path) ^ 0x0012_d591))),
         _ => Err(VmError::UnknownIntrinsic(format!("File.{method}"))),
     }
 }
