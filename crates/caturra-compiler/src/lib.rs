@@ -608,6 +608,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             || s.text.contains("Predicate")
             || s.text.contains("Supplier")
             || s.text.contains("Consumer")
+            || s.text.contains("Runnable")
             // A comparator lambda in a sorted collection's constructor
             // (`new PriorityQueue<>((a, b) -> ...)`) needs `__Comparator` too,
             // without ever naming it — trigger on the pair.

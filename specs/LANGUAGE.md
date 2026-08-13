@@ -3569,6 +3569,37 @@ file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
 friendly message for now.
 
+### Reference-array class literals, and `Runnable` (2026-08-12)
+
+**`String[].class`** did not parse though `int[].class` did. The primitive form
+is read where a primitive type keyword is; after a class NAME a `[` starts an
+array index, so the whole `[] … .class` tail has to be seen before committing
+to a type — the same lookahead `String[]::new` already needed.
+
+**`Runnable` is a functional interface, not a threading one.** It sat in the
+unsupported list beside `Thread`, which also refused the lambda target every
+callback example uses; `r.run()` runs on the spot and needs no thread.
+`Thread` itself stays unsupported — a program here runs on one thread, in one
+WASM instance.
+
+Runnable has NO type arguments, so it arrives as a plain named type, and that
+exposed two things the parameterized functional interfaces had hidden:
+
+- **A bare functional-interface name had no descriptor.** `void f(Runnable r)`
+  — and `int g(Comparator c)` — were "unknown type", though the same type
+  resolved fine as a local. The parameterized form erases to the bundled
+  interface; the bare form reached neither that arm nor the raw-collection one.
+- **The erasure alias was unguarded.** `functional_erased`'s own comment says a
+  class of that source name shadows it, "checked by the caller with
+  `has_class`" — two of three callers checked. It went unnoticed until a
+  bundled library (swing) declared its own `Runnable`: an anonymous class then
+  implemented `__Runnable` while the method taking it expected the other one.
+
+Found alongside: the bundled erased interfaces **leaked into diagnostics** —
+"does not override abstract method compare() in `__Comparator`" names an
+implementation detail, and reads as caturra's bug rather than the program's.
+javac names the interface the source wrote.
+
 ### One member, two spellings (2026-08-12)
 
 A batch of library members that existed under one name and not the other. Each

@@ -31,6 +31,10 @@ interface __Supplier {
   Object get();
 }
 
+interface __Runnable {
+  void run();
+}
+
 interface __Comparator {
   int compare(Object left, Object right);
 }

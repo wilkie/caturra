@@ -137,6 +137,11 @@ const JAVA_LANG: &[&str] = &[
     "Error",
     "IllegalArgumentException",
     "IllegalStateException",
+    // `Runnable` is a functional interface, not a threading one: `r.run()`
+    // runs on the spot. `Thread` stays unsupported (a program here runs on one
+    // thread, in one WASM instance) and refusing `Runnable` beside it also
+    // refused the lambda target every callback example uses.
+    "Runnable",
 ];
 
 /// Real Java classes students may reach for that caturra doesn't
@@ -190,7 +195,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "StringBuffer",
             "StrictMath",
             "Thread",
-            "Runnable",
             "ThreadLocal",
             "Process",
             "ProcessBuilder",

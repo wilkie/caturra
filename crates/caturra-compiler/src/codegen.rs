@@ -123,7 +123,10 @@ fn emit_class(
         // default methods either.
         let index = intern_class(
             &mut class.constant_pool,
-            &emitted_name(comparator_alias(interface)),
+            &emitted_name(comparator_alias(
+                interface,
+                table.class_id(interface).is_some(),
+            )),
         );
         class.interfaces.push(index);
     }
@@ -1211,7 +1214,7 @@ impl MethodTable {
                     // bundled erased `__Comparator`. Without it, the anonymous form of
                     // a library interface reported "cannot find symbol: class
                     // Comparator" about a class that was imported two lines up.
-                    let name = comparator_alias(name);
+                    let name = comparator_alias(name, table.class_id(name).is_some());
                     // `new Object() { ... }` — the synthetic top type is
                     // registered under its internal name, which no source
                     // spelling reaches. Extending Object is what every class
@@ -1248,11 +1251,7 @@ impl MethodTable {
                         // `implements Comparator<T>` implements the bundled
                         // erased `__Comparator` — unless the user defined that
                         // interface themselves, in which case theirs wins.
-                        let name = if table.class_id(name).is_some() {
-                            name.as_str()
-                        } else {
-                            comparator_alias(name)
-                        };
+                        let name = comparator_alias(name, table.class_id(name).is_some());
                         let id = table.class_id(name);
                         if id.is_none() {
                             diagnostics.push(Diagnostic::error(
@@ -1859,8 +1858,9 @@ impl MethodTable {
                             path,
                             format!(
                                 "{} is not abstract and does not override abstract method \
-                                 {method_name}() in {owner}",
-                                class.name
+                                 {method_name}() in {}",
+                                class.name,
+                                source_interface_name(&owner)
                             ),
                             class.span,
                         ));
@@ -3972,7 +3972,23 @@ fn collection_element_type(ty: JType) -> Option<ElemType> {
 /// writes `Comparator`, which caturra models with the erased `__Comparator`
 /// (its `compare(Object, Object)` reaches a user `compare(T, T)` through the
 /// VM's erasure bridge, exactly as `Comparable.compareTo` does).
-fn comparator_alias(name: &str) -> &str {
+/// ...unless a class of that source name really exists — a bundled or user
+/// `Runnable` shadows the alias exactly as `functional_erased`'s own comment
+/// says it must. Two of the three callers checked; this one did not, and the
+/// day a bundled library declared its own `Runnable` an anonymous class
+/// started implementing `__Runnable` while the method taking it expected the
+/// other one.
+/// The name a DIAGNOSTIC should use for a bundled erased interface: source
+/// says `Comparator`, caturra models `__Comparator`, and a message naming the
+/// internal one reads as caturra's bug rather than the program's.
+fn source_interface_name(name: &str) -> &str {
+    name.strip_prefix("__").unwrap_or(name)
+}
+
+fn comparator_alias(name: &str, declared: bool) -> &str {
+    if declared {
+        return name;
+    }
     functional_erased(name).unwrap_or(name)
 }
 
@@ -3994,6 +4010,7 @@ fn functional_erased(name: &str) -> Option<&'static str> {
         "Consumer" => "__Consumer",
         "BiConsumer" => "__BiConsumer",
         "Supplier" => "__Supplier",
+        "Runnable" => "__Runnable",
         _ => return None,
     })
 }
@@ -6416,6 +6433,20 @@ fn method_descriptor(
                     // `Throwable assertThrows(...)`, `catch` aside.
                     out.push('L');
                     out.push_str(&internal);
+                    out.push(';');
+                } else if !table.has_class(simple)
+                    && let Some(erased) = functional_erased(simple)
+                    && table.has_class(erased)
+                {
+                    // A functional interface named WITHOUT type arguments in a
+                    // signature — `void f(Runnable r)`, `int g(Comparator c)`.
+                    // The parameterized form erases to the bundled interface a
+                    // few arms below this one; the bare form reached neither,
+                    // so the same type resolved as a local and not as a
+                    // parameter. `Runnable` has no type arguments at all, so
+                    // for it the bare form is the only form.
+                    out.push('L');
+                    out.push_str(erased);
                     out.push(';');
                 } else if let Some(arity) = raw_generic_arity(simple)
                     && !table.has_class(simple)

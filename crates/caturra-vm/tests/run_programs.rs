@@ -6366,6 +6366,7 @@ fn inherited_fields_and_super_chaining() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one entry per pinned diagnostic
 fn stage6_compile_errors_match_javac_wording() {
     let cases: &[(&str, &str)] = &[
         (
@@ -6446,6 +6447,19 @@ fn stage6_compile_errors_match_javac_wording() {
         (
             "class M { static void f() { Math m = null; } }",
             "java.lang.Math is not supported by caturra",
+        ),
+        // The bundled erased interfaces are an implementation detail: a
+        // message naming `__Comparator` reads as caturra's bug rather than
+        // the program's. javac names the interface the source wrote.
+        (
+            "import java.util.*; class D implements Comparator<String> { } class M { }",
+            "does not override abstract method compare() in Comparator",
+        ),
+        // `Thread` is still refused — a program here runs on one thread, in
+        // one WASM instance — though the `Runnable` beside it is supported now.
+        (
+            "class M { static void f() { Thread t = new Thread(); } }",
+            "java.lang.Thread is not supported by caturra",
         ),
         (
             "import java.util.stream.*; class M { static void f() { Collectors c = null; } }",
@@ -11103,7 +11117,11 @@ fn unmodeled_library_classes_explain_themselves_in_every_position() {
             "class M { static void r() { Object o = new Vector<Integer>(); } }",
         ),
         ("extends", "class D extends Vector {} class M {}"),
-        ("implements", "class D implements Runnable {} class M {}"),
+        // `Runnable` used to be the case here; it is SUPPORTED now (a
+        // functional interface, not a threading one), so `Enumeration` — a
+        // real java.util interface caturra does not model — carries the
+        // implements position instead.
+        ("implements", "class D implements Enumeration {} class M {}"),
         (
             "type argument",
             "class M { static void r() { ArrayList<Vector> l; } }",

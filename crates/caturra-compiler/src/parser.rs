@@ -1642,6 +1642,36 @@ impl Parser<'_> {
             )
     }
 
+    /// `String[].class` / `String[][].class` — the class literal of a
+    /// REFERENCE array type. `[` here would otherwise start an array index,
+    /// so the whole `[] … .class` tail has to be seen before committing:
+    /// only an EMPTY pair can be part of a type, and only `.class` may follow
+    /// it. The primitive form (`int[].class`) is parsed where a primitive type
+    /// keyword is, and this is its missing other half.
+    fn at_array_class_literal(&self) -> bool {
+        let mut at = self.pos;
+        let mut pairs = 0usize;
+        while matches!(
+            self.tokens.get(at).map(|t| &t.kind),
+            Some(TokenKind::Symbol("["))
+        ) && matches!(
+            self.tokens.get(at + 1).map(|t| &t.kind),
+            Some(TokenKind::Symbol("]"))
+        ) {
+            at += 2;
+            pairs += 1;
+        }
+        pairs > 0
+            && matches!(
+                self.tokens.get(at).map(|t| &t.kind),
+                Some(TokenKind::Symbol("."))
+            )
+            && matches!(
+                self.tokens.get(at + 1).map(|t| &t.kind),
+                Some(TokenKind::Keyword(Keyword::Class))
+            )
+    }
+
     /// `String[]::new` — modelled as a one-parameter lambda that allocates
     /// the array, which is exactly what the reference means (JLS §15.13.3).
     fn array_constructor_reference(&mut self, element: &str, start: SourceSpan) -> Expr {
@@ -3790,6 +3820,35 @@ impl Parser<'_> {
                         span,
                     };
                 }
+            } else if self.at_symbol("[") && self.at_array_class_literal() {
+                // `String[].class`: the name so far is the ELEMENT type, and
+                // the `[]` pairs belong to it rather than indexing it.
+                let Expr::Name { path, span: start } = &expr else {
+                    self.error_here("expected a type before '[].class'");
+                    return Err(Abort);
+                };
+                let mut dims = 0usize;
+                while self.at_symbol("[") {
+                    self.pos += 2; // `[` and `]`
+                    dims += 1;
+                }
+                let element = path.join(".");
+                let start = *start;
+                self.pos += 1; // `.`
+                let end = self.here().end;
+                self.pos += 1; // `class`
+                let span = SourceSpan {
+                    start: start.start,
+                    end,
+                };
+                expr = Expr::Field {
+                    object: Box::new(Expr::Name {
+                        path: vec![format!("{element}{}", "[]".repeat(dims))],
+                        span,
+                    }),
+                    name: String::from("class"),
+                    span,
+                };
             } else if self.at_symbol("[") {
                 self.pos += 1;
                 let index = self.expression()?;

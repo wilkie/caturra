@@ -23988,3 +23988,82 @@ public class BothSpellings {
 }
 "#
 );
+
+// `String[].class` — the class literal of a REFERENCE array type. Only the
+// primitive form parsed, because it is read where a primitive type keyword is;
+// after a class NAME, `[` starts an array index, so the whole `[] … .class`
+// tail has to be seen before committing to a type.
+differential_test!(
+    diff_reference_array_class_literals,
+    "ArrayLiterals",
+    r#"
+public class ArrayLiterals {
+    public static void main(String[] args) {
+        System.out.println(String[].class);
+        System.out.println(String[][].class.getName());
+        System.out.println(Integer[].class.getSimpleName());
+        System.out.println(java.lang.String[].class.getTypeName());
+        System.out.println(int[].class + " " + String[].class.isArray());
+        System.out.println(String[].class.getComponentType());
+        System.out.println(String[].class == new String[0].getClass());
+
+        // ...and indexing still parses, which is what `[` otherwise starts.
+        int[] numbers = {1, 2};
+        System.out.println(numbers[1]);
+        String[][] grid = new String[2][2];
+        grid[0][1] = "q";
+        System.out.println(grid[0][1]);
+    }
+}
+"#
+);
+
+// `Runnable` is a FUNCTIONAL interface, not a threading one: `r.run()` runs on
+// the spot. It was refused beside `Thread`, which also refused the lambda
+// target every callback example uses. `Thread` itself stays unsupported — a
+// program here runs on one thread, in one WASM instance.
+//
+// It also has NO type arguments, so it arrives as a plain named type, and
+// that exposed a gap the parameterized functional interfaces hid: a bare
+// functional-interface name had no descriptor, so the same type resolved as a
+// local variable and not as a PARAMETER (`void f(Comparator c)` too).
+differential_test!(
+    diff_runnable_is_a_functional_interface,
+    "Runnables",
+    r#"
+import java.util.Comparator;
+
+public class Runnables {
+    static void twice(Runnable job) {
+        job.run();
+        job.run();
+    }
+
+    // A bare (unparameterized) functional interface as a parameter.
+    static int compareRaw(Comparator raw) {
+        return raw.compare("a", "b");
+    }
+
+    public static void main(String[] args) {
+        Runnable lambda = () -> System.out.println("ran");
+        lambda.run();
+        twice(() -> System.out.println("again"));
+
+        Runnable anonymous = new Runnable() {
+            public void run() {
+                System.out.println("anon");
+            }
+        };
+        anonymous.run();
+
+        int[] count = {0};
+        Runnable bump = () -> count[0]++;
+        bump.run();
+        bump.run();
+        System.out.println(count[0]);
+
+        System.out.println(compareRaw(Comparator.naturalOrder()));
+    }
+}
+"#
+);

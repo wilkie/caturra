@@ -1814,6 +1814,20 @@ fn user_defined_functional(target: &TypeRef, ctx: &Ctx) -> bool {
 }
 
 fn functional_lambda_spec(target: &TypeRef) -> Option<FunctionalSpec> {
+    // `Runnable` takes no type arguments, so it arrives as a plain NAMED type
+    // rather than a parameterized one — which is why a `Runnable r = () -> …`
+    // found no functional target at all.
+    if let TypeRef::Named(name) = target
+        && name.rsplit('.').next().unwrap_or(name) == "Runnable"
+    {
+        return Some(FunctionalSpec {
+            interface: "__Runnable",
+            method: "run",
+            ret: TypeRef::Void,
+            params: Vec::new(),
+            result: None,
+        });
+    }
     let TypeRef::Generic { base, args } = target else {
         return None;
     };
