@@ -3818,6 +3818,31 @@ once that is present.
 One divergence was found rather than fixed, and is listed below: a class
 caturra models only as a namespace for its statics cannot name a variable.
 
+### A constant `if` condition and definite assignment (2026-08-13)
+
+javac accepts `if (false) { } else { v = 1; }` and reads `v` afterwards: the
+then-branch cannot execute, so it imposes nothing on definite assignment
+(JLS §16.2.7 — "definitely assigned after e when false" is vacuous for a
+constant-true condition, and symmetrically for a false one). caturra
+intersected both branches unconditionally and refused every shape where only
+the taken branch assigns — including the `if (DEBUG) … else …` a program
+actually writes.
+
+The no-`else` form already had the carve-out, but tested for a **literal**
+`true`, so `if (1 < 2) x = 1;` was refused while `if (true) x = 1;` was not.
+Both forms now ask the same folder — codegen's own, which resolves a constant
+EXPRESSION and a constant VARIABLE, local `final boolean` included.
+
+An existing test had pinned the wrong behaviour here, commented "javac-style
+error" for a program javac accepts. Worth remembering: **a test can encode the
+bug**, and only asking the JDK finds that out.
+
+Found by an evaluation-order/scope/definite-assignment audit (round 10,
+dimensions 1–3): 85 probes, one divergence, and the other two dimensions were
+clean — evaluation order including `a[i++] = i++` and compound-assignment
+targets evaluated once, and shadowing including a private method not being
+overridden.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

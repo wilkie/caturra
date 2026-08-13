@@ -5351,14 +5351,19 @@ fn definite_assignment_across_branches() {
     }]);
     assert!(ok.success(), "{:?}", ok.diagnostics);
 
-    // Only one branch assigns: javac-style error.
+    // Only one branch assigns, and the condition is NOT constant: javac-style
+    // error. This case used to be written with `if (1 < 2)`, which javac
+    // ACCEPTS — a constant-true condition means the assignment always happens
+    // (JLS §16.2.7: "definitely assigned after e when false" is vacuous). The
+    // test pinned a strictness of caturra's own, and the constant cases below
+    // now pin what javac really does.
     let bad = caturra_compiler::compile(&[caturra_compiler::SourceFile {
         path: "T.java".into(),
         text: r"
             class T {
-                static void f() {
+                static void f(int n) {
                     int x;
-                    if (1 < 2) { x = 1; }
+                    if (n < 2) { x = 1; }
                     System.out.println(x);
                 }
             }

@@ -13071,6 +13071,17 @@ impl BodyGen<'_> {
         }
     }
 
+    /// Whether an `if` condition is a compile-time constant, and which. Asked
+    /// of the FOLDER rather than the syntax, so a constant expression (`1 > 2`)
+    /// and a constant VARIABLE — a local `final boolean DEBUG = false` as much
+    /// as a static one — count, which is what javac does.
+    fn constant_condition(&self, cond: &Expr) -> Option<bool> {
+        match self.const_fold(cond)?.literal() {
+            Literal::Bool(value) => Some(value),
+            _ => None,
+        }
+    }
+
     fn if_statement(&mut self, cond: &Expr, then: &Stmt, els: Option<&Stmt>) {
         self.condition(cond, "if");
         let before = self.assigned_flags();
@@ -13088,16 +13099,28 @@ impl BodyGen<'_> {
             // requirement — after `if (c) x = 1; else return;` the only way to
             // reach the next statement is through the branch that assigned.
             // Intersecting blindly (the old rule) rejected that valid program.
-            match (
-                crate::flow::completes_normally(then),
-                crate::flow::completes_normally(els),
-            ) {
-                (true, true) => self.intersect_assigned(&after_then),
-                // The else is abrupt, so only the then-branch reaches here.
-                (true, false) => self.restore_assigned(&after_then),
-                // The then is abrupt: keep what the else branch assigned,
-                // which is the state already in place.
-                (false, true | false) => {}
+            // A CONSTANT condition takes only the branch that can run: javac
+            // accepts `if (false) { } else { v = 1; }` and reads `v` after it,
+            // because the then-branch cannot execute and so imposes nothing.
+            // Intersecting both branches refused that — and every shape of it,
+            // including the `if (DEBUG) …` a program actually writes. The
+            // no-`else` form already had this carve-out, for a literal `true`
+            // only; both forms now ask the same folder, so a constant
+            // EXPRESSION (`1 > 2`) and a constant VARIABLE count too.
+            match self.constant_condition(cond) {
+                Some(true) => self.restore_assigned(&after_then),
+                Some(false) => {}
+                None => match (
+                    crate::flow::completes_normally(then),
+                    crate::flow::completes_normally(els),
+                ) {
+                    (true, true) => self.intersect_assigned(&after_then),
+                    // The else is abrupt, so only the then-branch reaches here.
+                    (true, false) => self.restore_assigned(&after_then),
+                    // The then is abrupt: keep what the else branch assigned,
+                    // which is the state already in place.
+                    (false, true | false) => {}
+                },
             }
             self.code.bind(end);
         } else {
@@ -13108,7 +13131,7 @@ impl BodyGen<'_> {
             // (JLS §16.2.7 — "definitely assigned after e when false" is
             // vacuous for a constant-true condition). Any other lone `if`
             // may not run, and its assignments do not.
-            if !is_true_literal(cond) {
+            if self.constant_condition(cond) != Some(true) {
                 self.restore_assigned(&before);
             }
             self.code.bind(end);

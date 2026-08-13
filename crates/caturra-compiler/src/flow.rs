@@ -429,7 +429,7 @@ fn has_escaping_break(statement: &Stmt, label: Option<&str>) -> bool {
 /// comparisons and the boolean operators over INT/boolean literals. A constant
 /// VARIABLE (`static final boolean FLAG = true`) is resolved by the caller,
 /// which has the class in hand.
-fn constant_bool(expr: &Expr) -> Option<bool> {
+pub(crate) fn constant_bool(expr: &Expr) -> Option<bool> {
     constant_bool_in(expr, &std::collections::HashMap::new())
 }
 

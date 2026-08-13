@@ -24187,3 +24187,191 @@ public class Refill {
 }
 "#
 );
+
+// A CONSTANT `if` condition takes only the branch that can run. javac accepts
+// `if (false) { } else { v = 1; }` and reads `v` afterwards, because the
+// then-branch cannot execute and so imposes nothing on definite assignment
+// (JLS §16.2.7 — "definitely assigned after e when false" is vacuous for a
+// constant-true condition, and symmetrically for false).
+//
+// caturra intersected both branches unconditionally, so every shape where only
+// the taken branch assigns was refused — including the `if (DEBUG) … else …`
+// a program actually writes. The no-`else` form had the carve-out already, but
+// only for a literal `true`; both forms now ask the same folder, so a constant
+// EXPRESSION and a constant VARIABLE count too.
+differential_test!(
+    diff_constant_if_condition_and_definite_assignment,
+    "ConstantIf",
+    r"
+public class ConstantIf {
+    static final boolean DEBUG = false;
+
+    public static void main(String[] args) {
+        int a;
+        if (false) { } else { a = 1; }
+        System.out.println(a);
+
+        int b;
+        if (true) { b = 2; } else { }
+        System.out.println(b);
+
+        int c;
+        if (1 > 2) { } else { c = 3; }
+        System.out.println(c);
+
+        int d;
+        if (DEBUG) { } else { d = 4; }
+        System.out.println(d);
+
+        final boolean localFlag = false;
+        int e;
+        if (localFlag) { } else { e = 5; }
+        System.out.println(e);
+
+        // No else, constant true: the assignment always happens.
+        int f;
+        if (1 < 2) { f = 6; }
+        System.out.println(f);
+
+        // Both branches assign, so the merge is unaffected.
+        int g;
+        if (args.length == 0) { g = 7; } else { g = 8; }
+        System.out.println(g);
+    }
+}
+"
+);
+
+// EVALUATION ORDER (JLS §15.7). Java pins the order operands are evaluated in,
+// and every rule is observable only through side effects — so getting one wrong
+// is a silent wrong answer, never a refusal. A 40-probe sweep found no
+// divergence; this is the part of it worth keeping.
+differential_test!(
+    diff_evaluation_order_and_side_effects,
+    "EvalOrder",
+    r#"
+public class EvalOrder {
+    static String log = "";
+    static int counter = 0;
+
+    static String tag(String s) { log += s; return s; }
+    static int val() { log += "v"; return 1; }
+    static int idx() { log += "i"; return 1; }
+    static boolean yes() { log += "Y"; return true; }
+    static boolean no() { log += "N"; return false; }
+    static int two(String a, String b) { return (a + b).length(); }
+
+    public static void main(String[] args) {
+        // The classic surprises: the value of `i++` is the OLD i.
+        int i = 1;
+        i = i++;
+        System.out.println(i);
+        int j = 1;
+        System.out.println(j++ + ++j);
+        System.out.println(j);
+
+        // An array store evaluates the reference, then the index, then the
+        // value — so the index is the OLD i and the stored value the new one.
+        int[] a = {0, 0, 0};
+        int k = 0;
+        a[k++] = k;
+        System.out.println(a[0] + "," + a[1] + "," + k);
+
+        // A compound assignment evaluates its target ONCE.
+        int[] b = {1, 2, 3};
+        b[idx()] += 10;
+        System.out.println(b[1] + " " + log);
+
+        // Left operand fully before right, in arguments and in concatenation.
+        log = "";
+        System.out.println(two(tag("g"), tag("h")) + " " + log);
+        log = "";
+        System.out.println(tag("1") + tag("2") + tag("3") + " " + log);
+
+        // Short-circuit really does skip the right operand; `&` does not.
+        log = "";
+        boolean r = no() && yes();
+        System.out.println(r + " " + log);
+        log = "";
+        r = no() & yes();
+        System.out.println(r + " " + log);
+
+        // The selector of a switch is evaluated once.
+        log = "";
+        switch (val()) {
+            case 1: System.out.println("one " + log); break;
+            default: System.out.println("other " + log);
+        }
+
+        // Assignment is an expression, right-associative.
+        log = "";
+        int x, y;
+        x = y = val();
+        System.out.println(x + "," + y + " " + log);
+    }
+}
+"#
+);
+
+// SCOPE, SHADOWING AND HIDING (JLS §6.4, §8.3). A field is HIDDEN where a
+// method is OVERRIDDEN, and the difference decides which value a program sees.
+// Picking wrong is silent, so this pins the whole set at once.
+differential_test!(
+    diff_shadowing_and_hiding,
+    "Shadowing",
+    r#"
+public class Shadowing {
+    static class Base {
+        String name = "base";
+        String get() { return "base"; }
+        private String secret() { return "base-secret"; }
+        String show() { return secret(); }
+        static String who() { return "base-static"; }
+    }
+
+    static class Derived extends Base {
+        String name = "derived";
+        String get() { return "derived"; }
+        private String secret() { return "derived-secret"; }
+        static String who() { return "derived-static"; }
+        int both() { return 0; }
+    }
+
+    static int shared = 1;
+
+    static class Holder {
+        int shared = 2;
+        int show() { return shared * 10 + Shadowing.shared; }
+    }
+
+    static String pick(Object o) { return "object"; }
+    static String pick(String s) { return "string"; }
+
+    public static void main(String[] args) {
+        Base asBase = new Derived();
+        Derived asDerived = new Derived();
+        // The FIELD comes from the static type, the METHOD from the runtime one.
+        System.out.println(asBase.name + " " + asBase.get());
+        System.out.println(asDerived.name + " " + asDerived.get());
+        System.out.println(((Base) asDerived).name + " " + ((Base) asDerived).get());
+
+        // A private method is not overridden, so the base calls its own.
+        System.out.println(new Derived().show());
+
+        // A static reached through an instance reference uses the STATIC type.
+        Base ref = new Derived();
+        System.out.println(ref.who() + " " + Base.who() + " " + Derived.who());
+
+        // A local shadows a field; the field is still reachable by its class.
+        int shared = 3;
+        System.out.println(shared + " " + Shadowing.shared);
+        System.out.println(new Holder().show());
+
+        // An overload is chosen by the STATIC type of the argument.
+        Object asObject = "text";
+        String asString = "text";
+        System.out.println(pick(asObject) + " " + pick(asString));
+    }
+}
+"#
+);
