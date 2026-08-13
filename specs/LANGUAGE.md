@@ -3959,10 +3959,13 @@ answers:
   refuses the assignment to `List<Object>`. `Expr::Call` carries no type
   arguments at all, so the witness is parsed and discarded; a witness that
   agrees with the arguments (the ordinary case) works.
-- **`<T> Optional<T> maybe(T v) { return Optional.of(v); }` does not compile**
-  — "Optional<Object> cannot be converted to Optional<Object>", the two
-  spellings of the erased element being different shapes. Pre-existing;
-  `List` and `Set` returns are fine.
+- ~~**`<T> Optional<T> maybe(T v) { return Optional.of(v); }` does not
+  compile**~~ — **fixed.** `Optional` was simply left off the list of
+  containers whose elements match by the variance rule, so a generic method
+  could not hold its own result: "Optional<Object> cannot be converted to
+  Optional<Object>", the two spellings of an erased element printing alike and
+  comparing unequal. Both gates needed the arm — `widens` and the conversion
+  matrix — which is the same two-gate trap recorded above for `Iterable`.
 
 ## Divergences from javac
 

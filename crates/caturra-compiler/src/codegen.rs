@@ -4402,7 +4402,14 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // not be called at all.
         || matches!(
             (from, to),
-            (JType::Stack(a), JType::Stack(b)) | (JType::TreeSet(a), JType::TreeSet(b))
+            (JType::Stack(a), JType::Stack(b))
+                | (JType::TreeSet(a), JType::TreeSet(b))
+                // `Optional<T>` was left off this list, so a generic method
+                // could not even hold its own result: `<T> Optional<T> f(T v)`
+                // assigning `Optional.of(v)` was "Optional<Object> cannot be
+                // converted to Optional<Object>" — the two spellings of an
+                // erased element printing alike and comparing unequal.
+                | (JType::Optional(a), JType::Optional(b))
                 if elem_matches(a, b, table)
         )
         || matches!(
@@ -25656,6 +25663,10 @@ impl BodyGen<'_> {
             // A user class that implements `Iterator` assigned to an
             // `Iterator<E>` variable — the same shape, and the same trap.
             (JType::Object(_), JType::Iterator(_)) if widens(from, to, self.table) => {}
+            // Two `Optional`s whose elements match by the variance rule (an
+            // erased type-variable element accepts any). The two gates again:
+            // `widens` allowing it is not enough, this matrix has to agree.
+            (JType::Optional(_), JType::Optional(_)) if widens(from, to, self.table) => {}
             // A PARAMETERIZED value assigned to a supertype, raw or
             // parameterized: `Iterable<String> it = bag` for a
             // `class Bag<T> implements Iterable<T>`. Nothing here matched a

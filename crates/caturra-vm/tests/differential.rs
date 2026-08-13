@@ -24581,6 +24581,17 @@ public class GenericReturns {
         return new ArrayList<>(source);
     }
 
+    // `Optional<T>` was left off the element-variance list, so a generic
+    // method could not even hold its own result.
+    static <T> Optional<T> maybe(T value) {
+        return Optional.of(value);
+    }
+
+    static <T> Optional<T> held(T value) {
+        Optional<T> kept = Optional.of(value);
+        return kept;
+    }
+
     public static void main(String[] args) {
         List<String> words = listOf("x");
         System.out.println(words + " " + words.get(0).toUpperCase());
@@ -24602,6 +24613,11 @@ public class GenericReturns {
         // A container in and a container out.
         List<String> copied = copy(words);
         System.out.println(copied.get(0) + copied.size());
+
+        Optional<String> present = maybe("y");
+        System.out.println(present.get().toUpperCase());
+        System.out.println(held(5).get() + 1);
+        System.out.println(maybe("z").isPresent() + " " + Optional.empty().isPresent());
 
         // var infers it too.
         var inferred = listOf("q");
