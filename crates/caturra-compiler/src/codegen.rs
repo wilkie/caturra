@@ -3559,6 +3559,29 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
             "a functional interface parameterized on a method's own type variable is not supported by caturra",
         );
     }
+    // A type argument that IS modelled, but not as an ELEMENT: caturra stores
+    // collection elements in a closed `ElemType` set, and a `Scanner` or a
+    // `File` is not one of them. Both messages this replaces were false — one
+    // blamed the BASE ("unknown type 'List'") and the other called the element
+    // unsupported outright, though the class works perfectly as a variable.
+    // Asked BEFORE the two of them, since both would answer first and wrongly.
+    if let TypeRef::Generic { base, args } = ty
+        && raw_generic_arity(base.rsplit('.').next().unwrap_or(base)).is_some()
+        && !table.has_class(base)
+    {
+        for arg in args {
+            if elem_from_type_arg(arg, table).is_none()
+                && let TypeRef::Named(name) | TypeRef::Generic { base: name, .. } = arg
+                && table.resolve_type(&TypeRef::Named(name.clone())).is_some()
+            {
+                let simple = name.rsplit('.').next().unwrap_or(name);
+                return format!(
+                    "{simple} works as a variable, but caturra does not model it as a \
+                     collection element"
+                );
+            }
+        }
+    }
     if let Some(reason) = unsupported_name_in(ty) {
         return reason;
     }

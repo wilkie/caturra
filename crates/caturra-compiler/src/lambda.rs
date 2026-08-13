@@ -2387,6 +2387,28 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 }
 
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    // `List.of("a", "b")` / `Set.of(...)` / `Arrays.asList(...)` used straight
+    // as a source. The element is what the arguments agree on, which is all
+    // this syntactic pass can see — the same reading `Stream.of(...)` already
+    // gets. Without it `List.of("a").stream().map(String::toUpperCase)` had no
+    // element for the lambda, though the identical pipeline over a DECLARED
+    // list worked and `List.of("a").get(0).toUpperCase()` did too.
+    if let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        ..
+    } = receiver
+        && !args.is_empty()
+        && let Expr::Name { path, .. } = owner.as_ref()
+        && path.len() == 1
+        && matches!(
+            (path[0].as_str(), method.as_str()),
+            ("List" | "Set", "of") | ("Arrays", "asList")
+        )
+    {
+        return Some(literal_element_type(args));
+    }
     if let Expr::Call {
         receiver: Some(inner),
         method,

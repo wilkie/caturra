@@ -3569,6 +3569,28 @@ file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
 friendly message for now.
 
+### An immutable factory as a stream source (2026-08-12)
+
+`List.of("a").stream().map(String::toUpperCase)` had no target type for its
+lambda, though the identical pipeline over a declared `List<String>` worked and
+`List.of("a").get(0).toUpperCase()` worked too. The lambda pass reads element
+types SYNTACTICALLY — it runs before typing — and it knew a declared variable's
+element, a `new ArrayList<String>()`, a map view and a cursor, but not
+`List.of(...)`, `Set.of(...)` or `Arrays.asList(...)` used straight as a
+source. The element is what the arguments agree on, which is the reading
+`Stream.of(...)` already got.
+
+It presented as a COLLECTOR gap — "toMap takes no lambda key extractor" — and
+was nothing of the kind: every collector involved already worked over a
+declared list. Worth remembering when a refusal names the operation furthest
+from the actual cause.
+
+Also fixed here: a type argument caturra models as a VARIABLE but not as a
+collection element (`List<Scanner>`, `Set<java.io.File>`) had two different
+false messages — one blamed the base (`unknown type 'List'`), the other called
+a perfectly working class unsupported. Caturra stores elements in a closed
+`ElemType` set, and the honest message says which of the two things is true.
+
 ### Reference-array class literals, and `Runnable` (2026-08-12)
 
 **`String[].class`** did not parse though `int[].class` did. The primitive form

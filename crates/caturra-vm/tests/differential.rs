@@ -24067,3 +24067,42 @@ public class Runnables {
 }
 "#
 );
+
+// A `List.of(...)` / `Set.of(...)` / `Arrays.asList(...)` used STRAIGHT as a
+// stream source. The lambda pass reads element types syntactically (it runs
+// before typing), and knew a declared variable's element but not one of these,
+// so `List.of("a").stream().map(String::toUpperCase)` had no target type for
+// its lambda — while the identical pipeline over a declared list worked, and
+// `List.of("a").get(0).toUpperCase()` worked too.
+//
+// It read as a collector gap ("toMap takes no lambda") and was nothing of the
+// kind: every collector below works over a declared list already.
+differential_test!(
+    diff_immutable_factories_as_stream_sources,
+    "FactorySource",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class FactorySource {
+    public static void main(String[] args) {
+        System.out.println(List.of("a", "bb").stream()
+            .map(String::toUpperCase).collect(Collectors.toList()));
+        System.out.println(List.of("a", "bb").stream()
+            .collect(Collectors.toMap(x -> x, String::length)));
+        System.out.println(List.of("a", "bb").stream()
+            .collect(Collectors.groupingBy(String::length)));
+        System.out.println(Arrays.asList("a", "bb").stream()
+            .filter(s -> s.length() > 1).count());
+        System.out.println(Set.of("a").stream()
+            .map(s -> s + "!").collect(Collectors.toList()));
+        System.out.println(List.of(3, 1, 2).stream()
+            .sorted().map(n -> n * 2).collect(Collectors.toList()));
+        System.out.println(List.of("x", "y").stream().collect(Collectors.joining("-")));
+        System.out.println(Arrays.asList(5, 6).stream().mapToInt(n -> n).sum());
+        System.out.println(List.of("a", "bb").stream()
+            .collect(Collectors.partitioningBy(s -> s.length() > 1)));
+    }
+}
+"#
+);

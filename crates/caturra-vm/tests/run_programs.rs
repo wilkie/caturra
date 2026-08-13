@@ -6461,6 +6461,18 @@ fn stage6_compile_errors_match_javac_wording() {
             "class M { static void f() { Thread t = new Thread(); } }",
             "java.lang.Thread is not supported by caturra",
         ),
+        // A type argument caturra models as a VARIABLE but not as an element.
+        // The two messages this replaces were both false: one blamed the base
+        // ("unknown type 'List'"), the other called a working class
+        // unsupported outright.
+        (
+            "import java.util.*; class M { static void f() { List<Scanner> l; } }",
+            "Scanner works as a variable, but caturra does not model it as a collection element",
+        ),
+        (
+            "class M { static void f() { java.util.Set<java.io.File> s; } }",
+            "File works as a variable, but caturra does not model it as a collection element",
+        ),
         (
             "import java.util.stream.*; class M { static void f() { Collectors c = null; } }",
             "java.util.stream.Collectors is not supported by caturra",
