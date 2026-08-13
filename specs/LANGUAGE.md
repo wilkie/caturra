@@ -3569,6 +3569,39 @@ file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
 friendly message for now.
 
+### A value that adopts its context, under `var` (2026-08-12)
+
+Self-check #2 re-run after a session of typing changes — `var x = EXPR` must
+infer what `println(EXPR)` emits — found eight disagreements over 74
+expressions, and they share one shape.
+
+A value that types as `null` so it **adopts its context** (an empty or
+immutable-factory collection, a `collect` whose element the `map` erased, a
+diamond) has no context to adopt under `var`. Worse, `type_of` had no rule for
+a `null` RECEIVER at all, so every method called straight on one was untyped
+though emission handled it: `List.of("a").size()`,
+`Collections.emptyList().size()` and
+`xs.stream().map(f).collect(toList()).size()` all printed fine and could not be
+named, inferred, or passed as an argument.
+
+The fix keeps the adopt-its-context typing — the assignment
+`List<String> r = …collect(toList())` still works — and resolves a direct call
+against the general face, which is what emission already did. A factory WITH
+arguments recovers its element from them, so `List.of("a").get(0)` stays a
+String.
+
+The rest were members reachable only through their own emitter, never a method
+table: `Stream.of(...)`, the `SimpleEntry` diamond, and `isNaN`/`isInfinite`
+(added earlier the same day on the emitting path only — the check caught the
+half that was missing). And a qualified factory (`java.util.List.of`) could not
+infer, because the rule keyed on the first path segment and read it as a class
+called `java`.
+
+All 74 expressions now agree. The other three sweeps are clean too: 0
+VM-internal errors over 570 library calls, 0 Object-method holes beyond the
+deliberate `Scanner` refusal, and 458 qualified-name probes with one known
+dependency-gated case.
+
 ### An immutable factory as a stream source (2026-08-12)
 
 `List.of("a").stream().map(String::toUpperCase)` had no target type for its

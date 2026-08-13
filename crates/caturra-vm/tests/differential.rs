@@ -24106,3 +24106,59 @@ public class FactorySource {
 }
 "#
 );
+
+// Self-check #2 again, after a session of typing changes: `var x = EXPR` must
+// infer what `println(EXPR)` emits. A 74-expression sweep found eight
+// disagreements; every one is below.
+//
+// The shape they share: a value that types as `null` so it ADOPTS its context
+// — an empty or immutable-factory collection, a `collect` whose element the
+// `map` erased, a diamond — has no context to adopt under `var`, and calling a
+// method straight on one was untyped even though emission handled it. Plus two
+// members reachable only through their own emitter (`Stream.of`, `isNaN`) and
+// the qualified spelling of a factory.
+differential_test!(
+    diff_var_infers_what_println_emits,
+    "VarInfers",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class VarInfers {
+    public static void main(String[] args) {
+        List<String> l = new ArrayList<>(List.of("ab", "c"));
+
+        // A method called straight on a context-adopting collection.
+        System.out.println(List.of("a").size() + " " + Collections.emptyList().size());
+        var size = List.of("a", "b").size();
+        var first = List.of("a", "bb").get(0);
+        var stream = List.of("a", "bb").stream();
+        System.out.println(size + " " + first.toUpperCase() + " " + stream.count());
+        var empty = Collections.emptyList().size();
+        System.out.println(empty);
+
+        // A `collect` whose element the `map` erased: still a real collection.
+        System.out.println(l.stream().map(String::toUpperCase)
+            .collect(Collectors.toList()).size());
+        var mapped = l.stream().map(String::toUpperCase).collect(Collectors.toList());
+        System.out.println(mapped);
+        // ...and the assignment still adopts the declared element.
+        List<String> declared = l.stream().map(String::toUpperCase)
+            .collect(Collectors.toList());
+        System.out.println(declared.get(0).length());
+
+        // Built by their own emitters rather than a method table.
+        var of = Stream.of(1, 2);
+        System.out.println(of.count());
+        var qualified = java.util.List.of(1, 2);
+        System.out.println(qualified);
+        var entry = new AbstractMap.SimpleEntry<>("c", 3);
+        System.out.println(entry.getKey() + "=" + (entry.getValue() + 1));
+        var nan = Double.valueOf(0.0 / 0.0).isNaN();
+        System.out.println(nan);
+        var opt = Optional.empty();
+        System.out.println(opt.isPresent());
+    }
+}
+"#
+);

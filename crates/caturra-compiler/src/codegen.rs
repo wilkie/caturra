@@ -3592,7 +3592,13 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
         // class every program has used. Asked here rather than of every name
         // in the type, because only the name that failed to resolve is at
         // fault: `List<Integer>` must not blame `Integer`.
-        if let Some(reason) = crate::imports::unusable_library_type_reason(&name) {
+        // The SIMPLE name: the reason is the same whichever spelling the
+        // program used, and asking with the dotted one found nothing — so
+        // `Collector<…>` gave its honest reason and `java.util.stream
+        // .Collector<…>` said "unknown type" about the very same class.
+        if let Some(reason) =
+            crate::imports::unusable_library_type_reason(name.rsplit('.').next().unwrap_or(&name))
+        {
             return reason;
         }
         return format!("unknown type '{name}'");
@@ -6259,7 +6265,11 @@ fn boxed_method_return(method: &str) -> Option<JType> {
         "doubleValue" => JType::Double,
         "floatValue" => JType::Float,
         "charValue" => JType::Char,
-        "booleanValue" | "equals" => JType::Boolean,
+        // `isNaN`/`isInfinite` are a floating wrapper's; the emitter checks
+        // the receiver kind, and answering here for any wrapper is harmless —
+        // a non-floating one has already been refused by the time a type is
+        // asked for.
+        "booleanValue" | "equals" | "isNaN" | "isInfinite" => JType::Boolean,
         "toString" => JType::Str,
         _ => return None,
     })
@@ -10640,6 +10650,41 @@ fn empty_collection_kind(receiver: &Expr) -> Option<EmptyKind> {
     }
 }
 
+/// A `collect(...)` whose ELEMENT is unknown — the stream passed through a
+/// `map`, which erases it — types as `null` so it still assigns to a
+/// collection of any element. It is a real collection though, so a method
+/// called straight on one resolves against the general face, exactly as
+/// `Collections.emptyList()` does: without this,
+/// `xs.stream().map(f).collect(toList()).size()` was "cannot call methods on
+/// null" for something that printed perfectly.
+fn collected_collection_kind(receiver: &Expr) -> Option<EmptyKind> {
+    let Expr::Call { method, args, .. } = receiver else {
+        return None;
+    };
+    if method != "collect" {
+        return None;
+    }
+    let Some(Expr::Call {
+        receiver: Some(owner),
+        method: collector,
+        ..
+    }) = args.first()
+    else {
+        return None;
+    };
+    if !matches!(owner.as_ref(), Expr::Name { path, .. }
+        if path.last().is_some_and(|name| name == "Collectors"))
+    {
+        return None;
+    }
+    match collector.as_str() {
+        "toList" | "toUnmodifiableList" => Some(EmptyKind::List),
+        "toSet" | "toUnmodifiableSet" => Some(EmptyKind::Set),
+        "toMap" | "groupingBy" | "partitioningBy" => Some(EmptyKind::Map),
+        _ => None,
+    }
+}
+
 /// `Optional.empty()` as a RECEIVER. It types as `null` so it assigns to an
 /// `Optional` of any element (`Optional<String> o = Optional.empty()`), but it
 /// is a real empty Optional, so a method called straight on one — javac infers
@@ -13279,6 +13324,52 @@ impl BodyGen<'_> {
             // the arguments, or `Object` when there are none.
             // `Error` counts here too: these factories are typed by their
             // context everywhere else, and reach this point unresolved.
+            // `new AbstractMap.SimpleEntry<>(k, v)`: a DIAMOND types as `null`
+            // so it assigns to any `Map.Entry`, and `var` has no target to
+            // adopt. The arguments give the two elements, which is what
+            // `Map.entry(k, v)` — the same object under a shorter name — is
+            // already typed from.
+            if matches!(inferred, JType::Null | JType::Error)
+                && let Expr::NewObject {
+                    class,
+                    type_args,
+                    args,
+                    ..
+                } = init
+                && type_args.is_empty()
+                && matches!(
+                    class.as_str(),
+                    "AbstractMap.SimpleEntry" | "java.util.AbstractMap.SimpleEntry"
+                )
+                && !self.table.has_class("AbstractMap")
+                && let [key, value] = args.as_slice()
+            {
+                let key = self.type_of(key);
+                let value = self.type_of(value);
+                if let (Some(key), Some(value)) =
+                    (collection_elem_of(key), collection_elem_of(value))
+                {
+                    inferred = JType::MapEntry { key, value };
+                }
+            }
+            // A `collect(...)` after a `map`: the element erased, so the
+            // result types as `null` and adopts its context — but `var` has no
+            // context to adopt. javac infers the mapped element; caturra
+            // infers the general face, which is stricter (a String method on
+            // an element is then refused) and never wrong.
+            if matches!(inferred, JType::Null | JType::Error)
+                && let Some(kind) = collected_collection_kind(init)
+            {
+                let object = ElemType::Object(self.table.object_id);
+                inferred = match kind {
+                    EmptyKind::List => JType::List(object),
+                    EmptyKind::Set => JType::Set(object),
+                    EmptyKind::Map => JType::Map {
+                        key: object,
+                        value: object,
+                    },
+                };
+            }
             if matches!(inferred, JType::Null | JType::Error)
                 && let Expr::Call {
                     receiver: Some(owner),
@@ -13287,6 +13378,13 @@ impl BodyGen<'_> {
                     ..
                 } = init
                 && let Expr::Name { path, .. } = owner.as_ref()
+                // A QUALIFIED factory is the same factory: `java.util.List.of`
+                // is `List.of`, and keying on the first segment alone read it
+                // as a class called `java`, so only the simple spelling could
+                // infer.
+                && let path = self
+                    .strip_package_prefix(path)
+                    .unwrap_or_else(|| path.clone())
                 && path.len() == 1
                 // `Collections` IS a bundled class, so `has_class` cannot be
                 // the guard here; these three names are the library's own and
@@ -13308,6 +13406,10 @@ impl BodyGen<'_> {
                         key: element(self, 0),
                         value: element(self, 1),
                     },
+                    // `Stream.of(...)` and `new AbstractMap.SimpleEntry<>(k, v)`
+                    // are built by their own emitters, not a method table, so
+                    // neither had a return type to infer from.
+                    ("Stream", "of") => JType::Stream(element(self, 0)),
                     ("Collections", "emptyList") => JType::List(object),
                     ("Collections", "emptySet") => JType::Set(object),
                     ("Collections", "emptyMap") => JType::Map {
@@ -17066,7 +17168,9 @@ impl BodyGen<'_> {
             // against the general (Object-element) face.
             JType::Null => {
                 let general = ElemType::Object(self.table.object_id);
-                let (table_ty, table) = match empty_collection_kind(receiver) {
+                let (table_ty, table) = match empty_collection_kind(receiver)
+                    .or_else(|| collected_collection_kind(receiver))
+                {
                     Some(EmptyKind::List) => (JType::List(general), LIST_METHODS),
                     Some(EmptyKind::Set) => (JType::Set(general), SET_METHODS),
                     Some(EmptyKind::Map) => (
@@ -17096,6 +17200,48 @@ impl BodyGen<'_> {
             }
         };
         self.emit_virtual_call_on_stacked_receiver(class_id, method, args, span)
+    }
+
+    /// The return type of a builtin instance call, for `type_of`. Mirrors the
+    /// lookup the emitting path does, without emitting or reporting.
+    fn type_of_builtin_call(&mut self, receiver_ty: JType, method: &str, args: &[Expr]) -> JType {
+        let elem = TypeArgs::of(receiver_ty);
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        let Some((_, methods)) = builtin_instance_table(receiver_ty) else {
+            return JType::Error;
+        };
+        pick_builtin(methods, method, &arg_types, elem, self.table)
+            .and_then(|m| bret_type(m.ret, elem, self.table))
+            .unwrap_or(JType::Error)
+    }
+
+    /// `List.of("a", "b")` / `Set.of(...)` / `Arrays.asList(...)` — a factory
+    /// WITH arguments, whose element the arguments themselves give. Typed as
+    /// `null` so it assigns to a collection of any element, so a call straight
+    /// on one has to recover the element here or `List.of("a").get(0)` comes
+    /// back as an `Object`.
+    fn literal_factory_type(&mut self, receiver: &Expr) -> Option<JType> {
+        let Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } = receiver
+        else {
+            return None;
+        };
+        let Expr::Name { path, .. } = owner.as_ref() else {
+            return None;
+        };
+        if args.is_empty() || path.len() != 1 {
+            return None;
+        }
+        let elem = collection_elem_of(self.type_of(&args[0]))?;
+        match (path[0].as_str(), method.as_str()) {
+            ("List", "of") | ("Arrays", "asList") => Some(JType::List(elem)),
+            ("Set", "of") => Some(JType::Set(elem)),
+            _ => None,
+        }
     }
 
     /// `Object` methods on an array receiver (already on the stack): identity
@@ -21551,6 +21697,39 @@ impl BodyGen<'_> {
                                 },
                                 _ => JType::Error,
                             };
+                        }
+                        // `Collections.emptyList()` and the `List.of(...)`
+                        // family type as `null` so they assign to a collection
+                        // of ANY element — but they are real collections, and
+                        // emission resolves a call straight on one against the
+                        // general face. `type_of` did not, so EVERY method on
+                        // such a receiver was untyped: `var n = List.of("a")
+                        // .size()` could not infer while `println` of it was
+                        // fine, and one used as an argument reported nothing.
+                        JType::Null => {
+                            let Some(source) = receiver.as_deref() else {
+                                return JType::Error;
+                            };
+                            let general = ElemType::Object(self.table.object_id);
+                            let table_ty = match empty_collection_kind(source)
+                                .or_else(|| collected_collection_kind(source))
+                            {
+                                Some(EmptyKind::List) => JType::List(general),
+                                Some(EmptyKind::Set) => JType::Set(general),
+                                Some(EmptyKind::Map) => JType::Map {
+                                    key: general,
+                                    value: general,
+                                },
+                                None if is_empty_optional(source) => JType::Optional(general),
+                                // A factory WITH arguments knows its element,
+                                // which is what keeps `List.of("a").get(0)` a
+                                // String rather than an Object.
+                                None => match self.literal_factory_type(source) {
+                                    Some(ty) => ty,
+                                    None => return JType::Error,
+                                },
+                            };
+                            return self.type_of_builtin_call(table_ty, method, args);
                         }
                         // A wrapper method on a primitive/boxed receiver
                         // (`someInt.intValue()`) — autoboxed at emission.
