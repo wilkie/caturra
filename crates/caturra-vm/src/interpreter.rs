@@ -10923,6 +10923,23 @@ impl<'run> Interpreter<'run> {
             self.vec_pool.push(args);
             return Ok(None);
         }
+        // `fillInStackTrace()` re-records the trace AT THIS CALL and returns
+        // the receiver itself (`Throwable`'s own return is `this`), so a
+        // throwable rethrown from elsewhere can be made to point at the
+        // rethrow. Its own frame is skipped the same way a constructor's is.
+        if method_name == "fillInStackTrace"
+            && let Some(exception) = receiver
+            && matches!(
+                self.heap.get(exception),
+                Some(crate::value::HeapObject::Exception { .. })
+            )
+        {
+            let lines = self.construction_trace_lines();
+            self.exception_traces.insert(exception, lines);
+            frame.stack.push(JValue::Ref(Some(exception)));
+            self.vec_pool.push(args);
+            return Ok(None);
+        }
         // The pieces of one frame.
         if let Some(frame_ref) = receiver
             && let Some(crate::value::HeapObject::StackFrame {

@@ -7195,7 +7195,15 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("String", "getBytes", "byte arrays are not supported by caturra"),
     ("StringBuilder", "capacity", "caturra does not model a builder's capacity, only its contents"),
-    ("StringBuilder", "codePoints", "streams are not supported by caturra"),
+    // A class's access flags are not modelled, and could not be answered
+    // honestly if they were: a LIBRARY class has no class file here, and a
+    // nested one is flattened to the top level, so the `static` and `private`
+    // bits a JDK reports from the InnerClasses attribute are gone. A number
+    // that is right for a top-level user class and quietly wrong for the other
+    // two is worse than saying so. (`Field`/`Method`/`Constructor`
+    // `getModifiers` ARE answered — those flags survive.)
+    ("Class", "getModifiers", "caturra does not model a class's access flags"),
+    ("Class", "getPackage", "caturra does not model java.lang.Package"),
     ("Integer", "decode", "system properties are not supported by caturra"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
     ("ArrayList", "parallelStream", "streams are not supported by caturra"),
@@ -7252,6 +7260,11 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::Collection(_) => "Collection",
         JType::MapEntry { .. } => "Map.Entry",
         JType::StringBuilder => "StringBuilder",
+        JType::Class => "Class",
+        JType::Exception(_) => "Throwable",
+        JType::Optional(_) => "Optional",
+        JType::Stream(_) => "Stream",
+        JType::File => "File",
         _ => "",
     }
 }
@@ -8778,6 +8791,15 @@ const EXCEPTION_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Throwable],
         ret: BRet::Void,
         descriptor: "(Ljava/lang/Throwable;)V",
+    },
+    // `fillInStackTrace()` re-records the trace AT THE CALL and returns
+    // `this`, so a throwable rethrown elsewhere can be made to point at the
+    // rethrow rather than its construction.
+    BuiltinMethod {
+        name: "fillInStackTrace",
+        params: &[],
+        ret: BRet::Throwable,
+        descriptor: "()Ljava/lang/Throwable;",
     },
     // `initCause(t)` sets the cause and returns `this` (for chaining).
     BuiltinMethod {

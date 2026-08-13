@@ -24162,3 +24162,28 @@ public class VarInfers {
 }
 "#
 );
+
+// `fillInStackTrace()` re-records the trace AT THIS CALL and returns the
+// receiver itself, so a throwable rethrown from elsewhere can be made to point
+// at the rethrow rather than at its construction. Its own frame is hidden the
+// same way a constructor's is.
+differential_test!(
+    diff_fill_in_stack_trace_repoints_a_throwable,
+    "Refill",
+    r#"
+public class Refill {
+    static Throwable deep() {
+        return new RuntimeException("x");
+    }
+
+    public static void main(String[] args) {
+        Throwable failure = deep();
+        System.out.println(failure.getStackTrace()[0].getMethodName());
+        Throwable same = failure.fillInStackTrace();
+        System.out.println(same == failure);
+        System.out.println(failure.getStackTrace()[0].getMethodName());
+        System.out.println(failure.getMessage());
+    }
+}
+"#
+);

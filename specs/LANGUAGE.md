@@ -3569,6 +3569,26 @@ file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
 friendly message for now.
 
+### `fillInStackTrace`, and what a `Class` will not say (2026-08-12)
+
+`Throwable.fillInStackTrace()` re-records the trace AT THE CALL and returns the
+receiver itself, so a throwable rethrown from elsewhere can be made to point at
+the rethrow rather than at its construction. Its own frame is hidden exactly as
+a constructor's is.
+
+`Class.getModifiers()` is **refused, on purpose**. It could not be answered
+honestly: a LIBRARY class has no class file here, and a nested class is
+flattened to the top level, so the `static` and `private` bits a JDK reports
+from the InnerClasses attribute are gone. A number that is right for a
+top-level user class and quietly wrong for the other two is worse than saying
+so. (`Field`, `Method` and `Constructor` DO answer `getModifiers` — those flags
+survive.) `Class.getPackage()` is refused too: `java.lang.Package` is not
+modelled.
+
+Both refusals needed `receiver_class_name` to know its own receiver kinds
+first — it named eleven and not `Class`, `Throwable`, `Optional`, `Stream` or
+`File`, so an honest reason written for any of those could never fire.
+
 ### A value that adopts its context, under `var` (2026-08-12)
 
 Self-check #2 re-run after a session of typing changes — `var x = EXPR` must

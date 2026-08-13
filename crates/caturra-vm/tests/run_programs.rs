@@ -6473,6 +6473,19 @@ fn stage6_compile_errors_match_javac_wording() {
             "class M { static void f() { java.util.Set<java.io.File> s; } }",
             "File works as a variable, but caturra does not model it as a collection element",
         ),
+        // A class's access flags could not be answered honestly if they were
+        // modelled: a LIBRARY class has no class file here, and a nested one
+        // is flattened, so the `static`/`private` bits a JDK reports from the
+        // InnerClasses attribute are gone. A number right for a top-level user
+        // class and quietly wrong for the other two is worse than saying so.
+        (
+            "class M { static void f() { int m = String.class.getModifiers(); } }",
+            "Class.getModifiers exists in Java, but caturra does not model a class's access flags",
+        ),
+        (
+            "class M { static void f() { Object p = String.class.getPackage(); } }",
+            "Class.getPackage exists in Java, but caturra does not model java.lang.Package",
+        ),
         (
             "import java.util.stream.*; class M { static void f() { Collectors c = null; } }",
             "java.util.stream.Collectors is not supported by caturra",
