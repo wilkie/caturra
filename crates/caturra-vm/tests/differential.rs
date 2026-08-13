@@ -24501,8 +24501,16 @@ public class MathBits {
         double[] values = {0.0, 1.0, -1.0, 0.5, 2.0, 3.0, 10.0, 0.1, 100.0,
                            1e-8, 1e8, Math.PI, Math.E, -0.5, 123.456, 1e-300};
         for (double v : values) {
-            // Ported from FDLIBM.
+            // Ported from FDLIBM — the functions with no HotSpot intrinsic,
+            // where Math really is StrictMath.
             System.out.println(Math.cbrt(v));
+            System.out.println(Math.atan(v));
+            System.out.println(Math.atan2(v, 3.25));
+            System.out.println(Math.atan2(3.25, v));
+            System.out.println(Math.asin(v / 2001));
+            System.out.println(Math.acos(v / 2001));
+            System.out.println(Math.cosh(v / 100));
+            System.out.println(Math.cosh(v));
             System.out.println(Math.hypot(v, 3.25));
             System.out.println(Math.hypot(1e300, v));
             System.out.println(Math.hypot(1e-320, v));
@@ -24524,6 +24532,10 @@ public class MathBits {
         System.out.println(Math.hypot(Double.MAX_VALUE, Double.MAX_VALUE));
         System.out.println(Math.hypot(Double.MIN_VALUE, Double.MIN_VALUE));
         System.out.println(Math.hypot(Double.POSITIVE_INFINITY, Double.NaN));
+        System.out.println(Math.atan2(0.0, -0.0) + " " + Math.atan2(-0.0, -1.0));
+        System.out.println(Math.atan2(Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY));
+        System.out.println(Math.asin(1.0) + " " + Math.acos(-1.0) + " " + Math.acos(1.0));
+        System.out.println(Math.cosh(0.0) + " " + Math.cosh(710.0) + " " + Math.cosh(-750.0));
     }
 }
 "#

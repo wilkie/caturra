@@ -3862,21 +3862,34 @@ platform libm, and the two differ in the last ulp often enough to matter.
 Exact already, and now pinned so they cannot drift: `sqrt`, `cos`, `log`,
 `log1p`, `expm1`, `sinh`, `tanh`.
 
-Six are FDLIBM ports now — `cbrt`, `hypot`, `atan`, `atan2`, `asin`, `acos` —
-each verified to **0 divergences** on the corpus that had them wrong, taking
-the total from 652 to 121 (81% closed). They are transcribed with the
+Seven are FDLIBM ports now — `cbrt`, `hypot`, `atan`, `atan2`, `asin`, `acos`,
+`cosh` — each verified to **0 divergences** on the corpus that had them wrong,
+taking the total from 652 to **42 (93.6% closed)**. They are transcribed with the
 algorithm's own constant spellings and variable names so a reader can check
 them line by line against the original; the module carries a `#![allow]` for
 the clippy lints that would otherwise push toward a tidier transcription nobody
 can verify.
 
-**What remains is one dependency, not six functions.** `cosh`, `log10`, `exp`,
-`pow`, `sin` and `tan` all bottom out in `exp` and `log`, and FDLIBM ports of
-`cosh` and `log10` written over Rust's `exp`/`ln` changed **nothing** — the
-same 79 and 34 values still differed, because the error is in the base
-function, not the wrapper. Both were reverted rather than left as code that
-looks like a fix. Porting FDLIBM's `__ieee754_exp` and `__ieee754_log` would
-close the rest at once.
+**Which functions are portable at all is decided by HotSpot, and the JDK will
+tell you.** Comparing `Math.f(x)` with `StrictMath.f(x)` over 4 000 inputs:
+
+- **`Math` == `StrictMath`** for `cbrt`, `hypot`, `atan2`, `asin`, `acos`,
+  `cosh` — no intrinsic, so these really are FDLIBM, and all seven ports
+  landed at exactly 0.
+- **`Math` != `StrictMath`** for `log`, `exp`, `log10`, `sin`, `cos`, `tan`,
+  `pow` — HotSpot substitutes an x86 intrinsic, so FDLIBM is the WRONG target
+  for them. Ports of `exp` and `log` made things worse (3 → 103 and 0 → 21)
+  and were reverted; Rust's libm is much closer to the intrinsic than FDLIBM
+  is.
+
+The FDLIBM `exp` is kept, but only as `cosh`'s internal helper — which is the
+whole reason an earlier `cosh` written over Rust's `exp` reproduced Rust's
+answer instead of the JDK's. `StrictMath.cosh` calls FDLIBM's own `exp`, not
+`Math.exp`.
+
+The remaining 42 (`log10` 34, `exp` 3, `sin` 2, `pow` 2, `tan` 1) are all in
+the intrinsic set. Closing them means matching an x86 intrinsic, not a
+published algorithm.
 
 ### `printf` digits, and an `Object` argument (2026-08-13)
 

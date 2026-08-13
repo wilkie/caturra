@@ -5244,7 +5244,7 @@ fn math_static(
         ("atan", [JValue::Double(v)]) => d(crate::floatdec::java_atan(*v)),
         ("atan2", [JValue::Double(a), JValue::Double(b)]) => d(crate::floatdec::java_atan2(*a, *b)),
         ("sinh", [JValue::Double(v)]) => d(v.sinh()),
-        ("cosh", [JValue::Double(v)]) => d(v.cosh()),
+        ("cosh", [JValue::Double(v)]) => d(crate::floatdec::java_cosh(*v)),
         ("tanh", [JValue::Double(v)]) => d(v.tanh()),
         ("exp", [JValue::Double(v)]) => d(v.exp()),
         ("expm1", [JValue::Double(v)]) => d(v.exp_m1()),

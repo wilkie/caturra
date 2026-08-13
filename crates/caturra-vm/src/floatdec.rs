@@ -840,6 +840,132 @@ pub(crate) fn java_acos(x: f64) -> f64 {
     2.0 * (df + w)
 }
 
+/// FDLIBM's `exp`. The base the rest of the library stands on: `cosh`, `pow`
+/// and the rest inherit whatever error this one has, which is why porting
+/// their wrappers over Rust's `exp` changed nothing.
+#[allow(clippy::many_single_char_names)] // FDLIBM's own names, to keep it checkable
+pub(crate) fn java_exp(x: f64) -> f64 {
+    const HALF: [f64; 2] = [0.5, -0.5];
+    const TWOM1000: f64 = 9.33263618503218878990e-302;
+    const O_THRESHOLD: f64 = 7.09782712893383973096e+02;
+    const U_THRESHOLD: f64 = -7.45133219101941108420e+02;
+    const LN2_HI: [f64; 2] = [6.93147180369123816490e-01, -6.93147180369123816490e-01];
+    const LN2_LO: [f64; 2] = [1.90821492927058770002e-10, -1.90821492927058770002e-10];
+    const INVLN2: f64 = 1.44269504088896338700e+00;
+    const P1: f64 = 1.66666666666666019037e-01;
+    const P2: f64 = -2.77777777770155933842e-03;
+    const P3: f64 = 6.61375632143793436117e-05;
+    const P4: f64 = -1.65339022054652515390e-06;
+    const P5: f64 = 4.13813679705723846039e-08;
+
+    let bits = x.to_bits();
+    let mut hx = (bits >> 32) as u32;
+    let xsb = ((hx >> 31) & 1) as usize; // sign bit
+    hx &= 0x7fff_ffff;
+
+    if hx >= 0x4086_2e42 {
+        // |x| >= 709.78...
+        if hx >= 0x7ff0_0000 {
+            if ((hx & 0xf_ffff) | (bits as u32)) != 0 {
+                return x + x; // NaN
+            }
+            return if xsb == 0 { x } else { 0.0 }; // exp(±inf)
+        }
+        if x > O_THRESHOLD {
+            return f64::INFINITY;
+        }
+        if x < U_THRESHOLD {
+            return 0.0;
+        }
+    }
+
+    // Argument reduction to [-ln2/2, ln2/2].
+    let mut x = x;
+    let mut hi = 0.0;
+    let mut lo = 0.0;
+    let mut k = 0i32;
+    if hx > 0x3fd6_2e42 {
+        if hx < 0x3ff0_a2b2 {
+            // 0.5 ln2 < |x| < 1.5 ln2
+            hi = x - LN2_HI[xsb];
+            lo = LN2_LO[xsb];
+            k = 1 - xsb.cast_signed() as i32 - xsb.cast_signed() as i32;
+        } else {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                k = (INVLN2 * x + HALF[xsb]) as i32;
+            }
+            let t = f64::from(k);
+            hi = x - t * LN2_HI[0]; // t*LN2_HI is exact here
+            lo = t * LN2_LO[0];
+        }
+        x = hi - lo;
+    } else if hx < 0x3e30_0000 {
+        // |x| < 2^-28: exp(x) is 1 + x
+        return 1.0 + x;
+    }
+
+    let t = x * x;
+    let c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
+    if k == 0 {
+        return 1.0 - ((x * c) / (c - 2.0) - x);
+    }
+    let y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi);
+    // `__HI(y) += k << 20` in the original: the addition happens in the 32-bit
+    // HIGH WORD and wraps there, which a 64-bit add of a sign-extended k does
+    // not reproduce.
+    let add_to_exponent = |y: f64, k: i32| {
+        let bits = y.to_bits();
+        let high = ((bits >> 32) as u32).wrapping_add(k.cast_unsigned() << 20);
+        f64::from_bits((u64::from(high) << 32) | (bits & 0xffff_ffff))
+    };
+    if k >= -1021 {
+        add_to_exponent(y, k)
+    } else {
+        add_to_exponent(y, k + 1000) * TWOM1000
+    }
+}
+
+/// FDLIBM's `cosh`. `Math.cosh` has no `HotSpot` intrinsic, so it really is
+/// `StrictMath.cosh` — and that one calls FDLIBM's own `exp`, which is why a
+/// version of this written over Rust's `exp` reproduced Rust's answer instead
+/// of the JDK's.
+#[allow(clippy::many_single_char_names)] // FDLIBM's own names, to keep it checkable
+pub(crate) fn java_cosh(x: f64) -> f64 {
+    let bits = x.to_bits();
+    let ix = ((bits >> 32) as u32) & 0x7fff_ffff;
+    if ix >= 0x7ff0_0000 {
+        return x * x; // infinity or NaN
+    }
+    let magnitude = x.abs();
+    if ix < 0x3fd6_2e43 {
+        // |x| in [0, 0.5 ln 2]: built from expm1 so the leading 1 does not
+        // swallow the precision.
+        let t = magnitude.exp_m1();
+        let w = 1.0 + t;
+        if ix < 0x3c80_0000 {
+            return w; // cosh(tiny) is 1
+        }
+        return 1.0 + (t * t) / (w + w);
+    }
+    if ix < 0x4036_0000 {
+        // |x| in [0.5 ln 2, 22]
+        let t = java_exp(magnitude);
+        return 0.5 * t + 0.5 / t;
+    }
+    if ix < 0x4086_2e42 {
+        // |x| in [22, log(MAX_VALUE)]
+        return 0.5 * java_exp(magnitude);
+    }
+    let lx = bits as u32;
+    if ix < 0x4086_33ce || (ix == 0x4086_33ce && lx <= 0x8fb9_f87d) {
+        // |x| in [log(MAX_VALUE), the overflow threshold]
+        let w = java_exp(0.5 * magnitude);
+        return 0.5 * w * w;
+    }
+    f64::INFINITY
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
