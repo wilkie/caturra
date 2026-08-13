@@ -3937,6 +3937,26 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### Enums and class initialization (2026-08-13)
+
+Audit round 10, dimension 11: 16 programs, **no divergence**. Pinned because
+every rule here is observable only through a side effect in a static
+initializer — a wrong answer would be silent, and this is the shape of code
+that would show it.
+
+What was checked: a class initializes on FIRST ACTIVE USE, so reading a
+**constant variable** does not initialize its class (the value is inlined at
+compile time) while reading any other static does; a static read through a
+SUBCLASS initializes the class that declares it, not the subclass;
+a superclass initializes before its subclass; instance initializers run in
+declaration order, interleaved with field initializers, before the constructor
+body. And for enums: declaration order for `ordinal`/`compareTo`, a FRESH
+`values()` array each call, `valueOf` throwing `IllegalArgumentException` for
+an unknown name and NPE for null, enums as `TreeMap` keys and as
+`Collections.sort` elements. Five programs javac rejects — instantiating an
+enum, assigning a constant, extending a class, a qualified `case` label, an
+abstract method with no constant body — are refused too.
+
 ### A generic method returning a container (2026-08-13)
 
 `<T> List<T> listOf(T value)` — how every generic factory is written — came

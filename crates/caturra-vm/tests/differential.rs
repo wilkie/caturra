@@ -24626,3 +24626,92 @@ public class GenericReturns {
 }
 "#
 );
+
+// WHEN A CLASS INITIALIZES (JLS §12.4.1) is observable only through a side
+// effect in a static initializer, so a wrong answer here is silent. The rules
+// that actually bite: reading a CONSTANT VARIABLE does not initialize its
+// class (the value is inlined at compile time), reading any other static does;
+// a static read through a SUBCLASS initializes the class that declares it, not
+// the subclass; and a superclass initializes before its subclass.
+//
+// A sweep of enums and initialization order found no divergence; this is the
+// part of it worth keeping.
+differential_test!(
+    diff_class_initialization_and_enums,
+    "InitOrder",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+public class InitOrder {
+    static class Constants {
+        static final int LIMIT = 10;
+        static final String NAME = "fixed";
+        static { System.out.println("Constants initialized"); }
+    }
+
+    static class Computed {
+        static final int VALUE = compute();
+        static int compute() { System.out.println("computing"); return 3; }
+    }
+
+    static class Base {
+        static int shared = report("Base");
+        static int report(String who) { System.out.println(who + " initialized"); return 1; }
+        Base() { System.out.println("Base ctor"); }
+    }
+
+    static class Derived extends Base {
+        static { System.out.println("Derived initialized"); }
+        Derived() { System.out.println("Derived ctor"); }
+    }
+
+    enum Colour { RED, GREEN, BLUE }
+
+    public static void main(String[] args) {
+        // A constant variable is inlined, so its class never initializes.
+        System.out.println("start");
+        System.out.println(Constants.LIMIT + Constants.NAME.length());
+        System.out.println("between");
+        System.out.println(Computed.VALUE);
+
+        // Reading an inherited static initializes the DECLARING class only.
+        System.out.println(Derived.shared);
+        // ...and constructing the subclass initializes it, superclass first.
+        new Derived();
+        new Derived();
+
+        // Enums: declaration order, a fresh values() array, a throwing valueOf.
+        for (Colour c : Colour.values()) {
+            System.out.println(c + " " + c.name() + " " + c.ordinal());
+        }
+        System.out.println(Colour.valueOf("GREEN") == Colour.GREEN);
+        System.out.println(Colour.RED.compareTo(Colour.BLUE) + " "
+            + Colour.BLUE.compareTo(Colour.RED));
+        Colour[] values = Colour.values();
+        values[0] = Colour.GREEN;
+        System.out.println(Colour.values()[0] + " " + values[0]);
+        System.out.println(Colour.values() == Colour.values());
+        try {
+            Colour.valueOf("PURPLE");
+            System.out.println("no throw");
+        } catch (IllegalArgumentException e) {
+            System.out.println("IAE " + e.getMessage());
+        }
+
+        Map<Colour, Integer> counts = new TreeMap<>();
+        for (Colour c : Colour.values()) {
+            counts.put(c, c.ordinal());
+        }
+        System.out.println(counts);
+        List<Colour> sorted = new ArrayList<>(Arrays.asList(Colour.BLUE, Colour.RED));
+        Collections.sort(sorted);
+        System.out.println(sorted);
+    }
+}
+"#
+);
