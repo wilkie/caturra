@@ -3937,6 +3937,23 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### Queue halves, list iterators, collection algorithms (2026-08-13)
+
+Audit round 10, dimension 12: 11 programs, **no divergence**. Pinned for the
+same reason as the dimension above — a `Queue` has two of everything
+(`add`/`offer`, `remove`/`poll`, `element`/`peek`), one half throwing where the
+other returns null, so picking the wrong half is a silent behaviour change
+rather than an error.
+
+Also checked: both ends and both halves of a `Deque` plus its stack face,
+`PriorityQueue` poll order and a comparator-ordered one, a `ListIterator`
+inserting and overwriting mid-walk (and what the list looks like DURING the
+walk), reverse iteration and removal, `removeIf`/`replaceAll` on a list, a set
+and a map's values view, a stable sort, `Collections`'
+max/min/frequency/reverse/sort/binarySearch/swap/fill/nCopies/disjoint/addAll,
+`shuffle` with a seeded `Random`, and `ConcurrentModificationException` from
+mutating during a for-each.
+
 ### Enums and class initialization (2026-08-13)
 
 Audit round 10, dimension 11: 16 programs, **no divergence**. Pinned because

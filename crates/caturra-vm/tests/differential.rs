@@ -24715,3 +24715,97 @@ public class InitOrder {
 }
 "#
 );
+
+// A `Queue` has two of everything — `add`/`offer`, `remove`/`poll`,
+// `element`/`peek` — one half throwing where the other returns null, and
+// picking the wrong half is a silent behaviour change rather than an error.
+// A `ListIterator` can insert and overwrite mid-walk, and what the list looks
+// like DURING that walk is observable. A sweep of these found no divergence;
+// this keeps the parts most likely to drift.
+differential_test!(
+    diff_queue_halves_and_list_iterator,
+    "QueueHalves",
+    r#"
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.NoSuchElementException;
+import java.util.PriorityQueue;
+import java.util.Queue;
+
+public class QueueHalves {
+    public static void main(String[] args) {
+        // The null half and the throwing half of an empty Queue.
+        Queue<String> queue = new LinkedList<>();
+        System.out.println(queue.poll() + " " + queue.peek());
+        try {
+            queue.remove();
+            System.out.println("no throw");
+        } catch (NoSuchElementException e) {
+            System.out.println("remove throws");
+        }
+        try {
+            queue.element();
+            System.out.println("no throw");
+        } catch (NoSuchElementException e) {
+            System.out.println("element throws");
+        }
+        System.out.println(queue.offer("a") + " " + queue.add("b"));
+        System.out.println(queue + " " + queue.peek() + " " + queue.element());
+        System.out.println(queue.poll() + " " + queue.remove() + " " + queue);
+
+        // Both ends of a Deque, both halves, and its stack face.
+        Deque<String> deque = new ArrayDeque<>();
+        deque.addFirst("b");
+        deque.addLast("c");
+        deque.offerFirst("a");
+        deque.offerLast("d");
+        System.out.println(deque);
+        System.out.println(deque.peekFirst() + " " + deque.peekLast()
+            + " " + deque.getFirst() + " " + deque.getLast());
+        System.out.println(deque.pollFirst() + " " + deque.pollLast() + " " + deque);
+        System.out.println(deque.removeFirst() + " " + deque.removeLast() + " " + deque.isEmpty());
+        System.out.println(deque.pollFirst() + " " + deque.peekLast());
+        Deque<String> stack = new ArrayDeque<>();
+        stack.push("x");
+        stack.push("y");
+        System.out.println(stack + " " + stack.peek() + " " + stack.pop() + " " + stack);
+
+        // A PriorityQueue hands back the least, in poll order.
+        PriorityQueue<Integer> pq = new PriorityQueue<>(Arrays.asList(5, 1, 4, 1, 3));
+        StringBuilder drained = new StringBuilder();
+        while (!pq.isEmpty()) {
+            drained.append(pq.poll()).append(' ');
+        }
+        System.out.println(drained.toString().trim());
+
+        // A ListIterator inserting and overwriting mid-walk.
+        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        ListIterator<String> cursor = list.listIterator();
+        while (cursor.hasNext()) {
+            int at = cursor.nextIndex();
+            String seen = cursor.next();
+            if (seen.equals("b")) {
+                cursor.set("B");
+                cursor.add("new");
+            }
+            System.out.println(at + " " + seen + " " + list);
+        }
+        while (cursor.hasPrevious()) {
+            System.out.print(cursor.previous());
+        }
+        System.out.println();
+
+        // A stable sort keeps equal elements in their original order.
+        List<String> tagged = new ArrayList<>(Arrays.asList("a2", "b1", "c2", "d1", "e2"));
+        tagged.sort(Comparator.comparing(s -> s.substring(1)));
+        System.out.println(tagged);
+    }
+}
+"#
+);
