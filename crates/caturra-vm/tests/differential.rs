@@ -24809,3 +24809,61 @@ public class QueueHalves {
 }
 "#
 );
+
+// A lambda's arity must match the SAM's. Zipping them silently dropped the
+// extra parameter, so `Function<String, Integer> f = (a, b) -> 1;` compiled
+// here and is a compile error on a real JDK.
+differential_reject!(
+    a_lambda_must_match_the_sam_arity,
+    "LambdaArity",
+    r"
+import java.util.function.Function;
+
+public class LambdaArity {
+    public static void main(String[] args) {
+        Function<String, Integer> f = (a, b) -> 1;
+        System.out.println(f);
+    }
+}
+"
+);
+
+// The lambda pass matches container and functional-interface names BY
+// SPELLING, so a fully qualified declaration found no target at all:
+// `l.sort((a, b) -> …)` where `l` is a `java.util.List<String>` was "a lambda
+// is only allowed where a functional-interface type is expected". Same for a
+// sorted collection's comparator constructor.
+differential_test!(
+    diff_lambdas_against_qualified_declarations,
+    "QualifiedLambdas",
+    r#"
+public class QualifiedLambdas {
+    public static void main(String[] args) {
+        java.util.List<String> list =
+            new java.util.ArrayList<>(java.util.List.of("bb", "a", "ccc"));
+        list.sort((a, b) -> a.compareTo(b));
+        System.out.println(list);
+        list.sort(java.util.Comparator.comparingInt(String::length));
+        System.out.println(list);
+        list.removeIf(s -> s.length() > 2);
+        System.out.println(list);
+
+        java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+        counts.put("a", 1);
+        counts.forEach((k, v) -> System.out.println(k + "=" + v));
+
+        java.util.TreeSet<String> descending =
+            new java.util.TreeSet<>((a, b) -> b.compareTo(a));
+        descending.add("a");
+        descending.add("b");
+        System.out.println(descending);
+
+        java.util.PriorityQueue<String> byLength =
+            new java.util.PriorityQueue<>((a, b) -> a.length() - b.length());
+        byLength.add("ccc");
+        byLength.add("a");
+        System.out.println(byLength.poll() + byLength.poll());
+    }
+}
+"#
+);

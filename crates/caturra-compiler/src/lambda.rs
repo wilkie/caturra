@@ -1154,8 +1154,10 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // element / key type, read from the `new`'s own type arguments or,
             // for a diamond, the declaration target it initializes. For a
             // `PriorityQueue(capacity, cmp)` the lambda is the last argument.
-            if matches!(class.as_str(), "TreeSet" | "TreeMap" | "PriorityQueue")
-                && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
+            if matches!(
+                simple_base(class.as_str()),
+                "TreeSet" | "TreeMap" | "PriorityQueue"
+            ) && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
                 && let Some(elem) = type_args
                     .first()
                     .cloned()
@@ -1753,13 +1755,26 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
         return None;
     };
     if !matches!(
-        base.as_str(),
+        simple_base(base.as_str()),
         "Map" | "HashMap" | "TreeMap" | "SortedMap" | "NavigableMap"
     ) || args.len() != 2
     {
         return None;
     }
     Some((args[0].clone(), args[1].clone()))
+}
+
+/// The simple name of a library type written in full: `java.util.List` is
+/// `List`. This pass matches container and functional-interface names by
+/// spelling, and a QUALIFIED one missed every list — `l.sort((a, b) -> …)`
+/// where `l` was declared `java.util.List<String>` found no comparator target.
+/// Only `java.*` is stripped: a nested user type (`Outer.Inner`) keeps its
+/// qualifier, since flattening that could match a library name by accident.
+fn simple_base(base: &str) -> &str {
+    match base.strip_prefix("java.") {
+        Some(rest) => rest.rsplit('.').next().unwrap_or(base),
+        None => base,
+    }
 }
 
 /// The comparator element of a `TreeSet<E>` (`E`) or `TreeMap<K, V>` (`K`, the
@@ -1770,7 +1785,7 @@ fn sorted_ctor_elem(target: &TypeRef) -> Option<TypeRef> {
         return None;
     };
     matches!(
-        base.as_str(),
+        simple_base(base.as_str()),
         "TreeSet"
             | "SortedSet"
             | "NavigableSet"
@@ -1947,7 +1962,8 @@ fn desugar_comparator_chain(
         method,
         "comparing" | "comparingInt" | "comparingDouble" | "comparingLong"
     ) && matches!(receiver.as_deref(), Some(Expr::Name { path, .. })
-            if path.len() == 1 && path[0] == "Comparator");
+            if path.last().is_some_and(|last| last == "Comparator")
+                && (path.len() == 1 || path[0] == "java"));
     let is_combinator = matches!(
         method,
         "thenComparing" | "thenComparingInt" | "thenComparingLong" | "thenComparingDouble"
@@ -2456,7 +2472,7 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         return None;
     };
     let is_collection = matches!(
-        base.as_str(),
+        simple_base(base.as_str()),
         "ArrayList"
             | "List"
             | "Set"
@@ -2601,6 +2617,17 @@ fn build_erased_lambda(
     // so nested lambdas inside its body are named as lambdas.
     let prefix = std::mem::replace(&mut ctx.class_prefix, crate::LAMBDA_CLASS_PREFIX);
     let name = format!("{prefix}{}", ctx.counter);
+
+    // The lambda's arity must match the SAM's. Zipping them silently dropped
+    // the extra parameter, so `Function<String,Integer> f = (a, b) -> 1;`
+    // compiled here and is a compile error on a real JDK.
+    if params.len() != elem_types.len() {
+        ctx.diags.push(crate::diagnostics::Diagnostic::error(
+            ctx.path,
+            String::from("incompatible types: incompatible parameter types in lambda expression"),
+            span,
+        ));
+    }
 
     let object = || TypeRef::Named(String::from("Object"));
     let erased: Vec<Param> = (0..elem_types.len())

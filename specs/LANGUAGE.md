@@ -3937,6 +3937,28 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### A lambda's arity, and lambdas against qualified declarations (2026-08-13)
+
+Widening the diagnostic sweep by 44 more programs found three more
+accepts-invalid, and the fix for one of them exposed a fourth defect.
+
+- **A lambda's arity was never checked against the SAM's.** The two were
+  zipped, so the extra parameter was silently dropped and
+  `Function<String, Integer> f = (a, b) -> 1;` compiled here — a compile error
+  on a real JDK.
+- **The lambda pass matches container and functional-interface names BY
+  SPELLING**, so a fully qualified declaration found no target at all:
+  `l.sort((a, b) -> …)` where `l` is a `java.util.List<String>` was "a lambda
+  is only allowed where a functional-interface type is expected". The same for
+  a sorted collection's comparator constructor and for
+  `java.util.Comparator.comparingInt(…)`. Only `java.*` is stripped when
+  matching — a nested user type keeps its qualifier, since flattening that
+  could collide with a library name.
+
+The other two accepts-invalid are recorded but not fixed: assigning to a
+multi-catch parameter (`catch (A | B e) { e = null; }`), and a repeated
+modifier (`public public void f()`).
+
 ### Diagnostic wording (2026-08-13)
 
 caturra mirrors javac's wording deliberately, because the message is what a
