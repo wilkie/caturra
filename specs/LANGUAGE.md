@@ -3937,6 +3937,27 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### An impossible cast is refused, not deferred (2026-08-13)
+
+JLS §5.5.1: casting a class to an interface is a **compile error** when the
+class is `final` and does not implement it. No subtype could ever satisfy both,
+so the cast is provably impossible and javac refuses it outright. caturra
+compiled it and threw `ClassCastException` at run time — accepts-invalid, and
+the last entry on that list.
+
+The rule turns on `final`, and only on `final`. A non-final class stays legal:
+some subclass could implement the interface, so javac defers the decision to
+run time and caturra must too. The three casts that remain legal — a final
+class that DOES implement the interface, a non-final class, and `Object` — are
+pinned alongside the refusal, because a check like this fails by over-reaching.
+
+The message needed the same treatment as the `String` cast: `describe` yields
+binary names, so the diagnostic read `X$F cannot be converted to X$I` where
+javac says `F cannot be converted to I`. Source spellings, both sides.
+
+With this, **"more permissive than javac" is empty again** — the invariant the
+spec documents, restored.
+
 ### A type argument must satisfy its bound (2026-08-13)
 
 A fifth diagnostic catalogue (31 more programs, 206 in all) found three more
@@ -3947,9 +3968,8 @@ each parameter's COUNT but not its bound; it now records both, and the check
 sits beside the existing arity validation.
 
 Recorded, not fixed: a class implementing `I<String>` without the right method
-signature, and a cast from a FINAL class to an interface it cannot implement
-(caturra throws `ClassCastException` at run time where javac refuses at compile
-time — the same shape as the `String` cast fixed earlier, one level out).
+signature. The other one — a cast from a FINAL class to an interface it cannot
+implement — is fixed below.
 
 ### A functional interface's result has a type (2026-08-13)
 

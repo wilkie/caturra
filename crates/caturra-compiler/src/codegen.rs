@@ -24090,6 +24090,28 @@ impl BodyGen<'_> {
                     if upcast {
                         return written; // always safe, no check needed
                     }
+                    // JLS §5.5.1: casting a class to an interface is an
+                    // error when the class is FINAL and does not implement it
+                    // — no subtype could ever satisfy both. caturra accepted
+                    // it and threw ClassCastException at run time, where a JDK
+                    // refuses to compile.
+                    let source_is_final = self
+                        .table
+                        .info_by_id(source_id)
+                        .is_some_and(|info| info.is_final_class && !info.is_interface);
+                    if target_is_interface && source_is_final && !downcast && !upcast {
+                        // Source spellings, not binary names: javac says
+                        // "F cannot be converted to I", never "X$F".
+                        self.error(
+                            span,
+                            format!(
+                                "incompatible types: {} cannot be converted to {}",
+                                source_interface_name(&source.describe(self.table)),
+                                source_interface_name(&written.describe(self.table))
+                            ),
+                        );
+                        return JType::Error;
+                    }
                     if downcast || source_is_interface || target_is_interface {
                         let class_name = self.table.class_name(target_id).to_owned();
                         let class_index = intern_class(self.pool, &class_name);

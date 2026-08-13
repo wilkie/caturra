@@ -25247,3 +25247,68 @@ public class InBounds {
 }
 "#
 );
+
+// JLS §5.5.1: a cast from a FINAL class to an interface it does not implement
+// is a compile error — no subtype could ever satisfy both, so the cast is
+// provably impossible. caturra used to compile it and throw ClassCastException
+// at run time, which is the accepts-invalid direction.
+differential_reject!(
+    a_final_class_cannot_cast_to_a_foreign_interface,
+    "ImpossibleCast",
+    r"
+public class ImpossibleCast {
+    interface Greeter {
+        String hello();
+    }
+
+    static final class Sealed {
+    }
+
+    public static void main(String[] args) {
+        Sealed value = new Sealed();
+        Greeter impossible = (Greeter) value;
+        System.out.println(impossible.hello());
+    }
+}
+"
+);
+
+// ...and the three casts that stay legal, so the new refusal cannot over-reach:
+// a final class that DOES implement the interface, a non-final class (some
+// subclass could implement it, so javac defers to run time), and Object.
+differential_test!(
+    diff_casts_to_an_interface_that_remain_legal,
+    "PossibleCasts",
+    r#"
+public class PossibleCasts {
+    interface Greeter {
+        String hello();
+    }
+
+    static final class Polite implements Greeter {
+        public String hello() {
+            return "hello";
+        }
+    }
+
+    static class Open {
+    }
+
+    public static void main(String[] args) {
+        Polite sealed = new Polite();
+        System.out.println(((Greeter) sealed).hello());
+
+        Object erased = new Polite();
+        System.out.println(((Greeter) erased).hello());
+
+        Open open = new Open();
+        try {
+            Greeter deferred = (Greeter) open;
+            System.out.println(deferred.hello());
+        } catch (ClassCastException e) {
+            System.out.println("deferred to run time");
+        }
+    }
+}
+"#
+);
