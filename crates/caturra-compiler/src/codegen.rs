@@ -4089,7 +4089,46 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
             Some(_) => return sig.ret,
         }
     }
-    joined.map_or(sig.ret, Some)
+    let Some(joined) = joined else {
+        return sig.ret;
+    };
+    // A CONTAINER return (`<T> List<T> listOf(T)`) infers its ELEMENT, not
+    // itself. The declared return says which: it erased to a container of
+    // `Object`, and the inferred type takes that element's place. Without
+    // this, every generic factory came back as a `List<Object>` and would not
+    // assign to the `List<String>` the call plainly produces.
+    // The shapes a type-variable element erases to: the bare variable, the
+    // top type, or the wildcard the parameter form leaves behind. A REAL
+    // wildcard (`? extends Number`) is deliberately not one of them — its
+    // bound is a written constraint, not an erased variable.
+    let erased_element = |elem: ElemType| {
+        matches!(
+            elem,
+            ElemType::Object(_)
+                | ElemType::TypeVar(_)
+                | ElemType::Wildcard {
+                    bound: WildcardBound::TypeVar,
+                    ..
+                }
+        )
+    };
+    let element = collection_elem_of(joined);
+    let wrapped = match (sig.ret, element) {
+        (Some(JType::List(elem)), Some(inferred)) if erased_element(elem) => {
+            Some(JType::List(inferred))
+        }
+        (Some(JType::Set(elem)), Some(inferred)) if erased_element(elem) => {
+            Some(JType::Set(inferred))
+        }
+        (Some(JType::Collection(elem)), Some(inferred)) if erased_element(elem) => {
+            Some(JType::Collection(inferred))
+        }
+        (Some(JType::Optional(elem)), Some(inferred)) if erased_element(elem) => {
+            Some(JType::Optional(inferred))
+        }
+        _ => None,
+    };
+    wrapped.map_or(Some(joined), Some)
 }
 
 #[allow(clippy::too_many_lines)] // one widening-conversion matrix (JLS §5.1.5/§5.2)

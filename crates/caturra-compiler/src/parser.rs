@@ -5210,8 +5210,16 @@ fn infer_return_plan(
     erasures: &std::collections::HashMap<String, TypeRef>,
 ) -> Option<Vec<crate::ast::InferSource>> {
     use crate::ast::InferSource;
-    let TypeRef::Named(ret_var) = &method.return_type else {
-        return None;
+    // Either `T` itself, or a container OF it: `<T> List<T> listOf(T value)`.
+    // For the container form the inference lands on the ELEMENT, which codegen
+    // reads back off the declared return's own shape.
+    let ret_var = match &method.return_type {
+        TypeRef::Named(name) => name,
+        TypeRef::Generic { args, .. } => match args.as_slice() {
+            [TypeRef::Named(name)] => name,
+            _ => return None,
+        },
+        _ => return None,
     };
     if !erasures.contains_key(ret_var) {
         return None;

@@ -24540,3 +24540,73 @@ public class MathBits {
 }
 "#
 );
+
+// A generic method returning a CONTAINER of its type variable — `<T> List<T>
+// listOf(T value)`, which is how every generic factory is written — came back
+// as a `List<Object>` and would not assign to the `List<String>` the call
+// plainly produces. The inference plan only understood a BARE `T` return.
+//
+// Which shape to apply it to is read off the declared return: `List<T>` erases
+// to a list whose element is the erased variable, and the inferred type takes
+// that element's place. A real wildcard (`? extends Number`) is deliberately
+// left alone — its bound is a written constraint, not an erased variable.
+differential_test!(
+    diff_generic_container_return_inference,
+    "GenericReturns",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+
+public class GenericReturns {
+    static <T> List<T> listOf(T value) {
+        List<T> out = new ArrayList<>();
+        out.add(value);
+        return out;
+    }
+
+    static <T> Set<T> setOf(T value) {
+        Set<T> out = new TreeSet<>();
+        out.add(value);
+        return out;
+    }
+
+    static <T> T pick(T first, T second) {
+        return first;
+    }
+
+    static <T> List<T> copy(List<T> source) {
+        return new ArrayList<>(source);
+    }
+
+    public static void main(String[] args) {
+        List<String> words = listOf("x");
+        System.out.println(words + " " + words.get(0).toUpperCase());
+
+        List<Integer> numbers = listOf(5);
+        System.out.println(numbers.get(0) + 1);
+
+        Set<String> unique = setOf("a");
+        System.out.println(unique + " " + unique.contains("a"));
+
+        // An explicit witness that AGREES with the arguments.
+        List<String> witnessed = GenericReturns.<String>listOf("w");
+        System.out.println(witnessed.get(0).length());
+
+        // The bare-variable return still works.
+        System.out.println(pick(1, 2) + 1);
+        System.out.println(pick("a", "b").toUpperCase());
+
+        // A container in and a container out.
+        List<String> copied = copy(words);
+        System.out.println(copied.get(0) + copied.size());
+
+        // var infers it too.
+        var inferred = listOf("q");
+        System.out.println(inferred);
+    }
+}
+"#
+);

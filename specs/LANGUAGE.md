@@ -3937,6 +3937,33 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### A generic method returning a container (2026-08-13)
+
+`<T> List<T> listOf(T value)` — how every generic factory is written — came
+back as a `List<Object>` and would not assign to the `List<String>` the call
+plainly produces. The return-inference plan only understood a **bare** `T`
+return; a container of it was not recognised at all.
+
+Which shape to apply the inference to is read off the declared return itself:
+`List<T>` erases to a list whose element is the erased variable, and the
+inferred type takes that element's place. Three erased spellings count — the
+bare variable, the top type, and the wildcard the parameter form leaves behind
+— while a REAL wildcard (`? extends Number`) is deliberately left alone, since
+its bound is a written constraint rather than an erased variable.
+
+Two gaps found alongside and left open, both refusals rather than wrong
+answers:
+
+- **An explicit type witness that DISAGREES with the arguments is ignored.**
+  `S.<Object>listOf("y")` infers `List<String>` from the argument and then
+  refuses the assignment to `List<Object>`. `Expr::Call` carries no type
+  arguments at all, so the witness is parsed and discarded; a witness that
+  agrees with the arguments (the ordinary case) works.
+- **`<T> Optional<T> maybe(T v) { return Optional.of(v); }` does not compile**
+  — "Optional<Object> cannot be converted to Optional<Object>", the two
+  spellings of the erased element being different shapes. Pre-existing;
+  `List` and `Set` returns are fine.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
