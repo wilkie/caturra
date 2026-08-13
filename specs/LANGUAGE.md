@@ -3977,12 +3977,12 @@ and left an inline lambda untyped. It now asks a (class, method) map first,
 using the receiver's declared type — which also makes every other same-name,
 different-signature pair resolvable.
 
-What is still erased is the lambda's own PARAMETER type through a combinator:
-`f.andThen(n -> n + 1)` on a `Function<String, Integer>` sees `n` as `Object`,
-because the bundled interface's SAM takes `Object` and nothing propagates the
-receiver's `R` into it. `f.andThen(g)` with a declared `g` works, as does a
-method reference. This is the same family as the element erasing after
-`map` — recovering it means threading type arguments through the lambda pass.
+The lambda's own PARAMETER now comes from the receiver's type arguments too:
+`f.andThen(n -> n + 1)` on a `Function<String, Integer>` gives `n` the type
+`Integer`, `p.and(s -> s.length() == 0)` on a `Predicate<String>` gives `s` a
+String, and the same for `Consumer.andThen` and `BiFunction.andThen`. The
+combinator's own signature cannot say this — the bundled SAM takes `Object` —
+so the target is synthesized from the receiver's declaration.
 
 ### An interface has no initializer block (2026-08-13)
 

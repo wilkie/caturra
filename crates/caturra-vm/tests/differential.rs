@@ -25158,9 +25158,17 @@ public class Combinators {
         System.out.println(shout.compose((String s) -> s + "?").apply("b"));
         System.out.println(empty.and(s -> true).test(""));
 
+        // ...and the lambda's own PARAMETER comes from the receiver's type
+        // arguments, so a body that needs the real type compiles.
+        System.out.println(length.andThen(n -> n + 1).apply("abc"));
+        System.out.println(shout.andThen(s -> s.toUpperCase()).apply("a"));
+        System.out.println(empty.and(s -> s.length() == 0).test(""));
+        first.andThen(s -> System.out.println("=" + s.toUpperCase())).accept("z");
+
         BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;
         Function<Integer, Integer> twice = n -> n * 2;
         System.out.println(add.andThen(twice).apply(1, 2));
+        System.out.println(add.andThen(n -> n * 2).apply(2, 3));
 
         // An anonymous class in the PROGRAM still implements its interface —
         // the collision this shape exposed.

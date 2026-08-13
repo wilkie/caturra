@@ -422,6 +422,52 @@ fn constructor_signatures(
 /// tell `__UnaryOperator.andThen` from `__Consumer.andThen` — three interfaces
 /// declare that name with different parameter types, so they disagree and the
 /// argument goes untyped. When the receiver's class is known, ask this first.
+/// The target type for a combinator's single lambda argument, read off the
+/// RECEIVER's declared type arguments. `Function<A, B>.andThen(g)` gives `g`
+/// the parameter type `B`; `Predicate<T>.and(p)` gives `p` the type `T`.
+/// `None` for anything else, which keeps the ordinary lookup.
+fn combinator_argument_type(
+    receiver: &Expr,
+    method: &str,
+    arity: usize,
+    ctx: &Ctx,
+) -> Option<TypeRef> {
+    if arity != 1 {
+        return None;
+    }
+    let Expr::Name { path, .. } = receiver else {
+        return None;
+    };
+    if path.len() != 1 {
+        return None;
+    }
+    let TypeRef::Generic { base, args } = ctx.lookup(&path[0])? else {
+        return None;
+    };
+    let object = || TypeRef::Named(String::from("Object"));
+    match (simple_base(&base), method) {
+        // The result of `this` is what the next function receives.
+        ("Function" | "UnaryOperator" | "BiFunction" | "BinaryOperator", "andThen") => {
+            let result = args.last()?.clone();
+            Some(TypeRef::Generic {
+                base: String::from("Function"),
+                args: vec![result, object()],
+            })
+        }
+        // Both halves of a predicate see the same element.
+        ("Predicate", "and" | "or") => Some(TypeRef::Generic {
+            base: String::from("Predicate"),
+            args: vec![args.first()?.clone()],
+        }),
+        // Both consumers see the same element.
+        ("Consumer", "andThen") => Some(TypeRef::Generic {
+            base: String::from("Consumer"),
+            args: vec![args.first()?.clone()],
+        }),
+        _ => None,
+    }
+}
+
 /// The class a call's receiver denotes, when that is knowable from its
 /// declared type — a local, or `this`. Library and computed receivers stay
 /// unknown and fall back to the name-only lookup.
@@ -1201,6 +1247,20 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // it was previously out of reach, because this insisted the method
             // be declared exactly once. Overloads that disagree at a position
             // leave it untyped, as before.
+            // A COMBINATOR takes its lambda's parameter from the receiver's
+            // own type arguments: `f.andThen(n -> n + 1)` on a
+            // `Function<String, Integer>` gives `n` the type Integer. Without
+            // it the bundled SAM's `Object` parameter reached the body and
+            // `n + 1` was "operator '+' cannot be applied to Object and int".
+            if let Some(target) = receiver
+                .as_deref()
+                .and_then(|r| combinator_argument_type(r, method, args.len(), ctx))
+            {
+                for arg in args.iter_mut() {
+                    desugar_expr(arg, Some(&target), ctx);
+                }
+                return;
+            }
             let owner = receiver
                 .as_deref()
                 .and_then(|r| receiver_class_name(r, ctx));
