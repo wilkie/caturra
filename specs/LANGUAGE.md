@@ -3962,8 +3962,19 @@ Keeping the result argument made a parameterized functional value stop matching
 the raw parameter the collection methods declare — the same both-spellings
 lesson as `Iterable`, and the existing suite caught it.
 
-Found but not fixed: `Predicate.negate()` and the other default combinators on
-the bundled functional interfaces are not modelled.
+The default combinators are implemented too: `Predicate.negate`/`and`/`or`,
+`Function.andThen`/`compose`, `Consumer.andThen` and `BiFunction.andThen`.
+
+They are written in the bundled interfaces as **named helper classes, not
+anonymous ones** — an anonymous class in a bundled source shares the `Anon$N`
+counter with the program's own, and the two collided: a program's
+`new Runnable() { … }` stopped converting to the interface it plainly
+implements. The compatibility-page manifest caught that within a run.
+
+One narrowness remains: an inline LAMBDA argument to `andThen` is untyped,
+because three different interfaces declare that name with different parameter
+types and the lambda pass keys its target lookup on the method NAME alone. A
+named argument or a method reference works, which is the common form.
 
 ### An interface has no initializer block (2026-08-13)
 

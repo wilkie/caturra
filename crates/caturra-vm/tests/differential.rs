@@ -25115,3 +25115,53 @@ public class FunctionalResults {
 }
 "#
 );
+
+// The `java.util.function` default combinators. They are written in the
+// bundled interfaces as NAMED helper classes, not anonymous ones: an anonymous
+// class in a bundled source shares the `Anon$N` counter with the program's own,
+// and the two collided — a program's `new Runnable() { … }` stopped converting
+// to the interface it plainly implements.
+differential_test!(
+    diff_functional_default_combinators,
+    "Combinators",
+    r#"
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+
+public class Combinators {
+    public static void main(String[] args) {
+        Predicate<String> empty = s -> s.isEmpty();
+        System.out.println(empty.negate().test("a"));
+        System.out.println(empty.and(s -> true).test(""));
+        System.out.println(empty.or(s -> false).test("a"));
+        System.out.println(empty.negate().negate().test(""));
+
+        Function<String, Integer> length = String::length;
+        Function<Integer, Integer> increment = n -> n + 1;
+        System.out.println(length.andThen(increment).apply("ab"));
+
+        Function<String, String> shout = s -> s + "!";
+        Function<String, String> ask = s -> s + "?";
+        System.out.println(shout.compose(ask).apply("a"));
+        System.out.println(shout.andThen(ask).apply("a"));
+
+        Consumer<String> first = s -> System.out.print(s);
+        Consumer<String> second = s -> System.out.println("|" + s);
+        first.andThen(second).accept("x");
+
+        BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;
+        Function<Integer, Integer> twice = n -> n * 2;
+        System.out.println(add.andThen(twice).apply(1, 2));
+
+        // An anonymous class in the PROGRAM still implements its interface —
+        // the collision this shape exposed.
+        Runnable job = new Runnable() {
+            public void run() { System.out.println("ran"); }
+        };
+        job.run();
+    }
+}
+"#
+);
