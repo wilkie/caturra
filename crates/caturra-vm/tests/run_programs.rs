@@ -6478,6 +6478,30 @@ fn stage6_compile_errors_match_javac_wording() {
             "class M { static void f() { java.util.Set<java.io.File> s; } }",
             "File works as a variable, but caturra does not model it as a collection element",
         ),
+        // JLS §5.5: a reference cast needs one type to be a subtype of the
+        // other, and `String` is final — so only a supertype casts down to it.
+        // These three compiled here and are compile ERRORS on a real JDK.
+        (
+            "class M { static void f() { String s = (String) Integer.valueOf(1); } }",
+            "incompatible types: Integer cannot be converted to String",
+        ),
+        (
+            "class M { static void f() { String s = (String) new StringBuilder(); } }",
+            "incompatible types: StringBuilder cannot be converted to String",
+        ),
+        // A PRIMITIVE has no members at all, which is what javac says — where
+        // caturra boxed it first and reported a missing `Integer` method, with
+        // the slashed INTERNAL class name in the text.
+        (
+            "class M { static void f() { int n = 1; System.out.println(n.length()); } }",
+            "int cannot be dereferenced",
+        ),
+        // A nested class's BINARY name is implementation detail: javac names
+        // the class the source wrote.
+        (
+            "class M { abstract static class A { abstract void go(); } static class B extends A { } }",
+            "B is not abstract and does not override abstract method go() in A",
+        ),
         // A class's access flags could not be answered honestly if they were
         // modelled: a LIBRARY class has no class file here, and a nested one
         // is flattened, so the `static`/`private` bits a JDK reports from the

@@ -4011,7 +4011,12 @@ fn collection_element_type(ty: JType) -> Option<ElemType> {
 /// says `Comparator`, caturra models `__Comparator`, and a message naming the
 /// internal one reads as caturra's bug rather than the program's.
 fn source_interface_name(name: &str) -> &str {
-    name.strip_prefix("__").unwrap_or(name)
+    // A bundled erased interface (`__Comparator`) and a nested class's BINARY
+    // name (`Outer$Inner`) are both implementation detail: javac names the
+    // interface the source wrote, and a message showing either reads as
+    // caturra's bug rather than the program's.
+    let simple = name.rsplit('$').next().unwrap_or(name);
+    simple.strip_prefix("__").unwrap_or(simple)
 }
 
 fn comparator_alias(name: &str, declared: bool) -> &str {
@@ -17026,6 +17031,7 @@ impl BodyGen<'_> {
         method: &str,
         args: &[Expr],
         span: SourceSpan,
+        primitive_receiver: Option<JType>,
     ) -> Option<Option<JType>> {
         let internal = wrapper_internal(elem);
         // (return type, descriptor, argument coercion)
@@ -17087,9 +17093,21 @@ impl BodyGen<'_> {
                 Some(Some(ret))
             }
             other => {
+                // A PRIMITIVE has no methods at all, which is what javac says:
+                // "int cannot be dereferenced". Only a wrapper receiver gets
+                // the missing-member wording — and with its SOURCE name, not
+                // the slashed internal one a message must never show.
                 self.error(
                     span,
-                    format!("cannot find symbol: method {other} in class {internal}"),
+                    match primitive_receiver {
+                        Some(primitive) => {
+                            format!("{} cannot be dereferenced", primitive.describe(self.table))
+                        }
+                        None => format!(
+                            "cannot find symbol: method {other} in class {}",
+                            wrapper_name(elem, self.table)
+                        ),
+                    },
                 );
                 None
             }
@@ -17176,7 +17194,7 @@ impl BodyGen<'_> {
             }
             // Wrapper instance methods (intValue, compareTo, ...).
             JType::Boxed(elem) => {
-                return self.boxed_instance_call(elem, method, args, span);
+                return self.boxed_instance_call(elem, method, args, span, None);
             }
             // A method on a type variable: only Object's methods.
             JType::TypeVar(_) => self.table.object_id,
@@ -17242,7 +17260,7 @@ impl BodyGen<'_> {
             | JType::Boolean => {
                 if let Some(elem) = elem_type_of(receiver_ty) {
                     self.emit_box(elem);
-                    return self.boxed_instance_call(elem, method, args, span);
+                    return self.boxed_instance_call(elem, method, args, span, Some(receiver_ty));
                 }
                 self.error(
                     span,
@@ -23745,6 +23763,35 @@ impl BodyGen<'_> {
         // Casting a reference (commonly an erased Object) to String: a
         // runtime checkcast to java/lang/String.
         if target == JType::Str && source.is_reference() {
+            // JLS §5.5: a reference cast needs ONE of the two types to be a
+            // subtype of the other. `String` is final, so only a supertype of
+            // it can be cast down — `Object`, `CharSequence`, an interface, a
+            // user class — never a wrapper, a builder or a collection. This
+            // accepted every reference, so `(String) Integer.valueOf(1)`
+            // compiled here and is a compile ERROR on a real JDK: the
+            // accepts-invalid direction, and the one caturra promises never to
+            // take.
+            if !matches!(
+                source,
+                JType::Str
+                    | JType::Null
+                    | JType::CharSequence
+                    | JType::Object(_)
+                    // A TYPE VARIABLE erases to Object, so a cast from one is
+                    // the same unchecked downcast — and it is what a BRIDGE
+                    // method does to its erased parameter, which is how this
+                    // restriction first broke a working program.
+                    | JType::TypeVar(_)
+            ) {
+                self.error(
+                    span,
+                    format!(
+                        "incompatible types: {} cannot be converted to String",
+                        source.describe(self.table)
+                    ),
+                );
+                return JType::Error;
+            }
             if source != JType::Str {
                 let class_index = intern_class(self.pool, "java/lang/String");
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);

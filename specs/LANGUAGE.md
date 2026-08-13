@@ -3937,6 +3937,28 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### Diagnostic wording (2026-08-13)
+
+caturra mirrors javac's wording deliberately, because the message is what a
+student reads and a different one reads as caturra's bug. That agreement was
+asserted case by case and never swept. Fifty broken programs, comparing
+javac's first `error:` line with caturra's first diagnostic: **20 identical,
+26 different, 0 accepts-invalid** after the fixes below.
+
+Most of the 26 are caturra being MORE specific where javac splits its message
+over following lines — javac's bare "cannot find symbol" against caturra's
+"cannot find symbol: class Scanner". Those are kept. Three were defects:
+
+- **A cast to `String` accepted any reference source** — the accepts-invalid
+  above, found because the sweep expected an error message and got a running
+  program.
+- **A primitive receiver reported a missing wrapper method.** `int n; n.length()`
+  said "cannot find symbol: method length in class `java/lang/Integer`" — the
+  wrong diagnosis (javac: "int cannot be dereferenced") *and* a slashed
+  internal class name, which a message must never show.
+- **A nested class's BINARY name leaked**: "does not override abstract method
+  go() in `S$A`" where javac names `A`.
+
 ### Queue halves, list iterators, collection algorithms (2026-08-13)
 
 Audit round 10, dimension 12: 11 programs, **no divergence**. Pinned for the
@@ -4042,6 +4064,14 @@ program, which would mean it is a shared rule rather than a strictness:
 **More permissive than javac** (caturra accepts; javac rejects). **This
 list is empty**, and the `looser_than_javac!` macro exists to keep it
 that way — a case asserted there is a case that cannot be forgotten.
+
+It was not empty on 2026-08-13: a cast to `String` accepted ANY reference
+source, so `(String) Integer.valueOf(1)`, `(String) aStringBuilder` and
+`(String) aList` all compiled here and are compile errors on a real JDK
+(JLS §5.5 — a reference cast needs one type to be a subtype of the other, and
+`String` is final, so only a supertype casts down to it). Found by a sweep of
+DIAGNOSTIC WORDING, not of behaviour: the program was in the sweep to compare
+error text, and caturra produced no error at all.
 
 Until 2026-07-09 it held three: `Collections.sort`, `max`/`min` and
 `binarySearch` over a list whose element type is not `Comparable`, which
