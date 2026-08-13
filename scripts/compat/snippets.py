@@ -910,6 +910,307 @@ public class Nio {
 }
 ''',
     ),
+    dict(
+        id="iterable-type",
+        category="Collections",
+        title="Iterable as a type",
+        summary="Hold any collection by the interface a for-each actually uses — and implement it yourself.",
+        main="Iterables",
+        source="""
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+
+public class Iterables {
+    static class Bag<T> implements Iterable<T> {
+        private final List<T> items = new ArrayList<>();
+        void add(T item) { items.add(item); }
+        public Iterator<T> iterator() { return items.iterator(); }
+    }
+
+    static <T> int count(Iterable<T> things) {
+        int n = 0;
+        for (T thing : things) {
+            n++;
+        }
+        return n;
+    }
+
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(List.of("b", "a"));
+        Set<String> set = new TreeSet<>(list);
+
+        Iterable<String> held = list;
+        for (String s : held) {
+            System.out.print(s);
+        }
+        System.out.println();
+        System.out.println(held.iterator().next().toUpperCase());
+
+        for (String s : (Iterable<String>) list) {
+            System.out.print(s);
+        }
+        System.out.println();
+
+        Bag<String> bag = new Bag<>();
+        bag.add("q");
+        Iterable<String> asIterable = bag;
+        for (String s : asIterable) {
+            System.out.println(s);
+        }
+
+        System.out.println(count(list) + " " + count(set) + " " + count(bag));
+    }
+}
+""",
+    ),
+    dict(
+        id="object-contract",
+        category="Language",
+        title="What every object inherits",
+        summary="getClass, equals and hashCode on every reference — and which classes compare by VALUE.",
+        main="ObjectContract",
+        source="""
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.PriorityQueue;
+
+public class ObjectContract {
+    public static void main(String[] args) {
+        // Value-based: two of these are equal when their contents are.
+        java.io.File one = new java.io.File("dir/f.txt");
+        java.io.File same = new java.io.File("dir/f.txt");
+        System.out.println(one.equals(same) + " " + (one.hashCode() == same.hashCode()));
+        System.out.println(one.getClass().getName());
+
+        Optional<String> present = Optional.of("x");
+        System.out.println(present.equals(Optional.of("x")));
+        System.out.println(present.hashCode() == "x".hashCode());
+        System.out.println(Optional.empty().equals(Optional.empty()));
+
+        List<String> list = new ArrayList<>(List.of("a"));
+        System.out.println(list.equals(new ArrayList<>(List.of("a"))) + " " + list.hashCode());
+        Map<String, Integer> map = new HashMap<>();
+        map.put("k", 1);
+        System.out.println(map.equals(new HashMap<>(map)));
+
+        // Identity: these override neither, so only the object itself is equal.
+        StringBuilder builder = new StringBuilder("a");
+        System.out.println(builder.equals(new StringBuilder("a")) + " " + builder.equals(builder));
+        PriorityQueue<String> queue = new PriorityQueue<>();
+        System.out.println(queue.equals(new PriorityQueue<String>()));
+        RuntimeException failure = new IllegalStateException("z");
+        System.out.println(failure.equals(new IllegalStateException("z")));
+
+        System.out.println(list.getClass().getName() + " " + builder.getClass().getName());
+    }
+}
+""",
+    ),
+    dict(
+        id="class-literals",
+        category="Types and literals",
+        title="Class literals and what a class knows",
+        summary="int[].class and String[].class, and the four names a class answers to.",
+        main="ClassLiterals",
+        source="""
+public class ClassLiterals {
+    static class Nested { }
+
+    public static void main(String[] args) {
+        System.out.println(String.class + " " + String.class.getSimpleName());
+        System.out.println(String[].class);
+        System.out.println(String[][].class.getName());
+        System.out.println(int[].class + " " + int[].class.getTypeName());
+        System.out.println(String[].class.getComponentType());
+        System.out.println(String[].class == new String[0].getClass());
+
+        System.out.println(Nested.class.getName());
+        System.out.println(Nested.class.getCanonicalName());
+        System.out.println(Nested.class.getEnclosingClass());
+        System.out.println(String.class.getEnclosingClass());
+        System.out.println(Nested.class.isAnonymousClass() + " " + int[].class.isArray());
+    }
+}
+""",
+    ),
+    dict(
+        id="qualified-names",
+        category="Declarations",
+        title="Fully qualified names, without an import",
+        summary="A qualified name needs no import — that is what it is for.",
+        main="Qualified",
+        source="""
+public class Qualified {
+    public static void main(String[] args) {
+        java.util.List<String> list = new java.util.ArrayList<>();
+        list.add("b");
+        list.add("a");
+        java.util.Collections.sort(list);
+        System.out.println(list);
+
+        java.util.stream.Stream<String> stream = list.stream();
+        System.out.println(stream.collect(java.util.stream.Collectors.joining("-")));
+        System.out.println(java.util.stream.IntStream.range(0, 4).sum());
+
+        java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+        counts.put("a", 1);
+        for (java.util.Map.Entry<String, Integer> entry : counts.entrySet()) {
+            System.out.println(entry.getKey() + "=" + entry.getValue());
+        }
+
+        System.out.println(java.lang.Math.abs(-2));
+        java.util.Scanner scanner = new java.util.Scanner("7");
+        System.out.println(scanner.nextInt());
+    }
+}
+""",
+    ),
+    dict(
+        id="stack-traces",
+        category="Library",
+        title="Reading a stack trace",
+        summary="getStackTrace, the frames it hands back, and fillInStackTrace.",
+        main="Traces",
+        source="""
+public class Traces {
+    static Throwable deep() {
+        return new RuntimeException("x");
+    }
+
+    public static void main(String[] args) {
+        Throwable failure = deep();
+        StackTraceElement[] frames = failure.getStackTrace();
+        System.out.println(frames.length > 0);
+        System.out.println(frames[0].getMethodName() + " in " + frames[0].getClassName());
+        System.out.println(frames[0].getFileName() + " " + (frames[0].getLineNumber() > 0));
+        System.out.println(frames[0].equals(frames[0]));
+
+        Throwable same = failure.fillInStackTrace();
+        System.out.println(same == failure);
+        System.out.println(failure.getStackTrace()[0].getMethodName());
+
+        try {
+            throw new IllegalStateException("boom", failure);
+        } catch (IllegalStateException caught) {
+            System.out.println(caught.getMessage() + " <- " + caught.getCause().getMessage());
+        }
+    }
+}
+""",
+    ),
+    dict(
+        id="functional-runnable",
+        category="Language",
+        title="Runnable and Function",
+        summary="The no-argument callback every example uses, and Function.identity().",
+        main="Callbacks",
+        source="""
+import java.util.function.Function;
+import java.util.function.UnaryOperator;
+
+public class Callbacks {
+    static void twice(Runnable job) {
+        job.run();
+        job.run();
+    }
+
+    public static void main(String[] args) {
+        Runnable lambda = () -> System.out.println("ran");
+        lambda.run();
+        twice(() -> System.out.println("again"));
+
+        Runnable anonymous = new Runnable() {
+            public void run() { System.out.println("anon"); }
+        };
+        anonymous.run();
+
+        int[] count = {0};
+        Runnable bump = () -> count[0]++;
+        bump.run();
+        bump.run();
+        System.out.println(count[0]);
+
+        Function<String, String> same = Function.identity();
+        System.out.println(same.apply("z"));
+        UnaryOperator<String> shout = s -> s.toUpperCase();
+        System.out.println(shout.apply("hi"));
+    }
+}
+""",
+    ),
+    dict(
+        id="factory-streams",
+        category="Collections",
+        title="List.of as a stream source",
+        summary="The immutable factories, straight into a pipeline and a collector.",
+        main="Factories",
+        source="""
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class Factories {
+    public static void main(String[] args) {
+        System.out.println(List.of("a", "bb").stream()
+            .map(String::toUpperCase).collect(Collectors.toList()));
+        System.out.println(List.of("a", "bb").stream()
+            .collect(Collectors.toMap(x -> x, String::length)));
+        System.out.println(List.of("a", "bb").stream()
+            .collect(Collectors.groupingBy(String::length)));
+        System.out.println(Arrays.asList("a", "bb").stream()
+            .filter(s -> s.length() > 1).count());
+        System.out.println(List.of(3, 1, 2).stream()
+            .sorted().map(n -> n * 2).collect(Collectors.toList()));
+        System.out.println(List.of("x", "y").stream().collect(Collectors.joining("-")));
+        System.out.println(Arrays.asList(5, 6).stream().mapToInt(n -> n).sum());
+        System.out.println(List.of("a", "bb").get(0).toUpperCase());
+    }
+}
+""",
+    ),
+    dict(
+        id="map-entry",
+        category="Collections",
+        title="Map.Entry as a value",
+        summary="An entry from a map, one built by Map.entry, and a standalone SimpleEntry.",
+        main="Entries",
+        source="""
+import java.util.AbstractMap;
+import java.util.HashMap;
+import java.util.Map;
+
+public class Entries {
+    public static void main(String[] args) {
+        Map<String, Integer> counts = new HashMap<>();
+        counts.put("a", 1);
+        counts.put("b", 2);
+
+        Map.Entry<String, Integer> first = counts.entrySet().iterator().next();
+        System.out.println(first + " " + first.getKey() + " " + first.getValue());
+
+        Map.Entry<String, Integer> made = Map.entry("k", 1);
+        System.out.println(made + " " + made.getKey());
+        System.out.println(made.equals(Map.entry("k", 1)));
+        System.out.println(made.equals(new AbstractMap.SimpleEntry<>("k", 1)));
+
+        int total = 0;
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            total += entry.getValue();
+        }
+        System.out.println(total);
+
+        var standalone = new AbstractMap.SimpleEntry<>("c", 3);
+        System.out.println(standalone.getKey() + "=" + (standalone.getValue() + 1));
+    }
+}
+""",
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -949,6 +1250,104 @@ public class Threads {
     }
 }
 ''',
+    ),
+    dict(
+        id="class-modifiers",
+        category="Library",
+        title="Class.getModifiers",
+        summary="A class's access flags. caturra answers them for a field, a method and a constructor — not for a class.",
+        main="Modifiers",
+        source="""
+import java.lang.reflect.Modifier;
+
+public class Modifiers {
+    public static void main(String[] args) {
+        System.out.println(Modifier.toString(String.class.getModifiers()));
+    }
+}
+""",
+    ),
+    dict(
+        id="sublist-view",
+        category="Collections",
+        title="subList as a live view",
+        summary="A window onto the list itself: writing through it writes through to the original.",
+        main="SubList",
+        source="""
+import java.util.ArrayList;
+import java.util.List;
+
+public class SubList {
+    public static void main(String[] args) {
+        List<String> letters = new ArrayList<>(List.of("a", "b", "c", "d"));
+        List<String> middle = letters.subList(1, 3);
+        middle.set(0, "B");
+        System.out.println(letters);
+    }
+}
+""",
+    ),
+    dict(
+        id="lambda-after-map",
+        category="Collections",
+        title="A lambda after map()",
+        summary=(
+            "caturra reads a stream's element type SYNTACTICALLY, before typing, "
+            "so `map` erases it: a later filter/map/collect lambda sees its "
+            "parameter as Object. Everything before the map, and method "
+            "references after it, are unaffected."
+        ),
+        main="AfterMap",
+        source="""
+import java.util.List;
+
+public class AfterMap {
+    public static void main(String[] args) {
+        List<String> words = List.of("a", "bb");
+        System.out.println(words.stream()
+            .map(String::toUpperCase)
+            .filter(w -> w.length() > 1)
+            .count());
+    }
+}
+""",
+    ),
+    dict(
+        id="element-types",
+        category="Collections",
+        title="Any object as a collection element",
+        summary="caturra stores elements in a closed set of kinds; a Scanner is not one of them.",
+        main="Elements",
+        source="""
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+
+public class Elements {
+    public static void main(String[] args) {
+        List<Scanner> scanners = new ArrayList<>();
+        scanners.add(new Scanner("7"));
+        System.out.println(scanners.get(0).nextInt());
+    }
+}
+""",
+    ),
+    dict(
+        id="scanner-text",
+        category="Library",
+        title="A Scanner's own toString",
+        summary="The JDK prints its delimiters, position and locale separators — internal state caturra does not model.",
+        main="ScannerText",
+        source="""
+import java.util.Scanner;
+
+public class ScannerText {
+    public static void main(String[] args) {
+        Scanner scanner = new Scanner("7 x");
+        System.out.println(scanner.toString().startsWith("java.util.Scanner"));
+    }
+}
+""",
     ),
 ]
 
@@ -1052,7 +1451,7 @@ GRAMMAR = [
                       '        int old[] = { 7 };\n'
                       '        System.out.println(jagged[0][1] + " " + jagged[1][0] + " " + objects[0] + " " + old[0]);')),
     dict(id="g-var", category="Types and literals", title="var (Java 10 local type inference)",
-         summary="`var count = 3;` — real Java 11, and caturra wants the type written out.", main="G",
+         summary="`var count = 3;` — the initializer's type, inferred.", main="G",
          source=_prog('var count = 3;\n        var name = "ada";\n        System.out.println(count + name);')),
 
     # ----- declarations -----
