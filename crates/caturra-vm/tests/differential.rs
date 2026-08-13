@@ -24375,3 +24375,57 @@ public class Shadowing {
 }
 "#
 );
+
+// `Double.toString` is OpenJDK 11's, not the shortest round-trip decimal. The
+// two differ: JDK 11's FloatingDecimal sometimes emits one digit more than
+// needed, so `1e23` prints as `9.999999999999999E22`. Ryū fixed that in JDK 19,
+// which is why Rust's shortest formatting — what caturra printed before —
+// matched a MODERN JDK and not the one the course targets.
+differential_test!(
+    diff_double_rendering_matches_jdk11,
+    "Doubles",
+    r#"
+public class Doubles {
+    public static void main(String[] args) {
+        // The headline: not the shortest decimal that round-trips.
+        System.out.println(1e23);
+        System.out.println(Double.toString(1e23));
+
+        // Values needing 16 or 17 significant digits.
+        System.out.println(-3.7657888876108336E16);
+        System.out.println(-1.91869629062093728E17);
+        System.out.println(-4.4509971103621658E18);
+
+        // The ordinary ones a program actually prints.
+        System.out.println(0.1);
+        System.out.println(1.0 / 3);
+        System.out.println(100.0);
+        System.out.println(1e7);
+        System.out.println(1e-3);
+        System.out.println(-0.0);
+        System.out.println(2.5e-10);
+        System.out.println(123456789.0);
+
+        // The extremes.
+        System.out.println(Double.MAX_VALUE);
+        System.out.println(Double.MIN_VALUE);
+        System.out.println(Double.MIN_NORMAL);
+        System.out.println(1.0 / 0);
+        System.out.println(0.0 / 0);
+
+        // An accumulation that drifts off any round value.
+        double sum = 0;
+        for (int i = 1; i <= 25; i++) {
+            sum += 1.0 / i;
+        }
+        System.out.println(sum);
+
+        // Powers of ten and their neighbours.
+        for (int p = -8; p <= 8; p++) {
+            double d = Double.parseDouble("1e" + p);
+            System.out.println(d + " " + Math.nextUp(d) + " " + Math.nextDown(d));
+        }
+    }
+}
+"#
+);

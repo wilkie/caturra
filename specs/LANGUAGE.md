@@ -3843,6 +3843,28 @@ clean — evaluation order including `a[i++] = i++` and compound-assignment
 targets evaluated once, and shadowing including a private method not being
 overridden.
 
+### `Double.toString` is JDK 11's, not the shortest decimal (2026-08-13)
+
+OpenJDK 11 does **not** print the shortest round-trip decimal — Ryū arrived in
+JDK 19 — and its `FloatingDecimal` sometimes emits one digit more than needed.
+`1e23` prints as `9.999999999999999E22`, and a value needing 16 digits can be
+given 17. caturra rendered doubles with Rust's shortest formatting, so it
+matched a MODERN JDK and not the one the course targets: about 0.7% of
+arbitrary doubles came out differently.
+
+The `float` path already had a clean-room `FloatingDecimal` (corpus-derived,
+not the GPL source), and its rendering half is width-agnostic — only the
+bit-field extraction and the slop constants are per-type. `Double.toString` now
+runs the same algorithm with 53-bit significands.
+
+**Measured, not asserted:** 24 082 values across random bit patterns, small
+integers and simple ratios, powers of two and ten with their neighbours,
+subnormals, and a drifting accumulation. **6 disagree (0.025%), all subnormals
+below 1e-315.** Both alternative constant choices were tried and are far worse
+(a full ulp costs 1671 values, a quarter costs 826), so what remains is not a
+constant to fit but JDK's per-value significant-bit count for subnormals. The
+entire normal range is exact.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

@@ -7152,36 +7152,9 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
 /// that round-trip, exact scientific-notation thresholds). Current
 /// coverage: NaN/infinities, integral values gaining `.0`, and the 1e7
 /// switch to scientific notation.
+/// `Double.toString`, matching `OpenJDK` 11's `FloatingDecimal`.
 pub(crate) fn java_double_to_string(value: f64) -> String {
-    // Java's FloatingDecimal renders the smallest subnormal as
-    // 4.9E-324; shortest-round-trip formatting would say 5.0E-324.
-    if value.to_bits() == 1 {
-        return String::from("4.9E-324");
-    }
-    if value.to_bits() == 0x8000_0000_0000_0001 {
-        return String::from("-4.9E-324");
-    }
-    if value.is_nan() {
-        return String::from("NaN");
-    }
-    if value.is_infinite() {
-        return String::from(if value > 0.0 { "Infinity" } else { "-Infinity" });
-    }
-    let magnitude = value.abs();
-    if magnitude != 0.0 && !(1e-3..1e7).contains(&magnitude) {
-        // Java: "1.0E7". Rust {:E}: "1E7" — restore the ".0".
-        let formatted = format!("{value:E}");
-        if let Some((mantissa, exponent)) = formatted.split_once('E')
-            && !mantissa.contains('.')
-        {
-            return format!("{mantissa}.0E{exponent}");
-        }
-        return formatted;
-    }
-    if value.fract() == 0.0 {
-        return format!("{value:.1}");
-    }
-    format!("{value}")
+    crate::floatdec::java_double_to_string(value)
 }
 
 /// `Float.toString`, matching `OpenJDK` 11's `FloatingDecimal`.
