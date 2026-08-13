@@ -1913,6 +1913,29 @@ fn builder_method(
         // A builder does NOT override hashCode either: it is Object's, and so
         // stable for the object's lifetime whatever the text becomes.
         ("hashCode", []) => Ok(Some(JValue::Int(identity_hash(receiver)))),
+        // `chars()`/`codePoints()` are `CharSequence`'s, so a builder answers
+        // them exactly as a String does — over ITS units, at the moment of the
+        // call.
+        ("chars", []) => {
+            let source: Vec<JValue> = units.iter().map(|u| JValue::Int(i32::from(*u))).collect();
+            let stream = heap.alloc(HeapObject::Stream {
+                source,
+                ops: Vec::new(),
+            });
+            Ok(Some(JValue::Ref(Some(stream))))
+        }
+        ("codePoints", []) => {
+            let text = String::from_utf16_lossy(&units);
+            let source: Vec<JValue> = text
+                .chars()
+                .map(|c| JValue::Int(i32::try_from(u32::from(c)).unwrap_or(i32::MAX)))
+                .collect();
+            let stream = heap.alloc(HeapObject::Stream {
+                source,
+                ops: Vec::new(),
+            });
+            Ok(Some(JValue::Ref(Some(stream))))
+        }
         _ => Err(VmError::UnknownIntrinsic(format!("StringBuilder.{method}"))),
     }
 }
@@ -4395,6 +4418,11 @@ fn boxed_virtual(
         #[allow(clippy::cast_possible_truncation)]
         "floatValue" => Ok(Some(JValue::Float(as_double(value) as f32))),
         "booleanValue" => Ok(Some(value)),
+        // The INSTANCE forms a floating wrapper declares. `Double.isNaN(d)`
+        // was modelled and `d.isNaN()` was not, though the second is the
+        // spelling a program reaches for on a value it already has.
+        "isNaN" => Ok(Some(JValue::Int(i32::from(as_double(value).is_nan())))),
+        "isInfinite" => Ok(Some(JValue::Int(i32::from(as_double(value).is_infinite())))),
         "toString" => {
             let text = boxed_to_string(class_name, value);
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))

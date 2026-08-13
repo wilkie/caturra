@@ -7940,10 +7940,10 @@ fn try_catch_compile_errors_match_javac() {
             "'try' needs at least one 'catch' clause or a 'finally' block",
         ),
         // `"abc".lines()` is no longer here: it WORKS now (a real Stream).
-        (
-            "class M { static void f() { new StringBuilder().chars(); } }",
-            "StringBuilder.chars exists in Java, but streams are not supported by caturra",
-        ),
+        // Neither is `new StringBuilder().chars()`, for the same reason — and
+        // it had to start working, because `CharSequence` declares `chars()`
+        // and a builder IS one, so the two spellings of a single call were
+        // answering differently.
         (
             "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.nextBigInteger(); } }",
             "Scanner.nextBigInteger exists in Java, but BigInteger is not supported by caturra",

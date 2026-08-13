@@ -23916,3 +23916,75 @@ public class OptionalTyped {
 }
 "#
 );
+
+// A batch of library members that existed in one spelling and not the other.
+// Each is small; what they share is that the missing half is the one a program
+// reaches for first — on the value it already has, or under the shorter name.
+//
+//  * `d.isNaN()` — the STATIC `Double.isNaN(d)` was modelled, the instance
+//    form (which is how you ask a value about itself) was not.
+//  * `Map.entry(k, v)` — the same standalone entry as
+//    `new AbstractMap.SimpleEntry<>(k, v)`, which already worked.
+//  * `chars()` on a `CharSequence` and on a `StringBuilder` — declared by
+//    `CharSequence`, so a builder answers it; it was refused as "streams are
+//    not supported" while the identical call on a String worked.
+//  * `Function.identity()` IS the lambda `x -> x`, which always worked
+//    written out.
+//  * `getTypeName`/`getCanonicalName`/`getEnclosingClass`/`isAnonymousClass`
+//    — the canonical name spells a nested class the way source does, and is
+//    NULL for an anonymous or local class.
+differential_test!(
+    diff_library_members_in_both_spellings,
+    "BothSpellings",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class BothSpellings {
+    static class Nested { }
+    interface Face { int go(); }
+
+    public static void main(String[] args) {
+        Double nan = 0.0 / 0.0;
+        Double infinite = 1.0 / 0.0;
+        Double ordinary = 1.5;
+        System.out.println(nan.isNaN() + " " + ordinary.isNaN());
+        System.out.println(infinite.isInfinite() + " " + ordinary.isInfinite());
+        System.out.println(Double.isNaN(nan) + " " + nan.isNaN());
+        Float notANumber = 0.0f / 0.0f;
+        System.out.println(notANumber.isNaN() + " " + notANumber.isInfinite());
+
+        Map.Entry<String, Integer> entry = Map.entry("k", 1);
+        System.out.println(entry + " " + entry.getKey() + " " + entry.getValue());
+        System.out.println(entry.equals(Map.entry("k", 1)));
+        System.out.println(entry.equals(new AbstractMap.SimpleEntry<>("k", 1)));
+
+        CharSequence text = "abc";
+        System.out.println(text.chars().count() + " " + text.chars().sum());
+        CharSequence builderAsSequence = new StringBuilder("xy");
+        System.out.println(builderAsSequence.chars().count());
+        StringBuilder builder = new StringBuilder("hi");
+        System.out.println(builder.chars().sum() + " " + builder.codePoints().count());
+
+        Function<String, String> same = Function.identity();
+        System.out.println(same.apply("z"));
+        UnaryOperator<String> unary = UnaryOperator.identity();
+        System.out.println(unary.apply("q"));
+
+        System.out.println(String.class.getCanonicalName() + " " + String.class.getTypeName());
+        System.out.println(Nested.class.getCanonicalName() + " " + Nested.class.getTypeName());
+        System.out.println(Nested.class.getEnclosingClass() + " " + String.class.getEnclosingClass());
+        System.out.println(Nested.class.isAnonymousClass() + " " + String.class.isAnonymousClass());
+        System.out.println(int[].class.getCanonicalName() + " " + int[].class.getTypeName());
+        System.out.println(new String[0].getClass().getTypeName());
+
+        // An anonymous and a local class have NO canonical name.
+        Face anonymous = new Face() { public int go() { return 1; } };
+        System.out.println(anonymous.getClass().isAnonymousClass());
+        System.out.println(anonymous.getClass().getCanonicalName());
+        class Local { }
+        System.out.println(new Local().getClass().getCanonicalName());
+    }
+}
+"#
+);

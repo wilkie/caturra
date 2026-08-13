@@ -3569,6 +3569,35 @@ file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
 friendly message for now.
 
+### One member, two spellings (2026-08-12)
+
+A batch of library members that existed under one name and not the other. Each
+is small; what they share is that the missing half is the one a program reaches
+for first — on the value it already has, or under the shorter name.
+
+- **`d.isNaN()` / `d.isInfinite()`.** The statics (`Double.isNaN(d)`) were
+  modelled and the instance forms were not, though asking a value about itself
+  is the natural spelling.
+- **`Map.entry(k, v)`.** The same standalone entry as
+  `new AbstractMap.SimpleEntry<>(k, v)`, which caturra already built — only
+  the spelling differed.
+- **`chars()` / `codePoints()` on a `CharSequence` and a `StringBuilder`.**
+  `CharSequence` declares them, so a builder answers them; the builder's were
+  refused as "streams are not supported" while the identical call on a String
+  worked. Adding them to the `CharSequence` face without implementing the
+  builder's would have made one object answer through one spelling and abort
+  through the other.
+- **`Function.identity()`** is the lambda `x -> x`, which always worked
+  written out. Saying so in the lambda pass is the whole implementation.
+- **`Class.getTypeName` / `getCanonicalName` / `getEnclosingClass` /
+  `isAnonymousClass`.** The canonical name spells a nested class the way
+  source does (`Outer.Inner`, not `Outer$Inner`) and is NULL for an anonymous
+  or local class, which have no canonical name at all (JLS §6.7).
+
+Reaching these turned up two gaps left open rather than fixed: `String[].class`
+does not parse though `int[].class` does, and `Collectors.toMap` takes no
+lambda key extractor in either spelling.
+
 ### Object's methods on every reference (2026-08-12)
 
 `getClass`, `hashCode` and `equals` are declared on `Object`, so every

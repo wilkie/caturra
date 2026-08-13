@@ -12438,6 +12438,46 @@ impl<'run> Interpreter<'run> {
                         let binary = class_binary_name(&name);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&binary)))))
                     }
+                    // `getTypeName` is `getName` except for an ARRAY, which it
+                    // writes the way source does: `int[]`, not `[I`.
+                    "getTypeName" => {
+                        let text = if name.starts_with('[') {
+                            descriptor_type_name(&name)
+                        } else {
+                            class_binary_name(&name)
+                        };
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
+                    }
+                    // The canonical name spells a nested class the way SOURCE
+                    // does — `Outer.Inner`, not the binary `Outer$Inner` — and
+                    // is NULL for a class with no canonical name at all, which
+                    // an anonymous or local one has not.
+                    "getCanonicalName" => {
+                        if name.starts_with('[') {
+                            let text = descriptor_type_name(&name);
+                            return Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))));
+                        }
+                        if is_synthesized_anonymous(&name) || is_hoisted_local(&name) {
+                            return Ok(Some(JValue::NULL));
+                        }
+                        let canonical = class_binary_name(&name).replace('$', ".");
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&canonical)))))
+                    }
+                    // The class a nested one is declared in, or null. Read off
+                    // the binary name, which is where the nesting is recorded.
+                    "getEnclosingClass" => {
+                        let binary = class_binary_name(&name);
+                        match binary.rsplit_once('$') {
+                            Some((outer, _)) if !name.starts_with('[') => {
+                                let reference = self.intern_class(outer.replace('.', "/"));
+                                Ok(Some(JValue::Ref(Some(reference))))
+                            }
+                            _ => Ok(Some(JValue::NULL)),
+                        }
+                    }
+                    "isAnonymousClass" => Ok(Some(JValue::Int(i32::from(
+                        is_synthesized_anonymous(&name),
+                    )))),
                     // `int[].class.isArray()` — the heap stores an array's
                     // class under its DESCRIPTOR, which is exactly the test.
                     "isArray" => Ok(Some(JValue::Int(i32::from(name.starts_with('['))))),
@@ -14566,6 +14606,14 @@ impl Frame<'_> {
 /// source, so this cannot mistake a user class for one.
 fn is_synthesized_anonymous(name: &str) -> bool {
     simple_class_name(name).starts_with("Anon$")
+}
+
+/// A LOCAL class, hoisted under `Name$LocalN`. Like an anonymous one, it has
+/// NO canonical name in Java (JLS §6.7) — `getCanonicalName()` is null for
+/// both, which is what distinguishes them from an ordinary nested class.
+fn is_hoisted_local(name: &str) -> bool {
+    name.split_once("$Local")
+        .is_some_and(|(_, suffix)| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// The simple name of a (possibly `/`- or `.`-qualified) class name.

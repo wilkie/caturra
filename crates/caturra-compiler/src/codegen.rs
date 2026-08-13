@@ -7131,7 +7131,6 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("String", "getBytes", "byte arrays are not supported by caturra"),
     ("StringBuilder", "capacity", "caturra does not model a builder's capacity, only its contents"),
-    ("StringBuilder", "chars", "streams are not supported by caturra"),
     ("StringBuilder", "codePoints", "streams are not supported by caturra"),
     ("Integer", "decode", "system properties are not supported by caturra"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
@@ -8315,6 +8314,21 @@ const CHAR_SEQUENCE_METHODS: &[BuiltinMethod] = &[
         BRet::Str,
         "(II)Ljava/lang/CharSequence;",
     ),
+    // `CharSequence` declares `chars()`/`codePoints()` too (Java 8 defaults),
+    // and both a String and a StringBuilder answer them — the VM dispatches on
+    // the actual object, so the CharSequence face only had to name them.
+    bm(
+        "chars",
+        &[],
+        BRet::IntStream,
+        "()Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "codePoints",
+        &[],
+        BRet::IntStream,
+        "()Ljava/util/stream/IntStream;",
+    ),
 ];
 
 const ITERATOR_METHODS: &[BuiltinMethod] = &[
@@ -9401,6 +9415,14 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
     bm("isArray", &[], BRet::Boolean, "()Z"),
     // `null` for a non-array class, so the return is a nullable Class.
     bm("getComponentType", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // The other names a class answers to. `getTypeName` is `getName` except
+    // for an array (`int[]`, not `[I`); `getCanonicalName` spells a nested
+    // class the way source does and is NULL for an anonymous or local one;
+    // `getEnclosingClass` is the class a nested one is declared in.
+    bm("getTypeName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getCanonicalName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getEnclosingClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm("isAnonymousClass", &[], BRet::Boolean, "()Z"),
     // `Class` does not override `Object`'s — a class has exactly one `Class`
     // instance, so both are identity — but they still have to RESOLVE.
     bm(
@@ -9651,6 +9673,22 @@ const METHOD_METHODS: &[BuiltinMethod] = &[
 /// `java.lang.StringBuilder` methods (`append` returns the builder for
 /// chaining; the VM stores UTF-16 units).
 const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
+    // `CharSequence`'s stream views, over the builder's units at the moment of
+    // the call. Refused as "streams are not supported by caturra" until the
+    // CharSequence face named them — at which point the same builder answered
+    // through one spelling and not the other.
+    bm(
+        "chars",
+        &[],
+        BRet::IntStream,
+        "()Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "codePoints",
+        &[],
+        BRet::IntStream,
+        "()Ljava/util/stream/IntStream;",
+    ),
     // A builder does NOT override equals/hashCode — both are Object's, so two
     // builders holding the same text are unequal and a builder's hash is
     // stable for its lifetime. Refusing `hashCode()` outright was simply a
@@ -16757,6 +16795,13 @@ impl BodyGen<'_> {
             // Inherited from Object; the VM answers it for a Boxed receiver
             // (and interning makes `a.getClass() == b.getClass()` hold).
             "getClass" => Some((JType::Class, String::from("()Ljava/lang/Class;"))),
+            // The INSTANCE forms, which only a floating wrapper declares. The
+            // statics (`Double.isNaN(d)`) were modelled and these were not, so
+            // the spelling a program reaches for first — on the value it
+            // already has — was a missing symbol.
+            "isNaN" | "isInfinite" if matches!(elem.base_type(), JType::Double | JType::Float) => {
+                Some((JType::Boolean, String::from("()Z")))
+            }
             _ => None,
         };
         if let Some((ret, descriptor)) = plan {
@@ -19263,6 +19308,17 @@ impl BodyGen<'_> {
         {
             return self.emit_immutable_factory(class, args, span);
         }
+        // `Map.entry(k, v)` is the same standalone entry as
+        // `new AbstractMap.SimpleEntry<>(k, v)`, which caturra already builds
+        // — only the spelling differed, and it is the shorter one a program
+        // reaches for.
+        if class == "Map" && method == "entry" && !self.table.has_class(class) {
+            if args.len() != 2 {
+                self.error(span, "Map.entry takes a key and a value");
+                return None;
+            }
+            return Some(Some(self.new_simple_entry(&[], args, span)));
+        }
         // `Arrays.deepToString/deepEquals/deepHashCode` recurse into element
         // arrays, which needs each element array's kind at run time. The VM
         // answers them; the bundled Java cannot.
@@ -21396,7 +21452,7 @@ impl BodyGen<'_> {
                             && self.lookup(&path[0]).is_none()
                             && matches!(
                                 path[0].as_str(),
-                                "Path" | "Paths" | "Files" | "Optional"
+                                "Path" | "Paths" | "Files" | "Optional" | "List" | "Set" | "Map"
                             ) =>
                     {
                         path[0].clone()
@@ -21601,6 +21657,16 @@ impl BodyGen<'_> {
                     && !self.table.has_class(&class)
                 {
                     return JType::Null;
+                }
+                // `Map.entry(k, v)` — a standalone entry, typed from its two
+                // arguments the way the emit path builds it.
+                if class == "Map" && method == "entry" && !self.table.has_class(&class) {
+                    let key = args.first().map_or(JType::Error, |a| self.type_of(a));
+                    let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
+                    return match (collection_elem_of(key), collection_elem_of(value)) {
+                        (Some(key), Some(value)) => JType::MapEntry { key, value },
+                        _ => JType::Error,
+                    };
                 }
                 if class == "Optional" {
                     match method.as_str() {

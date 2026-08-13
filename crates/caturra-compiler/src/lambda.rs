@@ -586,6 +586,35 @@ fn assign_target_type(target: &crate::ast::AssignTarget, ctx: &Ctx) -> Option<Ty
 
 #[allow(clippy::too_many_lines)] // one arm per expression kind
 fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
+    // `Function.identity()` IS the lambda `x -> x`, and saying so here is the
+    // whole implementation: everything below — target typing, the erased SAM,
+    // the synthesized class — then treats it as one. Written out by hand it
+    // always worked; only the named factory was missing.
+    if let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        span,
+    } = expr
+        && method == "identity"
+        && args.is_empty()
+        && matches!(owner.as_ref(), Expr::Name { path, .. }
+            if path.last().is_some_and(|name| name == "Function" || name == "UnaryOperator"))
+    {
+        let span = *span;
+        let name = String::from("__identity");
+        *expr = Expr::Lambda {
+            params: vec![crate::ast::LambdaParam {
+                name: name.clone(),
+                ty: None,
+            }],
+            body: LambdaBody::Expr(Box::new(Expr::Name {
+                path: vec![name],
+                span,
+            })),
+            span,
+        };
+    }
     // A method reference in a target-typed position becomes a lambda.
     if matches!(expr, Expr::MethodRef { .. }) {
         // A `java.util.function` target (`Function<String, Integer> len =
