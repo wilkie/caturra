@@ -24939,3 +24939,52 @@ public class StillFine {
 }
 "#
 );
+
+// An interface body has no initializer blocks (JLS §9.1.4) — there is no
+// instance to initialise and its fields are constants. Accepting one let a
+// block of statements sit inside an interface and never run.
+differential_reject!(
+    an_interface_has_no_initializer_block,
+    "InterfaceInit",
+    r"
+public class InterfaceInit {
+    interface Broken {
+        { int x = 1; }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(1);
+    }
+}
+"
+);
+
+// ...and the interface members that ARE legal, plus a class initializer, so
+// the check cannot over-reach.
+differential_test!(
+    diff_interface_members_still_work,
+    "InterfaceOk",
+    r#"
+public class InterfaceOk {
+    interface Sized {
+        int LIMIT = 3;
+        int size();
+        default boolean full() { return size() >= LIMIT; }
+        static Sized of(int n) { return () -> n; }
+    }
+
+    static class Fixed implements Sized {
+        public int size() { return 5; }
+    }
+
+    int marker;
+
+    { marker = 7; }
+
+    public static void main(String[] args) {
+        System.out.println(Sized.of(1).full() + " " + new Fixed().full());
+        System.out.println(Sized.LIMIT + " " + new InterfaceOk().marker);
+    }
+}
+"#
+);

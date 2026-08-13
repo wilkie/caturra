@@ -3937,6 +3937,22 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### An interface has no initializer block (2026-08-13)
+
+A third diagnostic catalogue (42 more programs, 136 in all) found one more
+accepts-invalid and one more leak:
+
+- **An interface body accepted an initializer block.** JLS §9.1.4 has none —
+  there is no instance to initialise and its fields are constants — so a block
+  of statements could sit inside an interface and never run.
+- **A nested class's BINARY name leaked into the override message** at a second
+  site: "go() in B cannot override go() in `S$A`". The abstract-method message
+  was fixed earlier; this one wasn't, which is what a sweep finds and a
+  case-by-case assertion does not.
+
+The rest of that catalogue's differences are caturra being more specific than
+javac (naming the method, the class, the escape) and are kept.
+
 ### A lambda's arity, and lambdas against qualified declarations (2026-08-13)
 
 Widening the diagnostic sweep by 44 more programs found three more

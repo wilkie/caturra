@@ -1662,7 +1662,10 @@ impl MethodTable {
                                     path,
                                     format!(
                                         "{}() in {} cannot override {}() in {}{detail}",
-                                        method.name, class.name, method.name, parent_name,
+                                        method.name,
+                                        class.name,
+                                        method.name,
+                                        source_interface_name(&parent_name),
                                     ),
                                     method.span,
                                 ));

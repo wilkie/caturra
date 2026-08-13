@@ -925,6 +925,7 @@ impl Parser<'_> {
 
     /// Parse a class/interface/enum whose modifiers were already
     /// consumed (shared by top-level and nested declarations).
+    #[allow(clippy::too_many_lines)] // one arm per member kind
     fn type_after_modifiers(
         &mut self,
         start: SourceSpan,
@@ -996,6 +997,17 @@ impl Parser<'_> {
                         fields.append(&mut declared);
                     }
                     Member::Init(mut block) => {
+                        // JLS §9.1.4: an interface body has no initializer
+                        // blocks — there is no instance to initialise and its
+                        // fields are constants. Accepting one let a block of
+                        // statements sit inside an interface and never run.
+                        if is_interface {
+                            self.diagnostics.push(Diagnostic::error(
+                                self.path,
+                                "initializers not allowed in interfaces",
+                                block.span,
+                            ));
+                        }
                         block.order = order;
                         order += 1;
                         init_blocks.push(block);
