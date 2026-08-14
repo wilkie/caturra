@@ -25393,3 +25393,136 @@ public class RightSignatures {
 }
 "#
 );
+
+// JLS §10.5: an array is covariant in its element type, and that includes an
+// INTERFACE element. An interface records no superclass, so the upward walk
+// that answers "is this a subtype of Object?" never reached `Object` from one
+// — `Impl[]` widened to `Object[]` and `Named[]` did not, in assignment and in
+// argument position alike.
+differential_test!(
+    diff_interface_element_arrays_are_covariant,
+    "InterfaceArrays",
+    r#"
+public class InterfaceArrays {
+    interface Named {
+        String name();
+    }
+
+    static class Impl implements Named {
+        public String name() {
+            return "impl";
+        }
+    }
+
+    static int length(Object[] any) {
+        return any.length;
+    }
+
+    public static void main(String[] args) {
+        Named[] named = new Impl[2];
+        named[0] = new Impl();
+        System.out.println(named[0].name());
+
+        Object[] erased = named;
+        System.out.println(erased.length + " " + length(named));
+
+        // The store check is what keeps covariance safe (JLS §10.5).
+        try {
+            erased[1] = "not an Impl";
+            System.out.println("stored");
+        } catch (ArrayStoreException e) {
+            System.out.println("ArrayStoreException");
+        }
+    }
+}
+"#
+);
+
+// JLS §9.4: a `private` interface method is callable only from inside the
+// interface and backs its defaults; a `static` one is not inherited by an
+// implementor. Probed as a dimension and clean throughout, so it is pinned
+// rather than merely observed.
+differential_test!(
+    diff_private_and_static_interface_methods,
+    "InterfaceMembers",
+    r#"
+public class InterfaceMembers {
+    interface Greeter {
+        private String prefix() {
+            return "hello, ";
+        }
+
+        private static String suffix() {
+            return "!";
+        }
+
+        static String shout(String who) {
+            return who.toUpperCase() + suffix();
+        }
+
+        default String greet(String who) {
+            return prefix() + who + suffix();
+        }
+
+        default String greetTwice(String who) {
+            return prefix() + greet(who);
+        }
+    }
+
+    static class Impl implements Greeter {
+    }
+
+    public static void main(String[] args) {
+        Impl impl = new Impl();
+        System.out.println(impl.greet("world"));
+        System.out.println(impl.greetTwice("world"));
+        System.out.println(Greeter.shout("world"));
+    }
+}
+"#
+);
+
+// ...and the rejections that keep those members private: a `private` interface
+// method reached from outside, and a `static` one read through an implementor
+// (it is NOT inherited).
+differential_reject!(
+    a_private_interface_method_is_not_callable_from_outside,
+    "HiddenMember",
+    r#"
+public class HiddenMember {
+    interface Greeter {
+        private String hidden() {
+            return "hidden";
+        }
+    }
+
+    static class Impl implements Greeter {
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Impl().hidden());
+    }
+}
+"#
+);
+
+differential_reject!(
+    a_static_interface_method_is_not_inherited,
+    "NotInherited",
+    r#"
+public class NotInherited {
+    interface Util {
+        static int twice(int n) {
+            return n * 2;
+        }
+    }
+
+    static class Impl implements Util {
+    }
+
+    public static void main(String[] args) {
+        System.out.println(Impl.twice(21));
+    }
+}
+"#
+);

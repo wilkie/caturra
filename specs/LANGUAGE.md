@@ -3937,6 +3937,28 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### Every reference type is a subtype of Object (2026-08-13)
+
+A fourteenth dimension — `private`/`static` interface methods (JLS §9.4) and
+array covariance depth (JLS §10.5) — came back clean in 26 of 27 programs. The
+one divergence was worth the sweep: **an array with an INTERFACE element type
+did not widen to `Object[]`**, in assignment and in argument position, while
+`Impl[]` and even an abstract class's `Base[]` did.
+
+The cause is one line below the covariance rule, not in it. `is_subtype` walks
+a class upward through its superclass and interfaces — and an interface records
+no superclass, so the walk can never reach `Object` from one. Every reference
+type is a subtype of `Object`, including an interface; that is now answered
+directly rather than searched for. `elem_widens_to_class` had already special
+cased `Object` at its top, which is the same rule written in one place and
+missing from the other.
+
+The rest of the dimension is pinned rather than merely observed: private
+interface methods backing defaults, a private *static* one behind a public
+static, and the two rejections that keep them private — a `private` method
+reached from outside, and a `static` one read through an implementor, which
+does NOT inherit it.
+
 ### An implementor owes the SUBSTITUTED signature (2026-08-13)
 
 JLS §8.4.8.1: `class Impl implements Box<String>` owes `unwrap(String)`, not

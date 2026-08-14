@@ -2133,6 +2133,13 @@ impl MethodTable {
         if sub == sup {
             return true;
         }
+        // Every reference type is a subtype of `Object` — an INTERFACE too.
+        // An interface records no superclass, so the upward walk below can
+        // never reach `Object` from one, and `Named[]` did not widen to
+        // `Object[]` while `Impl[]` did.
+        if sup == self.object_id {
+            return true;
+        }
         // An INTERSECTION bound (`<T extends A & B>`) erases to a synthesized
         // interface extending every bound. No class names it, so the ordinary
         // upward walk can never reach it — a class satisfies it exactly when it
