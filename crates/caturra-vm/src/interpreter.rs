@@ -5144,11 +5144,23 @@ impl<'run> Interpreter<'run> {
                         "java.lang.IllegalArgumentException: {from} > {to}"
                     )));
                 }
+                // Out of range, `copyOfRange` does not check the range itself
+                // — it hands the job to `System.arraycopy` and the message the
+                // program sees is arraycopy's, naming the array TYPE and its
+                // length. A plain "Array index out of range" is caturra's own
+                // wording for a different check.
                 let Ok(start) = usize::try_from(*from) else {
-                    return Err(array_index_error(*from));
+                    return Err(self.arraycopy_source_error(source, *from));
                 };
                 if start > length {
-                    return Err(array_index_error(*from));
+                    // The copy length arraycopy is asked for is
+                    // `min(length - from, to - from)`, and `from > length`
+                    // makes the first term the smaller and negative.
+                    let copy_length = i64::try_from(length).unwrap_or(i64::MAX) - i64::from(*from);
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.ArrayIndexOutOfBoundsException: \
+                         arraycopy: length {copy_length} is negative"
+                    )));
                 }
                 let new_length = usize::try_from(to - from).unwrap_or(0);
                 Some(self.array_copy_of_range(source, start, new_length)?)
@@ -5355,6 +5367,22 @@ impl<'run> Interpreter<'run> {
     }
 
     /// The length of any array on the heap.
+    /// The JDK's out-of-bounds message for a source index `System.arraycopy`
+    /// rejects: it names the array's TYPE and length, not just the index.
+    fn arraycopy_source_error(&self, reference: HeapRef, index: i32) -> VmError {
+        let described = self.heap.get(reference).and_then(|object| {
+            let name = intrinsics::arraycopy_type_name(object)?;
+            Some((name, self.array_length(reference)?))
+        });
+        match described {
+            Some((name, length)) => VmError::UncaughtException(format!(
+                "java.lang.ArrayIndexOutOfBoundsException: \
+                 arraycopy: source index {index} out of bounds for {name}[{length}]"
+            )),
+            None => array_index_error(index),
+        }
+    }
+
     fn array_length(&self, reference: HeapRef) -> Option<usize> {
         use crate::value::HeapObject as Object;
         Some(match self.heap.get(reference)? {

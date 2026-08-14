@@ -3148,7 +3148,7 @@ fn take_chunk(heap: &Heap, source: HeapRef, from: usize, count: usize) -> Option
 /// The name JDK arraycopy diagnostics give an array's type: the primitive
 /// for a primitive array, and the catch-all "object array" for every
 /// reference array (the JVM's own wording — it does not name the component).
-fn arraycopy_type_name(object: &HeapObject) -> Option<&'static str> {
+pub(crate) fn arraycopy_type_name(object: &HeapObject) -> Option<&'static str> {
     Some(match object {
         HeapObject::IntArray(kind, _) => match kind {
             IntKind::Int => "int",

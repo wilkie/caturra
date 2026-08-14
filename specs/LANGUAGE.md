@@ -3937,6 +3937,28 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### copyOfRange reports arraycopy's bounds (2026-08-13)
+
+A fifteenth dimension swept the `Arrays`/`Collections` utility surface — the
+two classes a student reaches for constantly, never checked as a unit: what
+`binarySearch` returns for an ABSENT key, whether `copyOf` pads or truncates,
+`deepToString` and `deepEquals`, `nCopies`/`frequency`/`swap`/`disjoint`, and
+the throwing contracts. 22 of 23 programs matched a real JDK byte for byte.
+
+The one divergence is a message. `Arrays.copyOfRange` does not range-check
+itself: past the `from > to` guard it hands the copy to `System.arraycopy`, so
+what the program catches is arraycopy's diagnostic, which names the array's
+TYPE and length — `arraycopy: source index -1 out of bounds for int[3]`, and
+`object array[3]` for a reference array. caturra reported its own
+`Array index out of range: -1`, from a different check entirely.
+
+The second shape had to be derived rather than copied: when `from` is past the
+end, arraycopy is asked for `min(length - from, to - from)` elements, and
+`from > length` makes the first term the smaller and negative — so the message
+is `arraycopy: length -2 is negative`, naming a number that appears nowhere in
+the call. The exception CLASS and which inputs throw were already right; only
+the words were caturra's.
+
 ### Every reference type is a subtype of Object (2026-08-13)
 
 A fourteenth dimension — `private`/`static` interface methods (JLS §9.4) and

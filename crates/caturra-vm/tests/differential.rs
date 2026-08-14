@@ -25509,7 +25509,7 @@ public class HiddenMember {
 differential_reject!(
     a_static_interface_method_is_not_inherited,
     "NotInherited",
-    r#"
+    r"
 public class NotInherited {
     interface Util {
         static int twice(int n) {
@@ -25522,6 +25522,103 @@ public class NotInherited {
 
     public static void main(String[] args) {
         System.out.println(Impl.twice(21));
+    }
+}
+"
+);
+
+// `Arrays.copyOfRange` does not range-check itself: it hands the copy to
+// `System.arraycopy`, so an out-of-range `from` reports arraycopy's message,
+// naming the array's TYPE and length. Probed as a dimension (23 programs over
+// the `Arrays`/`Collections` surface) and the only divergence in it.
+differential_test!(
+    diff_copy_of_range_reports_arraycopy_bounds,
+    "CopyRangeBounds",
+    r#"
+import java.util.Arrays;
+
+public class CopyRangeBounds {
+    static void ints(int from, int to) {
+        int[] source = {1, 2, 3};
+        try {
+            System.out.println(Arrays.toString(Arrays.copyOfRange(source, from, to)));
+        } catch (RuntimeException e) {
+            System.out.println(e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    static void words(int from, int to) {
+        String[] source = {"a", "b", "c"};
+        try {
+            System.out.println(Arrays.toString(Arrays.copyOfRange(source, from, to)));
+        } catch (RuntimeException e) {
+            System.out.println(e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        ints(-1, 2);
+        ints(-2, -1);
+        ints(5, 6);
+        ints(4, 4);
+        ints(2, 1);
+        ints(3, 3);
+        ints(1, 9);
+        words(-1, 2);
+        words(5, 6);
+    }
+}
+"#
+);
+
+// The rest of the dimension: the exact contracts a student meets on these two
+// utility classes — what `binarySearch` returns when the key is ABSENT (the
+// insertion point, negated and offset by one), whether `copyOf` pads or
+// truncates, and which exception an empty `Collections.max` throws.
+differential_test!(
+    diff_arrays_and_collections_contracts,
+    "UtilityContracts",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.NoSuchElementException;
+
+public class UtilityContracts {
+    public static void main(String[] args) {
+        int[] nums = {10, 20, 30, 40};
+        System.out.println(Arrays.binarySearch(nums, 30));
+        System.out.println(Arrays.binarySearch(nums, 25));
+        System.out.println(Arrays.binarySearch(nums, 5));
+        System.out.println(Arrays.binarySearch(nums, 50));
+
+        System.out.println(Arrays.toString(Arrays.copyOf(nums, 6)));
+        System.out.println(Arrays.toString(Arrays.copyOf(nums, 2)));
+        System.out.println(Arrays.toString(Arrays.copyOf(new String[] {"a"}, 3)));
+
+        int[] sorted = {5, 4, 3, 2, 1};
+        Arrays.sort(sorted, 1, 4);
+        System.out.println(Arrays.toString(sorted));
+
+        System.out.println(Arrays.deepToString(new int[][] {{1, 2}, {3}}));
+        System.out.println(Arrays.deepEquals(new int[][] {{1}}, new int[][] {{1}}));
+
+        List<Integer> values = new ArrayList<>(Arrays.asList(3, 1, 2));
+        Collections.sort(values);
+        System.out.println(values + " " + Collections.max(values));
+        System.out.println(Collections.max(values, Comparator.reverseOrder()));
+        System.out.println(Collections.binarySearch(values, 2));
+        System.out.println(Collections.binarySearch(values, 9));
+        System.out.println(Collections.nCopies(3, "x") + " " + Collections.frequency(values, 2));
+
+        try {
+            Collections.max(new ArrayList<Integer>());
+            System.out.println("no throw");
+        } catch (NoSuchElementException e) {
+            System.out.println("NoSuchElementException " + e.getMessage());
+        }
     }
 }
 "#
