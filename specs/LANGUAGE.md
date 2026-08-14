@@ -4037,6 +4037,40 @@ right; it cannot find a hole they share.
 
 47 of 48 matched at that point; the last one is below.
 
+### Auditing the refusals themselves (2026-08-14)
+
+Two fixes this round came from re-reading an old refusal and finding its reason
+no longer true — `StringBuilder.capacity` and `Collection.toArray`. That is a
+cheap, repeatable audit, so it was run over the whole table: 37 members, each
+reason checked against what caturra can actually do today.
+
+**Eight reasons were false.** They named capabilities the engine has since
+gained — streams, regular expressions, iterators, varargs — and a refusal that
+misdescribes the engine is worse than no refusal at all: it sends a student
+looking for a workaround that does not exist, and tells the next maintainer the
+wrong thing about their own system.
+
+Two of the eight were only ever a table entry:
+
+- **`LinkedList.listIterator`** was refused as "iterators are not supported",
+  while the very same list machinery already answered `ArrayList.listIterator`.
+  Both forms work now.
+- **`String.getBytes()`** was refused as "byte arrays are not supported". They
+  are, and it is the default charset's encoding — UTF-8 here — with an
+  unpaired surrogate becoming `?`, the substitution the console already makes.
+
+The rest name members that genuinely are not modelled, so the entry stays and
+the WORDING was corrected to say what is actually missing: a `Scanner` that
+splits on whitespace and takes no delimiter pattern; no descending view of a
+`TreeSet` or `LinkedList`; the immutable factories living on `Map` rather than
+`HashMap`; and a parallel stream that, on one thread, would only be a
+sequential one under another name.
+
+Nothing here was implemented on the strength of the audit alone — each
+capability was probed against a real JDK first, which is how `descendingIterator`
+stayed refused rather than being faked with a reversed snapshot whose `remove`
+would have written to the wrong element.
+
 ### String.format swept; collections found two more (2026-08-14)
 
 Two dimensions, one clean and one not.

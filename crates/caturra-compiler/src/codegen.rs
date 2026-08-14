@@ -6974,6 +6974,8 @@ enum BRet {
     StrArray,
     /// `char[]` (e.g. `String.toCharArray`).
     CharArray,
+    /// `byte[]` — `String.getBytes()`.
+    ByteArray,
     /// The list's element type.
     Elem,
     /// The element type, boxed when primitive — for a `Queue`/`Deque` return
@@ -7353,6 +7355,10 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         ret: BRet::CharArray,
         descriptor: "()[C",
     },
+    // `getBytes()` is the string's UTF-8 encoding, which is what a JDK on a
+    // UTF-8 default charset answers. The refusal said "byte arrays are not
+    // supported"; they are.
+    bm("getBytes", &[], BRet::ByteArray, "()[B"),
     BuiltinMethod {
         name: "getChars",
         params: &[BParam::Int, BParam::Int, BParam::CharArray, BParam::Int],
@@ -7484,7 +7490,6 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
 /// symbol" would read as a bug.
 #[rustfmt::skip]
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
-    ("String", "getBytes", "byte arrays are not supported by caturra"),
     // A class's access flags are not modelled, and could not be answered
     // honestly if they were: a LIBRARY class has no class file here, and a
     // nested one is flattened to the top level, so the `static` and `private`
@@ -7495,23 +7500,23 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Class", "getModifiers", "caturra does not model a class's access flags"),
     ("Class", "getPackage", "caturra does not model java.lang.Package"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
-    ("ArrayList", "parallelStream", "streams are not supported by caturra"),
+    ("ArrayList", "parallelStream", "caturra runs on one thread, so a parallel stream would only be a sequential one under another name"),
     ("ArrayList", "subList", "list views are not supported by caturra"),
     ("LinkedList", "subList", "list views are not supported by caturra"),
     ("Stack", "subList", "list views are not supported by caturra"),
     ("Collection", "subList", "list views are not supported by caturra"),
     ("ArrayList", "clone", "clone is not supported by caturra"),
-    ("Scanner", "useDelimiter", "regular expressions are not supported by caturra"),
-    ("Scanner", "findInLine", "regular expressions are not supported by caturra"),
-    ("Scanner", "findWithinHorizon", "regular expressions are not supported by caturra"),
-    ("Scanner", "skip", "regular expressions are not supported by caturra"),
-    ("Scanner", "tokens", "streams are not supported by caturra"),
-    ("Scanner", "findAll", "streams are not supported by caturra"),
+    ("Scanner", "useDelimiter", "caturra's Scanner splits on whitespace and does not take a delimiter pattern"),
+    ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
+    ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
+    ("Scanner", "skip", "caturra's Scanner reads whole tokens and cannot skip by pattern"),
+    ("Scanner", "tokens", "caturra's Scanner does not expose its tokens as a stream"),
+    ("Scanner", "findAll", "caturra's Scanner does not expose matches as a stream"),
     ("Scanner", "nextBigInteger", "BigInteger is not supported by caturra"),
     ("Scanner", "nextBigDecimal", "BigDecimal is not supported by caturra"),
     ("HashMap", "clone", "clone is not supported by caturra"),
-    ("HashMap", "of", "varargs are not supported by caturra"),
-    ("HashMap", "ofEntries", "varargs are not supported by caturra"),
+    ("HashMap", "of", "the immutable factories live on Map, not HashMap - write Map.of(...)"),
+    ("HashMap", "ofEntries", "the immutable factories live on Map, not HashMap - write Map.ofEntries(...)"),
     ("TreeMap", "clone", "clone is not supported by caturra"),
     ("TreeMap", "headMap", "TreeMap range views are not supported by caturra"),
     ("TreeMap", "tailMap", "TreeMap range views are not supported by caturra"),
@@ -7521,13 +7526,12 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("TreeMap", "lastEntry", "TreeMap entry views are not supported by caturra (use lastKey)"),
     ("TreeMap", "pollFirstEntry", "TreeMap entry views are not supported by caturra"),
     ("TreeMap", "pollLastEntry", "TreeMap entry views are not supported by caturra"),
-    ("TreeSet", "descendingIterator", "iterators are not supported by caturra"),
+    ("TreeSet", "descendingIterator", "caturra does not model a descending view of a TreeSet"),
     ("TreeSet", "descendingSet", "TreeSet.descendingSet is not supported by caturra"),
     ("TreeSet", "headSet", "TreeSet range views are not supported by caturra"),
     ("TreeSet", "tailSet", "TreeSet range views are not supported by caturra"),
     ("TreeSet", "subSet", "TreeSet range views are not supported by caturra"),
-    ("LinkedList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
-    ("LinkedList", "descendingIterator", "iterators are not supported by caturra"),
+    ("LinkedList", "descendingIterator", "caturra does not model a descending view of a LinkedList"),
 ];
 
 /// The source-level class name of a receiver that [`UNSUPPORTED_MEMBERS`]
@@ -8159,6 +8163,22 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
+    // `listIterator` is answered by the same list machinery `ArrayList` uses;
+    // only the unsupported table stood in the way, and it did so with a reason
+    // ("iterators are not supported") that had long since stopped being true.
+    bm(
+        "listIterator",
+        &[],
+        BRet::ListIterator,
+        "()Ljava/util/ListIterator;",
+    ),
+    bm(
+        "listIterator",
+        &[BParam::Int],
+        BRet::ListIterator,
+        "(I)Ljava/util/ListIterator;",
+    ),
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     // Every reference has the Object methods; these faces had none, so
@@ -11826,6 +11846,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         }),
         BRet::CharArray => Some(JType::Array {
             elem: ElemType::Char,
+            dims: 1,
+        }),
+        BRet::ByteArray => Some(JType::Array {
+            elem: ElemType::Byte,
             dims: 1,
         }),
         BRet::Elem => Some(

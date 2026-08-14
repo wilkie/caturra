@@ -1489,6 +1489,25 @@ fn string_method(
             let reference = heap.alloc(HeapObject::IntArray(IntKind::Char, values));
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // `getBytes()` encodes in the default charset, which is UTF-8 here.
+        // An unpaired surrogate is unencodable and becomes `?`, the same
+        // substitution the console makes.
+        ("getBytes", []) => {
+            let mut bytes: Vec<i8> = Vec::new();
+            for decoded in char::decode_utf16(units.iter().copied()) {
+                match decoded {
+                    Ok(character) => {
+                        let mut buffer = [0u8; 4];
+                        for byte in character.encode_utf8(&mut buffer).as_bytes() {
+                            bytes.push(byte.cast_signed());
+                        }
+                    }
+                    Err(_) => bytes.push(b'?'.cast_signed()),
+                }
+            }
+            let reference = heap.alloc(HeapObject::ByteArray(bytes));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         (
             "getChars",
             [

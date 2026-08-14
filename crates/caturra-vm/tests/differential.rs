@@ -26745,3 +26745,36 @@ public class CollectionMethods {
 }
 "#
 );
+
+// Members that were refused for a reason that had EXPIRED. Auditing the whole
+// unsupported-member table found eight reasons naming a capability caturra has
+// since gained — streams, regular expressions, iterators, varargs.
+differential_test!(
+    diff_members_whose_refusal_expired,
+    "ExpiredRefusals",
+    r#"
+import java.util.Arrays;
+import java.util.LinkedList;
+import java.util.ListIterator;
+
+public class ExpiredRefusals {
+    public static void main(String[] args) {
+        // Refused as "iterators are not supported by caturra", while the very
+        // same machinery already answered `ArrayList.listIterator`.
+        ListIterator<String> forward = new LinkedList<>(Arrays.asList("x", "y")).listIterator();
+        System.out.println(forward.next() + forward.hasNext() + forward.nextIndex());
+        ListIterator<String> backward = new LinkedList<>(Arrays.asList("p", "q")).listIterator(2);
+        System.out.println(backward.hasPrevious() + "" + backward.previous() + backward.previousIndex());
+
+        // Refused as "byte arrays are not supported by caturra"; they are, and
+        // getBytes is the default charset's encoding, which is UTF-8.
+        System.out.println(Arrays.toString("abc".getBytes()));
+        System.out.println(Arrays.toString("é".getBytes()));
+        System.out.println(Arrays.toString("😀".getBytes()));
+        System.out.println("".getBytes().length);
+        byte[] bytes = "hi".getBytes();
+        System.out.println(bytes.length + " " + bytes[0] + " " + bytes[1]);
+    }
+}
+"#
+);
