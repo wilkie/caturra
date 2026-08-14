@@ -22,8 +22,23 @@
 //! Below a table length of 64, a bin of 8 makes Java resize rather than
 //! treeify, which reshuffles every bucket; that is modelled. The one
 //! divergence left: at 64 or more, such a bin really does become a red-black
-//! tree, and iterates in tree order rather than chain order. Reaching it
-//! takes deliberately-crafted colliding keys.
+//! tree, and iterates in tree order rather than chain order.
+//!
+//! Measured 2026-08-13 over 120 printed orders — word, short, duplicate and
+//! collision key sets, every resize boundary from 0 to 100 entries, and the
+//! `Integer`/`Character`/`Long`/`Boolean`/`Double`/negative/`MIN_VALUE` key
+//! paths. 114 matched a real JDK exactly. The six that did not are the whole
+//! shape of the gap: **NINE or more keys in ONE bin of a table of 64+**,
+//! which needs keys that collide on purpose (`i * 32`, or the `Aa`/`BB`
+//! string family). What a treeified bin prints is `[tree root]` followed by
+//! the rest in chain order, because `treeify` ends with `moveRootToFront`.
+//!
+//! Closing it is a rewrite of this module, not an addition, for two reasons
+//! worth stating so nobody re-opens it lightly. A tree's shape depends on the
+//! ORDER puts, removes and resizes happened in, so it cannot be derived from
+//! the final entry set the way chain order can. And building one calls
+//! `compareTo` on the keys, which for a user class is user code this module
+//! deliberately cannot run.
 
 use std::cell::OnceCell;
 use std::collections::HashMap;

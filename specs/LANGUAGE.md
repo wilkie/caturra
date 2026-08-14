@@ -3937,6 +3937,33 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### Hash iteration order, measured (2026-08-13)
+
+A seventeenth dimension took the other surface caturra MODELS rather than
+wraps: `HashMap`/`HashSet` iteration order, which is a pure function of the
+keys' hash codes, the table length and insertion order — and which a student
+sees every time they print a map.
+
+120 printed orders: word, short, duplicate and deliberately-colliding key
+sets; every resize boundary from 0 to 100 entries; and the `Integer`,
+`Character`, `Long`, `Boolean`, `Double`, negative and `MIN_VALUE` key paths.
+**114 matched a real JDK exactly**, including the resize thresholds and the
+rule that removal does not re-order what stays. Those 114 are now pinned.
+
+The six that did not are one known gap, and the probe pins its shape: **nine or
+more keys in ONE bin of a table of 64 or more**, which takes keys that collide
+on purpose. There Java treeifies the bin, and it prints `[tree root]` followed
+by the rest in chain order, because `treeify` ends with `moveRootToFront`.
+
+It stays open, deliberately, and the reasons belong in the record rather than a
+future re-discovery. A tree's shape depends on the ORDER puts, removes and
+resizes happened in, so it cannot be derived from the final entry set the way
+chain order can — and `map.rs` is built on exactly that derivation. Building
+one also calls `compareTo` on the keys, which for a user class is user code
+that module deliberately cannot run. Closing this is a rewrite of the module,
+with the grading-corpus baseline riding on it, in exchange for key sets no
+ordinary program produces.
+
 ### Regex inline flags and named groups (2026-08-13)
 
 The last two families the 13,728-line sweep refused. With these the whole

@@ -25787,3 +25787,106 @@ public class NamedGroups {
 }
 "#
 );
+
+// Hash iteration order at volume. Order is a pure function of the keys' hash
+// codes, the table length, and insertion order — students see it every time
+// they print a map — so it is reproduced rather than replaced by a convenient
+// one. Probed as a dimension (120 lines over word/short/duplicate/collision
+// key sets, every resize boundary from 0 to 100 entries, and the Integer /
+// Character / Long / Boolean / Double / negative / MIN_VALUE key paths);
+// 114 of 120 matched, and those 114 are pinned here.
+differential_test!(
+    diff_hash_iteration_order,
+    "HashOrder",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class HashOrder {
+    static void words(String label, String[] keys) {
+        Map<String, Integer> map = new HashMap<>();
+        for (int i = 0; i < keys.length; i++) {
+            map.put(keys[i], i);
+        }
+        System.out.println(label + " map " + map);
+        System.out.println(label + " keys " + map.keySet());
+        System.out.println(label + " vals " + map.values());
+        System.out.println(label + " ents " + map.entrySet());
+        System.out.println(label + " set " + new HashSet<>(Arrays.asList(keys)));
+    }
+
+    static void counted(int n) {
+        Map<Integer, String> map = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            map.put(i, "v" + i);
+        }
+        System.out.println("n" + n + " " + map);
+        for (int i = 0; i < n; i += 3) {
+            map.remove(i);
+        }
+        System.out.println("n" + n + " after " + map);
+    }
+
+    public static void main(String[] args) {
+        words("words", new String[] {"apple", "banana", "cherry", "date", "elderberry"});
+        words("short", new String[] {"a", "b", "c", "d", "e", "f", "g", "h"});
+        words("dup", new String[] {"a", "a", "b", "b", "c"});
+        words("names", new String[] {
+            "Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Heidi",
+            "Ivan", "Judy", "Karl", "Laura", "Mallory", "Niaj", "Olivia", "Peggy",
+        });
+        // Colliding strings, but never eight in one bin of a table of 64 —
+        // below that Java RESIZES instead of treeifying, which is modelled.
+        words("collide", new String[] {"Aa", "BB", "AaAa", "BBBB", "AaBB", "BBAa"});
+
+        for (int n : new int[] {0, 1, 2, 7, 8, 9, 12, 13, 16, 17, 24, 25, 32, 33, 48, 64, 65, 100}) {
+            counted(n);
+        }
+
+        Map<Integer, Integer> edge = new HashMap<>();
+        int[] keys = {0, -1, 1, Integer.MAX_VALUE, Integer.MIN_VALUE, -16, 16, 31, -31, 65535};
+        for (int key : keys) {
+            edge.put(key, key);
+        }
+        System.out.println("edge " + edge);
+        System.out.println("copy " + new HashMap<>(edge));
+        System.out.println("copyset " + new HashSet<>(edge.keySet()));
+
+        Map<Character, Integer> chars = new HashMap<>();
+        for (char c = 'a'; c <= 'z'; c++) {
+            chars.put(c, (int) c);
+        }
+        System.out.println("chars " + chars);
+
+        Map<Long, Integer> longs = new HashMap<>();
+        for (long i = 0; i < 20; i++) {
+            longs.put(i * 1000000007L, (int) i);
+        }
+        System.out.println("longs " + longs);
+
+        Map<Double, String> doubles = new HashMap<>();
+        for (double d : new double[] {0.0, -0.0, 1.5, -1.5, 100.0, 0.1}) {
+            doubles.put(d, "d");
+        }
+        System.out.println("doubles " + doubles);
+
+        Map<Boolean, String> bools = new HashMap<>();
+        bools.put(true, "t");
+        bools.put(false, "f");
+        System.out.println("bools " + bools);
+
+        List<String> walked = new ArrayList<>();
+        Set<String> set = new HashSet<>(Arrays.asList("one", "two", "three", "four", "five"));
+        for (String each : set) {
+            walked.add(each);
+        }
+        System.out.println("walk " + walked);
+    }
+}
+"#
+);
