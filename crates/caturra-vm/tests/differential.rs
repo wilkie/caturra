@@ -25961,6 +25961,18 @@ public class CaseTables {
         }
         System.out.println(upper + " " + lower + " " + mapped.toString().hashCode());
 
+        // The FULL mappings too — `String.toUpperCase` expands where
+        // `Character.toUpperCase` cannot, and both come from the same table.
+        StringBuilder full = new StringBuilder();
+        for (int c = 0; c < 65536; c++) {
+            String one = String.valueOf((char) c);
+            full.append(one.toUpperCase()).append(one.toLowerCase()).append(';');
+        }
+        System.out.println(full.toString().hashCode());
+        System.out.println("ß".toUpperCase() + " " + "İ".toLowerCase().length()
+            + " " + "ﬁ".toUpperCase() + " " + "Ა".toLowerCase()
+            + " " + Character.toTitleCase('ǳ') + " " + Character.isTitleCase('ǲ'));
+
         // The Turkish dotted capital: its FULL lowercase is two characters,
         // but its simple mapping is a plain `i`, which is what a JDK answers
         // and what makes this comparison zero.

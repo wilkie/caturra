@@ -1161,13 +1161,12 @@ fn string_method(
                     if a == b {
                         return true;
                     }
-                    let (Some(a), Some(b)) =
-                        (char::from_u32(u32::from(*a)), char::from_u32(u32::from(*b)))
-                    else {
-                        return false;
-                    };
-                    let (upper_a, upper_b) = (java_simple_upper(a), java_simple_upper(b));
-                    upper_a == upper_b || java_simple_lower(upper_a) == java_simple_lower(upper_b)
+                    // `equalsIgnoreCase` compares each unit's uppercase and
+                    // THEN its lowercase, which is what makes `\u0130` equal
+                    // `i`. Units, not `char`s: a lone surrogate has to compare
+                    // too, and `char::from_u32` rejects one.
+                    let (upper_a, upper_b) = (java_upper_unit(*a), java_upper_unit(*b));
+                    upper_a == upper_b || java_lower_unit(upper_a) == java_lower_unit(upper_b)
                 });
             Ok(Some(JValue::Int(i32::from(same))))
         }
@@ -1225,14 +1224,17 @@ fn string_method(
             let reference = heap.alloc(HeapObject::JavaString(replaced));
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // The FULL mappings, from the JDK 11 tables rather than from Rust's
+        // (a newer Unicode version, which disagreed on thousands of units).
+        // Unit by unit, so an unpaired surrogate passes through untouched.
         ("toUpperCase", []) => {
-            let text = String::from_utf16_lossy(&units).to_uppercase();
-            let reference = heap.alloc_string(&text);
+            let mapped: Vec<u16> = units.iter().flat_map(|u| unicode::full_upper(*u)).collect();
+            let reference = heap.alloc(HeapObject::JavaString(mapped));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         ("toLowerCase", []) => {
-            let text = String::from_utf16_lossy(&units).to_lowercase();
-            let reference = heap.alloc_string(&text);
+            let mapped: Vec<u16> = units.iter().flat_map(|u| unicode::full_lower(*u)).collect();
+            let reference = heap.alloc(HeapObject::JavaString(mapped));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         // `lines()` — a Stream of the lines, split on \n, \r\n or \r, with
@@ -2175,14 +2177,7 @@ fn java_fold_unit(unit: u16) -> u16 {
 /// whose uppercase form is several characters (`ß` → `SS`) is unchanged. Using
 /// Rust's full mapping made `compareToIgnoreCase` call equal strings unequal.
 fn java_upper_unit(unit: u16) -> u16 {
-    let Some(c) = char::from_u32(u32::from(unit)) else {
-        return unit;
-    };
-    let mut upper = c.to_uppercase();
-    match (upper.next(), upper.next()) {
-        (Some(single), None) => u16::try_from(u32::from(single)).unwrap_or(unit),
-        _ => unit,
-    }
+    unicode::simple_upper(unit)
 }
 
 /// `Character.toLowerCase` on one unit. Unlike the uppercase side, a
@@ -2191,10 +2186,7 @@ fn java_upper_unit(unit: u16) -> u16 {
 /// SIMPLE mapping is a plain `i`, which is what the JDK answers. Leaving it
 /// unchanged made `"\u0130".compareToIgnoreCase("i")` non-zero.
 fn java_lower_unit(unit: u16) -> u16 {
-    let Some(c) = char::from_u32(u32::from(unit)) else {
-        return unit;
-    };
-    u16::try_from(u32::from(java_simple_lower(c))).unwrap_or(unit)
+    unicode::simple_lower(unit)
 }
 
 fn region_matches(
@@ -6267,28 +6259,6 @@ fn numeric_run_value(c: char) -> Option<i32> {
 }
 
 /// Java's `Character.toTitleCase(char)`: the uppercase mapping, except for
-/// the twelve Latin digraphs whose TITLECASE form is a third character
-/// (`\u01C6` lowercase dz, `\u01C4` uppercase DZ, `\u01C5` titlecase Dz).
-fn java_title_case(c: char) -> char {
-    match c {
-        '\u{01C4}'..='\u{01C6}' => '\u{01C5}',
-        '\u{01C7}'..='\u{01C9}' => '\u{01C8}',
-        '\u{01CA}'..='\u{01CC}' => '\u{01CB}',
-        '\u{01F1}'..='\u{01F3}' => '\u{01F2}',
-        other => java_simple_upper(other),
-    }
-}
-
-/// Java's simple LOWERCASE mapping — the first character of Rust's full one,
-/// which agrees with the JDK across the BMP (including `\u0130`, whose full
-/// mapping is two characters but whose simple mapping is plain `i`).
-fn java_simple_lower(c: char) -> char {
-    if unmapped_in_jdk_11(c) {
-        return c;
-    }
-    c.to_lowercase().next().unwrap_or(c)
-}
-
 /// Rewrite every Unicode decimal digit as its ASCII counterpart, so the
 /// integer parsers (which are ASCII-only) see what `Character.digit` would
 /// have given them: `Integer.parseInt("\u0663\u0664")` is 34 on a JDK.
@@ -6323,61 +6293,6 @@ fn nd_digit_value(c: char) -> Option<u32> {
 /// where it is multi-char the simple mapping is either the char itself (ß,
 /// ligatures) or, for 27 polytonic-Greek letters with ypogegrammeni, a specific
 /// char in the 1F88.. titlecase block.
-/// Characters Rust gives a simple case mapping but JDK 11 does not.
-///
-/// A JDK carries the Unicode version it shipped with — 11 carries Unicode 10 —
-/// while Rust's tables track the current one. Georgian Mtavruli (Unicode 11),
-/// the Cyrillic and Latin additions of 9 through 14: Rust uppercases them and
-/// JDK 11 leaves them alone. Measured over the whole BMP against a real JDK:
-/// 2188 units, every one of them this same direction, compressing to these
-/// ranges. The last is the surrogate block, which has no case mapping in any
-/// version — a lone surrogate must come back unchanged rather than as the
-/// replacement character.
-const UNMAPPED_IN_JDK_11: &[(u32, u32)] = &[
-    (0x019B, 0x019B),
-    (0x0264, 0x0264),
-    (0x0282, 0x0282),
-    (0x10D0, 0x10FA),
-    (0x10FD, 0x10FF),
-    (0x1C89, 0x1C8A),
-    (0x1C90, 0x1CBA),
-    (0x1CBD, 0x1CBF),
-    (0x1D8E, 0x1D8E),
-    (0x2C2F, 0x2C2F),
-    (0x2C5F, 0x2C5F),
-    (0xA794, 0xA794),
-    (0xA7B8, 0xA7DC),
-    (0xA7F5, 0xA7F6),
-    (0xD800, 0xDFFF),
-];
-
-fn unmapped_in_jdk_11(c: char) -> bool {
-    let point = u32::from(c);
-    UNMAPPED_IN_JDK_11
-        .iter()
-        .any(|&(first, last)| point >= first && point <= last)
-}
-
-fn java_simple_upper(c: char) -> char {
-    if unmapped_in_jdk_11(c) {
-        return c;
-    }
-    let mut it = c.to_uppercase();
-    let first = it.next().unwrap_or(c);
-    if it.next().is_none() {
-        return first;
-    }
-    match c {
-        '\u{1F80}'..='\u{1F87}' | '\u{1F90}'..='\u{1F97}' | '\u{1FA0}'..='\u{1FA7}' => {
-            char::from_u32(u32::from(c) + 8).unwrap_or(c)
-        }
-        '\u{1FB3}' => '\u{1FBC}',
-        '\u{1FC3}' => '\u{1FCC}',
-        '\u{1FF3}' => '\u{1FFC}',
-        _ => c,
-    }
-}
-
 #[allow(clippy::too_many_lines)] // one arm per documented method
 #[allow(clippy::many_single_char_names)]
 fn character_static(
@@ -6448,11 +6363,13 @@ fn character_static(
         }
         ("isDefined", [JValue::Int(v)]) => z(unicode::is_defined(unit_of(v))),
         ("isISOControl", [JValue::Int(v)]) => z(matches!(*v, 0..=0x1F | 0x7F..=0x9F)),
+        // A titlecase character is one that is its own TITLE form while
+        // having both an upper and a lower form of its own — the digraphs.
         ("isTitleCase", [JValue::Int(v)]) => {
-            let c = c_of(v);
-            let upper = c.to_uppercase().next().unwrap_or(c);
-            let lower = c.to_lowercase().next().unwrap_or(c);
-            z(upper != c && lower != c)
+            let unit = unit_of(v);
+            z(unicode::title_case(unit) == unit
+                && unicode::simple_upper(unit) != unit
+                && unicode::simple_lower(unit) != unit)
         }
         // A lone surrogate has no case mapping and comes back UNCHANGED.
         // `c_of` cannot hold one, so it hands over the replacement character
@@ -6462,9 +6379,15 @@ fn character_static(
         {
             Ok(Some(JValue::Int(*v)))
         }
-        ("toTitleCase", [JValue::Int(v)]) => ch_ret(java_title_case(c_of(v))),
-        ("toUpperCase", [JValue::Int(v)]) => ch_ret(java_simple_upper(c_of(v))),
-        ("toLowerCase", [JValue::Int(v)]) => ch_ret(java_simple_lower(c_of(v))),
+        ("toTitleCase", [JValue::Int(v)]) => Ok(Some(JValue::Int(i32::from(unicode::title_case(
+            unit_of(v),
+        ))))),
+        ("toUpperCase", [JValue::Int(v)]) => Ok(Some(JValue::Int(i32::from(
+            unicode::simple_upper(unit_of(v)),
+        )))),
+        ("toLowerCase", [JValue::Int(v)]) => Ok(Some(JValue::Int(i32::from(
+            unicode::simple_lower(unit_of(v)),
+        )))),
         ("getNumericValue", [JValue::Int(v)]) => {
             let c = c_of(v);
             // The Nd decimal value (0..=9) or a Latin letter's 10..=35 —
@@ -7207,11 +7130,22 @@ fn builder_value_text(heap: &Heap, param: &str, value: &JValue) -> Result<Vec<u1
         // `char::from_u32` would reject. Keep the raw unit.
         ("C", JValue::Int(v)) => return Ok(vec![u16::try_from(*v).unwrap_or(u16::MAX)]),
         ("[C", value) => return char_array_units(heap, value),
+        // Straight from the UNITS. Going through `string_text` converts by way
+        // of a Rust `String`, which cannot hold an unpaired surrogate, so
+        // appending such a string to a builder REPLACED the unit rather than
+        // copying it — a corrupted value, not merely a rendering.
         ("Ljava/lang/String;", JValue::Ref(reference)) => match reference {
             None => String::from("null"),
-            Some(reference) => heap.string_text(*reference).ok_or_else(|| {
-                VmError::UnknownIntrinsic(String::from("argument is not a string object"))
-            })?,
+            Some(reference) => match heap.get(*reference) {
+                Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
+                    return Ok(units.clone());
+                }
+                _ => {
+                    return Err(VmError::UnknownIntrinsic(String::from(
+                        "argument is not a string object",
+                    )));
+                }
+            },
         },
         // `insert(int, Object)` — `String.valueOf(Object)` semantics.
         // `append(Object)` never reaches here: the interpreter renders its

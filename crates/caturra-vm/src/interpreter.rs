@@ -5726,6 +5726,19 @@ impl<'run> Interpreter<'run> {
             ) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
             _ => return Ok(None),
         };
+        // A boxed `Character` renders as its UNIT. Going through
+        // `string_value_of` would convert it by way of a Rust `String`, which
+        // cannot hold an unpaired surrogate, so `"" + someChar` replaced the
+        // character instead of copying it.
+        if let JValue::Ref(Some(boxed)) = args[0]
+            && let Some(HeapObject::Boxed { class_name, value }) = self.heap.get(boxed)
+            && &**class_name == "java/lang/Character"
+            && let JValue::Int(unit) = *value
+        {
+            let unit = u16::try_from(unit).unwrap_or(u16::MAX);
+            let reference = self.heap.alloc(HeapObject::JavaString(vec![unit]));
+            return Ok(Some((string_form, JValue::Ref(Some(reference)))));
+        }
         let text = self.string_value_of(args[0], 0)?;
         let reference = self.heap.alloc_string(&text);
         Ok(Some((string_form, JValue::Ref(Some(reference)))))

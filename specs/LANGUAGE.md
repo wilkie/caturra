@@ -3937,6 +3937,36 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### Case mapping, carried rather than derived (2026-08-14)
+
+The classification entry ended by noting that the earlier 15-range
+case-mapping patch was still keyed to where Rust and JDK 11 *happen* to
+disagree, and so would rot the next time the Rust toolchain updated its tables.
+That inconsistency is closed the same way: recorded, not derived.
+
+`Character.toUpperCase`/`toLowerCase`/`toTitleCase` now read a JDK 11 table of
+2235 simple mappings and 12 titlecase exceptions. `String.toUpperCase`/
+`toLowerCase` read the FULL mappings, which differ from the simple ones for
+exactly 103 units — `ß` to `SS`, `\u0130` to `i` and a combining dot, the `ﬁ`
+ligature. Those were wrong too, on **3321 units against the JDK's 1203**, for
+the same Unicode-version reason; the earlier patch had only ever covered
+`Character`.
+
+Two surrogate losses fell out of pinning it, both of them corrupted VALUES
+rather than renderings:
+
+- **Appending a string to a `StringBuilder` went through a Rust `String`**, so
+  a string holding an unpaired surrogate had the unit REPLACED rather than
+  copied. That is why `"a😀cd"` reversed char by char could not round-trip.
+- **`StringBuilder.append(Object)` on a boxed `Character`** did the same.
+
+Still open, and now precisely bounded: `String.valueOf(Object)` and a
+concatenation whose operand is statically `Object` render a boxed `Character`
+through `object_display`, which returns a Rust `String`. Writing the same value
+through a `Character`-typed or `char`-typed operand is exact, as is every
+`StringBuilder` path. And a lone surrogate written as a `\uXXXX` CHAR LITERAL
+is lost in the compiler's pre-lex pass, which also works in Rust strings.
+
 ### Unicode classification, carried rather than derived (2026-08-13)
 
 The largest measured-open divergence left: `Character.isLetter`,
@@ -4048,11 +4078,8 @@ bare `IndexOutOfBoundsException` whose message is null.
 
 Measured and open: a genuinely UNPAIRED surrogate rendered into text through a
 boxed `Character` or a `char[]` element still prints U+FFFD where a JDK's
-encoder substitutes `?`. The value is right and every realistic operation is
-right — rebuilding, reversing and comparing a string that contains an emoji all
-match exactly — because a Java string here holds units. The two remaining
-helpers return a Rust `String`, which cannot hold a lone surrogate at all, so
-closing this means changing what they return rather than what they do.
+encoder substitutes `?`. Most of this is closed by the case-table work below;
+what remains is noted there.
 
 ### Hash iteration order, measured (2026-08-13)
 
