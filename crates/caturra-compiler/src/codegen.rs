@@ -480,6 +480,15 @@ struct ClassInfo {
     /// `Some("Number")`). A written type ARGUMENT has to satisfy it, and
     /// without this `Box<String>` for a `Box<T extends Number>` compiled.
     type_param_bounds: Vec<Option<String>>,
+    /// A LIBRARY class rather than one the program declared — either
+    /// synthesized here (`Object`, the wrappers, `Comparable`) or parsed from
+    /// a bundled source, whose units are lexed under an angle-bracketed path
+    /// (`<reflect>`) that nothing a user can write collides with.
+    ///
+    /// It is what tells `Modifier` the library class from `Modifier` the
+    /// class a student wrote: only the first is `java.lang.reflect.Modifier`,
+    /// and both answer to the same simple name.
+    is_bundled: bool,
     /// The type arguments written on this class's supertypes
     /// (`extends Box<String>`), so a subclass standing in for a
     /// parameterized supertype can be CHECKED rather than assumed.
@@ -702,6 +711,7 @@ impl MethodTable {
                 is_inner: false,
                 type_param_count: 0,
                 type_param_bounds: Vec::new(),
+                is_bundled: true,
                 supertype_args: Vec::new(),
                 methods: vec![
                     MethodSig {
@@ -791,6 +801,7 @@ impl MethodTable {
                 is_inner: false,
                 type_param_count: 1,
                 type_param_bounds: vec![None],
+                is_bundled: true,
                 supertype_args: Vec::new(),
                 methods: vec![MethodSig {
                     name: String::from("compareTo"),
@@ -845,6 +856,7 @@ impl MethodTable {
                     is_inner: false,
                     type_param_count: 0,
                     type_param_bounds: Vec::new(),
+                    is_bundled: true,
                     supertype_args: Vec::new(),
                     methods: if name == "Cloneable" {
                         Vec::new()
@@ -945,6 +957,7 @@ impl MethodTable {
                     is_inner: false,
                     type_param_count: 1,
                     type_param_bounds: vec![None],
+                    is_bundled: true,
                     supertype_args: Vec::new(),
                     methods,
                     fields: Vec::new(),
@@ -997,6 +1010,7 @@ impl MethodTable {
                     is_inner: false,
                     type_param_count: 0,
                     type_param_bounds: Vec::new(),
+                    is_bundled: true,
                     supertype_args: Vec::new(),
                     methods: vec![
                         accessor("intValue", JType::Int),
@@ -1010,13 +1024,22 @@ impl MethodTable {
                 },
             );
         }
-        for (_, unit) in units {
+        for (path, unit) in units {
+            // Bundled sources are lexed under `<name>`; a real file never is.
+            let bundled = path.starts_with('<');
             for class in &unit.classes {
                 let binary = class
                     .binary_name
                     .clone()
                     .unwrap_or_else(|| class.name.clone());
                 if table.classes.contains_key(&binary) {
+                    // A class the PROGRAM declares takes the name back from a
+                    // synthesized library entry of the same name: a student's
+                    // own `Comparable` is theirs, and must not report itself as
+                    // `java.lang.Comparable`.
+                    if !bundled && let Some(existing) = table.classes.get_mut(&binary) {
+                        existing.is_bundled = false;
+                    }
                     continue; // duplicate classes are reported by compile()
                 }
                 let id = ClassId(u16::try_from(table.class_names.len()).unwrap_or(u16::MAX));
@@ -1084,6 +1107,7 @@ impl MethodTable {
                                 })
                             })
                             .collect(),
+                        is_bundled: bundled,
                         supertype_args: Vec::new(),
                         methods: Vec::new(),
                         fields: Vec::new(),
@@ -23425,6 +23449,15 @@ impl BodyGen<'_> {
             "Integer" | "Double" | "Boolean" | "Character" | "Long" | "Float" | "Short"
             | "Byte" => {
                 format!("java/lang/{base}")
+            }
+            // A bundled library class answers to its simple name in source but
+            // reports the QUALIFIED one, the way a JDK does. A class the
+            // PROGRAM declared with the same name keeps its own.
+            other
+                if self.table.info(other).is_some_and(|info| info.is_bundled)
+                    && let Some(qualified) = crate::imports::qualified_library_class(other) =>
+            {
+                qualified
             }
             other => self.table.class_id(other).map_or_else(
                 || {

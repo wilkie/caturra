@@ -26778,3 +26778,62 @@ public class ExpiredRefusals {
 }
 "#
 );
+
+// A library class reports its QUALIFIED name; a class the program declares
+// with the same simple name reports its own. Telling those apart needs to know
+// which classes are the library's — synthesized here, or parsed from a bundled
+// source lexed under an angle-bracketed path.
+differential_test!(
+    diff_library_versus_user_class_names,
+    "ClassNaming",
+    r#"
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+
+public class ClassNaming {
+    public static void main(String[] args) throws Exception {
+        // java.lang.reflect resolves QUALIFIED, not only through an import.
+        System.out.println(java.lang.reflect.Modifier.isPublic(1));
+        java.lang.reflect.Method found = ClassNaming.class.getDeclaredMethod("main", String[].class);
+        System.out.println(found.getName());
+
+        System.out.println(Method.class.getName() + " " + Field.class.getName());
+        System.out.println(Constructor.class.getName() + " " + Modifier.class.getName());
+        System.out.println(Comparable.class.getName() + " " + CharSequence.class.getName());
+        System.out.println(Iterable.class.getName() + " " + Iterator.class.getName());
+        System.out.println(Comparator.class.getName() + " " + Runnable.class.getName());
+        System.out.println(List.class.getName() + " " + Map.class.getName());
+        System.out.println(Math.class.getName() + " " + StringBuilder.class.getName());
+    }
+}
+"#
+);
+
+// ...and the other half of that rule: a program's OWN class takes the name
+// back, even from a library class synthesized before it was seen.
+differential_test!(
+    diff_user_class_shadows_a_library_name,
+    "ShadowedName",
+    r#"
+class Comparable {
+    int value = 1;
+}
+
+class Modifier {
+    int value = 2;
+}
+
+public class ShadowedName {
+    public static void main(String[] args) {
+        System.out.println(Comparable.class.getName() + " " + new Comparable().value);
+        System.out.println(Modifier.class.getName() + " " + new Modifier().value);
+    }
+}
+"#
+);

@@ -4037,6 +4037,35 @@ right; it cannot find a hole they share.
 
 47 of 48 matched at that point; the last one is below.
 
+### java.lang.reflect, and which classes are the library's (2026-08-14)
+
+`import java.lang.reflect.*` worked while `java.lang.reflect.Method` written
+out in full did not — the package was waved through at the import check but
+never listed as a package, so a QUALIFIED use could not resolve, as a type or
+as a receiver. It is listed now, which also gives those classes their
+fully-qualified `getName()`.
+
+That exposed the question the earlier class-name fix had dodged: **`Modifier`
+the library class and `Modifier` the class a student wrote answer to the same
+simple name.** Only the first is `java.lang.reflect.Modifier`, and nothing in
+the table said which was which. It does now — `ClassInfo::is_bundled`, set for
+a class synthesized here (`Object`, the wrappers, `Comparable`) or parsed from
+a bundled source, whose units are lexed under an angle-bracketed path that
+nothing a user can write collides with. A program's own declaration takes the
+name back, which needed one more line: a user class of an already-synthesized
+name was skipped as a duplicate, leaving the library entry to answer for it.
+
+Both directions are pinned, because this is a rule that is easy to get right in
+one direction and wrong in the other.
+
+**The corpus caught a regression, and the shape is worth keeping.** Listing the
+package let the old permissive import check go — and 12 levels stopped
+compiling, because a harness imports `java.lang.reflect.Parameter`, which
+caturra does not model, and never uses it. The import check is permissive again
+for that package: an unused import is not the place to refuse a class, and the
+use site still does. A narrower rule looked strictly better and was strictly
+worse for real programs.
+
 ### Auditing the refusals themselves (2026-08-14)
 
 Two fixes this round came from re-reading an old refusal and finding its reason

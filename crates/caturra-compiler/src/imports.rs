@@ -122,6 +122,11 @@ const JAVA_LANG: &[&str] = &[
     "Character",
     "Number",
     "StringBuilder",
+    // Modelled as types and reachable unqualified, but absent from this list,
+    // so their class literals reported a bare `CharSequence`/`Iterable`.
+    "CharSequence",
+    "Iterable",
+    "Comparable",
     "Exception",
     "RuntimeException",
     "ArithmeticException",
@@ -380,6 +385,7 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("java.io", JAVA_IO),
     ("java.nio.file", JAVA_NIO_FILE),
     ("java.lang", JAVA_LANG),
+    ("java.lang.reflect", JAVA_LANG_REFLECT),
     ("org.code.neighborhood", ORG_CODE_NEIGHBORHOOD),
     ("org.code.validation", ORG_CODE_VALIDATION),
     ("org.code.theater", ORG_CODE_THEATER),
@@ -401,6 +407,18 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
 }
 
 /// The public class of the bundled neighborhood library.
+/// The structural reflection caturra models — what a grading harness inspects
+/// a student's class with. Listing the package here (rather than only waving
+/// its IMPORT through) is what lets a QUALIFIED `java.lang.reflect.Method`
+/// resolve, and gives these classes their fully qualified `getName()`.
+static JAVA_LANG_REFLECT: &[&str] = &[
+    "Method",
+    "Field",
+    "Constructor",
+    "Modifier",
+    "InvocationTargetException",
+];
+
 static ORG_CODE_NEIGHBORHOOD: &[&str] = &["Painter"];
 
 /// Public classes of the bundled validation library (neighborhood harness).
@@ -614,8 +632,13 @@ fn validate_import(
     {
         return;
     }
-    // `java.lang.reflect.*` — the structural reflection subset used by
-    // student helpers like `AttributesHelper` (Class/Field intrinsics).
+    // `java.lang.reflect.*` — the structural reflection subset used by student
+    // helpers like `AttributesHelper`. The IMPORT is waved through for the
+    // whole package, not just the classes modelled below: a harness that
+    // imports `Parameter` and never uses it compiled before this check
+    // existed, and an unused import is not where to tell it otherwise. Using
+    // an unmodelled one still fails at the USE site, which is where the
+    // program actually depends on it.
     if import.path.first().map(String::as_str) == Some("java")
         && import.path.get(1).map(String::as_str) == Some("lang")
         && import.path.get(2).map(String::as_str) == Some("reflect")
