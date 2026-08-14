@@ -4190,6 +4190,58 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### The name a type is written under (2026-08-14)
+
+Batch 3 of the legal-Java dimension (67 programs: initializers, interface
+member kinds, enums with bodies, try-with-resources, inner-class forms, arrays,
+numeric literals) found NOTHING — the constructs a CSA course reaches for are
+covered. Batch 4 aimed at the thinner parts instead and found six, four of
+which were one theme: **a type is refused when written under a name the
+program is entitled to use.**
+
+**`Iterator<T>` in a method signature.** A descriptor has two builders — one
+from the written syntax (`push_type`), one from the inferred `JType`
+(`descriptor_of`) — and they disagreed. `static String f(Iterator<String> i)`
+was emitted under one descriptor and CALLED with `Ljava/util/Iterator;`:
+"malformed class Main: no static method f(...)", for a signature javac
+accepts. A FIELD of the same type worked, which is what kept it hidden. This
+is the `type_of`-versus-emit divergence one layer down, and the same lesson:
+two computations of one fact drift unless something makes them agree.
+
+Fixing it needed a distinction the class table could not make. The guard was
+`!has_class("Iterator")`, which reads as "the library owns this name" and
+means "nobody does" — the bundled interfaces are in the table too. The
+predicate that was missing, `declares_class`, asks whether the PROGRAM
+declares it; a user interface named `Iterator` still shadows the library one.
+Its doc comment was already in the file, orphaned above an unrelated method,
+which is a fair sign it had been intended and lost.
+
+**A qualified library supertype.** `implements java.util.Iterator<T>`,
+`java.lang.Iterable<T>` and `java.lang.Comparable<T>` were all "cannot find
+symbol", about classes the JDK has: the bundled interfaces are registered
+under their SIMPLE name, and the lookup used the written spelling.
+`java.lang.Object` had already been carved out by hand a few lines above the
+lookup — the same problem, solved one name at a time.
+
+**A lambda targeting a nested interface.** `Outer.Inner i = () -> 5` was
+refused as though the position were not a functional-interface one, while the
+anonymous-class form of the identical target compiled — which is what made the
+gap look like a rule about lambdas. Nested interfaces hoist to the top level
+under their simple name and the lambda pass keyed its SAM map to match, so the
+qualified spelling javac REQUIRES from outside the enclosing type missed. The
+map now holds every dotted suffix of the binary name, with the bare simple name
+yielding to a top-level interface that owns it, so a top-level `Same` and a
+nested `Holder.Same` each keep their own SAM.
+
+**A nested type named through the top-level class.** `Main.H.Inner` did not
+resolve, though `H.Inner` and `Main.C` did: only `{enclosing}.{name}` was
+registered as a source spelling, which coincides with the full path exactly
+one level down. Every dotted suffix of the binary name is now registered.
+
+The two that were NOT this theme are recorded rather than fixed: `LinkedHashMap`
+and `IntBinaryOperator` are absent from the library, and `Map.Entry` is not
+usable as a written type name (`List<Map.Entry<K, V>>`).
+
 ### A covariant return, and a lambda after a qualified call (2026-08-14)
 
 Two refusals of legal Java, found by the dimension that writes ordinary

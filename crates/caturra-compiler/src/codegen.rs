@@ -1059,10 +1059,19 @@ impl MethodTable {
                         .by_source
                         .entry(class.name.clone())
                         .or_insert_with(|| binary.clone());
-                    if let Some(outer) = &class.enclosing {
-                        table
-                            .by_source
-                            .insert(format!("{outer}.{}", class.name), binary.clone());
+                    // Every dotted SUFFIX of the binary name is a legal source
+                    // spelling: `Main$H$Inner` is written `Main.H.Inner` or
+                    // `H.Inner`, and from outside the enclosing class javac
+                    // requires one of them. Registering only
+                    // `{enclosing}.{name}` covered the one-level form, so a
+                    // nested type named through the TOP-LEVEL class was
+                    // "cannot find symbol" — visible only two levels down,
+                    // where the two spellings stop coinciding.
+                    let dotted = binary.replace('$', ".");
+                    let mut rest = dotted.as_str();
+                    while let Some((_, tail)) = rest.split_once('.') {
+                        table.by_source.insert(String::from(rest), binary.clone());
+                        rest = tail;
                     }
                 }
                 table.classes.insert(
@@ -1261,6 +1270,7 @@ impl MethodTable {
                     // bundled erased `__Comparator`. Without it, the anonymous form of
                     // a library interface reported "cannot find symbol: class
                     // Comparator" about a class that was imported two lines up.
+                    let name = library_supertype_alias(name, table.class_id(name).is_some());
                     let name = comparator_alias(name, table.class_id(name).is_some());
                     // `new Object() { ... }` — the synthetic top type is
                     // registered under its internal name, which no source
@@ -1298,6 +1308,7 @@ impl MethodTable {
                         // `implements Comparator<T>` implements the bundled
                         // erased `__Comparator` — unless the user defined that
                         // interface themselves, in which case theirs wins.
+                        let name = library_supertype_alias(name, table.class_id(name).is_some());
                         let name = comparator_alias(name, table.class_id(name).is_some());
                         let id = table.class_id(name);
                         if id.is_none() {
@@ -2474,6 +2485,16 @@ impl MethodTable {
     /// Whether the PROGRAM declares this class — as opposed to caturra having
     /// synthesized a library interface of that name. A builtin type name is
     /// only given up to a real user declaration.
+    ///
+    /// `has_class` cannot answer this: the bundled `Iterator` and `Comparable`
+    /// are in the table too, so a guard written as `!has_class(name)` reads as
+    /// "the library owns this name" and means "nobody does". That difference
+    /// is why `Iterator<T>` in a method signature got a descriptor no call
+    /// site agreed with.
+    pub(crate) fn declares_class(&self, name: &str) -> bool {
+        self.info(name).is_some_and(|info| !info.is_bundled)
+    }
+
     /// Every `static final boolean` CONSTANT VARIABLE the program declares,
     /// keyed both by simple name (for `current`'s own) and as `Class.FIELD`.
     /// Reachability needs them: `while (Cfg.DEBUG)` over a false constant makes
@@ -4294,6 +4315,24 @@ fn comparator_alias(name: &str, declared: bool) -> &str {
         return name;
     }
     functional_erased(name).unwrap_or(name)
+}
+
+/// A supertype written QUALIFIED names the same type as the simple spelling:
+/// `implements java.util.Iterator<T>` is `Iterator`, and `extends
+/// java.lang.RuntimeException` is that exception. The bundled interfaces are
+/// registered in the class table under their SIMPLE name only, so a lookup by
+/// the dotted spelling missed every one of them and reported "cannot find
+/// symbol" about a class the JDK has. `java.lang.Object` was already carved
+/// out by hand a few lines from the lookup, which is the same problem solved
+/// one name at a time.
+///
+/// A name the table already knows wins untouched, so a user class whose
+/// dotted name somehow matches is unaffected.
+fn library_supertype_alias(name: &str, known: bool) -> &str {
+    if known {
+        return name;
+    }
+    crate::imports::canonical_library_class(name).unwrap_or(name)
 }
 
 /// The bundled erased interface a `java.util.function` type (or `Comparator`)
@@ -6651,8 +6690,17 @@ fn method_descriptor(
                 push_type(path, diagnostics, table, out, inner, span);
             }
             TypeRef::Generic { base, .. } => {
-                let mut simple =
-                    crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                // The name to LOOK UP: a library type written qualified
+                // (`java.util.Iterator<T>`) is the same type as the simple
+                // name, and the bundled interfaces live in the class table
+                // under their simple name only. `simple` is remapped below
+                // (`List` -> `ArrayList`), so the lookup name is kept
+                // separately — the arms that ask `has_class` were asking
+                // about the DOTTED spelling, which is never in the table, so
+                // every qualified use of a bundled interface in a parameter,
+                // return or field type was "unknown generic type".
+                let lookup = crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                let mut simple = lookup;
                 if simple == "List" && !table.has_class("List") {
                     simple = "ArrayList";
                 }
@@ -6694,14 +6742,29 @@ fn method_descriptor(
                     out.push_str("Ljava/util/Collection;");
                 } else if matches!(simple, "Map.Entry" | "Entry") && !table.has_class(simple) {
                     out.push_str("Ljava/util/Map$Entry;");
-                } else if !table.has_class(base) && simple == "Class" {
+                } else if matches!(simple, "Iterator" | "ListIterator")
+                    && !table.declares_class(lookup)
+                {
+                    // A descriptor has TWO builders — this one from the written
+                    // syntax, and `descriptor_of` from the inferred `JType` —
+                    // and they must agree or the call site names a method that
+                    // was never emitted. `Iterator<T>` had no arm here, so
+                    // `static String f(Iterator<String> i)` compiled to one
+                    // descriptor and was CALLED with `Ljava/util/Iterator;`:
+                    // "malformed class Main: no static method f(...)", for a
+                    // signature javac accepts. Same divergence class as
+                    // `type_of` versus emit, one layer down.
+                    out.push_str("Ljava/util/Iterator;");
+                } else if matches!(simple, "Stream") && !table.has_class(lookup) {
+                    out.push_str("Ljava/util/stream/Stream;");
+                } else if !table.has_class(lookup) && simple == "Class" {
                     out.push_str("Ljava/lang/Class;");
-                } else if !table.has_class(base) && simple == "Constructor" {
+                } else if !table.has_class(lookup) && simple == "Constructor" {
                     out.push_str("Ljava/lang/reflect/Constructor;");
-                } else if !table.has_class(base) && simple == "Field" {
+                } else if !table.has_class(lookup) && simple == "Field" {
                     out.push_str("Ljava/lang/reflect/Field;");
-                } else if let Some(erased) = functional_erased(base)
-                    && !table.has_class(base)
+                } else if let Some(erased) = functional_erased(lookup)
+                    && !table.has_class(lookup)
                 {
                     // `Comparator<T>` / `Function<T, R>` as a parameter/return/field
                     // type — erases to the bundled `__`-interface. Without this even
@@ -6709,23 +6772,25 @@ fn method_descriptor(
                     out.push('L');
                     out.push_str(erased);
                     out.push(';');
-                } else if table.has_class(base) {
+                } else if table.has_class(lookup) {
                     // A USER generic class as a parameter/return/field type
                     // (`String join(Pair<A, B> p)`): erasure drops the type
                     // arguments, leaving the raw class. Without this arm every
                     // signature naming a user generic class was rejected —
                     // `Box<T>` only worked because a single-parameter class is
                     // resolved through `JType::Generic`, never described here.
+                    // This is also the arm the BUNDLED interfaces reach, which
+                    // is why the lookup name has to be the simple one.
                     out.push('L');
                     out.push_str(
                         table
-                            .class_id(base)
-                            .map_or(base.as_str(), |id| table.class_name(id)),
+                            .class_id(lookup)
+                            .map_or(lookup, |id| table.class_name(id)),
                     );
                     out.push(';');
                 } else {
-                    let message = crate::imports::unsupported_class_reason(base)
-                        .filter(|_| !table.has_class(base))
+                    let message = crate::imports::unsupported_class_reason(lookup)
+                        .filter(|_| !table.has_class(lookup))
                         .unwrap_or_else(|| format!("unknown generic type '{base}'"));
                     diagnostics.push(Diagnostic::error(path, message, span));
                     out.push_str("Ljava/lang/Object;");

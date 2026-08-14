@@ -22139,6 +22139,193 @@ public class SubListCtor {
 "#
 );
 
+// `Iterator<T>` in a method SIGNATURE. A descriptor has two builders — one
+// from the written syntax, one from the inferred `JType` — and they disagreed
+// here, so the method was emitted under one descriptor and called with
+// `Ljava/util/Iterator;`: "malformed class Main: no static method f(...)", for
+// a signature javac accepts. A field of the same type worked, which is what
+// kept it hidden. Both spellings are pinned, since the qualified one reaches
+// the arm by a different route.
+differential_test!(
+    iterator_in_a_method_signature,
+    "IteratorSignature",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+import java.util.ListIterator;
+
+public class IteratorSignature {
+    static String first(Iterator<String> it) { return it.next(); }
+    static Iterator<String> make() { return Arrays.asList("a", "b").iterator(); }
+    static java.util.Iterator<String> qualified(java.util.Iterator<String> it) { return it; }
+    static String viaListIterator(ListIterator<String> it) { return it.next(); }
+
+    public static void main(String[] args) {
+        System.out.println(first(Arrays.asList("z").iterator()));
+        Iterator<String> it = make();
+        while (it.hasNext()) {
+            System.out.println(it.next());
+        }
+        Iterator<String> round = qualified(Arrays.asList("p", "q").iterator());
+        while (round.hasNext()) {
+            System.out.println(round.next());
+        }
+        List<String> list = new ArrayList<>(Arrays.asList("m"));
+        System.out.println(viaListIterator(list.listIterator()));
+    }
+}
+"#
+);
+
+// A user interface named `Iterator` SHADOWS the library one, so the arm above
+// must not claim a name the program declared.
+differential_test!(
+    a_user_iterator_shadows_the_library_one,
+    "UserIterator",
+    r#"
+public class UserIterator {
+    interface Iterator<T> { T get(); }
+
+    static String f(Iterator<String> i) { return i.get(); }
+
+    public static void main(String[] args) {
+        System.out.println(f(() -> "user"));
+    }
+}
+"#
+);
+
+// A library type written QUALIFIED names the same type as the simple spelling.
+// The bundled interfaces are registered under their SIMPLE name only, so
+// `implements java.util.Iterator<T>` looked up the dotted spelling, found
+// nothing, and reported "cannot find symbol" about a class the JDK has.
+// `java.lang.Object` had already been carved out by hand a few lines from the
+// lookup, which is this same problem solved one name at a time.
+differential_test!(
+    qualified_library_supertypes,
+    "QualifiedSupertypes",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+public class QualifiedSupertypes {
+    static class Counter implements java.util.Iterator<Integer> {
+        int i = 0;
+        public boolean hasNext() { return i < 2; }
+        public Integer next() { return i++; }
+    }
+
+    static class Bag implements java.lang.Iterable<String> {
+        public java.util.Iterator<String> iterator() {
+            return Arrays.asList("a", "b").iterator();
+        }
+    }
+
+    static class Ranked implements java.lang.Comparable<Ranked> {
+        final int v;
+        Ranked(int v) { this.v = v; }
+        public int compareTo(Ranked o) { return Integer.compare(v, o.v); }
+        public String toString() { return "" + v; }
+    }
+
+    static class ByLength implements java.util.Comparator<String> {
+        public int compare(String a, String b) { return a.length() - b.length(); }
+    }
+
+    public static void main(String[] args) {
+        java.util.Iterator<Integer> it = new Counter();
+        while (it.hasNext()) {
+            System.out.println(it.next());
+        }
+        for (String s : new Bag()) {
+            System.out.println(s);
+        }
+        List<Ranked> ranked = new ArrayList<>(Arrays.asList(new Ranked(2), new Ranked(1)));
+        Collections.sort(ranked);
+        System.out.println(ranked);
+        List<String> words = new ArrayList<>(Arrays.asList("ccc", "a"));
+        words.sort(new ByLength());
+        System.out.println(words);
+    }
+}
+"#
+);
+
+// A lambda whose target is a NESTED interface. Those are hoisted to the top
+// level under their simple name, and the lambda pass keyed its
+// functional-interface map the same way — so `Outer.Inner`, the spelling javac
+// REQUIRES from outside `Outer`, was refused as though the position were not a
+// functional-interface one. The anonymous-class form of the identical target
+// compiled, which is what made the gap look like a rule about lambdas.
+//
+// The collision is the point of the last two: a top-level `Same` and a nested
+// `Holder.Same` are different types, and each must get its own SAM.
+differential_test!(
+    a_nested_interface_is_a_lambda_target,
+    "NestedTarget",
+    r#"
+public class NestedTarget {
+    interface Outer { interface Inner { int k(); } }
+    static class Holder {
+        interface Op { int f(int x, int y); }
+        interface Len { int of(String s); }
+        interface Same { String tag(); }
+        static int run() { Op o = (x, y) -> x + y; return o.f(1, 2); }
+    }
+    interface Same { String tag(); }
+
+    static int use(Outer.Inner i) { return i.k(); }
+
+    public static void main(String[] args) {
+        Outer.Inner dotted = () -> 5;
+        System.out.println(dotted.k());
+        System.out.println(use(() -> 8));
+        Holder.Op op = (x, y) -> x * y;
+        System.out.println(op.f(3, 4));
+        Holder.Len len = String::length;
+        System.out.println(len.of("abcd"));
+        System.out.println(Holder.run());
+        Same top = () -> "top";
+        Holder.Same nested = () -> "nested";
+        NestedTarget.Holder.Same viaTopLevel = () -> "qualified";
+        System.out.println(top.tag() + "," + nested.tag() + "," + viaTopLevel.tag());
+    }
+}
+"#
+);
+
+// Every dotted SUFFIX of a nested type's binary name is a legal source
+// spelling. Only `{enclosing}.{name}` was registered, so naming a nested type
+// through the TOP-LEVEL class was "cannot find symbol" — invisible one level
+// down, where the two spellings coincide.
+differential_test!(
+    a_nested_type_named_through_the_top_level,
+    "DeepNested",
+    r"
+public class DeepNested {
+    static class H {
+        interface Inner { int k(); }
+        static class C { static class D { int v() { return 4; } } }
+    }
+
+    public static void main(String[] args) {
+        DeepNested.H.Inner anon = new DeepNested.H.Inner() {
+            public int k() { return 3; }
+        };
+        System.out.println(anon.k());
+        DeepNested.H.C.D deep = new DeepNested.H.C.D();
+        System.out.println(deep.v());
+        H.C.D shorter = new H.C.D();
+        System.out.println(shorter.v());
+    }
+}
+"
+);
+
 // A class caturra models only as a NAMESPACE for its static members cannot
 // name a variable, though javac accepts the declaration — `Math`, `Arrays` and
 // `Collectors` are ordinary class types there. Nobody writes one, so this is

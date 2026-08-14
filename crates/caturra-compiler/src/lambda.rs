@@ -246,14 +246,43 @@ fn functional_interfaces(units: &[(String, CompilationUnit)]) -> HashMap<String,
                 .collect();
             if abstract_methods.len() == 1 {
                 let m = abstract_methods[0];
-                out.insert(
-                    class.name.clone(),
-                    Sam {
-                        method: m.name.clone(),
-                        params: m.params.iter().map(|p| p.ty.clone()).collect(),
-                        ret: m.return_type.clone(),
-                    },
-                );
+                let sam = Sam {
+                    method: m.name.clone(),
+                    params: m.params.iter().map(|p| p.ty.clone()).collect(),
+                    ret: m.return_type.clone(),
+                };
+                // A NESTED interface is hoisted to the top level under its
+                // simple name, but source names it through its enclosing type
+                // — `Outer.Inner`, which javac REQUIRES from outside `Outer`.
+                // So it is keyed under every suffix of its binary name:
+                // `Main$H$Inner` answers to `Main.H.Inner`, `H.Inner` and
+                // `Inner`. Keying it only by the simple name refused every
+                // lambda whose target was a nested interface — while the
+                // anonymous-class form of the same target compiled, which is
+                // what made the gap look like a rule about lambdas.
+                //
+                // The qualified keys are inserted outright; the SIMPLE name is
+                // only filled in if nothing holds it, so a top-level interface
+                // keeps its own name when a nested one shares it (codegen
+                // already tells those two apart — this map was the one place
+                // that could not).
+                let dotted = class
+                    .binary_name
+                    .as_deref()
+                    .map(|binary| binary.replace('$', "."));
+                if let Some(dotted) = &dotted {
+                    let mut rest = dotted.as_str();
+                    loop {
+                        out.insert(String::from(rest), sam.clone());
+                        match rest.split_once('.') {
+                            Some((_, tail)) if tail.contains('.') => rest = tail,
+                            _ => break,
+                        }
+                    }
+                    out.entry(class.name.clone()).or_insert_with(|| sam.clone());
+                } else {
+                    out.insert(class.name.clone(), sam);
+                }
             }
         }
     }
@@ -768,8 +797,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             *expr = method_ref_to_lambda(expr, &sam, ctx);
             ctx.class_prefix = crate::METHOD_REF_CLASS_PREFIX;
         } else if let Some(target) = expected
-            && let Some(name) = interface_name(target)
-            && let Some(sam) = ctx.sams.get(name).cloned()
+            && let Some((_, sam)) = sam_target(target, ctx)
         {
             validate_method_ref(expr, &sam, ctx);
             *expr = method_ref_to_lambda(expr, &sam, ctx);
@@ -825,11 +853,10 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
     // A lambda in a target-typed position: rewrite it.
     if matches!(expr, Expr::Lambda { .. }) {
         if let Some(target) = expected
-            && let Some(name) = interface_name(target)
-            && let Some(sam) = ctx.sams.get(name).cloned()
+            && let Some((name, sam)) = sam_target(target, ctx)
         {
             let specialized = specialize_sam(&sam, target);
-            let replacement = build_lambda_class(expr, name, &sam, specialized.as_ref(), ctx);
+            let replacement = build_lambda_class(expr, &name, &sam, specialized.as_ref(), ctx);
             *expr = replacement;
         }
         return;
@@ -1793,6 +1820,27 @@ fn interface_name(ty: &TypeRef) -> Option<&str> {
         TypeRef::Named(name) | TypeRef::Generic { base: name, .. } => Some(name.as_str()),
         _ => None,
     }
+}
+
+/// The functional interface a target type names, and its SAM.
+///
+/// A NESTED interface is hoisted to the top level under its SIMPLE name, so
+/// `Outer.Inner` — the spelling javac REQUIRES from outside `Outer` — missed a
+/// map keyed by `Inner`, and a lambda there was refused as though the position
+/// were not a functional-interface one. The anonymous-class form of the same
+/// target compiled, which is what made the gap look like a lambda rule.
+///
+/// The written name is tried first, so a top-level interface of the same name
+/// still wins, and the name RETURNED is the one that matched — the
+/// synthesized lambda class implements it, so it has to be a name codegen can
+/// resolve.
+fn sam_target(target: &TypeRef, ctx: &Ctx) -> Option<(String, Sam)> {
+    let name = interface_name(target)?;
+    if let Some(sam) = ctx.sams.get(name) {
+        return Some((name.to_owned(), sam.clone()));
+    }
+    let (_, last) = name.rsplit_once('.')?;
+    ctx.sams.get(last).map(|sam| (last.to_owned(), sam.clone()))
 }
 
 /// `m.merge(k, v, g)` with `g` a declared function variable: javac checks the
