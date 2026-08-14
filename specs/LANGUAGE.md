@@ -4001,6 +4001,43 @@ nothing looks like a probe that passed.
 
 That left `capacity`, `ensureCapacity` and `trimToSize` refused — closed below.
 
+### Reflection: the surface the graders run on (2026-08-14)
+
+Chosen because the corpus had just shown where reflection actually executes:
+**103 sites, all inside grading harnesses.** A defect there changes a student's
+mark and nothing prints. 48 probes; nine diverged, and the two worst were
+access rules.
+
+- **`getMethod` and `getField` returned PRIVATE members.** They shared one
+  lookup with the `Declared` forms and never filtered by access — so a harness
+  asking "is this method public?" was told yes about a private one, and a
+  student passed a test they should have failed. (`getMethods`, the plural, had
+  the filter all along.)
+- **`Method.invoke` did not wrap what the target threw.** A harness writes
+  `catch (InvocationTargetException e) { e.getCause() }`; caturra handed over
+  the raw exception, so that catch never fired. Wrapping follows the
+  `ExceptionInInitializerError` machinery already in the unwinder.
+- **`Field.set` stored a WRAPPER into a primitive field.** `set` takes an
+  `Object`, so an `int` field was handed an `Integer` and kept it; nothing
+  failed until the next read of that field, somewhere else entirely.
+- `Method.toString` printed a JVM descriptor rather than Java's signature
+  format, and `NoSuchMethodException` named no parameter list, so a missing
+  overload read the same as a missing name.
+
+And a fourth instance of the round's recurring shape: the emitter packs
+`getMethod`/`getDeclaredMethod`/`getConstructor`'s `Class...` arguments into a
+`Class[]` before any table lookup, and `type_of` matched the table directly —
+so a chain through the varargs form typed as unknown, refusing a `println` of
+it and, inside a lambda, emitting bytecode that did not verify.
+
+That last one is worth recording against the cross-check added just before it,
+which did NOT catch it: **both paths failed, so there was nothing to
+disagree.** The check finds a `type_of` that is wrong where the emitter is
+right; it cannot find a hole they share.
+
+47 of 48 now match. The one left is `Class.forName` on a library class, which
+is a feature rather than a defect.
+
 ### type_of must agree with what is emitted (2026-08-14)
 
 The most productive defect class of this round was not a missing feature. It

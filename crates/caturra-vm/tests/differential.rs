@@ -26372,3 +26372,123 @@ public class BuilderCapacity {
 }
 "#
 );
+
+// Reflection — the surface the GRADERS run on. A defect here changes a
+// student's mark silently, which is why it was swept: 48 probes, and the two
+// worst were access rules.
+differential_test!(
+    diff_reflection_surface,
+    "Reflection",
+    r#"
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+
+public class Reflection {
+    interface Body {
+        Object get() throws Exception;
+    }
+
+    static void attempt(String label, Body body) {
+        try {
+            System.out.println(label + " " + body.get());
+        } catch (Throwable e) {
+            String m = e.getMessage();
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + (m == null ? "" : m));
+        }
+    }
+
+    public static class Sample {
+        public int publicField = 1;
+        private String privateField = "p";
+        public final int finalField = 3;
+        static int staticField = 9;
+
+        public Sample() {
+        }
+
+        public Sample(int a) {
+            publicField = a;
+        }
+
+        public int getValue() {
+            return publicField;
+        }
+
+        private String hidden() {
+            return privateField;
+        }
+
+        public static int twice(int n) {
+            return n * 2;
+        }
+
+        public String concat(String a, int b) {
+            return a + b;
+        }
+
+        public void boom() {
+            throw new IllegalStateException("boom");
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Class<?> c = Sample.class;
+        Sample s = new Sample();
+
+        // getMethod/getField see PUBLIC members only; the Declared forms see
+        // everything. Sharing one lookup let a grader call a PRIVATE method
+        // public — a student would pass a test they should fail.
+        attempt("getMethod public", () -> c.getMethod("getValue").getName());
+        attempt("getMethod private", () -> c.getMethod("hidden").getName());
+        attempt("getDeclaredMethod private", () -> c.getDeclaredMethod("hidden").getName());
+        attempt("getMethod missing", () -> c.getMethod("nope").getName());
+        attempt("getField public", () -> c.getField("publicField").getName());
+        attempt("getField private", () -> c.getField("privateField").getName());
+        attempt("getDeclaredField private", () -> c.getDeclaredField("privateField").getName());
+        attempt("ctorMissing", () -> c.getDeclaredConstructor(long.class).toString());
+
+        // Anything the target throws reaches the caller wrapped.
+        Method boom = c.getDeclaredMethod("boom");
+        attempt("invoke throwing", () -> {
+            try {
+                boom.invoke(s);
+                return "no throw";
+            } catch (InvocationTargetException e) {
+                return e.getCause().getClass().getName() + ":" + e.getCause().getMessage();
+            }
+        });
+
+        Method concat = c.getDeclaredMethod("concat", String.class, int.class);
+        attempt("invoke args", () -> concat.invoke(s, "n=", 5));
+        attempt("methodToString", () -> concat.toString());
+        attempt("staticToString", () -> c.getDeclaredMethod("twice", int.class).toString());
+        attempt("modifiers", () -> Modifier.isPublic(concat.getModifiers())
+            + " " + Modifier.isStatic(c.getDeclaredMethod("twice", int.class).getModifiers())
+            + " " + Modifier.isPrivate(c.getDeclaredMethod("hidden").getModifiers()));
+
+        // `set` takes an Object, so a primitive field arrives WRAPPED and has
+        // to be unwrapped into the field.
+        Field pub = c.getDeclaredField("publicField");
+        attempt("fieldSet", () -> {
+            pub.set(s, 42);
+            return s.getValue();
+        });
+        attempt("fieldSetBoxed", () -> {
+            pub.set(s, Integer.valueOf(7));
+            return s.getValue() + " " + pub.get(s);
+        });
+        attempt("fieldModifiers", () -> Modifier.isFinal(c.getDeclaredField("finalField").getModifiers())
+            + " " + Modifier.isStatic(c.getDeclaredField("staticField").getModifiers()));
+
+        Constructor<?> ctor = c.getDeclaredConstructor(int.class);
+        attempt("ctorNewInstance", () -> ((Sample) ctor.newInstance(11)).getValue());
+        attempt("invokeStatic", () -> c.getDeclaredMethod("twice", int.class).invoke(null, 21));
+        attempt("invokeWrongReceiver", () -> c.getDeclaredMethod("getValue").invoke("nope"));
+        attempt("invokeWrongArity", () -> c.getDeclaredMethod("twice", int.class).invoke(null));
+    }
+}
+"#
+);

@@ -985,6 +985,7 @@ impl<'run> Interpreter<'run> {
             current_line: None,
             locals,
             stack,
+            wraps_invocation_target: false,
             box_return_as: None,
             pc_reexecutes: false,
         })
@@ -2609,6 +2610,31 @@ impl<'run> Interpreter<'run> {
                 frame.stack.push(JValue::Ref(Some(exception)));
                 frame.pc = handler_pc;
                 return Ok(true);
+            }
+            // Anything escaping a reflective `Method.invoke` reaches the caller
+            // as an InvocationTargetException holding it (JLS §12.4.2 has the
+            // `<clinit>` analogue below). A harness writes
+            // `catch (InvocationTargetException e) { e.getCause() }`; handing
+            // it the raw exception meant that catch never fired.
+            if frame.wraps_invocation_target {
+                let cause = thrown_object.take().unwrap_or_else(|| {
+                    self.heap.alloc(crate::value::HeapObject::Exception {
+                        class_name: dotted.clone(),
+                        message: message.clone(),
+                        cause: None,
+                        suppressed: Vec::new(),
+                    })
+                });
+                let wrapper = self.heap.alloc(crate::value::HeapObject::Exception {
+                    class_name: String::from("java.lang.reflect.InvocationTargetException"),
+                    message: None,
+                    cause: Some(cause),
+                    suppressed: Vec::new(),
+                });
+                dotted = String::from("java.lang.reflect.InvocationTargetException");
+                message = None;
+                thrown_object = Some(wrapper);
+                rewrapped = Some(wrapper);
             }
             // A non-Error exception escaping a `<clinit>` is wrapped in
             // ExceptionInInitializerError (JVMS §5.5), with the original as its
@@ -10886,6 +10912,7 @@ impl<'run> Interpreter<'run> {
                 current_line,
                 locals: locals_vec,
                 stack: stack_vec,
+                wraps_invocation_target: false,
                 box_return_as: None,
                 pc_reexecutes: false,
             }
@@ -11824,6 +11851,7 @@ impl<'run> Interpreter<'run> {
         // primitive return is boxed (Integer/Double/…) and a void return still
         // yields `null` (the caller's bytecode always expects one value back).
         new_frame.box_return_as = Some(ret_desc);
+        new_frame.wraps_invocation_target = true;
         Ok(Some(new_frame))
     }
 
@@ -12905,9 +12933,13 @@ impl<'run> Interpreter<'run> {
                                     },
                                 )))))
                             }
+                            // The parameter list belongs in the message, as it
+                            // does for a missing method: a harness asking for
+                            // the wrong CONSTRUCTOR should be told which one.
                             None => Err(VmError::UncaughtException(format!(
-                                "java.lang.NoSuchMethodException: {}.<init>()",
-                                simple_class_name(&name)
+                                "java.lang.NoSuchMethodException: {}.<init>({})",
+                                simple_class_name(&name),
+                                param_class_names.join(",")
                             ))),
                         }
                     }
@@ -12918,10 +12950,20 @@ impl<'run> Interpreter<'run> {
                             }
                             _ => String::new(),
                         };
+                        // `getField` sees PUBLIC fields only, the same rule
+                        // `getMethod` follows.
+                        let public_only = method == "getField";
                         let found = self.classes.get(&name).and_then(|cf| {
                             cf.fields.iter().find_map(|fi| {
                                 let fname =
                                     cf.constant_pool.get_utf8(fi.name_index).unwrap_or_default();
+                                if public_only
+                                    && !fi
+                                        .access_flags
+                                        .contains(caturra_classfile::FieldAccessFlags::PUBLIC)
+                                {
+                                    return None;
+                                }
                                 (fname == field_name).then(|| {
                                     (
                                         fname.to_owned(),
@@ -12963,11 +13005,24 @@ impl<'run> Interpreter<'run> {
                         // Optional Class[] of parameter types (getMethod is
                         // varargs; a bare `getMethod(name)` means no params).
                         let param_class_names = self.class_array_names(args.get(1));
+                        // `getMethod` sees PUBLIC members only; `getDeclaredMethod`
+                        // sees every one this class declares. Sharing one lookup
+                        // let a grader's `getMethod("x")` find a PRIVATE method and
+                        // report it public — a student would pass a test about
+                        // access that they should fail.
+                        let public_only = method == "getMethod";
                         let found = self.classes.get(&name).and_then(|cf| {
                             cf.methods.iter().find_map(|m| {
                                 let mname =
                                     cf.constant_pool.get_utf8(m.name_index).unwrap_or_default();
                                 if mname != method_name {
+                                    return None;
+                                }
+                                if public_only
+                                    && !m
+                                        .access_flags
+                                        .contains(caturra_classfile::MethodAccessFlags::PUBLIC)
+                                {
                                     return None;
                                 }
                                 let desc = cf
@@ -12990,9 +13045,12 @@ impl<'run> Interpreter<'run> {
                                     },
                                 )))))
                             }
+                            // The JDK names the PARAMETER LIST too, so a
+                            // missing overload can be told from a missing name.
                             None => Err(VmError::UncaughtException(format!(
-                                "java.lang.NoSuchMethodException: {}.{method_name}",
-                                simple_class_name(&name)
+                                "java.lang.NoSuchMethodException: {}.{method_name}({})",
+                                simple_class_name(&name),
+                                param_class_names.join(",")
                             ))),
                         }
                     }
@@ -13060,6 +13118,12 @@ impl<'run> Interpreter<'run> {
                             Some(value) if method != "set" => {
                                 Some(Self::reflect_set_as(method, &descriptor, value)?)
                             }
+                            // Plain `set` takes an `Object`, so a primitive
+                            // field is handed a WRAPPER — and Java unwraps it
+                            // into the field. Storing the reference left an
+                            // `int` field holding an object, which only
+                            // surfaced later, on whatever next read it.
+                            Some(value) => Some(self.unbox_for(value, &descriptor)),
                             other => other,
                         };
                         self.write_reflected_field(&declaring, &name, access, args.first(), value)?;
@@ -13123,8 +13187,28 @@ impl<'run> Interpreter<'run> {
                         let count = parse_descriptor_params(&descriptor).len();
                         Ok(Some(JValue::Int(i32::try_from(count).unwrap_or(0))))
                     }
+                    // Java's own format — modifiers, return type, then the
+                    // qualified name and parameter TYPES — not the JVM
+                    // descriptor, which is what a harness printing a method
+                    // would have shown a student.
                     "toString" => {
-                        let text = format!("{declaring}.{name}{descriptor}");
+                        let modifiers = reflect_modifier_names(access);
+                        let ret = intrinsics::type_name_of_descriptor(
+                            descriptor.rsplit(')').next().unwrap_or("V"),
+                        );
+                        let params: Vec<String> = parse_descriptor_params(&descriptor)
+                            .iter()
+                            .map(|p| intrinsics::type_name_of_descriptor(p))
+                            .collect();
+                        let text = format!(
+                            "{}{ret} {declaring}.{name}({})",
+                            if modifiers.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{modifiers} ")
+                            },
+                            params.join(",")
+                        );
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
                     "setAccessible" => Ok(None),
@@ -13838,6 +13922,11 @@ struct Frame<'run> {
     /// before delivery (a reflective `Method.invoke` of a primitive-returning
     /// method must hand back an `Integer`/`Double`/… like real Java).
     box_return_as: Option<String>,
+    /// Set on a frame entered through `Method.invoke`. Anything thrown by the
+    /// target is delivered to the caller wrapped in an
+    /// `InvocationTargetException`, with the original as its cause — which is
+    /// what a grading harness catches and inspects.
+    wraps_invocation_target: bool,
     /// When set, `pc` points AT the instruction to (re-)execute rather than
     /// PAST a completed call — true for a frame suspended by an `<clinit>`
     /// init chain (it re-runs the `getstatic`/`new` that triggered it). The
@@ -15001,6 +15090,26 @@ fn primitive_arrays_equal(
         }
         _ => return None,
     })
+}
+
+/// The modifier words Java prints, in the order `Modifier.toString` uses.
+fn reflect_modifier_names(access: u16) -> String {
+    const WORDS: &[(u16, &str)] = &[
+        (0x0001, "public"),
+        (0x0004, "protected"),
+        (0x0002, "private"),
+        (0x0400, "abstract"),
+        (0x0008, "static"),
+        (0x0010, "final"),
+        (0x0020, "synchronized"),
+        (0x0100, "native"),
+    ];
+    WORDS
+        .iter()
+        .filter(|(bit, _)| access & bit != 0)
+        .map(|(_, word)| *word)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn array_length(object: &crate::value::HeapObject) -> Option<usize> {

@@ -22094,6 +22094,27 @@ impl BodyGen<'_> {
                 if let Some(factory) = self.literal_factory_type(expr) {
                     return factory;
                 }
+                // `getMethod`/`getDeclaredMethod`/`getConstructor`/
+                // `getDeclaredConstructor` are VARARGS over `Class...`, which
+                // the emitter packs into a `Class[]` before any table lookup.
+                // `type_of` matched the table directly, so the packed form
+                // missed and the whole chain typed as unknown — a `println` of
+                // it was refused, and inside a lambda it emitted bytecode that
+                // did not verify.
+                if matches!(
+                    method.as_str(),
+                    "getMethod" | "getDeclaredMethod" | "getConstructor" | "getDeclaredConstructor"
+                ) && let Some(receiver) = receiver.as_deref()
+                    && self.type_of(receiver) == JType::Class
+                {
+                    return if method.starts_with("getConstructor")
+                        || method.starts_with("getDeclaredConstructor")
+                    {
+                        JType::Constructor
+                    } else {
+                        JType::Method
+                    };
+                }
                 // The REFLECTIVE intercepts, which the emission path applies
                 // before consulting any method table — `Method.invoke` and
                 // `Constructor.newInstance` both answer `Object`. Without
