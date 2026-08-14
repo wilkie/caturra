@@ -26,6 +26,7 @@ use std::fmt::Write as _;
 
 use caturra_classfile::ClassFile;
 
+pub use codegen::{begin_type_verification, end_type_verification};
 pub use diagnostics::{Diagnostic, Severity, SourcePosition, SourceSpan};
 
 /// One Java source file presented to the compiler.
@@ -810,6 +811,50 @@ mod tests {
             let message = &result.diagnostics[0].message;
             assert!(message.contains(want), "expected {want:?}, got: {message}");
         }
+    }
+
+    /// `type_of`'s contract is that it "must agree with what `expr` leaves on
+    /// the stack", and for most of this compiler's life nothing checked it.
+    /// Three separate defects came from the two paths disagreeing, one of
+    /// which made a whole statement vanish — no code, no value, no diagnostic.
+    ///
+    /// The invariant needs no oracle, so it is asserted here over the shapes
+    /// that have broken it before: a qualified static as an argument, a call
+    /// to an enclosing static from inside a lambda, and a reflective `invoke`
+    /// whose result is passed on. The corpus and the differential suite can be
+    /// swept the same way with `CATURRA_VERIFY_TYPES=1`.
+    #[test]
+    fn type_of_agrees_with_what_is_emitted() {
+        let sources = [
+            "import java.util.*;\npublic class A { static void p(Object v) {} \
+             public static void main(String[] a) { p(java.util.Objects.toString(\"q\")); \
+             p(java.util.List.of(1)); p(Arrays.asList(\"a\").size()); } }",
+            "import java.util.function.Supplier;\npublic class B { static String w(String s) \
+             { return s; } static StringBuilder of(String s) { return new StringBuilder(s); } \
+             static void run(Supplier<Object> b) {} public static void main(String[] a) \
+             { String s = \"x\"; run(() -> w(of(s).reverse().toString())); } }",
+            "import java.lang.reflect.Method;\npublic class C { static int v() { return 7; } \
+             static void p(Object o) {} public static void main(String[] a) throws Exception \
+             { Method m = C.class.getDeclaredMethod(\"v\"); p(m.invoke(null)); \
+             System.out.println(m.invoke(null)); } }",
+            "import java.util.*;\npublic class D { public static void main(String[] a) { \
+             Map<String, List<Integer>> m = new HashMap<>(); m.put(\"k\", new ArrayList<>()); \
+             for (Map.Entry<String, List<Integer>> e : m.entrySet()) \
+             { System.out.println(e.getKey() + e.getValue().size()); } \
+             List<String> l = Arrays.asList(\"b\", \"a\"); Collections.sort(l); \
+             System.out.println(String.join(\",\", l) + l.stream().count()); } }",
+        ];
+        begin_type_verification();
+        for (index, text) in sources.iter().enumerate() {
+            let name = ["A", "B", "C", "D"][index];
+            let result = compile(&[SourceFile {
+                path: format!("{name}.java"),
+                text: (*text).to_string(),
+            }]);
+            assert!(result.success(), "{name}: {:?}", result.diagnostics);
+        }
+        let mismatches = end_type_verification();
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 
     /// A real Java 11 member caturra cannot model says so, rather than

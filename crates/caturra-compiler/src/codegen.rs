@@ -12062,6 +12062,91 @@ struct ProtectedRegion {
     intervals: Vec<(u16, u16)>,
 }
 
+/// The `type_of`-versus-emit cross-check: off unless `CATURRA_VERIFY_TYPES` is
+/// set or [`crate::begin_type_verification`] turns it on, so it costs one
+/// relaxed load in normal use.
+static VERIFY_TYPES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Every disagreement seen since verification began, so a test can assert on
+/// them rather than a human reading stderr.
+static TYPE_MISMATCHES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn verifying_types() -> bool {
+    static FROM_ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let from_env = *FROM_ENV.get_or_init(|| std::env::var_os("CATURRA_VERIFY_TYPES").is_some());
+    from_env || VERIFY_TYPES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Turn the cross-check on and discard anything an earlier run recorded.
+pub fn begin_type_verification() {
+    if let Ok(mut seen) = TYPE_MISMATCHES.lock() {
+        seen.clear();
+    }
+    VERIFY_TYPES.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The disagreements recorded since [`begin_type_verification`], and off again.
+#[must_use]
+pub fn end_type_verification() -> Vec<String> {
+    VERIFY_TYPES.store(false, std::sync::atomic::Ordering::Relaxed);
+    TYPE_MISMATCHES
+        .lock()
+        .map(|mut seen| std::mem::take(&mut *seen))
+        .unwrap_or_default()
+}
+
+/// One disagreement, to stderr — the verification run is a sweep, so it
+/// reports every one rather than stopping at the first.
+fn report_type_mismatch(
+    path: &str,
+    expr: &Expr,
+    predicted: &JType,
+    actual: &JType,
+    table: &MethodTable,
+) {
+    let span = expr.span();
+    let report = format!(
+        "TYPE-MISMATCH {path}:{}:{} {} type_of={} emit={}",
+        span.start.line,
+        span.start.column,
+        expression_kind(expr),
+        predicted.describe(table),
+        actual.describe(table),
+    );
+    // Collected for a test to assert on, and echoed so a corpus run shows it.
+    if let Ok(mut seen) = TYPE_MISMATCHES.lock() {
+        seen.push(report.clone());
+    }
+    eprintln!("{report}");
+}
+
+/// The expression's shape, so a mismatch report says what disagreed without
+/// needing the source to hand.
+fn expression_kind(expr: &Expr) -> &'static str {
+    match expr {
+        Expr::Literal { .. } => "literal",
+        Expr::Name { .. } => "name",
+        Expr::Call { .. } => "call",
+        Expr::Field { .. } => "field",
+        Expr::Index { .. } => "index",
+        Expr::Unary { .. } => "unary",
+        Expr::Binary { .. } => "binary",
+        Expr::IncDec { .. } => "inc-dec",
+        Expr::Ternary { .. } => "ternary",
+        Expr::Cast { .. } => "cast",
+        Expr::InstanceOf { .. } => "instanceof",
+        Expr::NewObject { .. } => "new-object",
+        Expr::This { .. } => "this",
+        Expr::Super { .. } => "super",
+        Expr::SuperMethodCall { .. } => "super-call",
+        Expr::NewArray { .. } => "new-array",
+        Expr::ArrayLiteral { .. } => "array-literal",
+        Expr::Lambda { .. } => "lambda",
+        Expr::MethodRef { .. } => "method-ref",
+        Expr::Assign { .. } => "assign",
+    }
+}
+
 impl BodyGen<'_> {
     fn error(&mut self, span: SourceSpan, message: impl Into<String>) {
         self.diagnostics
@@ -17647,10 +17732,15 @@ impl BodyGen<'_> {
         let Expr::Name { path, .. } = owner.as_ref() else {
             return None;
         };
-        if args.is_empty() || path.len() != 1 {
+        if path.len() != 1 {
             return None;
         }
-        let elem = collection_elem_of(self.type_of(&args[0]))?;
+        // `List.of()` has no argument to read an element from, and answers a
+        // collection of `Object` — the same as the emission path.
+        let elem = match args.first() {
+            Some(first) => collection_elem_of(self.type_of(first))?,
+            None => ElemType::Object(self.table.object_id),
+        };
         match (path[0].as_str(), method.as_str()) {
             ("List", "of") | ("Arrays", "asList") => Some(JType::List(elem)),
             ("Set", "of") => Some(JType::Set(elem)),
@@ -21998,6 +22088,26 @@ impl BodyGen<'_> {
                 args,
                 span,
             } => {
+                // The immutable factories (`List.of`, `Set.of`,
+                // `Arrays.asList`), which the emission path types from their
+                // arguments. `type_of` was answering `null` for all of them.
+                if let Some(factory) = self.literal_factory_type(expr) {
+                    return factory;
+                }
+                // The REFLECTIVE intercepts, which the emission path applies
+                // before consulting any method table — `Method.invoke` and
+                // `Constructor.newInstance` both answer `Object`. Without
+                // these, `type_of` said "unknown" for a call the emitter types
+                // fine, and a legal program that merely PASSED an `invoke`
+                // result to a method was refused.
+                if let Some(receiver) = receiver.as_deref() {
+                    let receiver_ty = self.type_of(receiver);
+                    if (receiver_ty == JType::Method && method == "invoke")
+                        || (receiver_ty == JType::Constructor && method == "newInstance")
+                    {
+                        return JType::Object(self.table.object_id);
+                    }
+                }
                 // A FULLY QUALIFIED receiver is answered as its simple name.
                 // Every arm below matches a one-segment path, so without this
                 // `java.util.Objects.toString(s)` typed as `Error` while the
@@ -22722,7 +22832,42 @@ impl BodyGen<'_> {
     /// Emit code leaving the expression's value on the stack; returns
     /// its type ([`JType::Error`] if a diagnostic was reported).
     #[allow(clippy::too_many_lines)] // one dispatch arm per expression kind
+    /// Emit `expr`, and — when `CATURRA_VERIFY_TYPES` is set — check that
+    /// [`Self::type_of`] predicted what was actually left on the stack.
+    ///
+    /// `type_of`'s own doc comment has always said it "must agree with what
+    /// `expr` leaves on the stack", and nothing ever checked it. Three
+    /// separate defects this round came from the two paths disagreeing,
+    /// including one where a whole statement vanished — no code, no value, no
+    /// diagnostic. The invariant is checkable without an oracle, so it is
+    /// checked, over every program the corpus and the suite already compile.
     fn expr(&mut self, expr: &Expr) -> JType {
+        if !verifying_types() {
+            return self.expr_emit(expr);
+        }
+        // `type_of` is meant to be silent; anything it reports here would be
+        // reported again by the emission below, so it is rolled back.
+        let before = self.diagnostics.len();
+        let predicted = self.type_of(expr);
+        self.diagnostics.truncate(before);
+        let actual = self.expr_emit(expr);
+        // Only an EMIT error is excused: it was reported to the user by
+        // whoever produced it. A `type_of` error is not — `type_of` is silent
+        // by contract — and it is the dangerous half of this divergence,
+        // because a caller that consults it bails or picks a wrong overload
+        // with nothing said. All three of this round's defects had that exact
+        // shape, so excusing it would have made this check blind to them.
+        // A lambda has no standalone type and `expr` says so deliberately.
+        let excused =
+            actual == JType::Error || matches!(expr, Expr::Lambda { .. } | Expr::MethodRef { .. });
+        if !excused && predicted != actual {
+            report_type_mismatch(self.path, expr, &predicted, &actual, self.table);
+        }
+        actual
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per expression kind
+    fn expr_emit(&mut self, expr: &Expr) -> JType {
         match expr {
             Expr::Literal { value, span } => self.literal(value, *span),
             Expr::Name { path, span } => self.name(path, *span),

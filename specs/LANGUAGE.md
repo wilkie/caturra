@@ -4001,6 +4001,44 @@ nothing looks like a probe that passed.
 
 That left `capacity`, `ensureCapacity` and `trimToSize` refused — closed below.
 
+### type_of must agree with what is emitted (2026-08-14)
+
+The most productive defect class of this round was not a missing feature. It
+was **two resolution paths that had to agree with nothing making them**:
+`type_of` predicts an expression's static type; `expr` emits it and returns
+what it left on the stack. `type_of`'s own doc comment has said "must agree
+with what `expr` leaves on the stack" for as long as it has existed, and
+nothing ever checked it. Three defects came from that gap in this round alone,
+including one where a whole statement VANISHED — no code, no value, no
+diagnostic.
+
+The invariant needs no oracle. `expr` now predicts, emits, and compares, behind
+`CATURRA_VERIFY_TYPES` (off by default, one relaxed load otherwise), reporting
+every disagreement rather than stopping at the first.
+
+**The excuse rule is the part worth reading.** The obvious version excuses a
+disagreement when either side is `Error` — and that would have made the check
+blind to all three defects, because their shape is exactly `type_of` answering
+`Error` where the emitter succeeds. Only an EMIT error is excused: that one was
+reported to the user by whoever produced it. A `type_of` error is silent by
+contract, which is what makes it dangerous — a caller consulting it bails, or
+picks the wrong overload, and says nothing.
+
+Swept over all 2,698 corpus levels and the 724 differential programs, it found
+two more:
+
+- **`Method.invoke` and `Constructor.newInstance` were not typed at all.** The
+  emitter intercepts them before any method table and answers `Object`;
+  `type_of` did not, so a legal program that merely PASSED an `invoke` result
+  to a method was refused. 103 sites in the corpus, all in grading harnesses,
+  which had survived only because they cast the result immediately.
+- **The immutable factories (`List.of`, `Set.of`, `Arrays.asList`) typed as
+  `null`.** Latent rather than live — the emitter drove the overloads that
+  mattered — but the same shape.
+
+The check is asserted as a test over the shapes that have broken it, so the
+invariant now has to hold rather than merely be documented.
+
 ### A builder's capacity (2026-08-14)
 
 The refusal said caturra "does not model a builder's capacity, only its
