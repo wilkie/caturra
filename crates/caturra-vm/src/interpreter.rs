@@ -12715,6 +12715,20 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Int(i32::from(assignable))))
                     }
                     "getInterfaces" => {
+                        // Every array implements exactly these two.
+                        if is_array_class_name(&name) {
+                            let refs: Vec<JValue> = ["java/lang/Cloneable", "java/io/Serializable"]
+                                .iter()
+                                .map(|each| {
+                                    JValue::Ref(Some(self.intern_class((*each).to_owned())))
+                                })
+                                .collect();
+                            let array = self.heap.alloc(HeapObject::RefArray(
+                                String::from("[Ljava/lang/Class;"),
+                                refs,
+                            ));
+                            return Ok(Some(JValue::Ref(Some(array))));
+                        }
                         let names: Vec<String> = self
                             .classes
                             .get(&name)
@@ -12742,11 +12756,19 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getSuperclass" => {
-                        let super_name = self.classes.get(&name).and_then(|cf| {
-                            cf.constant_pool
-                                .get_class_name(cf.super_class)
-                                .map(str::to_owned)
-                        });
+                        let super_name = self
+                            .classes
+                            .get(&name)
+                            .and_then(|cf| {
+                                cf.constant_pool
+                                    .get_class_name(cf.super_class)
+                                    .map(str::to_owned)
+                            })
+                            // A LIBRARY class has no class file here, so its
+                            // parent came back as `null` and the `getName()`
+                            // that follows threw NullPointerException on
+                            // perfectly legal code.
+                            .or_else(|| library_superclass(&name).map(str::to_owned));
                         match super_name {
                             Some(super_name) => {
                                 // The FULL internal name, not the simple one:
@@ -15090,6 +15112,69 @@ fn primitive_arrays_equal(
         }
         _ => return None,
     })
+}
+
+/// Whether an interned class name denotes an ARRAY (`[I`, `[Ljava/lang/String;`).
+fn is_array_class_name(name: &str) -> bool {
+    name.starts_with('[')
+}
+
+/// The superclass of a class caturra models but holds no class file for.
+///
+/// `Object` and the primitives have none. The six numeric wrappers extend
+/// `Number`; a throwable follows the exception table; an array and everything
+/// else extend `Object`.
+fn library_superclass(internal: &str) -> Option<&'static str> {
+    // The collection hierarchy, which a program can walk: answering `Object`
+    // for an `ArrayList` is a confident wrong answer, not a missing one.
+    // Recorded from a real JDK 11, chains included so each step resolves.
+    const PARENTS: &[(&str, &str)] = &[
+        ("java/util/ArrayList", "java/util/AbstractList"),
+        ("java/util/LinkedList", "java/util/AbstractSequentialList"),
+        ("java/util/HashMap", "java/util/AbstractMap"),
+        ("java/util/TreeMap", "java/util/AbstractMap"),
+        ("java/util/HashSet", "java/util/AbstractSet"),
+        ("java/util/TreeSet", "java/util/AbstractSet"),
+        ("java/util/ArrayDeque", "java/util/AbstractCollection"),
+        ("java/util/PriorityQueue", "java/util/AbstractQueue"),
+        ("java/util/Stack", "java/util/Vector"),
+        ("java/util/Vector", "java/util/AbstractList"),
+        ("java/util/AbstractSequentialList", "java/util/AbstractList"),
+        ("java/util/AbstractList", "java/util/AbstractCollection"),
+        ("java/util/AbstractSet", "java/util/AbstractCollection"),
+        ("java/util/AbstractQueue", "java/util/AbstractCollection"),
+        ("java/util/AbstractCollection", "java/lang/Object"),
+        ("java/util/AbstractMap", "java/lang/Object"),
+        // Package-private in the JDK, and `getSuperclass` names it anyway.
+        ("java/lang/StringBuilder", "java/lang/AbstractStringBuilder"),
+        ("java/lang/AbstractStringBuilder", "java/lang/Object"),
+    ];
+    if internal == "java/lang/Object"
+        || matches!(
+            internal,
+            "int" | "long" | "double" | "float" | "short" | "byte" | "char" | "boolean" | "void"
+        )
+    {
+        return None;
+    }
+    if matches!(
+        internal,
+        "java/lang/Integer"
+            | "java/lang/Long"
+            | "java/lang/Double"
+            | "java/lang/Float"
+            | "java/lang/Short"
+            | "java/lang/Byte"
+    ) {
+        return Some("java/lang/Number");
+    }
+    if let Some(parent) = caturra_classfile::exceptions::parent_of(internal) {
+        return Some(parent);
+    }
+    if let Some((_, parent)) = PARENTS.iter().find(|(child, _)| *child == internal) {
+        return Some(parent);
+    }
+    Some("java/lang/Object")
 }
 
 /// The modifier words Java prints, in the order `Modifier.toString` uses.

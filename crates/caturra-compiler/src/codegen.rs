@@ -18724,6 +18724,23 @@ impl BodyGen<'_> {
             self.coerce_to_string_for_output(ty);
             return Some(Some(JType::Str));
         }
+        // `Class.forName("java.util.ArrayList")` with a CONSTANT name is the
+        // class literal for it. Resolving here rather than in the VM keeps the
+        // single source of truth — the import table right beside this — and a
+        // computed name still goes to the VM, which answers for user classes
+        // and reports ClassNotFoundException otherwise.
+        if class == "Class"
+            && method == "forName"
+            && let [
+                Expr::Literal {
+                    value: Literal::Str(name),
+                    ..
+                },
+            ] = args
+            && let Some(simple) = crate::imports::canonical_library_class(name)
+        {
+            return Some(Some(self.class_literal(simple)));
+        }
         let (jvm_class, methods) = builtin_static_table(class).expect("caller checked");
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
@@ -23380,8 +23397,17 @@ impl BodyGen<'_> {
                     // Class carries its qualified name so `getName()` reports
                     // `java.lang.IllegalStateException` and a runtime type test
                     // can climb the exception hierarchy.
-                    caturra_classfile::exceptions::internal_name_of(other)
-                        .map_or_else(|| other.to_owned(), str::to_owned)
+                    caturra_classfile::exceptions::internal_name_of(other).map_or_else(
+                        || {
+                            // Every other library class is qualified from
+                            // the import table. Falling back to the simple
+                            // name made `Math.class.getName()` answer
+                            // `Math` where a JDK answers `java.lang.Math`.
+                            crate::imports::qualified_library_class(other)
+                                .unwrap_or_else(|| other.to_owned())
+                        },
+                        str::to_owned,
+                    )
                 },
                 |id| self.table.class_name(id).to_owned(),
             ),

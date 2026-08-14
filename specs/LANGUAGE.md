@@ -4035,8 +4035,43 @@ which did NOT catch it: **both paths failed, so there was nothing to
 disagree.** The check finds a `type_of` that is wrong where the emitter is
 right; it cannot find a hole they share.
 
-47 of 48 now match. The one left is `Class.forName` on a library class, which
-is a feature rather than a defect.
+47 of 48 matched at that point; the last one is below.
+
+### A library Class handle stops misreporting itself (2026-08-14)
+
+Chasing the one remaining reflection divergence — `Class.forName` on a library
+class — found three worse things beside it, which is why it was worth chasing.
+
+- **`getName()` was the SIMPLE name for most library classes.** `Math.class`
+  reported `Math` where a JDK reports `java.lang.Math`, and so did
+  `StringBuilder`, `ArrayList` and the rest; only the wrappers, `String`,
+  `Object` and `Number` were qualified. The class literal now takes its name
+  from the import table, which is the same source the compiler already resolves
+  imports against.
+- **`getSuperclass()` answered null**, so the `getName()` a program writes next
+  threw NullPointerException. A library class now answers its real parent: the
+  six numeric wrappers extend `Number`, a throwable follows the exception
+  table, and the collection hierarchy (`ArrayList` to `AbstractList`, and so
+  on up) is recorded from a real JDK rather than flattened to `Object`.
+- **An array reported no interfaces**, where every array implements exactly
+  `Cloneable` and `Serializable`.
+
+With the handle honest, `Class.forName` follows: a CONSTANT name resolves at
+compile time through the import table, so there is one source of truth and no
+registry to drift. A computed name still reaches the VM, which answers for user
+classes and reports `ClassNotFoundException` otherwise — the safe direction.
+
+**One attempt was reverted, and the corpus is why.** Enumerating the members of
+a library class (`String.class.getDeclaredMethods()`) returns an empty array
+where a JDK returns 90, and an empty array is the worst kind of wrong: a
+harness that loops over it concludes the method is absent. Refusing outright
+seemed obviously better — and broke seven org.code levels, because validators
+call `getDeclaredFields()` on a superclass that is usually `java.lang.Object`,
+where **empty is the correct answer**. The refusal traded a measured
+correctness for a speculative one. It stays recorded rather than guessed at:
+the fix is real member data for modelled library classes, not a blanket
+refusal.
+
 
 ### type_of must agree with what is emitted (2026-08-14)
 

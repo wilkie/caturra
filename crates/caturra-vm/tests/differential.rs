@@ -26492,3 +26492,70 @@ public class Reflection {
 }
 "#
 );
+
+// A `Class` handle for a LIBRARY type used to misreport itself: most literals
+// carried only the simple name, `getSuperclass` answered null (so the
+// `getName()` after it threw), and `Class.forName` could not find one at all.
+differential_test!(
+    diff_library_class_handles,
+    "LibraryClasses",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.PriorityQueue;
+import java.util.Stack;
+import java.util.TreeSet;
+
+public class LibraryClasses {
+    static String nameOf(Class<?> c) {
+        return c == null ? "null" : c.getName();
+    }
+
+    public static class Inner {
+    }
+
+    public static void main(String[] args) throws Exception {
+        // getName() is fully qualified, for every library class and not just
+        // the wrappers.
+        System.out.println(Math.class.getName() + " " + StringBuilder.class.getName());
+        System.out.println(ArrayList.class.getName() + " " + HashMap.class.getName());
+        System.out.println(String.class.getName() + " " + Integer.class.getName());
+
+        // The hierarchy a program can walk.
+        System.out.println(nameOf(Integer.class.getSuperclass())
+            + " " + nameOf(String.class.getSuperclass())
+            + " " + nameOf(Object.class.getSuperclass()));
+        System.out.println(nameOf(new ArrayList<String>().getClass().getSuperclass())
+            + " " + nameOf(new LinkedList<String>().getClass().getSuperclass())
+            + " " + nameOf(new TreeSet<String>().getClass().getSuperclass()));
+        System.out.println(nameOf(new Stack<String>().getClass().getSuperclass())
+            + " " + nameOf(new PriorityQueue<String>().getClass().getSuperclass()));
+        System.out.println(nameOf(IllegalStateException.class.getSuperclass())
+            + " " + nameOf(Exception.class.getSuperclass())
+            + " " + nameOf(int.class.getSuperclass())
+            + " " + nameOf(int[].class.getSuperclass()));
+
+        // Every array implements exactly Cloneable and Serializable.
+        StringBuilder ifaces = new StringBuilder();
+        for (Class<?> each : String[].class.getInterfaces()) {
+            ifaces.append(each.getName()).append(' ');
+        }
+        System.out.println(ifaces.toString().trim());
+
+        // A CONSTANT name resolves to the class literal for it; a name caturra
+        // does not model is still ClassNotFoundException.
+        System.out.println(Class.forName("java.util.ArrayList").getName());
+        System.out.println(Class.forName("java.lang.Integer") == Integer.class);
+        System.out.println(Class.forName("LibraryClasses").getSimpleName());
+        System.out.println(Class.forName("LibraryClasses$Inner").getSimpleName());
+        try {
+            Class.forName("java.lang.Frobnicator");
+            System.out.println("no throw");
+        } catch (ClassNotFoundException e) {
+            System.out.println("ClassNotFoundException");
+        }
+    }
+}
+"#
+);

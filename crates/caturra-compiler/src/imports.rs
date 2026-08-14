@@ -293,6 +293,23 @@ pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
         .map(|(_, _, canonical)| *canonical)
 }
 
+/// The package-qualified INTERNAL name of a library class, by its simple name
+/// (`ArrayList` -> `java/util/ArrayList`).
+///
+/// `Class.getName()` is fully qualified, and a class literal that carried only
+/// the simple name reported `Math` where a JDK reports `java.lang.Math`.
+/// `java.lang` is searched first, so a simple name that exists in both
+/// packages resolves the way an unqualified source reference would.
+pub(crate) fn qualified_library_class(simple: &str) -> Option<String> {
+    let mut packages: Vec<&(&str, &[&str])> = PACKAGES.iter().collect();
+    packages.sort_by_key(|(package, _)| *package != "java.lang");
+    packages.iter().find_map(|(package, classes)| {
+        classes
+            .contains(&simple)
+            .then(|| format!("{package}.{simple}").replace('.', "/"))
+    })
+}
+
 /// The honest reason a class caturra models only as a namespace for static
 /// members cannot name a variable: `Math m;`. javac accepts that declaration
 /// — `Math` is an ordinary class type — so caturra is stricter here, and has
