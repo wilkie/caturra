@@ -3978,6 +3978,32 @@ which is why the two must never be conflated. Every path is pinned.
 
 The char-literal case is closed below.
 
+### StringBuilder swept; an enclosing static could not be typed (2026-08-14)
+
+A twenty-fourth dimension put `StringBuilder` through a cross product — every
+mutator against every seed and index, results AND exception messages, over an
+alphabet carrying astral characters, a combining mark and an unpaired
+surrogate. **3,588 lines, all identical.** The surface is pinned so it stays
+that way.
+
+The finding came from RUNNING the probe rather than from its results: it
+stopped on caturra's own "cannot determine the type of an argument" — the net
+added when a vanishing statement was found, doing its job. **`type_of` could
+not type a call to an enclosing STATIC from inside a lambda.** The
+enclosing-INSTANCE fallback was already there, but a lambda in a static method
+captures no instance, so it never fired, and the lexical chain — the only route
+to an enclosing static — was not tried. The emission path resolved the same
+call perfectly well; `type_of` versus emit, for the third time this round.
+
+Worth noting what the net bought: before it existed this would have been a
+silently dropped statement rather than a refusal, and a probe that prints
+nothing looks like a probe that passed.
+
+Recorded, not fixed: `capacity`, `ensureCapacity` and `trimToSize` are refused
+with an honest reason. Their values are fully determined (16, or `n`, or
+`length + 16`, growing by `(old << 1) + 2`), so this is a gap that could be
+closed rather than one that cannot be.
+
 ### A char literal is a code unit (2026-08-14)
 
 The last case, and the bound was wrong about where it lived. The pre-lex pass

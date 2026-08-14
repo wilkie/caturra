@@ -26214,3 +26214,112 @@ public class Surrogates {
 }
 "#
 );
+
+// `type_of` could not type a call to an ENCLOSING STATIC from inside a lambda.
+// The enclosing-instance fallback existed, but a lambda in a static method
+// captures no instance, so it never fired and the lexical chain — the only
+// route to an enclosing static — was not tried. The emission path resolved the
+// same call, which is the `type_of`-versus-emit divergence again.
+differential_test!(
+    diff_enclosing_static_from_a_lambda,
+    "EnclosingStatic",
+    r#"
+import java.util.function.Supplier;
+
+public class EnclosingStatic {
+    static String wrap(String s) {
+        return "<" + s + ">";
+    }
+
+    static StringBuilder builderOf(String s) {
+        return new StringBuilder(s);
+    }
+
+    static int size(String s) {
+        return s.length();
+    }
+
+    static void show(Supplier<Object> body) {
+        System.out.println(body.get());
+    }
+
+    public static void main(String[] args) {
+        String seed = "abc";
+        // The receiver is an enclosing static returning a builder, and its
+        // result feeds an argument that has to be typed.
+        show(() -> wrap(builderOf(seed).reverse().toString()));
+        show(() -> wrap(builderOf(seed).toString()));
+        show(() -> builderOf(seed).length());
+        show(() -> wrap(String.valueOf(size(seed))));
+        show(() -> size(seed) + size(seed));
+    }
+}
+"#
+);
+
+// StringBuilder, probed as a dimension: every mutator against every seed and
+// index, results AND exception messages, over an alphabet carrying astral
+// characters, a combining mark and an unpaired surrogate. 3,588 lines, all
+// identical — this pins the surface so it stays that way.
+differential_test!(
+    diff_string_builder_surface,
+    "BuilderSurface",
+    r#"
+public class BuilderSurface {
+    static String q(String s) {
+        StringBuilder out = new StringBuilder("'");
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 32 || c > 126) {
+                out.append("\\u").append(Integer.toHexString(c));
+            } else {
+                out.append(c);
+            }
+        }
+        return out.append("'").toString();
+    }
+
+    static void attempt(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " " + body.get());
+        } catch (RuntimeException e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    static StringBuilder of(String seed) {
+        return new StringBuilder(seed);
+    }
+
+    public static void main(String[] args) {
+        String[] seeds = {"", "abc", "abcdef", "😀", "a😀b", "́"};
+        int[] indexes = {-1, 0, 2, 7};
+        for (String seed : seeds) {
+            String s = seed;
+            attempt("reverse", () -> q(of(s).reverse().toString()));
+            attempt("codePoints", () -> of(s).codePoints().count());
+            for (int index : indexes) {
+                int i = index;
+                attempt("charAt " + i, () -> (int) of(s).charAt(i));
+                attempt("deleteCharAt " + i, () -> q(of(s).deleteCharAt(i).toString()));
+                attempt("setLength " + i, () -> {
+                    StringBuilder b = of(s);
+                    b.setLength(i);
+                    return q(b.toString());
+                });
+                attempt("substring " + i, () -> q(of(s).substring(i)));
+                attempt("insert " + i, () -> q(of(s).insert(i, "yz").toString()));
+                attempt("replace " + i, () -> q(of(s).replace(i, i + 2, "yz").toString()));
+                attempt("delete " + i, () -> q(of(s).delete(i, i + 2).toString()));
+                attempt("codePointCount " + i, () -> of(s).codePointCount(0, i));
+            }
+        }
+        StringBuilder chain = new StringBuilder();
+        chain.append(1).append(2L).append(1.5).append(1.5f).append('c').append(true)
+            .append((Object) null).append((String) null).append(new char[] {'x', 'y'});
+        System.out.println(q(chain.toString()));
+        System.out.println(q(new StringBuilder().appendCodePoint(0x1F600).toString()));
+    }
+}
+"#
+);

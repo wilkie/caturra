@@ -22497,22 +22497,35 @@ impl BodyGen<'_> {
                         }
                     }
                 }
-                // A bare call to an ENCLOSING instance method, from inside a
-                // lambda or inner class (mirrors the emission path). type_of has
-                // to agree, or the concat/return it feeds is typed by a guess —
+                // A bare call to an ENCLOSING method, from inside a lambda or
+                // inner class (mirrors the emission path). type_of has to
+                // agree, or the concat/return it feeds is typed by a guess —
                 // the `type_of`/emit divergence trap.
                 if receiver.is_none()
                     && !matches!(
                         table.resolve(&class, method, &arg_types),
                         Resolution::Found(_)
                     )
-                    && let Some((_, enclosing)) = self.captured_outer()
                 {
-                    let enc_name = self.table.class_name(enclosing).to_owned();
-                    if let Resolution::Found(sig) =
-                        self.table.resolve(&enc_name, method, &arg_types)
-                    {
-                        return inferred_return(sig, &arg_types).unwrap_or(JType::Error);
+                    // The enclosing INSTANCE, when the body captured one...
+                    if let Some((_, enclosing)) = self.captured_outer() {
+                        let enc_name = self.table.class_name(enclosing).to_owned();
+                        if let Resolution::Found(sig) =
+                            self.table.resolve(&enc_name, method, &arg_types)
+                        {
+                            return inferred_return(sig, &arg_types).unwrap_or(JType::Error);
+                        }
+                    }
+                    // ...and the lexical chain, which is the only route to an
+                    // enclosing STATIC: a lambda in a static method captures no
+                    // instance, so `captured_outer` answers nothing and a call
+                    // to the enclosing class's own static typed as `Error`.
+                    for enc_name in self.enclosing_chain() {
+                        if let Resolution::Found(sig) =
+                            self.table.resolve(&enc_name, method, &arg_types)
+                        {
+                            return inferred_return(sig, &arg_types).unwrap_or(JType::Error);
+                        }
                     }
                 }
                 match table.resolve(&class, method, &arg_types) {
