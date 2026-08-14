@@ -5541,6 +5541,11 @@ fn checked_radix(radix: i32) -> Result<u32, VmError> {
 /// `Integer.decode`/`Long.decode`: an optional sign, then `0x`/`0X`/`#` (hex),
 /// a leading `0` (octal), or decimal. Returned as i64 for the caller to range.
 fn decode_integer(text: &str) -> Result<i64, VmError> {
+    // The JDK checks the length FIRST and says so in its own words, rather
+    // than falling through to the "For input string" wording.
+    if text.is_empty() {
+        return Err(throw("java.lang.NumberFormatException: Zero length string"));
+    }
     let (neg, body) = match text.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, text.strip_prefix('+').unwrap_or(text)),
@@ -5555,12 +5560,21 @@ fn decode_integer(text: &str) -> Result<i64, VmError> {
         } else {
             (10, body)
         };
-    // The JDK parses the STRIPPED remnant (`Integer.parseInt(digits,
-    // radix)`), so its message names that, not the whole input: `decode("0x")`
-    // is `For input string: ""`.
+    // A sign AFTER the radix prefix is its own complaint, and `--1` was
+    // accepted outright: the first `-` set `neg` and the second was read as
+    // part of the number.
+    if digits.starts_with('-') || digits.starts_with('+') {
+        return Err(throw(
+            "java.lang.NumberFormatException: Sign character in wrong position",
+        ));
+    }
+    // The JDK strips the RADIX PREFIX before parsing but puts the sign back
+    // when it reports, so `decode("0x")` names `""` while `decode("-1.5")`
+    // names the whole `-1.5` — not the `1.5` a plain strip would leave.
     let magnitude = i64::from_str_radix(digits, radix).map_err(|_| {
+        let sign = if neg { "-" } else { "" };
         throw(format!(
-            "java.lang.NumberFormatException: For input string: \"{digits}\""
+            "java.lang.NumberFormatException: For input string: \"{sign}{digits}\""
         ))
     })?;
     Ok(if neg { -magnitude } else { magnitude })
@@ -5603,13 +5617,48 @@ fn parse_unsigned_long(text: &str, radix: u32) -> Result<Option<JValue>, VmError
     )
 }
 
-fn parse_int_text(heap: &Heap, value: &JValue) -> Result<String, VmError> {
+/// The text an integer parser works on: the digits FOLDED to ASCII so Rust's
+/// ASCII-only parsers see what `Character.digit` would have given them, and
+/// the string as WRITTEN, which is what the JDK quotes back. Reporting the
+/// folded form said `For input string: "3"` about an input of `"\u0663"`.
+struct NumberText {
+    folded: String,
+    raw: String,
+}
+
+impl std::ops::Deref for NumberText {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.folded
+    }
+}
+
+impl std::fmt::Display for NumberText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.folded)
+    }
+}
+
+fn parse_int_text(heap: &Heap, value: &JValue) -> Result<NumberText, VmError> {
+    let raw = number_arg_text(heap, value)?;
+    Ok(NumberText {
+        folded: ascii_digits(&raw),
+        raw,
+    })
+}
+
+/// The argument text as WRITTEN, with the number parsers' shared handling of a
+/// null or non-string argument.
+///
+/// The FLOAT parsers must use this rather than `parse_int_text`: only the
+/// integer ones go through `Character.digit`, and `Double.parseDouble` reads
+/// ASCII alone. Folding for them made `Double.parseDouble("\u0663")` answer
+/// 3.0 where a JDK throws.
+fn number_arg_text(heap: &Heap, value: &JValue) -> Result<String, VmError> {
     match value {
-        // Java parses with `Character.digit`, which accepts every Unicode
-        // decimal digit; Rust's parsers are ASCII-only, so fold them first.
         JValue::Ref(Some(reference)) => heap
             .string_text(*reference)
-            .map(|text| ascii_digits(&text))
             .ok_or_else(|| throw("java.lang.ClassCastException: not a String")),
         // JDK 11's message for a null string is literally "null".
         JValue::Ref(None) => Err(throw("java.lang.NumberFormatException: null")),
@@ -5642,7 +5691,8 @@ fn integer_static(
             // results compare `==` by value.
             let parsed = (|| -> Result<Option<JValue>, VmError> {
                 let text = parse_int_text(heap, text)?;
-                text.parse().map_or_else(|_| Err(number_format(&text)), i)
+                text.parse()
+                    .map_or_else(|_| Err(number_format(&text.raw)), i)
             })()?;
             if method == "valueOf"
                 && let Some(value) = parsed
@@ -5659,7 +5709,7 @@ fn integer_static(
             let parsed = (|| -> Result<Option<JValue>, VmError> {
                 let text = parse_int_text(heap, text)?;
                 let radix = checked_radix(*radix)?;
-                i32::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text)), i)
+                i32::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text.raw)), i)
             })()?;
             if method == "valueOf"
                 && let Some(value) = parsed
@@ -5669,10 +5719,17 @@ fn integer_static(
             }
             Ok(parsed)
         }
+        // `decode` answers an `Integer`, not an `int` — the compiler types it
+        // as a wrapper and so does not box the result, and a raw `Int` left
+        // where a reference belongs is a VerifyError the moment the value
+        // reaches an `Object` (`Object o = Integer.decode("7")` then using
+        // `o`, or a `Supplier<Object>` lambda returning one).
         ("decode", [text @ JValue::Ref(_)]) => {
             let text = parse_int_text(heap, text)?;
             let value = decode_integer(&text)?;
-            i32::try_from(value).map_or_else(|_| Err(number_format(&text)), i)
+            let value = i32::try_from(value).map_err(|_| number_format(&text.raw))?;
+            let reference = heap.box_wrapper("java/lang/Integer", JValue::Int(value));
+            Ok(Some(JValue::Ref(Some(reference))))
         }
         ("parseUnsignedInt", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
             let text = parse_int_text(heap, text)?;
@@ -5934,7 +5991,7 @@ fn double_static(
                 if matches!(text, JValue::Ref(None)) {
                     return Err(throw("java.lang.NullPointerException"));
                 }
-                let text = parse_int_text(heap, text)?;
+                let text = number_arg_text(heap, text)?;
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
                     return Err(throw("java.lang.NumberFormatException: empty String"));
@@ -6561,7 +6618,8 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
             // results compare `==` by value.
             let parsed = (|| -> Result<Option<JValue>, VmError> {
                 let text = parse_int_text(heap, text)?;
-                text.parse().map_or_else(|_| Err(number_format(&text)), l)
+                text.parse()
+                    .map_or_else(|_| Err(number_format(&text.raw)), l)
             })()?;
             if method == "valueOf"
                 && let Some(value) = parsed
@@ -6578,7 +6636,7 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
             let parsed = (|| -> Result<Option<JValue>, VmError> {
                 let text = parse_int_text(heap, text)?;
                 let radix = checked_radix(*radix)?;
-                i64::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text)), l)
+                i64::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text.raw)), l)
             })()?;
             if method == "valueOf"
                 && let Some(value) = parsed
@@ -6597,9 +6655,12 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
             let radix = checked_radix(*radix)?;
             parse_unsigned_long(&text, radix)
         }
+        // ...and `Long.decode` answers a `Long`, for the same reason.
         ("decode", [text @ JValue::Ref(_)]) => {
             let text = parse_int_text(heap, text)?;
-            l(decode_integer(&text)?)
+            let value = decode_integer(&text)?;
+            let reference = heap.box_wrapper("java/lang/Long", JValue::Long(value));
+            Ok(Some(JValue::Ref(Some(reference))))
         }
         ("valueOf", [JValue::Long(v)]) => {
             let reference = heap.box_wrapper("java/lang/Long", JValue::Long(*v));
@@ -6709,7 +6770,7 @@ fn small_int_static(
     match (method, args) {
         ("parseShort" | "parseByte" | "valueOf", [text @ JValue::Ref(_)]) => {
             let text = parse_int_text(heap, text)?;
-            let value: i32 = text.parse().map_err(|_| number_format(&text))?;
+            let value: i32 = text.parse().map_err(|_| number_format(&text.raw))?;
             if value < lo || value > hi {
                 return Err(number_format_range(&text));
             }
@@ -6785,7 +6846,7 @@ fn float_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option
                 if matches!(text, JValue::Ref(None)) {
                     return Err(throw("java.lang.NullPointerException"));
                 }
-                let text = parse_int_text(heap, text)?;
+                let text = number_arg_text(heap, text)?;
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
                     return Err(throw("java.lang.NumberFormatException: empty String"));

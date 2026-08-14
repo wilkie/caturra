@@ -26043,3 +26043,51 @@ public class BoundsMessages {
 }
 "#
 );
+
+// The wrapper statics, probed as a dimension (9,179 lines over parsing, radix
+// conversion, bit twiddling and comparison, with an alphabet carrying unicode
+// digits, an astral character, signs and overflow). These are the four defects
+// it found that are fixed.
+differential_test!(
+    diff_wrapper_statics,
+    "WrapperStatics",
+    r#"
+public class WrapperStatics {
+    static void attempt(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " " + body.get());
+        } catch (RuntimeException e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // `decode` answers a WRAPPER, not a primitive: a raw int left where a
+        // reference belongs only fails once the value reaches an `Object`.
+        Object decoded = Integer.decode("7");
+        System.out.println(decoded.getClass().getName() + " " + decoded);
+        attempt("supplier", () -> Integer.decode("31"));
+        System.out.println(Integer.decode("0x1f") + " " + Integer.decode("-010")
+            + " " + Long.decode("0x10") + " " + Long.decode("077"));
+
+        // Its rejections, whose wording the JDK does not share with parseInt:
+        // an empty string, and a sign after the radix prefix.
+        String[] bad = {"", "--1", "+-1", "-1.5", "0x", "-Infinity", "-9223372036854775808"};
+        for (String one : bad) {
+            attempt("decode " + one, () -> Integer.decode(one));
+        }
+
+        // The float parsers do NOT go through Character.digit, so a unicode
+        // digit is a rejection, not a value.
+        String[] digits = {"٣", "1٣", "12"};
+        for (String one : digits) {
+            attempt("parseDouble " + one, () -> Double.parseDouble(one));
+            attempt("parseFloat " + one, () -> Float.parseFloat(one));
+            attempt("parseInt " + one, () -> Integer.parseInt(one));
+            attempt("parseInt2 " + one, () -> Integer.parseInt(one, 2));
+            attempt("parseLong " + one, () -> Long.parseLong(one));
+        }
+    }
+}
+"#
+);

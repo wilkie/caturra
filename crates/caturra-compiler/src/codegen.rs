@@ -7493,7 +7493,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // `getModifiers` ARE answered — those flags survive.)
     ("Class", "getModifiers", "caturra does not model a class's access flags"),
     ("Class", "getPackage", "caturra does not model java.lang.Package"),
-    ("Integer", "decode", "system properties are not supported by caturra"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
     ("ArrayList", "parallelStream", "streams are not supported by caturra"),
     ("ArrayList", "toArray", "Object arrays are not supported by caturra"),

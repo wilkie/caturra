@@ -3937,6 +3937,49 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### The wrapper statics at volume (2026-08-13)
+
+A nineteenth dimension: `Integer`/`Long`/`Double`/`Float`/`Character`/`Boolean`
+statics — parsing, radix conversion, bit twiddling, comparison — **9,179
+lines**, with an alphabet deliberately carrying unicode digits, an astral
+character, signs and overflow, because the String sweep had just shown what a
+narrow alphabet hides.
+
+The probe stopped on a **`VerifyError`**, which by this project's rule is
+always caturra's bug, and it was: **`Integer.decode` answered an `int` where
+Java answers an `Integer`.** The compiler already types it as a wrapper and so
+does not box, and a raw int left where a reference belongs stays invisible
+until the value reaches an `Object` — `Object o = Integer.decode("7")` and then
+using `o`, or a `Supplier<Object>` lambda returning one. `Long.decode` had the
+same shape.
+
+`decode` also **accepted `--1`**: the first `-` set the sign and the second was
+read as part of the number, where the JDK complains "Sign character in wrong
+position". Its messages were wrong in two more ways — an empty input is "Zero
+length string", not the "For input string" wording, and the JDK strips the
+RADIX PREFIX before parsing but puts the SIGN back when it reports, so
+`decode("-1.5")` names `-1.5` and not the `1.5` a plain strip leaves.
+
+**The float parsers were folding unicode digits.** Only the integer parsers go
+through `Character.digit`; `Double.parseDouble` reads ASCII alone. Sharing one
+helper made `Double.parseDouble("٣")` answer 3.0 where a JDK throws — an
+accepts-invalid. The integer parsers keep the fold but now also keep the string
+as WRITTEN, because the JDK quotes THAT back: reporting the folded form said
+`For input string: "3"` about an input of `"٣"`.
+
+Measured and open, both already-known categories:
+
+- **Unicode CLASSIFICATION** (`isLetter`, `isUpperCase`, `isAlphabetic`,
+  `isDefined`, …) diverges on 4761 BMP units over 416 ranges — the same
+  Unicode-version gap the case tables had (JDK 11 carries Unicode 10, Rust's
+  tables track the current one) plus a category-model difference over combining
+  marks. Every divergence is above U+0294: ASCII and Latin-1 are exact. Unlike
+  the case tables' 15 ranges this is a data drop rather than a patch, so it is
+  measured rather than guessed at.
+- **Subnormal formatting** now known to affect `Float.toString` as well as
+  `Double.toString` — `intBitsToFloat` disagrees on three of the probe's
+  values, the same shortest-decimal tail already recorded.
+
 ### The String surface at volume (2026-08-13)
 
 An eighteenth dimension put `String` through a cross product — every method
