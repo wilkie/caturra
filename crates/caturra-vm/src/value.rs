@@ -54,6 +54,11 @@ pub enum ComparatorSpec {
     /// `String.CASE_INSENSITIVE_ORDER` — compares two strings by their
     /// case-folded code units.
     CaseInsensitive,
+    /// `Map.Entry.comparingByKey()` / `comparingByValue()` — order two map
+    /// entries by the natural ordering of their keys (or values). A key
+    /// extractor cannot express these: `ByKey` runs a `Function` from the
+    /// heap, and there is no user lambda here to run.
+    Entry { by_value: bool },
     /// `Comparator.nullsFirst(inner)` / `nullsLast(inner)` — `null` sorts
     /// before (or after) everything, two nulls are equal, and anything else is
     /// left to `inner`. `first` selects which end the nulls go to.

@@ -4025,21 +4025,21 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
         }
         // A nested parameterized type argument (`List<List<Integer>>`): resolve
         // the inner type and intern it, so getting an element back returns the
-        // inner collection, not `Object`. A `Map.Entry` argument is not a value
-        // element (it only names an entrySet's type), and an inner that does not
-        // resolve to a type caturra models falls back to the erased `Object`.
-        TypeRef::Generic { base, .. }
-            if !matches!(base.as_str(), "Map.Entry" | "Entry" | "java.util.Map.Entry") =>
-        {
-            match table.resolve_type(arg) {
-                Some(inner) if !matches!(inner, JType::Object(_)) => Some(ElemType::Nested {
-                    inner: table.intern_nested(inner),
-                    read: table.object_id,
-                }),
-                _ => Some(ElemType::Object(table.object_id)),
-            }
-        }
-        TypeRef::Generic { .. } => Some(ElemType::Object(table.object_id)),
+        // inner collection, not `Object`. An inner that does not resolve to a
+        // type caturra models falls back to the erased `Object`.
+        //
+        // `Map.Entry` was carved out here, on the reasoning that it only ever
+        // named an entrySet's type rather than a value element. A program can
+        // hold a `List<Map.Entry<K, V>>` of real entries — the natural next
+        // line after copying `entrySet()` — and every element of one read back
+        // as `Object`, so `es.get(0).getKey()` did not compile.
+        TypeRef::Generic { .. } => match table.resolve_type(arg) {
+            Some(inner) if !matches!(inner, JType::Object(_)) => Some(ElemType::Nested {
+                inner: table.intern_nested(inner),
+                read: table.object_id,
+            }),
+            _ => Some(ElemType::Object(table.object_id)),
+        },
         // An array element (`List<int[]>`, `List<String[]>`): intern the array
         // type so getting an element back returns the array (not `Object`), and
         // `add`/`get` type against it. Erased to `Object` for storage, like the
@@ -11433,9 +11433,41 @@ const COMPARATOR_STATIC_METHODS: &[BuiltinMethod] = &[
     ),
 ];
 
+/// `Map.Entry`'s two comparator factories. Sorting a map's entries by key or
+/// by value is the reason a program materializes `entrySet()` into a list at
+/// all, and these are how it says so.
+const MAP_ENTRY_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "comparingByKey",
+        &[],
+        BRet::Comparator,
+        "()Ljava/util/Comparator;",
+    ),
+    bm(
+        "comparingByValue",
+        &[],
+        BRet::Comparator,
+        "()Ljava/util/Comparator;",
+    ),
+];
+
+/// The [`builtin_static_table`] key a static-call RECEIVER path names.
+///
+/// One segment is the class itself (`Math`); two are a nested library type
+/// spelled the only way Java spells one (`Map.Entry`). Anything longer cannot
+/// be a library static receiver, and answers a name no table holds.
+fn static_receiver_key(path: &[String]) -> String {
+    match path {
+        [single] => single.clone(),
+        [enclosing, nested] => format!("{enclosing}.{nested}"),
+        _ => String::new(),
+    }
+}
+
 fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match class {
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
+        "Map.Entry" | "Entry" => Some(("java/util/Map$Entry", MAP_ENTRY_STATIC_METHODS)),
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
         "IntStream" => Some(("java/util/stream/IntStream", INTSTREAM_STATIC_METHODS)),
@@ -20024,6 +20056,19 @@ impl BodyGen<'_> {
                     );
                     None
                 }
+                // `Map.Entry.comparingByKey()` — a LIBRARY nested type whose
+                // statics live in the builtin table under the DOTTED name.
+                // Every other receiver here is one segment, so the qualifier
+                // had nowhere to go and the call read as "cannot find symbol:
+                // 'Map.Entry'" — about a type the very same program was
+                // already using as an element type.
+                [enclosing, nested]
+                    if self.lookup(enclosing).is_none()
+                        && !self.table.has_class(enclosing)
+                        && builtin_static_table(&format!("{enclosing}.{nested}")).is_some() =>
+                {
+                    Some(CallTarget::Static(format!("{enclosing}.{nested}")))
+                }
                 // `Outer.Nested.staticMethod()` — a nested TYPE named
                 // through its enclosing one. Nested types are flattened to
                 // their simple names, so the qualifier carries nothing and
@@ -22472,13 +22517,14 @@ impl BodyGen<'_> {
                         if {
                             let short = self.strip_package_prefix(path);
                             let effective = short.as_deref().unwrap_or(path);
-                            effective.len() == 1
-                                && self.lookup(&effective[0]).is_none()
-                                && builtin_static_table(&effective[0]).is_some()
+                            self.lookup(&effective[0]).is_none()
+                                && builtin_static_table(&static_receiver_key(effective)).is_some()
                         } =>
                     {
                         let short = self.strip_package_prefix(path);
                         let path = short.as_deref().unwrap_or(path);
+                        let key = static_receiver_key(path);
+                        let path = std::slice::from_ref(&key);
                         // `String.format` is variadic and special-cased in the
                         // emission path (not in the static table); it returns
                         // String. Mirror that here so it can be an argument.

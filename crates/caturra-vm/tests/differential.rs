@@ -22139,6 +22139,149 @@ public class SubListCtor {
 "#
 );
 
+// `Map.Entry.comparingByKey()` / `comparingByValue()`, the two factories a
+// program reaches for after copying `entrySet()` into a list. The comparison
+// reads the value through the entry's MAP, as `getValue` does, so sorting
+// after a `put` orders by the new value.
+differential_test!(
+    map_entry_comparator_factories,
+    "EntryComparators",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+public class EntryComparators {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("b", 2);
+        m.put("a", 3);
+        m.put("c", 1);
+        List<Map.Entry<String, Integer>> byKey = new ArrayList<>(m.entrySet());
+        byKey.sort(Map.Entry.comparingByKey());
+        System.out.println(byKey);
+        List<Map.Entry<String, Integer>> byValue = new ArrayList<>(m.entrySet());
+        byValue.sort(Map.Entry.comparingByValue());
+        System.out.println(byValue);
+        List<Map.Entry<String, Integer>> sorted = new ArrayList<>(m.entrySet());
+        Collections.sort(sorted, Map.Entry.comparingByKey());
+        System.out.println(sorted);
+        // The three spellings that carry a type through to `reversed()`.
+        List<Map.Entry<String, Integer>> down = new ArrayList<>(m.entrySet());
+        down.sort(Map.Entry.<String, Integer>comparingByValue().reversed());
+        System.out.println(down);
+        Comparator<Map.Entry<String, Integer>> byV = Map.Entry.comparingByValue();
+        List<Map.Entry<String, Integer>> viaVar = new ArrayList<>(m.entrySet());
+        viaVar.sort(byV.reversed());
+        System.out.println(viaVar);
+        List<Map.Entry<String, Integer>> wrapped = new ArrayList<>(m.entrySet());
+        wrapped.sort(Collections.reverseOrder(Map.Entry.comparingByValue()));
+        System.out.println(wrapped);
+        // The value is read LIVE, through the map.
+        List<Map.Entry<String, Integer>> live = new ArrayList<>(m.entrySet());
+        m.put("a", 0);
+        live.sort(Map.Entry.comparingByValue());
+        System.out.println(live);
+        TreeMap<String, Integer> t = new TreeMap<>();
+        t.put("x", 5);
+        t.put("y", 1);
+        List<Map.Entry<String, Integer>> tree = new ArrayList<>(t.entrySet());
+        tree.sort(Map.Entry.comparingByValue());
+        System.out.println(tree);
+        m.entrySet().stream()
+            .sorted(Map.Entry.comparingByKey())
+            .forEach(e -> System.out.println(e.getKey() + "=" + e.getValue()));
+    }
+}
+"#
+);
+
+// Copying an `entrySet()` gave a list of its KEYS. Iterating the view builds
+// its entries elsewhere, so this was invisible until a program COPIED the
+// view: `new ArrayList<>(map.entrySet())` printed `[a, b]` where a JDK prints
+// `[a=3, b=2]` — a wrong answer with no error. The entries are live, so
+// `setValue` through a copied one writes to the map.
+//
+// The ELEMENT TYPE went with it: `Map.Entry` was carved out of the type
+// argument mapping as "not a value element", which stopped being true once a
+// program could hold a `List<Map.Entry<K, V>>`, so every element read back as
+// `Object` and `es.get(0).getKey()` did not compile.
+differential_test!(
+    copying_an_entry_set,
+    "CopiedEntries",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class CopiedEntries {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("b", 2);
+        m.put("a", 3);
+        List<Map.Entry<String, Integer>> es = new ArrayList<>(m.entrySet());
+        System.out.println(es);
+        for (Map.Entry<String, Integer> e : es) {
+            System.out.println(e.getKey() + ":" + e.getValue());
+        }
+        System.out.println(es.get(0).getKey());
+        List<Map.Entry<String, Integer>> built = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : m.entrySet()) {
+            built.add(e);
+        }
+        System.out.println(built.get(1).getValue());
+        // A copied entry stays LIVE against its map, in both directions.
+        m.put("a", 9);
+        System.out.println(es);
+        es.get(0).setValue(7);
+        System.out.println(m);
+        // The other two views are unchanged.
+        System.out.println(new ArrayList<>(m.keySet()));
+        System.out.println(new ArrayList<>(m.values()));
+    }
+}
+"#
+);
+
+// The one KNOWN case where caturra accepts what javac rejects.
+//
+// `Map.Entry.comparingByValue()` with no type witness infers
+// `Comparator<Entry<Object, V>>`, and `.reversed()` freezes that before the
+// target type can correct it — so javac demands
+// `Map.Entry.<K, V>comparingByValue()`, a typed variable, or a wrapper.
+// caturra's generics are erased, and the parser DISCARDS a type witness, so
+// the two spellings are the same tree here and cannot be told apart.
+//
+// All three forms javac accepts do work (pinned above), so nothing legitimate
+// is blocked by leaving this permissive. Asserted rather than described, so it
+// cannot be forgotten — and if caturra ever rejects it, this test fails and
+// says to delete itself.
+looser_than_javac!(
+    entry_comparator_needs_a_witness_to_reverse,
+    "LooserEntryReverse",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class LooserEntryReverse {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("b", 2);
+        List<Map.Entry<String, Integer>> es = new ArrayList<>(m.entrySet());
+        es.sort(Map.Entry.comparingByValue().reversed());
+        System.out.println(es);
+    }
+}
+"#
+);
+
 // `Iterator<T>` in a method SIGNATURE. A descriptor has two builders — one
 // from the written syntax, one from the inferred `JType` — and they disagreed
 // here, so the method was emitted under one descriptor and called with

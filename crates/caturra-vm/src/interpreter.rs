@@ -3069,7 +3069,7 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NullPointerException",
                 )));
             };
-            let items = self.collection_elements(source);
+            let items = self.materialized_elements(source);
             match self.heap.get_mut(receiver) {
                 Some(HeapObject::ArrayList(target) | HeapObject::LinkedList(target)) => {
                     *target = items;
@@ -3094,7 +3094,7 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NullPointerException",
                 )));
             };
-            let elements = self.collection_elements(source);
+            let elements = self.materialized_elements(source);
             #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
             let hint = std::cmp::max((elements.len() as f32 / 0.75) as i32 + 1, 16);
             if let Some(HeapObject::HashSet(map)) = self.heap.get_mut(receiver) {
@@ -3115,7 +3115,7 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NullPointerException",
                 )));
             };
-            let elements = self.collection_elements(source);
+            let elements = self.materialized_elements(source);
             if let Some(HeapObject::LinkedList(values)) = self.heap.get_mut(receiver) {
                 *values = elements;
             }
@@ -3135,7 +3135,7 @@ impl<'run> Interpreter<'run> {
                         "java.lang.NullPointerException",
                     )));
                 };
-                let elements = self.collection_elements(source);
+                let elements = self.materialized_elements(source);
                 if elements.iter().any(|v| matches!(v, JValue::Ref(None))) {
                     return Err(VmError::UncaughtException(String::from(
                         "java.lang.NullPointerException",
@@ -3270,7 +3270,7 @@ impl<'run> Interpreter<'run> {
                 {
                     *slot = comparator;
                 }
-                let elements = self.collection_elements(source);
+                let elements = self.materialized_elements(source);
                 self.set_pq_heap(receiver, elements);
                 if !already_heaped {
                     self.pq_heapify(receiver)?;
@@ -4685,6 +4685,18 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<bool, VmError> {
         use crate::value::{ComparatorSpec, HeapObject};
+        // `Map.Entry`'s two comparator factories join the Comparator ones:
+        // they build the same kind of object and are reached the same way.
+        if matches!(class_name, "Map.Entry" | "Entry" | "java/util/Map$Entry") {
+            let spec = match (method_name, args) {
+                ("comparingByKey", []) => ComparatorSpec::Entry { by_value: false },
+                ("comparingByValue", []) => ComparatorSpec::Entry { by_value: true },
+                _ => return Ok(false),
+            };
+            let comparator = self.heap.alloc(HeapObject::Comparator(spec));
+            frame.stack.push(JValue::Ref(Some(comparator)));
+            return Ok(true);
+        }
         if class_name != "Comparator" && class_name != "java/util/Comparator" {
             return Ok(false);
         }
@@ -9056,6 +9068,48 @@ impl<'run> Interpreter<'run> {
     /// `ArrayList` (or its unmodifiable view), a `HashSet`, a `TreeSet`, or a
     /// map's `keySet()`/`values()` view. Backs `addAll`/`removeAll`/`retainAll`
     /// and the collection-copy constructors.
+    /// The elements of a collection, with an `entrySet()`'s entries made into
+    /// real `Map.Entry` OBJECTS.
+    ///
+    /// [`Self::collection_elements`] cannot do this: an entry has to be
+    /// allocated, and it takes `&self` because most of its 39 callers are
+    /// comparing collections while holding a borrow. So an entries view
+    /// answered there with its KEYS — invisible while iterating, which builds
+    /// its entries elsewhere, and wrong the moment a program COPIES the view:
+    /// `new ArrayList<>(map.entrySet())` printed `[a, b]` where a JDK prints
+    /// `[a=3, b=2]`. A wrong answer with no error, so the copying paths use
+    /// this and the comparing paths keep the cheap one.
+    fn materialized_elements(&mut self, reference: HeapRef) -> Vec<JValue> {
+        use crate::value::{HeapObject, MapViewKind};
+        let entries_of = match self.heap.get(reference) {
+            Some(HeapObject::MapView {
+                map,
+                kind: MapViewKind::Entries,
+                ..
+            }) => Some(*map),
+            Some(HeapObject::UnmodifiableSet(inner)) => {
+                let inner = *inner;
+                return self.materialized_elements(inner);
+            }
+            _ => None,
+        };
+        let Some(map) = entries_of else {
+            return self.collection_elements(reference);
+        };
+        let read_only = self.checked_cursor_views.contains(&reference);
+        self.map_entries(map)
+            .into_iter()
+            .map(|(key, _)| {
+                let entry = self.heap.alloc(HeapObject::MapEntry {
+                    map,
+                    key,
+                    read_only,
+                });
+                JValue::Ref(Some(entry))
+            })
+            .collect()
+    }
+
     fn collection_elements(&self, reference: HeapRef) -> Vec<JValue> {
         use crate::value::HeapObject;
         match self.heap.get(reference) {
@@ -12142,6 +12196,28 @@ impl<'run> Interpreter<'run> {
                 let key_a = self.call_apply(extractor, a)?;
                 let key_b = self.call_apply(extractor, b)?;
                 self.compare_for_sort(key_a, key_b)
+            }
+            // `Map.Entry.comparingByKey()` / `comparingByValue()`. The value is
+            // read through the entry's MAP rather than off the entry, which is
+            // what `getValue` does — an entry from an `entrySet()` sees the
+            // current value, so sorting after a `put` orders by the new one.
+            ComparatorSpec::Entry { by_value } => {
+                let side = |vm: &mut Self, value: JValue| -> Result<JValue, VmError> {
+                    let JValue::Ref(Some(entry)) = value else {
+                        return Ok(value);
+                    };
+                    let Some(HeapObject::MapEntry { map, key, .. }) = vm.heap.get(entry) else {
+                        return Ok(value);
+                    };
+                    let (map, key) = (*map, *key);
+                    if by_value {
+                        vm.map_entry_value(map, key)
+                    } else {
+                        Ok(key)
+                    }
+                };
+                let (left, right) = (side(self, a)?, side(self, b)?);
+                self.compare_for_sort(left, right)
             }
             ComparatorSpec::Reversed(inner) => Ok(-self.compare_with(a, b, Some(inner))?),
             ComparatorSpec::Then(first, second) => {

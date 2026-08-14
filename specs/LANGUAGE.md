@@ -4190,6 +4190,45 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### An entrySet you can keep (2026-08-14)
+
+Chasing the missing `Map.Entry.comparingByKey()` found something worse beside
+it, which is the usual reason to chase a small gap.
+
+**Copying an `entrySet()` produced a list of its KEYS.** `new
+ArrayList<>(map.entrySet())` printed `[a, b]` where a JDK prints `[a=3, b=2]`
+— a wrong answer with no error. Iterating the view builds its entries on the
+way past, so this was invisible until a program kept one. The element walk
+behind every copy takes `&self` (most of its callers are comparing two
+collections while holding a borrow) and an entry has to be ALLOCATED, so the
+entries kind fell through to the arm that answers keys. The copying paths now
+use a materializing walk and the comparing paths keep the cheap one. The
+entries are live, so `setValue` through a copied one writes to the map.
+
+**The element TYPE went with it.** `Map.Entry` was carved out of the type
+argument mapping, as "not a value element — it only names an entrySet's
+type". That was true when `Set<Map.Entry<K, V>>` was the only way to write it,
+and stopped being true the moment a program could hold a `List<Map.Entry<K,
+V>>`: every element read back as `Object`, so `es.get(0).getKey()` did not
+compile. A third expired justification this round.
+
+**Then the factories.** `Map.Entry.comparingByKey()` / `comparingByValue()`
+order entries by key or value; the value is read through the entry's MAP, as
+`getValue` does, so sorting after a `put` orders by the new value. Reaching
+them needed the receiver `Map.Entry` to resolve as a static-call target — and
+that resolver, in both the emission path and its `type_of` mirror, assumed a
+one-segment receiver. The fourth single-segment assumption found today, after
+the lambda pass's library receivers, the bundled interfaces, and the nested
+SAM map.
+
+This one adds the FIRST known entry to the "more permissive than javac" list:
+`Map.Entry.comparingByValue().reversed()` without a type witness is a javac
+error (inference fixes `Entry<Object, V>` before the target type can correct
+it) and caturra accepts it, because the parser discards a type witness and the
+two spellings are the same tree here. All three forms javac accepts do work,
+so nothing legitimate is blocked. It is asserted by `looser_than_javac!`
+rather than described, so it cannot be forgotten.
+
 ### The name a type is written under (2026-08-14)
 
 Batch 3 of the legal-Java dimension (67 programs: initializers, interface
@@ -4239,8 +4278,15 @@ registered as a source spelling, which coincides with the full path exactly
 one level down. Every dotted suffix of the binary name is now registered.
 
 The two that were NOT this theme are recorded rather than fixed: `LinkedHashMap`
-and `IntBinaryOperator` are absent from the library, and `Map.Entry` is not
-usable as a written type name (`List<Map.Entry<K, V>>`).
+and `IntBinaryOperator` are absent from the library.
+
+One correction to the batch-4 reading above: the `Map.Entry` failure was
+reported as the type name, and it is not. `Map.Entry<K, V>` works as a
+for-each variable, a local, a parameter and a `List` element — the shapes a
+program actually writes. What is missing is the pair of STATIC factories,
+`Map.Entry.comparingByKey()` and `comparingByValue()`. A refusal names the
+line it happened on, not the feature that is absent, and the probe that
+provoked it used both at once.
 
 ### A covariant return, and a lambda after a qualified call (2026-08-14)
 
@@ -4961,11 +5007,21 @@ earn it.
   written simply it read as a typo — "unknown type 'Math'", about a class
   every program has used.
 
-**More permissive than javac** (caturra accepts; javac rejects). **This
-list is empty**, and the `looser_than_javac!` macro exists to keep it
-that way — a case asserted there is a case that cannot be forgotten.
+**More permissive than javac** (caturra accepts; javac rejects). **One
+known case**, asserted by `looser_than_javac!` so it cannot be forgotten:
 
-It was not empty on 2026-08-13: a cast to `String` accepted ANY reference
+- `Map.Entry.comparingByValue().reversed()` with no type witness. javac
+  infers `Comparator<Entry<Object, V>>` for the bare factory call, and
+  `.reversed()` freezes that before the target type can correct it, so javac
+  demands `Map.Entry.<K, V>comparingByValue()`, a typed variable, or a
+  wrapper like `Collections.reverseOrder(...)`. caturra's generics are erased
+  and the parser DISCARDS a type witness, so both spellings are the same tree
+  here and cannot be told apart without carrying witnesses through the AST.
+  All three forms javac accepts do work, so nothing legitimate is blocked by
+  leaving it permissive. Recorded when the two factories were added
+  (2026-08-14) rather than left for a later sweep to find.
+
+It held a worse one on 2026-08-13: a cast to `String` accepted ANY reference
 source, so `(String) Integer.valueOf(1)`, `(String) aStringBuilder` and
 `(String) aList` all compiled here and are compile errors on a real JDK
 (JLS §5.5 — a reference cast needs one type to be a subtype of the other, and
