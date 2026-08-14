@@ -9806,28 +9806,18 @@ fn linked_list_serves_as_queue_deque_and_list() {
 /// not the lambda, which is in a perfectly good position.
 #[test]
 fn unsupported_map_members_explain_themselves() {
-    for (source, want) in [
-        (
-            "import java.util.ArrayList; class M { static void r() { new ArrayList<String>().toArray(); } }",
-            "ArrayList.toArray exists in Java, but Object arrays are not supported by caturra",
-        ),
-        (
-            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().clone(); } }",
-            "HashMap.clone exists in Java, but clone is not supported by caturra",
-        ),
-        (
-            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().toArray(); } }",
-            "Collection.toArray exists in Java, but Object arrays are not supported by caturra",
-        ),
-    ] {
-        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
-            path: String::from("M.java"),
-            text: String::from(source),
-        }]);
-        assert!(!compilation.success(), "should not compile: {source}");
-        let message = &compilation.diagnostics[0].message;
-        assert!(message.contains(want), "expected {want:?}, got: {message}");
-    }
+    // `toArray` used to be here too, refused because "Object arrays are not
+    // supported". They are, so it is implemented rather than explained.
+    let source = "import java.util.HashMap; \
+                  class M { static void r() { new HashMap<String, Integer>().clone(); } }";
+    let want = "HashMap.clone exists in Java, but clone is not supported by caturra";
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("M.java"),
+        text: String::from(source),
+    }]);
+    assert!(!compilation.success(), "should not compile: {source}");
+    let message = &compilation.diagnostics[0].message;
+    assert!(message.contains(want), "expected {want:?}, got: {message}");
 }
 
 /// A value coerced to text uses its own `toString()`, even when the coercion

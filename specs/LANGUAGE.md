@@ -4037,6 +4037,39 @@ right; it cannot find a hole they share.
 
 47 of 48 matched at that point; the last one is below.
 
+### String.format swept; collections found two more (2026-08-14)
+
+Two dimensions, one clean and one not.
+
+**`String.format` is exact.** 44 specifiers against 25 argument shapes, plus
+the malformed calls whose text a student reads — **1,134 lines, all
+identical**. Flags, width, precision, argument index, the non-finite doubles,
+negative zero, and every "wrong type for this conversion" message. Pinned as a
+slice rather than left as a one-off measurement.
+
+**The collections' own instance methods** ran 82 probes over two `List`
+implementations plus the `Map`/`Set`/`Deque`/`Stack`/`PriorityQueue`
+contracts, and found two things.
+
+`toArray()` was refused because "Object arrays are not supported by caturra".
+**That reason had expired** — `Object[]` is fully modelled, as a probe
+confirmed before a line was changed. It is the SECOND stale honest-reason this
+round, after `StringBuilder.capacity`, and both were found by reading the
+refusal rather than trusting it. It is now implemented for every collection
+kind, boxing primitive elements the way `Stream.toArray` already did.
+
+The other is a message split worth recording, because a single format looked
+obviously right and was wrong in two directions at once. The JDK words an
+out-of-range list index TWO ways: `ArrayList` reaches the shared
+`Objects.checkIndex` and says `Index N out of bounds for length L`, while
+`LinkedList` writes its own `Index: N, Size: L` — and `ArrayList.add(index, …)`
+uses the SECOND form, because `rangeCheckForAdd` predates the shared check.
+caturra used the first everywhere. All 24 combinations of implementation,
+operation and out-of-range index now agree.
+
+`subList` remains refused: a list VIEW, which is a feature rather than a
+message.
+
 ### A library Class handle stops misreporting itself (2026-08-14)
 
 Chasing the one remaining reflection divergence — `Class.forName` on a library

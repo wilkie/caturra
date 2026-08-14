@@ -6910,6 +6910,22 @@ impl<'run> Interpreter<'run> {
                 }
                 JValue::Int(i32::from(changed))
             }
+            // `toArray()` in ITERATION order, with primitives boxed — the same
+            // contract the sequence collections answer.
+            ("toArray", []) => {
+                let values: Vec<JValue> = self
+                    .collection_elements(receiver)
+                    .into_iter()
+                    .map(|element| match element {
+                        JValue::Ref(_) => element,
+                        primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+                    })
+                    .collect();
+                JValue::Ref(Some(self.heap.alloc(HeapObject::RefArray(
+                    String::from("java/lang/Object"),
+                    values,
+                ))))
+            }
             ("containsAll", [JValue::Ref(Some(source))]) => {
                 let mut all = true;
                 for element in self.collection_elements(*source) {
@@ -7242,6 +7258,21 @@ impl<'run> Interpreter<'run> {
                     *values = kept;
                 }
                 JValue::Int(i32::from(changed))
+            }
+            // `toArray()` in SORTED order, primitives boxed.
+            ("toArray", []) => {
+                let values: Vec<JValue> = self
+                    .tree_set_values(receiver)
+                    .into_iter()
+                    .map(|element| match element {
+                        JValue::Ref(_) => element,
+                        primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+                    })
+                    .collect();
+                JValue::Ref(Some(self.heap.alloc(HeapObject::RefArray(
+                    String::from("java/lang/Object"),
+                    values,
+                ))))
             }
             // The two ends. Empty throws `NoSuchElementException`.
             ("first" | "last", []) => {

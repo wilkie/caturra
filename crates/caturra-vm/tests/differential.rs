@@ -26559,3 +26559,189 @@ public class LibraryClasses {
 }
 "#
 );
+
+// `String.format`, probed as a dimension: 44 specifiers against 25 argument
+// shapes plus the malformed calls — 1,134 lines, all identical. A
+// representative slice is pinned so the surface stays that way.
+differential_test!(
+    diff_string_format_surface,
+    "FormatSurface",
+    r#"
+public class FormatSurface {
+    static void attempt(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " [" + body.get() + "]");
+        } catch (RuntimeException e) {
+            String m = e.getMessage();
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + (m == null ? "" : m));
+        }
+    }
+
+    public static void main(String[] args) {
+        attempt("d", () -> String.format("%d|%5d|%-5d|%05d|%+d|%,d|%(d", 42, 42, 42, 42, 42, 1234567, -5));
+        attempt("radix", () -> String.format("%x|%X|%o|%#x|%#o", 255, 255, 8, 255, 8));
+        attempt("s", () -> String.format("%s|%10s|%-10s|%.3s|%S", "text", "t", "t", "text", "text"));
+        attempt("f", () -> String.format("%f|%.0f|%.5f|%12.3f|%,f|%+f", 3.14159, 2.5, 1.0, 2.5, 1234.5, 1.0));
+        attempt("e", () -> String.format("%e|%E|%.2e|%.0e", 1234.5, 1234.5, 1234.5, 1234.5));
+        attempt("g", () -> String.format("%g|%G|%.3g", 0.00012345, 0.00012345, 12345.6));
+        attempt("misc", () -> String.format("%b|%B|%c|%h|%%", true, false, 'q', "x"));
+        attempt("index", () -> String.format("%1$d %1$d %2$s %1$d", 7, "z"));
+
+        // Halfway cases a student actually meets.
+        attempt("nulls", () -> String.format("%s|%b|%S", (Object) null, (Object) null, (Object) null));
+        attempt("edges", () -> String.format("%d|%d", Integer.MAX_VALUE, Integer.MIN_VALUE));
+        attempt("nonfinite", () -> String.format("%f|%e|%g|%.2f",
+            Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NaN));
+        attempt("negzero", () -> String.format("%f|%.0f|%e", -0.0, -0.0, -0.0));
+        attempt("boxed", () -> String.format("%d|%s", Integer.valueOf(5), java.util.Arrays.asList(1, 2)));
+
+        // And the ones that throw, whose text a student reads.
+        attempt("no arg", () -> String.format("%d"));
+        attempt("wrong type", () -> String.format("%d", "text"));
+        attempt("float as d", () -> String.format("%d", 1.5));
+        attempt("int as f", () -> String.format("%f", 1));
+        attempt("bad spec", () -> String.format("%q", 1));
+        attempt("prec on d", () -> String.format("%.2d", 1));
+        attempt("index0", () -> String.format("%0$s", "a"));
+        attempt("index9", () -> String.format("%9$s", "a"));
+        attempt("lone pct", () -> String.format("100%"));
+        attempt("extra args", () -> String.format("%d", 1, 2));
+    }
+}
+"#
+);
+
+// The collections' own instance methods, probed as a dimension across two List
+// implementations plus the Map/Set/Deque/Stack/PriorityQueue contracts. The
+// two findings were `toArray` (refused for a reason that had expired) and the
+// bounds-message split below.
+differential_test!(
+    diff_collection_instance_methods,
+    "CollectionMethods",
+    r#"
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Set;
+import java.util.Stack;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public class CollectionMethods {
+    static void a(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " [" + body.get() + "]");
+        } catch (RuntimeException e) {
+            String m = e.getMessage();
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + (m == null ? "" : m));
+        }
+    }
+
+    static List<String> list(String kind) {
+        List<String> l = kind.equals("A") ? new ArrayList<>() : new LinkedList<>();
+        l.add("a");
+        l.add("b");
+        l.add("c");
+        return l;
+    }
+
+    public static void main(String[] args) {
+        // The JDK words an out-of-range index TWO ways: ArrayList reaches the
+        // shared check ("Index N out of bounds for length L") while LinkedList
+        // writes its own ("Index: N, Size: L") — and ArrayList.add uses the
+        // second form too, because rangeCheckForAdd predates the shared one.
+        for (String k : new String[] {"A", "L"}) {
+            for (int i : new int[] {-1, 3, 9}) {
+                final int n = i;
+                a(k + " get " + n, () -> list(k).get(n));
+                a(k + " set " + n, () -> list(k).set(n, "z"));
+                a(k + " add " + n, () -> {
+                    List<String> l = list(k);
+                    l.add(n, "z");
+                    return l;
+                });
+                a(k + " remove " + n, () -> list(k).remove(n));
+            }
+            a(k + " toArray", () -> Arrays.toString(list(k).toArray()));
+            a(k + " iterRemove", () -> {
+                List<String> l = list(k);
+                Iterator<String> it = l.iterator();
+                it.next();
+                it.remove();
+                return l;
+            });
+            a(k + " cme", () -> {
+                List<String> l = list(k);
+                for (String s : l) {
+                    l.add("x");
+                }
+                return "no throw";
+            });
+            a(k + " retainAll", () -> {
+                List<String> l = list(k);
+                l.retainAll(Arrays.asList("a", "c"));
+                return l;
+            });
+        }
+
+        a("boxedToArray", () -> {
+            Object[] o = new ArrayList<>(Arrays.asList(1, 2)).toArray();
+            return Arrays.toString(o) + " " + o[0].getClass().getSimpleName();
+        });
+        a("setToArray", () -> Arrays.toString(new HashSet<>(Arrays.asList("x")).toArray()));
+        a("treeSetToArray", () -> Arrays.toString(new TreeSet<>(Arrays.asList("b", "a")).toArray()));
+        a("dequeToArray", () -> Arrays.toString(new ArrayDeque<>(Arrays.asList("p", "q")).toArray()));
+        a("emptyToArray", () -> Arrays.toString(new ArrayList<String>().toArray()));
+
+        a("map merge", () -> {
+            Map<String, Integer> m = new HashMap<>();
+            m.put("a", 1);
+            m.merge("a", 10, Integer::sum);
+            m.merge("b", 10, Integer::sum);
+            return m;
+        });
+        a("map nullKey", () -> {
+            Map<String, Integer> m = new HashMap<>();
+            m.put(null, 1);
+            return m + "/" + m.get(null);
+        });
+        a("treeMapNullKey", () -> {
+            Map<String, Integer> m = new TreeMap<>();
+            m.put(null, 1);
+            return m.toString();
+        });
+        a("setEquals", () -> new HashSet<>(Arrays.asList("a", "b"))
+            .equals(new HashSet<>(Arrays.asList("b", "a"))));
+        a("treeSetNull", () -> {
+            Set<String> s = new TreeSet<>();
+            s.add(null);
+            return s.toString();
+        });
+        a("dequeNull", () -> {
+            Deque<String> d = new ArrayDeque<>();
+            d.add(null);
+            return "no throw";
+        });
+        a("stack", () -> {
+            Stack<String> s = new Stack<>();
+            s.push("a");
+            s.push("b");
+            return s + "/" + s.pop() + "/" + s.search("a");
+        });
+        a("stackEmpty", () -> new Stack<String>().pop());
+        a("pq", () -> {
+            PriorityQueue<Integer> q = new PriorityQueue<>(Arrays.asList(3, 1, 2));
+            return q + "/" + q.poll() + "/" + q.peek();
+        });
+    }
+}
+"#
+);

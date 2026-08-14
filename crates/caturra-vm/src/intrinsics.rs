@@ -3979,6 +3979,19 @@ fn list_method(
     // directly — so an out-of-range index is an ArrayIndexOutOfBoundsException,
     // not the List one. The class is observable in a catch clause.
     let backed_by_array = matches!(heap.get(receiver), Some(HeapObject::ArrayBackedList(_)));
+    // The JDK words this TWO ways, and which one a program sees depends on the
+    // implementation: `ArrayList` reaches `Objects.checkIndex` and says "Index
+    // N out of bounds for length L", while `LinkedList` writes its own
+    // "Index: N, Size: L" — and `ArrayList.add(index, …)` uses that second
+    // form too, because `rangeCheckForAdd` predates the shared check.
+    let linked = matches!(heap.get(receiver), Some(HeapObject::LinkedList(_)));
+    let bounds_message = move |index: i32, for_add: bool| -> String {
+        if linked || for_add {
+            format!("Index: {index}, Size: {list_len}")
+        } else {
+            format!("Index {index} out of bounds for length {list_len}")
+        }
+    };
     let check = |index: i32, limit: usize| -> Result<usize, VmError> {
         usize::try_from(index)
             .ok()
@@ -3989,9 +4002,7 @@ fn list_method(
                 } else {
                     "java.lang.IndexOutOfBoundsException"
                 };
-                throw(format!(
-                    "{class}: Index {index} out of bounds for length {list_len}"
-                ))
+                throw(format!("{class}: {}", bounds_message(index, false)))
             })
     };
     // A `Deque`/`Queue` end operation that must not run on an empty list:
@@ -4061,6 +4072,32 @@ fn list_method(
             i32::try_from(list_len).unwrap_or(i32::MAX),
         ))),
         ("isEmpty", _, []) => Ok(Some(JValue::Int(i32::from(list_len == 0)))),
+        // `toArray()` answers an `Object[]`, so a primitive element is boxed
+        // on the way out — the same rule `Stream.toArray` follows.
+        ("toArray", _, []) => {
+            let values: Vec<JValue> = heap
+                .list_values(receiver)
+                .map_or_else(Vec::new, Clone::clone)
+                .into_iter()
+                .map(|element| match element {
+                    JValue::Ref(_) => element,
+                    primitive => JValue::Ref(Some(heap.box_wrapper(
+                        match primitive {
+                            JValue::Long(_) => "java/lang/Long",
+                            JValue::Double(_) => "java/lang/Double",
+                            JValue::Float(_) => "java/lang/Float",
+                            _ => "java/lang/Integer",
+                        },
+                        primitive,
+                    ))),
+                })
+                .collect();
+            let array = heap.alloc(HeapObject::RefArray(
+                String::from("java/lang/Object"),
+                values,
+            ));
+            Ok(Some(JValue::Ref(Some(array))))
+        }
         // `add`/`offer`/`addLast`/`offerLast` all append; `addFirst`/`offerFirst`
         // and `push` prepend. The `offer*` forms and `Queue.add` return a
         // boolean; `addFirst`/`addLast`/`push` are void — the descriptor says
@@ -4091,8 +4128,8 @@ fn list_method(
                 .filter(|i| *i <= list_len)
                 .ok_or_else(|| {
                     throw(format!(
-                        "java.lang.IndexOutOfBoundsException: Index {index} out of bounds \
-                         for length {list_len}"
+                        "java.lang.IndexOutOfBoundsException: {}",
+                        bounds_message(*index, true)
                     ))
                 })?;
             let value = *value;

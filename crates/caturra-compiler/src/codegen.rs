@@ -7496,7 +7496,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Class", "getPackage", "caturra does not model java.lang.Package"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
     ("ArrayList", "parallelStream", "streams are not supported by caturra"),
-    ("ArrayList", "toArray", "Object arrays are not supported by caturra"),
     ("ArrayList", "subList", "list views are not supported by caturra"),
     ("LinkedList", "subList", "list views are not supported by caturra"),
     ("Stack", "subList", "list views are not supported by caturra"),
@@ -7529,8 +7528,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("TreeSet", "subSet", "TreeSet range views are not supported by caturra"),
     ("LinkedList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("LinkedList", "descendingIterator", "iterators are not supported by caturra"),
-    ("LinkedList", "toArray", "Object arrays are not supported by caturra"),
-    ("Collection", "toArray", "Object arrays are not supported by caturra"),
 ];
 
 /// The source-level class name of a receiver that [`UNSUPPORTED_MEMBERS`]
@@ -7646,6 +7643,8 @@ const PATH_METHODS: &[BuiltinMethod] = &[
 ];
 
 const LIST_METHODS: &[BuiltinMethod] = &[
+    // Every collection can hand back its elements as an `Object[]`.
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
@@ -7810,6 +7809,8 @@ const LIST_METHODS: &[BuiltinMethod] = &[
 /// the five LIFO operations. `push`/`pop`/`peek` act on the top (the end);
 /// `empty` mirrors `isEmpty`; `search` is a 1-based distance from the top.
 const STACK_METHODS: &[BuiltinMethod] = &[
+    // Every collection can hand back its elements as an `Object[]`.
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
@@ -7947,6 +7948,8 @@ const STACK_METHODS: &[BuiltinMethod] = &[
 /// `poll`/`peek` return the boxed element so their empty-collection `null` is
 /// representable; `remove()`/`element()` throw on empty instead.
 const QUEUE_METHODS: &[BuiltinMethod] = &[
+    // Every collection can hand back its elements as an `Object[]`.
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     // Every reference has the Object methods; these faces had none, so
     // `q.equals(q)` did not compile.
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -8035,6 +8038,8 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
 /// `java.util.Deque<E>` — everything a `Queue` has, plus the two-ended and
 /// stack (`push`/`pop`) operations.
 const DEQUE_METHODS: &[BuiltinMethod] = &[
+    // Every collection can hand back its elements as an `Object[]`.
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // Every reference has the Object methods; a Queue/Deque face had none, so
     // `q.equals(q)` did not compile.
@@ -8154,6 +8159,8 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    // Every collection can hand back its elements as an `Object[]`.
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     // Every reference has the Object methods; these faces had none, so
     // `q.equals(q)` did not compile.
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -10679,6 +10686,8 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
 /// `remove`/`clear`, exactly as Java's does. `__get` (the enhanced-for
 /// accessor) is synthesized by `for_each`, not listed here.
 const SET_METHODS: &[BuiltinMethod] = &[
+    // Every collection can hand back its elements as an `Object[]`.
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
@@ -10754,6 +10763,8 @@ const SET_METHODS: &[BuiltinMethod] = &[
 /// empty set; the `floor`/`ceiling`/`lower`/`higher` and `pollFirst`/`pollLast`
 /// return the boxed element so an absent/empty result is `null`.
 const TREESET_METHODS: &[BuiltinMethod] = &[
+    // Every collection can hand back its elements as an `Object[]`.
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
