@@ -91,9 +91,7 @@ impl ConstValue {
             ConstValue::Float(v) => Literal::Float(*v),
             ConstValue::Double(v) => Literal::Double(*v),
             ConstValue::Bool(b) => Literal::Bool(*b),
-            ConstValue::Char(c) => {
-                char::from_u32(u32::from(*c)).map_or(Literal::Int(0), Literal::Char)
-            }
+            ConstValue::Char(c) => Literal::Char(*c),
             ConstValue::Str(s) => Literal::Str(s.clone()),
         }
     }

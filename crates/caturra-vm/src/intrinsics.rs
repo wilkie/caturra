@@ -6435,8 +6435,21 @@ fn character_static(
         }
         ("compare", [JValue::Int(a), JValue::Int(b)]) => Ok(Some(JValue::Int(a - b))),
 
+        // The UNITS, not a rendered `char`: `Character.toString('\uD83D')` is
+        // a one-unit string holding that surrogate. The `int` overload takes a
+        // CODE POINT, so a supplementary one becomes its surrogate PAIR.
         ("toString", [JValue::Int(v)]) => {
-            let reference = heap.alloc_string(&c_of(v).to_string());
+            let units = match u32::try_from(*v) {
+                Ok(point @ 0x1_0000..=0x10_FFFF) => {
+                    let offset = point - 0x1_0000;
+                    vec![
+                        u16::try_from(0xD800 + (offset >> 10)).unwrap_or(u16::MAX),
+                        u16::try_from(0xDC00 + (offset & 0x3FF)).unwrap_or(u16::MAX),
+                    ]
+                }
+                _ => vec![unit_of(v)],
+            };
+            let reference = heap.alloc(HeapObject::JavaString(units));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         ("hashCode", [JValue::Int(v)]) => Ok(Some(JValue::Int(*v))),

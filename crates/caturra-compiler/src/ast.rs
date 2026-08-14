@@ -683,7 +683,9 @@ pub enum Literal {
     Float(f32),
     Double(f64),
     Str(String),
-    Char(char),
+    /// A `char` literal's UTF-16 code UNIT — not a Rust `char`, which cannot
+    /// hold the unpaired surrogate `'\uD83D'` legally denotes.
+    Char(u16),
     Bool(bool),
     Null,
 }

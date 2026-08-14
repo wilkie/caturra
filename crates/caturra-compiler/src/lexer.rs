@@ -17,7 +17,8 @@ pub enum TokenKind {
     FloatLiteral(f32),
     DoubleLiteral(f64),
     StringLiteral(String),
-    CharLiteral(char),
+    /// The literal's UTF-16 code unit, which may be an unpaired surrogate.
+    CharLiteral(u16),
     BooleanLiteral(bool),
     NullLiteral,
     /// Operators and punctuation, e.g. `+`, `==`, `{`.
@@ -762,13 +763,23 @@ impl Lexer<'_> {
         true
     }
 
+    /// An escape as a `char`, for a STRING literal — whose token is a Rust
+    /// `String`, so an unpaired surrogate there still becomes U+FFFD.
     fn escape(&mut self, start: SourcePosition) -> Option<char> {
+        let unit = self.escape_unit(start)?;
+        Some(char::from_u32(unit).unwrap_or('\u{FFFD}'))
+    }
+
+    /// An escape as its raw code UNIT. A `\uD83D` is a perfectly legal char
+    /// literal denoting an unpaired surrogate, and no Rust `char` can hold
+    /// one — so a char literal is carried as a number all the way through.
+    fn escape_unit(&mut self, start: SourcePosition) -> Option<u32> {
         match self.bump() {
-            Some('n') => Some('\n'),
-            Some('t') => Some('\t'),
-            Some('r') => Some('\r'),
-            Some('b') => Some('\u{8}'),
-            Some('f') => Some('\u{c}'),
+            Some('n') => Some(0x0A),
+            Some('t') => Some(0x09),
+            Some('r') => Some(0x0D),
+            Some('b') => Some(0x08),
+            Some('f') => Some(0x0C),
             // OCTAL escapes (JLS §3.10.6): one to three octal digits, at
             // most \377 — a three-digit form needs a leading 0-3, so `\400`
             // is `\40` followed by a literal '0'. `\0` is just its
@@ -788,11 +799,11 @@ impl Lexer<'_> {
                     self.bump();
                     digits += 1;
                 }
-                char::from_u32(value)
+                Some(value)
             }
-            Some('\\') => Some('\\'),
-            Some('\'') => Some('\''),
-            Some('"') => Some('"'),
+            Some('\\') => Some(u32::from(b'\\')),
+            Some('\'') => Some(u32::from(b'\'')),
+            Some('"') => Some(u32::from(b'"')),
             Some('u') => {
                 let mut code = String::new();
                 for _ in 0..4 {
@@ -804,13 +815,7 @@ impl Lexer<'_> {
                         }
                     }
                 }
-                let unit = u32::from_str_radix(&code, 16).expect("hex digits");
-                char::from_u32(unit).or({
-                    // Surrogate code units can't be a Rust char; map to
-                    // the replacement character (raw surrogates only
-                    // matter for pathological inputs).
-                    Some('\u{FFFD}')
-                })
+                Some(u32::from_str_radix(&code, 16).expect("hex digits"))
             }
             Some(other) => {
                 self.error(format!("unknown escape sequence '\\{other}'"), start);
@@ -850,7 +855,7 @@ impl Lexer<'_> {
 
     fn char_literal(&mut self, start: SourcePosition) {
         self.bump();
-        let value = match self.peek() {
+        let value: Option<u32> = match self.peek() {
             None | Some('\n' | '\'') => {
                 self.bump();
                 self.error("empty or unterminated character literal", start);
@@ -858,14 +863,17 @@ impl Lexer<'_> {
             }
             Some('\\') => {
                 self.bump();
-                self.escape(start)
+                self.escape_unit(start)
             }
-            Some(_) => self.bump(),
+            Some(_) => self.bump().map(u32::from),
         };
         if self.peek() == Some('\'') {
             self.bump();
-            if let Some(c) = value {
-                self.push(TokenKind::CharLiteral(c), start);
+            if let Some(unit) = value {
+                self.push(
+                    TokenKind::CharLiteral(u16::try_from(unit).unwrap_or(u16::MAX)),
+                    start,
+                );
             }
         } else {
             self.error("unterminated character literal (expected closing ')", start);
@@ -923,8 +931,8 @@ mod tests {
             vec![
                 TokenKind::IntLiteral(42),
                 TokenKind::DoubleLiteral(3.5),
-                TokenKind::CharLiteral('a'),
-                TokenKind::CharLiteral('\n'),
+                TokenKind::CharLiteral(u16::from(b'a')),
+                TokenKind::CharLiteral(0x0A),
                 TokenKind::BooleanLiteral(true),
                 TokenKind::BooleanLiteral(false),
                 TokenKind::NullLiteral,

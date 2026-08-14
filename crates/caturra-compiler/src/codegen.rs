@@ -6218,7 +6218,10 @@ fn literal_java_string(lit: &Literal) -> Option<String> {
     Some(match lit {
         Literal::Str(s) => s.clone(),
         Literal::Int(v) | Literal::Long(v) => v.to_string(),
-        Literal::Char(c) => c.to_string(),
+        // The CHARACTER the unit denotes, not the number. A lone surrogate has
+        // no `char` and so no constant string form — folding must not invent
+        // one, and the concatenation is left to run time.
+        Literal::Char(c) => char::from_u32(u32::from(*c))?.to_string(),
         Literal::Bool(b) => b.to_string(),
         Literal::Double(_) | Literal::Float(_) | Literal::Null => return None,
     })
@@ -6234,10 +6237,9 @@ fn coerce_const_to_type(lit: Literal, ty: JType) -> Option<Literal> {
         JType::Boolean => matches!(lit, Literal::Bool(_)).then_some(lit),
         JType::Char => match lit {
             Literal::Char(_) => Some(lit),
-            Literal::Int(v) => u32::try_from(v)
-                .ok()
-                .and_then(char::from_u32)
-                .map(Literal::Char),
+            // A constant int narrows to a char when it fits in a code UNIT;
+            // whether that unit is a surrogate is not the constant's business.
+            Literal::Int(v) => u16::try_from(v).ok().map(Literal::Char),
             _ => None,
         },
         JType::Int | JType::Short | JType::Byte => match lit {
@@ -15433,7 +15435,7 @@ impl BodyGen<'_> {
     fn emit_const_literal(&mut self, literal: &Literal) {
         match literal {
             Literal::Int(v) => self.push_int(i32::try_from(*v).unwrap_or_default()),
-            Literal::Char(c) => self.push_int(i32::from(u16::try_from(*c as u32).unwrap_or(0))),
+            Literal::Char(c) => self.push_int(i32::from(*c)),
             Literal::Bool(b) => self
                 .code
                 .push_op(if *b { op::ICONST_1 } else { op::ICONST_0 }, 1),
@@ -23638,12 +23640,11 @@ impl BodyGen<'_> {
                 self.push_int(value);
                 JType::Int
             }
+            // The literal already IS a code unit — including an unpaired
+            // surrogate, which is a legal `char` and no longer needs a `char`
+            // to pass through.
             Literal::Char(value) => {
-                let Ok(code_unit) = u16::try_from(*value as u32) else {
-                    self.error(span, "character literal does not fit in a Java char");
-                    return JType::Error;
-                };
-                self.push_int(i32::from(code_unit));
+                self.push_int(i32::from(*value));
                 JType::Char
             }
             Literal::Bool(value) => {

@@ -3976,12 +3976,31 @@ re-read, reaching the console as the `?` a JDK's encoder substitutes rather
 than as U+FFFD — a different character a program can also legitimately print,
 which is why the two must never be conflated. Every path is pinned.
 
-One case remains, and it is the one place a Rust `String` is unavoidable: a
-lone surrogate written as a `\uXXXX` CHAR LITERAL is lost in the compiler's
-pre-lex pass, which processes those escapes across the whole source before
-lexing, as Java specifies. Fixing it means pre-lexing into UTF-16 units rather
-than text. Every surrogate that arrives from DATA — which is every one a
-correct program has — is exact.
+The char-literal case is closed below.
+
+### A char literal is a code unit (2026-08-14)
+
+The last case, and the bound was wrong about where it lived. The pre-lex pass
+(JLS §3.3) already did the right thing — it leaves an unpaired surrogate escape
+in place, since a literal is the only context where one means anything. What
+lost it was the TOKEN: `CharLiteral` and `Literal::Char` each held a Rust
+`char`, so `'\uD83D'` became U+FFFD before the parser ever saw it. Both now
+carry a `u16`, which is what a Java `char` is.
+
+Most of the twenty-odd sites converted untouched, because `u32::from` accepts a
+`u16` as readily as a `char`. Three did not, and each was a small lesson:
+narrowing a constant `int` to a `char` no longer needs to be a valid scalar
+value; the constant STRING form of a char has to stay `None` for a surrogate
+rather than invent a rendering, which is what folding `"" + '\uD83D'` depends
+on; and `Character.toString` takes a CODE POINT in its `int` overload, so a
+supplementary one must become a surrogate PAIR — truncating it to one unit
+broke `Character.toString(0x1F600)`, which the suite caught.
+
+One case is left, and it is genuinely the last: a lone surrogate inside a
+STRING literal (`"x\uD83Dy"`). `Literal::Str` is a Rust `String`, and unlike
+the char literal that is not a one-field change — a string literal's text flows
+into the constant pool, class names and diagnostics. Every other route by which
+a surrogate can enter a program, from data or from a char literal, is exact.
 
 ### Unicode classification, carried rather than derived (2026-08-13)
 

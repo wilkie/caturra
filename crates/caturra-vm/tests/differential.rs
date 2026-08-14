@@ -26200,6 +26200,16 @@ public class Surrogates {
         System.out.println("printed " + reversed);
         System.out.println(new StringBuilder(source).reverse());
         System.out.println(java.util.Arrays.toString(emoji.toCharArray()));
+
+        // Written as a LITERAL, not derived from data: `'\uD83D'` is a legal
+        // char literal denoting an unpaired surrogate, and the token that
+        // carries it is a code unit rather than a Rust `char`.
+        char literal = '\ud83d';
+        System.out.println("literal " + (int) literal);
+        System.out.println("literalConcat " + (int) ("" + literal).charAt(0));
+        System.out.println("literalToString " + (int) Character.toString(literal).charAt(0));
+        System.out.println("literalEquals " + (literal == high));
+        System.out.println("codePointToString " + Character.toString(0x1F600).length());
     }
 }
 "#
