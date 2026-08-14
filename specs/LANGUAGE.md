@@ -4190,6 +4190,42 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### Half of java.util.function (2026-08-14)
+
+Surveying the package rather than the one interface a probe happened to name:
+the eight OBJECT-typed interfaces all worked, and all fourteen PRIMITIVE
+specializations were "cannot find symbol" — `IntUnaryOperator`, `IntPredicate`,
+`IntSupplier`, `IntConsumer`, `IntBinaryOperator`, `IntFunction`,
+`ToIntFunction`, their `Double` and `Long` counterparts, `BooleanSupplier`,
+plus `BiPredicate`. Half a package being nameable is not a distinction a
+program can be expected to keep track of, and the split was invisible from
+inside: each of the missing ones erases onto a SAM that already existed.
+
+**The design decision was where to put the method name.** Every specialization
+has the same shape as one of the bundled SAMs — one argument and a result, two
+and a result, a test, a sink, a source — and differs only in what its method is
+CALLED (`applyAsInt` rather than `apply`, `getAsInt` rather than `get`). The
+short version is to add those names to the shared interfaces as defaults. That
+was written, and it worked, and it made five programs compile that javac
+rejects: `aFunction.applyAsInt(x)`, `aSupplier.getAsInt()`,
+`aBiFunction.test(x, y)`, `anIntSupplier.get()`, `anIntUnaryOperator.apply(x)`.
+Sharing a type is sharing its whole surface. So each specialization gets its
+own erased interface, and the five are pinned as rejections.
+
+Their PARAMETERS are `Object` like every other erased SAM here. Declaring the
+real primitive was tried first and every specialization that takes one failed
+with "Lambda$1 is not abstract and does not override" — the lambda builder
+emits `Object` parameters and casts them back in the body, which is why
+`ToIntFunction` (whose parameter is already `Object`) was the one shape that
+worked. Only the method name and the RETURN are specialized, which is all a
+program can observe.
+
+Not included: the default COMBINATORS on the primitive forms
+(`IntPredicate.negate()`, `IntUnaryOperator.andThen(...)`). Each needs a helper
+class per interface — an anonymous class in a bundled source shares the
+`Anon$N` counter with the program's own and collides — for combinators that are
+rare on the primitive types. Stricter than javac, and pinned as such.
+
 ### An entrySet you can keep (2026-08-14)
 
 Chasing the missing `Map.Entry.comparingByKey()` found something worse beside
@@ -4993,6 +5029,9 @@ earn it.
 - `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
   and it answers 0.
 - `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`.
+- `IntPredicate.negate()` and the other default COMBINATORS on the primitive
+  `java.util.function` specializations — each needs a helper class per
+  interface, for a combinator that is rare on the primitive forms.
 - `list.subList(0, 2)` — a list VIEW, which is a feature rather than a
   message. Pinned in three contexts (argument, concatenation, constructor
   argument), because each reaches the refusal by a different path.

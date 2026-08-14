@@ -4365,6 +4365,32 @@ fn functional_erased(name: &str) -> Option<&'static str> {
         "BiConsumer" => "__BiConsumer",
         "Supplier" => "__Supplier",
         "Runnable" => "__Runnable",
+        // The PRIMITIVE specializations each keep their own erased interface.
+        // Folding them onto the SAM of matching shape would have been fewer
+        // lines and would have made `aFunction.applyAsInt(x)` compile, since
+        // the two would then be one type: a permissiveness, in exchange for
+        // brevity nobody reads.
+        "BiPredicate" => "__BiPredicate",
+        "IntFunction" => "__IntFunction",
+        "IntPredicate" => "__IntPredicate",
+        "IntSupplier" => "__IntSupplier",
+        "IntConsumer" => "__IntConsumer",
+        "IntUnaryOperator" => "__IntUnaryOperator",
+        "IntBinaryOperator" => "__IntBinaryOperator",
+        "ToIntFunction" => "__ToIntFunction",
+        "DoublePredicate" => "__DoublePredicate",
+        "DoubleSupplier" => "__DoubleSupplier",
+        "DoubleConsumer" => "__DoubleConsumer",
+        "DoubleUnaryOperator" => "__DoubleUnaryOperator",
+        "DoubleBinaryOperator" => "__DoubleBinaryOperator",
+        "ToDoubleFunction" => "__ToDoubleFunction",
+        "LongPredicate" => "__LongPredicate",
+        "LongSupplier" => "__LongSupplier",
+        "LongConsumer" => "__LongConsumer",
+        "LongUnaryOperator" => "__LongUnaryOperator",
+        "LongBinaryOperator" => "__LongBinaryOperator",
+        "ToLongFunction" => "__ToLongFunction",
+        "BooleanSupplier" => "__BooleanSupplier",
         _ => return None,
     })
 }

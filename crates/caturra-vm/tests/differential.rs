@@ -22139,6 +22139,183 @@ public class SubListCtor {
 "#
 );
 
+// The PRIMITIVE specializations of `java.util.function`. Half of that package
+// was nameable and half was not, which is not a distinction a program can be
+// expected to keep track of: the eight object-typed interfaces worked and all
+// fourteen primitive ones were "cannot find symbol".
+//
+// Each gets its OWN erased interface rather than sharing the SAM of matching
+// shape. Sharing was tried first and was fewer lines, and it made
+// `aFunction.applyAsInt(x)`, `aSupplier.getAsInt()`, `aBiFunction.test(x, y)`,
+// `anIntSupplier.get()` and `anIntUnaryOperator.apply(x)` all compile — five
+// new permissive cases, each a javac error, for brevity nobody reads. Those
+// five are pinned as rejections below.
+differential_test!(
+    primitive_functional_interfaces,
+    "PrimitiveFunctions",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.function.BiPredicate;
+import java.util.function.BooleanSupplier;
+import java.util.function.DoubleBinaryOperator;
+import java.util.function.DoubleConsumer;
+import java.util.function.DoublePredicate;
+import java.util.function.DoubleSupplier;
+import java.util.function.DoubleUnaryOperator;
+import java.util.function.IntBinaryOperator;
+import java.util.function.IntConsumer;
+import java.util.function.IntFunction;
+import java.util.function.IntPredicate;
+import java.util.function.IntSupplier;
+import java.util.function.IntUnaryOperator;
+import java.util.function.LongBinaryOperator;
+import java.util.function.LongConsumer;
+import java.util.function.LongPredicate;
+import java.util.function.LongSupplier;
+import java.util.function.LongUnaryOperator;
+import java.util.function.ToDoubleFunction;
+import java.util.function.ToIntFunction;
+import java.util.function.ToLongFunction;
+
+public class PrimitiveFunctions {
+    static int twice(IntUnaryOperator f, int v) { return f.applyAsInt(v); }
+
+    public static void main(String[] args) {
+        IntUnaryOperator inc = i -> i + 1;
+        System.out.println(inc.applyAsInt(1));
+        IntBinaryOperator add = (x, y) -> x + y;
+        System.out.println(add.applyAsInt(2, 3));
+        IntPredicate positive = i -> i > 0;
+        System.out.println(positive.test(1) + "," + positive.test(-1));
+        IntSupplier four = () -> 4;
+        System.out.println(four.getAsInt());
+        IntConsumer show = i -> System.out.println("i" + i);
+        show.accept(7);
+        IntFunction<String> name = i -> "n" + i;
+        System.out.println(name.apply(3));
+        ToIntFunction<String> len = String::length;
+        System.out.println(len.applyAsInt("abcd"));
+        DoubleUnaryOperator dbl = d -> d * 2;
+        System.out.println(dbl.applyAsDouble(2.5));
+        DoubleBinaryOperator div = (x, y) -> x / y;
+        System.out.println(div.applyAsDouble(5.0, 2.0));
+        DoublePredicate big = d -> d > 1;
+        System.out.println(big.test(2.0));
+        DoubleSupplier half = () -> 1.5;
+        System.out.println(half.getAsDouble());
+        DoubleConsumer showD = d -> System.out.println("d" + d);
+        showD.accept(0.5);
+        ToDoubleFunction<String> toD = s -> s.length() / 2.0;
+        System.out.println(toD.applyAsDouble("abc"));
+        LongUnaryOperator incL = l -> l + 1;
+        System.out.println(incL.applyAsLong(1L));
+        LongBinaryOperator mulL = (x, y) -> x * y;
+        System.out.println(mulL.applyAsLong(3L, 4L));
+        LongPredicate posL = l -> l > 0;
+        System.out.println(posL.test(3L));
+        LongSupplier nine = () -> 9L;
+        System.out.println(nine.getAsLong());
+        LongConsumer showL = l -> System.out.println("l" + l);
+        showL.accept(2L);
+        ToLongFunction<String> toL = s -> 7L;
+        System.out.println(toL.applyAsLong("a"));
+        BooleanSupplier yes = () -> true;
+        System.out.println(yes.getAsBoolean());
+        BiPredicate<String, Integer> longer = (s, i) -> s.length() > i;
+        System.out.println(longer.test("abc", 1));
+        // As a parameter, as a method reference, and where the JDK's own
+        // signatures name these types.
+        System.out.println(twice(i -> i * 2, 21));
+        IntUnaryOperator abs = Math::abs;
+        System.out.println(abs.applyAsInt(-3));
+        List<String> words = new ArrayList<>(Arrays.asList("ccc", "a"));
+        words.sort(Comparator.comparingInt(s -> s.length()));
+        System.out.println(words);
+    }
+}
+"#
+);
+
+// The five calls the shared-interface design would have accepted. Each is a
+// javac error: a specialization's method name belongs to it alone.
+differential_reject!(
+    a_function_has_no_apply_as_int,
+    "NoApplyAsInt",
+    r#"
+import java.util.function.Function;
+
+public class NoApplyAsInt {
+    public static void main(String[] args) {
+        Function<String, Integer> f = s -> s.length();
+        System.out.println(f.applyAsInt("ab"));
+    }
+}
+"#
+);
+
+differential_reject!(
+    a_supplier_has_no_get_as_int,
+    "NoGetAsInt",
+    r"
+import java.util.function.Supplier;
+
+public class NoGetAsInt {
+    public static void main(String[] args) {
+        Supplier<Integer> s = () -> 4;
+        System.out.println(s.getAsInt());
+    }
+}
+"
+);
+
+differential_reject!(
+    a_bifunction_has_no_test,
+    "NoBiTest",
+    r"
+import java.util.function.BiFunction;
+
+public class NoBiTest {
+    public static void main(String[] args) {
+        BiFunction<Integer, Integer, Boolean> f = (x, y) -> x > y;
+        System.out.println(f.test(2, 1));
+    }
+}
+"
+);
+
+differential_reject!(
+    an_int_supplier_has_no_get,
+    "NoPlainGet",
+    r"
+import java.util.function.IntSupplier;
+
+public class NoPlainGet {
+    public static void main(String[] args) {
+        IntSupplier s = () -> 4;
+        System.out.println(s.get());
+    }
+}
+"
+);
+
+differential_reject!(
+    an_int_unary_operator_has_no_apply,
+    "NoPlainApply",
+    r"
+import java.util.function.IntUnaryOperator;
+
+public class NoPlainApply {
+    public static void main(String[] args) {
+        IntUnaryOperator f = i -> i + 1;
+        System.out.println(f.apply(1));
+    }
+}
+"
+);
+
 // `Map.Entry.comparingByKey()` / `comparingByValue()`, the two factories a
 // program reaches for after copying `entrySet()` into a list. The comparison
 // reads the value through the entry's MAP, as `getValue` does, so sorting
@@ -22464,6 +22641,27 @@ public class DeepNested {
         System.out.println(deep.v());
         H.C.D shorter = new H.C.D();
         System.out.println(shorter.v());
+    }
+}
+"
+);
+
+// The primitive specializations carry no DEFAULT COMBINATORS: `Predicate` has
+// `negate`/`and`/`or` and `IntPredicate` does not, here. Each would need its
+// own helper class per interface (an anonymous one in a bundled source shares
+// the `Anon$N` counter with the program's own and collides), for combinators
+// that are rare on the primitive forms. Stricter than javac, which is the safe
+// direction, and recorded rather than quietly missing.
+stricter_than_javac!(
+    stricter_int_predicate_has_no_combinators,
+    "NoIntNegate",
+    r"
+import java.util.function.IntPredicate;
+
+public class NoIntNegate {
+    public static void main(String[] args) {
+        IntPredicate p = i -> i > 0;
+        System.out.println(p.negate().test(1));
     }
 }
 "

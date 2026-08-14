@@ -96,3 +96,57 @@ interface __Runnable {
 interface __Comparator {
   int compare(Object left, Object right);
 }
+
+/*
+ * The PRIMITIVE specializations, and `BiPredicate`. Each is its own interface
+ * rather than another name for one of the SAMs above, because a shared one
+ * would make `aFunction.applyAsInt(x)` and `anIntSupplier.get()` compile —
+ * both are javac errors, and permissiveness is the direction that must not
+ * grow quietly.
+ *
+ * Their PARAMETERS are `Object` like every other erased SAM here: the
+ * synthesized lambda class casts them back to the declared primitive in its
+ * first statements, and a caller's `int` boxes on the way in. Only the method
+ * NAME and the RETURN are specialized, which is all a program can observe.
+ */
+interface __IntUnaryOperator { int applyAsInt(Object value); }
+
+interface __IntBinaryOperator { int applyAsInt(Object left, Object right); }
+
+interface __IntPredicate { boolean test(Object value); }
+
+interface __IntSupplier { int getAsInt(); }
+
+interface __IntConsumer { void accept(Object value); }
+
+interface __IntFunction { Object apply(Object value); }
+
+interface __ToIntFunction { int applyAsInt(Object value); }
+
+interface __DoubleUnaryOperator { double applyAsDouble(Object value); }
+
+interface __DoubleBinaryOperator { double applyAsDouble(Object left, Object right); }
+
+interface __DoublePredicate { boolean test(Object value); }
+
+interface __DoubleSupplier { double getAsDouble(); }
+
+interface __DoubleConsumer { void accept(Object value); }
+
+interface __ToDoubleFunction { double applyAsDouble(Object value); }
+
+interface __LongUnaryOperator { long applyAsLong(Object value); }
+
+interface __LongBinaryOperator { long applyAsLong(Object left, Object right); }
+
+interface __LongPredicate { boolean test(Object value); }
+
+interface __LongSupplier { long getAsLong(); }
+
+interface __LongConsumer { void accept(Object value); }
+
+interface __ToLongFunction { long applyAsLong(Object value); }
+
+interface __BooleanSupplier { boolean getAsBoolean(); }
+
+interface __BiPredicate { boolean test(Object left, Object right); }

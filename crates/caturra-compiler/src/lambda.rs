@@ -2046,20 +2046,135 @@ fn user_defined_functional(target: &TypeRef, ctx: &Ctx) -> bool {
     ctx.class_names.contains(simple)
 }
 
+/// The functional interfaces named WITHOUT type arguments: `Runnable`, and the
+/// primitive specializations, whose parameter and result types their name
+/// fixes. Each names its own erased interface — see `stdlib/function.java` for
+/// why they are not the shared SAM of matching shape.
+#[allow(clippy::too_many_lines)] // one flat table, one line per interface
+fn unparameterized_spec(simple: &str) -> Option<FunctionalSpec> {
+    let (interface, method, ret, params, result): (_, _, _, Vec<TypeRef>, Option<TypeRef>) =
+        match simple {
+            "Runnable" => ("__Runnable", "run", TypeRef::Void, vec![], None),
+            "IntUnaryOperator" => (
+                "__IntUnaryOperator",
+                "applyAsInt",
+                TypeRef::Int,
+                vec![TypeRef::Int],
+                None,
+            ),
+            "IntBinaryOperator" => (
+                "__IntBinaryOperator",
+                "applyAsInt",
+                TypeRef::Int,
+                vec![TypeRef::Int, TypeRef::Int],
+                None,
+            ),
+            "IntPredicate" => (
+                "__IntPredicate",
+                "test",
+                TypeRef::Boolean,
+                vec![TypeRef::Int],
+                None,
+            ),
+            "IntSupplier" => ("__IntSupplier", "getAsInt", TypeRef::Int, vec![], None),
+            "IntConsumer" => (
+                "__IntConsumer",
+                "accept",
+                TypeRef::Void,
+                vec![TypeRef::Int],
+                None,
+            ),
+            "DoubleUnaryOperator" => (
+                "__DoubleUnaryOperator",
+                "applyAsDouble",
+                TypeRef::Double,
+                vec![TypeRef::Double],
+                None,
+            ),
+            "DoubleBinaryOperator" => (
+                "__DoubleBinaryOperator",
+                "applyAsDouble",
+                TypeRef::Double,
+                vec![TypeRef::Double, TypeRef::Double],
+                None,
+            ),
+            "DoublePredicate" => (
+                "__DoublePredicate",
+                "test",
+                TypeRef::Boolean,
+                vec![TypeRef::Double],
+                None,
+            ),
+            "DoubleSupplier" => (
+                "__DoubleSupplier",
+                "getAsDouble",
+                TypeRef::Double,
+                vec![],
+                None,
+            ),
+            "DoubleConsumer" => (
+                "__DoubleConsumer",
+                "accept",
+                TypeRef::Void,
+                vec![TypeRef::Double],
+                None,
+            ),
+            "LongUnaryOperator" => (
+                "__LongUnaryOperator",
+                "applyAsLong",
+                TypeRef::Long,
+                vec![TypeRef::Long],
+                None,
+            ),
+            "LongBinaryOperator" => (
+                "__LongBinaryOperator",
+                "applyAsLong",
+                TypeRef::Long,
+                vec![TypeRef::Long, TypeRef::Long],
+                None,
+            ),
+            "LongPredicate" => (
+                "__LongPredicate",
+                "test",
+                TypeRef::Boolean,
+                vec![TypeRef::Long],
+                None,
+            ),
+            "LongSupplier" => ("__LongSupplier", "getAsLong", TypeRef::Long, vec![], None),
+            "LongConsumer" => (
+                "__LongConsumer",
+                "accept",
+                TypeRef::Void,
+                vec![TypeRef::Long],
+                None,
+            ),
+            "BooleanSupplier" => (
+                "__BooleanSupplier",
+                "getAsBoolean",
+                TypeRef::Boolean,
+                vec![],
+                None,
+            ),
+            _ => return None,
+        };
+    Some(FunctionalSpec {
+        interface,
+        method,
+        ret,
+        params,
+        result,
+    })
+}
+
+#[allow(clippy::too_many_lines)] // one flat table, one line per interface
 fn functional_lambda_spec(target: &TypeRef) -> Option<FunctionalSpec> {
     // `Runnable` takes no type arguments, so it arrives as a plain NAMED type
     // rather than a parameterized one — which is why a `Runnable r = () -> …`
     // found no functional target at all.
-    if let TypeRef::Named(name) = target
-        && name.rsplit('.').next().unwrap_or(name) == "Runnable"
-    {
-        return Some(FunctionalSpec {
-            interface: "__Runnable",
-            method: "run",
-            ret: TypeRef::Void,
-            params: Vec::new(),
-            result: None,
-        });
+    // The specializations that take NO type arguments — `Runnable`, and every
+    // primitive one, whose parameter and result types are fixed by the name.
+    if let TypeRef::Named(name) = target {
+        return unparameterized_spec(name.rsplit('.').next().unwrap_or(name));
     }
     let TypeRef::Generic { base, args } = target else {
         return None;
@@ -2121,6 +2236,43 @@ fn functional_lambda_spec(target: &TypeRef) -> Option<FunctionalSpec> {
                 "accept",
                 TypeRef::Void,
                 vec![a.clone(), b.clone()],
+                None,
+            ),
+            // The specializations that DO take a type argument: one end of the
+            // function is a primitive fixed by the name, the other is written.
+            ("IntFunction", [r]) => (
+                "__IntFunction",
+                "apply",
+                object(),
+                vec![TypeRef::Int],
+                Some(r.clone()),
+            ),
+            ("ToIntFunction", [t]) => (
+                "__ToIntFunction",
+                "applyAsInt",
+                TypeRef::Int,
+                vec![t.clone()],
+                None,
+            ),
+            ("ToDoubleFunction", [t]) => (
+                "__ToDoubleFunction",
+                "applyAsDouble",
+                TypeRef::Double,
+                vec![t.clone()],
+                None,
+            ),
+            ("ToLongFunction", [t]) => (
+                "__ToLongFunction",
+                "applyAsLong",
+                TypeRef::Long,
+                vec![t.clone()],
+                None,
+            ),
+            ("BiPredicate", [t, u]) => (
+                "__BiPredicate",
+                "test",
+                TypeRef::Boolean,
+                vec![t.clone(), u.clone()],
                 None,
             ),
             _ => return None,

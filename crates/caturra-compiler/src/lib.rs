@@ -610,6 +610,9 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             || s.text.contains("Supplier")
             || s.text.contains("Consumer")
             || s.text.contains("Runnable")
+            // `IntUnaryOperator` and the other primitive specializations spell
+            // none of the words above.
+            || s.text.contains("Operator")
             // A comparator lambda in a sorted collection's constructor
             // (`new PriorityQueue<>((a, b) -> ...)`) needs `__Comparator` too,
             // without ever naming it — trigger on the pair.

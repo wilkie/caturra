@@ -87,9 +87,35 @@ const JAVA_UTIL_FUNCTION: &[&str] = &[
     "UnaryOperator",
     "BinaryOperator",
     "Predicate",
+    "BiPredicate",
     "Consumer",
     "BiConsumer",
     "Supplier",
+    // The PRIMITIVE specializations. Each erases onto one of the bundled SAMs
+    // above (same arity, same shape) and differs only in the name of its
+    // method, so they cost a table entry each rather than an interface each.
+    // Half of `java.util.function` was nameable and half was not, which is not
+    // a distinction a program can be expected to keep track of.
+    "IntFunction",
+    "IntPredicate",
+    "IntSupplier",
+    "IntConsumer",
+    "IntUnaryOperator",
+    "IntBinaryOperator",
+    "DoublePredicate",
+    "DoubleSupplier",
+    "DoubleConsumer",
+    "DoubleUnaryOperator",
+    "DoubleBinaryOperator",
+    "LongPredicate",
+    "LongSupplier",
+    "LongConsumer",
+    "LongUnaryOperator",
+    "LongBinaryOperator",
+    "BooleanSupplier",
+    "ToIntFunction",
+    "ToDoubleFunction",
+    "ToLongFunction",
 ];
 /// `java.util.stream` — the Stream pipeline and its collectors.
 /// `Pattern`/`Matcher` are not modelled — caturra compiles patterns inside
