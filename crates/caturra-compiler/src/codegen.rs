@@ -14026,6 +14026,18 @@ impl BodyGen<'_> {
                     }
                 } else {
                     let init_ty = self.expr(init);
+                    // A DIAMOND takes its type argument from the target, not
+                    // from what it copies (JLS §15.9.1: it is a poly
+                    // expression). Inferring from the argument made
+                    // `List<Shape> s = new ArrayList<>(squares)` read as
+                    // "ArrayList<Square> cannot be converted to
+                    // ArrayList<Shape>" — ordinary Java, refused, and only in
+                    // the diamond form: writing the type out worked.
+                    let init_ty = if self.diamond_adopts_target(init, init_ty, var_ty) {
+                        var_ty
+                    } else {
+                        init_ty
+                    };
                     let init_const = self.const_int(init);
                     self.convert_for_assignment_const(init_ty, var_ty, init.span(), init_const);
                 }
@@ -14058,6 +14070,43 @@ impl BodyGen<'_> {
 
     /// Declare and initialize a single local whose type is already known — the
     /// `var` path, where the type came from the initializer rather than the source.
+    /// Whether `init` is a DIAMOND `new` whose inferred type differs from the
+    /// target only by an element that widens to the target's — in which case
+    /// Java infers the target's, and so should this.
+    ///
+    /// The runtime object is the same either way (a collection's elements are
+    /// not typed at run time); only the static type differs, so adopting the
+    /// target changes what is ACCEPTED and nothing about what is built.
+    fn diamond_adopts_target(&self, init: &Expr, init_ty: JType, target: JType) -> bool {
+        let Expr::NewObject { type_args, .. } = init else {
+            return false;
+        };
+        if !type_args.is_empty() {
+            return false;
+        }
+        let widens = |from: ElemType, to: ElemType| match (from, to) {
+            (ElemType::Object(sub), ElemType::Object(sup)) => self.table.is_subtype(sub, sup),
+            _ => from == to,
+        };
+        match (init_ty, target) {
+            (JType::List(from), JType::List(to) | JType::Collection(to))
+            | (JType::Set(from), JType::Set(to) | JType::Collection(to))
+            | (JType::TreeSet(from), JType::TreeSet(to) | JType::Set(to))
+            | (JType::Collection(from), JType::Collection(to)) => widens(from, to),
+            (
+                JType::Map {
+                    key: from_key,
+                    value: from_value,
+                },
+                JType::Map {
+                    key: to_key,
+                    value: to_value,
+                },
+            ) => widens(from_key, to_key) && widens(from_value, to_value),
+            _ => false,
+        }
+    }
+
     fn local_decl_resolved(
         &mut self,
         var_ty: JType,
@@ -14081,6 +14130,8 @@ impl BodyGen<'_> {
             .init
             .as_ref()
             .expect("var requires an initializer");
+        // No diamond adjustment here: for `var` the inferred type IS the
+        // target, so there is nothing to adopt.
         let init_ty = self.expr(init);
         let init_const = self.const_int(init);
         self.convert_for_assignment_const(init_ty, var_ty, init.span(), init_const);

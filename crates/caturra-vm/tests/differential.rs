@@ -26837,3 +26837,261 @@ public class ShadowedName {
 }
 "#
 );
+
+// A DIAMOND takes its type argument from the target, not from what it copies
+// (JLS §15.9.1 — it is a poly expression). Inferring from the argument refused
+// `List<Shape> s = new ArrayList<>(squares)`, ordinary Java, and only in the
+// diamond form: writing the type out worked.
+differential_test!(
+    diff_diamond_adopts_its_target,
+    "DiamondTarget",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class DiamondTarget {
+    static class Shape {
+        String who() {
+            return "shape";
+        }
+    }
+
+    static class Square extends Shape {
+        @Override
+        String who() {
+            return "square";
+        }
+    }
+
+    public static void main(String[] args) {
+        List<Square> squares = new ArrayList<>(Arrays.asList(new Square(), new Square()));
+
+        List<Shape> copied = new ArrayList<>(squares);
+        System.out.println(copied.size() + " " + copied.get(0).who());
+
+        List<Shape> explicit = new ArrayList<Shape>(squares);
+        System.out.println(explicit.size() + " " + explicit.get(0).who());
+
+        Set<Square> squareSet = new HashSet<>(squares);
+        Set<Shape> shapeSet = new HashSet<>(squareSet);
+        System.out.println(shapeSet.size());
+
+        Map<String, Square> bySquare = new HashMap<>();
+        bySquare.put("a", new Square());
+        Map<String, Shape> byShape = new HashMap<>(bySquare);
+        System.out.println(byShape.size() + " " + byShape.get("a").who());
+
+        // The empty diamond and a same-type copy still behave.
+        List<Shape> empty = new ArrayList<>();
+        empty.addAll(squares);
+        System.out.println(empty.size());
+        List<Square> same = new ArrayList<>(squares);
+        System.out.println(same.size() + " " + same.get(0).who());
+    }
+}
+"#
+);
+
+// Inheritance and polymorphism, probed as a dimension: construction order,
+// virtual dispatch from a superclass constructor, field and static HIDING
+// against method overriding, super calls, abstract dispatch, two inherited
+// defaults, and the runtime failures. 67 lines, all identical.
+differential_test!(
+    diff_inheritance_and_dispatch,
+    "Inheritance",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class Inheritance {
+    static void p(String label, Object v) {
+        System.out.println(label + " " + v);
+    }
+
+    static void attempt(String label, java.util.function.Supplier<Object> body) {
+        try {
+            p(label, body.get());
+        } catch (RuntimeException e) {
+            p(label, "! " + e.getClass().getName());
+        }
+    }
+
+    static class A {
+        String name = "A";
+        static String tag = "sA";
+
+        A() {
+            p("ctor", "A()");
+            init();
+        }
+
+        void init() {
+            p("init", "A.init");
+        }
+
+        String who() {
+            return "A";
+        }
+
+        static String stat() {
+            return "A.stat";
+        }
+
+        String callWho() {
+            return "via " + who();
+        }
+
+        private String priv() {
+            return "A.priv";
+        }
+
+        String usesPriv() {
+            return priv();
+        }
+
+        @Override
+        public String toString() {
+            return "A[" + name + "]";
+        }
+    }
+
+    static class B extends A {
+        String name = "B";
+        static String tag = "sB";
+        int built;
+
+        B() {
+            super();
+            built = 1;
+            p("ctor", "B()");
+        }
+
+        @Override
+        void init() {
+            p("init", "B.init built=" + built);
+        }
+
+        @Override
+        String who() {
+            return "B";
+        }
+
+        static String stat() {
+            return "B.stat";
+        }
+
+        String priv() {
+            return "B.priv";
+        }
+
+        String superWho() {
+            return super.who();
+        }
+
+        String superName() {
+            return super.name + "/" + this.name;
+        }
+    }
+
+    static class C extends B {
+        @Override
+        String who() {
+            return "C<" + super.who() + ">";
+        }
+    }
+
+    abstract static class Shape {
+        abstract double area();
+
+        String describe() {
+            return getClass().getSimpleName() + " " + area();
+        }
+    }
+
+    static class Sq extends Shape {
+        double side;
+
+        Sq(double side) {
+            this.side = side;
+        }
+
+        @Override
+        double area() {
+            return side * side;
+        }
+    }
+
+    interface Greet {
+        String hi();
+
+        default String loud() {
+            return hi().toUpperCase() + "!";
+        }
+    }
+
+    interface Named {
+        default String hi() {
+            return "named";
+        }
+    }
+
+    static class Both implements Greet, Named {
+        public String hi() {
+            return "both";
+        }
+    }
+
+    public static void main(String[] args) {
+        A ab = new B();
+        p("dynamic", ab.who() + " " + ab.name + " " + ab.callWho());
+        B b = new B();
+        p("static B", b.who() + " " + b.name + " " + b.superWho() + " " + b.superName());
+        p("cast down", ((A) b).name + " " + ((A) b).who());
+        p("deep", new C().who() + " " + new C().callWho());
+        p("statics", A.stat() + " " + B.stat() + " " + A.tag + " " + B.tag);
+        p("private not overridden", new B().usesPriv());
+        p("toString", ab.toString());
+
+        Shape s = new Sq(3);
+        p("abstract", s.describe() + " " + s.area());
+
+        Both both = new Both();
+        Greet g = both;
+        p("defaults", both.hi() + " " + both.loud() + " " + g.loud());
+        p("instanceof", (g instanceof Both) + " " + (g instanceof Named));
+
+        A[] arr = {new A(), new B(), new C()};
+        StringBuilder walk = new StringBuilder();
+        for (A each : arr) {
+            walk.append(each.who()).append(',');
+        }
+        p("array dispatch", walk);
+        List<A> list = new ArrayList<>(Arrays.asList(new B(), new C()));
+        StringBuilder lw = new StringBuilder();
+        for (A each : list) {
+            lw.append(each.who()).append(each.name).append(';');
+        }
+        p("list dispatch", lw);
+        p("getClass", arr[1].getClass().getSimpleName());
+
+        attempt("bad downcast", () -> ((B) new A()).name);
+        attempt("null method", () -> {
+            A n = null;
+            return n.who();
+        });
+        attempt("array store", () -> {
+            A[] as = new B[1];
+            as[0] = new A();
+            return "stored";
+        });
+        p("instanceof null", ((A) null) instanceof B);
+    }
+}
+"#
+);

@@ -4037,6 +4037,34 @@ right; it cannot find a hole they share.
 
 47 of 48 matched at that point; the last one is below.
 
+### A diamond adopts its target (2026-08-14)
+
+A thirty-third dimension took inheritance and polymorphism — construction
+order, virtual dispatch from a superclass constructor, field and static HIDING
+against method overriding, `super` calls, abstract dispatch, two inherited
+defaults, polymorphic arrays and collections, and the runtime failures.
+**67 lines, all identical.**
+
+The finding was that the probe would not COMPILE. `List<Shape> shapes = new
+ArrayList<>(squares)` was refused as "ArrayList<Square> cannot be converted to
+ArrayList<Shape>" — ordinary Java, and only in the diamond form: writing
+`new ArrayList<Shape>(squares)` worked, as did an empty diamond followed by
+`addAll`.
+
+A diamond is a POLY expression (JLS §15.9.1): it takes its type argument from
+the target, not from what it copies. caturra inferred it from the constructor
+ARGUMENT, which is right for `var` — where the initializer IS the context, and
+which is why the `var` path had already been special-cased — and wrong wherever
+a type is written down.
+
+The fix is deliberately narrow, because `List<Square>` really is not a
+`List<Shape>`: only a diamond `new`, and only when the inferred type differs
+from the target by an element that widens to it. Assigning one collection
+variable to another still fails, and so does an unrelated element type. The
+runtime object is the same either way — a collection's elements are not typed
+at run time — so adopting the target changes what is ACCEPTED and nothing about
+what is built.
+
 ### java.lang.reflect, and which classes are the library's (2026-08-14)
 
 `import java.lang.reflect.*` worked while `java.lang.reflect.Method` written
