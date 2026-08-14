@@ -8,6 +8,7 @@
 
 use crate::io::ConsoleIo;
 use crate::map::JavaHashMap;
+use crate::unicode;
 use crate::value::{
     Heap, HeapObject, HeapRef, IntKind, IteratorWrites, JValue, MapViewKind, StdStream,
 };
@@ -6301,26 +6302,6 @@ fn ascii_digits(text: &str) -> String {
         .collect()
 }
 
-/// The `LETTER_NUMBER` (Nl) characters of the BMP — Roman numerals, the
-/// runic and CJK number letters. Java counts them as `isAlphabetic` but NOT
-/// as `isLetter`; Rust's `is_alphabetic` includes them either way.
-const NL_RANGES: [(u32, u32); 7] = [
-    (0x16EE, 0x16F0),
-    (0x2160, 0x2182),
-    (0x2185, 0x2188),
-    (0x3007, 0x3007),
-    (0x3021, 0x3029),
-    (0x3038, 0x303A),
-    (0xA6E6, 0xA6EF),
-];
-
-fn is_letter_number(c: char) -> bool {
-    let cp = u32::from(c);
-    NL_RANGES
-        .iter()
-        .any(|&(first, last)| cp >= first && cp <= last)
-}
-
 /// Java's Unicode decimal-digit value (category `Nd`): 0..=9, or `None`.
 /// Rust's `char::to_digit` is ASCII-only, so Arabic-Indic '٠', fullwidth '０',
 /// Devanagari '५' etc. all need this table.
@@ -6406,6 +6387,9 @@ fn character_static(
 ) -> Result<Option<JValue>, VmError> {
     let z = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
     let c_of = |unit: &i32| char::from_u32(u32::try_from(*unit).unwrap_or(0)).unwrap_or('\u{FFFD}');
+    // The raw UTF-16 unit, which the category tables are keyed by — a
+    // surrogate has a category too, and `c_of` cannot hold one.
+    let unit_of = |unit: &i32| u16::try_from(*unit).unwrap_or(u16::MAX);
     let ch_ret = |c: char| {
         Ok(Some(JValue::Int(
             i32::try_from(u32::from(c) & 0xFFFF).unwrap_or(0),
@@ -6431,38 +6415,38 @@ fn character_static(
             };
             code_point_count(&units, *begin, *end).map(|n| Some(JValue::Int(n)))
         }
-        ("isDigit", [JValue::Int(v)]) => z(nd_digit_value(c_of(v)).is_some()),
-
+        // These come from the JDK 11 category table rather than from Rust's
+        // Unicode data, which is a NEWER version and disagreed on 4761 BMP
+        // units. See `crate::unicode`.
+        ("isDigit", [JValue::Int(v)]) => z(unicode::is_digit(unit_of(v))),
         ("isLetterOrDigit", [JValue::Int(v)]) => {
-            let c = c_of(v);
-            z(c.is_alphabetic() || nd_digit_value(c).is_some())
+            let unit = unit_of(v);
+            z(unicode::is_letter(unit) || unicode::is_digit(unit))
         }
-        // isAlphabetic is a superset of isLetter in real Java (letter
-        // numbers); identical under this approximation.
         // `isLetter` is the L* categories; `isAlphabetic` is L* plus
-        // LETTER_NUMBER (Roman numerals and the CJK number letters), which
-        // is where the two part company — Rust's `is_alphabetic` is the
-        // wider one, so `isLetter('\u2167')` used to answer true.
-        ("isLetter", [JValue::Int(v)]) => {
-            let c = c_of(v);
-            z(c.is_alphabetic() && !is_letter_number(c))
+        // LETTER_NUMBER (Roman numerals and the CJK number letters) and the
+        // `Other_Alphabetic` marks, which is where the two part company.
+        ("isLetter", [JValue::Int(v)]) => z(unicode::is_letter(unit_of(v))),
+        ("isAlphabetic", [JValue::Int(v)]) => z(unicode::is_alphabetic(unit_of(v))),
+        ("isUpperCase", [JValue::Int(v)]) => z(unicode::is_upper(unit_of(v))),
+        ("isLowerCase", [JValue::Int(v)]) => z(unicode::is_lower(unit_of(v))),
+        ("isWhitespace", [JValue::Int(v)]) => z(unicode::is_whitespace(unit_of(v))),
+        ("isSpaceChar", [JValue::Int(v)]) => z(unicode::is_space_char(unit_of(v))),
+        ("getType", [JValue::Int(v)]) => {
+            Ok(Some(JValue::Int(i32::from(unicode::category(unit_of(v))))))
         }
-        ("isAlphabetic", [JValue::Int(v)]) => z(c_of(v).is_alphabetic()),
-        ("isUpperCase", [JValue::Int(v)]) => z(c_of(v).is_uppercase()),
-        ("isLowerCase", [JValue::Int(v)]) => z(c_of(v).is_lowercase()),
-        ("isWhitespace", [JValue::Int(v)]) => z(java_is_whitespace(c_of(v))),
-        ("isSpaceChar", [JValue::Int(v)]) => z(java_is_space_char(c_of(v))),
         ("isJavaIdentifierStart", [JValue::Int(v)]) => {
-            let c = c_of(v);
-            z(c.is_alphabetic() || c == '_' || c == '$')
+            let unit = unit_of(v);
+            z(unicode::is_alphabetic(unit) || *v == i32::from(b'_') || *v == i32::from(b'$'))
         }
         ("isJavaIdentifierPart", [JValue::Int(v)]) => {
-            let c = c_of(v);
-            z(c.is_alphanumeric() || c == '_' || c == '$')
+            let unit = unit_of(v);
+            z(unicode::is_alphabetic(unit)
+                || unicode::is_digit(unit)
+                || *v == i32::from(b'_')
+                || *v == i32::from(b'$'))
         }
-        ("isDefined", [JValue::Int(v)]) => {
-            z(char::from_u32(u32::try_from(*v).unwrap_or(0)).is_some())
-        }
+        ("isDefined", [JValue::Int(v)]) => z(unicode::is_defined(unit_of(v))),
         ("isISOControl", [JValue::Int(v)]) => z(matches!(*v, 0..=0x1F | 0x7F..=0x9F)),
         ("isTitleCase", [JValue::Int(v)]) => {
             let c = c_of(v);

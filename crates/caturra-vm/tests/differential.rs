@@ -26091,3 +26091,52 @@ public class WrapperStatics {
 }
 "#
 );
+
+// Unicode classification over the WHOLE BMP. A JDK carries the Unicode version
+// it shipped with — 11 carries Unicode 10 — while Rust's tables track the
+// current one, so deriving these from Rust disagreed on 4761 units. The
+// categories are now carried in `crate::unicode` instead of derived, which
+// also makes the answers independent of the Rust toolchain's Unicode version;
+// this pins the whole table, so a regenerated or drifting one cannot pass.
+differential_test!(
+    diff_unicode_classification,
+    "Classification",
+    r#"
+public class Classification {
+    public static void main(String[] args) {
+        StringBuilder all = new StringBuilder();
+        int letters = 0;
+        int defined = 0;
+        for (int c = 0; c < 65536; c++) {
+            char ch = (char) c;
+            int bits = (Character.isLetter(ch) ? 1 : 0)
+                | (Character.isDigit(ch) ? 2 : 0)
+                | (Character.isUpperCase(ch) ? 4 : 0)
+                | (Character.isLowerCase(ch) ? 8 : 0)
+                | (Character.isAlphabetic(c) ? 16 : 0)
+                | (Character.isDefined(ch) ? 32 : 0)
+                | (Character.isWhitespace(ch) ? 64 : 0)
+                | (Character.isSpaceChar(ch) ? 128 : 0)
+                | (Character.isLetterOrDigit(ch) ? 256 : 0);
+            if (Character.isLetter(ch)) {
+                letters++;
+            }
+            if (Character.isDefined(ch)) {
+                defined++;
+            }
+            all.append(bits).append(',').append(Character.getType(ch)).append(';');
+        }
+        System.out.println(letters + " " + defined + " " + all.toString().hashCode());
+
+        // The parts that are NOT a pure function of the category, spelled out
+        // so a failure says which rule broke rather than only moving a hash.
+        System.out.println(Character.isUpperCase('Ⅰ') + " " + Character.isLowerCase('ª'));
+        System.out.println(Character.isAlphabetic(0x0345) + " " + Character.isLetter('ͅ'));
+        System.out.println(Character.isWhitespace(' ') + " " + Character.isSpaceChar(' '));
+        System.out.println(Character.isWhitespace('\t') + " " + Character.isSpaceChar('\t'));
+        System.out.println(Character.isLetter('Ა') + " " + Character.isDefined('Ა'));
+        System.out.println(Character.getType('a') + " " + Character.getType('Ⅰ'));
+    }
+}
+"#
+);

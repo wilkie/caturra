@@ -3937,6 +3937,36 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### Unicode classification, carried rather than derived (2026-08-13)
+
+The largest measured-open divergence left: `Character.isLetter`,
+`isUpperCase`, `isLowerCase`, `isAlphabetic`, `isDefined`, `isWhitespace`,
+`isSpaceChar`, `isDigit` and `isLetterOrDigit` disagreed with a real JDK on
+**4761 BMP units**.
+
+Two causes, both about DATA rather than logic. A JDK carries the Unicode
+version it shipped with — 11 carries Unicode 10 — while Rust's tables track the
+current one, so Rust knows Georgian Mtavruli and the other additions of 11
+onwards. And Java's predicates are defined over general CATEGORIES plus the
+`Other_Uppercase`/`Other_Lowercase`/`Other_Alphabetic` properties, which is not
+the same partition as Rust's `is_alphabetic`/`is_uppercase` — chiefly over the
+combining marks.
+
+So the categories are now carried, not derived: `Character.getType` recorded
+from a real JDK 11 over the whole BMP, as 2858 contiguous runs, with the three
+`Other_*` property sets and the two whitespace adjustments beside them. Every
+predicate is derived from that table exactly as the JDK derives it, which also
+makes these answers **independent of the Rust toolchain's Unicode version** —
+the previous fix, the 15-range case-mapping patch, was not.
+
+All 4761 units now agree, and `Character.getType` itself became answerable, so
+it is exposed. The whole table is pinned as a differential test rather than a
+spot check: a regenerated or drifting table cannot pass it.
+
+Everything below U+0295 had always been exact, which is why no student program
+ever showed this — and why it took a probe whose alphabet went past ASCII to
+find.
+
 ### The wrapper statics at volume (2026-08-13)
 
 A nineteenth dimension: `Integer`/`Long`/`Double`/`Float`/`Character`/`Boolean`
@@ -3969,13 +3999,8 @@ as WRITTEN, because the JDK quotes THAT back: reporting the folded form said
 
 Measured and open, both already-known categories:
 
-- **Unicode CLASSIFICATION** (`isLetter`, `isUpperCase`, `isAlphabetic`,
-  `isDefined`, …) diverges on 4761 BMP units over 416 ranges — the same
-  Unicode-version gap the case tables had (JDK 11 carries Unicode 10, Rust's
-  tables track the current one) plus a category-model difference over combining
-  marks. Every divergence is above U+0294: ASCII and Latin-1 are exact. Unlike
-  the case tables' 15 ranges this is a data drop rather than a patch, so it is
-  measured rather than guessed at.
+- **Unicode CLASSIFICATION** diverged on 4761 BMP units over 416 ranges. Closed
+  below.
 - **Subnormal formatting** now known to affect `Float.toString` as well as
   `Double.toString` — `intBitsToFloat` disagrees on three of the probe's
   values, the same shortest-decimal tail already recorded.

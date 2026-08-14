@@ -9397,6 +9397,14 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Boolean,
         descriptor: "(C)Z",
     },
+    // `getType` answers the general CATEGORY, which the JDK 11 table now
+    // carries directly — every other predicate is derived from it.
+    BuiltinMethod {
+        name: "getType",
+        params: &[BParam::Char],
+        ret: BRet::Int,
+        descriptor: "(C)I",
+    },
     BuiltinMethod {
         name: "isLetterOrDigit",
         params: &[BParam::Char],
