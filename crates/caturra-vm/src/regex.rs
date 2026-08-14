@@ -213,16 +213,16 @@ fn is_flag_letter(unit: u16) -> bool {
     )
 }
 
-fn is_java_space(unit: u16) -> bool {
+fn is_java_space(unit: u32) -> bool {
     matches!(unit, 0x20 | 0x09 | 0x0A | 0x0B | 0x0C | 0x0D)
 }
 
-fn is_java_digit(unit: u16) -> bool {
+fn is_java_digit(unit: u32) -> bool {
     (0x30..=0x39).contains(&unit)
 }
 
 /// Java's `\w` is `[a-zA-Z_0-9]` — ASCII only.
-fn is_java_word(unit: u16) -> bool {
+fn is_java_word(unit: u32) -> bool {
     is_java_digit(unit)
         || (0x41..=0x5A).contains(&unit)
         || (0x61..=0x7A).contains(&unit)
@@ -230,12 +230,12 @@ fn is_java_word(unit: u16) -> bool {
 }
 
 /// The line terminators `.` refuses to match.
-fn is_line_terminator(unit: u16) -> bool {
+fn is_line_terminator(unit: u32) -> bool {
     matches!(unit, 0x0A | 0x0D | 0x85 | 0x2028 | 0x2029)
 }
 
 impl Predefined {
-    fn matches(self, unit: u16) -> bool {
+    fn matches(self, unit: u32) -> bool {
         match self {
             Predefined::Digit => is_java_digit(unit),
             Predefined::NotDigit => !is_java_digit(unit),
@@ -249,15 +249,15 @@ impl Predefined {
 
 /// The other case of an ASCII letter, or the unit unchanged. Java's
 /// `CASE_INSENSITIVE` without `UNICODE_CASE` folds ASCII and nothing else.
-fn ascii_fold(unit: u16) -> u16 {
+fn ascii_fold(unit: u32) -> u32 {
     match u8::try_from(unit) {
-        Ok(byte) if byte.is_ascii_alphabetic() => u16::from(byte ^ 0x20),
+        Ok(byte) if byte.is_ascii_alphabetic() => u32::from(byte ^ 0x20),
         _ => unit,
     }
 }
 
 impl CharClass {
-    fn matches(&self, unit: u16) -> bool {
+    fn matches(&self, unit: u32) -> bool {
         if self.fold {
             let other = ascii_fold(unit);
             if other != unit && self.matches_exactly(other) != self.negated {
@@ -270,10 +270,10 @@ impl CharClass {
     }
 
     /// `matches` without the case folding, negation included.
-    fn matches_exactly(&self, unit: u16) -> bool {
+    fn matches_exactly(&self, unit: u32) -> bool {
         let mut hit = self.items.iter().any(|item| match item {
-            ClassItem::Single(single) => *single == unit,
-            ClassItem::Range(low, high) => *low <= unit && unit <= *high,
+            ClassItem::Single(single) => u32::from(*single) == unit,
+            ClassItem::Range(low, high) => u32::from(*low) <= unit && unit <= u32::from(*high),
             ClassItem::Predefined(predefined) => predefined.matches(unit),
             ClassItem::Nested(nested) => nested.matches(unit),
         });
@@ -389,7 +389,7 @@ impl Parser<'_> {
             }
             if unit == u16::from(b'#') {
                 while let Some(unit) = self.units.get(self.at).copied() {
-                    if is_line_terminator(unit) {
+                    if is_line_terminator(u32::from(unit)) {
                         break;
                     }
                     self.at += 1;
@@ -500,7 +500,7 @@ impl Parser<'_> {
         let mut min_digits = String::new();
         self.skip_ignorable();
         while let Some(unit) = self.peek() {
-            if !is_java_digit(unit) {
+            if !is_java_digit(u32::from(unit)) {
                 break;
             }
             min_digits.push(char::from(unit as u8));
@@ -527,7 +527,7 @@ impl Parser<'_> {
         }
         let mut max_digits = String::new();
         while let Some(unit) = self.peek() {
-            if !is_java_digit(unit) {
+            if !is_java_digit(u32::from(unit)) {
                 break;
             }
             max_digits.push(char::from(unit as u8));
@@ -585,7 +585,7 @@ impl Parser<'_> {
     /// one-item class that also accepts the other case — so folding lives in
     /// ONE place and reaches `\Q...\E` and the escapes for free.
     fn literal(&self, unit: u16) -> Node {
-        if self.flags.fold && ascii_fold(unit) != unit {
+        if self.flags.fold && ascii_fold(u32::from(unit)) != u32::from(unit) {
             return Node::Class(CharClass {
                 fold: true,
                 negated: false,
@@ -968,7 +968,7 @@ impl Parser<'_> {
                 let mut number = usize::from(u - 0x30);
                 self.at += 1;
                 while let Some(next) = self.peek() {
-                    if !is_java_digit(next) {
+                    if !is_java_digit(u32::from(next)) {
                         break;
                     }
                     let extended = number * 10 + usize::from(next - 0x30);
@@ -1097,7 +1097,7 @@ impl Parser<'_> {
             // A letter or digit after a backslash with no meaning is an error
             // in Java, not a literal — being permissive here would accept
             // patterns a real JDK refuses.
-            other if is_java_word(other) && other != u16::from(b'_') => {
+            other if is_java_word(u32::from(other)) && other != u16::from(b'_') => {
                 return Err(self.error(
                     "Illegal/unsupported escape sequence",
                     self.at.saturating_sub(1),
@@ -1186,8 +1186,28 @@ struct Matcher<'a> {
 const STEP_LIMIT: u64 = 20_000_000;
 
 impl<'a> Matcher<'a> {
+    /// The code point at `at`, and the UTF-16 units it occupies.
+    ///
+    /// Java's regex engine works on CODE POINTS, not on `char`s: `.` matches
+    /// an astral character whole. Stepping a unit at a time let `.` match half
+    /// a surrogate pair, so `"a\u{1F600}".replaceAll("a.", "#")` returned a
+    /// string containing a LONE surrogate — a corrupt result, not merely a
+    /// wrong count.
+    fn code_point_at(&self, at: usize) -> Option<(u32, usize)> {
+        let high = *self.input.get(at)?;
+        if (0xD800..0xDC00).contains(&high)
+            && let Some(&low) = self.input.get(at + 1)
+            && (0xDC00..0xE000).contains(&low)
+        {
+            let pair = 0x1_0000 + ((u32::from(high) - 0xD800) << 10) + (u32::from(low) - 0xDC00);
+            return Some((pair, 2));
+        }
+        Some((u32::from(high), 1))
+    }
+
     fn at_word(&self, at: usize) -> bool {
-        self.input.get(at).copied().is_some_and(is_java_word)
+        self.code_point_at(at)
+            .is_some_and(|(point, _)| is_java_word(point))
     }
 
     fn is_boundary(&self, at: usize) -> bool {
@@ -1226,16 +1246,20 @@ impl<'a> Matcher<'a> {
                 }
                 None
             }
-            Node::AnyChar => match self.input.get(pos) {
-                Some(unit) if !is_line_terminator(*unit) => self.resume(pos + 1, caps, cont),
+            Node::AnyChar => match self.code_point_at(pos) {
+                Some((point, width)) if !is_line_terminator(point) => {
+                    self.resume(pos + width, caps, cont)
+                }
                 _ => None,
             },
-            Node::AnyCharDotAll => match self.input.get(pos) {
-                Some(_) => self.resume(pos + 1, caps, cont),
+            Node::AnyCharDotAll => match self.code_point_at(pos) {
+                Some((_, width)) => self.resume(pos + width, caps, cont),
                 None => None,
             },
-            Node::Class(class) => match self.input.get(pos) {
-                Some(unit) if class.matches(*unit) => self.resume(pos + 1, caps, cont),
+            Node::Class(class) => match self.code_point_at(pos) {
+                Some((point, width)) if class.matches(point) => {
+                    self.resume(pos + width, caps, cont)
+                }
                 _ => None,
             },
             Node::Concat(nodes) => {
@@ -1295,7 +1319,7 @@ impl<'a> Matcher<'a> {
                 let same = if *fold {
                     here.iter()
                         .zip(text)
-                        .all(|(a, b)| a == b || ascii_fold(*a) == *b)
+                        .all(|(a, b)| a == b || ascii_fold(u32::from(*a)) == u32::from(*b))
                 } else {
                     here == text
                 };
@@ -1342,7 +1366,7 @@ impl<'a> Matcher<'a> {
                     return None;
                 }
                 let after_terminator = pos > 0
-                    && is_line_terminator(self.input[pos - 1])
+                    && is_line_terminator(u32::from(self.input[pos - 1]))
                     // NOT between a CR and its LF: the pair is ONE terminator.
                     && !(self.input[pos - 1] == 0x0D && self.input.get(pos) == Some(&0x0A));
                 if pos == 0 || after_terminator {
@@ -1354,7 +1378,7 @@ impl<'a> Matcher<'a> {
                 let before_terminator = self
                     .input
                     .get(pos)
-                    .is_some_and(|unit| is_line_terminator(*unit))
+                    .is_some_and(|unit| is_line_terminator(u32::from(*unit)))
                     // A CRLF pair is ONE terminator: the line ends before the
                     // CR, not again between the CR and the LF.
                     && !(self.input[pos] == 0x0A && pos > 0 && self.input[pos - 1] == 0x0D);
@@ -1416,7 +1440,7 @@ impl<'a> Matcher<'a> {
         if pos == len {
             return false;
         }
-        if pos + 1 == len && is_line_terminator(self.input[pos]) {
+        if pos + 1 == len && is_line_terminator(u32::from(self.input[pos])) {
             // NOT between a final CR and LF: the pair is ONE terminator, so
             // `$` fires before the CR and nowhere else. Treating the LF as its
             // own terminator gave `"a\r\n".replaceAll("$", "X")` an extra X.

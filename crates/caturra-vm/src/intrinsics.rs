@@ -1099,12 +1099,7 @@ fn string_method(
             let unit = usize::try_from(*index)
                 .ok()
                 .and_then(|i| units.get(i))
-                .ok_or_else(|| {
-                    throw(format!(
-                        "java.lang.StringIndexOutOfBoundsException: String index out of \
-                         range: {index}"
-                    ))
-                })?;
+                .ok_or_else(|| char_at_error(&units, *index))?;
             Ok(Some(JValue::Int(i32::from(*unit))))
         }
         // The JDK returns THIS string when the range is the whole of it —
@@ -1599,8 +1594,10 @@ fn get_chars(
 fn code_point_before(units: &[u16], index: i32) -> Result<i32, VmError> {
     let before = index - 1;
     if before < 0 {
+        // `codePointBefore` reports the OTHER of the JDK's two String
+        // wordings — `codePointAt` names the length, this one does not.
         return Err(throw(format!(
-            "java.lang.StringIndexOutOfBoundsException: index {index}"
+            "java.lang.StringIndexOutOfBoundsException: String index out of range: {index}"
         )));
     }
     // A low surrogate preceded by a high one forms a pair.
@@ -1620,12 +1617,10 @@ fn code_point_count(units: &[u16], begin: i32, end: i32) -> Result<i32, VmError>
         .ok()
         .zip(usize::try_from(end).ok())
         .filter(|(b, e)| b <= e && *e <= units.len())
-        .ok_or_else(|| {
-            throw(format!(
-                "java.lang.IndexOutOfBoundsException: begin {begin}, end {end}, length {}",
-                units.len()
-            ))
-        })?;
+        // The JDK reaches this through a bounds check that throws a BARE
+        // `IndexOutOfBoundsException`, so `getMessage()` is null — printed as
+        // "null", not as a description of the range.
+        .ok_or_else(|| throw(String::from("java.lang.IndexOutOfBoundsException")))?;
     let count = char::decode_utf16(units[begin..end].iter().copied()).count();
     Ok(i32::try_from(count).unwrap_or(i32::MAX))
 }
@@ -1636,8 +1631,8 @@ fn offset_by_code_points(units: &[u16], index: i32, offset: i32) -> Result<i32, 
     let mut at = usize::try_from(index)
         .ok()
         .filter(|at| *at <= units.len())
-        .ok_or_else(|| throw(format!("java.lang.IndexOutOfBoundsException: {index}")))?;
-    let out_of_range = || throw(format!("java.lang.IndexOutOfBoundsException: {offset}"));
+        .ok_or_else(|| throw(String::from("java.lang.IndexOutOfBoundsException")))?;
+    let out_of_range = || throw(String::from("java.lang.IndexOutOfBoundsException"));
     let mut remaining = offset;
     while remaining > 0 {
         if at >= units.len() {
@@ -2114,13 +2109,33 @@ fn reverse_units(units: &[u16]) -> Vec<u16> {
 
 /// `String.codePointAt`: the code point at a UTF-16 index (pairs
 /// combine; unpaired surrogates return themselves, like Java).
+/// `charAt`'s out-of-range message, which COMPACT STRINGS make observable.
+///
+/// A JDK 9+ string is stored as Latin-1 when every character fits in a byte
+/// and as UTF-16 otherwise, and the two implementations word this differently:
+/// `StringLatin1` says "String index out of range: i", `StringUTF16` says
+/// "index i,length n". So the same call on `"abc"` and on `"ab\u0100"`
+/// reports differently, and only the second names the length.
+fn char_at_error(units: &[u16], index: i32) -> VmError {
+    if units.iter().any(|unit| *unit > 0xFF) {
+        return throw(format!(
+            "java.lang.StringIndexOutOfBoundsException: index {index},length {}",
+            units.len()
+        ));
+    }
+    throw(format!(
+        "java.lang.StringIndexOutOfBoundsException: String index out of range: {index}"
+    ))
+}
+
 fn code_point_at(units: &[u16], index: i32) -> Result<i32, VmError> {
     let at = usize::try_from(index)
         .ok()
         .filter(|i| *i < units.len())
         .ok_or_else(|| {
             throw(format!(
-                "java.lang.StringIndexOutOfBoundsException: index {index}"
+                "java.lang.StringIndexOutOfBoundsException: index {index},length {}",
+                units.len()
             ))
         })?;
     let unit = units[at];
@@ -2169,15 +2184,16 @@ fn java_upper_unit(unit: u16) -> u16 {
     }
 }
 
+/// `Character.toLowerCase` on one unit. Unlike the uppercase side, a
+/// multi-character full mapping does NOT mean "no simple mapping": `\u0130`
+/// lowercases to two characters in full (`i` and a combining dot) but its
+/// SIMPLE mapping is a plain `i`, which is what the JDK answers. Leaving it
+/// unchanged made `"\u0130".compareToIgnoreCase("i")` non-zero.
 fn java_lower_unit(unit: u16) -> u16 {
     let Some(c) = char::from_u32(u32::from(unit)) else {
         return unit;
     };
-    let mut lower = c.to_lowercase();
-    match (lower.next(), lower.next()) {
-        (Some(single), None) => u16::try_from(u32::from(single)).unwrap_or(unit),
-        _ => unit,
-    }
+    u16::try_from(u32::from(java_simple_lower(c))).unwrap_or(unit)
 }
 
 fn region_matches(
@@ -6209,6 +6225,9 @@ fn java_title_case(c: char) -> char {
 /// which agrees with the JDK across the BMP (including `\u0130`, whose full
 /// mapping is two characters but whose simple mapping is plain `i`).
 fn java_simple_lower(c: char) -> char {
+    if unmapped_in_jdk_11(c) {
+        return c;
+    }
     c.to_lowercase().next().unwrap_or(c)
 }
 
@@ -6266,7 +6285,45 @@ fn nd_digit_value(c: char) -> Option<u32> {
 /// where it is multi-char the simple mapping is either the char itself (ß,
 /// ligatures) or, for 27 polytonic-Greek letters with ypogegrammeni, a specific
 /// char in the 1F88.. titlecase block.
+/// Characters Rust gives a simple case mapping but JDK 11 does not.
+///
+/// A JDK carries the Unicode version it shipped with — 11 carries Unicode 10 —
+/// while Rust's tables track the current one. Georgian Mtavruli (Unicode 11),
+/// the Cyrillic and Latin additions of 9 through 14: Rust uppercases them and
+/// JDK 11 leaves them alone. Measured over the whole BMP against a real JDK:
+/// 2188 units, every one of them this same direction, compressing to these
+/// ranges. The last is the surrogate block, which has no case mapping in any
+/// version — a lone surrogate must come back unchanged rather than as the
+/// replacement character.
+const UNMAPPED_IN_JDK_11: &[(u32, u32)] = &[
+    (0x019B, 0x019B),
+    (0x0264, 0x0264),
+    (0x0282, 0x0282),
+    (0x10D0, 0x10FA),
+    (0x10FD, 0x10FF),
+    (0x1C89, 0x1C8A),
+    (0x1C90, 0x1CBA),
+    (0x1CBD, 0x1CBF),
+    (0x1D8E, 0x1D8E),
+    (0x2C2F, 0x2C2F),
+    (0x2C5F, 0x2C5F),
+    (0xA794, 0xA794),
+    (0xA7B8, 0xA7DC),
+    (0xA7F5, 0xA7F6),
+    (0xD800, 0xDFFF),
+];
+
+fn unmapped_in_jdk_11(c: char) -> bool {
+    let point = u32::from(c);
+    UNMAPPED_IN_JDK_11
+        .iter()
+        .any(|&(first, last)| point >= first && point <= last)
+}
+
 fn java_simple_upper(c: char) -> char {
+    if unmapped_in_jdk_11(c) {
+        return c;
+    }
     let mut it = c.to_uppercase();
     let first = it.next().unwrap_or(c);
     if it.next().is_none() {
@@ -6356,14 +6413,17 @@ fn character_static(
             let lower = c.to_lowercase().next().unwrap_or(c);
             z(upper != c && lower != c)
         }
+        // A lone surrogate has no case mapping and comes back UNCHANGED.
+        // `c_of` cannot hold one, so it hands over the replacement character
+        // and these used to answer U+FFFD for all 2048 of them.
+        ("toTitleCase" | "toUpperCase" | "toLowerCase", [JValue::Int(v)])
+            if (0xD800..=0xDFFF).contains(v) =>
+        {
+            Ok(Some(JValue::Int(*v)))
+        }
         ("toTitleCase", [JValue::Int(v)]) => ch_ret(java_title_case(c_of(v))),
         ("toUpperCase", [JValue::Int(v)]) => ch_ret(java_simple_upper(c_of(v))),
-        ("toLowerCase", [JValue::Int(v)]) => {
-            // The first char of Rust's full lowercase equals Java's simple
-            // lowercase across the whole BMP (verified against a real JVM).
-            let c = c_of(v);
-            ch_ret(c.to_lowercase().next().unwrap_or(c))
-        }
+        ("toLowerCase", [JValue::Int(v)]) => ch_ret(java_simple_lower(c_of(v))),
         ("getNumericValue", [JValue::Int(v)]) => {
             let c = c_of(v);
             // The Nd decimal value (0..=9) or a Latin letter's 10..=35 —
@@ -6857,11 +6917,14 @@ fn string_static(
                     values.len()
                 )));
             }
-            let text: String = values[offset_u..end]
+            // The UNITS verbatim, exactly as the whole-array overload below
+            // already does: rendering each through `char::from_u32` destroys
+            // every surrogate pair the range happens to contain.
+            let units: Vec<u16> = values[offset_u..end]
                 .iter()
-                .map(|v| char::from_u32(u32::try_from(*v).unwrap_or(0)).unwrap_or('\u{FFFD}'))
+                .map(|v| u16::try_from(*v).unwrap_or(u16::MAX))
                 .collect();
-            let reference = heap.alloc_string(&text);
+            let reference = heap.alloc(HeapObject::JavaString(units));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         // `String.valueOf(char[])` / `copyValueOf(char[])` copy the UNITS
@@ -6877,12 +6940,16 @@ fn string_static(
         ("valueOf" | "copyValueOf", [value]) => {
             // The descriptor disambiguates int/char/boolean, which all
             // arrive as JValue::Int.
+            // A `char` is ONE UTF-16 unit and stays one, even when it is an
+            // unpaired surrogate: `char::from_u32` rejects those, and the
+            // U+FFFD it fell back to is a different character. `"" + c`
+            // lowers to this, so the loss showed up in ordinary concatenation.
+            if let ("(C)Ljava/lang/String;", JValue::Int(v)) = (descriptor, value) {
+                let unit = u16::try_from(*v).unwrap_or(u16::MAX);
+                let reference = heap.alloc(HeapObject::JavaString(vec![unit]));
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
             let text = match (descriptor, value) {
-                ("(C)Ljava/lang/String;", JValue::Int(v)) => {
-                    char::from_u32(u32::try_from(*v).unwrap_or(0))
-                        .unwrap_or('\u{FFFD}')
-                        .to_string()
-                }
                 ("(Z)Ljava/lang/String;", JValue::Int(v)) => {
                     String::from(if *v != 0 { "true" } else { "false" })
                 }
@@ -7140,6 +7207,23 @@ fn descriptor_params(descriptor: &str) -> &str {
 }
 
 /// Render a print/println argument the way Java would.
+/// What an UNPAIRED surrogate becomes on the way to the console.
+///
+/// A lone surrogate is not a character and cannot be encoded, so a JDK's
+/// `PrintStream` hands it to the charset encoder, which substitutes its
+/// default replacement — a plain `?`. Rust's lossy conversion substitutes
+/// U+FFFD instead, which is a DIFFERENT character and one a program can also
+/// legitimately print, so the two must not be conflated.
+const UNENCODABLE: char = '?';
+
+/// UTF-16 units as console text: valid characters through, unpaired
+/// surrogates as `?`.
+fn console_text(units: &[u16]) -> String {
+    char::decode_utf16(units.iter().copied())
+        .map(|decoded| decoded.unwrap_or(UNENCODABLE))
+        .collect()
+}
+
 fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result<String, VmError> {
     // `append` has the same argument shapes as `print`, but answers the
     // stream — so its descriptors end in the stream type, not `V`.
@@ -7155,21 +7239,27 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
         ("(Z)V", [JValue::Int(v)]) => if *v != 0 { "true" } else { "false" }.to_owned(),
         ("(C)V", [JValue::Int(v)]) => {
             let unit = u32::try_from(*v).unwrap_or(u32::from(u16::MAX));
-            char::from_u32(unit).map_or_else(|| String::from('\u{FFFD}'), String::from)
+            char::from_u32(unit).map_or_else(|| String::from(UNENCODABLE), String::from)
         }
         ("(D)V", [JValue::Double(v)]) => java_double_to_string(*v),
         // `println(char[])` is a real overload: it prints the CHARACTERS.
         // (`"" + chars` does not — that is `append(Object)` and prints
         // `[C@hash`. A classic Java trap, faithfully reproduced.)
-        ("([C)V", [value]) => String::from_utf16_lossy(&char_array_units(heap, value)?),
+        ("([C)V", [value]) => console_text(&char_array_units(heap, value)?),
         ("(Ljava/lang/String;)V" | "(Ljava/lang/CharSequence;)V", [JValue::Ref(reference)]) => {
             match reference {
                 None => String::from("null"),
-                Some(reference) => heap.string_text(*reference).ok_or_else(|| {
-                    VmError::UnknownIntrinsic(String::from(
-                        "println argument is not a string object",
-                    ))
-                })?,
+                // Straight from the UNITS: a string carrying an unpaired
+                // surrogate has to reach the console as `?`, and the lossy
+                // conversion `string_text` performs would make it U+FFFD.
+                Some(reference) => match heap.get(*reference) {
+                    Some(HeapObject::JavaString(units)) => console_text(units),
+                    _ => {
+                        return Err(VmError::UnknownIntrinsic(String::from(
+                            "println argument is not a string object",
+                        )));
+                    }
+                },
             }
         }
         _ => {

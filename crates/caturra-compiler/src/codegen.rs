@@ -19737,6 +19737,27 @@ impl BodyGen<'_> {
     fn own_call(&mut self, method: &str, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
         // Peek resolution to decide static vs instance dispatch.
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        // The instance path carries this net; the implicit-`this` path did
+        // not, and a call whose argument would not TYPE simply vanished —
+        // no code, no value, no diagnostic, the method never invoked. Emit
+        // the arguments so a nested diagnostic surfaces, and if none does,
+        // say so rather than dropping the statement.
+        if arg_types.contains(&JType::Error) {
+            let before = self.diagnostics.len();
+            for arg in args {
+                self.expr(arg);
+            }
+            if self.diagnostics.len() == before {
+                self.error(
+                    span,
+                    format!(
+                        "cannot determine the type of an argument to {method}(...) — \
+                         this is a caturra limitation, not an error in your program"
+                    ),
+                );
+            }
+            return None;
+        }
         let table = self.table;
         // A lambda body is lexically scoped (JLS §15.27.2): a bare
         // `apply(y)` inside `y -> apply(y) * 2` means the ENCLOSING
@@ -21964,8 +21985,31 @@ impl BodyGen<'_> {
                 receiver,
                 method,
                 args,
-                ..
+                span,
             } => {
+                // A FULLY QUALIFIED receiver is answered as its simple name.
+                // Every arm below matches a one-segment path, so without this
+                // `java.util.Objects.toString(s)` typed as `Error` while the
+                // emission path resolved it fine — the `type_of`-versus-emit
+                // divergence again. As an argument to a user method that Error
+                // made the call bail, and the whole statement DISAPPEARED: no
+                // code, no value, no diagnostic.
+                if let Some(Expr::Name {
+                    path,
+                    span: receiver_span,
+                }) = receiver.as_deref()
+                    && let Some(short) = self.strip_package_prefix(path)
+                {
+                    return self.type_of(&Expr::Call {
+                        receiver: Some(Box::new(Expr::Name {
+                            path: short,
+                            span: *receiver_span,
+                        })),
+                        method: method.clone(),
+                        args: args.clone(),
+                        span: *span,
+                    });
+                }
                 // `Comparator` combinators build another comparator (mirrors the
                 // emission-path intercept in `instance_call`).
                 if matches!(

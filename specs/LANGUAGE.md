@@ -3937,6 +3937,55 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### The String surface at volume (2026-08-13)
+
+An eighteenth dimension put `String` through a cross product — every method
+against every input, four entry points, exceptions recorded as class AND
+message: **24,371 lines** against a real JDK 11. 253 diverged, in five groups,
+and every group was a real defect.
+
+**A statement could VANISH.** `p(java.util.Objects.toString("q"));` produced no
+code, no value, no diagnostic — the method was never invoked. `type_of` answers
+a call by matching a ONE-SEGMENT receiver path, so a fully qualified receiver
+typed as `Error` while the emission path resolved the same call fine; as an
+argument that `Error` made the call bail out. This is the `type_of`-versus-emit
+divergence in its worst form, and the instance-call path already carried a
+"never bail in silence" net for exactly this — the implicit-`this` path did
+not. Both are fixed: qualified receivers are normalised once, and the net now
+covers own calls too.
+
+**The regex engine matched UTF-16 units, not CODE POINTS.** Java's matches a
+whole astral character with `.`; caturra's matched half a surrogate pair, so
+`"a😀".replaceAll("a.", "#")` returned a string containing a LONE surrogate —
+corrupt output, not merely a wrong count. The 13,728-line regex sweep missed it
+because no input carried an astral character.
+
+**`Character.toUpperCase`/`toLowerCase` over-mapped 2188 BMP units.** A JDK
+carries the Unicode version it shipped with — 11 carries Unicode 10 — while
+Rust's tables track the current one, so Rust uppercases Georgian Mtavruli
+(Unicode 11) and the later Cyrillic and Latin additions that JDK 11 leaves
+alone. Every divergence ran that one direction, and compresses to 15 ranges;
+the last is the surrogate block, where a lone surrogate had been answering as
+the replacement character. `compareToIgnoreCase` needed the other half of the
+rule: a multi-character FULL lowercase does not mean "no simple mapping" —
+`İ` lowercases to two characters in full but to a plain `i` simply, which is
+why `"İ".compareToIgnoreCase("i")` is zero.
+
+**The bounds messages are not uniform, and COMPACT STRINGS make that
+observable.** `charAt` on a Latin-1 string says "String index out of range: i";
+on a UTF-16 one it says "index i,length n" — the same call, worded by how the
+receiver happens to be stored. `codePointAt` always names the length,
+`codePointBefore` never does, and `codePointCount`/`offsetByCodePoints` throw a
+bare `IndexOutOfBoundsException` whose message is null.
+
+Measured and open: a genuinely UNPAIRED surrogate rendered into text through a
+boxed `Character` or a `char[]` element still prints U+FFFD where a JDK's
+encoder substitutes `?`. The value is right and every realistic operation is
+right — rebuilding, reversing and comparing a string that contains an emoji all
+match exactly — because a Java string here holds units. The two remaining
+helpers return a Rust `String`, which cannot hold a lone surrogate at all, so
+closing this means changing what they return rather than what they do.
+
 ### Hash iteration order, measured (2026-08-13)
 
 A seventeenth dimension took the other surface caturra MODELS rather than

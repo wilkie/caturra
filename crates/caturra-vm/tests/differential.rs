@@ -25890,3 +25890,156 @@ public class HashOrder {
 }
 "#
 );
+
+// A statement whose argument would not TYPE used to VANISH: no code, no value,
+// no diagnostic, the method never invoked. `type_of` answered `Error` for a
+// fully qualified receiver because every arm below it matches a one-segment
+// path, while the emission path resolved the same call fine — the
+// `type_of`-versus-emit divergence, in its worst form.
+differential_test!(
+    diff_qualified_static_as_an_argument,
+    "QualifiedArgument",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+public class QualifiedArgument {
+    static int calls = 0;
+
+    static void count(Object value) {
+        calls++;
+    }
+
+    static void show(String label, Object value) {
+        System.out.println(label + " " + value);
+    }
+
+    public static void main(String[] args) {
+        count(java.util.Objects.toString("q"));
+        count(java.util.List.of(1, 2));
+        count(java.util.Arrays.asList("a", "b"));
+        count(java.util.Objects.toString("q").length());
+        count("plain");
+        System.out.println("calls=" + calls);
+
+        show("chars", java.util.Arrays.toString("ab".toCharArray()));
+        show("hash", java.util.Objects.hash(1, 2));
+
+        List<String> list = new ArrayList<>();
+        list.addAll(java.util.Arrays.asList("d", "e"));
+        System.out.println(list);
+    }
+}
+"#
+);
+
+// `Character.toUpperCase`/`toLowerCase` over the WHOLE BMP. A JDK carries the
+// Unicode version it shipped with — 11 carries Unicode 10 — while Rust's
+// tables track the current one, so Rust maps Georgian Mtavruli and the later
+// Cyrillic and Latin additions that JDK 11 leaves alone. 2188 units differed,
+// every one in that direction. A lone surrogate must also come back unchanged.
+differential_test!(
+    diff_character_case_tables,
+    "CaseTables",
+    r#"
+public class CaseTables {
+    public static void main(String[] args) {
+        int upper = 0;
+        int lower = 0;
+        StringBuilder mapped = new StringBuilder();
+        for (int c = 0; c < 65536; c++) {
+            char up = Character.toUpperCase((char) c);
+            char lo = Character.toLowerCase((char) c);
+            if (up != (char) c) {
+                upper++;
+                mapped.append(c).append('>').append((int) up).append(' ');
+            }
+            if (lo != (char) c) {
+                lower++;
+                mapped.append(c).append('<').append((int) lo).append(' ');
+            }
+        }
+        System.out.println(upper + " " + lower + " " + mapped.toString().hashCode());
+
+        // The Turkish dotted capital: its FULL lowercase is two characters,
+        // but its simple mapping is a plain `i`, which is what a JDK answers
+        // and what makes this comparison zero.
+        System.out.println("İ".compareToIgnoreCase("i"));
+        System.out.println("İ".compareToIgnoreCase("I"));
+        System.out.println("straße".compareToIgnoreCase("STRASSE"));
+        System.out.println("é".compareToIgnoreCase("É"));
+    }
+}
+"#
+);
+
+// Java's regex engine works on CODE POINTS, not on `char`s. Stepping a UTF-16
+// unit at a time let `.` match half a surrogate pair, so `replaceAll` could
+// return a string containing a LONE surrogate — a corrupt result, not merely a
+// wrong count.
+differential_test!(
+    diff_regex_over_code_points,
+    "RegexCodePoints",
+    r##"
+public class RegexCodePoints {
+    public static void main(String[] args) {
+        String emoji = "😀";
+        String[][] cases = {
+            {emoji, "."}, {emoji, ".."}, {emoji, ".*"}, {emoji, "[a-z]"}, {emoji, "\\w"},
+            {"a" + emoji + "b", "..."}, {"a" + emoji + "b", "a.b"}, {"a" + emoji + "b", ".+"},
+            {emoji + emoji, ".."}, {emoji, "^.$"}, {"a" + emoji, "a."}, {"a" + emoji + "b", "[^x]+"},
+        };
+        for (String[] one : cases) {
+            String replaced = one[0].replaceAll(one[1], "#");
+            System.out.println(one[1]
+                + " len=" + one[0].length()
+                + " cp=" + one[0].codePointCount(0, one[0].length())
+                + " matches=" + one[0].matches(one[1])
+                + " replaced=" + replaced.length());
+        }
+    }
+}
+"##
+);
+
+// The bounds messages of the String index methods, which are NOT uniform:
+// `charAt`'s wording depends on whether COMPACT STRINGS stored the receiver as
+// Latin-1 or UTF-16, `codePointAt` always names the length, `codePointBefore`
+// never does, and the code-point range methods throw a bare
+// `IndexOutOfBoundsException` whose message is null.
+differential_test!(
+    diff_string_bounds_messages,
+    "BoundsMessages",
+    r#"
+public class BoundsMessages {
+    static void show(String label, Runnable body) {
+        try {
+            body.run();
+            System.out.println(label + " -> ok");
+        } catch (RuntimeException e) {
+            System.out.println(label + " -> " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    static void probe(String name, String s) {
+        show(name + " charAt-1", () -> s.charAt(-1));
+        show(name + " charAt+", () -> s.charAt(s.length()));
+        show(name + " cpAt-1", () -> s.codePointAt(-1));
+        show(name + " cpAt+", () -> s.codePointAt(s.length()));
+        show(name + " cpBefore0", () -> s.codePointBefore(0));
+        show(name + " sub-1", () -> s.substring(-1));
+        show(name + " subRange", () -> s.substring(2, 1));
+        show(name + " offset", () -> s.offsetByCodePoints(0, 9));
+        show(name + " cpCount", () -> s.codePointCount(0, 9));
+    }
+
+    public static void main(String[] args) {
+        probe("ascii", "abcde");
+        probe("latin1", "éx");
+        probe("utf16", "Āx");
+        probe("astral", "😀");
+        probe("empty", "");
+    }
+}
+"#
+);
