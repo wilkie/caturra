@@ -3937,6 +3937,38 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### Regex inline flags and named groups (2026-08-13)
+
+The last two families the 13,728-line sweep refused. With these the whole
+cross product is byte-identical, and so are five smaller probes written while
+closing them: **14,621 lines, zero divergences**.
+
+**Inline flags.** `(?i)`, `(?s)`, `(?m)`, `(?x)`, scoped the way Java scopes
+them: a flag runs to the end of the group it sits in, `(?i:X)` limits it to
+`X`, and `(?-i)` turns it back off — so every group saves and restores the
+flag set around its body. `(?i)` is ASCII-only folding, which is Java's rule
+without `u`, and it is applied in ONE place by routing every literal through a
+fold-aware node, so `\Q...\E` and the escapes get it for free. Folding has to
+happen BEFORE negation: `(?i)[^a]` must reject `A`, and negating each case
+separately accepts it.
+
+`(?x)` changes LEXING, not matching, so it is a skip performed wherever a token
+is about to be read — Java ignores whitespace inside a character class and
+inside `{n, m}` bounds too, which is easy to miss and was the last case to
+fall.
+
+**The multiline anchor rule is the surprise.** `"".matches("(?m)^.*$")` is
+FALSE, though `^`, `.*` and `$` all look satisfiable at position 0. Java's
+`Caret` carries the reason as a comment — *"Perl does not match ^ at end of
+input even after newline"* — so a multiline `^` never fires at the end of the
+input, which for an empty string is position 0 as well. A CRLF pair is ONE
+terminator, so neither anchor fires between the CR and the LF.
+
+**Named groups.** `(?<name>X)`, `\k<name>`, and `${name}` in a replacement.
+The four ways to write one wrong carry Java's messages and caret indices,
+including that an EMPTY name (`(?<>a)`) reports "does not start with a Latin
+letter" rather than a length complaint of its own.
+
 ### Regex lookaround (2026-08-13)
 
 A sixteenth dimension took the regex engine at volume, because caturra MODELS
@@ -3966,8 +3998,7 @@ spec says it should not be, and the probe caught it. The bound now only
 narrows the backwards search; it is not a rule. The caret index is the body's
 last character, one before the closing paren, confirmed against five patterns.
 
-Still refused, and separately: inline flags (`(?i)`, `(?s)`, `(?m)`) and named
-groups (`(?<name>X)`).
+The other two families — inline flags and named groups — are closed below.
 
 ### copyOfRange reports arraycopy's bounds (2026-08-13)
 

@@ -2529,6 +2529,42 @@ fn expand_replacement(
             continue;
         }
         at += 1;
+        // `${name}` names a group written as `(?<name>X)`.
+        if replacement.get(at) == Some(&u16::from(b'{')) {
+            let mut name = String::new();
+            let mut cursor = at + 1;
+            while let Some(unit) = replacement.get(cursor).copied() {
+                if unit == u16::from(b'}') {
+                    break;
+                }
+                match u8::try_from(unit) {
+                    Ok(byte) if byte.is_ascii_alphanumeric() => name.push(char::from(byte)),
+                    _ => {
+                        return Err(throw(String::from(
+                            "java.lang.IllegalArgumentException: \
+                             named capturing group is missing trailing '}'",
+                        )));
+                    }
+                }
+                cursor += 1;
+            }
+            if replacement.get(cursor) != Some(&u16::from(b'}')) {
+                return Err(throw(String::from(
+                    "java.lang.IllegalArgumentException: \
+                     named capturing group is missing trailing '}'",
+                )));
+            }
+            let Some(index) = regex.group_named(&name) else {
+                return Err(throw(format!(
+                    "java.lang.IllegalArgumentException: No group with name {{{name}}}"
+                )));
+            };
+            if let Some((from, to)) = one.groups.get(index).copied().flatten() {
+                out.extend_from_slice(&input[from..to]);
+            }
+            at = cursor + 1;
+            continue;
+        }
         // Java takes the longest run of digits that still names a group.
         let mut group = None;
         while at < replacement.len() {

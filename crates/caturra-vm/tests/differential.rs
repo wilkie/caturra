@@ -25685,3 +25685,105 @@ public class LookbehindWidth {
 }
 "#
 );
+
+// Inline flags: `(?i)` CASE_INSENSITIVE (ASCII folding, which is Java's rule
+// without `u`), `(?s)` DOTALL, `(?m)` MULTILINE, `(?x)` COMMENTS. A flag runs
+// to the end of the group it sits in, `(?i:X)` scopes it to `X`, and `(?-i)`
+// turns it back off.
+differential_test!(
+    diff_regex_inline_flags,
+    "InlineFlags",
+    r#"
+public class InlineFlags {
+    public static void main(String[] args) {
+        String[] patterns = {
+            "(?i)abc", "(?i)[a-c]+", "(?i)[^a]", "(?i)(a)\\1", "(?i)\\Qa+B\\E",
+            "a(?i)b", "(?i:ab)c", "(?i)a(?-i)b", "((?i)a)b", "(?i)\\w+", "(?i)x|Y",
+            "(?s).*", "(?s)a.b", "(?m)^b", "(?m)b$", "(?m)^.*$", "(?im)^a$",
+            "(?x)a b", "(?x)a b#z", "(?x)[a b]", "(?x)a\\ b", "(?x)a{1, 2}",
+            "(?idmsux)a",
+        };
+        String[] inputs = {
+            "", "a", "A", "ab", "AB", "aBc", "aA", "a\nb", "b\na", "a\nb\n",
+            "a+B", "a b", "ab\nc", "aa", "Y", "c",
+        };
+        for (String pattern : patterns) {
+            for (String input : inputs) {
+                System.out.println(
+                    "[" + pattern + "][" + input.replace("\n", "\\n") + "] "
+                        + input.matches(pattern)
+                        + " " + input.replaceAll(pattern, "<>").replace("\n", "\\n"));
+            }
+        }
+    }
+}
+"#
+);
+
+// `(?m)^` never matches at the END of input — Java's own comment says "Perl
+// does not match ^ at end of input even after newline" — so
+// `"".matches("(?m)^.*$")` is FALSE though every part of it looks satisfiable.
+// A CRLF pair is one terminator, so neither anchor fires between the CR and
+// the LF.
+differential_test!(
+    diff_regex_multiline_anchors,
+    "MultilineAnchors",
+    r#"
+public class MultilineAnchors {
+    public static void main(String[] args) {
+        String[] patterns = {"(?m)^", "(?m)$", "(?m)^$", "(?m)^.*$", "^.*$", "^$", "(?m)^a$"};
+        String[] inputs = {"", "a", "\n", "a\n", "\na", "a\nb", "a\r\nb", "a\r\n"};
+        for (String pattern : patterns) {
+            for (String input : inputs) {
+                System.out.println(
+                    "[" + pattern + "][" + input.replace("\n", "\\n").replace("\r", "\\r") + "] "
+                        + input.matches(pattern)
+                        + " " + input.replaceAll(pattern, "<>")
+                            .replace("\n", "\\n").replace("\r", "\\r"));
+            }
+        }
+    }
+}
+"#
+);
+
+// Named groups: `(?<name>X)`, the `\k<name>` backreference, and a `${name}`
+// replacement — plus the four ways to write one wrong, whose messages and
+// caret indices are Java's.
+differential_test!(
+    diff_regex_named_groups,
+    "NamedGroups",
+    r#"
+public class NamedGroups {
+    public static void main(String[] args) {
+        String[][] cases = {
+            {"(?<name>a)", "abc", "<$0|${name}>"},
+            {"(?<x>a)(?<y>b)", "ab", "${y}${x}"},
+            {"(?<w>\\w+)@(?<d>\\w+)", "me@host", "${d}/${w}"},
+            {"(?<c>a)\\k<c>", "aa", "<>"},
+            {"(?<c>a)\\k<c>", "ab", "<>"},
+            {"(?i)(?<n>ab)\\k<n>", "AbaB", "<>"},
+            {"(?<n>a)", "aa", "[${n}]"},
+            {"(?<n>a)", "a", "$1"},
+            {"(?<n>a)", "a", "${missing}"},
+            {"(?<n>a)", "a", "${n"},
+            {"(?<1x>a)", "a", "x"},
+            {"(?<>a)", "a", "x"},
+            {"(?<n>a)(?<n>b)", "ab", "x"},
+            {"\\k<zz>", "a", "x"},
+        };
+        for (String[] one : cases) {
+            String out;
+            try {
+                out = one[1].replaceAll(one[0], one[2]);
+            } catch (RuntimeException e) {
+                String message = e.getMessage();
+                out = "! " + e.getClass().getSimpleName() + ": "
+                    + (message == null ? "" : message.split("\n")[0]);
+            }
+            System.out.println(one[0] + " | " + one[1] + " | " + one[2] + " -> " + out);
+        }
+    }
+}
+"#
+);

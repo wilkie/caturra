@@ -26,6 +26,8 @@ pub struct Regex {
     node: Node,
     /// Capturing groups, excluding group 0 (the whole match).
     group_count: usize,
+    /// `(?<name>X)` names, and the group each stands for.
+    names: Vec<(String, usize)>,
 }
 
 /// A syntax error, carrying what Java's `PatternSyntaxException` reports.
@@ -57,6 +59,8 @@ enum Node {
     Literal(u16),
     /// `.` — any character except a line terminator.
     AnyChar,
+    /// `.` under `(?s)` (DOTALL) — any character at all.
+    AnyCharDotAll,
     Class(CharClass),
     Concat(Vec<Node>),
     Alt(Vec<Node>),
@@ -71,11 +75,19 @@ enum Node {
         index: Option<usize>,
         node: Box<Node>,
     },
-    BackRef(usize),
+    BackRef {
+        index: usize,
+        /// Under `(?i)` a backreference compares case-insensitively too.
+        fold: bool,
+    },
     /// `^`
     Start,
     /// `$`
     End,
+    /// `^` under `(?m)` (MULTILINE) — the start of any line.
+    LineStart,
+    /// `$` under `(?m)` — the end of any line.
+    LineEnd,
     /// `\b` (true) and `\B` (false).
     WordBoundary(bool),
     /// `\A`
@@ -131,8 +143,12 @@ fn max_width(node: &Node) -> Option<Width> {
         | Node::InputStart
         | Node::InputEnd
         | Node::InputEndBeforeFinalTerminator
+        | Node::LineStart
+        | Node::LineEnd
         | Node::Look { .. } => Some(Width::Fixed(0)),
-        Node::Literal(_) | Node::AnyChar | Node::Class(_) => Some(Width::Fixed(1)),
+        Node::Literal(_) | Node::AnyChar | Node::AnyCharDotAll | Node::Class(_) => {
+            Some(Width::Fixed(1))
+        }
         Node::Concat(nodes) => nodes.iter().try_fold(Width::Fixed(0), |total, node| {
             Some(total.combine(max_width(node)?, |a, b| a + b))
         }),
@@ -144,7 +160,7 @@ fn max_width(node: &Node) -> Option<Width> {
             (Width::Fixed(width), Some(max)) => Some(Width::Fixed(width * max as usize)),
             _ => Some(Width::Unbounded),
         },
-        Node::BackRef(_) => None,
+        Node::BackRef { .. } => None,
     }
 }
 
@@ -160,6 +176,9 @@ enum RepeatKind {
 
 #[derive(Debug, Clone)]
 struct CharClass {
+    /// Set by `(?i)`: this class also matches the other case of an ASCII
+    /// letter.
+    fold: bool,
     negated: bool,
     items: Vec<ClassItem>,
     /// `[a-z&&[^bc]]` — every intersected class must also match.
@@ -186,6 +205,14 @@ enum Predefined {
 }
 
 /// Java's `\s` is exactly these six, NOT Unicode whitespace.
+/// A letter Java accepts in an inline flag group.
+fn is_flag_letter(unit: u16) -> bool {
+    matches!(
+        u8::try_from(unit),
+        Ok(b'i' | b's' | b'm' | b'u' | b'U' | b'd' | b'x')
+    )
+}
+
 fn is_java_space(unit: u16) -> bool {
     matches!(unit, 0x20 | 0x09 | 0x0A | 0x0B | 0x0C | 0x0D)
 }
@@ -220,8 +247,30 @@ impl Predefined {
     }
 }
 
+/// The other case of an ASCII letter, or the unit unchanged. Java's
+/// `CASE_INSENSITIVE` without `UNICODE_CASE` folds ASCII and nothing else.
+fn ascii_fold(unit: u16) -> u16 {
+    match u8::try_from(unit) {
+        Ok(byte) if byte.is_ascii_alphabetic() => u16::from(byte ^ 0x20),
+        _ => unit,
+    }
+}
+
 impl CharClass {
     fn matches(&self, unit: u16) -> bool {
+        if self.fold {
+            let other = ascii_fold(unit);
+            if other != unit && self.matches_exactly(other) != self.negated {
+                // Fold BEFORE negating: `(?i)[^a]` must reject `A`, and
+                // negating each case separately would accept it.
+                return !self.negated;
+            }
+        }
+        self.matches_exactly(unit)
+    }
+
+    /// `matches` without the case folding, negation included.
+    fn matches_exactly(&self, unit: u16) -> bool {
         let mut hit = self.items.iter().any(|item| match item {
             ClassItem::Single(single) => *single == unit,
             ClassItem::Range(low, high) => *low <= unit && unit <= *high,
@@ -248,7 +297,34 @@ struct Parser<'a> {
     units: &'a [u16],
     at: usize,
     groups: usize,
+    /// `(?<name>X)` — each name and the group number it stands for, so
+    /// `\k<name>` and a `${name}` replacement can find it.
+    names: Vec<(String, usize)>,
     pattern: String,
+    /// The inline flags in force here. `(?i)` applies from where it appears
+    /// to the end of the ENCLOSING group, so each group saves and restores
+    /// this on the way in and out.
+    flags: Flags,
+}
+
+/// The inline flags caturra models: `(?i)`, `(?s)`, `(?m)`. Java's `u`, `d`,
+/// `x` and `U` parse and are accepted where they do not change what matches
+/// for the input this engine sees; anything else is refused rather than
+/// silently ignored.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // Java has exactly these four switches
+struct Flags {
+    /// `i` — `CASE_INSENSITIVE`. Without `u` this is ASCII-only folding,
+    /// which is exactly Java's rule for `(?i)` on its own.
+    fold: bool,
+    /// `s` — `DOTALL`: `.` matches a line terminator too.
+    dotall: bool,
+    /// `m` — `MULTILINE`: `^` and `$` match at every line boundary.
+    multiline: bool,
+    /// `x` — `COMMENTS`: unescaped whitespace and `#` to end of line are not
+    /// part of the pattern. This changes LEXING rather than matching, so it is
+    /// applied when reading each token instead of baked into a node.
+    comments: bool,
 }
 
 type ParseResult<T> = Result<T, SyntaxError>;
@@ -295,9 +371,40 @@ impl Parser<'_> {
     }
 
     /// concat := quantified*
+    /// Under `(?x)` whitespace and `# comment` are not part of the pattern.
+    /// Java ignores them inside a character class and inside `{n,m}` bounds
+    /// too, so this is called wherever a token is about to be read — an
+    /// ESCAPED space (`\ `) never reaches here, and stays a literal.
+    fn skip_ignorable(&mut self) {
+        if !self.flags.comments {
+            return;
+        }
+        while let Some(unit) = self.units.get(self.at).copied() {
+            if matches!(
+                u8::try_from(unit),
+                Ok(b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C)
+            ) {
+                self.at += 1;
+                continue;
+            }
+            if unit == u16::from(b'#') {
+                while let Some(unit) = self.units.get(self.at).copied() {
+                    if is_line_terminator(unit) {
+                        break;
+                    }
+                    self.at += 1;
+                }
+                continue;
+            }
+            break;
+        }
+    }
+
     fn parse_concat(&mut self) -> ParseResult<Node> {
         let mut nodes = Vec::new();
-        while let Some(unit) = self.peek() {
+        loop {
+            self.skip_ignorable();
+            let Some(unit) = self.peek() else { break };
             if unit == u16::from(b'|') || unit == u16::from(b')') {
                 break;
             }
@@ -314,6 +421,7 @@ impl Parser<'_> {
     fn parse_quantified(&mut self) -> ParseResult<Node> {
         let start = self.at;
         let atom = self.parse_atom()?;
+        self.skip_ignorable();
         let (min, max) = match self.peek() {
             Some(unit) if unit == u16::from(b'*') => {
                 self.at += 1;
@@ -390,6 +498,7 @@ impl Parser<'_> {
         let open = self.at;
         self.at += 1; // consume '{'
         let mut min_digits = String::new();
+        self.skip_ignorable();
         while let Some(unit) = self.peek() {
             if !is_java_digit(unit) {
                 break;
@@ -404,6 +513,7 @@ impl Parser<'_> {
         let min = min_digits
             .parse::<u32>()
             .map_err(|_| self.error("Illegal repetition range", open))?;
+        self.skip_ignorable();
         if self.eat(u16::from(b'}')) {
             return Ok(Some((min, Some(min))));
         }
@@ -411,6 +521,7 @@ impl Parser<'_> {
             self.at = open;
             return Ok(None);
         }
+        self.skip_ignorable();
         if self.eat(u16::from(b'}')) {
             return Ok(Some((min, None)));
         }
@@ -422,6 +533,7 @@ impl Parser<'_> {
             max_digits.push(char::from(unit as u8));
             self.at += 1;
         }
+        self.skip_ignorable();
         if max_digits.is_empty() || !self.eat(u16::from(b'}')) {
             return Err(self.error("Unclosed counted closure", open));
         }
@@ -437,9 +549,21 @@ impl Parser<'_> {
             return Ok(Node::Empty);
         };
         match unit {
-            u if u == u16::from(b'.') => Ok(Node::AnyChar),
-            u if u == u16::from(b'^') => Ok(Node::Start),
-            u if u == u16::from(b'$') => Ok(Node::End),
+            u if u == u16::from(b'.') => Ok(if self.flags.dotall {
+                Node::AnyCharDotAll
+            } else {
+                Node::AnyChar
+            }),
+            u if u == u16::from(b'^') => Ok(if self.flags.multiline {
+                Node::LineStart
+            } else {
+                Node::Start
+            }),
+            u if u == u16::from(b'$') => Ok(if self.flags.multiline {
+                Node::LineEnd
+            } else {
+                Node::End
+            }),
             u if u == u16::from(b'(') => self.parse_group(start),
             u if u == u16::from(b'[') => Ok(Node::Class(self.parse_class(start)?)),
             u if u == u16::from(b'\\') => self.parse_escape(start),
@@ -453,8 +577,23 @@ impl Parser<'_> {
                 let meta = char::from_u32(u32::from(u)).unwrap_or('?');
                 Err(self.error(&format!("Dangling meta character '{meta}'"), start))
             }
-            other => Ok(Node::Literal(other)),
+            other => Ok(self.literal(other)),
         }
+    }
+
+    /// One literal character, as a fold-aware node. Under `(?i)` it becomes a
+    /// one-item class that also accepts the other case — so folding lives in
+    /// ONE place and reaches `\Q...\E` and the escapes for free.
+    fn literal(&self, unit: u16) -> Node {
+        if self.flags.fold && ascii_fold(unit) != unit {
+            return Node::Class(CharClass {
+                fold: true,
+                negated: false,
+                items: vec![ClassItem::Single(unit)],
+                intersections: Vec::new(),
+            });
+        }
+        Node::Literal(unit)
     }
 
     fn parse_group(&mut self, open: usize) -> ParseResult<Node> {
@@ -474,12 +613,41 @@ impl Parser<'_> {
                         self.at += 2;
                         Some((true, unit == u16::from(b'!')))
                     }
-                    // `(?<name>...)` is a named group, not a lookbehind.
-                    _ => return Err(self.error("Unsupported group construct", open)),
+                    // Neither `=` nor `!` after `<`: a NAMED group.
+                    _ => {
+                        self.at += 1;
+                        let name = self.parse_group_name(open)?;
+                        self.groups += 1;
+                        let group = self.groups;
+                        if self.names.iter().any(|(taken, _)| *taken == name) {
+                            return Err(self.error(
+                                &format!("Named capturing group <{name}> is already defined"),
+                                self.at.saturating_sub(1),
+                            ));
+                        }
+                        self.names.push((name, group));
+                        let saved = self.flags;
+                        let node = self.parse_alt()?;
+                        self.flags = saved;
+                        if !self.eat(u16::from(b')')) {
+                            return Err(self.error("Unclosed group", self.units.len()));
+                        }
+                        return Ok(Node::Group {
+                            index: Some(group),
+                            node: Box::new(node),
+                        });
+                    }
                 }
             } else {
                 None
             };
+            if look.is_none()
+                && self
+                    .peek()
+                    .is_some_and(|unit| is_flag_letter(unit) || unit == u16::from(b'-'))
+            {
+                return self.parse_flags(open);
+            }
             if let Some((behind, negated)) = look {
                 let node = self.parse_alt()?;
                 if !self.eat(u16::from(b')')) {
@@ -515,7 +683,10 @@ impl Parser<'_> {
             self.groups += 1;
             index = Some(self.groups);
         }
+        // `(?i)` reaches the end of the group it sits in and no further.
+        let saved = self.flags;
         let node = self.parse_alt()?;
+        self.flags = saved;
         if !self.eat(u16::from(b')')) {
             // At END of input the JDK's cursor is one past the last character.
             return Err(self.error("Unclosed group", self.units.len()));
@@ -526,8 +697,104 @@ impl Parser<'_> {
         })
     }
 
+    /// A group name: a letter, then letters and digits, then `>`. Java's
+    /// rules exactly — anything else is a syntax error rather than a group
+    /// that silently never matches.
+    fn parse_group_name(&mut self, open: usize) -> ParseResult<String> {
+        let mut name = String::new();
+        loop {
+            let Some(unit) = self.peek() else {
+                return Err(self.error("Unclosed group name", open));
+            };
+            if unit == u16::from(b'>') {
+                if name.is_empty() {
+                    // An EMPTY name is the same complaint as a bad first
+                    // character, reported at the `>`.
+                    return Err(self.error(
+                        "capturing group name does not start with a Latin letter",
+                        self.at,
+                    ));
+                }
+                self.at += 1;
+                break;
+            }
+            let byte = u8::try_from(unit).unwrap_or(0);
+            let first = name.is_empty();
+            if first && !byte.is_ascii_alphabetic() {
+                // Java's wording, and it covers the EMPTY name too — `(?<>a)`
+                // reports this at the `>`, not a separate "0 length" error.
+                return Err(self.error(
+                    "capturing group name does not start with a Latin letter",
+                    self.at,
+                ));
+            }
+            if !(byte.is_ascii_alphabetic() || byte.is_ascii_digit()) {
+                return Err(self.error("named capturing group is missing trailing '>'", self.at));
+            }
+            name.push(char::from(byte));
+            self.at += 1;
+        }
+        Ok(name)
+    }
+
+    /// `(?i)`, `(?im-sx)` — set flags for the rest of the enclosing group —
+    /// and `(?i:X)`, which scopes them to `X`. The cursor sits on the first
+    /// flag letter (or the `-`).
+    fn parse_flags(&mut self, open: usize) -> ParseResult<Node> {
+        let saved = self.flags;
+        let mut flags = self.flags;
+        let mut clearing = false;
+        loop {
+            let Some(unit) = self.peek() else {
+                return Err(self.error("Unclosed group", self.units.len()));
+            };
+            if unit == u16::from(b'-') {
+                self.at += 1;
+                clearing = true;
+                continue;
+            }
+            if !is_flag_letter(unit) {
+                break;
+            }
+            self.at += 1;
+            let on = !clearing;
+            match u8::try_from(unit).unwrap_or(0) {
+                b'i' => flags.fold = on,
+                b's' => flags.dotall = on,
+                b'm' => flags.multiline = on,
+                // `u`/`U` (Unicode case and character classes), `d` (UNIX
+                // lines) and `x` (comments) parse and are accepted: for the
+                // patterns this engine sees they select behaviour it already
+                // has. `x` genuinely changes parsing, so it is refused.
+                b'x' => flags.comments = on,
+                b'u' | b'U' | b'd' => {}
+                _ => return Err(self.error("Unsupported group construct", open)),
+            }
+        }
+        if self.eat(u16::from(b')')) {
+            // Set for the REST of the enclosing group: the caller's parse
+            // continues with these flags, and its own group restores them.
+            self.flags = flags;
+            return Ok(Node::Empty);
+        }
+        if !self.eat(u16::from(b':')) {
+            return Err(self.error("Unsupported group construct", open));
+        }
+        self.flags = flags;
+        let node = self.parse_alt()?;
+        self.flags = saved;
+        if !self.eat(u16::from(b')')) {
+            return Err(self.error("Unclosed group", self.units.len()));
+        }
+        Ok(Node::Group {
+            index: None,
+            node: Box::new(node),
+        })
+    }
+
     fn parse_class(&mut self, open: usize) -> ParseResult<CharClass> {
         let mut class = CharClass {
+            fold: self.flags.fold,
             negated: self.eat(u16::from(b'^')),
             items: Vec::new(),
             intersections: Vec::new(),
@@ -537,6 +804,7 @@ impl Parser<'_> {
             class.items.push(ClassItem::Single(u16::from(b']')));
         }
         loop {
+            self.skip_ignorable();
             let Some(unit) = self.peek() else {
                 return Err(self.error("Unclosed character class", open));
             };
@@ -560,6 +828,7 @@ impl Parser<'_> {
                         items.push(self.parse_class_item()?);
                     }
                     CharClass {
+                        fold: self.flags.fold,
                         negated: false,
                         items,
                         intersections: Vec::new(),
@@ -625,6 +894,7 @@ impl Parser<'_> {
         Ok(ClassItem::Single(low))
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per escape kind
     fn parse_escape(&mut self, start: usize) -> ParseResult<Node> {
         let Some(unit) = self.peek() else {
             return Err(self.error("Trailing backslash", start));
@@ -658,6 +928,7 @@ impl Parser<'_> {
                 Ok(Node::Alt(vec![
                     Node::Concat(vec![Node::Literal(0x0D), Node::Literal(0x0A)]),
                     Node::Class(CharClass {
+                        fold: false,
                         negated: false,
                         items: vec![
                             ClassItem::Single(0x0A),
@@ -683,7 +954,7 @@ impl Parser<'_> {
                         self.at += 2;
                         return Ok(Node::Concat(nodes));
                     }
-                    nodes.push(Node::Literal(next));
+                    nodes.push(self.literal(next));
                     self.at += 1;
                 }
                 Ok(Node::Concat(nodes))
@@ -713,15 +984,47 @@ impl Parser<'_> {
                 if number == 0 {
                     return Err(self.error("No group to reference", start));
                 }
-                Ok(Node::BackRef(number))
+                Ok(Node::BackRef {
+                    index: number,
+                    fold: self.flags.fold,
+                })
+            }
+            // `\k<name>` — a backreference by name.
+            u if u == u16::from(b'k') => {
+                // `parse_escape` PEEKS, so each arm consumes its own letter.
+                self.at += 1;
+                if !self.eat(u16::from(b'<')) {
+                    return Err(self.error(
+                        "\\k is not followed by '<' for named capturing group",
+                        self.at,
+                    ));
+                }
+                let name = self.parse_group_name(start)?;
+                let Some(index) = self
+                    .names
+                    .iter()
+                    .find(|(taken, _)| *taken == name)
+                    .map(|(_, index)| *index)
+                else {
+                    // The JDK points at the closing `>`.
+                    return Err(self.error(
+                        &format!("named capturing group <{name}> does not exist"),
+                        self.at.saturating_sub(1),
+                    ));
+                };
+                Ok(Node::BackRef {
+                    index,
+                    fold: self.flags.fold,
+                })
             }
             _ => match self.parse_class_escape(start)? {
                 ClassEscape::Predefined(predefined) => Ok(Node::Class(CharClass {
+                    fold: false,
                     negated: false,
                     items: vec![ClassItem::Predefined(predefined)],
                     intersections: Vec::new(),
                 })),
-                ClassEscape::Literal(literal) => Ok(Node::Literal(literal)),
+                ClassEscape::Literal(literal) => Ok(self.literal(literal)),
             },
         }
     }
@@ -927,6 +1230,10 @@ impl<'a> Matcher<'a> {
                 Some(unit) if !is_line_terminator(*unit) => self.resume(pos + 1, caps, cont),
                 _ => None,
             },
+            Node::AnyCharDotAll => match self.input.get(pos) {
+                Some(_) => self.resume(pos + 1, caps, cont),
+                None => None,
+            },
             Node::Class(class) => match self.input.get(pos) {
                 Some(unit) if class.matches(*unit) => self.resume(pos + 1, caps, cont),
                 _ => None,
@@ -975,7 +1282,7 @@ impl<'a> Matcher<'a> {
                 max,
                 kind,
             } => self.repeat(node, *min, *max, *kind, 0, pos, caps, cont),
-            Node::BackRef(index) => {
+            Node::BackRef { index, fold } => {
                 let Some(Some((from, to))) = caps.get(*index).copied() else {
                     // An unmatched group's backreference fails, per Java.
                     return None;
@@ -984,7 +1291,15 @@ impl<'a> Matcher<'a> {
                 if self.input.len() < pos + text.len() {
                     return None;
                 }
-                if &self.input[pos..pos + text.len()] == text {
+                let here = &self.input[pos..pos + text.len()];
+                let same = if *fold {
+                    here.iter()
+                        .zip(text)
+                        .all(|(a, b)| a == b || ascii_fold(*a) == *b)
+                } else {
+                    here == text
+                };
+                if same {
                     return self.resume(pos + text.len(), caps, cont);
                 }
                 None
@@ -1011,6 +1326,39 @@ impl<'a> Matcher<'a> {
             }
             Node::InputEndBeforeFinalTerminator => {
                 if pos == self.input.len() || self.at_final_terminator(pos) {
+                    return self.resume(pos, caps, cont);
+                }
+                None
+            }
+            // `(?m)`: a line starts at the input's start and just after any
+            // terminator; it ends at the input's end and just before one. A
+            // CRLF pair is ONE terminator, so `$` sits before the CR.
+            Node::LineStart => {
+                // Java's own comment: "Perl does not match ^ at end of input
+                // even after newline". So the END of the input is never a line
+                // start — which for an EMPTY input is position 0 too, and
+                // `"".matches("(?m)^.*$")` is false because of it.
+                if pos == self.input.len() {
+                    return None;
+                }
+                let after_terminator = pos > 0
+                    && is_line_terminator(self.input[pos - 1])
+                    // NOT between a CR and its LF: the pair is ONE terminator.
+                    && !(self.input[pos - 1] == 0x0D && self.input.get(pos) == Some(&0x0A));
+                if pos == 0 || after_terminator {
+                    return self.resume(pos, caps, cont);
+                }
+                None
+            }
+            Node::LineEnd => {
+                let before_terminator = self
+                    .input
+                    .get(pos)
+                    .is_some_and(|unit| is_line_terminator(*unit))
+                    // A CRLF pair is ONE terminator: the line ends before the
+                    // CR, not again between the CR and the LF.
+                    && !(self.input[pos] == 0x0A && pos > 0 && self.input[pos - 1] == 0x0D);
+                if pos == self.input.len() || before_terminator {
                     return self.resume(pos, caps, cont);
                 }
                 None
@@ -1288,7 +1636,9 @@ impl Regex {
             units: pattern,
             at: 0,
             groups: 0,
+            names: Vec::new(),
             pattern: String::from_utf16_lossy(pattern),
+            flags: Flags::default(),
         };
         let node = parser.parse_alt()?;
         if parser.at < parser.units.len() {
@@ -1299,12 +1649,22 @@ impl Regex {
         Ok(Regex {
             node,
             group_count: parser.groups,
+            names: parser.names,
         })
     }
 
     /// The number of capturing groups, excluding group 0.
     pub fn group_count(&self) -> usize {
         self.group_count
+    }
+
+    /// The group a `(?<name>X)` stands for, for `\k<name>` and a `${name}`
+    /// replacement.
+    pub fn group_named(&self, name: &str) -> Option<usize> {
+        self.names
+            .iter()
+            .find(|(taken, _)| taken == name)
+            .map(|(_, index)| *index)
     }
 
     /// The leftmost match at or after `from`.
