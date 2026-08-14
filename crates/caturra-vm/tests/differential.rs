@@ -27095,3 +27095,82 @@ public class Inheritance {
 }
 "#
 );
+
+// Legal Java caturra REFUSED. Every other probe asks "does this run the same?",
+// which only reaches programs caturra accepts; this axis is the other one.
+// Two of the four findings are fixed here.
+differential_test!(
+    diff_legal_java_that_was_refused,
+    "LegalJava",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class LegalJava {
+    static class Shape {
+        String who() {
+            return "shape";
+        }
+    }
+
+    static class Square extends Shape {
+        @Override
+        String who() {
+            return "square";
+        }
+    }
+
+    static class Circle extends Shape {
+        @Override
+        String who() {
+            return "circle";
+        }
+    }
+
+    static double sum(List<? extends Number> values) {
+        double total = 0;
+        for (Number each : values) {
+            total += each.doubleValue();
+        }
+        return total;
+    }
+
+    public static void main(String[] args) {
+        // An annotation on a LOCAL declaration (JLS §14.4) — the idiom for an
+        // unchecked cast, and it read as "expected an expression".
+        Object erased = new ArrayList<String>();
+        @SuppressWarnings("unchecked")
+        List<String> recovered = (List<String>) erased;
+        recovered.add("x");
+        System.out.println(recovered);
+
+        @SuppressWarnings("unused")
+        final int annotated = 5;
+        System.out.println(annotated);
+
+        // `Arrays.asList` took its element from the FIRST argument, so a list
+        // that mixed them was refused. The element is the join of them all:
+        // mixed numerics at Number, two references at their nearest common
+        // supertype, anything else at Object.
+        System.out.println(Arrays.asList(1, 2.5));
+        System.out.println(sum(Arrays.asList(1, 2.5)));
+        System.out.println(sum(Arrays.asList(1, 2)));
+        System.out.println(Arrays.asList(1, "a"));
+
+        List<Shape> mixed = new ArrayList<>(Arrays.asList(new Square(), new Circle()));
+        StringBuilder walk = new StringBuilder();
+        for (Shape each : mixed) {
+            walk.append(each.who()).append(' ');
+        }
+        System.out.println(walk.toString().trim());
+
+        // Same element on both sides still keeps its exact type.
+        List<Integer> ints = Arrays.asList(1, 2);
+        System.out.println(ints + " " + (ints.get(0) + 1));
+        List<String> strings = Arrays.asList("a", "b");
+        System.out.println(strings + " " + strings.get(0).length());
+    }
+}
+"#
+);

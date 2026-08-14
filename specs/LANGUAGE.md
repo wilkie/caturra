@@ -4037,6 +4037,35 @@ right; it cannot find a hole they share.
 
 47 of 48 matched at that point; the last one is below.
 
+### Legal Java that caturra refused (2026-08-14)
+
+Every dimension so far asked "does this run the same?", which can only reach
+programs caturra ACCEPTS. The last two findings arrived the other way — a probe
+that would not compile — so a thirty-fourth went looking on purpose: 48 small
+programs, each accepted by javac, across generics, lambdas, control flow,
+nested classes and the awkward corners of the language. **Six were refused.**
+
+- **An annotation on a LOCAL declaration did not parse.** Members accepted
+  them; locals did not, so `@SuppressWarnings("unchecked") List<String> l =
+  (List<String>) o;` — the standard idiom for an unchecked cast — read as
+  "expected an expression". They are skipped now, and dropped rather than left
+  pending, so a local's annotation cannot attach itself to the next member.
+- **`Arrays.asList` read its element type off the FIRST argument**, so
+  `asList(1, 2.5)` was refused for the `2.5`. The element is the join of them
+  all now: mixed numerics at `Number` — which is what a `List<? extends
+  Number>` parameter needs, and `Object` would not satisfy — two references at
+  their nearest common supertype, and anything else at `Object`.
+
+That second fix is a good example of a coarse answer passing its own test and
+failing someone else's: falling to `Object` for every mismatch satisfied
+`asList(1, 2.5)` and broke `asList(new B(), new C())`, which the inheritance
+dimension's pinned test caught immediately.
+
+Recorded, not fixed: a `List<? super Integer>` parameter does not accept a
+`List<Number>`; a lambda whose body is itself a lambda; an array of a generic
+type (`new List[2]`, refused honestly); and a functional interface as a
+collection element, which was already documented.
+
 ### A diamond adopts its target (2026-08-14)
 
 A thirty-third dimension took inheritance and polymorphism — construction

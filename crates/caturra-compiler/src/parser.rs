@@ -2119,6 +2119,18 @@ impl Parser<'_> {
         if self.eat_symbol(";") {
             return Ok(None);
         }
+        // A local declaration may carry annotations (JLS §14.4:
+        // `@SuppressWarnings("unchecked") List<String> l = (List<String>) o;`
+        // is the idiom for an unchecked cast). Only members accepted them, so
+        // an annotated local read as "expected an expression".
+        //
+        // They are dropped rather than recorded: caturra acts on no annotation
+        // anywhere, and leaving them PENDING would attach a local's annotation
+        // to whatever member was declared next.
+        while matches!(self.peek(), Some(TokenKind::Symbol("@"))) {
+            self.skip_annotation();
+            self.pending_annotations.clear();
+        }
         // A label: `identifier : statement`. Unambiguous at statement
         // start — a bare expression there can't have a top-level `:`.
         if let Some(TokenKind::Identifier(name)) = self.peek()

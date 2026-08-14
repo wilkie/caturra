@@ -21378,10 +21378,59 @@ impl BodyGen<'_> {
                 scalar
             }
         } else {
-            let scalar = args
-                .first()
-                .and_then(|a| collection_elem_of(self.type_of(a)))
-                .unwrap_or(object_elem);
+            // The element is the join of EVERY argument, not the first one's:
+            // `Arrays.asList(1, 2.5)` is a list of `Number`, and reading the
+            // element off the leading `1` refused the `2.5` that followed.
+            // Mixed arguments fall to `Object`, which boxes each in turn and
+            // prints what a JDK prints.
+            let mut scalar = None;
+            let mut mixed = false;
+            for arg in args {
+                let each = collection_elem_of(self.type_of(arg));
+                match (scalar, each) {
+                    (None, found) => scalar = found,
+                    (Some(seen), Some(found)) if seen != found => {
+                        // Two REFERENCE elements join at their nearest common
+                        // supertype: `asList(new Square(), new Circle())` is a
+                        // list of `Shape`, and `asList(new B(), new C())` where
+                        // `C extends B` is a list of `B`.
+                        match self.join_reference_elems(seen, found) {
+                            Some(joined) => scalar = Some(joined),
+                            None => mixed = true,
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Mixed NUMERIC arguments join at `Number`, which is what javac
+            // infers and what a `List<? extends Number>` parameter needs;
+            // anything else joins at `Object`.
+            let numeric = |elem: Option<ElemType>| {
+                matches!(
+                    elem,
+                    Some(
+                        ElemType::Int
+                            | ElemType::Long
+                            | ElemType::Double
+                            | ElemType::Float
+                            | ElemType::Short
+                            | ElemType::Byte
+                            | ElemType::Wrapper(_)
+                    )
+                )
+            };
+            let all_numeric = !args.is_empty()
+                && args
+                    .iter()
+                    .all(|arg| numeric(collection_elem_of(self.type_of(arg))));
+            let scalar = if mixed {
+                self.table
+                    .class_id("Number")
+                    .filter(|_| all_numeric)
+                    .map_or(object_elem, ElemType::Object)
+            } else {
+                scalar.unwrap_or(object_elem)
+            };
             self.emit_array_literal(
                 args,
                 JType::Array {
@@ -24889,6 +24938,34 @@ impl BodyGen<'_> {
     /// error: once primitives box, EVERY pair of types joins — at worst at
     /// `Object`, the erased least upper bound — which is why javac accepts
     /// `t ? "s" : 1` and `t ? aBoolean : anInteger`.
+    /// The nearest common supertype of two REFERENCE elements, or `None` when
+    /// they are not both references (a primitive pairing joins elsewhere).
+    ///
+    /// `Object` is a valid answer, but only when the walk actually reaches it:
+    /// falling to `Object` for every mismatch loses the `Shape` that a
+    /// `List<? extends Shape>` parameter needs.
+    fn join_reference_elems(&self, left: ElemType, right: ElemType) -> Option<ElemType> {
+        let (ElemType::Object(left), ElemType::Object(right)) = (left, right) else {
+            return None;
+        };
+        if self.table.is_subtype(left, right) {
+            return Some(ElemType::Object(right));
+        }
+        if self.table.is_subtype(right, left) {
+            return Some(ElemType::Object(left));
+        }
+        // Walk the left side's ancestors until one covers the right.
+        let mut current = Some(left);
+        for _ in 0..=self.table.class_names.len() {
+            let id = current?;
+            if self.table.is_subtype(right, id) {
+                return Some(ElemType::Object(id));
+            }
+            current = self.table.info_by_id(id).and_then(|info| info.superclass);
+        }
+        Some(ElemType::Object(self.table.object_id))
+    }
+
     fn conditional_join(&mut self, then: &Expr, els: &Expr) -> JType {
         let then_ty = self.type_of(then);
         let els_ty = self.type_of(els);
