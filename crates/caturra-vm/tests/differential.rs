@@ -26152,3 +26152,55 @@ public class Classification {
 }
 "#
 );
+
+// An UNPAIRED surrogate is a `char` like any other: it must survive being
+// stored, concatenated, appended, boxed and re-read, and reach the console as
+// the `?` a JDK's encoder substitutes — never as U+FFFD, which is a different
+// character a program can also legitimately print. Every path here went
+// through a Rust `String` at some point, which cannot hold one, so the unit
+// was REPLACED rather than copied.
+differential_test!(
+    diff_unpaired_surrogates_survive,
+    "Surrogates",
+    r#"
+public class Surrogates {
+    public static void main(String[] args) {
+        String emoji = "😀";
+        char high = emoji.charAt(0);
+
+        System.out.println("raw " + (int) high);
+        System.out.println("valueOf " + (int) String.valueOf(high).charAt(0));
+        System.out.println("concat " + (int) ("" + high).charAt(0));
+
+        Object boxed = emoji.charAt(0);
+        System.out.println("object " + (int) ("x" + boxed).charAt(1));
+        System.out.println("objectValueOf " + (int) String.valueOf(boxed).charAt(0));
+
+        Character typed = emoji.charAt(0);
+        System.out.println("typed " + (int) ("x" + typed).charAt(1));
+        System.out.println("toString " + (int) typed.toString().charAt(0));
+
+        StringBuilder builder = new StringBuilder();
+        builder.append(high).append(boxed).append(String.valueOf(high));
+        System.out.println("builder " + builder.length() + " " + (int) builder.charAt(2));
+
+        // Rebuilding and reversing a string that holds an astral character.
+        String source = "ab😀cd";
+        StringBuilder rebuilt = new StringBuilder();
+        for (int i = 0; i < source.length(); i++) {
+            rebuilt.append(source.charAt(i));
+        }
+        System.out.println("rebuilt " + rebuilt.toString().equals(source));
+
+        String reversed = "";
+        for (int i = source.length() - 1; i >= 0; i--) {
+            reversed += source.charAt(i);
+        }
+        System.out.println("reversed " + reversed.length() + " " + (int) reversed.charAt(2));
+        System.out.println("printed " + reversed);
+        System.out.println(new StringBuilder(source).reverse());
+        System.out.println(java.util.Arrays.toString(emoji.toCharArray()));
+    }
+}
+"#
+);

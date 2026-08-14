@@ -4469,6 +4469,15 @@ fn boxed_virtual(
         "isNaN" => Ok(Some(JValue::Int(i32::from(as_double(value).is_nan())))),
         "isInfinite" => Ok(Some(JValue::Int(i32::from(as_double(value).is_infinite())))),
         "toString" => {
+            // A `Character` is its UNIT, which may be an unpaired surrogate no
+            // Rust `String` can hold. `String.valueOf(Object)` and a concat
+            // whose operand is statically `Object` both lower to this
+            // `toString`, so rendering it as text replaced the character.
+            if let ("java/lang/Character", JValue::Int(unit)) = (class_name, value) {
+                let unit = u16::try_from(unit).unwrap_or(u16::MAX);
+                let reference = heap.alloc(HeapObject::JavaString(vec![unit]));
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
             let text = boxed_to_string(class_name, value);
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
         }

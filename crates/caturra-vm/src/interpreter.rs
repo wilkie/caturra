@@ -5703,6 +5703,27 @@ impl<'run> Interpreter<'run> {
         Ok(true)
     }
 
+    /// A boxed `Character` as a one-unit string, or `None` for anything else.
+    /// Its unit may be an unpaired surrogate, which no Rust `String` can hold,
+    /// so this deliberately never goes through one.
+    fn boxed_char_string(&mut self, value: JValue) -> Option<HeapRef> {
+        use crate::value::HeapObject;
+        let JValue::Ref(Some(boxed)) = value else {
+            return None;
+        };
+        let Some(HeapObject::Boxed { class_name, value }) = self.heap.get(boxed) else {
+            return None;
+        };
+        if &**class_name != "java/lang/Character" {
+            return None;
+        }
+        let JValue::Int(unit) = *value else {
+            return None;
+        };
+        let unit = u16::try_from(unit).unwrap_or(u16::MAX);
+        Some(self.heap.alloc(HeapObject::JavaString(vec![unit])))
+    }
+
     /// `println(Object)` and `StringBuilder.append(Object)` render their
     /// argument, which may call a user `toString()`. Rather than duplicate
     /// the console-capturing and appending logic, render the argument here
@@ -5726,17 +5747,7 @@ impl<'run> Interpreter<'run> {
             ) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
             _ => return Ok(None),
         };
-        // A boxed `Character` renders as its UNIT. Going through
-        // `string_value_of` would convert it by way of a Rust `String`, which
-        // cannot hold an unpaired surrogate, so `"" + someChar` replaced the
-        // character instead of copying it.
-        if let JValue::Ref(Some(boxed)) = args[0]
-            && let Some(HeapObject::Boxed { class_name, value }) = self.heap.get(boxed)
-            && &**class_name == "java/lang/Character"
-            && let JValue::Int(unit) = *value
-        {
-            let unit = u16::try_from(unit).unwrap_or(u16::MAX);
-            let reference = self.heap.alloc(HeapObject::JavaString(vec![unit]));
+        if let Some(reference) = self.boxed_char_string(args[0]) {
             return Ok(Some((string_form, JValue::Ref(Some(reference)))));
         }
         let text = self.string_value_of(args[0], 0)?;
@@ -9885,8 +9896,16 @@ impl<'run> Interpreter<'run> {
             && descriptor == "(Ljava/lang/Object;)Ljava/lang/String;"
             && let Some(value) = args.first().copied()
         {
-            let text = self.string_value_of(value, 0)?;
-            let reference = self.heap.alloc_string(&text);
+            // A boxed `Character` is its UNIT. `string_value_of` renders by
+            // way of a Rust `String`, which cannot hold an unpaired surrogate,
+            // and a concatenation whose operand is statically `Object` lands
+            // here — so `"x" + someChar` replaced the character.
+            let reference = if let Some(reference) = self.boxed_char_string(value) {
+                reference
+            } else {
+                let text = self.string_value_of(value, 0)?;
+                self.heap.alloc_string(&text)
+            };
             frame.stack.push(JValue::Ref(Some(reference)));
             return Ok(None);
         }

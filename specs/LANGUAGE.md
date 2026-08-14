@@ -3960,12 +3960,28 @@ rather than renderings:
   copied. That is why `"a😀cd"` reversed char by char could not round-trip.
 - **`StringBuilder.append(Object)` on a boxed `Character`** did the same.
 
-Still open, and now precisely bounded: `String.valueOf(Object)` and a
-concatenation whose operand is statically `Object` render a boxed `Character`
-through `object_display`, which returns a Rust `String`. Writing the same value
-through a `Character`-typed or `char`-typed operand is exact, as is every
-`StringBuilder` path. And a lone surrogate written as a `\uXXXX` CHAR LITERAL
-is lost in the compiler's pre-lex pass, which also works in Rust strings.
+Those bounded the last of it, and the rest is closed below.
+
+### An unpaired surrogate is a char like any other (2026-08-14)
+
+Following the bound stated above to its end. `String.valueOf(Object)`, and a
+concatenation whose operand is statically `Object`, both lower to
+`obj.toString()` — so the loss was in the boxed wrapper's `toString`, not in
+`object_display` as the bound had guessed. A `Character` is its UNIT, and it is
+now answered as one.
+
+With that, **the 24,371-line String cross product is byte-identical**, and an
+unpaired surrogate survives being stored, concatenated, appended, boxed and
+re-read, reaching the console as the `?` a JDK's encoder substitutes rather
+than as U+FFFD — a different character a program can also legitimately print,
+which is why the two must never be conflated. Every path is pinned.
+
+One case remains, and it is the one place a Rust `String` is unavoidable: a
+lone surrogate written as a `\uXXXX` CHAR LITERAL is lost in the compiler's
+pre-lex pass, which processes those escapes across the whole source before
+lexing, as Java specifies. Fixing it means pre-lexing into UTF-16 units rather
+than text. Every surrogate that arrives from DATA — which is every one a
+correct program has — is exact.
 
 ### Unicode classification, carried rather than derived (2026-08-13)
 
