@@ -591,6 +591,9 @@ impl HeapObject {
 }
 
 /// The per-run object heap.
+/// `new StringBuilder()` starts here, and a `String` seed adds its length.
+pub const DEFAULT_BUILDER_CAPACITY: usize = 16;
+
 #[derive(Debug, Default)]
 pub struct Heap {
     objects: Vec<HeapObject>,
@@ -599,6 +602,12 @@ pub struct Heap {
     /// a == b` is true while `200 == 200` (out of range) is false. Keyed by
     /// (wrapper tag, value) — see [`Heap::box_wrapper`].
     wrapper_cache: std::collections::HashMap<(u8, i64), HeapRef>,
+    /// A builder's `capacity()`, which is HISTORY-dependent and so cannot be
+    /// derived from its contents: appending ten characters one at a time
+    /// leaves the initial 16, while appending forty at once jumps straight to
+    /// 40. A side table, so the `StringBuilder` variant stays a plain
+    /// `Vec<u16>` and keeps sharing its or-patterns with `JavaString`.
+    builder_capacity: std::collections::HashMap<HeapRef, usize>,
 }
 
 /// The autoboxing-cache key for a wrapper class and value, or `None` when the
@@ -643,6 +652,30 @@ impl Heap {
     /// boxings is true, while out-of-range values each get a fresh reference.
     /// Integer/Short/Byte/Long cache -128..=127, Character 0..=127, Boolean
     /// both values; Double/Float are never cached.
+    /// A builder's capacity: 16 by default, as `new StringBuilder()` has.
+    #[must_use]
+    pub fn builder_capacity(&self, reference: HeapRef) -> usize {
+        self.builder_capacity
+            .get(&reference)
+            .copied()
+            .unwrap_or(DEFAULT_BUILDER_CAPACITY)
+    }
+
+    pub fn set_builder_capacity(&mut self, reference: HeapRef, capacity: usize) {
+        self.builder_capacity.insert(reference, capacity);
+    }
+
+    /// Grow to hold `needed`, the way `AbstractStringBuilder` does: double and
+    /// add two, or jump straight to what is needed when that is still short.
+    pub fn grow_builder_capacity(&mut self, reference: HeapRef, needed: usize) {
+        let current = self.builder_capacity(reference);
+        if needed <= current {
+            return;
+        }
+        let doubled = current.saturating_mul(2).saturating_add(2);
+        self.set_builder_capacity(reference, doubled.max(needed));
+    }
+
     pub fn box_wrapper(&mut self, class: &str, value: JValue) -> HeapRef {
         let cache_key = wrapper_cache_key(class, value);
         if let Some(key) = cache_key

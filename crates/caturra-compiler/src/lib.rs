@@ -815,19 +815,17 @@ mod tests {
     /// A real Java 11 member caturra cannot model says so, rather than
     /// pretending it never existed.
     #[test]
-    fn string_builder_capacity_explains_itself() {
+    fn string_builder_capacity_compiles() {
+        // It used to be refused with an honest reason. The reason stopped
+        // being true once the VM tracked the backing array's size, so the
+        // refusal had to go with it.
         let result = compile(&[SourceFile {
             path: String::from("Main.java"),
             text: String::from(
                 "class Main { static void run() { int c = new StringBuilder().capacity(); } }",
             ),
         }]);
-        assert!(!result.success());
-        assert_eq!(
-            result.diagnostics[0].message,
-            "StringBuilder.capacity exists in Java, but caturra does not model a builder's \
-             capacity, only its contents"
-        );
+        assert!(result.success(), "{:?}", result.diagnostics);
     }
 
     /// The honest-reason table is keyed by class: a `File` method must not

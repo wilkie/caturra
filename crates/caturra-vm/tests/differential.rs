@@ -9801,12 +9801,6 @@ public class DiffArrayCopyObj {
 );
 
 stricter_than_javac!(
-    strict_string_builder_has_no_capacity,
-    "StrictSbCapacity",
-    "public class StrictSbCapacity { static int r() { return new StringBuilder().capacity(); } }"
-);
-
-stricter_than_javac!(
     strict_fill_checks_the_element_type_of_a_reference_array,
     "StrictFillObjArr",
     "import java.util.Arrays;\npublic class StrictFillObjArr { static void r() { Arrays.fill(new String[1], 5); } }"
@@ -26319,6 +26313,61 @@ public class BuilderSurface {
             .append((Object) null).append((String) null).append(new char[] {'x', 'y'});
         System.out.println(q(chain.toString()));
         System.out.println(q(new StringBuilder().appendCodePoint(0x1F600).toString()));
+    }
+}
+"#
+);
+
+// A builder's `capacity()` is HISTORY-dependent — appending ten characters one
+// at a time leaves the initial 16, while appending forty at once jumps to 40 —
+// so it cannot be derived from the contents and is tracked beside them. It used
+// to be refused with an honest reason; the reason stopped being true.
+differential_test!(
+    diff_string_builder_capacity,
+    "BuilderCapacity",
+    r#"
+public class BuilderCapacity {
+    public static void main(String[] args) {
+        System.out.println(new StringBuilder().capacity());
+        System.out.println(new StringBuilder(5).capacity());
+        System.out.println(new StringBuilder(0).capacity());
+        System.out.println(new StringBuilder("abc").capacity());
+        System.out.println(new StringBuilder("").capacity());
+
+        // The growth curve: double and add two, or jump to what is needed.
+        StringBuilder grown = new StringBuilder();
+        StringBuilder trace = new StringBuilder();
+        for (int i = 0; i < 40; i++) {
+            grown.append('x');
+            trace.append(grown.capacity()).append(' ');
+        }
+        System.out.println(trace.toString().trim());
+
+        StringBuilder jumped = new StringBuilder(2);
+        jumped.append("abcdefghij");
+        System.out.println(jumped.capacity());
+        jumped.trimToSize();
+        System.out.println(jumped.capacity());
+        jumped.ensureCapacity(100);
+        System.out.println(jumped.capacity());
+        jumped.ensureCapacity(1);
+        System.out.println(jumped.capacity());
+        jumped.setLength(0);
+        System.out.println(jumped.capacity() + " " + jumped.length());
+        jumped.trimToSize();
+        System.out.println(jumped.capacity());
+
+        // Deleting does not shrink it.
+        StringBuilder shrunk = new StringBuilder("abcdefghijklmnopqrstuvwxyz");
+        shrunk.delete(0, 20);
+        System.out.println(shrunk.capacity() + " " + shrunk.length());
+
+        try {
+            new StringBuilder(-1);
+            System.out.println("no throw");
+        } catch (NegativeArraySizeException e) {
+            System.out.println("NegativeArraySizeException " + e.getMessage());
+        }
     }
 }
 "#

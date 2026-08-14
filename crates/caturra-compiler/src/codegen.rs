@@ -7485,7 +7485,6 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
 #[rustfmt::skip]
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("String", "getBytes", "byte arrays are not supported by caturra"),
-    ("StringBuilder", "capacity", "caturra does not model a builder's capacity, only its contents"),
     // A class's access flags are not modelled, and could not be answered
     // honestly if they were: a LIBRARY class has no class file here, and a
     // nested one is flattened to the top level, so the `static` and `private`
@@ -10267,6 +10266,9 @@ const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
     bm("reverse", &[], BRet::Builder, "()Ljava/lang/StringBuilder;"),
     bm("setCharAt", &[I, C], BRet::Void, "(IC)V"),
     bm("setLength", &[I], BRet::Void, "(I)V"),
+    // The backing array's size, which is a function of how the builder was
+    // BUILT rather than of what it holds — so the VM tracks it.
+    bm("capacity", &[], BRet::Int, "()I"),
     bm("ensureCapacity", &[I], BRet::Void, "(I)V"),
     bm("trimToSize", &[], BRet::Void, "()V"),
     bm("indexOf", &[S], BRet::Int, "(Ljava/lang/String;)I"),

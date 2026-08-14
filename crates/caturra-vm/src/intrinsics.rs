@@ -197,16 +197,16 @@ pub fn invoke_special(
             }
             Ok(())
         }
-        // `new StringBuilder(capacity)`: a sizing hint with no observable
-        // effect — caturra models contents, not the backing array — EXCEPT
-        // that a negative capacity throws, as it allocates a `char[capacity]`.
+        // `new StringBuilder(capacity)`: the hint IS the capacity, and a
+        // negative one throws, as it allocates a `char[capacity]`.
         ("<init>", "(I)V") if matches!(heap.get(receiver), Some(HeapObject::StringBuilder(_))) => {
-            if let JValue::Int(capacity) = args[0]
-                && capacity < 0
-            {
-                return Err(throw(format!(
-                    "java.lang.NegativeArraySizeException: {capacity}"
-                )));
+            if let JValue::Int(capacity) = args[0] {
+                if capacity < 0 {
+                    return Err(throw(format!(
+                        "java.lang.NegativeArraySizeException: {capacity}"
+                    )));
+                }
+                heap.set_builder_capacity(receiver, usize::try_from(capacity).unwrap_or(0));
             }
             Ok(())
         }
@@ -313,21 +313,32 @@ pub fn invoke_special(
             // `new StringBuilder(otherBuilder)` reaches here too (a
             // StringBuilder IS a CharSequence), so read the argument's chars
             // whether it is a String or a builder.
-            let text = match &args[0] {
+            // The UNITS, not the text: routing through a Rust `String` would
+            // replace an unpaired surrogate rather than copy it.
+            let seed: Vec<u16> = match &args[0] {
                 JValue::Ref(Some(reference)) => match heap.get(*reference) {
                     Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
-                        String::from_utf16_lossy(units)
+                        units.clone()
                     }
                     _ => return Err(throw("java.lang.ClassCastException: not a String")),
                 },
                 JValue::Ref(None) => return Err(throw("java.lang.NullPointerException")),
                 _ => return Err(throw("java.lang.VerifyError: expected a String argument")),
             };
+            let text = String::from_utf16_lossy(&seed);
+            // `new StringBuilder(String)` reserves the seed's length plus the
+            // default 16.
+            if matches!(heap.get(receiver), Some(HeapObject::StringBuilder(_))) {
+                let sized = seed
+                    .len()
+                    .saturating_add(crate::value::DEFAULT_BUILDER_CAPACITY);
+                heap.set_builder_capacity(receiver, sized);
+            }
             match heap.get_mut(receiver) {
                 // `new String(String)` / `new StringBuilder(String)`: seed
                 // with a fresh copy of the chars (both store UTF-16 units).
                 Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
-                    *units = text.encode_utf16().collect();
+                    *units = seed;
                     Ok(())
                 }
                 Some(HeapObject::File(path)) => {
@@ -1679,10 +1690,9 @@ fn is_low_surrogate(unit: u16) -> bool {
 /// code units, exactly as `String` does, so indices mean what Java says
 /// they mean even across supplementary characters.
 ///
-/// `capacity` is deliberately absent — caturra models a builder's contents
-/// but not its backing array, so there is no honest number to return.
-/// `ensureCapacity`/`trimToSize` are therefore the no-ops they observably
-/// are without it.
+/// `capacity` is modelled too, in a side table on the heap: it is a pure
+/// function of how the builder was BUILT, not of what it now holds, so it
+/// cannot be derived from the contents.
 #[allow(clippy::too_many_lines)] // one method table
 fn builder_method(
     heap: &mut Heap,
@@ -1713,6 +1723,22 @@ fn builder_method(
 
     match (method, args) {
         ("length", []) => Ok(Some(JValue::Int(len))),
+        ("capacity", []) => Ok(Some(JValue::Int(
+            i32::try_from(heap.builder_capacity(receiver)).unwrap_or(i32::MAX),
+        ))),
+        ("ensureCapacity", [JValue::Int(wanted)]) => {
+            if let Ok(wanted) = usize::try_from(*wanted) {
+                heap.grow_builder_capacity(receiver, wanted);
+            }
+            Ok(None)
+        }
+        // `trimToSize` drops the slack — the one operation that SHRINKS it.
+        ("trimToSize", []) => {
+            if count < heap.builder_capacity(receiver) {
+                heap.set_builder_capacity(receiver, count);
+            }
+            Ok(None)
+        }
         ("charAt", [JValue::Int(index)]) => {
             let at = check_index(*index, count)?;
             Ok(Some(JValue::Int(i32::from(units[at]))))
@@ -1842,9 +1868,6 @@ fn builder_method(
             builder_store(heap, receiver, resized);
             Ok(None)
         }
-        // caturra does not model capacity, so there is nothing to reserve
-        // or release. See the doc comment above.
-        ("ensureCapacity", [JValue::Int(_)]) | ("trimToSize", []) => Ok(None),
         ("indexOf", [needle]) => Ok(Some(JValue::Int(index_of(&units, &arg_units(needle)?)))),
         ("indexOf", [needle, JValue::Int(from)]) => Ok(Some(JValue::Int(index_of_from(
             &units,
@@ -1940,6 +1963,9 @@ fn builder_method(
 
 /// Overwrite a builder's contents.
 fn builder_store(heap: &mut Heap, receiver: HeapRef, units: Vec<u16>) {
+    // Capacity only ever grows, and only when the contents outrun it — the
+    // one place every mutation passes through.
+    heap.grow_builder_capacity(receiver, units.len());
     let Some(HeapObject::StringBuilder(slot)) = heap.get_mut(receiver) else {
         unreachable!("receiver kind checked by caller");
     };

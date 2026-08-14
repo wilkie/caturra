@@ -3999,10 +3999,32 @@ Worth noting what the net bought: before it existed this would have been a
 silently dropped statement rather than a refusal, and a probe that prints
 nothing looks like a probe that passed.
 
-Recorded, not fixed: `capacity`, `ensureCapacity` and `trimToSize` are refused
-with an honest reason. Their values are fully determined (16, or `n`, or
-`length + 16`, growing by `(old << 1) + 2`), so this is a gap that could be
-closed rather than one that cannot be.
+That left `capacity`, `ensureCapacity` and `trimToSize` refused — closed below.
+
+### A builder's capacity (2026-08-14)
+
+The refusal said caturra "does not model a builder's capacity, only its
+contents", and gave that as an honest reason. It had stopped being a reason:
+capacity is fully determined — 16, or `n`, or the seed's `length + 16`, growing
+by `(old << 1) + 2` or straight to what is needed, and shrinking only on
+`trimToSize`. All verified against a real JDK.
+
+It cannot be derived from the contents, though, because it depends on HOW the
+builder was built: appending ten characters one at a time leaves the initial
+16, while appending forty at once jumps to 40. So it is stored — in a side
+table on the heap, following the exception traces, rather than as a field on
+the `StringBuilder` variant. That variant is a bare `Vec<u16>` and shares
+or-patterns with `JavaString` at a dozen sites; a struct field would have
+churned every one of them for a number none of them care about.
+
+Growth lives in `builder_store`, the single point every mutation already passes
+through, so no operation can grow the contents without the capacity noticing.
+
+Two smaller things came with it: `new StringBuilder(String)` was seeding
+through a Rust `String` and so replacing an unpaired surrogate rather than
+copying it — the last instance of that pattern — and the strictness list is one
+shorter, since a program using `capacity()` is no longer refused.
+
 
 ### A char literal is a code unit (2026-08-14)
 
