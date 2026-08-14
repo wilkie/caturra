@@ -2402,12 +2402,12 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   javac has it. `new Pair<String, Integer>(...)` constructs too — only
   single-parameter classes track their argument, but any class that declares
   type parameters may be parameterized.
-  **Still refused, deliberately:** a COVARIANT return (`String f()` overriding
-  `Object f()`). Dispatch is by descriptor, so it needs a bridge, and a bridge
-  differing only in return type cannot be written in source — its body would
-  resolve back to itself. Accepting it without one made `((A) new B()).f()`
-  answer A's method, a silent wrong answer; the refusal is the safe direction
-  and is pinned by `stricter_than_javac!`.
+  A COVARIANT return (`String f()` overriding `Object f()`) was refused here,
+  on the reasoning that dispatch is by descriptor and so it needs a bridge that
+  cannot be written in source. That was superseded on 2026-08-14: the VM
+  resolves an override by name and arity, so no bridge is involved, and the
+  dispatch corners are pinned by `differential_test!`. See "A covariant return,
+  and a lambda after a qualified call".
 - **Flow analysis** (`caturra-compiler/src/flow.rs`, 2026-07-18): statement
   reachability (JLS §14.21) and blank-final definite assignment (JLS §8.3.1.2,
   §16.9). Code after `return`/`throw`/`break`/`continue`, and the body of a
@@ -4190,6 +4190,53 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A covariant return, and a lambda after a qualified call (2026-08-14)
+
+Two refusals of legal Java, found by the dimension that writes ordinary
+programs and asserts only that they COMPILE.
+
+**A covariant return was refused.** `String f()` overriding `Object f()` is
+JLS 8.4.8.3, and every CSA textbook has it. The recorded justification —
+dispatch is by descriptor, so this needs a bridge method that cannot be written
+in source — had expired: the VM resolves an override by name and arity, so
+there is no bridge to write. The refusal outlived its cause, which is the same
+failure mode as the three stale "honest reasons" found earlier this round.
+
+Both override sites had to be fixed, and both were wrong for one reason. Each
+tested covariance by matching `(JType::Object(sub), JType::Object(sup))`.
+caturra gives `String`, arrays and the collections their own `JType` variants,
+so that pattern only ever matched user-declared classes and fell straight
+through on the textbook case. The test is now `widens` between any two
+REFERENCE types, which also keeps the two directions that must stay errors: a
+return that does not widen to the overridden one, and a primitive return
+(`int` does not override `long`, though it widens as a value).
+
+Dispatch was the thing to verify, not acceptance, since a wrong answer here
+would be silent. Pinned: the call through a supertype reference, through the
+interface, from an interface DEFAULT method, through a `List<I>` for-each, and
+`super.f()` still reaching the overridden method.
+
+**A lambda after a fully qualified call was refused.** This compiled:
+
+```java
+Arrays.asList(1, 2, 3).stream().filter(v -> v > 1)
+```
+
+and this did not:
+
+```java
+java.util.Arrays.asList(1, 2, 3).stream().filter(v -> v > 1)
+```
+
+with "a lambda or method reference is only allowed where a functional-interface
+type is expected". The lambda pass recognizes a library receiver in order to
+type the lambda's parameter, and every one of those tests compared a
+single-segment path — so writing the package name, which is always legal, hid
+the receiver and left the lambda with no target type. Now routed through one
+`names_library_class` helper that accepts either spelling, with the qualifier
+required to start at `java` or `javax` so a user class named `Arrays` is
+unaffected.
+
 ### A library Class handle stops misreporting itself (2026-08-14)
 
 Chasing the one remaining reflection divergence — `Class.forName` on a library
@@ -4829,10 +4876,18 @@ case cannot silently change direction, and neither list can grow unnoticed.
 
 **Stricter than javac** (caturra rejects; javac accepts). Each
 `stricter_than_javac!` test fails if javac ever starts rejecting the
-program, which would mean it is a shared rule rather than a strictness:
+program, which would mean it is a shared rule rather than a strictness.
 
-- `new StringBuilder().capacity()` — capacity is an implementation detail
-  of a growable buffer caturra does not model.
+This list was itself audited on 2026-08-14, by running every bullet rather
+than reading it, after a covariant return turned out to be documented as a
+deliberate refusal months after it should have been. Three bullets had gone
+stale in the safe direction — `new StringBuilder().capacity()`,
+`Collections.addAll(list, new Integer[] {1})` and the declarations
+`LinkedList`/`HashSet`/`TreeMap`/`TreeSet` all compile now — and `subList`,
+which has three pinned tests, had never been written down. A strictness that
+stops being true is not a bug, but a list that says it is exhaustive has to
+earn it.
+
 - `Arrays.fill(new String[1], 5)` — javac erases to `fill(Object[], Object)`
   and throws `ArrayStoreException` at run time.
 - `Arrays.sort(new Plain[2])` where `Plain` is not `Comparable` — javac
@@ -4840,11 +4895,13 @@ program, which would mean it is a shared rule rather than a strictness:
 - `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
   and it answers 0.
 - `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`.
-- `Collections.addAll(List<Integer>, new Integer[] {1})` — caturra reads a
-  lone array as the varargs array only for a reference element type.
-- `LinkedList<Integer> l;`, `HashSet`, `TreeMap`, `TreeSet` and the rest of
-  the unmodeled library — a scope limit, reported by name wherever written
-  rather than as a missing symbol.
+- `list.subList(0, 2)` — a list VIEW, which is a feature rather than a
+  message. Pinned in three contexts (argument, concatenation, constructor
+  argument), because each reaches the refusal by a different path.
+- `Vector<Integer> v;` and the rest of the unmodeled library — a scope
+  limit, reported by name wherever written rather than as a missing symbol.
+  This bullet used to name `LinkedList`, `HashSet`, `TreeMap` and `TreeSet`
+  as well; all four are modeled now, and `Vector` is what is left of it.
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,

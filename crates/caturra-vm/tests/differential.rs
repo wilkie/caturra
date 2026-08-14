@@ -13093,22 +13093,98 @@ public class RejBoxMismatch {
 "
 );
 
-// A COVARIANT return (JLS 8.4.5) is legal Java that caturra refuses. Dispatch
-// here is by descriptor, so `String f()` overriding `Object f()` needs a
-// bridge — and a bridge differing only in RETURN type cannot be written in
-// source, since its body would resolve back to itself. Accepting it without
-// one made `((A) new B()).f()` answer A's method: a silent wrong answer, far
-// worse than this refusal. Recorded so the strictness is deliberate and
-// cannot be lost by accident.
-stricter_than_javac!(
-    covariant_return_is_refused,
-    "StricterCovariant",
+// A COVARIANT return (JLS 8.4.5/9.4.1): `String f()` overrides `Object f()`.
+// This was once REFUSED, on the reasoning that dispatch is by descriptor and a
+// bridge differing only in return type cannot be written in source. The VM
+// resolves the override by name and arity, so no such bridge is needed, and
+// the refusal outlived its cause.
+//
+// BOTH override sites had to be fixed, and both for the same reason: each
+// tested covariance by matching `(JType::Object(sub), JType::Object(sup))`.
+// caturra gives `String`, arrays and the collections their own `JType`
+// variants, so that pattern only ever saw user-declared classes — the
+// textbook `Object` -> `String` case fell straight through it. The test is now
+// `widens` over any two reference types.
+//
+// The dispatch corners are pinned here because a wrong answer would be silent:
+// the call through the SUPERTYPE reference, through the interface, from an
+// interface default method, and `super.f()` still reaching the overridden one.
+differential_test!(
+    covariant_return_overrides,
+    "CovariantReturn",
     r#"
-public class StricterCovariant {
-    static class A { Object f() { return "A"; } }
-    static class B extends A { @Override String f() { return "B"; } }
+public class CovariantReturn {
+    interface I { Object g(); default String viaDefault() { return "d:" + g(); } }
+    static class C implements I { public String g() { return "C"; } }
+    static class A { Object f() { return "A"; } CharSequence cs() { return "a"; } }
+    static class B extends A {
+        @Override String f() { return "B"; }
+        @Override String cs() { return "b"; }
+        String callSuper() { return "super=" + super.f(); }
+    }
+    static class N { Number h() { return 1; } }
+    static class M extends N { @Override Integer h() { return 2; } }
     public static void main(String[] args) {
+        A a = new B();
         System.out.println(((A) new B()).f());
+        System.out.println(a.f());
+        System.out.println(a.f().getClass().getName());
+        System.out.println(a.cs());
+        System.out.println(new B().callSuper());
+        System.out.println(((N) new M()).h());
+        I i = new C();
+        System.out.println(i.g());
+        System.out.println(i.viaDefault());
+        java.util.List<I> list = new java.util.ArrayList<>();
+        list.add(new C());
+        for (I e : list) System.out.println(e.g());
+        Object[] arr = { new B(), new C() };
+        for (Object o : arr) System.out.println(o instanceof A ? ((A) o).f() : ((I) o).g());
+    }
+}
+"#
+);
+
+// The other direction must NOT be lost with it: a return type that does not
+// widen to the overridden one is still an error, and a PRIMITIVE return never
+// covaries (`int` does not override `long`, though it widens as a value).
+differential_reject!(
+    covariant_return_must_widen,
+    "CovariantWiden",
+    r#"
+public class CovariantWiden {
+    static class A { String f() { return "A"; } }
+    static class B extends A { @Override Integer f() { return 1; } }
+    public static void main(String[] args) {
+        System.out.println(new B().f());
+    }
+}
+"#
+);
+
+differential_reject!(
+    covariant_return_not_primitive,
+    "CovariantPrim",
+    r"
+public class CovariantPrim {
+    static class A { long f() { return 1L; } }
+    static class B extends A { @Override int f() { return 2; } }
+    public static void main(String[] args) {
+        System.out.println(new B().f());
+    }
+}
+"
+);
+
+differential_reject!(
+    covariant_return_interface_must_widen,
+    "CovariantIface",
+    r#"
+public class CovariantIface {
+    interface I { String g(); }
+    static class C implements I { public Object g() { return "C"; } }
+    public static void main(String[] args) {
+        System.out.println(new C().g());
     }
 }
 "#
@@ -22061,6 +22137,25 @@ public class SubListCtor {
     }
 }
 "#
+);
+
+// A class caturra models only as a NAMESPACE for its static members cannot
+// name a variable, though javac accepts the declaration — `Math`, `Arrays` and
+// `Collectors` are ordinary class types there. Nobody writes one, so this is
+// the least consequential entry in the strictness list; it is pinned because
+// the list claims every entry is pinned, and an audit of that list found two
+// entries that had silently stopped being true.
+stricter_than_javac!(
+    stricter_namespace_class_as_a_variable_type,
+    "NamespaceVar",
+    r"
+public class NamespaceVar {
+    public static void main(String[] args) {
+        Math m;
+        System.out.println(1);
+    }
+}
+"
 );
 
 // ---------------------------------------------------------------------------

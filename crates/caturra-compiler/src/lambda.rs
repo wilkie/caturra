@@ -471,6 +471,25 @@ fn combinator_argument_type(
 /// The class a call's receiver denotes, when that is knowable from its
 /// declared type — a local, or `this`. Library and computed receivers stay
 /// unknown and fall back to the name-only lookup.
+/// Whether `expr` names the library class `want`, written plainly (`Arrays`)
+/// or FULLY QUALIFIED (`java.util.Arrays`).
+///
+/// Every receiver test here matched a one-segment path, so a qualified
+/// `java.util.Arrays.asList(1, 2).stream().filter(v -> ...)` lost the element
+/// type and then refused the lambda for having no target.
+fn names_library_class(expr: &Expr, want: &str) -> bool {
+    let Expr::Name { path, .. } = expr else {
+        return false;
+    };
+    match path.split_last() {
+        Some((last, [])) => last == want,
+        Some((last, prefix)) => {
+            last == want && matches!(prefix.first().map(String::as_str), Some("java" | "javax"))
+        }
+        None => false,
+    }
+}
+
 fn receiver_class_name(receiver: &Expr, ctx: &Ctx) -> Option<String> {
     let Expr::Name { path, .. } = receiver else {
         return None;
@@ -1093,7 +1112,9 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // int index, its result the array's element type.
             if method == "setAll"
                 && args.len() == 2
-                && matches!(receiver.as_deref(), Some(Expr::Name { path, .. }) if path.len() == 1 && path[0] == "Arrays")
+                && receiver
+                    .as_deref()
+                    .is_some_and(|r| names_library_class(r, "Arrays"))
                 && matches!(&args[1], Expr::Lambda { params, .. } if params.len() == 1)
                 && let Some(elem) = array_elem_type(&args[0], ctx)
             {
@@ -2329,23 +2350,18 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // `IntStream.range(a, b)` / `rangeClosed(a, b)` / `IntStream.of(...)` —
     // sources of `int`s.
     if matches!(method.as_str(), "range" | "rangeClosed" | "of")
-        && matches!(prev.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "IntStream")
+        && names_library_class(prev.as_ref(), "IntStream")
     {
         return Some(TypeRef::Int);
     }
     // `Stream.of(...)` — the element is what the arguments agree on, which is
     // all this syntactic pass can see; a mixed or computed list erases to
     // `Object`, as it does after `map`.
-    if method == "of"
-        && matches!(prev.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "Stream")
-    {
+    if method == "of" && names_library_class(prev.as_ref(), "Stream") {
         return Some(literal_element_type(args));
     }
     // `Arrays.stream(array)` — the array's element type.
-    if method == "stream"
-        && args.len() == 1
-        && matches!(prev.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "Arrays")
-    {
+    if method == "stream" && args.len() == 1 && names_library_class(prev.as_ref(), "Arrays") {
         return array_elem_type(&args[0], ctx);
     }
     match method.as_str() {
@@ -2381,7 +2397,9 @@ fn is_collectors_call(expr: &Expr) -> bool {
             receiver: Some(owner),
             ..
         } if matches!(owner.as_ref(), Expr::Name { path, .. }
-            if path.len() == 1 && path[0] == "Collectors")
+            if path.split_last().is_some_and(|(last, prefix)| last == "Collectors"
+                && (prefix.is_empty()
+                    || matches!(prefix.first().map(String::as_str), Some("java" | "javax")))))
     )
 }
 
@@ -2565,12 +2583,10 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         ..
     } = receiver
         && !args.is_empty()
-        && let Expr::Name { path, .. } = owner.as_ref()
-        && path.len() == 1
-        && matches!(
-            (path[0].as_str(), method.as_str()),
-            ("List" | "Set", "of") | ("Arrays", "asList")
-        )
+        && matches!(method.as_str(), "of" | "asList")
+        && (names_library_class(owner.as_ref(), "List")
+            || names_library_class(owner.as_ref(), "Set")
+            || names_library_class(owner.as_ref(), "Arrays"))
     {
         return Some(literal_element_type(args));
     }

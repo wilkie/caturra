@@ -1660,12 +1660,24 @@ impl MethodTable {
                                         .and_then(|arg| self.resolve_type(&arg))
                                 })
                                 .flatten();
+                            // JLS §8.4.8.3: an override may return a SUBTYPE
+                            // (a covariant return). The rule was written for
+                            // two user classes only, so a `String` overriding
+                            // an `Object` — or an `Integer` overriding a
+                            // `Number` — was refused, because caturra models
+                            // those as their own JTypes rather than as
+                            // `Object(id)`. Any two REFERENCE types now use
+                            // the ordinary widening relation; primitives must
+                            // still match exactly, since `int` overriding
+                            // `long` is not a covariant return.
                             let compatible_return = sup_sig.ret == ret
                                 || substituted.is_some_and(|want| ret == Some(want))
                                 || matches!(
                                     (ret, sup_sig.ret),
-                                    (Some(JType::Object(sub)), Some(JType::Object(sup)))
-                                        if self.is_subtype(sub, sup)
+                                    (Some(sub), Some(sup))
+                                        if sub.is_reference()
+                                            && sup.is_reference()
+                                            && widens(sub, sup, self)
                                 );
                             // JLS §8.4.3.3: a `final` method cannot be
                             // overridden. JLS §8.4.8.3: an override may not
@@ -1781,13 +1793,20 @@ impl MethodTable {
                             .copied()
                             .unwrap_or(3)
                     };
+                    // A COVARIANT return (JLS §8.4.8.3) satisfies the interface:
+                    // `String g()` implements `Object g()`. The test is
+                    // `widens` over any two REFERENCE types, not a match on
+                    // `Object(_)` — caturra gives `String`, arrays and the
+                    // collections their own `JType` variants, so a pattern
+                    // written in terms of `JType::Object` saw only
+                    // user-declared classes and refused the textbook case.
                     let compatible_return = approximate
                         || implementation.ret == sig.ret
                         || matches!(sig.ret, Some(JType::TypeVar(_)))
                         || matches!(
                             (implementation.ret, sig.ret),
-                            (Some(JType::Object(sub)), Some(JType::Object(sup)))
-                                if self.is_subtype(sub, sup)
+                            (Some(sub), Some(sup))
+                                if sub.is_reference() && sup.is_reference() && widens(sub, sup, self)
                         );
                     let interface_throws = self
                         .throws_clauses
