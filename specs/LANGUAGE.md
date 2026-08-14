@@ -3937,6 +3937,38 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### Regex lookaround (2026-08-13)
+
+A sixteenth dimension took the regex engine at volume, because caturra MODELS
+this surface rather than wrapping the JDK's: a defect here is a wrong ANSWER,
+not a wrong word. 78 patterns x 44 inputs x 4 entry points (`matches`, `split`,
+`replaceAll`, `replaceFirst`) = **13,728 lines**, diffed against a real JDK 11.
+
+The headline is what did NOT diverge. **70 of 78 patterns were byte-identical
+across every input and entry point — 12,320 lines with zero wrong answers**,
+including the backtracking stress patterns (`(a*)*b`, `(a+)+b`, `(.*)*c`),
+backreferences, the greedy/reluctant/possessive trio, and the `$`-before-final-
+terminator rule. Every divergence was an honest refusal, in exactly two
+families: lookaround and inline flags.
+
+Lookaround is implemented here: `(?=X)`, `(?!X)`, `(?<=X)`, `(?<!X)`. Looking
+backwards needs a continuation that succeeds only at a GIVEN position — the
+body has to end where the lookaround sits, not merely somewhere after its start
+— so `Cont::EndAt` joins `Cont::Done`. A positive lookaround keeps what its
+body captured, a negative one matched nothing and so captures nothing.
+
+The width rule is the part worth writing down, because the obvious reading of
+it is wrong. Java does NOT refuse an unbounded lookbehind: `(?<=a*)b` compiles
+and matches. What it refuses is a body whose width is not knowable at ALL — a
+BACKREFERENCE, whose width is whatever another group captured at run time.
+caturra first refused both, which is stricter than javac in a place where the
+spec says it should not be, and the probe caught it. The bound now only
+narrows the backwards search; it is not a rule. The caret index is the body's
+last character, one before the closing paren, confirmed against five patterns.
+
+Still refused, and separately: inline flags (`(?i)`, `(?s)`, `(?m)`) and named
+groups (`(?<name>X)`).
+
 ### copyOfRange reports arraycopy's bounds (2026-08-13)
 
 A fifteenth dimension swept the `Arrays`/`Collections` utility surface — the

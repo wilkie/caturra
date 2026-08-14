@@ -25623,3 +25623,65 @@ public class UtilityContracts {
 }
 "#
 );
+
+// Lookaround (JLS-adjacent: `java.util.regex`) — `(?=X)`, `(?!X)`, `(?<=X)`,
+// `(?<!X)`. caturra models this engine rather than wrapping the JDK's, so a
+// 13,728-line cross product (78 patterns x 44 inputs x 4 entry points) was run
+// against a real JDK; lookaround was one of two families it refused outright.
+differential_test!(
+    diff_regex_lookaround,
+    "Lookaround",
+    r#"
+public class Lookaround {
+    static void show(String pattern, String input) {
+        System.out.println(
+            pattern
+                + " [" + input + "] "
+                + input.matches(pattern)
+                + " " + input.replaceAll(pattern, "<>")
+                + " " + input.replaceFirst(pattern, "<>"));
+    }
+
+    public static void main(String[] args) {
+        String[] patterns = {
+            "a(?=b)", "a(?!b)", "(?<=a)b", "(?<!a)b",
+            "(?<=ab)c", "(?<=a|xy)b", "(?<=a{2})b", "(?<=a{1,3})b",
+            "(?<=a*)b", "(?=.*a)(?=.*b).*", "^(?!x).*", "((?<=a)b)c",
+            "\\d+(?= dollars)", "(?<=\\$)\\d+",
+        };
+        String[] inputs = {"", "a", "b", "ab", "ba", "abc", "aab", "xb", "xyb", "5 dollars", "$42"};
+        for (String pattern : patterns) {
+            for (String input : inputs) {
+                show(pattern, input);
+            }
+        }
+    }
+}
+"#
+);
+
+// The one lookbehind Java REFUSES, and it is not the one usually assumed: an
+// unbounded body (`(?<=a*)b`) compiles and matches, while a BACKREFERENCE does
+// not, because its width is whatever another group captured at run time. The
+// caret index is the body's last character, one before the closing paren.
+differential_test!(
+    diff_regex_lookbehind_width_rule,
+    "LookbehindWidth",
+    r#"
+public class LookbehindWidth {
+    public static void main(String[] args) {
+        String[] patterns = {
+            "(?<=(a)\\1)b", "(?<=(ab)\\1)c", "(?<=\\1x)b", "x(?<=(a)\\1)y", "(?<=(a)\\1)",
+        };
+        for (String pattern : patterns) {
+            try {
+                "".matches(pattern);
+                System.out.println(pattern + " -> compiles");
+            } catch (RuntimeException e) {
+                System.out.println(pattern + " -> " + e.getMessage().split("\n")[0]);
+            }
+        }
+    }
+}
+"#
+);

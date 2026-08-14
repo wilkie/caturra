@@ -84,6 +84,68 @@ enum Node {
     InputEnd,
     /// `\Z` — end of input, but before a final line terminator.
     InputEndBeforeFinalTerminator,
+    /// `(?=X)`, `(?!X)`, `(?<=X)`, `(?<!X)` — match without consuming.
+    Look {
+        direction: Look,
+        negated: bool,
+        node: Box<Node>,
+    },
+}
+
+/// Which way a lookaround looks, and for a lookbehind how far back its body
+/// can reach — `None` for "as far as the input goes", which Java allows
+/// (`(?<=a*)b` compiles and matches) though it is often assumed not to.
+#[derive(Debug, Clone, Copy)]
+enum Look {
+    Ahead,
+    Behind(Width),
+}
+
+/// The widest match a lookbehind body can make: a count, or `Unbounded` for
+/// one that can reach as far as the input goes. `max_width` answers `None`
+/// instead when the width is not knowable at all — Java's "obvious maximum
+/// length" complaint, which applies to a backreference and only to one: its
+/// width is whatever some other group captured at run time.
+#[derive(Debug, Clone, Copy)]
+enum Width {
+    Fixed(usize),
+    Unbounded,
+}
+
+impl Width {
+    fn combine(self, other: Width, join: impl Fn(usize, usize) -> usize) -> Width {
+        match (self, other) {
+            (Width::Fixed(a), Width::Fixed(b)) => Width::Fixed(join(a, b)),
+            _ => Width::Unbounded,
+        }
+    }
+}
+
+fn max_width(node: &Node) -> Option<Width> {
+    match node {
+        // A lookaround inside a lookbehind consumes nothing itself.
+        Node::Empty
+        | Node::Start
+        | Node::End
+        | Node::WordBoundary(_)
+        | Node::InputStart
+        | Node::InputEnd
+        | Node::InputEndBeforeFinalTerminator
+        | Node::Look { .. } => Some(Width::Fixed(0)),
+        Node::Literal(_) | Node::AnyChar | Node::Class(_) => Some(Width::Fixed(1)),
+        Node::Concat(nodes) => nodes.iter().try_fold(Width::Fixed(0), |total, node| {
+            Some(total.combine(max_width(node)?, |a, b| a + b))
+        }),
+        Node::Alt(branches) => branches.iter().try_fold(Width::Fixed(0), |widest, node| {
+            Some(widest.combine(max_width(node)?, usize::max))
+        }),
+        Node::Group { node, .. } => max_width(node),
+        Node::Repeat { node, max, .. } => match (max_width(node)?, *max) {
+            (Width::Fixed(width), Some(max)) => Some(Width::Fixed(width * max as usize)),
+            _ => Some(Width::Unbounded),
+        },
+        Node::BackRef(_) => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -398,8 +460,54 @@ impl Parser<'_> {
     fn parse_group(&mut self, open: usize) -> ParseResult<Node> {
         let mut index = None;
         if self.eat(u16::from(b'?')) {
-            // `(?:...)` is the only group flag caturra models; the lookaround
-            // and named-group forms are refused rather than silently ignored.
+            // Lookaround, then the plain non-capturing group. Anything else
+            // (a named group, a flag setting) is refused rather than silently
+            // ignored — a mis-parsed pattern is a wrong answer.
+            let look = if self.eat(u16::from(b'=')) {
+                Some((false, false))
+            } else if self.eat(u16::from(b'!')) {
+                Some((false, true))
+            } else if self.peek() == Some(u16::from(b'<')) {
+                let after = self.units.get(self.at + 1).copied();
+                match after {
+                    Some(unit) if unit == u16::from(b'=') || unit == u16::from(b'!') => {
+                        self.at += 2;
+                        Some((true, unit == u16::from(b'!')))
+                    }
+                    // `(?<name>...)` is a named group, not a lookbehind.
+                    _ => return Err(self.error("Unsupported group construct", open)),
+                }
+            } else {
+                None
+            };
+            if let Some((behind, negated)) = look {
+                let node = self.parse_alt()?;
+                if !self.eat(u16::from(b')')) {
+                    return Err(self.error("Unclosed group", self.units.len()));
+                }
+                let direction = if behind {
+                    // Java refuses only a lookbehind whose width is not
+                    // knowable at all — a backreference. An UNBOUNDED body
+                    // (`(?<=a*)b`) compiles and matches, so the bound here is
+                    // an optimisation of the backwards search, not a rule.
+                    let Some(width) = max_width(&node) else {
+                        // The JDK points at the body's LAST character, one
+                        // before the closing paren `self.at` has just passed.
+                        return Err(self.error(
+                            "Look-behind group does not have an obvious maximum length",
+                            self.at.saturating_sub(2),
+                        ));
+                    };
+                    Look::Behind(width)
+                } else {
+                    Look::Ahead
+                };
+                return Ok(Node::Look {
+                    direction,
+                    negated,
+                    node: Box::new(node),
+                });
+            }
             if !self.eat(u16::from(b':')) {
                 return Err(self.error("Unsupported group construct", open));
             }
@@ -755,6 +863,9 @@ enum Cont<'a> {
     },
     /// The whole pattern matched.
     Done,
+    /// Succeed only at exactly this position — a lookbehind's body has to end
+    /// where the lookbehind sits, not merely somewhere after its start.
+    EndAt(usize),
 }
 
 struct Matcher<'a> {
@@ -909,6 +1020,43 @@ impl<'a> Matcher<'a> {
                     return self.resume(pos, caps, cont);
                 }
                 None
+            }
+            Node::Look {
+                direction,
+                negated,
+                node,
+            } => {
+                let mut probe = caps.clone();
+                let hit = match direction {
+                    // Backwards: the body must END at `pos`, and it can begin
+                    // no earlier than its widest match allows — or at the
+                    // start of the input when that width is unbounded.
+                    Look::Behind(width) => {
+                        let earliest = match width {
+                            Width::Fixed(width) => pos.saturating_sub(*width),
+                            Width::Unbounded => 0,
+                        };
+                        (earliest..=pos).rev().any(|start| {
+                            let mut attempt = caps.clone();
+                            let landed = self.run(node, start, &mut attempt, &Cont::EndAt(pos));
+                            if landed.is_some() {
+                                probe = attempt;
+                            }
+                            landed.is_some()
+                        })
+                    }
+                    Look::Ahead => self.run(node, pos, &mut probe, &Cont::Done).is_some(),
+                };
+                if hit == *negated {
+                    return None;
+                }
+                // A POSITIVE lookaround keeps what its body captured (Java
+                // does); a negative one matched nothing, so it captures
+                // nothing.
+                if !*negated {
+                    *caps = probe;
+                }
+                self.resume(pos, caps, cont)
             }
         }
     }
@@ -1076,6 +1224,7 @@ impl<'a> Matcher<'a> {
         }
         match cont {
             Cont::Done => Some(pos),
+            Cont::EndAt(at) => (pos == *at).then_some(pos),
             Cont::Seq { seq, at, parent } => {
                 if *at >= seq.len() {
                     return self.resume(pos, caps, parent);
