@@ -4190,6 +4190,30 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A list of the types that have a table (2026-08-15)
+
+The largest remaining shape from the suite sweep, and one change closed 27 of
+the 51.
+
+`type_of` gated its builtin-receiver dispatch on a hand-written list of the
+`JType`s that have a method table — and the body of that arm then asked
+`builtin_instance_table` anyway, with an `.expect("matched builtin
+receivers")`. So the list existed only as a gate on the same question the table
+answers, and the two had drifted: `DoubleStream`, `LongStream` and
+`IntSummaryStatistics` all had tables and were missing from the list.
+
+`type_of` could therefore not type a single method on one.
+`ns.stream().mapToDouble(x -> x).sum()` was "cannot determine the type of an
+argument" when passed to a method, while `println` of it — which types itself —
+printed the right number. The gate asks the table now, so a receiver that gains
+a table gains its typing with it.
+
+**Two lists that must agree is the shape behind most of this sweep.** The
+element join was written three times; the copy-source element twice; this one
+was a list and the table it gates. Each disagreed only where nothing had looked.
+
+51 → 24, the rest a long tail of distinct causes.
+
 ### What a diamond takes its type from (2026-08-15)
 
 The second and third shapes from the suite sweep, both diamonds, and they

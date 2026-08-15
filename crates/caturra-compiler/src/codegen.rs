@@ -23038,40 +23038,16 @@ impl BodyGen<'_> {
                         | JType::Boxed(_) => {
                             return boxed_method_return(method).unwrap_or(JType::Error);
                         }
-                        receiver_ty @ (JType::Str
-                        | JType::CharSequence
-                        | JType::StringBuilder
-                        | JType::Scanner
-                        | JType::File
-                        | JType::Writer
-                        | JType::Reader
-                        | JType::Path
-                        | JType::List(_)
-                        | JType::Stack(_)
-                        | JType::LinkedList { .. }
-                        | JType::Map { .. }
-                        | JType::TreeMap { .. }
-                        | JType::Set(_)
-                        | JType::TreeSet(_)
-                        | JType::Stream(_)
-                        | JType::Collector
-                        | JType::IntStream
-                        | JType::Iterator(_)
-                        | JType::ListIterator(_)
-                        | JType::EntryIterator { .. }
-                        | JType::Optional(_)
-                        | JType::OptionalInt
-                        | JType::OptionalDouble
-                        | JType::Collection(_)
-                        | JType::EntrySet { .. }
-                        | JType::MapEntry { .. }
-                        | JType::Exception(_)
-                        | JType::Class
-                        | JType::Field
-                        | JType::Method
-                        | JType::StackFrame
-                        | JType::Type
-                        | JType::Constructor) => {
+                        // Every receiver that HAS a builtin method table, asked
+                        // of the table itself. This was a hand-written list of
+                        // the same types, and the two drifted: `DoubleStream`,
+                        // `LongStream` and `IntSummaryStatistics` had tables and
+                        // were missing from the list, so `type_of` could not type
+                        // a single method on one — `mapToDouble(x -> x).sum()`
+                        // was untyped as an argument while `println` of it was
+                        // fine. The body already asks the table, so the list was
+                        // only ever a gate on the same question.
+                        receiver_ty if builtin_instance_table(receiver_ty).is_some() => {
                             let elem = TypeArgs::of(receiver_ty);
                             let arg_types: Vec<JType> =
                                 args.iter().map(|a| self.type_of(a)).collect();

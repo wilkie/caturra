@@ -22287,6 +22287,50 @@ public class EntryComparatorRef {
 "#
 );
 
+// Methods on a `DoubleStream`, a `LongStream` and an `IntSummaryStatistics`,
+// used where their TYPE matters — as an argument, or a `var` initializer.
+//
+// `type_of` gated its builtin-receiver dispatch on a hand-written list of the
+// types that have a method table, and the body then asked the table anyway. The
+// list and the table drifted: those three had tables and were missing from the
+// list, so `type_of` could not type a single method on one.
+// `mapToDouble(x -> x).sum()` was untyped as an argument while `println` of it
+// — which types itself — was fine. The gate asks the table now, so the two
+// cannot disagree again.
+differential_test!(
+    methods_on_a_primitive_stream,
+    "PrimStreamTypes",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.IntStream;
+
+public class PrimStreamTypes {
+    static void show(Object o) { System.out.println(o); }
+
+    public static void main(String[] args) {
+        List<Integer> ns = new ArrayList<>(Arrays.asList(1, 2, 3));
+        show(ns.stream().mapToDouble(x -> x).sum());
+        show(ns.stream().mapToLong(x -> x).sum());
+        show(ns.stream().mapToInt(x -> x).sum());
+        show(IntStream.of(1, 2).asDoubleStream().sum());
+        show(IntStream.of(1, 2).asLongStream().sum());
+        var summed = ns.stream().mapToDouble(x -> x).sum();
+        show(summed);
+
+        show(IntStream.of(3, 1, 4).summaryStatistics().getSum());
+        show(IntStream.of(3, 1, 4).summaryStatistics().getCount());
+        show(IntStream.of(3, 1, 4).summaryStatistics().getMin());
+        show(IntStream.of(3, 1, 4).summaryStatistics().getMax());
+        show(IntStream.of(3, 1, 4).summaryStatistics().getAverage());
+        var stats = IntStream.of(3, 1, 4).summaryStatistics();
+        show(stats.getSum());
+    }
+}
+"#
+);
+
 // A DIAMOND takes its type arguments from what it is given, and both paths
 // have to agree about what that is.
 //
