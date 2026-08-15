@@ -22287,6 +22287,70 @@ public class EntryComparatorRef {
 "#
 );
 
+// Three shapes from the tail of the suite sweep, each a REJECTION of legal
+// Java once the expression's type was actually needed — passed to a method, or
+// used to infer a `var`. Each printed fine, because `println` types itself.
+//
+//   * `Double p, q; p + q` — binary numeric promotion UNBOXES its operands
+//     (JLS §5.6.2). `type_of` handed the boxed types straight to `promote`,
+//     which fell back to `int`, so `var s = p + q` inferred `int` and then
+//     refused its own initializer as a lossy conversion. The bitwise operators
+//     beside it already unboxed.
+//   * `import static java.lang.Math.PI` then a bare `PI` — the emitter reads
+//     imported CONSTANTS, `type_of` only knew imported METHODS.
+//   * `super.getMessage()` in a class extending a LIBRARY throwable — the
+//     superclass has no entry in the class table, and the emitter has the
+//     Throwable fallback while `type_of` returned an error.
+differential_test!(
+    types_the_emitter_knew_alone,
+    "TypeOfTail",
+    r#"
+import static java.lang.Math.E;
+import static java.lang.Math.PI;
+
+class TailEx extends RuntimeException {
+    TailEx(String m) { super(m); }
+    @Override public String getMessage() { return wrap(super.getMessage()); }
+    @Override public String toString() { return "[" + length(super.toString()) + "]"; }
+
+    static String wrap(Object o) { return "<" + o + ">"; }
+    static int length(String s) { return s.length(); }
+}
+
+public class TypeOfTail {
+    static void show(Object o) { System.out.println(o); }
+
+    public static void main(String[] args) {
+        Double p = 1.5;
+        Double q = 2.5;
+        show(p + q);
+        var sum = p + q;
+        show(sum);
+        Integer x = 7;
+        Double y = 2.0;
+        var quotient = x / y;
+        show(quotient);
+        Long big = 3L;
+        var product = big * big;
+        show(product);
+        Integer i = 1;
+        var ints = i + i;
+        show(ints);
+
+        show(PI);
+        var pi = PI;
+        show(pi);
+        var e = E;
+        show(e);
+        show(Math.PI);
+
+        show(new TailEx("x").getMessage());
+        show(new TailEx("y").toString());
+    }
+}
+"#
+);
+
 // Methods on a `DoubleStream`, a `LongStream` and an `IntSummaryStatistics`,
 // used where their TYPE matters — as an argument, or a `var` initializer.
 //

@@ -4190,6 +4190,29 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### Types the emitter knew alone (2026-08-15)
+
+Three shapes from the tail of the suite sweep. Each one REJECTED legal Java the
+moment the expression's type was actually needed — passed to a method, or used
+to infer a `var` — and each printed fine before that, because `println` types
+itself.
+
+- **`Double p, q; p + q`.** Binary numeric promotion UNBOXES its operands
+  (JLS §5.6.2). `type_of` handed the boxed types straight to `promote`, which
+  fell back to `int`, so `var s = p + q` inferred `int` and then refused its own
+  initializer as a lossy conversion. The bitwise operators three lines below
+  already applied the unboxing view — the arithmetic ones never had.
+- **`import static java.lang.Math.PI`, then a bare `PI`.** The emitter reads
+  imported CONSTANTS; `type_of` knew only imported METHODS, so the constant
+  printed and could not be passed anywhere.
+- **`super.getMessage()` inside a class extending a LIBRARY throwable.** The
+  superclass has no entry in the class table. The emitter carries an explicit
+  Throwable fallback for exactly this, with a comment explaining why; `type_of`
+  returned an error beside it.
+
+All three are the same shape as the rest of this sweep: a fact the emitter had
+and its mirror did not. 24 → 19.
+
 ### A list of the types that have a table (2026-08-15)
 
 The largest remaining shape from the suite sweep, and one change closed 27 of

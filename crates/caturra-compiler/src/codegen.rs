@@ -3637,6 +3637,20 @@ fn exception_internal(id: u8) -> &'static str {
 
 /// A boxed wrapper viewed as its primitive for numeric operators
 /// (auto-unboxing); non-wrapper types pass through.
+/// The type a builtin constant denotes. `type_of` and the emitter both need
+/// it: one to report the type, the other to pick the `ldc` — and a constant
+/// whose type only the emitter knew could not be passed to anything.
+fn constant_type(constant: BuiltinConstant) -> JType {
+    match constant {
+        BuiltinConstant::Double(_) => JType::Double,
+        BuiltinConstant::Char(_) => JType::Char,
+        BuiltinConstant::Bool(_) => JType::Boxed(ElemType::Boolean),
+        BuiltinConstant::Long(_) => JType::Long,
+        BuiltinConstant::Float(_) => JType::Float,
+        BuiltinConstant::Int(_) => JType::Int,
+    }
+}
+
 fn numeric_view(ty: JType) -> JType {
     match ty {
         JType::Boxed(elem) => elem.base_type(),
@@ -22609,6 +22623,12 @@ impl BodyGen<'_> {
                         self.enclosing_instance_field(&path[0])
                             .map(|(_, _, f)| f.ty)
                     })
+                    // A statically-imported CONSTANT (`import static
+                    // java.lang.Math.PI`, then a bare `PI`), which `name()`
+                    // emits and this did not — so the constant printed fine and
+                    // was "cannot determine the type of an argument" the moment
+                    // it was passed to a method.
+                    .or_else(|| self.imported_constant(&path[0]).map(constant_type))
                     .unwrap_or(JType::Error)
             }
             Expr::Name { path, .. }
@@ -23417,17 +23437,24 @@ impl BodyGen<'_> {
             },
             Expr::Cast { ty, .. } => self.table.resolve_type(ty).unwrap_or(JType::Error),
             Expr::Binary { op, lhs, rhs, .. } => match op {
+                // JLS §5.6.2: binary numeric promotion UNBOXES its operands
+                // first, which is why `numeric_view` has to be applied here as
+                // it already was to the bitwise operators below. Handing
+                // `promote` two `Boxed` types made it fall back to `int`, so
+                // `Double p, q; var s = p + q` inferred `int` and then refused
+                // its own initializer as a lossy conversion.
                 BinaryOp::Add => {
                     let (lt, rt) = (self.type_of(lhs), self.type_of(rhs));
                     if lt == JType::Str || rt == JType::Str {
                         JType::Str
                     } else {
-                        promote(lt, rt)
+                        promote(numeric_view(lt), numeric_view(rt))
                     }
                 }
-                BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-                    promote(self.type_of(lhs), self.type_of(rhs))
-                }
+                BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => promote(
+                    numeric_view(self.type_of(lhs)),
+                    numeric_view(self.type_of(rhs)),
+                ),
                 // These must agree with what `bitwise` / the shift arm actually
                 // emit: `long & long` yields a long, and a shift takes the type
                 // of its LEFT operand alone (JLS §15.19) — the count doesn't
@@ -23529,6 +23556,26 @@ impl BodyGen<'_> {
                     let current = self.table.class_name(self.current_class_id).to_owned();
                     let Some(superclass) = self.table.info(&current).and_then(|c| c.superclass)
                     else {
+                        // A user exception's superclass is a LIBRARY throwable,
+                        // with no entry in the class table. `super.getMessage()`
+                        // and `super.toString()` inside one are ordinary Java
+                        // and the emitter answers them with Throwable's own
+                        // behaviour; this returned an error, so the call typed
+                        // as nothing the moment it was used as a value.
+                        if self
+                            .table
+                            .classes
+                            .get(&current)
+                            .and_then(|c| c.library_superclass)
+                            .is_some_and(caturra_classfile::exceptions::is_exception_class)
+                            && matches!(
+                                method.as_str(),
+                                "getMessage" | "getLocalizedMessage" | "toString"
+                            )
+                            && args.is_empty()
+                        {
+                            return JType::Str;
+                        }
                         return JType::Error;
                     };
                     self.table.class_name(superclass).to_owned()
