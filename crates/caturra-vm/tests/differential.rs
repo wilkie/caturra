@@ -22300,7 +22300,7 @@ public class EntryComparatorRef {
 differential_test!(
     methods_on_a_primitive_stream,
     "PrimStreamTypes",
-    r#"
+    r"
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -22328,7 +22328,7 @@ public class PrimStreamTypes {
         show(stats.getSum());
     }
 }
-"#
+"
 );
 
 // A DIAMOND takes its type arguments from what it is given, and both paths
