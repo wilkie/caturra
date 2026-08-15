@@ -4190,6 +4190,47 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### Optional's null contract (2026-08-14)
+
+Surveying the type rather than the one method a probe named again — and most
+of it was already right (`map` with a lambda, `filter`, `ifPresent`,
+`orElseGet`, `orElseThrow`, `isEmpty`, the `OptionalInt` family). Three things
+were not, and the null contract was wrong in all three directions at once:
+
+- **`Optional.of(s)` with a null `s` built a PRESENT Optional holding null**,
+  so `isPresent()` answered `true` where a JDK throws NPE from
+  `Objects.requireNonNull`. A silent wrong answer, and the null would surface
+  from a later `get()` with nothing left to blame it on.
+- **`Optional.of(null)` was a COMPILE error**, though javac accepts it and the
+  throw is a runtime one.
+- **`Optional.ofNullable(null)` was a compile error too** — the empty Optional
+  is the entire point of that method.
+
+All three came from one place: a `null` literal has no element type, so the
+factory reported "Optional.of cannot hold null", a message that describes
+caturra's representation rather than the program. Both factories now accept
+it, `ofNullable(null)` types like `empty()` (an Optional with no element
+adopts its context, so `ofNullable(null).orElse(d)` resolves), and the VM
+throws for `of`.
+
+**A method reference was refused everywhere a lambda was taken.**
+`optional.map(String::toUpperCase)`, `filter(String::isEmpty)`,
+`ifPresent(System.out::println)` — each with the false claim that this is not
+a functional-interface position, while the equivalent lambda compiled. The
+list methods had already been given the gate that accepts both; the Optional
+ones had not. An `Optional.of(x)` used STRAIGHT as a receiver also had no
+element type, so the identical chain over a DECLARED Optional worked and the
+inline one did not.
+
+**`flatMap` was missing.** Its function already answers an Optional, so that
+answer IS the result — wrapping it would give `Optional[Optional[x]]`, which
+is the whole difference from `map`.
+
+Recorded, not fixed: a `map` ERASES its result element, here and in a
+`Stream` alike, so `opt.map(String::toUpperCase).get().length()` does not
+compile. The element would have to be inferred from the function's own result.
+It predates `flatMap`, which inherits it rather than adding it.
+
 ### Half of java.util.function (2026-08-14)
 
 Surveying the package rather than the one interface a probe happened to name:
@@ -5029,6 +5070,9 @@ earn it.
 - `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
   and it answers 0.
 - `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`.
+- `opt.map(String::toUpperCase).get().length()` — a `map` erases its result
+  element (in an `Optional` and a `Stream` alike), so a chain cannot go on to
+  call a method of the mapped-to type.
 - `IntPredicate.negate()` and the other default COMBINATORS on the primitive
   `java.util.function` specializations — each needs a helper class per
   interface, for a combinator that is rare on the primitive forms.

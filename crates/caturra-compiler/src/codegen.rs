@@ -8960,6 +8960,15 @@ const OPTIONAL_METHODS: &[BuiltinMethod] = &[
         BRet::OptionalErased,
         "(Ljava/util/function/Function;)Ljava/util/Optional;",
     ),
+    // `flatMap(function)` is `map` whose function already returns an Optional,
+    // so the result is that Optional rather than one wrapped around it. Its
+    // element is erased for the same reason `map`'s is.
+    bm(
+        "flatMap",
+        &[BParam::UnaryOperator],
+        BRet::OptionalErased,
+        "(Ljava/util/function/Function;)Ljava/util/Optional;",
+    ),
     // `orElseGet(supplier)` yields the value or the supplier's result — both the
     // element type.
     bm(
@@ -11176,19 +11185,37 @@ fn collected_collection_kind(receiver: &Expr) -> Option<EmptyKind> {
 /// `Optional` of any element (`Optional<String> o = Optional.empty()`), but it
 /// is a real empty Optional, so a method called straight on one — javac infers
 /// `Optional<Object>` there — has to resolve against the general face.
+///
+/// `Optional.ofNullable(null)` is the same object written another way, and
+/// types the same, so it needs the same treatment: `ofNullable(null).orElse(d)`
+/// is ordinary Java, and reporting "cannot call methods on null" about it
+/// describes caturra's representation rather than the program.
 fn is_empty_optional(receiver: &Expr) -> bool {
-    matches!(
-        receiver,
-        Expr::Call {
-            receiver: Some(owner),
-            method,
-            args,
-            ..
-        } if method == "empty"
-            && args.is_empty()
-            && matches!(owner.as_ref(), Expr::Name { path, .. }
-                if path.last().is_some_and(|name| name == "Optional"))
-    )
+    let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        ..
+    } = receiver
+    else {
+        return false;
+    };
+    let names_optional = matches!(owner.as_ref(), Expr::Name { path, .. }
+        if path.last().is_some_and(|name| name == "Optional"));
+    if !names_optional {
+        return false;
+    }
+    match (method.as_str(), args.as_slice()) {
+        ("empty", []) => true,
+        ("ofNullable", [only]) => matches!(
+            only,
+            Expr::Literal {
+                value: Literal::Null,
+                ..
+            }
+        ),
+        _ => false,
+    }
 }
 
 /// Whether caturra models this type's `toString` text. The three I/O types
@@ -20545,6 +20572,22 @@ impl BodyGen<'_> {
             return None;
         };
         let value_ty = self.expr(value);
+        // A `null` LITERAL is a legal argument to both factories, and they
+        // differ in what happens next: `ofNullable(null)` is the empty
+        // Optional — the whole point of the method — and `of(null)` throws
+        // NPE at RUN time. Both were compile errors here, because a null
+        // literal has no element type; the message ("Optional.of cannot hold
+        // null") read as a caturra limitation for one call that is ordinary
+        // Java and another whose real rule is a runtime throw.
+        if value_ty == JType::Null {
+            let descriptor = "(Ljava/lang/Object;)Ljava/util/Optional;";
+            let method_ref = intern_method_ref(self.pool, "Optional", method, descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(value_ty.width());
+            // Like `empty()`: an Optional with no element type adopts its
+            // assignment context.
+            return Some(Some(JType::Null));
+        }
         let Some(elem) = collection_elem_of(value_ty) else {
             self.error(
                 value.span(),

@@ -1013,9 +1013,15 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // `ifPresent` erases to `__Consumer` (void), `filter` to
             // `__Predicate` (boolean), `map` to `__UnaryOperator` (its result
             // erased to `Object`, like a stream's `map`).
-            if matches!(method.as_str(), "ifPresent" | "filter" | "map")
-                && args.len() == 1
-                && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 1)
+            // A METHOD REFERENCE stands in every one of these positions too
+            // (`optional.map(String::toUpperCase)`), and was refused with the
+            // false claim that this is not a functional-interface position —
+            // while the equivalent lambda compiled. `flatMap` takes the same
+            // shape as `map`: a function whose result the Optional adopts.
+            let one_argument_function = matches!(&args[0..], [Expr::MethodRef { .. }])
+                || matches!(&args[0..], [Expr::Lambda { params, .. }] if params.len() == 1);
+            if matches!(method.as_str(), "ifPresent" | "filter" | "map" | "flatMap")
+                && one_argument_function
                 && let Some(r) = receiver.as_deref()
                 && let Some(elem) = optional_elem_type(r, ctx)
             {
@@ -1025,6 +1031,14 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     "filter" => ("__Predicate", "test", TypeRef::Boolean),
                     _ => ("__UnaryOperator", "apply", object),
                 };
+                if matches!(&args[0], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from(sam),
+                        params: vec![elem.clone()],
+                        ret: ret.clone(),
+                    };
+                    args[0] = method_ref_to_lambda(&args[0], &synth, ctx);
+                }
                 args[0] = build_erased_lambda(&mut args[0], iface, sam, &ret, &[elem], None, ctx);
                 return;
             }
@@ -2742,16 +2756,30 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     if let Expr::Call {
         receiver: Some(prev),
         method,
+        args,
         ..
     } = receiver
     {
+        // `Optional.of(x)` / `ofNullable(x)` used STRAIGHT as a receiver: the
+        // element is what the argument looks like, the same reading
+        // `List.of(...)` already gets. Without it the identical chain over a
+        // DECLARED Optional worked and `Optional.ofNullable("v").map(...)` did
+        // not.
+        if matches!(method.as_str(), "of" | "ofNullable")
+            && args.len() == 1
+            && names_library_class(prev, "Optional")
+        {
+            return Some(literal_element_type(args));
+        }
         return match method.as_str() {
             // Optional.filter: same element. (A STREAM's filter resolves to
             // None here — its chain never bottoms out in an Optional.)
             "filter" => optional_elem_type(prev, ctx),
-            // Optional.map erases its element, exactly like a stream's map —
-            // but only when the receiver IS an Optional.
-            "map" => optional_elem_type(prev, ctx).map(|_| TypeRef::Named(String::from("Object"))),
+            // Optional.map and flatMap erase their element, exactly like a
+            // stream's map — but only when the receiver IS an Optional.
+            "map" | "flatMap" => {
+                optional_elem_type(prev, ctx).map(|_| TypeRef::Named(String::from("Object")))
+            }
             "findFirst" | "max" | "min" => stream_elem_type(prev, ctx),
             _ => None,
         };

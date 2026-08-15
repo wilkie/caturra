@@ -22139,6 +22139,98 @@ public class SubListCtor {
 "#
 );
 
+// `Optional`'s null contract, which was wrong in all three directions.
+//
+// `Optional.of(s)` with a null s built a PRESENT Optional holding null, so
+// `isPresent()` answered true where a JDK throws NPE from
+// `Objects.requireNonNull` — a silent wrong answer, and the null would surface
+// from a later `get()` with nothing to blame. `Optional.of(null)` and
+// `Optional.ofNullable(null)` were both COMPILE errors ("Optional.of cannot
+// hold null"), reading as a caturra limitation for one call whose real rule is
+// a runtime throw and another that is the entire point of `ofNullable`.
+differential_test!(
+    optional_null_contract,
+    "OptionalNulls",
+    r#"
+import java.util.Optional;
+
+public class OptionalNulls {
+    public static void main(String[] args) {
+        System.out.println(Optional.ofNullable(null));
+        System.out.println(Optional.ofNullable(null).isPresent());
+        System.out.println(Optional.ofNullable(null).orElse("d"));
+        Optional<String> adopted = Optional.ofNullable(null);
+        System.out.println(adopted.orElse("z"));
+        String missing = null;
+        System.out.println(Optional.ofNullable(missing).orElse("d"));
+        System.out.println(Optional.ofNullable("v").get());
+        try {
+            Optional.of(null);
+        } catch (NullPointerException e) {
+            System.out.println("literal=" + e.getMessage());
+        }
+        try {
+            Optional.of(missing);
+        } catch (NullPointerException e) {
+            System.out.println("variable=" + e.getMessage());
+        }
+        System.out.println(Optional.empty());
+        System.out.println(Optional.empty().isPresent());
+    }
+}
+"#
+);
+
+// A METHOD REFERENCE in an `Optional` position, and `flatMap`.
+//
+// Every one of these took a lambda and refused the equivalent method
+// reference, with the false claim that this is not a functional-interface
+// position — the same gate the list methods had already been given. An
+// `Optional.of(x)` used STRAIGHT as a receiver also had no element type, so
+// the identical chain over a DECLARED Optional worked and the inline one did
+// not.
+//
+// `flatMap` is the one with semantics of its own: the function already answers
+// an Optional, so its result IS the answer. Wrapping it would give
+// `Optional[Optional[x]]`, which is the whole difference from `map` — pinned
+// here beside a `map` that still wraps.
+differential_test!(
+    optional_method_refs_and_flat_map,
+    "OptionalChains",
+    r#"
+import java.util.Optional;
+import java.util.stream.Stream;
+
+public class OptionalChains {
+    public static void main(String[] args) {
+        Optional<String> present = Optional.of("x");
+        System.out.println(present.map(String::toUpperCase).orElse("n"));
+        System.out.println(Optional.of("x").map(String::toUpperCase).orElse("n"));
+        System.out.println(Optional.ofNullable("v").map(s -> s + "!").get());
+        System.out.println(Optional.of("").filter(String::isEmpty).isPresent());
+        Optional.of("p").ifPresent(System.out::println);
+        Stream.of("a").findFirst().ifPresent(System.out::println);
+        System.out.println(present.flatMap(s -> Optional.of(s + "!")).get());
+        System.out.println(Optional.of("x").flatMap(s -> Optional.of(s + "?")).get());
+        Optional<String> empty = Optional.empty();
+        System.out.println(empty.flatMap(s -> Optional.of(s + "!")).isPresent());
+        System.out.println(present.flatMap(s -> Optional.empty()).isPresent());
+        // `map` wraps what its function returns; `flatMap` does not.
+        System.out.println(present.map(s -> Optional.of(s)).get());
+        try {
+            present.flatMap(s -> null).get();
+        } catch (NullPointerException e) {
+            System.out.println("npe");
+        }
+        // The lambda forms these used to be the only spelling of.
+        System.out.println(present.map(s -> s.toUpperCase()).orElse("n"));
+        System.out.println(present.filter(s -> s.length() > 0).isPresent());
+        System.out.println(empty.orElseGet(() -> "made"));
+    }
+}
+"#
+);
+
 // The PRIMITIVE specializations of `java.util.function`. Half of that package
 // was nameable and half was not, which is not a distinction a program can be
 // expected to keep track of: the eight object-typed interfaces worked and all
@@ -22644,6 +22736,26 @@ public class DeepNested {
     }
 }
 "
+);
+
+// A `map` ERASES its result element, in an `Optional` and in a `Stream` alike,
+// so a chain cannot go on to call a method of the mapped-to type:
+// `opt.map(String::toUpperCase).get().length()` does not compile here. The
+// element would have to be inferred from the function's own result, which this
+// syntactic pass does not compute. Stricter than javac — a refusal, not a
+// wrong answer — and recorded because a program that maps usually keeps going.
+stricter_than_javac!(
+    stricter_map_erases_its_element,
+    "MapErases",
+    r#"
+import java.util.Optional;
+
+public class MapErases {
+    public static void main(String[] args) {
+        System.out.println(Optional.of("ab").map(String::toUpperCase).get().length());
+    }
+}
+"#
 );
 
 // The primitive specializations carry no DEFAULT COMBINATORS: `Predicate` has

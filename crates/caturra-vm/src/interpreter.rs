@@ -8178,6 +8178,7 @@ impl<'run> Interpreter<'run> {
     }
 
     /// `java.util.Optional` / `OptionalInt` / `OptionalDouble` methods.
+    #[allow(clippy::too_many_lines)] // one arm per Optional method
     fn optional_intrinsic(
         &mut self,
         receiver: HeapRef,
@@ -8245,6 +8246,33 @@ impl<'run> Interpreter<'run> {
                 return Ok(Answered::Value(
                     self.alloc_optional(mapped, crate::value::OptionalKind::Ref),
                 ));
+            }
+            // `flatMap(function)`: the function already returns an Optional, so
+            // its answer IS the result — wrapping it would give
+            // `Optional[Optional[x]]`, which is the whole difference from
+            // `map`. An empty receiver stays empty without calling the
+            // function; the JDK's `Objects.requireNonNull` on the result makes
+            // a null return an NPE rather than an empty Optional.
+            ("flatMap", [JValue::Ref(Some(function))]) => {
+                let Some(present) = value else {
+                    return Ok(Answered::Value(
+                        self.alloc_optional(None, crate::value::OptionalKind::Ref),
+                    ));
+                };
+                let result = self
+                    .call_functional(
+                        *function,
+                        "apply",
+                        "(Ljava/lang/Object;)Ljava/lang/Object;",
+                        present,
+                    )?
+                    .unwrap_or(JValue::NULL);
+                let JValue::Ref(Some(inner)) = result else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                return Ok(Answered::Value(JValue::Ref(Some(inner))));
             }
             // `orElseGet(supplier)`: the value, or the supplier's result.
             ("orElseGet", [JValue::Ref(Some(supplier))]) => match value {
@@ -10104,6 +10132,16 @@ impl<'run> Interpreter<'run> {
         if class_name == "Optional" || class_name == "java/util/Optional" {
             let value = match (method_name, args) {
                 ("empty", []) => Some(None),
+                // `Optional.of(null)` is `Objects.requireNonNull` and throws,
+                // with no message. Accepting it built a PRESENT Optional
+                // holding null, so `isPresent()` answered true where a JDK
+                // never gets that far — a silent wrong answer, and the value
+                // would surface from `get()` later as a null nobody expects.
+                ("of", [JValue::Ref(None)]) => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                }
                 ("of", [v]) => Some(Some(*v)),
                 ("ofNullable", [v]) => Some((*v != JValue::NULL).then_some(*v)),
                 _ => None,
