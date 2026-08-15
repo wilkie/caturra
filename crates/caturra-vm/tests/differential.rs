@@ -22287,6 +22287,69 @@ public class EntryComparatorRef {
 "#
 );
 
+// The tail of the suite sweep: nine more facts the emitter had and `type_of`
+// did not, each a REJECTION once the expression's type was needed. They share
+// no cause beyond that — a nested type's statics, a `Collections` helper the
+// mirror had not listed, a variadic writer method special-cased out of its
+// table, a type variable that boxes its argument.
+//
+// This is what closed the sweep: 82 disagreements to zero.
+differential_test!(
+    the_tail_of_the_type_sweep,
+    "TypeOfTailTwo",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.IntStream;
+
+class Holder {
+    enum Kind { RED, BLUE }
+    static class Deep { static int twice(int x) { return x * 2; } }
+}
+
+public class TypeOfTailTwo {
+    static void show(Object o) { System.out.println(o); }
+
+    public static void main(String[] args) {
+        // A nested type's statics, named through the enclosing type.
+        show(Holder.Kind.values().length);
+        show(Holder.Kind.valueOf("BLUE"));
+        var kind = Holder.Kind.valueOf("RED");
+        show(kind);
+        show(Holder.Deep.twice(21));
+
+        // `Collections` helpers over a COLLECTION rather than a list.
+        Set<Integer> s = new HashSet<>(Arrays.asList(4, 9, 2));
+        show(Collections.max(s));
+        show(Collections.min(s));
+        List<String> r = new ArrayList<>(Arrays.asList("a", "b", "a"));
+        show(Collections.replaceAll(r, "a", "Z"));
+        show(r);
+        Collection<String> view = Collections.unmodifiableCollection(r);
+        show(view);
+        show(Collections.nCopies(3, null));
+        show(Objects.checkIndex(2, 5));
+        Comparator<String> byNature = (x, y) -> x.compareTo(y);
+        show(Objects.compare("a", "b", byNature));
+
+        // A type variable is a REFERENCE, so a primitive argument boxes.
+        var boxed = Objects.requireNonNull(7);
+        show(((Object) boxed).getClass().getName());
+        show(Objects.requireNonNull("s"));
+
+        show(IntStream.empty().sum());
+    }
+}
+"#
+);
+
 // Three shapes from the tail of the suite sweep, each a REJECTION of legal
 // Java once the expression's type was actually needed — passed to a method, or
 // used to infer a `var`. Each printed fine, because `println` types itself.

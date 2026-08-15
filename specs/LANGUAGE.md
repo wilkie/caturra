@@ -4190,6 +4190,37 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### The type sweep, closed (2026-08-15)
+
+The differential suite reports **zero** `type_of`-versus-emit disagreements,
+from 82. The tail took nine more fixes sharing no cause beyond the shape of the
+sweep itself — a fact the emitter had and its mirror did not:
+
+- a nested type's statics named through the enclosing type
+  (`Holder.Kind.values()`), which the emission path resolves by dropping the
+  qualifier and the mirror only ever looked at one segment;
+- `Collections.max`/`min` over a COLLECTION rather than a list, and
+  `replaceAll`, `unmodifiableCollection`, `nCopies(n, null)`;
+- `Objects.checkIndex` and `Objects.compare`, absent from a mirror that listed
+  their neighbours;
+- `Objects.requireNonNull(7)` — a type variable is a REFERENCE, so a primitive
+  argument BOXES and javac infers `Integer`;
+- `writer.format(...)`, variadic and so special-cased out of its own method
+  table, returning the writer for chaining;
+- `IntStream.empty()`.
+
+**What the sweep was worth.** Every one of these printed correctly before it was
+fixed, because `println` types itself — and every one REJECTED the same
+expression the moment it was passed to a method or used to infer a `var`. The
+invariant had been documented as sweepable over this suite for months; running
+it took one command and found 82 real defects, of which the majority were
+rejections of valid Java rather than cosmetic disagreements.
+
+The recurring cause, across all 82: **one fact, written down twice.** The
+element join lived in three places, the copy-source element in two, the
+builtin-receiver set in a list and the table it gates. Where a fact had one
+home, the paths agreed.
+
 ### Types the emitter knew alone (2026-08-15)
 
 Three shapes from the tail of the suite sweep. Each one REJECTED legal Java the

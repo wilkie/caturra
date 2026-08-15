@@ -22848,6 +22848,20 @@ impl BodyGen<'_> {
                         .class_id("__Comparator")
                         .map_or(JType::Error, JType::Object);
                 }
+                // `writer.format(...)`/`printf(...)` are VARIADIC, so they are
+                // special-cased in the emission path rather than living in the
+                // Writer table — and `format` returns the writer, for chaining.
+                // Mirrored here or `out.format(...).println()` types as nothing.
+                if let Some(source) = receiver.as_deref()
+                    && matches!(method.as_str(), "format" | "printf")
+                    && self.type_of(source) == JType::Writer
+                {
+                    return if method == "format" {
+                        JType::Writer
+                    } else {
+                        JType::Error
+                    };
+                }
                 // `java.util.Objects` is a special-cased emitter (not in the
                 // static table), so its returns are mirrored here — without
                 // this, `Objects.hash(a, b) == x` was "bad operand types".
@@ -22859,9 +22873,20 @@ impl BodyGen<'_> {
                 {
                     return match method.as_str() {
                         "equals" | "isNull" | "nonNull" | "deepEquals" => JType::Boolean,
-                        "hashCode" | "hash" => JType::Int,
+                        // `checkIndex` answers the index it checked and
+                        // `compare` the comparator's verdict — both `int`, and
+                        // both missing here, so either one passed to a method
+                        // was "cannot determine the type of an argument".
+                        "hashCode" | "hash" | "checkIndex" | "compare" => JType::Int,
                         "toString" => JType::Str,
-                        "requireNonNull" => args.first().map_or(JType::Error, |a| self.type_of(a)),
+                        // `<T> T requireNonNull(T)` — a type variable is a
+                        // REFERENCE, so a primitive argument BOXES: javac
+                        // infers `Integer` for `requireNonNull(7)`, and the
+                        // emitter answers the wrapper.
+                        "requireNonNull" => {
+                            let arg = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            return boxable_primitive(arg).map_or(arg, JType::Boxed);
+                        }
                         "requireNonNullElse" => match args.as_slice() {
                             [a, fallback] => {
                                 let first = self.type_of(a);
@@ -22885,6 +22910,21 @@ impl BodyGen<'_> {
                             && self.table.has_class(&path[0]) =>
                     {
                         path[0].clone()
+                    }
+                    // `Holder.Kind.values()` — a nested USER type named through
+                    // its enclosing one. Nested types are flattened to their
+                    // simple names, so the qualifier carries nothing and the
+                    // call is an ordinary static on the last segment; that is
+                    // what `call_target` does for the emission path, and this
+                    // mirror only ever looked at a one-segment receiver, so
+                    // `Holder.Kind.values()` typed as nothing.
+                    Some(Expr::Name { path, .. })
+                        if path.len() == 2
+                            && self.lookup(&path[0]).is_none()
+                            && self.table.has_class(&path[0])
+                            && self.table.has_class(&path[1]) =>
+                    {
+                        path[1].clone()
                     }
                     Some(Expr::Name { path, .. })
                         if {
@@ -22912,9 +22952,10 @@ impl BodyGen<'_> {
                         // same stream held in a variable first passed fine.
                         if matches!(path[0].as_str(), "Stream" | "IntStream") {
                             match (path[0].as_str(), method.as_str()) {
-                                ("IntStream", "of" | "range" | "rangeClosed" | "concat") => {
-                                    return JType::IntStream;
-                                }
+                                (
+                                    "IntStream",
+                                    "of" | "range" | "rangeClosed" | "concat" | "empty",
+                                ) => return JType::IntStream,
                                 ("Stream", "of") => {
                                     let elem = args
                                         .first()
@@ -23125,12 +23166,20 @@ impl BodyGen<'_> {
                 // table either: the VM answers them.
                 if class == "Collections" {
                     match method.as_str() {
+                        // `Collections.max`/`min` take a COLLECTION, not a
+                        // list: `max(aSet)` typed as nothing here while the
+                        // emitter answered the element, so it could not be
+                        // passed on or concatenated into a `var`.
                         "max" | "min" => {
-                            let list = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return match list {
-                                JType::List(elem) => elem.base_type(),
-                                _ => JType::Error,
-                            };
+                            let source = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            return any_collection_elem(source)
+                                .map_or(JType::Error, ElemType::base_type);
+                        }
+                        // An unmodifiable wrapper is its source's own face.
+                        "unmodifiableCollection" => {
+                            let source = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            return any_collection_elem(source)
+                                .map_or(JType::Error, JType::Collection);
                         }
                         // `indexOfSubList`/`lastIndexOfSubList` answer an index
                         // and `disjoint` a boolean. Missing from this mirror,
@@ -23142,7 +23191,9 @@ impl BodyGen<'_> {
                         "frequency" | "binarySearch" | "indexOfSubList" | "lastIndexOfSubList" => {
                             return JType::Int;
                         }
-                        "addAll" | "disjoint" => return JType::Boolean,
+                        // `replaceAll` reports whether it changed anything,
+                        // as `addAll` and `disjoint` do.
+                        "addAll" | "disjoint" | "replaceAll" => return JType::Boolean,
                         "unmodifiableList" => {
                             return args.first().map_or(JType::Error, |a| self.type_of(a));
                         }
@@ -23150,6 +23201,11 @@ impl BodyGen<'_> {
                         "emptyList" | "emptySet" | "emptyMap" => return JType::Null,
                         "nCopies" => {
                             let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
+                            // `nCopies(3, null)` has no element to name, and
+                            // the emitter answers the context-adopting `null`.
+                            if value == JType::Null {
+                                return JType::Null;
+                            }
                             return collection_elem_of(value).map_or(JType::Error, JType::List);
                         }
                         "singletonList" => {
