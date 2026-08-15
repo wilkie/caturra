@@ -846,10 +846,30 @@ mod tests {
              { System.out.println(e.getKey() + e.getValue().size()); } \
              List<String> l = Arrays.asList(\"b\", \"a\"); Collections.sort(l); \
              System.out.println(String.join(\",\", l) + l.stream().count()); } }",
+            // The FACTORY literals, whose element is the join of every
+            // argument. That join was written three times — the emitter, the
+            // `type_of` mirror and `var` inference — and the copies disagreed
+            // about `List.of(1, 2.5)`: one said `Integer`, another `Number`.
+            // A lone PRIMITIVE array is one element, which the join must not
+            // spread.
+            "import java.util.*;\npublic class E { static void p(Object o) {} \
+             public static void main(String[] a) { p(Arrays.asList(1, 2.5)); \
+             p(List.of(1, 2.5)); p(Map.of(\"k\", 1)); var v = List.of(1, 2.5); \
+             p(v); int[] prim = {1, 2, 3}; p(Arrays.asList(prim).size()); \
+             String[] refs = {\"a\"}; p(Arrays.asList(refs).size()); } }",
+            // The kinds a collection can be built as, and the arrays of them.
+            // `new LinkedHashMap<>()` typed as an error here while it emitted
+            // a map, and `new List[n]` as an error while it emitted `Object[]`.
+            "import java.util.*;\npublic class F { static void p(Object o) {} \
+             public static void main(String[] a) { Map<String, Integer> m = new LinkedHashMap<>(); \
+             Set<String> s = new LinkedHashSet<>(); p(m); p(s); \
+             List<String>[] buckets = new List[2]; buckets[0] = new ArrayList<>(); \
+             p(buckets[0]); p(buckets.length); \
+             p(Optional.ofNullable(null).orElse(\"d\")); } }",
         ];
         begin_type_verification();
         for (index, text) in sources.iter().enumerate() {
-            let name = ["A", "B", "C", "D"][index];
+            let name = ["A", "B", "C", "D", "E", "F"][index];
             let result = compile(&[SourceFile {
                 path: format!("{name}.java"),
                 text: (*text).to_string(),

@@ -14247,8 +14247,13 @@ impl BodyGen<'_> {
                         .unwrap_or(object)
                 };
                 inferred = match (path[0].as_str(), method.as_str()) {
-                    ("List", "of" | "copyOf") => JType::List(element(self, 0)),
-                    ("Set", "of" | "copyOf") => JType::Set(element(self, 0)),
+                    // The JOIN of every argument, as the emission path and
+                    // `literal_factory_type` use — this was a third copy that
+                    // read the first argument only, so `var l = List.of(1, 2.5)`
+                    // inferred `List<Integer>` and then refused its own
+                    // initializer.
+                    ("List", "of" | "copyOf") => JType::List(self.joined_literal_elem(args)),
+                    ("Set", "of" | "copyOf") => JType::Set(self.joined_literal_elem(args)),
                     ("Map", "of" | "copyOf" | "ofEntries") => JType::Map {
                         key: element(self, 0),
                         value: element(self, 1),
@@ -16083,7 +16088,11 @@ impl BodyGen<'_> {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Stack),
                 _ => JType::Null,
             },
-            "HashMap" | "Map" => match type_args {
+            // `LinkedHashMap`/`LinkedHashSet` are the same TYPE as the plain
+            // ones — only the object's iteration order differs — and the
+            // emission path remaps them. This table did not, so `new
+            // LinkedHashMap<>()` typed as an error while it emitted a map.
+            "HashMap" | "Map" | "LinkedHashMap" => match type_args {
                 [key, value] => match (
                     elem_from_type_arg(key, self.table),
                     elem_from_type_arg(value, self.table),
@@ -16095,7 +16104,7 @@ impl BodyGen<'_> {
                     .copy_source_entry(args)
                     .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
             },
-            "HashSet" | "Set" => match type_args {
+            "HashSet" | "Set" | "LinkedHashSet" => match type_args {
                 // A diamond `new HashSet<>(...)` gets its element from context —
                 // `Null` (assignable to any Set), matching `new_hash_set`.
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Set),
@@ -18187,15 +18196,25 @@ impl BodyGen<'_> {
         if path.len() != 1 {
             return None;
         }
-        // `List.of()` has no argument to read an element from, and answers a
-        // collection of `Object` — the same as the emission path.
-        let elem = match args.first() {
-            Some(first) => collection_elem_of(self.type_of(first))?,
-            None => ElemType::Object(self.table.object_id),
-        };
+        // The SAME join the emission path uses — `List.of()` with no argument
+        // answers a collection of `Object`, and a mixed one joins rather than
+        // taking the first element's type.
         match (path[0].as_str(), method.as_str()) {
-            ("List", "of") | ("Arrays", "asList") => Some(JType::List(elem)),
-            ("Set", "of") => Some(JType::Set(elem)),
+            ("List", "of") | ("Arrays", "asList") => {
+                Some(JType::List(self.joined_literal_elem(args)))
+            }
+            ("Set", "of") => Some(JType::Set(self.joined_literal_elem(args))),
+            // `Map.of(k, v, ...)` — the keys and values alternate, so each
+            // side joins its own half. Left out here, a map literal typed as
+            // `null` while emission built a real `HashMap<K, V>`.
+            ("Map", "of") if args.len().is_multiple_of(2) => {
+                let keys: Vec<Expr> = args.iter().step_by(2).cloned().collect();
+                let values: Vec<Expr> = args.iter().skip(1).step_by(2).cloned().collect();
+                Some(JType::Map {
+                    key: self.joined_literal_elem(&keys),
+                    value: self.joined_literal_elem(&values),
+                })
+            }
             _ => None,
         }
     }
@@ -21764,59 +21783,7 @@ impl BodyGen<'_> {
                 scalar
             }
         } else {
-            // The element is the join of EVERY argument, not the first one's:
-            // `Arrays.asList(1, 2.5)` is a list of `Number`, and reading the
-            // element off the leading `1` refused the `2.5` that followed.
-            // Mixed arguments fall to `Object`, which boxes each in turn and
-            // prints what a JDK prints.
-            let mut scalar = None;
-            let mut mixed = false;
-            for arg in args {
-                let each = collection_elem_of(self.type_of(arg));
-                match (scalar, each) {
-                    (None, found) => scalar = found,
-                    (Some(seen), Some(found)) if seen != found => {
-                        // Two REFERENCE elements join at their nearest common
-                        // supertype: `asList(new Square(), new Circle())` is a
-                        // list of `Shape`, and `asList(new B(), new C())` where
-                        // `C extends B` is a list of `B`.
-                        match self.join_reference_elems(seen, found) {
-                            Some(joined) => scalar = Some(joined),
-                            None => mixed = true,
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            // Mixed NUMERIC arguments join at `Number`, which is what javac
-            // infers and what a `List<? extends Number>` parameter needs;
-            // anything else joins at `Object`.
-            let numeric = |elem: Option<ElemType>| {
-                matches!(
-                    elem,
-                    Some(
-                        ElemType::Int
-                            | ElemType::Long
-                            | ElemType::Double
-                            | ElemType::Float
-                            | ElemType::Short
-                            | ElemType::Byte
-                            | ElemType::Wrapper(_)
-                    )
-                )
-            };
-            let all_numeric = !args.is_empty()
-                && args
-                    .iter()
-                    .all(|arg| numeric(collection_elem_of(self.type_of(arg))));
-            let scalar = if mixed {
-                self.table
-                    .class_id("Number")
-                    .filter(|_| all_numeric)
-                    .map_or(object_elem, ElemType::Object)
-            } else {
-                scalar.unwrap_or(object_elem)
-            };
+            let scalar = self.joined_literal_elem(args);
             self.emit_array_literal(
                 args,
                 JType::Array {
@@ -21859,14 +21826,19 @@ impl BodyGen<'_> {
             self.error(span, "Map.of takes alternating keys and values");
             return None;
         }
-        let elem = args
-            .first()
-            .and_then(|a| collection_elem_of(self.type_of(a)))
-            .unwrap_or(object_elem);
+        // The JOIN of every element, as `Arrays.asList` uses — reading the
+        // FIRST argument made `List.of(1, 2.5)` a list of `Integer` here while
+        // `type_of` said `Number`, so the two disagreed about the same call.
+        // A map's keys and values alternate, so each side joins its own half.
+        let elem = if class == "Map" {
+            let keys: Vec<Expr> = args.iter().step_by(2).cloned().collect();
+            self.joined_literal_elem(&keys)
+        } else {
+            self.joined_literal_elem(args)
+        };
         let value_elem = if class == "Map" {
-            args.get(1)
-                .and_then(|a| collection_elem_of(self.type_of(a)))
-                .unwrap_or(object_elem)
+            let values: Vec<Expr> = args.iter().skip(1).step_by(2).cloned().collect();
+            self.joined_literal_elem(&values)
         } else {
             object_elem
         };
@@ -22656,10 +22628,20 @@ impl BodyGen<'_> {
                 _ => JType::Error,
             },
             Expr::NewArray { elem, dims, .. } => {
-                match (
-                    self.table.resolve_type(elem).and_then(elem_type_of),
-                    u8::try_from(dims.len()),
-                ) {
+                // The same two-step the emission path uses: a COLLECTION
+                // element (`new List[2]`) is a reference like any other, and
+                // `elem_type_of` cannot intern it. Left out here, `new List[n]`
+                // typed as an error while it emitted an `Object[]`.
+                let resolved = self.table.resolve_type(elem);
+                let element = resolved.and_then(elem_type_of).or_else(|| {
+                    resolved
+                        .filter(|ty| ty.is_reference())
+                        .map(|ty| ElemType::Nested {
+                            inner: self.table.intern_nested(ty),
+                            read: self.table.object_id,
+                        })
+                });
+                match (element, u8::try_from(dims.len())) {
                     (Some(element), Ok(count)) => JType::Array {
                         elem: element,
                         dims: count,
@@ -25435,6 +25417,85 @@ impl BodyGen<'_> {
     /// `Object` is a valid answer, but only when the walk actually reaches it:
     /// falling to `Object` for every mismatch loses the `Shape` that a
     /// `List<? extends Shape>` parameter needs.
+    /// The element type of a `List.of(...)` / `Arrays.asList(...)` literal:
+    /// the join of EVERY argument, not the first one's. `Arrays.asList(1, 2.5)`
+    /// is a list of `Number`, and reading the element off the leading `1`
+    /// refused the `2.5` that followed.
+    ///
+    /// Shared by the emission path and `type_of`. It was written once, inline,
+    /// and the mirror kept reading the first argument — so the two disagreed
+    /// about `asList(1, 2.5)` (`ArrayList<Integer>` against
+    /// `ArrayList<Number>`), which is the drift that having one copy prevents.
+    fn joined_literal_elem(&mut self, args: &[Expr]) -> ElemType {
+        let object_elem = ElemType::Object(self.table.object_id);
+        // A LONE ARRAY argument is the varargs array itself, and which one it
+        // is depends on the element: a REFERENCE array spreads (`T` infers as
+        // its element), a PRIMITIVE one cannot (`T` would have to be `int`), so
+        // it infers as `int[]` and the call is a ONE-element `List<int[]>` —
+        // the famous varargs gotcha. The emission path has always known this;
+        // joining the arguments without it made `type_of` spread a primitive
+        // array and disagree.
+        if let [single] = args {
+            match self.type_of(single) {
+                JType::Array { elem, dims: 1 } if elem.base_type().is_reference() => return elem,
+                array @ JType::Array { .. } => {
+                    return ElemType::Nested {
+                        inner: self.table.intern_nested(array),
+                        read: self.table.object_id,
+                    };
+                }
+                _ => {}
+            }
+        }
+        let mut scalar = None;
+        let mut mixed = false;
+        for arg in args {
+            let each = collection_elem_of(self.type_of(arg));
+            match (scalar, each) {
+                (None, found) => scalar = found,
+                (Some(seen), Some(found)) if seen != found => {
+                    // Two REFERENCE elements join at their nearest common
+                    // supertype: `asList(new Square(), new Circle())` is a list
+                    // of `Shape`, and `asList(new B(), new C())` where `C
+                    // extends B` is a list of `B`.
+                    match self.join_reference_elems(seen, found) {
+                        Some(joined) => scalar = Some(joined),
+                        None => mixed = true,
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !mixed {
+            return scalar.unwrap_or(object_elem);
+        }
+        // Mixed NUMERIC arguments join at `Number`, which is what javac infers
+        // and what a `List<? extends Number>` parameter needs; anything else
+        // joins at `Object`.
+        let numeric = |elem: Option<ElemType>| {
+            matches!(
+                elem,
+                Some(
+                    ElemType::Int
+                        | ElemType::Long
+                        | ElemType::Double
+                        | ElemType::Float
+                        | ElemType::Short
+                        | ElemType::Byte
+                        | ElemType::Wrapper(_)
+                )
+            )
+        };
+        let all_numeric = !args.is_empty()
+            && args
+                .iter()
+                .all(|arg| numeric(collection_elem_of(self.type_of(arg))));
+        self.table
+            .class_id("Number")
+            .filter(|_| all_numeric)
+            .map_or(object_elem, ElemType::Object)
+    }
+
     fn join_reference_elems(&self, left: ElemType, right: ElemType) -> Option<ElemType> {
         let (ElemType::Object(left), ElemType::Object(right)) = (left, right) else {
             return None;

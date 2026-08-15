@@ -4190,6 +4190,38 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### Sweeping the probe corpus for type divergence (2026-08-15)
+
+The `type_of`-versus-emit invariant is CHECKED, and the check is swept over
+the grading corpus — which contains no maps, no interfaces, no streams and no
+`Optional`s. Eight divergences this round were in exactly those APIs, so the
+sweep could not have found any of them. The 395 probe programs written for the
+legal-Java and qualified-name dimensions can, and they cost nothing to reuse:
+compile each with `CATURRA_VERIFY_TYPES=1` and read stderr.
+
+Three distinct divergences, none of which changed any program's OUTPUT — they
+are the latent kind, which surfaces the moment such an expression is used where
+its type matters (an argument to a user method, a `var` initializer):
+
+- **The element JOIN of a factory literal was written THREE times** — the
+  emitter, the `type_of` mirror and `var` inference — and the copies disagreed
+  about `List.of(1, 2.5)`: one said `Integer`, another `Number`. Now one
+  helper, called by all three, and `Map.of`'s keys and values each join their
+  own half. The lone-array rule lives in it too: a lone REFERENCE array spreads
+  and a PRIMITIVE one is a single element, which the join must not undo. That
+  rule was pinned by a test, which is what caught the helper's first version.
+- **`new List[n]` typed as an error while it emitted an `Object[]`.** The
+  array-of-collections work taught the emitter and left the mirror.
+- **`new LinkedHashMap<>()` typed as an error while it emitted a map.** The
+  `LinkedHashMap` work remapped the emitter's table and left this one.
+
+The last two are mine, from this session, and both are the same shape: a
+feature taught to one path and not the other. The sweep found them within an
+hour of being written, which is the argument for it.
+
+Six programs from the sweep are now part of the checked invariant, so the
+shapes cannot silently regress.
+
 ### The same program, written with qualified names (2026-08-14)
 
 Seven separate defects this session were one assumption — that a type's name
