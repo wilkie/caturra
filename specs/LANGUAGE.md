@@ -4190,6 +4190,28 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A collection's clone (2026-08-15)
+
+`ArrayList.clone()`, `HashMap.clone()` and `TreeMap.clone()` were refused as
+"clone is not supported by caturra", while `new ArrayList<>(list)` beside them
+did the same work: a SHALLOW copy is what both are. The reason expired when the
+copy constructors landed, and it was the third expired refusal this round.
+
+Cloning the heap object IS the operation, so it is one arm at the shared
+dispatch rather than one per collection — and a `LinkedHashMap` keeps its
+insertion ordering for free, because the flag rides along in the value being
+cloned. The JDK returns `Object`, so a program casts the result, which is why
+casting back to a collection had to work first.
+
+Pinned: the copy is independent, its ELEMENTS are shared (`clone` is shallow),
+and it keeps its class.
+
+**A refusal pinned by a test outlives its reason exactly as quietly as one that
+is not — and the test then argues FOR keeping the gap.** The test that pinned
+this one already carried a note that `toArray` had been removed from it for the
+same reason, which is the second time that file has recorded the pattern. Both
+members are now exercised rather than explained.
+
 ### Casting back to a collection (2026-08-15)
 
 Chasing the refusal table's `clone` entries — which need a cast to be usable —

@@ -11676,6 +11676,33 @@ impl<'run> Interpreter<'run> {
             self.iterator_for_each_remaining(receiver, consumer)?;
             return Ok(None);
         }
+        // `clone()` on a collection: a SHALLOW copy — the elements are the same
+        // references, which is what the JDK's does and what the copy
+        // constructors here already built. One arm for every collection kind,
+        // since cloning the heap object IS the operation; a `LinkedHashMap`
+        // keeps its insertion ordering because the flag rides along in the
+        // value being cloned.
+        if method_name == "clone" && args.is_empty() {
+            use crate::value::HeapObject as H;
+            let copy = match self.heap.get(receiver) {
+                Some(
+                    object @ (H::ArrayList(_)
+                    | H::LinkedList(_)
+                    | H::ArrayDeque(_)
+                    | H::Stack(_)
+                    | H::HashMap(_)
+                    | H::HashSet(_)
+                    | H::TreeMap { .. }
+                    | H::TreeSet { .. }),
+                ) => Some(object.clone()),
+                _ => None,
+            };
+            if let Some(copy) = copy {
+                let cloned = self.heap.alloc(copy);
+                frame.stack.push(JValue::Ref(Some(cloned)));
+                return Ok(None);
+            }
+        }
         // Likewise for comparing elements or keys, which may call a user
         // `equals` and `hashCode`.
         let compared = match self.stream_dispatch(receiver, method_name, descriptor, &args)? {

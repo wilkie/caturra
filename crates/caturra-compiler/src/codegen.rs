@@ -7765,7 +7765,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("LinkedList", "subList", "list views are not supported by caturra"),
     ("Stack", "subList", "list views are not supported by caturra"),
     ("Collection", "subList", "list views are not supported by caturra"),
-    ("ArrayList", "clone", "clone is not supported by caturra"),
     ("Scanner", "useDelimiter", "caturra's Scanner splits on whitespace and does not take a delimiter pattern"),
     ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
     ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
@@ -7774,10 +7773,8 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Scanner", "findAll", "caturra's Scanner does not expose matches as a stream"),
     ("Scanner", "nextBigInteger", "BigInteger is not supported by caturra"),
     ("Scanner", "nextBigDecimal", "BigDecimal is not supported by caturra"),
-    ("HashMap", "clone", "clone is not supported by caturra"),
     ("HashMap", "of", "the immutable factories live on Map, not HashMap - write Map.of(...)"),
     ("HashMap", "ofEntries", "the immutable factories live on Map, not HashMap - write Map.ofEntries(...)"),
-    ("TreeMap", "clone", "clone is not supported by caturra"),
     ("TreeMap", "headMap", "TreeMap range views are not supported by caturra"),
     ("TreeMap", "tailMap", "TreeMap range views are not supported by caturra"),
     ("TreeMap", "subMap", "TreeMap range views are not supported by caturra"),
@@ -7906,6 +7903,12 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // `clone()` — a SHALLOW copy, which is exactly what the copy
+    // constructors already build. It was refused as "clone is not supported
+    // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
+    // returns `Object`, so a program casts the result, and casting back to a
+    // collection had to work first.
+    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm(
@@ -8462,6 +8465,12 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)Z",
     ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // `clone()` — a SHALLOW copy, which is exactly what the copy
+    // constructors already build. It was refused as "clone is not supported
+    // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
+    // returns `Object`, so a program casts the result, and casting back to a
+    // collection had to work first.
+    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
@@ -10605,6 +10614,12 @@ const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
 /// boundary so that a missing key can hand back a real `null`.
 const MAP_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // `clone()` — a SHALLOW copy, which is exactly what the copy
+    // constructors already build. It was refused as "clone is not supported
+    // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
+    // returns `Object`, so a program casts the result, and casting back to a
+    // collection had to work first.
+    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("size", &[], BRet::Int, "()I"),
     // `forEach(BiConsumer)`: the VM walks the entries in iteration order and
     // calls the lambda class's `accept` on each.
@@ -10735,6 +10750,12 @@ const MAP_METHODS: &[BuiltinMethod] = &[
 /// boxed key so an absent result is `null`. Keys iterate in sorted order.
 const TREEMAP_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // `clone()` — a SHALLOW copy, which is exactly what the copy
+    // constructors already build. It was refused as "clone is not supported
+    // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
+    // returns `Object`, so a program casts the result, and casting back to a
+    // collection had to work first.
+    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("size", &[], BRet::Int, "()I"),
     bm(
         "forEach",
@@ -10990,6 +11011,12 @@ const SET_METHODS: &[BuiltinMethod] = &[
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // `clone()` — a SHALLOW copy, which is exactly what the copy
+    // constructors already build. It was refused as "clone is not supported
+    // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
+    // returns `Object`, so a program casts the result, and casting back to a
+    // collection had to work first.
+    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
@@ -11067,6 +11094,12 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // `clone()` — a SHALLOW copy, which is exactly what the copy
+    // constructors already build. It was refused as "clone is not supported
+    // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
+    // returns `Object`, so a program casts the result, and casting back to a
+    // collection had to work first.
+    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),

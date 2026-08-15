@@ -9804,13 +9804,17 @@ fn linked_list_serves_as_queue_deque_and_list() {
 /// pretending they do not exist. The reason has to win over the arguments'
 /// own errors: `map.forEach(lambda)` must blame the missing lambda support,
 /// not the lambda, which is in a perfectly good position.
+///
+/// `toArray` and `clone` both used to be pinned here, refused because "Object
+/// arrays are not supported" and "clone is not supported". Both are
+/// implemented now, so each is exercised rather than explained — a refusal
+/// pinned by a test outlives its reason just as quietly as one that is not,
+/// and the test then argues FOR keeping the gap.
 #[test]
 fn unsupported_map_members_explain_themselves() {
-    // `toArray` used to be here too, refused because "Object arrays are not
-    // supported". They are, so it is implemented rather than explained.
-    let source = "import java.util.HashMap; \
-                  class M { static void r() { new HashMap<String, Integer>().clone(); } }";
-    let want = "HashMap.clone exists in Java, but clone is not supported by caturra";
+    let source = "import java.util.TreeMap; \
+                  class M { static void r() { new TreeMap<String, Integer>().descendingMap(); } }";
+    let want = "TreeMap.descendingMap exists in Java, but";
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
         path: String::from("M.java"),
         text: String::from(source),
@@ -9818,6 +9822,43 @@ fn unsupported_map_members_explain_themselves() {
     assert!(!compilation.success(), "should not compile: {source}");
     let message = &compilation.diagnostics[0].message;
     assert!(message.contains(want), "expected {want:?}, got: {message}");
+}
+
+/// `clone()` is a SHALLOW copy of a collection: the copy is independent, its
+/// ELEMENTS are shared, and it keeps its class — including a `LinkedHashMap`'s
+/// insertion ordering, which rides along in the value being cloned.
+#[test]
+fn collections_clone_shallowly() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Arrays;
+        import java.util.LinkedHashMap;
+        public class Main {
+            static class Box { int v; Box(int v) { this.v = v; }
+                public String toString() { return "B" + v; } }
+            public static void main(String[] args) {
+                ArrayList<String> l = new ArrayList<>(Arrays.asList("a"));
+                ArrayList<String> copy = (ArrayList<String>) l.clone();
+                copy.add("b");
+                System.out.println(l + " " + copy + " " + copy.getClass().getName());
+                ArrayList<Box> boxes = new ArrayList<>(Arrays.asList(new Box(1)));
+                ArrayList<Box> shared = (ArrayList<Box>) boxes.clone();
+                shared.get(0).v = 9;
+                System.out.println(boxes + " " + shared);
+                LinkedHashMap<String, Integer> m = new LinkedHashMap<>();
+                m.put("z", 1);
+                m.put("a", 2);
+                System.out.println(m.clone() + " " + m.clone().getClass().getName());
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(
+        out,
+        "[a] [a, b] java.util.ArrayList\n[B9] [B9]\n{z=1, a=2} java.util.LinkedHashMap\n"
+    );
 }
 
 /// A value coerced to text uses its own `toString()`, even when the coercion
