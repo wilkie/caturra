@@ -14266,7 +14266,21 @@ impl BodyGen<'_> {
                     // javac infers `Optional<Object>` here, the same way it
                     // infers `List<Object>` for `List.of()` — the context-free
                     // form of a type that otherwise adopts its context.
+                    // `ofNullable(null)` is the same empty Optional written
+                    // another way, and `var` needs a concrete type: the `Null`
+                    // that adopts a context has none to adopt here.
                     ("Optional", "empty") => JType::Optional(object),
+                    ("Optional", "ofNullable")
+                        if matches!(
+                            args.first(),
+                            Some(Expr::Literal {
+                                value: Literal::Null,
+                                ..
+                            })
+                        ) =>
+                    {
+                        JType::Optional(object)
+                    }
                     _ => JType::Null,
                 };
             }
@@ -23121,6 +23135,16 @@ impl BodyGen<'_> {
                     match method.as_str() {
                         "of" | "ofNullable" => {
                             let arg = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            // A `null` LITERAL has no element type, and the
+                            // emission path answers `Null` for it — an Optional
+                            // that adopts its context, exactly as `empty()`
+                            // does. Answering `Error` here left
+                            // `ofNullable(null).orElse(d)` untyped as an
+                            // ARGUMENT while `println` of it was fine, which is
+                            // the shape a type_of/emit divergence always takes.
+                            if arg == JType::Null {
+                                return JType::Null;
+                            }
                             return collection_elem_of(arg).map_or(JType::Error, JType::Optional);
                         }
                         // An empty Optional adopts its context, typing like `null`.

@@ -1757,10 +1757,18 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
             span,
         };
     }
-    // Is the qualifier a bare class name?
+    // Is the qualifier a class name? A QUALIFIED library class names the same
+    // type as its simple spelling and must take the same route — the
+    // one-segment test saw only the simple one, so `java.lang.String::length`
+    // and `Map.Entry::getKey` fell to the BOUND form and compiled to
+    // `java.lang.String.length(p0)` and `Map.Entry.getKey(entry)`: calls on a
+    // type rather than through it.
     let qualifier_class = match qualifier.as_ref() {
         Expr::Name { path, .. } if path.len() == 1 && ctx.class_names.contains(&path[0]) => {
             Some(path[0].clone())
+        }
+        Expr::Name { path, .. } if path.len() > 1 => {
+            crate::imports::nested_library_class(&path.join(".")).map(String::from)
         }
         _ => None,
     };
@@ -1770,30 +1778,6 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
     // compiled to `Map.Entry.getKey(entry)`: a static call on a type that has
     // no such static. The receiver parameter keeps the type the SAM gives it
     // (the stream's element), which is more precise than the raw qualifier.
-    let library_qualifier = match qualifier.as_ref() {
-        Expr::Name { path, .. } if path.len() > 1 && qualifier_class.is_none() => {
-            let dotted = path.join(".");
-            crate::imports::nested_library_class(&dotted).map(|_| dotted)
-        }
-        _ => None,
-    };
-    if library_qualifier.is_some() && arity > 0 {
-        let call = Expr::Call {
-            receiver: Some(Box::new(name_expr(&param_names[0]))),
-            method: method.clone(),
-            args: param_names[1..].iter().map(|n| name_expr(n)).collect(),
-            span,
-        };
-        return Expr::Lambda {
-            params: param_names
-                .into_iter()
-                .map(|name| crate::ast::LambdaParam { name, ty: None })
-                .collect(),
-            body: LambdaBody::Expr(Box::new(call)),
-            span,
-        };
-    }
-
     // For an unbound-instance ref (`Person::getAge`), the first parameter IS
     // the receiver and must be typed as the qualifier class, so the call
     // resolves against it rather than `Object`.
@@ -1837,7 +1821,14 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
             }
         } else {
             // Unbound instance: `p0.method(p1, ...)`.
-            receiver_param_type = Some(TypeRef::Named(class));
+            //
+            // A NESTED library type (`Map.Entry`) is left untyped: the SAM
+            // gives the receiver the stream's element, which carries its type
+            // arguments, where the bare qualifier would be the raw type and
+            // `getKey()` would answer `Object`.
+            if !class.contains('.') {
+                receiver_param_type = Some(TypeRef::Named(class));
+            }
             Expr::Call {
                 receiver: Some(Box::new(name_expr(&param_names[0]))),
                 method: method.clone(),

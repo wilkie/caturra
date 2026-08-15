@@ -22139,6 +22139,90 @@ public class SubListCtor {
 "#
 );
 
+// A METHOD REFERENCE whose qualifier is written QUALIFIED. The one-segment
+// test saw only the simple spelling, so `java.lang.String::length` compiled to
+// `java.lang.String.length(p0)` — a call ON the type rather than THROUGH it.
+//
+// The qualifier is canonicalized now, which puts every spelling through the
+// same static-versus-unbound decision: `java.lang.Integer::parseInt` is a
+// STATIC reference and `java.lang.String::length` an unbound instance one, and
+// nothing about that choice may depend on how the name was written. A first
+// attempt keyed the choice on the path having more than one segment, which
+// made every package-qualified reference unbound and broke `Integer::parseInt`
+// — the case is pinned here because the fix and the bug look alike.
+differential_test!(
+    a_qualified_method_reference,
+    "QualifiedRefs",
+    r#"
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+public class QualifiedRefs {
+    public static void main(String[] args) {
+        Function<String, Integer> unbound = java.lang.String::length;
+        System.out.println(unbound.apply("abcd"));
+        Function<String, Integer> parsed = java.lang.Integer::parseInt;
+        System.out.println(parsed.apply("42"));
+        Function<Integer, Integer> abs = java.lang.Math::abs;
+        System.out.println(abs.apply(-3));
+        Supplier<ArrayList<String>> made = java.util.ArrayList::new;
+        System.out.println(made.get().size());
+        // The simple spellings of the same four.
+        Function<String, Integer> plainUnbound = String::length;
+        System.out.println(plainUnbound.apply("abcd"));
+        Function<String, Integer> plainParsed = Integer::parseInt;
+        System.out.println(plainParsed.apply("42"));
+        Function<Integer, Integer> plainAbs = Math::abs;
+        System.out.println(plainAbs.apply(-3));
+        Supplier<ArrayList<String>> plainMade = ArrayList::new;
+        System.out.println(plainMade.get().size());
+        // A nested library type, both ways.
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("a", 1);
+        System.out.println(m.entrySet().stream().map(Map.Entry::getKey).count());
+        System.out.println(m.entrySet().stream()
+            .map(java.util.Map.Entry::getKey).count());
+    }
+}
+"#
+);
+
+// `Optional.ofNullable(null)` types as an Optional that ADOPTS its context, in
+// the emission path and in `type_of` alike. Only emission was taught that, so
+// the chain `ofNullable(null).orElse(d)` was fine as a `println` argument —
+// which types itself — and "cannot determine the type of an argument" when
+// passed to a method of one's own. `var` needs a concrete type instead, and
+// javac infers `Optional<Object>` there, the same as for `Optional.empty()`.
+differential_test!(
+    an_empty_optional_written_two_ways,
+    "OptionalAdopts",
+    r#"
+import java.util.Optional;
+
+public class OptionalAdopts {
+    static void show(Object o) { System.out.println(o); }
+
+    public static void main(String[] args) {
+        show(Optional.ofNullable(null).orElse("d"));
+        show(java.util.Optional.ofNullable(null).orElse("d"));
+        show(Optional.empty().orElse("d"));
+        var inferred = Optional.ofNullable(null);
+        show(inferred.isPresent());
+        var empty = Optional.empty();
+        show(empty.isPresent());
+        var present = Optional.ofNullable("v");
+        show(present.get());
+        String missing = null;
+        show(Optional.ofNullable(missing).orElse("d"));
+        show(Optional.of("x").orElse("d"));
+    }
+}
+"#
+);
+
 // `Map.Entry::getKey` — a method reference whose qualifier is a NESTED
 // LIBRARY type, which is what every stream over an `entrySet()` reaches for.
 // The qualifier test saw one segment only, so a two-segment name fell through

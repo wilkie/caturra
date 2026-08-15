@@ -4190,6 +4190,41 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### The same program, written with qualified names (2026-08-14)
+
+Seven separate defects this session were one assumption — that a type's name
+has one segment — and every one was found by accident, from a probe that
+happened to spell a name in full. This asked the question on purpose: 62
+programs, each written twice, once with `List`/`Map`/`Optional` and once with
+`java.util.List`/`java.util.Map`/`java.util.Optional`, requiring that the
+qualified form compile, that both forms agree, and that both match a JDK.
+
+**Zero qualified-only failures.** The axis is closed for everything the sweep
+covers: declarations, type arguments, parameters, returns, fields, statics,
+supertypes, casts, `instanceof`, `catch`, lambdas, method references,
+anonymous classes, for-each, generics and wildcards.
+
+Two failures it did surface were shared by both spellings, so they were
+ordinary gaps rather than qualifier bugs:
+
+- **`Optional.ofNullable(null)` typed as an Optional that adopts its context
+  in the emission path only.** So the chain `ofNullable(null).orElse(d)` was
+  fine as a `println` argument — which types itself — and "cannot determine the
+  type of an argument" when passed to a method of one's own. The eighth
+  `type_of`-versus-emit divergence of the round, and mine: the emission half
+  landed two units earlier without its mirror.
+- **A qualified method reference chose the wrong SHAPE.**
+  `java.lang.String::length` compiled to `java.lang.String.length(p0)`, a call
+  ON the type rather than THROUGH it. The qualifier is canonicalized now, so
+  every spelling goes through the same static-versus-unbound decision.
+
+That second fix has a trap worth recording: keying the choice on "the path has
+more than one segment" makes every package-qualified reference unbound, which
+breaks `java.lang.Integer::parseInt` — a STATIC reference. A nested type
+(`Map.Entry`) and a package-qualified one (`java.lang.Integer`) are told apart
+by whether the CANONICAL name still contains a dot. Both are pinned, because
+the bug and the fix look alike.
+
 ### A method reference through a nested library type (2026-08-14)
 
 `Map.Entry::getKey` — the reference every stream over an `entrySet()` reaches
