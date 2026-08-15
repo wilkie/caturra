@@ -4190,6 +4190,38 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### LinkedHashMap and LinkedHashSet (2026-08-14)
+
+The last absent class the legal-Java sweep found, and it cost one flag.
+
+`JavaHashMap` already STORES its entries in insertion order — the bucket order
+a `HashMap` iterates in is DERIVED on top, so that the JDK's exact ordering can
+be reproduced across resizes. A `LinkedHashMap` is that same structure with the
+derivation skipped. Everything built on the iteration order — `toString`, the
+three views, for-each, streams, the compute family, `equals`/`hashCode` across
+kinds — followed without being touched.
+
+What did need saying explicitly:
+
+- **The class a program can see.** `getClass()` and `instanceof` are the only
+  ways besides the order to tell the two apart, so the object reports
+  `LinkedHashMap`, and a `LinkedHashMap` answers `instanceof HashMap` (it
+  extends one) while a plain `HashMap` is no `LinkedHashMap`.
+- **The sizing constructors start from `default()`**, so
+  `new LinkedHashMap<>(32)` and the copy constructors lost the flag and
+  silently iterated in bucket order. Each now carries it across — the
+  int-capacity one by reading it back off the receiver, which was already built
+  for its class.
+
+The order rules pinned: re-putting an existing key keeps its original position,
+removing then re-adding moves it to the end, and a copy constructor iterates
+the SOURCE in the source's own order — so `new LinkedHashMap<>(aHashMap)` is in
+bucket order and stays that way.
+
+The compiler treats both as the TYPE they already had (`Map`, `Set`): the
+distinction lives in the object, not the type, so only the class named by `new`
+differs.
+
 ### An array of collections (2026-08-14)
 
 `new List[n]` — the bucket array — was refused with "arrays are not yet

@@ -83,12 +83,40 @@ pub struct JavaHashMap {
     tail_seq: i64,
     /// The last head-insert sequence handed out (descending from 0).
     head_seq: i64,
+    /// A `LinkedHashMap`/`LinkedHashSet`: iterate in INSERTION order rather
+    /// than in bucket order. The entries are already stored that way — the
+    /// bucket order is derived on top for a `HashMap` — so the whole
+    /// difference between the two classes is whether that derivation runs.
+    linked: bool,
 }
 
 impl JavaHashMap {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A `LinkedHashMap`/`LinkedHashSet` — insertion-ordered iteration.
+    #[must_use]
+    pub fn linked() -> Self {
+        Self {
+            linked: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether this map iterates in insertion order.
+    #[must_use]
+    pub fn is_linked(&self) -> bool {
+        self.linked
+    }
+
+    /// Carry the insertion-ordered flag onto a map built by a sizing
+    /// constructor, which starts from `default()`.
+    #[must_use]
+    pub fn as_linked(mut self, linked: bool) -> Self {
+        self.linked = linked;
+        self
     }
 
     /// `new HashMap<>(initialCapacity)`. Java rounds the hint up to a power
@@ -243,6 +271,11 @@ impl JavaHashMap {
     /// bucket by insertion.
     pub fn iteration_order(&self) -> &[usize] {
         self.order.get_or_init(|| {
+            // A LinkedHashMap keeps its linked list in insertion order, which
+            // is exactly the order `entries` is already in.
+            if self.linked {
+                return (0..self.entries.len()).collect();
+            }
             let mask = self.table_len.saturating_sub(1);
             let mut order: Vec<usize> = (0..self.entries.len()).collect();
             // Sorting by (bucket, chain sequence) reproduces each bucket's

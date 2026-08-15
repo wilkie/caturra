@@ -2859,11 +2859,13 @@ impl MethodTable {
                     simple = "ArrayList";
                 }
                 // `Map<K, V>` is the interface form of the HashMap caturra models.
-                if simple == "Map" && !self.has_class("Map") {
+                // A `LinkedHashMap` is the same TYPE — the two differ only in
+                // iteration order, which the object carries, not the type.
+                if matches!(simple, "Map" | "LinkedHashMap") && !self.has_class(simple) {
                     simple = "HashMap";
                 }
                 // `HashSet<E>` is the concrete form of the Set caturra models.
-                if simple == "HashSet" && !self.has_class("HashSet") {
+                if matches!(simple, "HashSet" | "LinkedHashSet") && !self.has_class(simple) {
                     simple = "Set";
                 }
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
@@ -3529,6 +3531,8 @@ fn raw_library_internal(name: &str) -> Option<&'static str> {
         "ArrayList" => "java/util/ArrayList",
         "HashMap" => "java/util/HashMap",
         "HashSet" => "java/util/HashSet",
+        "LinkedHashMap" => "java/util/LinkedHashMap",
+        "LinkedHashSet" => "java/util/LinkedHashSet",
         "TreeMap" => "java/util/TreeMap",
         "TreeSet" => "java/util/TreeSet",
         "LinkedList" => "java/util/LinkedList",
@@ -6830,10 +6834,10 @@ fn method_descriptor(
                 if simple == "List" && !table.has_class("List") {
                     simple = "ArrayList";
                 }
-                if simple == "Map" && !table.has_class("Map") {
+                if matches!(simple, "Map" | "LinkedHashMap") && !table.has_class(simple) {
                     simple = "HashMap";
                 }
-                if simple == "HashSet" && !table.has_class("HashSet") {
+                if matches!(simple, "HashSet" | "LinkedHashSet") && !table.has_class(simple) {
                     simple = "Set";
                 }
                 if matches!(
@@ -16372,8 +16376,18 @@ impl BodyGen<'_> {
                 }
                 "ArrayList" => return self.new_array_list(type_args, args, span),
                 "Stack" => return self.new_stack(type_args, args, span),
-                "HashMap" => return self.new_hash_map(type_args, args, span),
-                "HashSet" => return self.new_hash_set(type_args, args, span),
+                "HashMap" => {
+                    return self.new_hash_map("java/util/HashMap", type_args, args, span);
+                }
+                "LinkedHashMap" => {
+                    return self.new_hash_map("java/util/LinkedHashMap", type_args, args, span);
+                }
+                "HashSet" => {
+                    return self.new_hash_set("java/util/HashSet", type_args, args, span);
+                }
+                "LinkedHashSet" => {
+                    return self.new_hash_set("java/util/LinkedHashSet", type_args, args, span);
+                }
                 "TreeSet" => return self.new_tree_set(type_args, args, span),
                 "TreeMap" => return self.new_tree_map(type_args, args, span),
                 "LinkedList" => return self.new_linked_list(type_args, args, span),
@@ -17138,7 +17152,16 @@ impl BodyGen<'_> {
         JType::MapEntry { key, value }
     }
 
-    fn new_hash_map(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+    /// `new HashMap<>(...)` and `new LinkedHashMap<>(...)`. Both are a
+    /// `Map` here — the only difference is the class constructed, which is what
+    /// tells the VM to iterate in INSERTION order and what `getClass` reports.
+    fn new_hash_map(
+        &mut self,
+        class: &'static str,
+        type_args: &[TypeRef],
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> JType {
         if args.len() > 1 {
             self.error(span, "HashMap takes at most one constructor argument");
             return JType::Error;
@@ -17165,12 +17188,12 @@ impl BodyGen<'_> {
                 return JType::Error;
             }
         };
-        let map_class = intern_class(self.pool, "java/util/HashMap");
+        let map_class = intern_class(self.pool, class);
         self.code.push_op_u16(op::NEW, map_class, 1);
         self.code.push_op(op::DUP, 1);
         match args {
             [] => {
-                let init_ref = intern_method_ref(self.pool, "java/util/HashMap", "<init>", "()V");
+                let init_ref = intern_method_ref(self.pool, class, "<init>", "()V");
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(1);
             }
@@ -17191,8 +17214,7 @@ impl BodyGen<'_> {
                         }
                         "(I)V"
                     };
-                let init_ref =
-                    intern_method_ref(self.pool, "java/util/HashMap", "<init>", descriptor);
+                let init_ref = intern_method_ref(self.pool, class, "<init>", descriptor);
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(2); // the dup'd receiver + the argument
             }
@@ -17563,7 +17585,15 @@ impl BodyGen<'_> {
     /// `new HashSet<>()` / `new HashSet<>(int)` / `new HashSet<>(collection)`.
     /// Emits `new java.util.HashSet` so the VM builds a set backed by a map of
     /// the elements; the copy constructor deduplicates at runtime.
-    fn new_hash_set(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+    /// `new HashSet<>(...)` and `new LinkedHashSet<>(...)` — see
+    /// [`Self::new_hash_map`] for why one function serves both.
+    fn new_hash_set(
+        &mut self,
+        class: &'static str,
+        type_args: &[TypeRef],
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> JType {
         if args.len() > 1 {
             self.error(span, "HashSet takes at most one constructor argument");
             return JType::Error;
@@ -17588,12 +17618,12 @@ impl BodyGen<'_> {
                 return JType::Error;
             }
         };
-        let set_class = intern_class(self.pool, "java/util/HashSet");
+        let set_class = intern_class(self.pool, class);
         self.code.push_op_u16(op::NEW, set_class, 1);
         self.code.push_op(op::DUP, 1);
         match args {
             [] => {
-                let init_ref = intern_method_ref(self.pool, "java/util/HashSet", "<init>", "()V");
+                let init_ref = intern_method_ref(self.pool, class, "<init>", "()V");
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(1);
             }
@@ -17619,8 +17649,7 @@ impl BodyGen<'_> {
                         "(I)V"
                     }
                 };
-                let init_ref =
-                    intern_method_ref(self.pool, "java/util/HashSet", "<init>", descriptor);
+                let init_ref = intern_method_ref(self.pool, class, "<init>", descriptor);
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(2); // the dup'd receiver + the argument
             }

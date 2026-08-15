@@ -22139,6 +22139,117 @@ public class SubListCtor {
 "#
 );
 
+// `LinkedHashMap` and `LinkedHashSet` — insertion-ordered iteration.
+//
+// The whole feature is one flag, because `JavaHashMap` already STORES its
+// entries in insertion order and derives the bucket order on top: a
+// LinkedHashMap is that structure with the derivation skipped. Every operation
+// built on the iteration order — `toString`, the three views, for-each,
+// streams, the compute family — follows without being touched.
+//
+// The order rules are what this pins: re-putting an existing key keeps its
+// original position, and removing then re-adding moves it to the end. A copy
+// constructor iterates the SOURCE in the source's own order, so
+// `new LinkedHashMap<>(aHashMap)` is in bucket order and stays that way.
+differential_test!(
+    insertion_ordered_collections,
+    "LinkedOrder",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
+
+public class LinkedOrder {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("z", 1);
+        m.put("a", 2);
+        m.put("m", 3);
+        System.out.println(m);
+        System.out.println(m.keySet() + "," + m.values());
+        for (Map.Entry<String, Integer> e : m.entrySet()) {
+            System.out.println(e.getKey() + "=" + e.getValue());
+        }
+        // Re-putting keeps the original position; remove-then-add moves it.
+        m.put("z", 9);
+        System.out.println(m);
+        m.remove("z");
+        m.put("z", 3);
+        System.out.println(m);
+        m.computeIfAbsent("c", k -> 4);
+        m.merge("a", 5, Integer::sum);
+        System.out.println(m);
+
+        Map<Integer, Integer> many = new LinkedHashMap<>();
+        for (int i = 20; i > 0; i--) {
+            many.put(i, i);
+        }
+        System.out.println(many);
+
+        Set<String> s = new LinkedHashSet<>();
+        s.add("z");
+        s.add("a");
+        s.add("m");
+        System.out.println(s);
+        System.out.println(new ArrayList<>(s));
+        System.out.println(new LinkedHashSet<>(Arrays.asList("q", "b", "d")));
+        Set<String> sized = new LinkedHashSet<>(16);
+        sized.add("z");
+        sized.add("a");
+        System.out.println(sized);
+
+        // The sizing and copy constructors keep the ordering.
+        Map<String, Integer> capacity = new LinkedHashMap<>(32);
+        capacity.put("z", 1);
+        capacity.put("a", 2);
+        System.out.println(capacity);
+        System.out.println(new LinkedHashMap<>(capacity));
+        // A copy iterates the SOURCE in the source's order.
+        Map<String, Integer> hashed = new HashMap<>();
+        hashed.put("z", 1);
+        hashed.put("a", 2);
+        System.out.println(new LinkedHashMap<>(hashed));
+        System.out.println(new HashMap<>(capacity));
+
+        // The plain kinds are untouched, and equal across kinds.
+        Map<String, Integer> plain = new HashMap<>();
+        plain.put("z", 1);
+        plain.put("a", 2);
+        plain.put("m", 3);
+        System.out.println(plain);
+        Set<String> plainSet = new HashSet<>();
+        plainSet.add("z");
+        plainSet.add("a");
+        plainSet.add("m");
+        System.out.println(plainSet);
+        Map<String, Integer> one = new HashMap<>();
+        one.put("z", 1);
+        Map<String, Integer> other = new LinkedHashMap<>();
+        other.put("z", 1);
+        System.out.println(one.equals(other) + "," + (one.hashCode() == other.hashCode()));
+
+        // The class a program can see, and the hierarchy behind it.
+        System.out.println(m.getClass().getName());
+        System.out.println(s.getClass().getName());
+        System.out.println(m.getClass().getSuperclass().getName());
+        Object linked = new LinkedHashMap<String, Integer>();
+        System.out.println((linked instanceof Map) + "," + (linked instanceof LinkedHashMap)
+            + "," + (linked instanceof HashMap));
+        Object bucketed = new HashMap<String, Integer>();
+        System.out.println(bucketed instanceof LinkedHashMap);
+        Object linkedSet = new LinkedHashSet<String>();
+        System.out.println((linkedSet instanceof Set) + "," + (linkedSet instanceof LinkedHashSet)
+            + "," + (linkedSet instanceof HashSet));
+    }
+}
+"#
+);
+
 // An array whose element is a COLLECTION — `new List[n]`, the bucket array.
 // It was refused with "arrays are not yet supported by caturra", which a
 // program that had just declared a `String[]` could only read as nonsense: the

@@ -79,6 +79,11 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         "java/util/Stack" => Some(HeapObject::Stack(Vec::new())),
         "java/util/HashMap" => Some(HeapObject::HashMap(JavaHashMap::new())),
         "java/util/HashSet" => Some(HeapObject::HashSet(JavaHashMap::new())),
+        // A LinkedHashMap/LinkedHashSet is the same structure iterated in
+        // INSERTION order — which is the order the entries are stored in
+        // anyway, so only the derived bucket order is skipped.
+        "java/util/LinkedHashMap" => Some(HeapObject::HashMap(JavaHashMap::linked())),
+        "java/util/LinkedHashSet" => Some(HeapObject::HashSet(JavaHashMap::linked())),
         "java/util/TreeSet" => Some(HeapObject::TreeSet {
             values: Vec::new(),
             comparator: None,
@@ -257,7 +262,12 @@ pub fn invoke_special(
                 // `new HashSet<>(initialCapacity)` builds `new HashMap<>(cap)`,
                 // so the hint reaches the backing map identically.
                 Some(HeapObject::HashMap(map) | HeapObject::HashSet(map)) => {
-                    *map = JavaHashMap::with_capacity_hint(capacity);
+                    // The object was already built for its class, so it knows
+                    // whether it iterates in insertion order; sizing it must
+                    // not throw that away (`with_capacity_hint` starts from
+                    // `default()`).
+                    let linked = map.is_linked();
+                    *map = JavaHashMap::with_capacity_hint(capacity).as_linked(linked);
                     Ok(())
                 }
                 _ => Ok(()),

@@ -1860,10 +1860,16 @@ impl<'run> Interpreter<'run> {
                                     // The rest of the collections. They answered
                                     // FALSE to everything — there was no arm at all
                                     // — so `o instanceof Map` was silently wrong.
-                                    Some(crate::value::HeapObject::HashMap(_)) => matches!(
-                                        target.as_str(),
-                                        "java/util/HashMap" | "java/util/Map"
-                                    ),
+                                    // A LinkedHashMap IS a HashMap (it extends
+                                    // one), so it answers to both; a plain
+                                    // HashMap is no LinkedHashMap.
+                                    Some(crate::value::HeapObject::HashMap(map)) => {
+                                        matches!(
+                                            target.as_str(),
+                                            "java/util/HashMap" | "java/util/Map"
+                                        ) || (map.is_linked()
+                                            && target == "java/util/LinkedHashMap")
+                                    }
                                     Some(crate::value::HeapObject::TreeMap { .. }) => matches!(
                                         target.as_str(),
                                         "java/util/TreeMap"
@@ -1884,12 +1890,15 @@ impl<'run> Interpreter<'run> {
                                     Some(crate::value::HeapObject::UnmodifiableMap(_)) => {
                                         target == "java/util/Map"
                                     }
-                                    Some(crate::value::HeapObject::HashSet(_)) => matches!(
-                                        target.as_str(),
-                                        "java/util/HashSet"
-                                            | "java/util/Set"
-                                            | "java/util/Collection"
-                                    ),
+                                    Some(crate::value::HeapObject::HashSet(set)) => {
+                                        matches!(
+                                            target.as_str(),
+                                            "java/util/HashSet"
+                                                | "java/util/Set"
+                                                | "java/util/Collection"
+                                        ) || (set.is_linked()
+                                            && target == "java/util/LinkedHashSet")
+                                    }
                                     Some(crate::value::HeapObject::TreeSet { .. }) => matches!(
                                         target.as_str(),
                                         "java/util/TreeSet"
@@ -3037,7 +3046,11 @@ impl<'run> Interpreter<'run> {
         // because hashing a key may run a user `hashCode`. The intrinsic arm
         // read only a real HashMap, so every other source was a
         // ClassCastException — or, for a TreeMap receiver, silently nothing.
-        if target_class == "java/util/HashMap" && descriptor == "(Ljava/util/Map;)V" {
+        if matches!(
+            target_class,
+            "java/util/HashMap" | "java/util/LinkedHashMap"
+        ) && descriptor == "(Ljava/util/Map;)V"
+        {
             use crate::value::HeapObject;
             let JValue::Ref(Some(source)) = args[0] else {
                 return Err(VmError::UncaughtException(String::from(
@@ -3047,8 +3060,12 @@ impl<'run> Interpreter<'run> {
             let entries = self.map_entries(source);
             #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
             let hint = std::cmp::max((entries.len() as f32 / 0.75) as i32 + 1, 16);
+            // The sizing constructors start from `default()`, so the
+            // insertion-ordered flag has to be carried across — it is the
+            // CLASS being constructed that decides it, not the source's.
+            let linked = target_class == "java/util/LinkedHashMap";
             if let Some(HeapObject::HashMap(map)) = self.heap.get_mut(receiver) {
-                *map = crate::map::JavaHashMap::with_capacity_hint(hint);
+                *map = crate::map::JavaHashMap::with_capacity_hint(hint).as_linked(linked);
             }
             for (key, value) in entries {
                 self.map_put(receiver, key, value)?;
@@ -3087,7 +3104,11 @@ impl<'run> Interpreter<'run> {
         // the heap-only intrinsic layer. Java pre-sizes the backing map to
         // `max((int)(size/.75f)+1, 16)`, so a large source lands on a bigger
         // table and iterates accordingly.
-        if target_class == "java/util/HashSet" && descriptor == "(Ljava/util/Collection;)V" {
+        if matches!(
+            target_class,
+            "java/util/HashSet" | "java/util/LinkedHashSet"
+        ) && descriptor == "(Ljava/util/Collection;)V"
+        {
             use crate::value::HeapObject;
             let JValue::Ref(Some(source)) = args[0] else {
                 return Err(VmError::UncaughtException(String::from(
@@ -3097,8 +3118,9 @@ impl<'run> Interpreter<'run> {
             let elements = self.materialized_elements(source);
             #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
             let hint = std::cmp::max((elements.len() as f32 / 0.75) as i32 + 1, 16);
+            let linked = target_class == "java/util/LinkedHashSet";
             if let Some(HeapObject::HashSet(map)) = self.heap.get_mut(receiver) {
-                *map = crate::map::JavaHashMap::with_capacity_hint(hint);
+                *map = crate::map::JavaHashMap::with_capacity_hint(hint).as_linked(linked);
             }
             for element in elements {
                 self.set_add(receiver, element)?;
@@ -11780,10 +11802,21 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
             Some(HeapObject::ArrayDeque(_)) => String::from("java/util/ArrayDeque"),
             Some(HeapObject::Stack(_)) => String::from("java/util/Stack"),
-            Some(HeapObject::HashSet(_)) => String::from("java/util/HashSet"),
+            // A LinkedHashSet/LinkedHashMap is the same object with insertion
+            // ordering, so the class it reports is the only way a program can
+            // tell them apart besides that order.
+            Some(HeapObject::HashSet(set)) => String::from(if set.is_linked() {
+                "java/util/LinkedHashSet"
+            } else {
+                "java/util/HashSet"
+            }),
             // HashMap was the one collection missing here, so `map.getClass()`
             // answered `java.lang.Object` — the TreeMap beside it was fine.
-            Some(HeapObject::HashMap(_)) => String::from("java/util/HashMap"),
+            Some(HeapObject::HashMap(map)) => String::from(if map.is_linked() {
+                "java/util/LinkedHashMap"
+            } else {
+                "java/util/HashMap"
+            }),
             Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
             Some(HeapObject::TreeMap { .. }) => String::from("java/util/TreeMap"),
             Some(HeapObject::PriorityQueue { .. }) => String::from("java/util/PriorityQueue"),
@@ -15304,6 +15337,8 @@ fn library_superclass(internal: &str) -> Option<&'static str> {
         ("java/util/ArrayList", "java/util/AbstractList"),
         ("java/util/LinkedList", "java/util/AbstractSequentialList"),
         ("java/util/HashMap", "java/util/AbstractMap"),
+        ("java/util/LinkedHashMap", "java/util/HashMap"),
+        ("java/util/LinkedHashSet", "java/util/HashSet"),
         ("java/util/TreeMap", "java/util/AbstractMap"),
         ("java/util/HashSet", "java/util/AbstractSet"),
         ("java/util/TreeSet", "java/util/AbstractSet"),
