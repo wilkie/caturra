@@ -22287,6 +22287,77 @@ public class EntryComparatorRef {
 "#
 );
 
+// Casting an erased `Object` back down to a COLLECTION — the ordinary
+// store-it-and-cast-it-back. Only `List` had an arm, so every other target was
+// "cannot cast Object to HashMap<…>"; and the `List` arm itself checked
+// `java/util/ArrayList`, so `(List<E>) o` THREW on a LinkedList that a JDK
+// accepts. The class to check is the one the program WROTE — `List` and
+// `ArrayList` are one `JType` here, so the type cannot tell them apart, and
+// `instanceof` records having made exactly this mistake once already.
+//
+// The wrong casts must still throw, which is the other half: an interface
+// accepts any implementation, a concrete class accepts only itself.
+differential_test!(
+    casting_back_to_a_collection,
+    "CollectionCasts",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public class CollectionCasts {
+    public static void main(String[] args) {
+        Object list = new ArrayList<String>(Arrays.asList("x"));
+        System.out.println((ArrayList<String>) list);
+        System.out.println((List<String>) list);
+        System.out.println((Collection<String>) list);
+        // An INTERFACE target accepts another implementation.
+        Object linked = new LinkedList<Integer>(Arrays.asList(1));
+        System.out.println((List<Integer>) linked);
+        System.out.println((LinkedList<Integer>) linked);
+        Object hashed = new HashMap<String, Integer>();
+        System.out.println((HashMap<String, Integer>) hashed);
+        System.out.println((Map<String, Integer>) hashed);
+        Object sorted = new TreeMap<String, Integer>();
+        System.out.println((Map<String, Integer>) sorted);
+        System.out.println((TreeMap<String, Integer>) sorted);
+        Object set = new HashSet<String>();
+        System.out.println((HashSet<String>) set);
+        System.out.println((Set<String>) set);
+        Object treeSet = new TreeSet<String>();
+        System.out.println((Set<String>) treeSet);
+        System.out.println((TreeSet<String>) treeSet);
+
+        // A CONCRETE target accepts only its own class, and an unrelated
+        // object is no collection at all.
+        report(() -> (ArrayList<Integer>) linked);
+        report(() -> (HashMap<String, Integer>) sorted);
+        report(() -> (TreeSet<String>) set);
+        report(() -> (Set<String>) list);
+        report(() -> (Map<String, Integer>) list);
+        Object text = "a string";
+        report(() -> (List<Integer>) text);
+    }
+
+    static void report(java.util.function.Supplier<Object> cast) {
+        try {
+            System.out.println(cast.get());
+        } catch (ClassCastException e) {
+            System.out.println("cce");
+        }
+    }
+}
+"#
+);
+
 // `TreeMap.firstEntry()` and the other ENTRY accessors, refused as "TreeMap
 // entry views are not supported by caturra". That reason expired when
 // `Map.Entry` became a type a program can hold: the entries an `entrySet()`

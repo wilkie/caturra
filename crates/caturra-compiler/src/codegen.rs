@@ -3517,6 +3517,18 @@ fn library_exception_internal(name: &str, table: &MethodTable) -> Option<String>
 /// These have no `JType` of their own without type arguments (a raw `List` is not
 /// a variable type caturra models), but `o instanceof List` is a perfectly ordinary
 /// question and the VM can answer it.
+/// The simple name a cast target was WRITTEN as, for choosing the class a
+/// `checkcast` names. `List` and `ArrayList` share one `JType`, so the type
+/// alone cannot say which the program asked for — and the answer decides
+/// whether a `LinkedList` passes the cast.
+fn cast_target_name(ty: &TypeRef) -> Option<&str> {
+    let name = match ty {
+        TypeRef::Named(name) | TypeRef::Generic { base: name, .. } => name.as_str(),
+        _ => return None,
+    };
+    Some(name.rsplit('.').next().unwrap_or(name))
+}
+
 fn raw_library_internal(name: &str) -> Option<&'static str> {
     let simple = crate::imports::canonical_library_class(name).unwrap_or(name);
     // An INTERFACE must map to the interface's own name, never to a concrete class:
@@ -25028,13 +25040,38 @@ impl BodyGen<'_> {
             }
             return JType::StringBuilder;
         }
-        // Casting a reference (commonly an erased Object) to a List: a runtime
-        // checkcast to java/util/ArrayList.
-        if let JType::List(_) = target
-            && source.is_reference()
+        // Casting a reference (commonly an erased `Object`) down to a library
+        // COLLECTION: `(List<E>) o`, `(Map<K, V>) o`, `(TreeSet<E>) o`.
+        //
+        // The class to CHECK is the one the program WROTE, not the one the
+        // `JType` is modelled as — `List` and `ArrayList` are one type here, so
+        // the type cannot tell them apart. Casting to the INTERFACE `List`
+        // checked `java/util/ArrayList`, which threw ClassCastException on a
+        // LinkedList that a JDK accepts: the same mistake `instanceof` records
+        // having made ("an INTERFACE must map to the interface's own name,
+        // never to a concrete class"). `raw_library_internal` is that table.
+        //
+        // Only `List` had an arm at all, so every other collection target was
+        // "cannot cast Object to HashMap<…>" — the ordinary store-in-an-Object
+        // and cast-back, refused.
+        if source.is_reference()
+            && matches!(
+                target,
+                JType::List(_)
+                    | JType::Map { .. }
+                    | JType::TreeMap { .. }
+                    | JType::Set(_)
+                    | JType::TreeSet(_)
+                    | JType::LinkedList { .. }
+                    | JType::Collection(_)
+                    | JType::Stack(_)
+                    | JType::Optional(_)
+            )
+            && let Some(written) = cast_target_name(ty)
+            && let Some(internal) = raw_library_internal(written)
         {
-            if !matches!(source, JType::List(_)) {
-                let class_index = intern_class(self.pool, "java/util/ArrayList");
+            if source != target {
+                let class_index = intern_class(self.pool, internal);
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
             }
             return target;

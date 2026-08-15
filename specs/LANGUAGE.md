@@ -4190,6 +4190,27 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### Casting back to a collection (2026-08-15)
+
+Chasing the refusal table's `clone` entries — which need a cast to be usable —
+found the cast itself. Only `List` had an arm, so `(Map<K, V>) o`,
+`(Set<E>) o`, `(TreeMap<K, V>) o` and the rest were all "cannot cast Object to
+…": the ordinary store-in-an-`Object`-and-cast-it-back, refused.
+
+The `List` arm was worse than missing. It checked `java/util/ArrayList`, so
+`(List<E>) o` THREW ClassCastException on a `LinkedList` that a JDK accepts —
+a wrong answer, not a refusal. `List` and `ArrayList` are one `JType` here, so
+the type cannot say which the program asked for; the class to check is the one
+it WROTE. `raw_library_internal` is already that table, and its own comment
+records this exact mistake being made once before, in `instanceof`: "an
+INTERFACE must map to the interface's own name, never to a concrete class —
+`Set` -> `java/util/HashSet` made a TreeSet answer `instanceof Set` with
+false."
+
+So the same table now serves both, and the other half is pinned with it: an
+interface target accepts any implementation, a concrete one accepts only its
+own class, and an unrelated object is no collection at all.
+
 ### A TreeMap's entry accessors (2026-08-15)
 
 Three shapes recurred this session: a name with more than one segment, a fact
