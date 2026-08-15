@@ -4190,6 +4190,37 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### Sweeping the differential suite for type divergence (2026-08-15)
+
+This file has said for some time that "the corpus and the differential suite
+can be swept the same way with `CATURRA_VERIFY_TYPES=1`". The corpus had been.
+The suite had not, and it holds 777 real Java programs — every shape the
+project has ever pinned. Swept, it reports **82 disagreements in 30 distinct
+shapes**.
+
+A measurement note that nearly hid them: `cargo test` captures stderr for
+PASSING tests, so the first sweep reported zero. The check writes each
+disagreement to stderr, so the suite has to be run with `--nocapture`.
+
+The first shape, and the largest at 19 of the 82, is the type of `i++` on a
+BOXED counter. JLS §15.14.2 is explicit — the type of a postfix increment is
+the type of the VARIABLE — so `Integer i; i++` is an `Integer`, which javac
+confirms by inferring `Integer` for `var x = i++`.
+
+`type_of` answered the primitive, and its comment gave the reason: `i++ + 1`
+and `i++ < n` have to stay legal. They do, but because binary numeric promotion
+unboxes the operand (§5.6.2), not because the expression is primitive — the
+comment was right about the consequence and wrong about the cause. The emitter
+answered the wrapper, *except* for an array element, where it answered the
+primitive and `type_of` the wrapper. **Each path was right about one case and
+wrong about the other**, which is why the disagreement survived being looked at.
+
+None of it changed any program's output, which is what a latent divergence
+looks like until the day it does not.
+
+Remaining after this unit: 63, in shapes that are being worked through in
+order of frequency.
+
 ### A collection's clone (2026-08-15)
 
 `ArrayList.clone()`, `HashMap.clone()` and `TreeMap.clone()` were refused as

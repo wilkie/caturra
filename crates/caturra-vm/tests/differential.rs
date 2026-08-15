@@ -22287,6 +22287,55 @@ public class EntryComparatorRef {
 "#
 );
 
+// The type of `i++` on a BOXED counter. JLS §15.14.2: the type of a postfix
+// increment is the TYPE OF THE VARIABLE, so `Integer i; i++` is an `Integer`
+// — javac agrees, inferring `Integer` for `var x = i++`.
+//
+// `type_of` answered the PRIMITIVE, reasoning that `i++ + 1` and `i++ < n`
+// have to stay legal. They do, but because binary numeric promotion unboxes
+// the operand (§5.6.2), not because the expression is primitive. The emitter
+// answered the wrapper — except for an ARRAY element, where it answered the
+// primitive and `type_of` the wrapper. Each path was right about one case and
+// wrong about the other, which is what made the disagreement survive.
+differential_test!(
+    the_type_of_a_boxed_increment,
+    "BoxedIncrementType",
+    r#"
+public class BoxedIncrementType {
+    public static void main(String[] args) {
+        Integer i = 1;
+        var x = i++;
+        System.out.println(((Object) x).getClass().getName() + " " + i);
+        Integer j = 5;
+        var y = j--;
+        System.out.println(((Object) y).getClass().getName() + " " + j);
+        Character c = 'a';
+        var z = c++;
+        System.out.println(((Object) z).getClass().getName() + " " + c);
+        Long l = 7L;
+        var w = l++;
+        System.out.println(((Object) w).getClass().getName() + " " + l);
+
+        // An ARRAY element is the same rule.
+        Integer[] arr = { 10, 20 };
+        var e = arr[0]++;
+        System.out.println(((Object) e).getClass().getName() + " " + arr[0]);
+        int old = arr[1]--;
+        System.out.println(old + " " + arr[1]);
+
+        // The arithmetic and comparison uses stay legal, by unboxing in the
+        // promotion rather than by the expression being primitive.
+        Integer k = 2;
+        System.out.println((k++ + 1) + " " + (k++ < 10) + " " + k);
+        Integer n = 5;
+        int unboxed = n++;
+        System.out.println(unboxed + " " + n);
+        System.out.println((arr[0]++ + 1) + " " + (arr[0]++ < 100));
+    }
+}
+"#
+);
+
 // Casting an erased `Object` back down to a COLLECTION — the ordinary
 // store-it-and-cast-it-back. Only `List` had an arm, so every other target was
 // "cannot cast Object to HashMap<…>"; and the `List` arm itself checked

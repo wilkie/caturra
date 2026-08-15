@@ -23493,12 +23493,16 @@ impl BodyGen<'_> {
             Expr::Ternary { then, els, .. } => self.conditional_join(then, els),
             Expr::IncDec { target, .. } => match self.type_of(target) {
                 ty if ty.is_numeric() => ty,
-                // `i++` on a BOXED counter unboxes for the arithmetic (JLS
-                // §15.14.2/§5.6.2), so its value is the primitive — which is
-                // what makes `i++ + 1` and `i++ < n` legal. Typing it as an
-                // error made every binary use of the result "bad operand
-                // types", though the emitter handled the increment itself.
-                JType::Boxed(elem) => elem.base_type(),
+                // JLS §15.14.2: the type of a postfix increment expression is
+                // the TYPE OF THE VARIABLE — so `i++` on an `Integer` is an
+                // `Integer`, which javac confirms (`var x = i++` infers
+                // `Integer`). This answered the primitive instead, on the
+                // reasoning that `i++ + 1` and `i++ < n` have to stay legal:
+                // they do, but because BINARY NUMERIC PROMOTION unboxes the
+                // operand (§5.6.2), not because the expression is primitive.
+                // The emitter always answered the wrapper, so the two paths
+                // disagreed about every boxed counter in the suite.
+                boxed @ JType::Boxed(_) => boxed,
                 _ => JType::Error,
             },
             Expr::SuperMethodCall {
@@ -25933,7 +25937,12 @@ impl BodyGen<'_> {
                 }
                 self.code.push_op(store, 0);
                 self.code.drop_stack(2 + view.width());
-                view
+                // JLS §15.14.2: the expression's type is the VARIABLE's — so
+                // `arr[0]++` on an `Integer[]` is an `Integer`, which javac
+                // confirms (`var x = arr[0]++` infers `Integer`). Answering the
+                // primitive view here disagreed with `type_of`, which reads the
+                // element type.
+                elem_ty
             }
             _ => {
                 // Field targets (this.count++, obj.n--): reuse the
