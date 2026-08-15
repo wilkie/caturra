@@ -21782,8 +21782,20 @@ impl BodyGen<'_> {
             self.expr(single);
             elem
         } else if method == "stream" {
-            // `Arrays.stream` takes an array and nothing else.
-            self.no_suitable_library_method(class, method, args, span);
+            // `Arrays.stream(a, from, to)` streams a RANGE of the array, and
+            // like every stream source it is late-binding over the array
+            // itself. caturra records a stream's origin as a whole collection
+            // or array, with no room for a range, and lowering the range to a
+            // copy would quietly drop that late binding — so this is refused
+            // rather than answered from a snapshot.
+            let reason = if args.len() == 3 {
+                "Arrays.stream(array, from, to) exists in Java, but caturra streams a whole \
+                 array — use Arrays.stream(Arrays.copyOfRange(array, from, to))"
+            } else {
+                self.no_suitable_library_method(class, method, args, span);
+                return None;
+            };
+            self.error(span, String::from(reason));
             return None;
         } else {
             // `IntStream.of(...)` packs a genuine `int[]`: its pipeline stores
@@ -22817,8 +22829,17 @@ impl BodyGen<'_> {
                                 _ => JType::Error,
                             };
                         }
-                        "frequency" | "binarySearch" => return JType::Int,
-                        "addAll" => return JType::Boolean,
+                        // `indexOfSubList`/`lastIndexOfSubList` answer an index
+                        // and `disjoint` a boolean. Missing from this mirror,
+                        // each typed as an ERROR while it emitted fine — so
+                        // `println(Collections.disjoint(a, b))` worked (the
+                        // println overload is chosen on the emitted type) and
+                        // passing the same call to a method of one's own was
+                        // "cannot determine the type of an argument".
+                        "frequency" | "binarySearch" | "indexOfSubList" | "lastIndexOfSubList" => {
+                            return JType::Int;
+                        }
+                        "addAll" | "disjoint" => return JType::Boolean,
                         "unmodifiableList" => {
                             return args.first().map_or(JType::Error, |a| self.type_of(a));
                         }

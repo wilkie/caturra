@@ -7821,25 +7821,12 @@ impl<'run> Interpreter<'run> {
     ) -> Result<Answered, VmError> {
         use crate::value::HeapObject;
         if method == "stream" && args.is_empty() && self.is_streamable(receiver) {
-            // An `entrySet()` streams whole ENTRIES. `collection_elements`
-            // cannot build them (it does not allocate), so it hands back the
-            // keys — and the pipeline's lambda got a String where it expected
-            // a `Map.Entry`, and died on the cast.
-            let elements = if let Some(map) = self.entry_set_map(receiver) {
-                let entries = self.map_entries(map);
-                entries
-                    .into_iter()
-                    .map(|(key, _)| {
-                        JValue::Ref(Some(self.heap.alloc(HeapObject::MapEntry {
-                            map,
-                            key,
-                            read_only: self.is_read_only_view(receiver),
-                        })))
-                    })
-                    .collect()
-            } else {
-                self.collection_elements(receiver)
-            };
+            // An `entrySet()` streams whole ENTRIES, which `collection_elements`
+            // cannot build (it does not allocate) — it hands back the keys, and
+            // the pipeline's lambda got a String where it expected a
+            // `Map.Entry` and died on the cast. `materialized_elements` is that
+            // same walk, and is what a terminal re-reads through.
+            let elements = self.materialized_elements(receiver);
             let length = iterated_len_of(&self.heap, receiver);
             let stream = self.heap.alloc(HeapObject::Stream {
                 source: elements,
@@ -7899,10 +7886,26 @@ impl<'run> Interpreter<'run> {
     }
 
     /// A stream's source vector and pending ops, detached from the heap borrow.
-    fn stream_pipeline(&self, stream: HeapRef) -> (Vec<JValue>, Vec<crate::value::StreamOp>) {
-        match self.heap.get(stream) {
+    ///
+    /// A stream is LATE-BINDING (`java.util.stream`, package docs): its source
+    /// is read when the terminal runs, not when the stream is built. So a
+    /// collection modified after `stream()` and before the terminal is seen in
+    /// its CURRENT state — `l.stream()`, `l.add(x)`, `count()` answers the new
+    /// size. Holding the vector captured at construction answered the old one:
+    /// a wrong answer with no error, in all three shapes (an element replaced,
+    /// an element added, an array written through).
+    ///
+    /// The stored vector still stands for a source with no origin —
+    /// `Stream.of(...)`, and the fresh stream `sorted` materializes, whose
+    /// order is its own and must not be re-read away.
+    fn stream_pipeline(&mut self, stream: HeapRef) -> (Vec<JValue>, Vec<crate::value::StreamOp>) {
+        let (source, ops) = match self.heap.get(stream) {
             Some(crate::value::HeapObject::Stream { source, ops }) => (source.clone(), ops.clone()),
-            _ => (Vec::new(), Vec::new()),
+            _ => return (Vec::new(), Vec::new()),
+        };
+        match self.stream_origins.get(&stream).map(|(origin, _)| *origin) {
+            Some(origin) => (self.materialized_elements(origin), ops),
+            None => (source, ops),
         }
     }
 
@@ -8007,6 +8010,13 @@ impl<'run> Interpreter<'run> {
         let Some((collection, length)) = origin else {
             return Ok(());
         };
+        // An ARRAY source has no comodification: its length is fixed, so
+        // writing to it is not a structural change and never throws. (It is
+        // recorded as an origin for LATE BINDING, not for this check, and
+        // `iterated_len_of` answers 0 for one — which would read as a change.)
+        if self.array_length(collection).is_some() {
+            return Ok(());
+        }
         if iterated_len_of(&self.heap, collection) == length {
             return Ok(());
         }
@@ -9122,9 +9132,15 @@ impl<'run> Interpreter<'run> {
             _ => None,
         };
         let Some(map) = entries_of else {
+            // An ARRAY is a stream source too, and `collection_elements` does
+            // not walk one — a stream over an array re-read through here would
+            // otherwise come back empty.
+            if let Some(elements) = self.array_elements(reference) {
+                return elements;
+            }
             return self.collection_elements(reference);
         };
-        let read_only = self.checked_cursor_views.contains(&reference);
+        let read_only = self.is_read_only_view(reference);
         self.map_entries(map)
             .into_iter()
             .map(|(key, _)| {
@@ -10111,10 +10127,21 @@ impl<'run> Interpreter<'run> {
                 _ => None,
             };
             if let Some(source) = source {
+                let length = source.len();
                 let stream = self.heap.alloc(crate::value::HeapObject::Stream {
                     source,
                     ops: Vec::new(),
                 });
+                // `Arrays.stream(a)` and `Stream.of(a)` are backed BY that
+                // array, so writing to it before the terminal runs is visible
+                // — the same late binding a collection source has. The array
+                // is recorded as the origin so the terminal re-reads it.
+                // `Stream.of(1, 2, 3)` records the synthetic varargs array,
+                // which nothing else can reach, so late binding is invisible
+                // there rather than wrong.
+                if let ("of", [JValue::Ref(Some(array))]) = (method_name, args) {
+                    self.stream_origins.insert(stream, (*array, length));
+                }
                 frame.stack.push(JValue::Ref(Some(stream)));
                 return Ok(None);
             }

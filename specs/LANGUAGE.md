@@ -4190,6 +4190,50 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A stream reads its source when it runs (2026-08-14)
+
+A sweep of the static utility surface — 64 programs across `Arrays`,
+`Collections`, `String`, `StringBuilder`, the wrappers, `Math` and `Objects` —
+came back 62 clean. The two that did not were small, and chasing one of them
+found something that was not.
+
+**A stream is LATE-BINDING** (`java.util.stream`, package documentation): its
+source is read when the TERMINAL runs, not when the stream is built. caturra
+captured the elements at construction, so anything done to the source in
+between was invisible:
+
+```java
+List<Integer> l = new ArrayList<>(List.of(1, 2));
+Stream<Integer> s = l.stream();
+l.add(97);
+s.count();          // 3 on a JDK; caturra answered 2
+```
+
+All three shapes were wrong — an element replaced, an element added, an array
+written through — and each is a wrong answer with no error. The stream already
+recorded its origin collection (for fail-fast), so the fix is to re-read
+through that origin when the terminal pulls. Arrays are recorded as origins
+too, which is what makes `Arrays.stream(a)` see a later write, and they are
+exempt from the comodification check because an array's length cannot change.
+The two sources that must NOT be re-read are the fresh stream `sorted`
+materializes — its order is its own — and `Stream.of(...)` over a synthetic
+varargs array; neither records an origin, so both keep their vector.
+
+**`Collections.disjoint`, `indexOfSubList` and `lastIndexOfSubList` had no
+type.** Each was missing from `type_of`'s mirror of the Collections statics,
+so it typed as an ERROR while emitting fine —
+`println(Collections.disjoint(a, b))` worked, because that overload is chosen
+on the emitted type, and passing the same call to a method of one's own was
+"cannot determine the type of an argument". The fourth `type_of`-versus-emit
+divergence of the round, and the reason that invariant is now checked.
+
+Still refused: `Arrays.stream(a, from, to)`. A stream's origin is a whole
+collection or array with no room for a range, and lowering the range to a copy
+would quietly drop the late binding just established. The refusal now gives
+that reason and names the spelling that works
+(`Arrays.stream(Arrays.copyOfRange(a, from, to))`) instead of reporting "no
+suitable method", which reads as though the program were wrong.
+
 ### Optional's null contract (2026-08-14)
 
 Surveying the type rather than the one method a probe named again — and most

@@ -22139,6 +22139,124 @@ public class SubListCtor {
 "#
 );
 
+// A stream is LATE-BINDING (`java.util.stream`, package docs): its source is
+// read when the TERMINAL runs, not when the stream is built. caturra captured
+// the elements at construction, so a source modified in between was invisible
+// — a wrong answer with no error, in every shape: an element replaced, an
+// element added, an array written through.
+//
+// The stream already recorded its origin collection (for fail-fast), so the
+// fix is to re-read through that origin at the terminal. Arrays are recorded
+// as origins too, which is what makes `Arrays.stream(a)` see a later write —
+// and they are exempt from the comodification check, since an array's length
+// cannot change.
+//
+// The two that must NOT be re-read are pinned here as well: the fresh stream
+// `sorted` materializes (whose order is its own) and `Stream.of(...)` over a
+// synthetic varargs array.
+differential_test!(
+    a_stream_is_late_binding,
+    "LateBinding",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.ConcurrentModificationException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
+
+public class LateBinding {
+    public static void main(String[] args) {
+        List<Integer> added = new ArrayList<>(Arrays.asList(1, 2));
+        Stream<Integer> counting = added.stream();
+        added.add(97);
+        System.out.println(counting.count());
+
+        List<String> replaced = new ArrayList<>(Arrays.asList("a"));
+        Stream<String> first = replaced.stream();
+        replaced.set(0, "z");
+        System.out.println(first.findFirst().get());
+
+        // Late binding survives the intermediate ops, which are pending until
+        // the terminal pulls them.
+        List<Integer> filtered = new ArrayList<>(Arrays.asList(1, 2));
+        Stream<Integer> positive = filtered.stream().filter(x -> x > 0);
+        filtered.add(3);
+        System.out.println(positive.count());
+
+        int[] numbers = {1, 2, 3};
+        IntStream sum = Arrays.stream(numbers);
+        numbers[0] = 100;
+        System.out.println(sum.sum());
+
+        String[] words = {"a", "b"};
+        Stream<String> head = Arrays.stream(words);
+        words[0] = "z";
+        System.out.println(head.findFirst().get());
+
+        // `sorted` materializes: its order is its own and is not re-read away.
+        List<Integer> unsorted = new ArrayList<>(Arrays.asList(3, 1, 2));
+        System.out.println(unsorted.stream().sorted()
+            .map(String::valueOf).collect(Collectors.joining(",")));
+        System.out.println(Arrays.stream(new int[] {3, 1, 2}).sorted().boxed()
+            .map(String::valueOf).collect(Collectors.joining(",")));
+
+        // The ordinary sources, unchanged.
+        System.out.println(Stream.of("a", "bb").filter(s -> s.length() > 1).count());
+        System.out.println(IntStream.of(1, 2, 3).sum());
+        System.out.println(IntStream.range(1, 4).map(i -> i * 2).sum());
+        System.out.println(Stream.concat(Stream.of("a"), Stream.of("b")).count());
+        Map<String, Integer> map = new HashMap<>();
+        map.put("a", 1);
+        map.entrySet().stream().forEach(e -> System.out.println(e.getKey() + "=" + e.getValue()));
+        System.out.println(map.values().stream().mapToInt(Integer::intValue).sum());
+
+        // Modified DURING the traversal is still a comodification.
+        List<Integer> victim = new ArrayList<>(Arrays.asList(1, 2));
+        try {
+            victim.stream().forEach(x -> victim.add(x));
+        } catch (ConcurrentModificationException e) {
+            System.out.println("cme");
+        }
+    }
+}
+"#
+);
+
+// `Collections.disjoint`/`indexOfSubList`/`lastIndexOfSubList` were missing
+// from `type_of`'s mirror of the Collections statics, so each typed as an
+// ERROR while it emitted fine. `println(Collections.disjoint(a, b))` worked —
+// its overload is chosen on the emitted type — and passing the same call to a
+// method of one's own was "cannot determine the type of an argument".
+differential_test!(
+    collections_predicates_have_a_type,
+    "CollectionsTypes",
+    r"
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+public class CollectionsTypes {
+    static void show(Object o) { System.out.println(o); }
+
+    public static void main(String[] args) {
+        List<Integer> left = Arrays.asList(1, 2);
+        List<Integer> right = Arrays.asList(3);
+        show(Collections.disjoint(left, right));
+        show(Collections.disjoint(left, Arrays.asList(2)));
+        show(Collections.indexOfSubList(left, Arrays.asList(2)));
+        show(Collections.lastIndexOfSubList(left, Arrays.asList(2)));
+        boolean apart = Collections.disjoint(left, right);
+        System.out.println(apart);
+        System.out.println(Collections.disjoint(left, right));
+    }
+}
+"
+);
+
 // `Optional`'s null contract, which was wrong in all three directions.
 //
 // `Optional.of(s)` with a null s built a PRESENT Optional holding null, so
