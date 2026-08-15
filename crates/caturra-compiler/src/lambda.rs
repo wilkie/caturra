@@ -2848,7 +2848,13 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     let TypeRef::Generic { base, args } = ty else {
         return None;
     };
-    (base == "Optional" && args.len() == 1).then(|| args[0].clone())
+    // The SIMPLE name: `java.util.Optional<String>` is the same declared type
+    // as `Optional<String>`, and comparing the written base against "Optional"
+    // meant a qualified declaration lost its element — so a lambda on one had
+    // no target type, though the list, map and stream lookups beside it all
+    // normalize.
+    (base.rsplit('.').next().unwrap_or(base.as_str()) == "Optional" && args.len() == 1)
+        .then(|| args[0].clone())
 }
 
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
@@ -2970,6 +2976,59 @@ fn build_bi_consumer_class(
 fn coerce_returns(stmts: &mut [Stmt], ty: &TypeRef, span: crate::diagnostics::SourceSpan) {
     for stmt in stmts {
         coerce_return_in(stmt, ty, span);
+    }
+}
+
+/// Desugar every `return` expression in a lambda's BLOCK body against the
+/// lambda's own result type, before the block is walked normally.
+///
+/// An expression-bodied lambda gets that target from its caller; a block one
+/// reaches its body through `desugar_stmt`, which knows no expected type — so
+/// `x -> { return y -> x + y; }` was refused where `x -> y -> x + y` compiled.
+/// Running first means the inner lambda is already a class by the time the
+/// ordinary walk reaches it, and `coerce_returns` then wraps the result as it
+/// does for any other body.
+fn target_type_returns(stmts: &mut [Stmt], ty: &TypeRef, ctx: &mut Ctx) {
+    for stmt in stmts {
+        target_type_return_in(stmt, ty, ctx);
+    }
+}
+
+fn target_type_return_in(stmt: &mut Stmt, ty: &TypeRef, ctx: &mut Ctx) {
+    match stmt {
+        Stmt::Return { value: Some(e), .. } => desugar_expr(e, Some(ty), ctx),
+        Stmt::Block(body) => target_type_returns(body, ty, ctx),
+        Stmt::If { then, els, .. } => {
+            target_type_return_in(then, ty, ctx);
+            if let Some(e) = els {
+                target_type_return_in(e, ty, ctx);
+            }
+        }
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::ForEach { body, .. }
+        | Stmt::Labeled { body, .. } => target_type_return_in(body, ty, ctx),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            target_type_returns(body, ty, ctx);
+            for c in catches {
+                target_type_returns(&mut c.body, ty, ctx);
+            }
+            if let Some(f) = finally_body {
+                target_type_returns(f, ty, ctx);
+            }
+        }
+        Stmt::Switch { arms, .. } => {
+            for arm in arms {
+                target_type_returns(&mut arm.body, ty, ctx);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -3114,7 +3173,14 @@ fn build_erased_lambda(
     let is_void = matches!(ret, TypeRef::Void);
     match std::mem::replace(body, LambdaBody::Block(Vec::new())) {
         LambdaBody::Expr(mut e) => {
-            desugar_expr(&mut e, None, ctx);
+            // The body is desugared against the lambda's own RESULT type
+            // when there is one, which is what lets a lambda RETURN a lambda:
+            // `x -> y -> x + y` has `Function<Integer, Integer>` as its
+            // result, and the inner lambda needs that as its target. With no
+            // expected type the inner one had no functional-interface
+            // position and was refused, though a METHOD returning the same
+            // lambda compiled -- its return type supplied what this did not.
+            desugar_expr(&mut e, result_type, ctx);
             if is_void {
                 method_body.push(Stmt::Expr(*e));
             } else if let Some(declared) = result_type {
@@ -3146,6 +3212,9 @@ fn build_erased_lambda(
             }
         }
         LambdaBody::Block(mut stmts) => {
+            if let Some(declared) = result_type {
+                target_type_returns(&mut stmts, declared, ctx);
+            }
             for stmt in &mut stmts {
                 desugar_stmt(stmt, ctx);
             }
@@ -3355,7 +3424,14 @@ fn build_lambda_class(
     let mut method_body = prelude;
     match std::mem::replace(body, LambdaBody::Block(Vec::new())) {
         LambdaBody::Expr(mut e) => {
-            desugar_expr(&mut e, None, ctx);
+            // The body is desugared against the lambda's own RESULT type
+            // when there is one, which is what lets a lambda RETURN a lambda:
+            // `x -> y -> x + y` has `Function<Integer, Integer>` as its
+            // result, and the inner lambda needs that as its target. With no
+            // expected type the inner one had no functional-interface
+            // position and was refused, though a METHOD returning the same
+            // lambda compiled -- its return type supplied what this did not.
+            desugar_expr(&mut e, result_type.as_ref(), ctx);
             if matches!(sam.ret, TypeRef::Void) {
                 method_body.push(Stmt::Expr(*e));
             } else if let Some(declared) = &result_type {
@@ -3385,6 +3461,9 @@ fn build_lambda_class(
             }
         }
         LambdaBody::Block(mut stmts) => {
+            if let Some(declared) = &result_type {
+                target_type_returns(&mut stmts, declared, ctx);
+            }
             for s in &mut stmts {
                 desugar_stmt(s, ctx);
             }

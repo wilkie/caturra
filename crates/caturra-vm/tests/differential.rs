@@ -22139,6 +22139,66 @@ public class SubListCtor {
 "#
 );
 
+// A lambda that RETURNS a lambda, and a lambda on a QUALIFIED Optional.
+//
+// `x -> y -> x + y` was refused: a lambda's body was desugared with no
+// expected type, so the inner one had no functional-interface position — while
+// a METHOD returning the same lambda compiled, its return type supplying what
+// the lambda's own result type did not. The body is now desugared against that
+// result type, in both lambda builders and for a BLOCK body too (`x -> {
+// return y -> x + y; }`), which needed the returns target-typed before the
+// block is walked.
+//
+// `java.util.Optional<String> o` lost its element because the lookup compared
+// the written base against "Optional" — the list, map and stream lookups
+// beside it all take the last segment. The sixth place this session where a
+// qualified spelling was not the same type as the simple one.
+differential_test!(
+    a_lambda_that_returns_a_lambda,
+    "NestedLambdas",
+    r#"
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+public class NestedLambdas {
+    static Function<Integer, Integer> adder(int x) { return y -> x + y; }
+
+    public static void main(String[] args) {
+        Function<Integer, Function<Integer, Integer>> curried = x -> y -> x + y;
+        System.out.println(curried.apply(2).apply(3));
+
+        Function<Integer, Function<Integer, Integer>> block = x -> {
+            return y -> x + y;
+        };
+        System.out.println(block.apply(2).apply(3));
+
+        Function<Integer, Function<Integer, Integer>> branching = x -> {
+            if (x > 0) {
+                return y -> x + y;
+            }
+            return y -> 0;
+        };
+        System.out.println(branching.apply(2).apply(3));
+
+        Supplier<Runnable> nested = () -> () -> System.out.println("deep");
+        nested.get().run();
+        Supplier<Supplier<String>> twice = () -> () -> "twice";
+        System.out.println(twice.get().get());
+
+        System.out.println(adder(2).apply(3));
+
+        // A QUALIFIED Optional keeps its element, so a lambda and a method
+        // reference both have a target.
+        java.util.Optional<String> qualified = java.util.Optional.of("x");
+        System.out.println(qualified.map(String::toUpperCase).orElse("n"));
+        System.out.println(qualified.map(s -> s.toUpperCase()).orElse("n"));
+        System.out.println(qualified.filter(s -> !s.isEmpty()).isPresent());
+        qualified.ifPresent(s -> System.out.println(s));
+    }
+}
+"#
+);
+
 // A stream that has been given a NAME. `Stream<T>` became a nameable type in
 // round 8, but almost nothing could be done with one:
 //

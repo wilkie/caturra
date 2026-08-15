@@ -4190,6 +4190,34 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A lambda that returns a lambda (2026-08-14)
+
+`x -> y -> x + y` was refused. A lambda's body was desugared with NO expected
+type, so the inner lambda had no functional-interface position to sit in —
+while a METHOD returning the same lambda compiled, its declared return type
+supplying what the lambda's own result type did not. The body is now desugared
+against that result type, in both lambda builders.
+
+A BLOCK body (`x -> { return y -> x + y; }`) needed a second step: it reaches
+its statements through the ordinary walk, which knows no expected type, so the
+returns are target-typed first and the block is walked after — by which time
+the inner lambda is already a class. Returns nested in an `if`, a loop, a
+`try` or a `switch` are reached the same way `coerce_returns` reaches them.
+
+Three levels (`Function<Integer, Function<Integer, Function<Integer,
+Integer>>>`) still refuses: caturra models one type parameter per class, so a
+doubly-nested type argument has nowhere to go. Two is what curried code
+actually writes.
+
+Also: `java.util.Optional<String> o` lost its element type, because that lookup
+compared the written base against `"Optional"` while the list, map and stream
+lookups beside it all take the last segment — so a lambda on a qualified
+Optional had no target though the simple spelling worked. That is the sixth
+place this session where a qualified name was not treated as the same type as
+the simple one; the others were the lambda pass's library receivers, the
+bundled interfaces in a supertype, a nested SAM, the `Map.Entry` static
+receiver, and a nested type named through its top-level class.
+
 ### A stream with a name (2026-08-14)
 
 `Stream<T>` became a nameable type in round 8. Almost nothing could be done
