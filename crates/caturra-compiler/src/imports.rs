@@ -312,6 +312,22 @@ const NESTED_LIBRARY_CLASSES: &[(&str, &str, &str)] = &[("Map", "Entry", "Map.En
 /// `java.lang.Math.abs(...)` did, then `java.util.stream.Stream<String> s`
 /// was refused as unsupported though `import java.util.stream.*` worked.
 /// Asking `package_classes` directly is what stops it drifting a third time.
+/// A NESTED library type by the way source spells it — `Map.Entry`, and the
+/// qualified `java.util.Map.Entry`. [`canonical_library_class`] only resolves
+/// the qualified form: it splits at the last dot and asks the PACKAGE table,
+/// so a bare `Map.Entry` asks about a package called `Map` and gets nothing.
+pub(crate) fn nested_library_class(name: &str) -> Option<&'static str> {
+    if let Some(canonical) = canonical_library_class(name) {
+        return Some(canonical);
+    }
+    let (outer, nested) = name.rsplit_once('.')?;
+    let outer = canonical_library_class(outer).unwrap_or(outer);
+    NESTED_LIBRARY_CLASSES
+        .iter()
+        .find(|(enclosing, inner, _)| *enclosing == outer && *inner == nested)
+        .map(|(_, _, canonical)| *canonical)
+}
+
 pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
     let (package, class) = dotted.rsplit_once('.')?;
     if let Some(known) = package_classes(package) {

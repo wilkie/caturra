@@ -4190,6 +4190,29 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A method reference through a nested library type (2026-08-14)
+
+`Map.Entry::getKey` — the reference every stream over an `entrySet()` reaches
+for — compiled to `Map.Entry.getKey(entry)`, a STATIC call on a type that has
+no such static. The qualifier test recognized a one-segment class name, so a
+two-segment one fell through to the BOUND form, where the qualifier is the
+receiver. `String::length` and `Person::getName` were fine either side of it.
+
+The receiver parameter keeps the type the SAM gives it — the stream's element —
+rather than the raw qualifier, which is what lets `collect(joining(...))` have
+Strings to join.
+
+`canonical_library_class` could not answer whether `Map.Entry` names a type: it
+splits at the last dot and asks the PACKAGE table, so a bare `Map.Entry` asks
+about a package called `Map` and gets nothing. `nested_library_class` asks the
+nested table too, and accepts both spellings.
+
+Still refused: `Comparator.comparing(Map.Entry::getKey)`. The key extractor's
+parameter is typed by the surrounding factory, which has no element to give, so
+the reference resolves `getKey()` against `Object`. Both spellings a program
+actually writes — `Map.Entry.comparingByKey()` and the lambda `e -> e.getKey()`
+— work, and so does the same reference in a stream, where the element is known.
+
 ### LinkedHashMap and LinkedHashSet (2026-08-14)
 
 The last absent class the legal-Java sweep found, and it cost one flag.

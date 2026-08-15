@@ -22139,6 +22139,70 @@ public class SubListCtor {
 "#
 );
 
+// `Map.Entry::getKey` — a method reference whose qualifier is a NESTED
+// LIBRARY type, which is what every stream over an `entrySet()` reaches for.
+// The qualifier test saw one segment only, so a two-segment name fell through
+// to the BOUND form and compiled to `Map.Entry.getKey(entry)`: a static call
+// on a type that has no such static. The receiver parameter keeps the type the
+// SAM gives it — the stream's element — rather than the raw qualifier, which
+// is what lets `collect(joining(...))` have Strings to join. (The element is
+// erased AFTER a `map`, as it is for any stream; that limit is recorded
+// separately.)
+//
+// `canonical_library_class` could not answer this: it splits at the LAST dot
+// and asks the package table, so a bare `Map.Entry` asks about a package
+// called `Map`. `nested_library_class` asks the nested table as well.
+differential_test!(
+    a_nested_library_method_reference,
+    "EntryMethodRefs",
+    r#"
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+public class EntryMethodRefs {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("z", 1);
+        m.put("a", 2);
+        System.out.println(m.entrySet().stream().map(Map.Entry::getKey)
+            .collect(Collectors.joining(",")));
+        System.out.println(m.entrySet().stream().map(Map.Entry::getValue).count());
+        // The qualified spelling of the same type.
+        System.out.println(m.entrySet().stream().map(java.util.Map.Entry::getKey).count());
+    }
+}
+"#
+);
+
+// `Comparator.comparing(Map.Entry::getKey)` is still refused: the key
+// extractor's parameter is typed by the surrounding factory, which has no
+// element to give, so the reference resolves `getKey()` against `Object`. The
+// two spellings a program actually uses both work — `Map.Entry.comparingByKey()`
+// and the lambda `e -> e.getKey()` — and the same method reference works in a
+// stream, where the element type is known.
+stricter_than_javac!(
+    stricter_entry_method_ref_in_a_comparator,
+    "EntryComparatorRef",
+    r#"
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+public class EntryComparatorRef {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("z", 1);
+        List<Map.Entry<String, Integer>> es = new ArrayList<>(m.entrySet());
+        es.sort(Comparator.comparing(Map.Entry::getKey));
+        System.out.println(es);
+    }
+}
+"#
+);
+
 // `LinkedHashMap` and `LinkedHashSet` — insertion-ordered iteration.
 //
 // The whole feature is one flag, because `JavaHashMap` already STORES its

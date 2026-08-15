@@ -1764,6 +1764,35 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
         }
         _ => None,
     };
+    // A NESTED LIBRARY type as the qualifier — `Map.Entry::getKey`, the
+    // reference every stream over an `entrySet()` reaches for. The test above
+    // sees one segment only, so this fell through to the BOUND form and
+    // compiled to `Map.Entry.getKey(entry)`: a static call on a type that has
+    // no such static. The receiver parameter keeps the type the SAM gives it
+    // (the stream's element), which is more precise than the raw qualifier.
+    let library_qualifier = match qualifier.as_ref() {
+        Expr::Name { path, .. } if path.len() > 1 && qualifier_class.is_none() => {
+            let dotted = path.join(".");
+            crate::imports::nested_library_class(&dotted).map(|_| dotted)
+        }
+        _ => None,
+    };
+    if library_qualifier.is_some() && arity > 0 {
+        let call = Expr::Call {
+            receiver: Some(Box::new(name_expr(&param_names[0]))),
+            method: method.clone(),
+            args: param_names[1..].iter().map(|n| name_expr(n)).collect(),
+            span,
+        };
+        return Expr::Lambda {
+            params: param_names
+                .into_iter()
+                .map(|name| crate::ast::LambdaParam { name, ty: None })
+                .collect(),
+            body: LambdaBody::Expr(Box::new(call)),
+            span,
+        };
+    }
 
     // For an unbound-instance ref (`Person::getAge`), the first parameter IS
     // the receiver and must be typed as the qualifier class, so the call
