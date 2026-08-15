@@ -22287,6 +22287,135 @@ public class EntryComparatorRef {
 "#
 );
 
+// How every kind of value RENDERS, in each context that renders one:
+// concatenation, `String.valueOf`, `%s`, inside a list, inside a map. A defect
+// here is silent — the program runs and prints the wrong characters.
+//
+// The hard cases are the numeric ones this project has been bitten by before:
+// `1e23` (whose shortest decimal is not JDK 11's), `-0.0`, the NaNs and
+// infinities, `Double.MIN_VALUE`, `Float.MAX_VALUE`, `1.0/3`.
+differential_test!(
+    the_rendering_surface,
+    "RenderSurface",
+    r#"
+import java.util.*;
+public class RenderSurface {
+  enum Kind { RED }
+  static class Plain { }
+  static class Nice { public String toString(){ return "NICE"; } }
+  static void row(Object v){
+    System.out.println("[" + v + "]|" + String.valueOf(v) + "|" + String.format("%s", v)
+      + "|" + Arrays.asList(v) + "|" + Collections.singletonMap("k", v));
+  }
+  public static void main(String[] a){
+    row(1); row(-1); row(0); row(1L); row(Long.MIN_VALUE); row(Integer.MIN_VALUE);
+    row(1.0); row(-0.0); row(1.0/3); row(1e23); row(1e-7); row(100.0); row(1.0f); row(0.1f);
+    row(Double.NaN); row(Double.POSITIVE_INFINITY); row(Double.NEGATIVE_INFINITY);
+    row(Float.NaN); row(Float.MAX_VALUE); row(Double.MIN_VALUE);
+    row('c'); row('\n'); row(true); row(false); row(null); row("s"); row("");
+    row(new Nice()); row(Kind.RED);
+    row(Arrays.asList(1,2)); row(new ArrayList<String>()); row(Collections.emptyMap());
+    row(new int[0].length); row(Optional.of("o")); row(Optional.empty());
+    row(new StringBuilder("b")); row(Integer.valueOf(5)); row(Double.valueOf(2.5));
+    row(Character.valueOf('z')); row(Boolean.TRUE);
+    // nested containers
+    List<List<Integer>> nested = new ArrayList<>();
+    nested.add(new ArrayList<>(Arrays.asList(1,2)));
+    row(nested);
+    Map<String,List<Integer>> mm = new LinkedHashMap<>();
+    mm.put("a", new ArrayList<>(Arrays.asList(3)));
+    row(mm);
+    // arrays rendered the ways a program renders them
+    int[] ints = {1,2}; String[] strs = {"a",null}; int[][] grid = {{1},{2,3}};
+    double[] ds = {1.0, 0.5}; char[] cs = {'a','b'}; boolean[] bs = {true};
+    System.out.println(Arrays.toString(ints) + Arrays.toString(strs) + Arrays.deepToString(grid)
+      + Arrays.toString(ds) + Arrays.toString(cs) + Arrays.toString(bs));
+    System.out.println(new String(cs) + String.valueOf(cs));
+    // a collection holding nulls and mixed values
+    List<Object> mixed = new ArrayList<>(Arrays.asList(1, "s", null, 'c', 2.5, true));
+    System.out.println(mixed + "|" + mixed.toString());
+  }
+}
+"#
+);
+
+// What observes a mutation and what does not. Every silent wrong answer this
+// session lived here: an `entrySet()` copied as its KEYS, a stream that read
+// its source when it was BUILT rather than when it ran, a `LinkedHashMap`
+// losing its ordering through a sizing constructor.
+//
+// Views are live and write through; copies and clones are detached;
+// `Arrays.asList` writes through to its array in both directions; a stream is
+// late-binding; and the `Integer` cache makes `==` true at 127 and false at
+// 128, which is the one every Java programmer has been caught by.
+differential_test!(
+    the_aliasing_surface,
+    "AliasSurface",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class AliasSurface {
+  public static void main(String[] a){
+    // views are LIVE
+    Map<String,Integer> m = new LinkedHashMap<>(); m.put("a",1); m.put("b",2);
+    Set<String> keys = m.keySet(); Collection<Integer> vals = m.values();
+    Set<Map.Entry<String,Integer>> ents = m.entrySet();
+    m.put("c",3);
+    System.out.println(keys + "|" + vals + "|" + ents.size());
+    m.remove("a");
+    System.out.println(keys + "|" + vals);
+    // writing THROUGH a view
+    keys.remove("b");
+    System.out.println(m);
+    // an entry from a view writes through
+    for (Map.Entry<String,Integer> e : m.entrySet()) e.setValue(99);
+    System.out.println(m);
+    // a COPY is detached
+    Map<String,Integer> copy = new LinkedHashMap<>(m);
+    m.put("d",4);
+    System.out.println(copy + "|" + m);
+    List<String> l = new ArrayList<>(Arrays.asList("x","y"));
+    List<String> lcopy = new ArrayList<>(l);
+    l.add("z");
+    System.out.println(lcopy + "|" + l);
+    // subLists/unmodifiable wrappers are live
+    List<String> un = Collections.unmodifiableList(l);
+    l.add("w");
+    System.out.println(un);
+    // Arrays.asList writes THROUGH to the array
+    String[] arr = {"p","q"};
+    List<String> backed = Arrays.asList(arr);
+    backed.set(0, "P");
+    System.out.println(arr[0] + "|" + backed);
+    arr[1] = "Q";
+    System.out.println(backed);
+    // a stream is late-binding
+    List<Integer> ns = new ArrayList<>(Arrays.asList(1,2));
+    Stream<Integer> st = ns.stream();
+    ns.add(3);
+    System.out.println(st.count());
+    int[] prims = {1,2,3};
+    IntStream is = Arrays.stream(prims);
+    prims[0] = 100;
+    System.out.println(is.sum());
+    // boxed identity
+    Integer c1 = 127, c2 = 127, f1 = 128, f2 = 128;
+    System.out.println((c1 == c2) + "|" + (f1 == f2) + "|" + c1.equals(c2) + "|" + f1.equals(f2));
+    List<Integer> boxes = new ArrayList<>(Arrays.asList(1000));
+    Integer got = boxes.get(0);
+    System.out.println((got == boxes.get(0)) + "|" + got.equals(boxes.get(0)));
+    // arrays alias
+    int[] alias = prims;
+    alias[1] = 55;
+    System.out.println(prims[1] + "|" + Arrays.equals(prims, alias));
+    int[] cloned = prims.clone();
+    cloned[2] = 77;
+    System.out.println(prims[2] + "|" + cloned[2]);
+  }
+}
+"#
+);
+
 // OVERLOAD RESOLUTION across the argument forms — the other question an
 // argument position asks, and the one where a wrong answer is SILENT: picking
 // `f(long)` where javac picks `f(int)` runs a different method and prints a

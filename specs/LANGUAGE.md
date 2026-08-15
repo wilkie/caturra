@@ -4190,6 +4190,32 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### Two more surfaces, and a negative result (2026-08-15)
+
+Continuing to write down the surfaces the cleared scratchpad used to cover,
+choosing the two where a defect would be SILENT rather than a refusal — because
+a refusal announces itself and a wrong answer does not.
+
+**How every kind of value RENDERS**, in each context that renders one:
+concatenation, `String.valueOf`, `%s`, inside a list, inside a map. Fifty rows,
+byte-identical, including the numeric cases this project has been bitten by
+before — `1e23`, whose shortest decimal is not JDK 11's, and `-0.0`, the NaNs
+and infinities, `Double.MIN_VALUE`, `Float.MAX_VALUE`, `1.0/3`.
+
+**What observes a mutation and what does not.** Every silent wrong answer found
+this session lived on this surface: an `entrySet()` copied as its KEYS, a
+stream that read its source when it was BUILT rather than when it ran, a
+`LinkedHashMap` losing its ordering through a sizing constructor. Views are
+live and write through; copies and clones are detached; `Arrays.asList` writes
+through to its array in both directions; a stream is late-binding; and the
+`Integer` cache makes `==` true at 127 and false at 128. Byte-identical.
+
+Four surfaces asked, four clean. That is a negative result and worth recording
+as one: the axes that were productive earlier today are productive no longer,
+which is a statement about the engine rather than about the method. The method
+still holds — every one of these was closed by a fix made this session, and
+each is now gated instead of assumed.
+
 ### Two surfaces, written down (2026-08-15)
 
 A checked invariant catches the paths disagreeing; only the oracle catches them
