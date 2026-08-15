@@ -4190,6 +4190,37 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### The third pair, and what it found (2026-08-15)
+
+The source names a third pair of paths that answer one question, and records
+being caught by it twice: "this matrix gates separately from `widens`, so both
+need the arm — the same trap that once left List -> Collection widening
+half-implemented". It caught a third case this session, for an array of
+collections.
+
+The matrix's refusal arm now asks `widens` and reports when the two disagree —
+a check at exactly the point of failure, so it costs nothing until an
+assignment is actually about to be refused. Perturbing it (inverting the guard)
+makes `String s = 5;` report, so a clean sweep means the invariant holds rather
+than that nothing ran.
+
+**Writing the test for it found the bug the check could not.** The check fires
+only when the two paths DISAGREE; when both are wrong together it says nothing.
+Compiling a conversion surface for it to sweep — thirty-odd assignments that
+javac accepts — turned up `List<String>[] b; Object[] o = b;` refused by both,
+with the message "incompatible types: Object[] cannot be converted to
+Object[]".
+
+The rule "any reference array widens to `Object[]`" had been written as a LIST
+of the element kinds that happen to be references, and the list left out the
+nested (collection) one. It asks the element itself now. A primitive array is
+still not an `Object[]`, which is the half that listing kinds was protecting,
+and both directions are pinned.
+
+**A checked invariant covers the paths disagreeing, never the paths agreeing
+and both being wrong.** The oracle is still the only thing that catches the
+second kind.
+
 ### The second pair of paths (2026-08-15)
 
 With the `type_of`-versus-emit sweep closed, the question is which OTHER pair of

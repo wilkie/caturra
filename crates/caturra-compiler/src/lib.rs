@@ -880,6 +880,48 @@ mod tests {
         assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 
+    /// A conversion `widens` allows must not be refused by the assignment
+    /// matrix. The two gate separately — the source says so, and records the
+    /// trap catching it twice ("the same trap that once left List -> Collection
+    /// widening half-implemented"); it caught a third case this session, an
+    /// array of collections. The matrix's refusal arm now asks `widens` and
+    /// reports when the two disagree, so this compiles the conversion surface
+    /// and lets that check speak.
+    #[test]
+    fn a_widening_conversion_is_never_refused() {
+        let source = "import java.util.*;\nimport java.util.function.*;\n\
+             import java.util.stream.*;\npublic class Conv {\n\
+             interface Shape {}\n\
+             static class Circle implements Shape {}\n\
+             public static void main(String[] a) {\n\
+             Object o = \"s\"; Object o2 = new ArrayList<String>(); Shape sh = new Circle();\n\
+             Comparable<String> c = \"x\"; CharSequence cs = \"y\";\n\
+             CharSequence cs2 = new StringBuilder();\n\
+             List<String> l = new ArrayList<>(); Collection<String> col = l;\n\
+             Iterable<String> it = l; Set<String> st = new HashSet<>();\n\
+             Collection<String> col2 = st; Map<String, Integer> m = new TreeMap<>();\n\
+             Queue<Integer> q = new LinkedList<>(); Deque<Integer> dq = new ArrayDeque<>();\n\
+             Collection<Integer> col3 = new PriorityQueue<>();\n\
+             Object[] oa = new String[1]; Object oo = new int[1];\n\
+             Integer[] boxes = new Integer[1]; Object[] oa2 = boxes;\n\
+             List<String>[] buckets = new List[1]; Object[] oa3 = buckets;\n\
+             long lg = 5; double d = 5; float f = 5L; int i = 'c'; double d2 = 5f;\n\
+             Integer bi = 5; Double bd = 1.5; Object ob = 7; Number n = 3; Number n2 = 1.5;\n\
+             Comparable<Integer> ci = 5;\n\
+             Runnable r = () -> {}; Supplier<String> s = () -> \"x\";\n\
+             Stream<String> str = Stream.of(\"a\"); IntStream is = IntStream.of(1);\n\
+             String ns = null; int[] na = null; List<String> nl = null;\n\
+             }\n}";
+        begin_type_verification();
+        let result = compile(&[SourceFile {
+            path: String::from("Conv.java"),
+            text: String::from(source),
+        }]);
+        assert!(result.success(), "{:?}", result.diagnostics);
+        let mismatches = end_type_verification();
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
+    }
+
     /// The two DESCRIPTOR builders must agree: one reads the written
     /// `TypeRef` (the signature the class file carries), the other the
     /// resolved `JType` (which every call site uses). When they differ the

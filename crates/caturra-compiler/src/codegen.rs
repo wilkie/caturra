@@ -4970,21 +4970,19 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Array { elem: ElemType::Object(sup), dims: d2 },
             ) if d1 == d2 && table.is_subtype(sub, sup)
         )
-        // Any reference array widens to `Object[]` (e.g. `String[]`,
-        // `Field[]` -> `Object[]` for `Arrays.toString`).
+        // Any REFERENCE array widens to `Object[]` (`String[]`, `Field[]` ->
+        // `Object[]` for `Arrays.toString`). Asked of the element itself
+        // rather than of a list of the element kinds that happen to be
+        // references: the list left out `Nested`, so an array of collections
+        // — `List<String>[] b; Object[] o = b;` — was refused with
+        // "incompatible types: Object[] cannot be converted to Object[]",
+        // which is not a sentence about the program.
         || matches!(
             (from, to),
             (
-                JType::Array {
-                    elem: ElemType::Str
-                        | ElemType::Builder
-                        | ElemType::Field
-                        | ElemType::StackFrame
-                        | ElemType::Constructor,
-                    dims: d1,
-                },
+                JType::Array { elem, dims: d1 },
                 JType::Array { elem: ElemType::Object(sup), dims: d2 },
-            ) if d1 == d2 && sup == table.object_id
+            ) if d1 == d2 && sup == table.object_id && elem.base_type().is_reference()
         )
         // A wrapper array (`Integer[]`) is covariant into every face the
         // wrapper itself has: `Object[]`, `Comparable[]`, and — numeric only —
@@ -12591,6 +12589,18 @@ pub fn end_type_verification() -> Vec<String> {
         .lock()
         .map(|mut seen| std::mem::take(&mut *seen))
         .unwrap_or_default()
+}
+
+/// A conversion `widens` allows that the assignment matrix refuses.
+fn report_conversion_mismatch(path: &str, span: SourceSpan, from: &str, to: &str) {
+    let report = format!(
+        "CONVERSION-MISMATCH {path}:{}:{} widens={from}->{to} but the matrix refused it",
+        span.start.line, span.start.column,
+    );
+    if let Ok(mut seen) = TYPE_MISMATCHES.lock() {
+        seen.push(report.clone());
+    }
+    eprintln!("{report}");
 }
 
 /// A descriptor disagreement, in the same shape as a type one.
@@ -27479,6 +27489,22 @@ impl BodyGen<'_> {
                 );
             }
             (from, to) => {
+                // The THIRD pair of paths that answer one question: this
+                // matrix and `widens`. A conversion `widens` allows must never
+                // reach this arm — if it does, an assignment that is legal
+                // Java is being refused, which is what "the same trap that
+                // once left List -> Collection widening half-implemented"
+                // above records happening twice already (and once more this
+                // session, for an array of collections). Checked rather than
+                // remembered, at exactly the point of failure.
+                if verifying_types() && widens(from, to, self.table) {
+                    report_conversion_mismatch(
+                        self.path,
+                        span,
+                        &from.describe(self.table),
+                        &to.describe(self.table),
+                    );
+                }
                 self.error(
                     span,
                     format!(

@@ -22287,6 +22287,71 @@ public class EntryComparatorRef {
 "#
 );
 
+// Any REFERENCE array widens to `Object[]`. The rule was written as a LIST of
+// the element kinds that happen to be references, and the list left out the
+// nested (collection) one — so `List<String>[] b; Object[] o = b;` was refused
+// with "incompatible types: Object[] cannot be converted to Object[]", which is
+// not a sentence about the program. Asked of the element itself now.
+//
+// Found by the conversion-agreement check's own test: writing down the
+// conversion surface for that check to sweep is what compiled this line.
+differential_test!(
+    a_reference_array_widens_to_object_array,
+    "ArrayWidening",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+
+public class ArrayWidening {
+    static int count(Object[] a) { return a.length; }
+
+    public static void main(String[] args) {
+        @SuppressWarnings("unchecked")
+        List<String>[] buckets = new List[2];
+        buckets[0] = new ArrayList<>();
+        buckets[0].add("x");
+        Object[] asObjects = buckets;
+        System.out.println(asObjects.length + " " + count(buckets));
+        System.out.println(Arrays.toString(buckets));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Integer>[] maps = new Map[1];
+        Object[] mapsAsObjects = maps;
+        System.out.println(mapsAsObjects.length);
+
+        String[] strings = { "a" };
+        Object[] stringsAsObjects = strings;
+        System.out.println(stringsAsObjects.length + " " + count(strings));
+        Integer[] boxes = { 1 };
+        Object[] boxesAsObjects = boxes;
+        System.out.println(boxesAsObjects.length);
+        int[][] grid = new int[2][2];
+        Object[] gridAsObjects = grid;
+        System.out.println(gridAsObjects.length);
+    }
+}
+"#
+);
+
+// A PRIMITIVE array is not an `Object[]` — the rule is about reference
+// elements, and asking the element rather than listing kinds must not lose
+// that.
+differential_reject!(
+    a_primitive_array_is_not_an_object_array,
+    "PrimArrayWiden",
+    r"
+public class PrimArrayWiden {
+    public static void main(String[] args) {
+        int[] values = new int[1];
+        Object[] wrong = values;
+        System.out.println(wrong.length);
+    }
+}
+"
+);
+
 // The tail of the suite sweep: nine more facts the emitter had and `type_of`
 // did not, each a REJECTION once the expression's type was needed. They share
 // no cause beyond that — a nested type's statics, a `Collections` helper the
