@@ -2828,6 +2828,8 @@ impl MethodTable {
                     // The primitive-specialized pipeline names a type too, so
                     // one can be held in a variable rather than only chained.
                     "IntStream" if !self.has_class(simple) => Some(JType::IntStream),
+                    "DoubleStream" if !self.has_class(simple) => Some(JType::DoubleStream),
+                    "LongStream" if !self.has_class(simple) => Some(JType::LongStream),
                     "IntSummaryStatistics" if !self.has_class(simple) => {
                         Some(JType::IntSummaryStats)
                     }
@@ -6868,6 +6870,16 @@ fn method_descriptor(
                 ) && !table.has_class(simple)
                 {
                     out.push_str("Ljava/io/BufferedReader;");
+                } else if matches!(simple, "IntStream" | "DoubleStream" | "LongStream")
+                    && !table.has_class(simple)
+                {
+                    // The primitive pipelines name a TYPE — `resolve_type`
+                    // already answered one, so a variable held it — but no
+                    // descriptor was built for the name, and a method that
+                    // took or returned an `IntStream` was "unknown type".
+                    out.push_str("Ljava/util/stream/");
+                    out.push_str(simple);
+                    out.push(';');
                 } else if simple == "Class" && !table.has_class(simple) {
                     out.push_str("Ljava/lang/Class;");
                 } else if simple == "Field" && !table.has_class(simple) {
@@ -11216,6 +11228,25 @@ fn collected_collection_kind(receiver: &Expr) -> Option<EmptyKind> {
 /// types the same, so it needs the same treatment: `ofNullable(null).orElse(d)`
 /// is ordinary Java, and reporting "cannot call methods on null" about it
 /// describes caturra's representation rather than the program.
+/// `Stream.empty()` as a RECEIVER — the same shape as `Optional.empty()` and
+/// for the same reason: it types as `null` so it can be a `Stream<String>`
+/// wherever one is wanted, and a method called straight on one still has to
+/// resolve against the general face.
+fn is_empty_stream(receiver: &Expr) -> bool {
+    matches!(
+        receiver,
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } if method == "empty"
+            && args.is_empty()
+            && matches!(owner.as_ref(), Expr::Name { path, .. }
+                if path.last().is_some_and(|name| name == "Stream"))
+    )
+}
+
 fn is_empty_optional(receiver: &Expr) -> bool {
     let Expr::Call {
         receiver: Some(owner),
@@ -17987,6 +18018,7 @@ impl BodyGen<'_> {
                     None if is_empty_optional(receiver) => {
                         (JType::Optional(general), OPTIONAL_METHODS)
                     }
+                    None if is_empty_stream(receiver) => (JType::Stream(general), STREAM_METHODS),
                     None => {
                         self.error(span, "cannot call methods on null");
                         return None;
@@ -21767,10 +21799,16 @@ impl BodyGen<'_> {
             let method_ref =
                 intern_method_ref(self.pool, internal, "empty", "()Ljava/util/stream/Stream;");
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            // An EMPTY object stream adopts its assignment context, exactly
+            // as `Optional.empty()` and `Collections.emptyList()` do: typing it
+            // `Stream<Object>` made `Stream<String> s = Stream.empty()` an
+            // incompatible assignment, and passing one to a method that wants a
+            // `Stream<String>` an incompatible argument. An `IntStream` has no
+            // element to adopt, so it keeps its own type.
             return Some(Some(if class == "IntStream" {
                 JType::IntStream
             } else {
-                JType::Stream(object_elem)
+                JType::Null
             }));
         }
         if method == "concat" {
@@ -22638,6 +22676,40 @@ impl BodyGen<'_> {
                         if path[0] == "String" && matches!(method.as_str(), "format" | "join") {
                             return JType::Str;
                         }
+                        // The stream SOURCES are built by their own emitter too
+                        // (their static table is empty — every one is variadic
+                        // or array-taking), so a source used STRAIGHT as an
+                        // argument had no type: `n(Stream.of("a", "b"))` was
+                        // "cannot determine the type of an argument", while the
+                        // same stream held in a variable first passed fine.
+                        if matches!(path[0].as_str(), "Stream" | "IntStream") {
+                            match (path[0].as_str(), method.as_str()) {
+                                ("IntStream", "of" | "range" | "rangeClosed" | "concat") => {
+                                    return JType::IntStream;
+                                }
+                                ("Stream", "of") => {
+                                    let elem = args
+                                        .first()
+                                        .and_then(|a| collection_elem_of(self.type_of(a)))
+                                        .unwrap_or(ElemType::Object(self.table.object_id));
+                                    return JType::Stream(elem);
+                                }
+                                // An EMPTY stream adopts its context, the way
+                                // `Optional.empty()` and `Collections.emptyList()`
+                                // do — typing it as `Stream<Object>` made it the
+                                // wrong argument for a `Stream<String>`.
+                                ("Stream", "empty") => return JType::Null,
+                                ("Stream", "concat") => {
+                                    let first =
+                                        args.first().map_or(JType::Error, |a| self.type_of(a));
+                                    return match first {
+                                        JType::Stream(elem) => JType::Stream(elem),
+                                        _ => JType::Stream(ElemType::Object(self.table.object_id)),
+                                    };
+                                }
+                                _ => {}
+                            }
+                        }
                         // Intrinsic static (Math.abs, ...).
                         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
                         let (_, methods) = builtin_static_table(&path[0]).expect("checked above");
@@ -22734,6 +22806,7 @@ impl BodyGen<'_> {
                                     value: general,
                                 },
                                 None if is_empty_optional(source) => JType::Optional(general),
+                                None if is_empty_stream(source) => JType::Stream(general),
                                 // A factory WITH arguments knows its element,
                                 // which is what keeps `List.of("a").get(0)` a
                                 // String rather than an Object.

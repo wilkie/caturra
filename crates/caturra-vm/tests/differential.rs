@@ -22139,6 +22139,84 @@ public class SubListCtor {
 "#
 );
 
+// A stream that has been given a NAME. `Stream<T>` became a nameable type in
+// round 8, but almost nothing could be done with one:
+//
+//   - a lambda or method reference on a stream held in a VARIABLE, a parameter
+//     or a field was refused, though the identical inline chain compiled. The
+//     element walk followed a chain of calls and had no base case for a name,
+//     which undercut the point of the type being nameable at all.
+//   - `Stream.of(...)` used STRAIGHT as an argument had no type ("cannot
+//     determine the type of an argument"), while the same stream held in a
+//     variable first passed fine — the stream sources are built by their own
+//     emitter, so their static table is empty and `type_of` found nothing.
+//   - `IntStream`, `DoubleStream` and `LongStream` resolved as types but had no
+//     DESCRIPTOR, so a method taking or returning one was "unknown type".
+//   - `Stream.empty()` typed as `Stream<Object>`, so it was an incompatible
+//     assignment to a `Stream<String>`. It now adopts its context, exactly as
+//     `Optional.empty()` and `Collections.emptyList()` do, in both the emission
+//     path and `type_of` — the two must agree or the call site names a method
+//     that was never emitted.
+differential_test!(
+    a_stream_with_a_name,
+    "NamedStreams",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.DoubleStream;
+import java.util.stream.IntStream;
+import java.util.stream.LongStream;
+import java.util.stream.Stream;
+
+public class NamedStreams {
+    static Stream<String> field = Stream.of("a", "bb");
+
+    static long longer(Stream<String> s) { return s.filter(x -> x.length() > 1).count(); }
+    static String joined(Stream<String> s) { return s.collect(Collectors.joining(",")); }
+    static int total(IntStream s) { return s.sum(); }
+    static double totalD(DoubleStream s) { return s.sum(); }
+    static long totalL(LongStream s) { return s.sum(); }
+    static IntStream upTo(int n) { return IntStream.range(1, n); }
+
+    public static void main(String[] args) {
+        // A source used straight as an argument.
+        System.out.println(longer(Stream.of("a", "bb")));
+        System.out.println(joined(Stream.of("a", "b")));
+        System.out.println(total(IntStream.of(1, 2)));
+        System.out.println(total(IntStream.range(1, 4)));
+        System.out.println(longer(Stream.concat(Stream.of("a"), Stream.of("bb"))));
+        System.out.println(totalD(IntStream.of(1, 2).asDoubleStream()));
+        System.out.println(totalL(IntStream.of(1, 2).asLongStream()));
+        System.out.println(upTo(4).sum());
+
+        // A lambda and a method reference on a NAMED stream.
+        Stream<String> named = Stream.of("a", "bb");
+        System.out.println(named.filter(x -> x.length() > 1).count());
+        Stream<String> mapped = Stream.of("a");
+        System.out.println(mapped.map(String::toUpperCase).count());
+        IntStream ints = IntStream.of(1, 2);
+        System.out.println(ints.map(i -> i * 2).sum());
+        System.out.println(field.filter(x -> x.length() > 1).count());
+
+        // An EMPTY stream adopts its context.
+        System.out.println(longer(Stream.empty()));
+        Stream<String> empty = Stream.empty();
+        System.out.println(empty.map(String::toUpperCase).count());
+        System.out.println(Stream.empty().count());
+        System.out.println(IntStream.empty().sum());
+
+        // The inline forms, unchanged.
+        System.out.println(Stream.of("a", "bb").filter(x -> x.length() > 1).count());
+        List<String> list = new ArrayList<>(Arrays.asList("a", "bb"));
+        System.out.println(list.stream().filter(x -> x.length() > 1).count());
+        System.out.println(IntStream.range(1, 4).map(i -> i * 2).sum());
+    }
+}
+"#
+);
+
 // A FUNCTIONAL INTERFACE as a collection element — the callback registry and
 // the strategy table, which are why a program keeps one. `List<Runnable>` was
 // refused outright ("Runnable works as a variable, but caturra does not model

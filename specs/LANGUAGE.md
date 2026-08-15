@@ -4190,6 +4190,32 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A stream with a name (2026-08-14)
+
+`Stream<T>` became a nameable type in round 8. Almost nothing could be done
+with one, and the pieces were separate defects that each looked small:
+
+- **A lambda on a stream held in a VARIABLE, a parameter or a field was
+  refused**, though the identical inline chain compiled. The element walk
+  followed a chain of calls and had no base case for a name — so giving a
+  stream a name took its lambdas away, which undercuts the point of the type
+  being nameable.
+- **`Stream.of(...)` used straight as an ARGUMENT had no type.** The stream
+  sources are built by their own emitter, so their static table is empty and
+  `type_of` found nothing; passing the same stream through a variable first
+  worked. The fifth `type_of`-versus-emit divergence of the round.
+- **`IntStream`, `DoubleStream` and `LongStream` resolved as types but had no
+  DESCRIPTOR**, so a method taking or returning one was "unknown type" — a
+  variable could hold one, a signature could not name one.
+- **`Stream.empty()` typed as `Stream<Object>`**, so `Stream<String> s =
+  Stream.empty()` was an incompatible assignment. It now adopts its context,
+  as `Optional.empty()` and `Collections.emptyList()` do.
+
+That last one is worth noting as a near-miss: fixing it in `type_of` alone
+made the two paths disagree, and the disagreement surfaced immediately as
+"incompatible types: Stream<Object>". The emission path and its mirror have to
+move together — which is why the invariant is checked rather than remembered.
+
 ### A functional interface as a collection element (2026-08-14)
 
 `List<Runnable>` and `Map<String, Function<Integer, Integer>>` — the callback

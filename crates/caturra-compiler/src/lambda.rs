@@ -2578,7 +2578,32 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         ..
     } = receiver
     else {
-        return None;
+        // A stream held in a VARIABLE, a parameter or a `this` field. Every
+        // case below walks a chain of calls, so a stream that had been given a
+        // name took a lambda nowhere: `Stream<String> s = ...;
+        // s.filter(x -> ...)` was refused, though the identical inline chain
+        // compiled — which undercut the point of `Stream<T>` being a nameable
+        // type at all.
+        let declared = match receiver {
+            Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
+            Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+                ctx.lookup(name)?
+            }
+            _ => return None,
+        };
+        return match &declared {
+            TypeRef::Generic { base, args } if args.len() == 1 => {
+                (base.rsplit('.').next().unwrap_or(base) == "Stream").then(|| args[0].clone())
+            }
+            // The primitive pipelines carry their element in their name.
+            TypeRef::Named(name) => match name.rsplit('.').next().unwrap_or(name) {
+                "IntStream" => Some(TypeRef::Int),
+                "DoubleStream" => Some(TypeRef::Double),
+                "LongStream" => Some(TypeRef::Long),
+                _ => None,
+            },
+            _ => None,
+        };
     };
     if method == "stream" && args.is_empty() {
         return list_elem_type(prev, ctx);
