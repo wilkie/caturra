@@ -22287,6 +22287,50 @@ public class EntryComparatorRef {
 "#
 );
 
+// `descendingIterator()` — the last entry in the refusal table left unjudged,
+// refused as "caturra does not model a descending view of a LinkedList". It is
+// not a view: it is the same cursor started at the END, walking toward the
+// front, and `remove()` works through it. One flag on the cursor, and `next()`
+// does what `previous()` does.
+//
+// Answered once at the shared dispatch rather than at each of the points that
+// build a forward cursor (a list's, a view's, a queue's, a tree's) — the
+// direction is the only difference, and the receiver kind does not change it.
+// Getting that wrong the first way round showed up immediately: TreeSet and
+// ArrayDeque still refused while LinkedList worked.
+differential_test!(
+    descending_cursors,
+    "DescendingCursors",
+    r#"
+import java.util.*;
+public class DescendingCursors { public static void main(String[] a){
+  LinkedList<Integer> l = new LinkedList<>(Arrays.asList(1,2,3));
+  Iterator<Integer> it = l.descendingIterator();
+  while (it.hasNext()) System.out.print(it.next() + " ");
+  System.out.println();
+  TreeSet<String> t = new TreeSet<>(Arrays.asList("b","a","c"));
+  Iterator<String> ti = t.descendingIterator();
+  while (ti.hasNext()) System.out.print(ti.next() + " ");
+  System.out.println();
+  ArrayDeque<Integer> d = new ArrayDeque<>(Arrays.asList(1,2,3));
+  Iterator<Integer> di = d.descendingIterator();
+  while (di.hasNext()) System.out.print(di.next() + " ");
+  System.out.println();
+  // remove() through a descending cursor
+  LinkedList<Integer> r = new LinkedList<>(Arrays.asList(1,2,3,4));
+  Iterator<Integer> ri = r.descendingIterator();
+  while (ri.hasNext()) { int v = ri.next(); if (v % 2 == 0) ri.remove(); }
+  System.out.println(r);
+  // empty, and exhaustion
+  Iterator<Integer> ei = new LinkedList<Integer>().descendingIterator();
+  System.out.println(ei.hasNext());
+  Iterator<Integer> x = new LinkedList<>(Arrays.asList(9)).descendingIterator();
+  System.out.println(x.next());
+  try { x.next(); } catch (NoSuchElementException e) { System.out.println("nse"); }
+} }
+"#
+);
+
 // How every kind of value RENDERS, in each context that renders one:
 // concatenation, `String.valueOf`, `%s`, inside a list, inside a map. A defect
 // here is silent — the program runs and prints the wrong characters.

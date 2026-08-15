@@ -3822,13 +3822,14 @@ fn iterator_method(
         last,
         expected_len,
         writes,
+        descending,
         ..
     }) = heap.get(receiver)
     else {
         unreachable!("receiver kind checked by caller");
     };
-    let (source, index, last, expected_len, writes) =
-        (*source, *index, *last, *expected_len, *writes);
+    let (source, index, last, expected_len, writes, descending) =
+        (*source, *index, *last, *expected_len, *writes, *descending);
     // A cursor over a read-only view refuses the same mutators the view does —
     // `set` survives on a FIXED-SIZE `Arrays.asList`, whose element write goes
     // through to the array. The JDK reaches this by having `Itr.remove` call
@@ -3865,9 +3866,30 @@ fn iterator_method(
         // of throwing, because the shortened size makes `hasNext` false before
         // `next` ever gets to complain. Checking here would "improve" caturra
         // into disagreeing with every real JVM.
+        // A DESCENDING cursor walks toward the front, so it is done at 0
+        // rather than at the end. The JDK's `hasNext` is a bare cursor
+        // comparison either way, which is what lets removing the
+        // second-to-last element end a for-each silently rather than throw.
+        "hasNext" if descending => Ok(Some(JValue::Int(i32::from(index != 0)))),
         "hasNext" => Ok(Some(JValue::Int(i32::from(
             index != iterated_len(heap, source),
         )))),
+        // `next()` on a descending cursor is `previous()`: step back first,
+        // then read. The index is the position AFTER the element returned, so
+        // `remove()` lands on the one just handed out.
+        "next" if descending => {
+            check_comodification(heap, source, expected_len)?;
+            if index == 0 {
+                return Err(throw("java.util.NoSuchElementException"));
+            }
+            let at = index - 1;
+            let element = box_iterated_element(heap, source, at);
+            if let Some(HeapObject::Iterator { index, last, .. }) = heap.get_mut(receiver) {
+                *index = at;
+                *last = Some(at);
+            }
+            Ok(Some(element))
+        }
         "next" => {
             check_comodification(heap, source, expected_len)?;
             if index >= iterated_len(heap, source) {
@@ -4061,6 +4083,23 @@ fn list_method(
         // ListIterator methods (`previous`/`set`/…) act on the same fields.
         // `listIterator(int)` starts the cursor at an index — the standard way
         // to walk a list backwards (`list.listIterator(list.size())`).
+        // `descendingIterator()` — the same cursor, started at the END and
+        // walking toward the front. A LinkedList's, an ArrayDeque's and a
+        // TreeSet's all behave this way, and `remove()` works through it, so
+        // the direction is the whole difference.
+        ("descendingIterator", _, []) => {
+            let expected_len = iterated_len(heap, receiver);
+            let iterator = heap.alloc(HeapObject::Iterator {
+                source: receiver,
+                index: expected_len,
+                last: None,
+                expected_len,
+                writes: IteratorWrites::All,
+                list: false,
+                descending: true,
+            });
+            Ok(Some(JValue::Ref(Some(iterator))))
+        }
         ("iterator" | "listIterator", _, [] | [JValue::Int(_)]) => {
             let expected_len = iterated_len(heap, receiver);
             let index = match args {
@@ -4094,6 +4133,7 @@ fn list_method(
                 expected_len,
                 writes,
                 list: method != "iterator",
+                descending: false,
             });
             Ok(Some(JValue::Ref(Some(iterator))))
         }

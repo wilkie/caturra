@@ -475,6 +475,11 @@ pub enum HeapObject {
         /// can tell the difference, and it can: a JDK's are separate classes
         /// (`ArrayList$Itr` vs `ArrayList$ListItr`).
         list: bool,
+        /// Built by `descendingIterator()`: walks from the END toward the
+        /// front, so `next()` does what `previous()` does on a list cursor.
+        /// The index is the position AFTER the element `next()` will return,
+        /// which is what makes `remove()` land on the right one.
+        descending: bool,
     },
     /// A live view onto a map: `keySet()`, `values()` or `entrySet()`.
     /// Java's are views too, so a later `put` shows through.

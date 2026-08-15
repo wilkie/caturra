@@ -7857,12 +7857,10 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("TreeMap", "tailMap", "TreeMap range views are not supported by caturra"),
     ("TreeMap", "subMap", "TreeMap range views are not supported by caturra"),
     ("TreeMap", "descendingMap", "TreeMap.descendingMap is not supported by caturra"),
-    ("TreeSet", "descendingIterator", "caturra does not model a descending view of a TreeSet"),
     ("TreeSet", "descendingSet", "TreeSet.descendingSet is not supported by caturra"),
     ("TreeSet", "headSet", "TreeSet range views are not supported by caturra"),
     ("TreeSet", "tailSet", "TreeSet range views are not supported by caturra"),
     ("TreeSet", "subSet", "TreeSet range views are not supported by caturra"),
-    ("LinkedList", "descendingIterator", "caturra does not model a descending view of a LinkedList"),
 ];
 
 /// The source-level class name of a receiver that [`UNSUPPORTED_MEMBERS`]
@@ -7989,6 +7987,13 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
+    // `descendingIterator()` — the same cursor walked from the END.
+    bm(
+        "descendingIterator",
+        &[],
+        BRet::Iterator,
+        "()Ljava/util/Iterator;",
+    ),
     bm(
         "listIterator",
         &[],
@@ -8410,6 +8415,13 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
     // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
     // is the only way to remove from the MIDDLE of one.
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
+    // `descendingIterator()` — the same cursor walked from the END.
+    bm(
+        "descendingIterator",
+        &[],
+        BRet::Iterator,
+        "()Ljava/util/Iterator;",
+    ),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("clear", &[], BRet::Void, "()V"),
@@ -8501,6 +8513,13 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
+    // `descendingIterator()` — the same cursor walked from the END.
+    bm(
+        "descendingIterator",
+        &[],
+        BRet::Iterator,
+        "()Ljava/util/Iterator;",
+    ),
     // `listIterator` is answered by the same list machinery `ArrayList` uses;
     // only the unsupported table stood in the way, and it did so with a reason
     // ("iterators are not supported") that had long since stopped being true.
@@ -11097,6 +11116,13 @@ const SET_METHODS: &[BuiltinMethod] = &[
     bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
+    // `descendingIterator()` — the same cursor walked from the END.
+    bm(
+        "descendingIterator",
+        &[],
+        BRet::Iterator,
+        "()Ljava/util/Iterator;",
+    ),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("clear", &[], BRet::Void, "()V"),
@@ -11180,6 +11206,13 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
     bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
+    // `descendingIterator()` — the same cursor walked from the END.
+    bm(
+        "descendingIterator",
+        &[],
+        BRet::Iterator,
+        "()Ljava/util/Iterator;",
+    ),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("clear", &[], BRet::Void, "()V"),

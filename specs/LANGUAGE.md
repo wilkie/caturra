@@ -4190,6 +4190,29 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A descending cursor (2026-08-15)
+
+The last entry in the refusal table left unjudged, and the reason was a
+misreading of what the method is: "caturra does not model a descending view of
+a LinkedList". It is not a view. It is the same cursor started at the END,
+walking toward the front, with `remove()` working through it — so one flag on
+the cursor, and `next()` does what `previous()` does.
+
+The flag is a field on the cursor rather than a separate object, which makes
+the compiler name every place a cursor is built and each of those declare its
+direction. Five sites, each an honest "this one is ascending".
+
+Answered ONCE at the shared native dispatch rather than at each of the points
+that build a forward cursor — a list's, a view's, a queue's, a tree's. Doing it
+per-path first showed the cost immediately: `LinkedList` worked while `TreeSet`
+and `ArrayDeque` still refused, because they reach the cursor by different
+routes. The direction is the only difference and the receiver kind does not
+change it, so it belongs where the receiver kind is not yet known.
+
+With this, every entry in the refusal table has been judged: three reasons had
+expired (the TreeMap entry accessors, collection `clone`, this), and the rest
+hold.
+
 ### Two more surfaces, and a negative result (2026-08-15)
 
 Continuing to write down the surfaces the cleared scratchpad used to cover,

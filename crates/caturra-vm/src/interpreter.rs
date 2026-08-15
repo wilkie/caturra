@@ -6586,6 +6586,7 @@ impl<'run> Interpreter<'run> {
                 expected_len,
                 writes,
                 list: false,
+                descending: false,
             });
             return Ok(Answered::Value(JValue::Ref(Some(iterator))));
         }
@@ -6619,6 +6620,7 @@ impl<'run> Interpreter<'run> {
                         expected_len,
                         writes,
                         list: false,
+                        descending: false,
                     });
                     return Ok(Answered::Value(JValue::Ref(Some(iterator))));
                 }
@@ -7700,6 +7702,7 @@ impl<'run> Interpreter<'run> {
                     expected_len: len,
                     writes: IteratorWrites::All,
                     list: false,
+                    descending: false,
                 });
                 JValue::Ref(Some(cursor))
             }
@@ -11405,6 +11408,7 @@ impl<'run> Interpreter<'run> {
                     expected_len,
                     writes,
                     list: method_name != "iterator",
+                    descending: false,
                 });
                 frame.stack.push(JValue::Ref(Some(iterator)));
                 self.vec_pool.push(args);
@@ -11674,6 +11678,25 @@ impl<'run> Interpreter<'run> {
                 _ => None,
             };
             self.iterator_for_each_remaining(receiver, consumer)?;
+            return Ok(None);
+        }
+        // `descendingIterator()` — the same cursor every collection hands out,
+        // started at the END. Answered once here rather than at each of the
+        // dispatch points that build a forward cursor (a list's, a view's, a
+        // queue's), because the direction is the only difference and the
+        // receiver kind does not change it.
+        if method_name == "descendingIterator" && args.is_empty() {
+            let length = iterated_len_of(&self.heap, receiver);
+            let cursor = self.heap.alloc(crate::value::HeapObject::Iterator {
+                source: receiver,
+                index: length,
+                last: None,
+                expected_len: length,
+                writes: IteratorWrites::All,
+                list: false,
+                descending: true,
+            });
+            frame.stack.push(JValue::Ref(Some(cursor)));
             return Ok(None);
         }
         // `clone()` on a collection: a SHALLOW copy — the elements are the same
