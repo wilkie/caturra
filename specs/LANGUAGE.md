@@ -4190,6 +4190,35 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### Two surfaces, written down (2026-08-15)
+
+A checked invariant catches the paths disagreeing; only the oracle catches them
+agreeing and both being wrong. The probe corpora were what asked the oracle,
+and they lived in a scratchpad that has since been cleared — so the surfaces
+worth keeping belong in the differential suite, where every program is compiled
+AND diffed against a JDK on every run.
+
+Two are written down now, and both came back clean:
+
+**Every expression form, used as an ARGUMENT.** That position is what forces
+`type_of` to answer, and it is exactly where the suite sweep's 82 disagreements
+bit: each printed correctly, because `println` types itself, and each failed
+with "cannot determine the type of an argument" here. Seventy expression forms
+— literals, every operator, pre/post increment, names, fields, array access,
+calls, `new`, enums, class literals, `instanceof`, lambdas behind a stream —
+byte-identical to a JDK.
+
+**Overload resolution across the argument forms.** The other question an
+argument position asks, and the one where a wrong answer is SILENT: choosing
+`f(long)` where javac chooses `f(int)` runs a different method. Widening versus
+boxing versus varargs, `Number` against `Integer`, `Collection` against `List`,
+`char` against `int`, `String.valueOf`'s and `StringBuilder.append`'s families
+— and the trap every Java programmer meets once, `list.remove(1)` removing an
+INDEX where `list.remove(Integer.valueOf(30))` removes a VALUE. Byte-identical.
+
+Finding nothing is the useful part of both: the expression surface is where the
+82 lived, and it is closed and now gated rather than closed and assumed.
+
 ### The third pair, and what it found (2026-08-15)
 
 The source names a third pair of paths that answer one question, and records

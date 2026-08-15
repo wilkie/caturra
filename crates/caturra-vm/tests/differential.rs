@@ -22287,6 +22287,121 @@ public class EntryComparatorRef {
 "#
 );
 
+// OVERLOAD RESOLUTION across the argument forms — the other question an
+// argument position asks, and the one where a wrong answer is SILENT: picking
+// `f(long)` where javac picks `f(int)` runs a different method and prints a
+// different word.
+//
+// Includes the trap every Java programmer meets once: `list.remove(1)` removes
+// the element at INDEX 1, `list.remove(Integer.valueOf(30))` removes the VALUE.
+differential_test!(
+    overload_resolution_surface,
+    "OverloadSurface",
+    r#"
+import java.util.*;
+public class OverloadSurface {
+  static String f(int x){ return "int"; }
+  static String f(long x){ return "long"; }
+  static String f(double x){ return "double"; }
+  static String f(Integer x){ return "Integer"; }
+  static String f(Object x){ return "Object"; }
+  static String g(Object x){ return "Object"; }
+  static String g(String x){ return "String"; }
+  static String h(Object... x){ return "varargs"; }
+  static String h(String x){ return "String"; }
+  static String k(int x, double y){ return "int,double"; }
+  static String k(double x, int y){ return "double,int"; }
+  static String n(Number x){ return "Number"; }
+  static String n(Integer x){ return "Integer"; }
+  static String c(Collection<String> x){ return "Collection"; }
+  static String c(List<String> x){ return "List"; }
+  static String w(char x){ return "char"; }
+  static String w(int x){ return "int"; }
+  public static void main(String[] a){
+    byte b = 1; short sh = 2; char ch = 'c'; int i = 3; long lg = 4L; float fl = 5f; double d = 6;
+    Integer bi = 7; Object o = "s"; String s = "t";
+    System.out.println(f(i) + " " + f(lg) + " " + f(d) + " " + f(bi) + " " + f(o));
+    System.out.println(f(b) + " " + f(sh) + " " + f(ch) + " " + f(fl) + " " + f(1) + " " + f(1L));
+    System.out.println(g(o) + " " + g(s) + " " + g(null) + " " + g((Object) s));
+    System.out.println(h(s) + " " + h(o) + " " + h(s, s) + " " + h());
+    System.out.println(k(1, 2.0) + " " + k(2.0, 1));
+    System.out.println(n(bi) + " " + n(1.5) + " " + n((Number) bi));
+    System.out.println(c(new ArrayList<String>()) + " " + c((Collection<String>) new ArrayList<String>()));
+    System.out.println(w(ch) + " " + w(i) + " " + w('x') + " " + w(65));
+    System.out.println(String.valueOf(1) + " " + String.valueOf('c') + " " + String.valueOf(1.0)
+      + " " + String.valueOf(true) + " " + String.valueOf((Object) null));
+    StringBuilder sb = new StringBuilder();
+    System.out.println(sb.append(1).append('c').append(1.5).append(true).append("s").append(o));
+    List<Integer> li = new ArrayList<>(Arrays.asList(10,20,30));
+    li.remove(1);                      // index, not value
+    System.out.println(li);
+    li.remove(Integer.valueOf(30));    // value, not index
+    System.out.println(li);
+  }
+}
+"#
+);
+
+// EVERY expression form, used where its TYPE is needed — passed to a method
+// taking `Object`. That position is what forces `type_of` to answer, and it is
+// where the differential-suite sweep's 82 disagreements actually bit: each one
+// printed correctly (`println` types itself) and was "cannot determine the type
+// of an argument" here.
+//
+// So this is the surface those 82 lived on, written down and diffed against a
+// JDK rather than left in a scratchpad. It found nothing new the day it was
+// written, which is the point: the sweep had already closed it, and now the
+// closing is gated.
+differential_test!(
+    every_expression_as_an_argument,
+    "ExprSurface",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+public class ExprSurface {
+  enum Kind { RED, BLUE }
+  interface Shape { int sides(); }
+  static class Sq implements Shape { public int sides(){ return 4; } int f = 7; static int S = 9; }
+  static int fn(int x){ return x; }
+  static <T> T id(T t){ return t; }
+  static void show(Object o){ System.out.println(o); }
+  public static void main(String[] a){
+    int i = 3; Integer bi = 4; String s = "abc"; int[] arr = {1,2};
+    List<String> l = new ArrayList<>(Arrays.asList("x","y"));
+    Map<String,Integer> m = new LinkedHashMap<>(); m.put("k",1);
+    Sq sq = new Sq(); Shape sh = sq;
+    // literals and operators
+    show(1); show(1L); show(1.5); show(1.5f); show('c'); show(true); show("t"); show(null);
+    show(i + 1); show(i * 2 - 1); show(i / 2); show(i % 2); show(-i); show(~i);
+    show(i > 1); show(i > 1 && i < 9); show(i > 1 ? "y" : "n");
+    show(i << 2); show(i >> 1); show(i >>> 1); show(i & 1); show(i | 1); show(i ^ 1);
+    show(bi + 1); show(bi); show((double) i); show((Object) s);
+    show(i++); show(++i); show(i--); show(--i);
+    // names, fields, arrays
+    show(s); show(sq.f); show(Sq.S); show(arr[0]); show(arr.length);
+    show(s.length()); show(s.charAt(0)); show(s.substring(1));
+    // calls
+    show(fn(2)); show(id("g")); show(Math.max(1,2)); show(Integer.parseInt("5"));
+    show(String.valueOf(3)); show(String.format("%d", 4)); show(Arrays.toString(arr));
+    show(l.get(0)); show(l.size()); show(l.contains("x")); show(m.get("k")); show(m.keySet());
+    show(sh.sides()); show(sq.sides());
+    // objects, enums, classes
+    show(Kind.RED);
+    show(Kind.valueOf("BLUE")); show(Kind.values().length); show(Kind.RED.ordinal());
+    show(s.getClass()); show(s.getClass().getName()); show(ExprSurface.class);
+    show(s instanceof String); show(sh instanceof Sq);
+    // lambdas and streams behind a call
+    show(l.stream().count()); show(l.stream().filter(x -> x.length()>0).count());
+    show(l.stream().map(String::toUpperCase).collect(Collectors.joining(",")));
+    show(IntStream.of(1,2).sum()); show(Optional.of("o").get());
+    show(new StringBuilder("b").append(1));
+    show(Collections.max(l)); show(Objects.hash(1,2));
+  }
+}
+"#
+);
+
 // Any REFERENCE array widens to `Object[]`. The rule was written as a LIST of
 // the element kinds that happen to be references, and the list left out the
 // nested (collection) one — so `List<String>[] b; Object[] o = b;` was refused
