@@ -5666,6 +5666,93 @@ answers:
   comparing unequal. Both gates needed the arm — `widens` and the conversion
   matrix — which is the same two-gate trap recorded above for `Iterable`.
 
+### The Java 9-11 additions a Java 11 engine owes a program
+
+Probing the surface the target itself defines — the APIs Java 9, 10 and 11 add
+— found five gaps, and following the first of them found a much older one.
+
+**`takeWhile` / `dropWhile` (Java 9)** join `filter` on both stream shapes as
+`StreamOp::TakeWhile` and `StreamOp::DropWhile`. Because the pipeline is lazy,
+`takeWhile` says "stop" to the source at the first element that fails rather
+than filtering the rest, which is the whole difference from `filter`:
+`numbers.stream().takeWhile(n -> n < 5)` over `1, 2, 5, 1, 6` is `[1, 2]` while
+`filter` gives `[1, 2, 1]`. `dropWhile` latches once its predicate first fails
+and passes everything after.
+
+**`Stream.ofNullable` (Java 9)** is a one- or zero-element stream.
+
+**`List.copyOf` / `Set.copyOf` / `Map.copyOf` (Java 10)** are NOT copy
+constructors: what they answer refuses every mutator and does not follow its
+source. They route through the same VM factory as `List.of`, which is where
+the null rejection already lives; the one difference is that a duplicate is
+DROPPED here (a source list may legitimately hold two equal elements) where
+`of` throws `IllegalArgumentException`. The element of the result comes from
+the SOURCE, not from reading the argument as an element — treating
+`List.copyOf(aStringList)` the way `List.of` treats its arguments made it a
+`List<Object>`, and the checked `type_of`-vs-emit invariant caught the map half
+of exactly that mistake before it reached a program.
+
+**`Predicate.not` / `Predicate.isEqual`** are the bundled `__Negate` and a new
+`__IsEqual` (which compares TARGET-first, and tests for null when the target is
+null, as the JDK does). `not` is transparent to target typing, and that is the
+subtle part: in an ARGUMENT position — `filter(Predicate.not(String::isEmpty))`
+— there is no `Predicate<String>` anywhere to read the element from, so the
+erasure that types the inner lambda has to reach THROUGH the negation. It does
+so at one site, inside `build_erased_lambda`, with the guards that admit it
+naming only the positions where a predicate is what is wanted; spelling it more
+loosely would have accepted `forEach(Predicate.not(...))`, which javac rejects.
+
+Following it turned up a gap that predates all of this: the element type did
+not flow through a predicate COMBINATOR either, so `p.negate().and(s ->
+s.length() == 1)` typed the second lambda's parameter `Object` and then refused
+`length()` on it. The combinator's argument type was read off a bare NAME.
+`functional_type_of` now walks the chain, since `negate`, `and`, `or` and
+`Predicate.not` all answer a predicate over the same element.
+
+**`Collection.toArray(IntFunction)` (Java 11)** — and, behind it,
+**`toArray(T[])`, the idiom since 1.2**, which was not supported at all. The
+model array carries the RUNTIME element type: it is filled and returned when it
+is long enough (with one null written after the last element, which callers
+rely on), and replaced by a fresh array of its class when it is not. The parser
+already models `String[]::new` as the lambda `n -> new String[n]`, so the
+generator overload needs no new machinery — the JDK defines it as
+`toArray(generator.apply(0))`, and applying the generator at compile time is
+the whole implementation.
+
+A stream has ONLY the generator overload, so its call is renamed to an internal
+`__toArrayTyped`: spelling it `toArray` in the stream method table would have
+accepted `stream.toArray(new String[0])`, which javac rejects, and this engine
+holds accepts-invalid at zero.
+
+The `ArrayStoreException` a bad element raises has two different messages in a
+JDK, and both are observable. An array-backed collection (`ArrayList`,
+`Vector`/`Stack`, `Arrays.asList`, `ArrayDeque`, a `subList`) bulk-copies, so
+what a program catches is `System.arraycopy`'s complaint naming the internal
+`Object[]` and the destination component; an element-wise one (`LinkedList`,
+the sets, a map view) names the offending element's own class. An
+unmodifiable wrapper delegates, so which message it gives depends on what it
+wraps.
+
+**`Collectors.toUnmodifiableList` / `toUnmodifiableSet` / `toUnmodifiableMap`**
+were found while checking that claim, and the first two were the worst kind of
+defect: they ALIASED the plain collectors outright. A program that asked for an
+immutable result got a mutable one that printed identically, so a defensive
+`collect(toUnmodifiableList())` protected nothing — the same shape as the
+round-8 finding that `Collections.unmodifiable*` views mutated through their
+cursors. `toUnmodifiableMap` was refused entirely.
+
+They differ from the plain collectors in the FINISH, not the gathering, so
+`CollectorKind::Unmodifiable` wraps the collector it defers to and hands the
+result to the same factory `List.of` uses — which is where both the refusal to
+mutate and the rejection of a null element already live. (A null element IS an
+NPE here where `toList` keeps it, which the JDK does for the same reason: it
+finishes through `List.of`.) An unmodifiable map inherits the salted iteration
+order of `Map.of`, so a program that prints one does not agree with itself
+between two runs of a real JDK either.
+
+The one gap left open, a refusal: `IntFunction` as a named variable type
+(`IntFunction<String[]> gen = String[]::new; list.toArray(gen)`).
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

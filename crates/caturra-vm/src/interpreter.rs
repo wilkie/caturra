@@ -3785,6 +3785,42 @@ impl<'run> Interpreter<'run> {
         )))
     }
 
+    /// Which `ArrayStoreException` a bad `toArray(T[])` element raises. The
+    /// JDK's two implementations say different things, and both are observable:
+    /// an ARRAY-BACKED collection (`ArrayList`, `Vector`/`Stack`,
+    /// `Arrays.asList`, `ArrayDeque`, a `subList`) bulk-copies, so the message
+    /// is `System.arraycopy`'s and names the internal `Object[]` and the
+    /// destination COMPONENT; an element-wise one (`LinkedList`, the sets, a
+    /// map view) stores one at a time and names the offending ELEMENT's class.
+    fn to_array_store_error(
+        &self,
+        receiver: HeapRef,
+        array_class: &str,
+        fallback: VmError,
+    ) -> VmError {
+        use crate::value::HeapObject as H;
+        let bulk = match self.heap.get(receiver) {
+            Some(H::UnmodifiableList(inner)) => {
+                return self.to_array_store_error(*inner, array_class, fallback);
+            }
+            Some(H::ArrayList(_) | H::ArrayBackedList(_) | H::Stack(_) | H::ArrayDeque(_)) => true,
+            _ => false,
+        };
+        if !bulk {
+            return fallback;
+        }
+        let component = array_class
+            .strip_prefix("[L")
+            .and_then(|name| name.strip_suffix(';'))
+            .unwrap_or(array_class)
+            .replace('/', ".");
+        VmError::UncaughtException(format!(
+            "java.lang.ArrayStoreException: arraycopy: element type mismatch: can not cast one \
+             of the elements of java.lang.Object[] to the type of the destination array, \
+             {component}"
+        ))
+    }
+
     /// Whether a BUILTIN object answers to `Iterable` or `Iterator`.
     ///
     /// Both names reach here in two spellings: qualified, as a source
@@ -4212,48 +4248,35 @@ impl<'run> Interpreter<'run> {
             // set or a map, duplicates), which is half of what they are for.
             ("__listOf" | "__setOf" | "__mapOf", [JValue::Ref(Some(elements))]) => {
                 let items = self.array_elements(*elements).unwrap_or_default();
-                if items.iter().any(|item| matches!(item, JValue::Ref(None))) {
+                let view = self.immutable_collection(method_name, items, true)?;
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
+            // Java 10's `copyOf(source)`: the same immutable shapes, read out
+            // of an existing collection instead of an argument list. It shares
+            // the construction above, and differs in exactly one way — a
+            // duplicate is DROPPED here where `of` throws, because a source
+            // `List` may legitimately hold two equal elements.
+            ("__listCopyOf" | "__setCopyOf" | "__mapCopyOf", [JValue::Ref(source)]) => {
+                let Some(source) = *source else {
                     return Err(VmError::UncaughtException(String::from(
                         "java.lang.NullPointerException",
                     )));
-                }
-                let view = match method_name {
-                    "__listOf" => {
-                        let backing = self.heap.alloc(HeapObject::ArrayList(items));
-                        self.heap.alloc(HeapObject::UnmodifiableList(backing))
-                    }
-                    "__setOf" => {
-                        let backing = self.heap.alloc(HeapObject::HashSet(
-                            crate::map::JavaHashMap::with_capacity_hint(16),
-                        ));
-                        for item in items {
-                            if self.map_find(backing, item)?.is_some() {
-                                return Err(VmError::UncaughtException(format!(
-                                    "java.lang.IllegalArgumentException: duplicate element: {}",
-                                    self.string_value_of(item, 0)?
-                                )));
-                            }
-                            self.map_put(backing, item, JValue::NULL)?;
-                        }
-                        self.heap.alloc(HeapObject::UnmodifiableSet(backing))
-                    }
-                    _ => {
-                        let backing = self.heap.alloc(HeapObject::HashMap(
-                            crate::map::JavaHashMap::with_capacity_hint(16),
-                        ));
-                        for pair in items.chunks(2) {
-                            let [key, value] = pair else { continue };
-                            if self.map_find(backing, *key)?.is_some() {
-                                return Err(VmError::UncaughtException(format!(
-                                    "java.lang.IllegalArgumentException: duplicate key: {}",
-                                    self.string_value_of(*key, 0)?
-                                )));
-                            }
-                            self.map_put(backing, *key, *value)?;
-                        }
-                        self.heap.alloc(HeapObject::UnmodifiableMap(backing))
-                    }
                 };
+                let items = if method_name == "__mapCopyOf" {
+                    self.map_entries(source)
+                        .into_iter()
+                        .flat_map(|(key, value)| [key, value])
+                        .collect()
+                } else {
+                    self.materialized_elements(source)
+                };
+                let kind = match method_name {
+                    "__listCopyOf" => "__listOf",
+                    "__setCopyOf" => "__setOf",
+                    _ => "__mapOf",
+                };
+                let view = self.immutable_collection(kind, items, false)?;
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
@@ -4759,6 +4782,7 @@ impl<'run> Interpreter<'run> {
     }
 
     #[allow(clippy::unnecessary_wraps)] // uniform with the other *_static_intrinsic
+    #[allow(clippy::too_many_lines)] // one arm per collector factory
     fn collectors_static_intrinsic(
         &mut self,
         frame: &mut Frame<'run>,
@@ -4775,8 +4799,14 @@ impl<'run> Interpreter<'run> {
             _ => String::new(),
         };
         let kind = match (method_name, args) {
-            ("toList" | "toUnmodifiableList", []) => CollectorKind::ToList,
-            ("toSet" | "toUnmodifiableSet", []) => CollectorKind::ToSet,
+            ("toList", []) => CollectorKind::ToList,
+            ("toSet", []) => CollectorKind::ToSet,
+            ("toUnmodifiableList", []) => {
+                CollectorKind::Unmodifiable(Box::new(CollectorKind::ToList))
+            }
+            ("toUnmodifiableSet", []) => {
+                CollectorKind::Unmodifiable(Box::new(CollectorKind::ToSet))
+            }
             ("joining", []) => CollectorKind::Joining {
                 delimiter: String::new(),
                 prefix: String::new(),
@@ -4806,6 +4836,25 @@ impl<'run> Interpreter<'run> {
             ("partitioningBy", [JValue::Ref(Some(predicate))]) => {
                 CollectorKind::PartitioningBy(*predicate)
             }
+            ("toUnmodifiableMap", [JValue::Ref(Some(key)), JValue::Ref(Some(value))]) => {
+                CollectorKind::Unmodifiable(Box::new(CollectorKind::ToMap {
+                    key: *key,
+                    value: *value,
+                    merge: None,
+                }))
+            }
+            (
+                "toUnmodifiableMap",
+                [
+                    JValue::Ref(Some(key)),
+                    JValue::Ref(Some(value)),
+                    JValue::Ref(Some(merge)),
+                ],
+            ) => CollectorKind::Unmodifiable(Box::new(CollectorKind::ToMap {
+                key: *key,
+                value: *value,
+                merge: Some(*merge),
+            })),
             ("toMap", [JValue::Ref(Some(key)), JValue::Ref(Some(value))]) => CollectorKind::ToMap {
                 key: *key,
                 value: *value,
@@ -6434,6 +6483,63 @@ impl<'run> Interpreter<'run> {
     }
 
     /// A map's entries in iteration order, detached from the heap borrow.
+    /// The immutable collection behind `List/Set/Map.of` and `.copyOf`.
+    /// `items` are the elements, or a map's alternating keys and values.
+    /// Both factories reject a null element; only `of` rejects a duplicate.
+    fn immutable_collection(
+        &mut self,
+        kind: &str,
+        items: Vec<JValue>,
+        reject_duplicates: bool,
+    ) -> Result<HeapRef, VmError> {
+        use crate::value::HeapObject;
+        if items.iter().any(|item| matches!(item, JValue::Ref(None))) {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
+        Ok(match kind {
+            "__listOf" => {
+                let backing = self.heap.alloc(HeapObject::ArrayList(items));
+                self.heap.alloc(HeapObject::UnmodifiableList(backing))
+            }
+            "__setOf" => {
+                let backing = self.heap.alloc(HeapObject::HashSet(
+                    crate::map::JavaHashMap::with_capacity_hint(16),
+                ));
+                for item in items {
+                    if self.map_find(backing, item)?.is_some() {
+                        if !reject_duplicates {
+                            continue;
+                        }
+                        return Err(VmError::UncaughtException(format!(
+                            "java.lang.IllegalArgumentException: duplicate element: {}",
+                            self.string_value_of(item, 0)?
+                        )));
+                    }
+                    self.map_put(backing, item, JValue::NULL)?;
+                }
+                self.heap.alloc(HeapObject::UnmodifiableSet(backing))
+            }
+            _ => {
+                let backing = self.heap.alloc(HeapObject::HashMap(
+                    crate::map::JavaHashMap::with_capacity_hint(16),
+                ));
+                for pair in items.chunks(2) {
+                    let [key, value] = pair else { continue };
+                    if self.map_find(backing, *key)?.is_some() && reject_duplicates {
+                        return Err(VmError::UncaughtException(format!(
+                            "java.lang.IllegalArgumentException: duplicate key: {}",
+                            self.string_value_of(*key, 0)?
+                        )));
+                    }
+                    self.map_put(backing, *key, *value)?;
+                }
+                self.heap.alloc(HeapObject::UnmodifiableMap(backing))
+            }
+        })
+    }
+
     fn map_entries(&self, map: HeapRef) -> Vec<(JValue, JValue)> {
         match self.heap.get(map) {
             Some(
@@ -8047,6 +8153,9 @@ impl<'run> Interpreter<'run> {
                     StreamOpState::Counter(0)
                 }
                 crate::value::StreamOp::Distinct => StreamOpState::Seen(Vec::new()),
+                // `dropWhile` latches: once an element fails the predicate,
+                // every later one passes even if it would have matched.
+                crate::value::StreamOp::DropWhile(_) => StreamOpState::Counter(0),
                 _ => StreamOpState::None,
             })
             .collect();
@@ -8089,6 +8198,7 @@ impl<'run> Interpreter<'run> {
     /// Feed one `value` into `ops[i..]`; on reaching the end it goes to `sink`.
     /// Returns `false` to stop the source (a full `limit`, or a satisfied
     /// short-circuit sink).
+    #[allow(clippy::too_many_lines)] // one arm per stream terminal
     fn stream_feed(
         &mut self,
         ops: &[crate::value::StreamOp],
@@ -8132,6 +8242,28 @@ impl<'run> Interpreter<'run> {
                 let downstream = self.stream_feed(ops, states, sink, i + 1, value)?;
                 // Stop once this is the n-th element, or if downstream stopped.
                 Ok(downstream && emitted + 1 < n)
+            }
+            // `takeWhile` STOPS the source at the first element that fails,
+            // where `filter` would keep looking — that is the whole difference,
+            // and it is what makes it usable on an endless source.
+            StreamOp::TakeWhile(predicate) => {
+                if self.call_test(*predicate, value)? {
+                    self.stream_feed(ops, states, sink, i + 1, value)
+                } else {
+                    Ok(false)
+                }
+            }
+            StreamOp::DropWhile(predicate) => {
+                let StreamOpState::Counter(passing) = states[i] else {
+                    unreachable!("dropWhile latch");
+                };
+                if passing == 0 {
+                    if self.call_test(*predicate, value)? {
+                        return Ok(true);
+                    }
+                    states[i] = StreamOpState::Counter(1);
+                }
+                self.stream_feed(ops, states, sink, i + 1, value)
             }
             StreamOp::Skip(n) => {
                 let n = *n;
@@ -8642,6 +8774,16 @@ impl<'run> Interpreter<'run> {
                     self.stream_with_op(receiver, StreamOp::Filter(*pred)),
                 ));
             }
+            ("takeWhile", [JValue::Ref(Some(pred))]) => {
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::TakeWhile(*pred)),
+                ));
+            }
+            ("dropWhile", [JValue::Ref(Some(pred))]) => {
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::DropWhile(*pred)),
+                ));
+            }
             (
                 "map" | "mapToInt" | "mapToObj" | "mapToLong" | "mapToDouble",
                 [JValue::Ref(Some(function))],
@@ -8884,6 +9026,39 @@ impl<'run> Interpreter<'run> {
                     self.heap.alloc(crate::value::HeapObject::LongArray(values)),
                 ))
             }
+            // `stream.toArray(String[]::new)` — the generator, already reduced
+            // to the array it makes, supplies the RUNTIME element type. A
+            // stream is not a collection, so it cannot share the shared
+            // `toArray(T[])` arm; it does share the store check, which is what
+            // makes a wrongly-typed element throw here too.
+            ("__toArrayTyped", [JValue::Ref(model)]) => {
+                let Some(model) = *model else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                let Some(crate::value::HeapObject::RefArray(class, _)) = self.heap.get(model)
+                else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.ArrayStoreException: not an array",
+                    )));
+                };
+                let class = class.clone();
+                let values: Vec<JValue> = elements
+                    .iter()
+                    .map(|element| match element {
+                        JValue::Ref(_) => *element,
+                        primitive => JValue::Ref(Some(self.box_primitive_value(*primitive))),
+                    })
+                    .collect();
+                let array = self
+                    .heap
+                    .alloc(crate::value::HeapObject::RefArray(class, values.clone()));
+                for element in &values {
+                    self.array_store_check(array, *element)?;
+                }
+                JValue::Ref(Some(array))
+            }
             // An object `Stream.toArray()` answers an `Object[]` of the
             // elements, boxing any primitive as a collection would.
             ("toArray", []) if descriptor.ends_with(")[Ljava/lang/Object;") => {
@@ -9017,6 +9192,31 @@ impl<'run> Interpreter<'run> {
             )));
         };
         match kind.clone() {
+            // The unmodifiable finishers: gather exactly as the plain
+            // collector does, then hand the result to the same factory
+            // `List.of` uses — which is where the refusal to mutate and the
+            // rejection of a null element both already live.
+            CollectorKind::Unmodifiable(inner) => {
+                let inner = self.heap.alloc(HeapObject::Collector(*inner));
+                let gathered = self.stream_collect(elements, inner)?;
+                let JValue::Ref(Some(gathered)) = gathered else {
+                    return Ok(gathered);
+                };
+                let (kind, items) = match self.heap.get(gathered) {
+                    Some(HeapObject::ArrayList(items)) => ("__listOf", items.clone()),
+                    Some(HeapObject::HashSet(_)) => ("__setOf", self.collection_elements(gathered)),
+                    Some(HeapObject::HashMap(_)) => (
+                        "__mapOf",
+                        self.map_entries(gathered)
+                            .into_iter()
+                            .flat_map(|(key, value)| [key, value])
+                            .collect(),
+                    ),
+                    _ => return Ok(JValue::Ref(Some(gathered))),
+                };
+                let view = self.immutable_collection(kind, items, false)?;
+                Ok(JValue::Ref(Some(view)))
+            }
             CollectorKind::ToList => Ok(JValue::Ref(Some(
                 self.heap.alloc(HeapObject::ArrayList(elements)),
             ))),
@@ -9216,8 +9416,16 @@ impl<'run> Interpreter<'run> {
     }
 
     fn collection_elements(&self, reference: HeapRef) -> Vec<JValue> {
+        self.try_collection_elements(reference).unwrap_or_default()
+    }
+
+    /// The elements, and whether the reference IS a collection at all — a
+    /// caller that has to tell an empty collection from a non-collection reads
+    /// this rather than re-listing the kinds below, which would be the same
+    /// fact written twice.
+    fn try_collection_elements(&self, reference: HeapRef) -> Option<Vec<JValue>> {
         use crate::value::HeapObject;
-        match self.heap.get(reference) {
+        Some(match self.heap.get(reference) {
             Some(
                 HeapObject::ArrayList(_)
                 | HeapObject::ArrayBackedList(_)
@@ -9245,8 +9453,8 @@ impl<'run> Interpreter<'run> {
             }
             // An unmodifiable set view walks its backing set.
             Some(HeapObject::UnmodifiableSet(inner)) => self.collection_elements(*inner),
-            _ => Vec::new(),
-        }
+            _ => return None,
+        })
     }
 
     fn map_value_at(&self, map: HeapRef, at: usize) -> JValue {
@@ -10174,6 +10382,17 @@ impl<'run> Interpreter<'run> {
         ) {
             let source = match (method_name, args) {
                 ("empty", []) => Some(Vec::new()),
+                // `Stream.ofNullable(x)` (Java 9) — one element, or none when
+                // the argument is null. The compiler packs a lone argument
+                // into a one-element array, so the null shows up as a single
+                // null element rather than as no arguments.
+                ("ofNullable", [JValue::Ref(Some(array))]) => Some(
+                    self.array_elements(*array)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|v| *v != JValue::NULL)
+                        .collect(),
+                ),
                 ("of", [JValue::Ref(Some(array))]) => Some(
                     self.array_elements(*array)
                         .ok_or_else(|| VmError::UnknownIntrinsic(String::from("Stream.of")))?,
@@ -11697,6 +11916,66 @@ impl<'run> Interpreter<'run> {
                 descending: true,
             });
             frame.stack.push(JValue::Ref(Some(cursor)));
+            return Ok(None);
+        }
+        // `toArray(T[] model)` — the idiom since 1.2, and what Java 11's
+        // `toArray(String[]::new)` reduces to. The MODEL carries the runtime
+        // element type: it is filled and RETURNED when it is long enough (with
+        // a null terminator after the last element, which callers rely on),
+        // and a fresh array of its class is allocated when it is not. One arm
+        // for every collection kind, reading through the shared element
+        // reader, so a list, a set, a deque and a map view all answer here.
+        if method_name == "toArray"
+            && let [JValue::Ref(model)] = args[..]
+            && let Some(elements) = self.try_collection_elements(receiver)
+        {
+            let Some(model) = model else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
+            let Some(crate::value::HeapObject::RefArray(class, existing)) = self.heap.get(model)
+            else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.ArrayStoreException: not an array",
+                )));
+            };
+            let (class, room) = (class.clone(), existing.len());
+            let boxed: Vec<JValue> = elements
+                .into_iter()
+                .map(|element| match element {
+                    JValue::Ref(_) => element,
+                    primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+                })
+                .collect();
+            let target = if room >= boxed.len() {
+                model
+            } else {
+                self.heap.alloc(crate::value::HeapObject::RefArray(
+                    class.clone(),
+                    boxed.clone(),
+                ))
+            };
+            for element in &boxed {
+                if let Err(store) = self.array_store_check(target, *element) {
+                    return Err(self.to_array_store_error(receiver, &class, store));
+                }
+            }
+            if target == model
+                && let Some(crate::value::HeapObject::RefArray(_, slots)) = self.heap.get_mut(model)
+            {
+                {
+                    for (slot, element) in slots.iter_mut().zip(boxed.iter()) {
+                        *slot = *element;
+                    }
+                    // The JDK writes ONE null after the last element when the
+                    // model is longer, and leaves the rest untouched.
+                    if room > boxed.len() {
+                        slots[boxed.len()] = JValue::NULL;
+                    }
+                }
+            }
+            frame.stack.push(JValue::Ref(Some(target)));
             return Ok(None);
         }
         // `clone()` on a collection: a SHALLOW copy — the elements are the same

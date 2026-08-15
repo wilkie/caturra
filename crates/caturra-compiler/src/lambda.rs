@@ -455,6 +455,47 @@ fn constructor_signatures(
 /// RECEIVER's declared type arguments. `Function<A, B>.andThen(g)` gives `g`
 /// the parameter type `B`; `Predicate<T>.and(p)` gives `p` the type `T`.
 /// `None` for anything else, which keeps the ordinary lookup.
+/// The declared functional type an expression answers, when it is knowable.
+/// A local variable gives its own; a PREDICATE COMBINATOR gives its receiver's,
+/// because `negate`, `and` and `or` all answer a `Predicate<T>` over the same
+/// element — as does `Predicate.not(p)`. Reading only a bare name meant that
+/// `p.negate().and(s -> s.length() == 1)` typed the second lambda's parameter
+/// `Object`, and calling anything on it was then refused.
+///
+/// Deliberately NOT extended to `Function.andThen`, whose result type is the
+/// composed function's, not the receiver's.
+fn functional_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    match expr {
+        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0]),
+        Expr::Call {
+            receiver: Some(inner),
+            method,
+            args,
+            ..
+        } => {
+            if is_negated_predicate(expr) {
+                return functional_type_of(&args[0], ctx);
+            }
+            let preserving = (method == "negate" && args.is_empty())
+                || (matches!(method.as_str(), "and" | "or") && args.len() == 1);
+            // The receiver's own type decides: only a `Predicate` has these,
+            // so a user class that happens to declare `and` answers its own
+            // type here and falls out of the caller's match.
+            preserving
+                .then(|| functional_type_of(inner, ctx))
+                .flatten()
+                .filter(|ty| matches!(ty, TypeRef::Generic { base, .. } if simple_base(base) == "Predicate"))
+        }
+        // The receiver may already have been rewritten: the desugaring turns
+        // `Predicate.not(p)` into the bundled `__Negate`, and it still stands
+        // for a predicate over `p`'s element.
+        Expr::NewObject { class, args, .. } if class == "__Negate" && args.len() == 1 => {
+            functional_type_of(&args[0], ctx)
+        }
+        _ => None,
+    }
+}
+
 fn combinator_argument_type(
     receiver: &Expr,
     method: &str,
@@ -464,13 +505,7 @@ fn combinator_argument_type(
     if arity != 1 {
         return None;
     }
-    let Expr::Name { path, .. } = receiver else {
-        return None;
-    };
-    if path.len() != 1 {
-        return None;
-    }
-    let TypeRef::Generic { base, args } = ctx.lookup(&path[0])? else {
+    let TypeRef::Generic { base, args } = functional_type_of(receiver, ctx)? else {
         return None;
     };
     let object = || TypeRef::Named(String::from("Object"));
@@ -779,6 +814,86 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             span,
         };
     }
+    // `Predicate.not(p)` (Java 11) IS `p.negate()`, and `negate()` already
+    // builds the bundled `__Negate`. Rewriting to that CLASS rather than to a
+    // `.negate()` call keeps the argument in a target-typed position, so a
+    // lambda written inline (`Predicate.not(s -> s.isEmpty())`) still knows
+    // what interface it implements.
+    if let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        span,
+    } = expr
+        && matches!(method.as_str(), "not" | "isEqual")
+        && args.len() == 1
+        && matches!(owner.as_ref(), Expr::Name { path, .. }
+            if path.last().is_some_and(|name| name == "Predicate"))
+    {
+        // `not`'s argument IS the predicate, so it inherits the whole
+        // expression's target type — desugaring it here is what tells an
+        // inline lambda its element is a `String` and not an `Object`. The
+        // constructor parameter is the ERASED `__Predicate`, which carries no
+        // element, so leaving this to the generic recursion typed it `Object`.
+        if method == "not" {
+            desugar_expr(&mut args[0], expected, ctx);
+        }
+        *expr = Expr::NewObject {
+            class: String::from(if method == "not" {
+                "__Negate"
+            } else {
+                "__IsEqual"
+            }),
+            type_args: Vec::new(),
+            args: std::mem::take(args),
+            outer: None,
+            span: *span,
+        };
+    }
+    // `toArray(String[]::new)` (Java 11) IS `toArray(new String[0])`: the JDK's
+    // default method is `toArray(generator.apply(0))`, so applying the
+    // generator here — the parser already models `String[]::new` as the lambda
+    // `n -> new String[n]` — is the whole implementation, and the array
+    // overload below does the rest.
+    if let Expr::Call {
+        receiver,
+        method,
+        args,
+        ..
+    } = expr
+        && method == "toArray"
+        && let [Expr::Lambda { params, body, span }] = &args[..]
+        && let [param] = &params[..]
+        && let LambdaBody::Expr(body) = body
+        && let Expr::NewArray {
+            elem,
+            dims,
+            init: None,
+            ..
+        } = body.as_ref()
+        && let [Some(Expr::Name { path, .. })] = &dims[..]
+        && path == std::slice::from_ref(&param.name)
+    {
+        let span = *span;
+        let elem = elem.clone();
+        // A STREAM has only the generator overload, so its call is renamed to
+        // an internal one; a COLLECTION has `toArray(T[])` itself and keeps it.
+        let stream = receiver
+            .as_deref()
+            .is_some_and(|r| stream_elem_type(r, ctx).is_some());
+        args[0] = Expr::NewArray {
+            elem,
+            dims: vec![Some(Expr::Literal {
+                value: crate::ast::Literal::Int(0),
+                span,
+            })],
+            init: None,
+            span,
+        };
+        if stream {
+            *method = String::from("__toArrayTyped");
+        }
+    }
     // A method reference in a target-typed position becomes a lambda.
     if matches!(expr, Expr::MethodRef { .. }) {
         // A `java.util.function` target (`Function<String, Integer> len =
@@ -973,7 +1088,8 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             if matches!(
                 method.as_str(),
                 "forEach" | "forEachRemaining" | "removeIf" | "replaceAll"
-            ) && one_argument_function
+            ) && (one_argument_function
+                || (method == "removeIf" && args.len() == 1 && is_negated_predicate(&args[0])))
                 && let Some(elem) = receiver.as_deref().and_then(|r| list_elem_type(r, ctx))
             {
                 let object = TypeRef::Named(String::from("Object"));
@@ -1021,7 +1137,8 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             let one_argument_function = matches!(&args[0..], [Expr::MethodRef { .. }])
                 || matches!(&args[0..], [Expr::Lambda { params, .. }] if params.len() == 1);
             if matches!(method.as_str(), "ifPresent" | "filter" | "map" | "flatMap")
-                && one_argument_function
+                && (one_argument_function
+                    || (method == "filter" && args.len() == 1 && is_negated_predicate(&args[0])))
                 && let Some(r) = receiver.as_deref()
                 && let Some(elem) = optional_elem_type(r, ctx)
             {
@@ -1222,7 +1339,10 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             {
                 let object = TypeRef::Named(String::from("Object"));
                 let single = match method.as_str() {
-                    "filter" | "anyMatch" | "allMatch" | "noneMatch" => {
+                    "filter" | "anyMatch" | "allMatch" | "noneMatch"
+                    // `takeWhile`/`dropWhile` (Java 9) take the same predicate
+                    // over the element that `filter` does.
+                    | "takeWhile" | "dropWhile" => {
                         Some(("__Predicate", "test", TypeRef::Boolean))
                     }
                     "map" | "mapToObj" | "mapToInt" | "mapToLong" | "mapToDouble"
@@ -1265,7 +1385,11 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     matches!(&args[0..], [Expr::Lambda { params, .. }] if params.len() == 1);
                 let is_method_ref = matches!(&args[0..], [Expr::MethodRef { .. }]);
                 if let Some((iface, sam, ret)) = single
-                    && (is_lambda || is_method_ref)
+                    && (is_lambda
+                        || is_method_ref
+                        || (iface == "__Predicate"
+                            && args.len() == 1
+                            && is_negated_predicate(&args[0])))
                 {
                     if is_method_ref {
                         let synth = Sam {
@@ -2655,7 +2779,10 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     match method.as_str() {
         // `boxed` retypes without changing what the element IS here (the VM
         // stores it unboxed either way), so it passes the element through too.
-        "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" | "boxed" => {
+        "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" | "boxed"
+        // `takeWhile`/`dropWhile` pass the element through unchanged, as
+        // `filter` does, so a chain after one keeps its type.
+        | "takeWhile" | "dropWhile" => {
             stream_elem_type(prev, ctx)
         }
         // `mapToInt` produces an int stream; `mapToObj` an erased one.
@@ -2704,7 +2831,7 @@ fn desugar_collector(expr: &mut Expr, elem: &TypeRef, ctx: &mut Ctx) {
     let element_functions = match method.as_str() {
         "groupingBy" | "mapping" | "summingInt" | "summingLong" | "summingDouble"
         | "averagingInt" | "averagingLong" | "averagingDouble" => 1,
-        "toMap" => 2,
+        "toMap" | "toUnmodifiableMap" => 2,
         _ => 0,
     };
     #[allow(clippy::needless_range_loop)] // each arm REPLACES args[index]
@@ -2744,7 +2871,7 @@ fn desugar_collector(expr: &mut Expr, elem: &TypeRef, ctx: &mut Ctx) {
         }
         // `toMap`'s third argument merges two VALUES, whose type this pass
         // cannot see, so both parameters erase to `Object`.
-        if method == "toMap" && index == 2 && is_lambda {
+        if matches!(method.as_str(), "toMap" | "toUnmodifiableMap") && index == 2 && is_lambda {
             args[index] = build_erased_lambda(
                 &mut args[index],
                 "__BiFunction",
@@ -3121,6 +3248,17 @@ fn coerce_return_in(stmt: &mut Stmt, ty: &TypeRef, span: crate::diagnostics::Sou
 /// element type, the way javac's bridge method does, binding the lambda's own
 /// parameter names. An expression body returns for a non-void SAM.
 #[allow(clippy::too_many_lines)] // one class-assembly, linear
+/// `Predicate.not(p)` — a predicate-shaped expression that is not itself a
+/// lambda, so the guards that look for one have to admit it explicitly.
+fn is_negated_predicate(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call { receiver: Some(owner), method, args, .. }
+        if method == "not"
+            && args.len() == 1
+            && matches!(owner.as_ref(), Expr::Name { path, .. }
+                if path.last().is_some_and(|n| n == "Predicate")))
+}
+
+#[allow(clippy::too_many_lines)] // the erasure, plus one arm per lambda shape
 fn build_erased_lambda(
     lambda: &mut Expr,
     interface: &str,
@@ -3134,6 +3272,57 @@ fn build_erased_lambda(
     result_type: Option<&TypeRef>,
     ctx: &mut Ctx,
 ) -> Expr {
+    // `Predicate.not(inner)` is TRANSPARENT to target typing: the predicate
+    // inside it takes the SAME element the position wants, so it erases here
+    // and the negation wraps the result. Doing it at this one site is what
+    // lets `filter(Predicate.not(String::isEmpty))` and
+    // `removeIf(Predicate.not(s -> s.isEmpty()))` know their element type —
+    // reading the target type from the enclosing expression cannot, because
+    // an argument position supplies no `Predicate<T>` to read.
+    if let Expr::Call {
+        receiver: Some(owner),
+        method: name,
+        args,
+        span,
+    } = lambda
+        && name == "not"
+        && args.len() == 1
+        && matches!(owner.as_ref(), Expr::Name { path, .. }
+            if path.last().is_some_and(|n| n == "Predicate"))
+    {
+        let span = *span;
+        if matches!(args[0], Expr::MethodRef { .. }) {
+            let synth = Sam {
+                method: method.to_owned(),
+                params: elem_types.to_vec(),
+                ret: ret.clone(),
+            };
+            args[0] = method_ref_to_lambda(&args[0], &synth, ctx);
+        }
+        let inner = if matches!(args[0], Expr::Lambda { .. }) {
+            build_erased_lambda(
+                &mut args[0],
+                interface,
+                method,
+                ret,
+                elem_types,
+                result_type,
+                ctx,
+            )
+        } else {
+            // Already a predicate VALUE (a variable, a field, another `not`):
+            // nothing to erase, only to wrap.
+            desugar_expr(&mut args[0], None, ctx);
+            args[0].clone()
+        };
+        return Expr::NewObject {
+            class: String::from("__Negate"),
+            type_args: Vec::new(),
+            args: vec![inner],
+            outer: None,
+            span,
+        };
+    }
     let Expr::Lambda { params, body, span } = lambda else {
         unreachable!("guarded by caller");
     };

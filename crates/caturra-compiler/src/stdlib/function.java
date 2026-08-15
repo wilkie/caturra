@@ -39,8 +39,24 @@ interface __Predicate {
 
 class __Negate implements __Predicate {
   private final __Predicate inner;
-  __Negate(__Predicate inner) { this.inner = inner; }
+  // `Predicate.not(null)` throws AT THE CALL (the JDK's `requireNonNull`),
+  // not when the predicate is first tested. `negate()` never passes null.
+  __Negate(__Predicate inner) {
+    if (inner == null) { throw new NullPointerException(); }
+    this.inner = inner;
+  }
   public boolean test(Object element) { return !inner.test(element); }
+}
+
+// `Predicate.isEqual(target)` — the JDK compares TARGET-first
+// (`targetRef.equals(object)`), and a null target tests for null instead.
+class __IsEqual implements __Predicate {
+  private final Object target;
+  __IsEqual(Object target) { this.target = target; }
+  public boolean test(Object element) {
+    if (target == null) { return element == null; }
+    return target.equals(element);
+  }
 }
 
 class __And implements __Predicate {

@@ -29554,3 +29554,250 @@ public class LegalJava {
 }
 "#
 );
+
+// The Java 9-11 API additions a Java 11 engine owes a program: `takeWhile` and
+// `dropWhile` on both stream shapes, `Stream.ofNullable`, and the immutable
+// `copyOf` factories — which are NOT copy constructors, so what they answer
+// refuses every mutator and does not follow its source.
+differential_test!(
+    java_nine_to_eleven_stream_and_factory_additions,
+    "NineToEleven",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class NineToEleven {
+    public static void main(String[] args) {
+        List<Integer> numbers = new ArrayList<>(Arrays.asList(1, 2, 5, 1, 6));
+        System.out.println(numbers.stream().takeWhile(n -> n < 5).collect(Collectors.toList()));
+        System.out.println(numbers.stream().dropWhile(n -> n < 5).collect(Collectors.toList()));
+        System.out.println(IntStream.of(1, 2, 9, 1).takeWhile(n -> n < 5).sum());
+        System.out.println(IntStream.of(1, 2, 9, 1).dropWhile(n -> n < 5).sum());
+        // `takeWhile` STOPS at the first failure; `filter` does not.
+        System.out.println(numbers.stream().filter(n -> n < 5).count());
+
+        System.out.println(Stream.ofNullable("x").count());
+        String absent = null;
+        System.out.println(Stream.ofNullable(absent).count());
+        System.out.println(Stream.ofNullable("x").collect(Collectors.toList()));
+
+        List<String> source = new ArrayList<>(Arrays.asList("b", "a", "b"));
+        List<String> copy = List.copyOf(source);
+        System.out.println(copy + " " + copy.get(0).toUpperCase());
+        System.out.println(Set.copyOf(source).size());
+        Map<String, Integer> map = new LinkedHashMap<>();
+        map.put("k", 1);
+        System.out.println(Map.copyOf(map));
+        // An immutable copy does not follow its source, and refuses mutation.
+        source.add("z");
+        System.out.println(copy.size() + " vs " + List.copyOf(source).size());
+        try {
+            copy.add("z");
+        } catch (UnsupportedOperationException e) {
+            System.out.println("copy is immutable");
+        }
+        try {
+            List.copyOf(Arrays.asList("a", null));
+        } catch (NullPointerException e) {
+            System.out.println("copyOf rejects a null element");
+        }
+        List<String> missing = null;
+        try {
+            List.copyOf(missing);
+        } catch (NullPointerException e) {
+            System.out.println("copyOf rejects a null source");
+        }
+    }
+}
+"#
+);
+
+// `Predicate.not` (Java 11) and `Predicate.isEqual`, in every position a
+// predicate stands in. The subtle one is target typing: as an ARGUMENT there
+// is no `Predicate<String>` to read the element from, so the negation has to
+// be transparent to the erasure that types the lambda inside it.
+differential_test!(
+    predicate_statics_are_transparent_to_target_typing,
+    "PredicateStatics",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class PredicateStatics {
+    public static void main(String[] args) {
+        List<String> words = new ArrayList<>(Arrays.asList("", "x", "", "yy"));
+        System.out.println(words.stream().filter(Predicate.not(String::isEmpty))
+            .collect(Collectors.toList()));
+        System.out.println(words.stream().filter(Predicate.not(s -> s.length() > 1)).count());
+
+        Predicate<String> empty = s -> s.isEmpty();
+        System.out.println(Predicate.not(empty).test("q"));
+        System.out.println(Predicate.not(empty).negate().test(""));
+        System.out.println(Predicate.not(empty).and(s -> s.length() == 1).test("q"));
+
+        System.out.println(Predicate.isEqual("a").test("a"));
+        System.out.println(Predicate.isEqual("a").test(null));
+        System.out.println(Predicate.isEqual(null).test(null));
+
+        words.removeIf(Predicate.not(s -> s.isEmpty()));
+        System.out.println(words);
+
+        Optional<String> maybe = Optional.of("hello");
+        System.out.println(maybe.filter(Predicate.not(String::isEmpty)).isPresent());
+
+        Predicate<String> missing = null;
+        try {
+            Predicate.not(missing);
+        } catch (NullPointerException e) {
+            System.out.println("not(null) throws at the call");
+        }
+    }
+}
+"#
+);
+
+// `toArray(T[])` — the idiom since 1.2 — and `toArray(String[]::new)`, which
+// the JDK defines as `toArray(generator.apply(0))`. A model long enough is
+// FILLED and returned (with one null after the last element); a short one is
+// replaced. The `ArrayStoreException` MESSAGE differs by implementation: an
+// array-backed collection bulk-copies and reports `System.arraycopy`'s
+// complaint, an element-wise one names the offending element's class.
+differential_test!(
+    to_array_takes_a_model_or_a_generator,
+    "ToArrayTyped",
+    r#"
+import java.util.*;
+
+public class ToArrayTyped {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("b", "a"));
+        String[] exact = list.toArray(new String[0]);
+        System.out.println(Arrays.toString(exact) + " " + exact.length);
+        System.out.println(exact[0].toUpperCase());
+
+        String[] roomy = new String[] {"1", "2", "3", "4"};
+        String[] filled = list.toArray(roomy);
+        System.out.println((filled == roomy) + " " + Arrays.toString(filled));
+
+        System.out.println(Arrays.toString(list.toArray(String[]::new)));
+        System.out.println(Arrays.toString(list.stream().toArray(String[]::new)));
+        System.out.println(Arrays.toString(list.stream().toArray()));
+
+        Set<String> sorted = new TreeSet<>(list);
+        System.out.println(Arrays.toString(sorted.toArray(new String[0])));
+        Map<String, Integer> map = new LinkedHashMap<>();
+        map.put("k", 1);
+        map.put("j", 2);
+        System.out.println(Arrays.toString(map.keySet().toArray(new String[0])));
+        System.out.println(Arrays.toString(list.toArray(new Object[0])));
+
+        Deque<String> deque = new ArrayDeque<>(list);
+        System.out.println(Arrays.toString(deque.toArray(new String[0])));
+        List<String> linked = new LinkedList<>(list);
+        System.out.println(Arrays.toString(linked.toArray(new String[0])));
+
+        try {
+            list.toArray((String[]) null);
+        } catch (NullPointerException e) {
+            System.out.println("null model");
+        }
+
+        List<Object> mixed = new ArrayList<>();
+        mixed.add("s");
+        mixed.add(1);
+        try {
+            mixed.toArray(new String[0]);
+        } catch (ArrayStoreException e) {
+            System.out.println("array-backed: " + e.getMessage());
+        }
+        List<Object> mixedLinked = new LinkedList<>(mixed);
+        try {
+            mixedLinked.toArray(new String[0]);
+        } catch (ArrayStoreException e) {
+            System.out.println("element-wise: " + e.getMessage());
+        }
+    }
+}
+"#
+);
+
+// A stream has ONLY the generator overload of `toArray`; passing it an array
+// is a compile error, and modelling the generator as the array it makes must
+// not quietly accept one.
+differential_reject!(
+    a_stream_has_no_array_model_to_array,
+    "StreamToArrayModel",
+    r#"
+import java.util.*;
+
+public class StreamToArrayModel {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("b", "a"));
+        String[] wrong = list.stream().toArray(new String[0]);
+        System.out.println(wrong.length);
+    }
+}
+"#
+);
+
+// `Collectors.toUnmodifiableList/Set/Map` differ from the plain collectors in
+// the FINISH, not the gathering: what they answer refuses every mutator, and a
+// null element is an NPE rather than an entry. They aliased the mutable
+// collectors outright, which printed the same and let a program mutate a
+// collection its author had asked to be immutable.
+//
+// An unmodifiable MAP's iteration order is salted per JVM run, so only its
+// size is printed here.
+differential_test!(
+    the_unmodifiable_collectors_are_unmodifiable,
+    "UnmodifiableCollectors",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class UnmodifiableCollectors {
+    public static void main(String[] args) {
+        List<String> source = new ArrayList<>(Arrays.asList("b", "a", "b"));
+        List<String> list = source.stream().collect(Collectors.toUnmodifiableList());
+        System.out.println(list);
+        try {
+            list.add("z");
+        } catch (UnsupportedOperationException e) {
+            System.out.println("list refuses add");
+        }
+        try {
+            list.set(0, "z");
+        } catch (UnsupportedOperationException e) {
+            System.out.println("list refuses set");
+        }
+
+        Set<String> set = source.stream().collect(Collectors.toUnmodifiableSet());
+        System.out.println(set.size() + " " + set.contains("a"));
+        try {
+            set.add("z");
+        } catch (UnsupportedOperationException e) {
+            System.out.println("set refuses add");
+        }
+
+        Map<String, Integer> map = Stream.of("a", "bb")
+            .collect(Collectors.toUnmodifiableMap(s -> s, String::length));
+        System.out.println(map.size() + " " + map.get("bb"));
+        try {
+            map.put("z", 1);
+        } catch (UnsupportedOperationException e) {
+            System.out.println("map refuses put");
+        }
+
+        // The plain collectors are unchanged: mutable, and null-tolerant.
+        List<String> nullable = new ArrayList<>(Arrays.asList("b", null));
+        System.out.println(nullable.stream().collect(Collectors.toList()));
+        try {
+            nullable.stream().collect(Collectors.toUnmodifiableList());
+        } catch (NullPointerException e) {
+            System.out.println("unmodifiable rejects a null element");
+        }
+    }
+}
+"#
+);

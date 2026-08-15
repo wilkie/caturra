@@ -7978,6 +7978,14 @@ const PATH_METHODS: &[BuiltinMethod] = &[
 const LIST_METHODS: &[BuiltinMethod] = &[
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
+    // `toArray(T[] model)` — the model gives the RUNTIME element type, and
+    // the result is typed `T[]` by `refine_builtin_return`.
+    bm(
+        "toArray",
+        &[BParam::RefArray],
+        BRet::ObjectArray,
+        "([Ljava/lang/Object;)[Ljava/lang/Object;",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `clone()` — a SHALLOW copy, which is exactly what the copy
     // constructors already build. It was refused as "clone is not supported
@@ -8157,6 +8165,14 @@ const LIST_METHODS: &[BuiltinMethod] = &[
 const STACK_METHODS: &[BuiltinMethod] = &[
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
+    // `toArray(T[] model)` — the model gives the RUNTIME element type, and
+    // the result is typed `T[]` by `refine_builtin_return`.
+    bm(
+        "toArray",
+        &[BParam::RefArray],
+        BRet::ObjectArray,
+        "([Ljava/lang/Object;)[Ljava/lang/Object;",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
@@ -8296,6 +8312,14 @@ const STACK_METHODS: &[BuiltinMethod] = &[
 const QUEUE_METHODS: &[BuiltinMethod] = &[
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
+    // `toArray(T[] model)` — the model gives the RUNTIME element type, and
+    // the result is typed `T[]` by `refine_builtin_return`.
+    bm(
+        "toArray",
+        &[BParam::RefArray],
+        BRet::ObjectArray,
+        "([Ljava/lang/Object;)[Ljava/lang/Object;",
+    ),
     // Every reference has the Object methods; these faces had none, so
     // `q.equals(q)` did not compile.
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -8386,6 +8410,14 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
 const DEQUE_METHODS: &[BuiltinMethod] = &[
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
+    // `toArray(T[] model)` — the model gives the RUNTIME element type, and
+    // the result is typed `T[]` by `refine_builtin_return`.
+    bm(
+        "toArray",
+        &[BParam::RefArray],
+        BRet::ObjectArray,
+        "([Ljava/lang/Object;)[Ljava/lang/Object;",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // Every reference has the Object methods; a Queue/Deque face had none, so
     // `q.equals(q)` did not compile.
@@ -8537,6 +8569,14 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
     ),
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
+    // `toArray(T[] model)` — the model gives the RUNTIME element type, and
+    // the result is typed `T[]` by `refine_builtin_return`.
+    bm(
+        "toArray",
+        &[BParam::RefArray],
+        BRet::ObjectArray,
+        "([Ljava/lang/Object;)[Ljava/lang/Object;",
+    ),
     // Every reference has the Object methods; these faces had none, so
     // `q.equals(q)` did not compile.
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -8716,6 +8756,20 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
         BRet::Stream,
         "(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;",
     ),
+    // `takeWhile`/`dropWhile` (Java 9): `takeWhile` STOPS at the first
+    // element that fails, where `filter` keeps looking.
+    bm(
+        "takeWhile",
+        &[BParam::Predicate],
+        BRet::Stream,
+        "(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "dropWhile",
+        &[BParam::Predicate],
+        BRet::Stream,
+        "(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;",
+    ),
     bm(
         "map",
         &[BParam::UnaryOperator],
@@ -8765,6 +8819,17 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
         "(Ljava/util/function/BinaryOperator;)Ljava/util/Optional;",
     ),
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
+    // `stream.toArray(String[]::new)`. A stream has NO `toArray(T[])` overload
+    // in Java — only the generator one — so the desugaring renames the call to
+    // this internal name, which a program cannot write. Spelling it `toArray`
+    // here would have accepted `stream.toArray(new String[0])`, which javac
+    // rejects.
+    bm(
+        "__toArrayTyped",
+        &[BParam::RefArray],
+        BRet::ObjectArray,
+        "([Ljava/lang/Object;)[Ljava/lang/Object;",
+    ),
     bm("sorted", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm(
         "sorted",
@@ -8860,6 +8925,20 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
         &[BParam::Predicate],
         BRet::SameStream,
         "(Ljava/util/function/IntPredicate;)Ljava/util/stream/IntStream;",
+    ),
+    // `takeWhile`/`dropWhile` (Java 9): `takeWhile` STOPS at the first
+    // element that fails, where `filter` keeps looking.
+    bm(
+        "takeWhile",
+        &[BParam::Predicate],
+        BRet::SameStream,
+        "(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "dropWhile",
+        &[BParam::Predicate],
+        BRet::SameStream,
+        "(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;",
     ),
     bm(
         "map",
@@ -11107,6 +11186,14 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
 const SET_METHODS: &[BuiltinMethod] = &[
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
+    // `toArray(T[] model)` — the model gives the RUNTIME element type, and
+    // the result is typed `T[]` by `refine_builtin_return`.
+    bm(
+        "toArray",
+        &[BParam::RefArray],
+        BRet::ObjectArray,
+        "([Ljava/lang/Object;)[Ljava/lang/Object;",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `clone()` — a SHALLOW copy, which is exactly what the copy
     // constructors already build. It was refused as "clone is not supported
@@ -11197,6 +11284,14 @@ const SET_METHODS: &[BuiltinMethod] = &[
 const TREESET_METHODS: &[BuiltinMethod] = &[
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
+    // `toArray(T[] model)` — the model gives the RUNTIME element type, and
+    // the result is typed `T[]` by `refine_builtin_return`.
+    bm(
+        "toArray",
+        &[BParam::RefArray],
+        BRet::ObjectArray,
+        "([Ljava/lang/Object;)[Ljava/lang/Object;",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `clone()` — a SHALLOW copy, which is exactly what the copy
     // constructors already build. It was refused as "clone is not supported
@@ -11458,7 +11553,7 @@ fn collected_collection_kind(receiver: &Expr) -> Option<EmptyKind> {
     match collector.as_str() {
         "toList" | "toUnmodifiableList" => Some(EmptyKind::List),
         "toSet" | "toUnmodifiableSet" => Some(EmptyKind::Set),
-        "toMap" | "groupingBy" | "partitioningBy" => Some(EmptyKind::Map),
+        "toMap" | "toUnmodifiableMap" | "groupingBy" | "partitioningBy" => Some(EmptyKind::Map),
         _ => None,
     }
 }
@@ -11677,6 +11772,24 @@ const COLLECTORS_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "toMap",
+        &[
+            BParam::UnaryOperator,
+            BParam::UnaryOperator,
+            BParam::BiFunction,
+        ],
+        BRet::Collector,
+        "(Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;",
+    ),
+    // `toUnmodifiableMap` takes the same two shapes `toMap` does; only the
+    // finish differs.
+    bm(
+        "toUnmodifiableMap",
+        &[BParam::UnaryOperator, BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/Function;Ljava/util/function/Function;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "toUnmodifiableMap",
         &[
             BParam::UnaryOperator,
             BParam::UnaryOperator,
@@ -12320,6 +12433,21 @@ fn numeric_stream_conversion(receiver: JType, method: &str) -> bool {
 }
 
 #[allow(clippy::too_many_lines)] // one arm per return kind
+/// `collection.toArray(model)` answers the MODEL's array type, not `Object[]`
+/// — being able to say `String[] a = list.toArray(new String[0])` is the whole
+/// point of the overload. The method table has no way to say "the type of
+/// argument 0", so the emitter and `type_of` both refine the table's answer
+/// through here rather than each deciding for itself.
+fn refine_builtin_return(method: &str, ret: Option<JType>, arg_types: &[JType]) -> Option<JType> {
+    if matches!(method, "toArray" | "__toArrayTyped")
+        && let [model @ JType::Array { .. }] = arg_types
+    {
+        return Some(*model);
+    }
+    ret
+}
+
+#[allow(clippy::too_many_lines)] // one arm per builtin return shape
 fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
     match ret {
         BRet::Void => None,
@@ -14450,9 +14578,22 @@ impl BodyGen<'_> {
                     // read the first argument only, so `var l = List.of(1, 2.5)`
                     // inferred `List<Integer>` and then refused its own
                     // initializer.
-                    ("List", "of" | "copyOf") => JType::List(self.joined_literal_elem(args)),
-                    ("Set", "of" | "copyOf") => JType::Set(self.joined_literal_elem(args)),
-                    ("Map", "of" | "copyOf" | "ofEntries") => JType::Map {
+                    // `of(...)` reads its ELEMENTS from the arguments;
+                    // `copyOf(c)` reads them from the SOURCE COLLECTION, so
+                    // treating the argument as an element made
+                    // `List.copyOf(aStringList)` a `List<Object>`.
+                    ("List", "of") => JType::List(self.joined_literal_elem(args)),
+                    ("Set", "of") => JType::Set(self.joined_literal_elem(args)),
+                    ("List", "copyOf") => self
+                        .copy_source_element(args)
+                        .map_or(JType::Null, JType::List),
+                    ("Set", "copyOf") => self
+                        .copy_source_element(args)
+                        .map_or(JType::Null, JType::Set),
+                    ("Map", "copyOf") => self
+                        .copy_source_map(args)
+                        .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
+                    ("Map", "of" | "ofEntries") => JType::Map {
                         key: element(self, 0),
                         value: element(self, 1),
                     },
@@ -16207,6 +16348,20 @@ impl BodyGen<'_> {
         };
         match self.type_of(source) {
             JType::Map { key, value } | JType::TreeMap { key, value } => Some((key, value)),
+            _ => None,
+        }
+    }
+
+    /// The key and value a `Map.copyOf(source)` inherits — the SOURCE map's,
+    /// exactly as `copy_source_element` reads a collection's element. Three
+    /// paths need it (the emitter, `literal_factory_type` and `var`
+    /// inference), and computing it in each is how they came to disagree.
+    fn copy_source_map(&mut self, args: &[Expr]) -> Option<(ElemType, ElemType)> {
+        let [source] = args else {
+            return None;
+        };
+        match self.type_of(source) {
+            JType::Map { key, value } => Some((key, value)),
             _ => None,
         }
     }
@@ -18411,6 +18566,20 @@ impl BodyGen<'_> {
                 Some(JType::List(self.joined_literal_elem(args)))
             }
             ("Set", "of") => Some(JType::Set(self.joined_literal_elem(args))),
+            // `copyOf(c)` takes its element from the SOURCE, not from reading
+            // the argument as an element of the result.
+            ("Map", "copyOf") => Some(
+                self.copy_source_map(args)
+                    .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
+            ),
+            ("List", "copyOf") => Some(
+                self.copy_source_element(args)
+                    .map_or(JType::Null, JType::List),
+            ),
+            ("Set", "copyOf") => Some(
+                self.copy_source_element(args)
+                    .map_or(JType::Null, JType::Set),
+            ),
             // `Map.of(k, v, ...)` — the keys and values alternate, so each
             // side joins its own half. Left out here, a map literal typed as
             // `null` while emission built a real `HashMap<K, V>`.
@@ -18818,7 +18987,11 @@ impl BodyGen<'_> {
         }
         let descriptor = prim_stream_descriptor(receiver_ty, chosen.descriptor);
         let method_ref = intern_method_ref(self.pool, class, chosen.name, &descriptor);
-        let ret = bret_type(chosen.ret, elem, self.table);
+        let ret = refine_builtin_return(
+            chosen.name,
+            bret_type(chosen.ret, elem, self.table),
+            &arg_types,
+        );
         let ret_width = ret.map_or(0, JType::width);
         self.code
             .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
@@ -20735,7 +20908,9 @@ impl BodyGen<'_> {
         // fixed method table: `Stream.of(...)`, `IntStream.of(...)` and
         // `Arrays.stream(array)` all lower to one array plus a call.
         let stream_source = match (class, method) {
-            ("Stream" | "IntStream", "of" | "empty" | "concat") => !self.table.has_class(class),
+            ("Stream" | "IntStream", "of" | "empty" | "concat" | "ofNullable") => {
+                !self.table.has_class(class)
+            }
             ("Arrays", "stream") => true,
             _ => false,
         };
@@ -20763,6 +20938,48 @@ impl BodyGen<'_> {
             return self.emit_arrays_as_list(args, span);
         }
         // Java 9's `List.of` / `Set.of` / `Map.of` — immutable factories.
+        // Java 10's `copyOf(source)`: an IMMUTABLE copy, so it goes through
+        // the same VM factory as `of(...)` rather than a copy constructor —
+        // a copy constructor would answer a mutable collection.
+        if matches!(class, "List" | "Set" | "Map")
+            && method == "copyOf"
+            && !self.table.has_class(class)
+            && let [source] = args
+        {
+            let source_ty = self.type_of(source);
+            self.expr(source);
+            let (name, owner, ret) = match class {
+                "Map" => (
+                    "__mapCopyOf",
+                    "java/util/HashMap",
+                    self.copy_source_map(args)
+                        .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
+                ),
+                "Set" => (
+                    "__setCopyOf",
+                    "java/util/HashSet",
+                    JType::Set(
+                        copy_element_of(source_ty)
+                            .unwrap_or(ElemType::Object(self.table.object_id)),
+                    ),
+                ),
+                _ => (
+                    "__listCopyOf",
+                    "java/util/ArrayList",
+                    JType::List(
+                        copy_element_of(source_ty)
+                            .unwrap_or(ElemType::Object(self.table.object_id)),
+                    ),
+                ),
+            };
+            let descriptor = format!("(Ljava/lang/Object;)L{owner};");
+            // The same owner the `of` factories use — the VM answers these
+            // natives under `Collections`.
+            let method_ref = intern_method_ref(self.pool, "Collections", name, &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(1); // the source collection
+            return Some(Some(ret));
+        }
         if matches!(class, "List" | "Set" | "Map") && method == "of" && !self.table.has_class(class)
         {
             return self.emit_immutable_factory(class, args, span);
@@ -23058,7 +23275,7 @@ impl BodyGen<'_> {
                                     "IntStream",
                                     "of" | "range" | "rangeClosed" | "concat" | "empty",
                                 ) => return JType::IntStream,
-                                ("Stream", "of") => {
+                                ("Stream", "of" | "ofNullable") => {
                                     let elem = args
                                         .first()
                                         .and_then(|a| collection_elem_of(self.type_of(a)))
@@ -23218,7 +23435,13 @@ impl BodyGen<'_> {
                                 .expect("matched builtin receivers");
                             if let Some(ret) =
                                 pick_builtin(methods, method, &arg_types, elem, self.table)
-                                    .and_then(|m| bret_type(m.ret, elem, self.table))
+                                    .and_then(|m| {
+                                        refine_builtin_return(
+                                            m.name,
+                                            bret_type(m.ret, elem, self.table),
+                                            &arg_types,
+                                        )
+                                    })
                             {
                                 return ret;
                             }

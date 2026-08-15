@@ -87,6 +87,12 @@ pub enum StreamOp {
     Skip(usize),
     /// `distinct()` — pass an element only the first time it is seen.
     Distinct,
+    /// `takeWhile(pred)` — pass elements until one fails the predicate, then
+    /// STOP the source (unlike `filter`, which keeps looking).
+    TakeWhile(HeapRef),
+    /// `dropWhile(pred)` — drop elements while the predicate holds, then pass
+    /// every one that follows, including later elements that would match.
+    DropWhile(HeapRef),
     /// `boxed()` — the primitive pipeline becomes an OBJECT one, so each
     /// element becomes its wrapper. Not a retyping: a collection stores boxed
     /// references at rest, so a raw `int` reaching one is a `VerifyError` at the
@@ -107,6 +113,12 @@ pub enum CollectorKind {
     ToList,
     /// `Collectors.toSet()` — a `HashSet`, in the JDK's iteration order.
     ToSet,
+    /// `Collectors.toUnmodifiableList/Set/Map` — the collector inside it, with
+    /// its result handed to `List.of`/`Set.of`/`Map.ofEntries`. Composing
+    /// rather than duplicating is what keeps the gathering in one place: the
+    /// unmodifiable forms differ from the plain ones only in the finish, where
+    /// the result becomes immutable AND a null element becomes an NPE.
+    Unmodifiable(Box<CollectorKind>),
     /// `Collectors.joining(...)` — the elements' text, with a delimiter,
     /// prefix, and suffix.
     Joining {
