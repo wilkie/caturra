@@ -7770,10 +7770,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("TreeMap", "tailMap", "TreeMap range views are not supported by caturra"),
     ("TreeMap", "subMap", "TreeMap range views are not supported by caturra"),
     ("TreeMap", "descendingMap", "TreeMap.descendingMap is not supported by caturra"),
-    ("TreeMap", "firstEntry", "TreeMap entry views are not supported by caturra (use firstKey)"),
-    ("TreeMap", "lastEntry", "TreeMap entry views are not supported by caturra (use lastKey)"),
-    ("TreeMap", "pollFirstEntry", "TreeMap entry views are not supported by caturra"),
-    ("TreeMap", "pollLastEntry", "TreeMap entry views are not supported by caturra"),
     ("TreeSet", "descendingIterator", "caturra does not model a descending view of a TreeSet"),
     ("TreeSet", "descendingSet", "TreeSet.descendingSet is not supported by caturra"),
     ("TreeSet", "headSet", "TreeSet range views are not supported by caturra"),
@@ -8732,8 +8728,11 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
 
 /// `java.util.stream.IntStream` — a primitive int stream. Its lambdas take a
 /// single `int` (the VM stores the elements unboxed, so the same erased
-/// interfaces serve). `sum`/`toArray` are the numeric terminals `Stream` lacks;
-/// `average`/`min`/`max` return `Optional…`, which caturra does not model.
+/// interfaces serve). `sum`/`toArray` are the numeric terminals `Stream` lacks,
+/// and `average`/`min`/`max` answer the `OptionalInt`/`OptionalDouble` the JDK
+/// does. (This said those three were unsupported "because caturra does not
+/// model Optional" long after it did — a comment can expire as quietly as a
+/// refusal.)
 const INTSTREAM_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -10841,6 +10840,19 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
     // Sorted navigation. The keys are boxed so an absent result is `null`.
     bm("firstKey", &[], BRet::Key, "()Ljava/lang/Object;"),
     bm("lastKey", &[], BRet::Key, "()Ljava/lang/Object;"),
+    // The ENTRY accessors. Each answers an immutable SNAPSHOT — the JDK's
+    // `SimpleImmutableEntry`, whose `setValue` throws — and `null` for an
+    // empty map. They were refused as "entry views are not supported", which
+    // stopped being true once `Map.Entry` became a type a program can hold.
+    bm("firstEntry", &[], BRet::Entry, "()Ljava/util/Map$Entry;"),
+    bm("lastEntry", &[], BRet::Entry, "()Ljava/util/Map$Entry;"),
+    bm(
+        "pollFirstEntry",
+        &[],
+        BRet::Entry,
+        "()Ljava/util/Map$Entry;",
+    ),
+    bm("pollLastEntry", &[], BRet::Entry, "()Ljava/util/Map$Entry;"),
     bm(
         "floorKey",
         &[BParam::Key],

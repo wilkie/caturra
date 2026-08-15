@@ -4190,6 +4190,31 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A TreeMap's entry accessors (2026-08-15)
+
+Three shapes recurred this session: a name with more than one segment, a fact
+taught to one path and not its mirror, and a REFUSAL whose reason had stopped
+being true. The first two now have sweeps. This is the third, and the refusal
+table is the place to look, because it is machine-readable: 35 entries, each
+naming a class, a member, and a reason.
+
+`TreeMap.firstEntry`/`lastEntry`/`pollFirstEntry`/`pollLastEntry` were refused
+as "TreeMap entry views are not supported by caturra". That expired when
+`Map.Entry` became a type a program can hold — the entries an `entrySet()`
+hands out already worked here, `setValue` write-through and all.
+
+What the JDK returns is not a view but an immutable SNAPSHOT
+(`AbstractMap$SimpleImmutableEntry`), which is a stricter thing to model and
+the reason to check rather than assume: it must NOT follow a later `put` to the
+same key, its `setValue` throws, and an empty map answers `null` rather than
+throwing — unlike `firstKey` beside it, which throws. All four are modelled the
+way a standalone entry already was, as a hidden one-mapping map with a
+read-only entry over it, and every one of those behaviours is pinned.
+
+The same audit found a comment claiming `IntStream.average`/`min`/`max` were
+unsupported "because caturra does not model Optional", long after it did — all
+three have worked for some time. A comment can expire as quietly as a refusal.
+
 ### Sweeping the probe corpus for type divergence (2026-08-15)
 
 The `type_of`-versus-emit invariant is CHECKED, and the check is swept over

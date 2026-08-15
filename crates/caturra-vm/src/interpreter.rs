@@ -6706,6 +6706,42 @@ impl<'run> Interpreter<'run> {
                 };
                 *key
             }
+            // The ENTRY accessors. Each answers an immutable SNAPSHOT — the
+            // JDK's `SimpleImmutableEntry`, detached from the map so a later
+            // `put` cannot change it and whose `setValue` throws — or `null`
+            // for an empty map. `poll*` removes the entry it returns.
+            //
+            // Modelled the way a standalone entry already is: a hidden
+            // one-mapping map with the entry over it, which is what makes
+            // every entry method work on the result.
+            ("firstEntry" | "lastEntry" | "pollFirstEntry" | "pollLastEntry", []) => {
+                let entries = self.map_entries(receiver);
+                let found = if method_name.contains("first") || method_name.contains("First") {
+                    entries.first().copied()
+                } else {
+                    entries.last().copied()
+                };
+                match found {
+                    None => JValue::NULL,
+                    Some((key, value)) => {
+                        if method_name.starts_with("poll")
+                            && let Some(at) = self.map_find(receiver, key)?
+                        {
+                            self.map_remove_at(receiver, at);
+                        }
+                        let holder = self
+                            .heap
+                            .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
+                        self.map_put(holder, key, value)?;
+                        let entry = self.heap.alloc(HeapObject::MapEntry {
+                            map: holder,
+                            key,
+                            read_only: true,
+                        });
+                        JValue::Ref(Some(entry))
+                    }
+                }
+            }
             ("floorKey" | "ceilingKey" | "lowerKey" | "higherKey", [probe]) => {
                 self.tree_map_navigate_key(receiver, method_name, *probe)?
             }

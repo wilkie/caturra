@@ -22287,6 +22287,75 @@ public class EntryComparatorRef {
 "#
 );
 
+// `TreeMap.firstEntry()` and the other ENTRY accessors, refused as "TreeMap
+// entry views are not supported by caturra". That reason expired when
+// `Map.Entry` became a type a program can hold: the entries an `entrySet()`
+// hands out already worked here, `setValue` and all.
+//
+// What the JDK actually returns is not a view but an immutable SNAPSHOT —
+// `AbstractMap$SimpleImmutableEntry` — so it must NOT follow a later `put` to
+// the same key, and its `setValue` throws. Modelled the way a standalone entry
+// already is: a hidden one-mapping map with the entry over it, `read_only`.
+// `poll*` removes the entry it returns; an empty map answers `null`, not an
+// exception (unlike `firstKey`, which throws).
+differential_test!(
+    tree_map_entry_accessors,
+    "TreeEntries",
+    r#"
+import java.util.Map;
+import java.util.TreeMap;
+
+public class TreeEntries {
+    public static void main(String[] args) {
+        TreeMap<String, Integer> t = new TreeMap<>();
+        t.put("b", 2);
+        t.put("a", 1);
+        t.put("c", 3);
+        System.out.println(t.firstEntry() + " " + t.lastEntry());
+        System.out.println(t.firstEntry().getKey() + "/" + t.firstEntry().getValue());
+        try {
+            t.firstEntry().setValue(9);
+        } catch (UnsupportedOperationException e) {
+            System.out.println("setValue UOE");
+        }
+        System.out.println(t);
+
+        TreeMap<String, Integer> empty = new TreeMap<>();
+        System.out.println(empty.firstEntry() + " " + empty.lastEntry());
+        System.out.println(empty.pollFirstEntry() + " " + empty.pollLastEntry());
+
+        Map.Entry<String, Integer> polled = t.pollFirstEntry();
+        System.out.println(polled + " then " + t);
+        System.out.println(t.pollLastEntry() + " then " + t);
+
+        // The snapshot is DETACHED: neither a later put nor a remove reaches it.
+        TreeMap<String, Integer> live = new TreeMap<>();
+        live.put("a", 1);
+        live.put("b", 2);
+        Map.Entry<String, Integer> snapshot = live.firstEntry();
+        live.put("a", 99);
+        System.out.println(snapshot + " vs map " + live);
+        live.remove("a");
+        System.out.println(snapshot.getKey() + "=" + snapshot.getValue());
+
+        TreeMap<Integer, String> nums = new TreeMap<>();
+        nums.put(3, "c");
+        nums.put(1, "a");
+        System.out.println(nums.firstEntry() + "," + nums.lastEntry());
+        TreeMap<String, Integer> one = new TreeMap<>();
+        one.put("k", 5);
+        System.out.println(one.pollFirstEntry() + " then " + one + " " + one.firstEntry());
+        // `firstKey` still THROWS on an empty map, where `firstEntry` is null.
+        try {
+            empty.firstKey();
+        } catch (java.util.NoSuchElementException e) {
+            System.out.println("firstKey throws");
+        }
+    }
+}
+"#
+);
+
 // `LinkedHashMap` and `LinkedHashSet` — insertion-ordered iteration.
 //
 // The whole feature is one flag, because `JavaHashMap` already STORES its
