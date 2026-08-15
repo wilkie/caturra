@@ -4190,6 +4190,30 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### The second pair of paths (2026-08-15)
+
+With the `type_of`-versus-emit sweep closed, the question is which OTHER pair of
+functions answers one question twice — because that was the cause of all 82.
+
+There is one more, and it has already produced a bug: a method's descriptor is
+built from the WRITTEN `TypeRef` for the signature the class file carries, and
+from the RESOLVED `JType` by every call site. `Iterator<T>` in a signature
+disagreed between them, and the symptom was "malformed class Main: no static
+method f(Ljava/util/Iterator;)" — a call naming a method that was never
+emitted. That was found by hand, from a probe.
+
+It is checked now, under the same `CATURRA_VERIFY_TYPES` flag, at both points
+where a method's descriptor is written. A type that does not resolve is skipped
+rather than reported: a user generic or a type variable has no `JType` to
+compare against, and the written form is the authority there.
+
+The corpus and the differential suite report **none**. That is a real zero, not
+an unrun check: perturbing the comparison to expect `Q` where the return
+descriptor says `V` makes it report on every method of a two-line program,
+including the implicit constructor. After the `--nocapture` lesson — where a
+sweep reported zero because `cargo test` swallows stderr for passing tests — a
+clean result is worth only as much as the proof that the check can fail.
+
 ### The type sweep, closed (2026-08-15)
 
 The differential suite reports **zero** `type_of`-versus-emit disagreements,

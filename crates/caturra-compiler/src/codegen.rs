@@ -6694,6 +6694,7 @@ fn emit_method(
     // Abstract / interface methods have no body and no Code attribute.
     if decl.is_abstract {
         let descriptor = method_descriptor(path, diagnostics, table, decl);
+        verify_descriptor_agreement(path, table, decl, &descriptor);
         let mut flags = MethodAccessFlags::ABSTRACT;
         if decl.is_public || class_decl.is_interface {
             flags |= MethodAccessFlags::PUBLIC;
@@ -6772,6 +6773,7 @@ fn emit_method(
     let (bytecode, max_stack, line_numbers, exception_table) = body.code.finish();
 
     let descriptor = method_descriptor(path, diagnostics, table, decl);
+    verify_descriptor_agreement(path, table, decl, &descriptor);
     let mut flags = 0;
     if decl.is_public || (class_decl.is_interface && !decl.is_private) {
         flags |= MethodAccessFlags::PUBLIC;
@@ -6827,12 +6829,51 @@ fn boxed_method_return(method: &str) -> Option<JType> {
 }
 
 #[allow(clippy::too_many_lines)] // one descriptor builder with a type-mapping matrix
+/// The two descriptor builders must agree.
+///
+/// One reads the WRITTEN `TypeRef` (this function, for the signature the class
+/// file carries); the other reads the RESOLVED `JType` (`JType::descriptor`,
+/// which every call site uses). When they differ, the call names a method that
+/// was never emitted — "malformed class Main: no static method
+/// f(Ljava/util/Iterator;)" — which is exactly how `Iterator<T>` in a
+/// signature failed. That was found by hand; this asks the question.
+///
+/// A type that does not resolve is skipped rather than reported: a user
+/// generic or a type variable has no `JType` to compare against, and the
+/// written form is the authority there.
+fn verify_descriptor_agreement(path: &str, table: &MethodTable, decl: &MethodDecl, emitted: &str) {
+    if !verifying_types() {
+        return;
+    }
+    let mut resolved = String::from("(");
+    for param in &decl.params {
+        let Some(ty) = table.resolve_type(&param.ty) else {
+            return;
+        };
+        resolved.push_str(&ty.descriptor(table));
+    }
+    resolved.push(')');
+    if matches!(decl.return_type, TypeRef::Void) {
+        resolved.push('V');
+    } else {
+        let Some(ty) = table.resolve_type(&decl.return_type) else {
+            return;
+        };
+        resolved.push_str(&ty.descriptor(table));
+    }
+    if resolved != emitted {
+        report_descriptor_mismatch(path, &decl.name, decl.span, emitted, &resolved);
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per type, plus the nested builder
 fn method_descriptor(
     path: &str,
     diagnostics: &mut Vec<Diagnostic>,
     table: &MethodTable,
     decl: &MethodDecl,
 ) -> String {
+    #[allow(clippy::too_many_lines)] // one arm per type a signature can name
     fn push_type(
         path: &str,
         diagnostics: &mut Vec<Diagnostic>,
@@ -12550,6 +12591,24 @@ pub fn end_type_verification() -> Vec<String> {
         .lock()
         .map(|mut seen| std::mem::take(&mut *seen))
         .unwrap_or_default()
+}
+
+/// A descriptor disagreement, in the same shape as a type one.
+fn report_descriptor_mismatch(
+    path: &str,
+    method: &str,
+    span: SourceSpan,
+    emitted: &str,
+    resolved: &str,
+) {
+    let report = format!(
+        "DESCRIPTOR-MISMATCH {path}:{}:{} {method} written={emitted} resolved={resolved}",
+        span.start.line, span.start.column,
+    );
+    if let Ok(mut seen) = TYPE_MISMATCHES.lock() {
+        seen.push(report.clone());
+    }
+    eprintln!("{report}");
 }
 
 /// One disagreement, to stderr — the verification run is a sweep, so it

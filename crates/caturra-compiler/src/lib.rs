@@ -880,6 +880,44 @@ mod tests {
         assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 
+    /// The two DESCRIPTOR builders must agree: one reads the written
+    /// `TypeRef` (the signature the class file carries), the other the
+    /// resolved `JType` (which every call site uses). When they differ the
+    /// call names a method that was never emitted — "malformed class Main: no
+    /// static method f(Ljava/util/Iterator;)", which is how `Iterator<T>` in a
+    /// signature failed, found by hand rather than by a check.
+    ///
+    /// Swept the same way as the type invariant: `CATURRA_VERIFY_TYPES=1` over
+    /// the corpus and the differential suite, both of which report none. These
+    /// are the signature shapes that have to keep agreeing.
+    #[test]
+    fn a_signature_descriptor_agrees_with_its_type() {
+        let source = "import java.util.*;\nimport java.util.function.*;\n\
+             import java.util.stream.*;\npublic class Sig {\n\
+             static String first(Iterator<String> it) { return it.next(); }\n\
+             static Iterator<String> make(List<String> l) { return l.iterator(); }\n\
+             static long count(Stream<String> s) { return s.count(); }\n\
+             static int total(IntStream s) { return s.sum(); }\n\
+             static double sum(DoubleStream s) { return s.sum(); }\n\
+             static Map.Entry<String, Integer> entry() { return Map.entry(\"k\", 1); }\n\
+             static String key(Map.Entry<String, Integer> e) { return e.getKey(); }\n\
+             static int apply(IntUnaryOperator f) { return f.applyAsInt(1); }\n\
+             static Optional<String> opt() { return Optional.of(\"x\"); }\n\
+             static Set<String> set(Collection<String> c) { return new HashSet<>(c); }\n\
+             static StringBuilder build(CharSequence cs) { return new StringBuilder(cs); }\n\
+             static int[] ints() { return new int[0]; }\n\
+             static Integer[] boxes() { return new Integer[0]; }\n\
+             public static void main(String[] a) {}\n}";
+        begin_type_verification();
+        let result = compile(&[SourceFile {
+            path: String::from("Sig.java"),
+            text: String::from(source),
+        }]);
+        assert!(result.success(), "{:?}", result.diagnostics);
+        let mismatches = end_type_verification();
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
+    }
+
     /// A real Java 11 member caturra cannot model says so, rather than
     /// pretending it never existed.
     #[test]
