@@ -3655,6 +3655,22 @@ fn wrapper_primitive_name(wrapper: &str) -> Option<&'static str> {
     })
 }
 
+/// The wrapper class name as a PRIMITIVE kind (`Integer` -> `int`), for the
+/// places that need the primitive itself rather than an element type.
+fn wrapper_prim(name: &str) -> Option<Prim> {
+    Some(match name {
+        "Integer" => Prim::Int,
+        "Double" => Prim::Double,
+        "Long" => Prim::Long,
+        "Float" => Prim::Float,
+        "Short" => Prim::Short,
+        "Byte" => Prim::Byte,
+        "Character" => Prim::Char,
+        "Boolean" => Prim::Boolean,
+        _ => return None,
+    })
+}
+
 fn wrapper_elem(name: &str) -> Option<ElemType> {
     Some(match name {
         "Integer" => ElemType::Int,
@@ -4126,7 +4142,14 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
                 read: object,
                 bound: WildcardBound::Lower(id),
             },
-            None => ElemType::Object(object),
+            // A WRAPPER bound (`? super Integer`) names no class in the table.
+            None => match wrapper_prim(canonical) {
+                Some(prim) => ElemType::Wildcard {
+                    read: object,
+                    bound: WildcardBound::LowerWrapper(prim),
+                },
+                None => ElemType::Object(object),
+            },
         },
         _ => ElemType::Object(object),
     }
@@ -4172,6 +4195,14 @@ fn wildcard_accepts(arg: ElemType, bound: WildcardBound, table: &MethodTable) ->
         WildcardBound::Lower(class) => {
             matches!(arg, ElemType::Object(id) if table.is_subtype(class, id))
         }
+        // `? super Integer`: the wrapper itself, or one of the faces it widens
+        // to — `Number`, `Object`, `Comparable`. Asked in that direction,
+        // which is what a LOWER bound means: does the BOUND fit the argument.
+        WildcardBound::LowerWrapper(bound) => match arg {
+            ElemType::Object(id) => wrapper_face(Some(bound.elem()), id, table),
+            ElemType::Wrapper(prim) => prim == bound,
+            other => other == bound.elem(),
+        },
     }
 }
 
@@ -5070,6 +5101,13 @@ enum WildcardBound {
     Upper(ClassId),
     /// `? super C`: an element `C` itself is assignable to (a supertype of C).
     Lower(ClassId),
+    /// `? super Integer` — a WRAPPER lower bound. Wrappers are elements, not
+    /// classes in the table, so `Lower` has no id to hold and the bound was
+    /// dropped: `List<? super Integer>` accepted only a `List<Object>`, and
+    /// the `List<Number>` and `List<Integer>` a JDK takes were refused.
+    /// Carries the PRIMITIVE, not the element type — an `ElemType` holds a
+    /// wildcard, so nesting one here makes the two types recursive.
+    LowerWrapper(Prim),
     /// A TYPE VARIABLE argument (`List<T>` in `<T> void dump(List<T>)`), after
     /// erasure. Like `Unbounded` for applicability — a `List<anything>` may be
     /// passed — but a real type, not a capture, so the collection may still be

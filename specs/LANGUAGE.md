@@ -4190,6 +4190,22 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A wrapper lower bound (2026-08-14)
+
+`List<? super Integer>` accepted only a `List<Object>`. The `? super`
+machinery was there and correct for a user class, and it dropped the bound
+entirely when the bound named a WRAPPER: wrappers are elements, not classes in
+the table, so there was no `ClassId` for `Lower` to hold and the whole wildcard
+fell back to a plain `Object` element. The `List<Number>` and `List<Integer>`
+a JDK takes were refused — which is the entire point of writing `? super`.
+
+The bound now carries the PRIMITIVE kind (an `ElemType` holds a wildcard, so
+nesting one inside `WildcardBound` makes the two types recursive), and the test
+is asked in the direction a lower bound means: does the BOUND fit the argument
+element — the wrapper itself, or a face it widens to (`Number` for the numeric
+ones, `Object`, `Comparable`). So `List<String>` is still no `List<? super
+Integer>`, and `Character` still does not widen to `Number`; both are pinned.
+
 ### A lambda that returns a lambda (2026-08-14)
 
 `x -> y -> x + y` was refused. A lambda's body was desugared with NO expected

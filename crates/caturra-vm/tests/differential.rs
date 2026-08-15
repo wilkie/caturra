@@ -22139,6 +22139,99 @@ public class SubListCtor {
 "#
 );
 
+// `List<? super Integer>` — a WRAPPER lower bound. The `? super` machinery
+// worked for a user class and for `Object`, and dropped the bound entirely
+// when it named a wrapper, because wrappers are ELEMENTS and not classes in
+// the table, so there was no id for the bound to hold. `List<Object>` was
+// accepted (the fallback), and the `List<Number>` and `List<Integer>` a JDK
+// takes were refused — which is the whole point of a `? super` parameter.
+differential_test!(
+    a_wrapper_lower_bound,
+    "SuperWildcard",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class SuperWildcard {
+    static void fillInts(List<? super Integer> l) { l.add(1); }
+    static void fillDoubles(List<? super Double> l) { l.add(1.5); }
+    static void fillChars(List<? super Character> l) { l.add('A'); }
+    static void fillStrings(List<? super String> l) { l.add("s"); }
+    static double sum(List<? extends Number> l) {
+        double t = 0;
+        for (Number n : l) {
+            t += n.doubleValue();
+        }
+        return t;
+    }
+
+    public static void main(String[] args) {
+        List<Number> numbers = new ArrayList<>();
+        fillInts(numbers);
+        System.out.println(numbers);
+        List<Integer> ints = new ArrayList<>();
+        fillInts(ints);
+        System.out.println(ints);
+        List<Object> objects = new ArrayList<>();
+        fillInts(objects);
+        System.out.println(objects);
+        List<Number> doubles = new ArrayList<>();
+        fillDoubles(doubles);
+        System.out.println(doubles);
+        List<Object> chars = new ArrayList<>();
+        fillChars(chars);
+        System.out.println(chars);
+        List<Object> strings = new ArrayList<>();
+        fillStrings(strings);
+        System.out.println(strings);
+        System.out.println(sum(new ArrayList<>(Arrays.asList(1, 2))));
+    }
+}
+"#
+);
+
+// The bound still has to be a SUPERTYPE of what the wildcard names: a
+// `List<String>` is no `List<? super Integer>`, and `Character` does not
+// widen to `Number` the way the numeric wrappers do.
+differential_reject!(
+    a_lower_bound_is_not_any_element,
+    "SuperMismatch",
+    r"
+import java.util.ArrayList;
+import java.util.List;
+
+public class SuperMismatch {
+    static void fill(List<? super Integer> l) { l.add(1); }
+
+    public static void main(String[] args) {
+        List<String> l = new ArrayList<>();
+        fill(l);
+        System.out.println(l);
+    }
+}
+"
+);
+
+differential_reject!(
+    a_char_is_not_a_number,
+    "CharNotNumber",
+    r"
+import java.util.ArrayList;
+import java.util.List;
+
+public class CharNotNumber {
+    static void fill(List<? super Character> l) { l.add('A'); }
+
+    public static void main(String[] args) {
+        List<Number> l = new ArrayList<>();
+        fill(l);
+        System.out.println(l);
+    }
+}
+"
+);
+
 // A lambda that RETURNS a lambda, and a lambda on a QUALIFIED Optional.
 //
 // `x -> y -> x + y` was refused: a lambda's body was desugared with no
