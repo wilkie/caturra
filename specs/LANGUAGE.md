@@ -4190,6 +4190,31 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### A functional interface as a collection element (2026-08-14)
+
+`List<Runnable>` and `Map<String, Function<Integer, Integer>>` — the callback
+registry and the strategy table, which are most of why a program keeps a
+collection of functions — were refused. The reason given was honest
+("`Runnable` works as a variable, but caturra does not model it as a
+collection element") and had stopped being necessary: a functional interface
+erases to a bundled `__`-one, and that IS a class in the table, so the element
+is an ordinary reference to it — the same thing a `Runnable` variable already
+held. Both the plain (`Runnable`) and parameterized (`Function<A, B>`) spellings
+now map to it.
+
+Storing a LAMBDA there took a second half, and it was the half that mattered:
+with the element type accepted, `rs.add(() -> ...)` still had no
+functional-interface position to sit in. The element type IS the lambda's
+target type, and only the call site knows it, so `add`/`set`/`put` hand it
+down — which means a method reference and a user-declared interface take the
+same route without further code. `Comparator.naturalOrder()` stored in a
+`List<Comparator<String>>` needed only the first half, which is what showed
+the two were separable.
+
+Handing a type down must not turn every argument into a functional-interface
+position: `List<String>.add(() -> "x")` and a stored lambda of the wrong arity
+are both still rejected, and pinned.
+
 ### A stream reads its source when it runs (2026-08-14)
 
 A sweep of the static utility surface — 64 programs across `Arrays`,

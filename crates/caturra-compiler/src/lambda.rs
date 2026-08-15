@@ -1130,6 +1130,35 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `list.add(() -> ...)` / `list.set(i, ...)` / `map.put(k, ...)`:
+            // a lambda STORED in a collection whose element is a functional
+            // interface — the callback registry and the strategy table. The
+            // element type IS the target type, and only this call site knows
+            // it; without it the lambda had no functional-interface position
+            // to sit in, though a `Runnable` VARIABLE assigned the same lambda
+            // worked. Handed down rather than built here, so a method
+            // reference and a user-declared interface take the same route.
+            let stored_at = match (method.as_str(), args.len()) {
+                ("add" | "addFirst" | "addLast" | "push" | "offer", 1) => Some(0),
+                ("add" | "set" | "put" | "putIfAbsent", 2) => Some(1),
+                _ => None,
+            };
+            if let Some(at) = stored_at
+                && matches!(&args[at], Expr::Lambda { .. } | Expr::MethodRef { .. })
+                && let Some(r) = receiver.as_deref()
+                && let Some(target) = if matches!(method.as_str(), "put" | "putIfAbsent") {
+                    map_type_args(r, ctx).map(|(_, value)| value)
+                } else {
+                    list_elem_type(r, ctx)
+                }
+            {
+                let (leading, tail) = args.split_at_mut(at);
+                for arg in leading {
+                    desugar_expr(arg, None, ctx);
+                }
+                desugar_expr(&mut tail[0], Some(&target), ctx);
+                return;
+            }
             // `Collections.sort(list, (a, b) -> ...)`: the comparator is the
             // second argument, its parameters the FIRST argument's element type.
             if method == "sort"

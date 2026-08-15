@@ -3995,6 +3995,20 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
             if let Some(id) = table.qualified_nested_class(name) {
                 return Some(ElemType::Object(id));
             }
+            // A FUNCTIONAL INTERFACE as an element: `List<Runnable>`, the
+            // callback registry every event-driven program keeps. It erases to
+            // the bundled `__`-interface, which IS a class in the table, so the
+            // element is an ordinary reference to one — the same thing a
+            // `Runnable` VARIABLE already held. Without this the type was
+            // refused with an honest but unnecessary reason, "works as a
+            // variable, but caturra does not model it as a collection
+            // element".
+            if let Some(erased) = functional_erased(name)
+                && !table.has_class(name)
+                && let Some(id) = table.class_id(erased)
+            {
+                return Some(ElemType::Object(id));
+            }
             match crate::imports::canonical_library_class(name).unwrap_or(name.as_str()) {
                 // A wrapper type argument is a BOXED element — `List<Integer>`
                 // stores references to `Integer` objects, exactly as maps and
@@ -4033,6 +4047,18 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
         // hold a `List<Map.Entry<K, V>>` of real entries — the natural next
         // line after copying `entrySet()` — and every element of one read back
         // as `Object`, so `es.get(0).getKey()` did not compile.
+        // A PARAMETERIZED functional interface as an element —
+        // `Map<String, Function<Integer, Integer>>`, the strategy table. Its
+        // type arguments erase, exactly as they do for a variable of that
+        // type, so the element is a plain reference to the bundled interface.
+        TypeRef::Generic { base, .. }
+            if !table.has_class(base)
+                && functional_erased(base).is_some_and(|erased| table.has_class(erased)) =>
+        {
+            functional_erased(base)
+                .and_then(|erased| table.class_id(erased))
+                .map(ElemType::Object)
+        }
         TypeRef::Generic { .. } => match table.resolve_type(arg) {
             Some(inner) if !matches!(inner, JType::Object(_)) => Some(ElemType::Nested {
                 inner: table.intern_nested(inner),

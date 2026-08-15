@@ -22139,6 +22139,138 @@ public class SubListCtor {
 "#
 );
 
+// A FUNCTIONAL INTERFACE as a collection element — the callback registry and
+// the strategy table, which are why a program keeps one. `List<Runnable>` was
+// refused outright ("Runnable works as a variable, but caturra does not model
+// it as a collection element"), an honest reason that had stopped being
+// necessary: the interface erases to a bundled `__`-one, which IS a class in
+// the table, so the element is an ordinary reference to it — the same thing a
+// `Runnable` VARIABLE already held.
+//
+// Storing a LAMBDA there took a second half. The element type is the lambda's
+// target type and only the call site knows it, so `add`/`set`/`put` hand it
+// down; a method reference and a user-declared interface take the same route.
+differential_test!(
+    a_functional_interface_as_an_element,
+    "StoredLambdas",
+    r#"
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.function.IntUnaryOperator;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+
+public class StoredLambdas {
+    interface Op { int f(int x); }
+
+    static Map<String, Runnable> commands = new HashMap<>();
+
+    static void runAll(List<Runnable> rs) {
+        for (Runnable r : rs) {
+            r.run();
+        }
+    }
+
+    static List<Supplier<String>> made() {
+        List<Supplier<String>> l = new ArrayList<>();
+        l.add(() -> "made");
+        return l;
+    }
+
+    static void greet() { System.out.println("hi"); }
+
+    public static void main(String[] args) {
+        List<Runnable> rs = new ArrayList<>();
+        rs.add(() -> System.out.println("r"));
+        rs.add(StoredLambdas::greet);
+        for (Runnable r : rs) {
+            r.run();
+        }
+        rs.set(0, () -> System.out.println("replaced"));
+        rs.get(0).run();
+        runAll(rs);
+
+        commands.put("go", () -> System.out.println("going"));
+        commands.put("stop", () -> System.out.println("stopped"));
+        commands.get("go").run();
+        commands.get("stop").run();
+
+        Map<String, Function<Integer, Integer>> strategies = new HashMap<>();
+        strategies.put("inc", x -> x + 1);
+        System.out.println(strategies.get("inc").apply(1));
+
+        List<Predicate<String>> checks = new ArrayList<>();
+        checks.add(s -> s.isEmpty());
+        checks.add(s -> s.length() > 2);
+        for (Predicate<String> p : checks) {
+            System.out.println(p.test("abc"));
+        }
+
+        List<Supplier<String>> suppliers = new ArrayList<>();
+        suppliers.add(() -> "s");
+        System.out.println(suppliers.get(0).get());
+        System.out.println(made().get(0).get());
+
+        List<IntUnaryOperator> ops = new ArrayList<>();
+        ops.add(i -> i * 2);
+        System.out.println(ops.get(0).applyAsInt(21));
+
+        // An already-built one, and a USER interface, take the same element.
+        List<Comparator<String>> comparators = new ArrayList<>();
+        comparators.add(Comparator.naturalOrder());
+        System.out.println(comparators.get(0).compare("a", "b"));
+        List<Op> user = new ArrayList<>();
+        user.add(x -> x + 1);
+        System.out.println(user.get(0).f(1));
+
+        Runnable[] array = { () -> System.out.println("arr") };
+        array[0].run();
+    }
+}
+"#
+);
+
+// Handing the element type down must not make every argument a
+// functional-interface position: a lambda still needs one, and its arity still
+// has to match.
+differential_reject!(
+    a_lambda_is_not_a_string_element,
+    "LambdaNotString",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+public class LambdaNotString {
+    public static void main(String[] args) {
+        List<String> l = new ArrayList<>();
+        l.add(() -> "x");
+        System.out.println(l);
+    }
+}
+"#
+);
+
+differential_reject!(
+    a_stored_lambda_keeps_its_arity,
+    "StoredArity",
+    r"
+import java.util.ArrayList;
+import java.util.List;
+
+public class StoredArity {
+    public static void main(String[] args) {
+        List<Runnable> rs = new ArrayList<>();
+        rs.add(x -> System.out.println(x));
+        System.out.println(rs.size());
+    }
+}
+"
+);
+
 // A stream is LATE-BINDING (`java.util.stream`, package docs): its source is
 // read when the TERMINAL runs, not when the stream is built. caturra captured
 // the elements at construction, so a source modified in between was invisible
