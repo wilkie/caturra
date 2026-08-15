@@ -3074,6 +3074,19 @@ impl MethodTable {
                         Some(prim) => ElemType::Wrapper(prim),
                         None => return None,
                     },
+                    // An array whose element is a COLLECTION (`List<String>[]`,
+                    // `Map[]`) — a reference array like any other, with the
+                    // element type interned so reading one back gives the
+                    // collection rather than `Object`, exactly as
+                    // `List<List<Integer>>` already does. Without this arm the
+                    // whole type failed to resolve and the message blamed
+                    // ARRAYS ("arrays are not yet supported by caturra"), which
+                    // a program that had just used `String[]` could only read
+                    // as nonsense.
+                    other if other.is_reference() => ElemType::Nested {
+                        inner: self.intern_nested(other),
+                        read: self.object_id,
+                    },
                     _ => return None,
                 };
                 Some(JType::Array { elem, dims })
@@ -4640,6 +4653,27 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (JType::Object(sub), JType::Object(sup)) if table.is_subtype(sub, sup)
+        )
+        // An array of a RAW collection assigns to an array of a PARAMETERIZED
+        // one: `List<String>[] a = new List[2]`. Java calls that an unchecked
+        // conversion — a warning, not an error — and it is the only way to
+        // build such an array at all, since `new List<String>[2]` is illegal
+        // generic array creation. The two element types differ only in their
+        // type argument, which the array does not carry at run time anyway.
+        || matches!(
+            (from, to),
+            (
+                JType::Array {
+                    elem: ElemType::Nested { inner: a, .. },
+                    dims: from_dims,
+                },
+                JType::Array {
+                    elem: ElemType::Nested { inner: b, .. },
+                    dims: to_dims,
+                },
+            ) if from_dims == to_dims
+                && std::mem::discriminant(&table.nested_type(a))
+                    == std::mem::discriminant(&table.nested_type(b))
         )
         // A subclass stands in for its PARAMETERIZED supertype:
         // `Box<String> b = new SBox()` where `SBox extends Box<String>`, and
@@ -19435,7 +19469,15 @@ impl BodyGen<'_> {
     /// the element type.
     fn array_and_index(&mut self, array: &Expr, index: &Expr) -> Option<JType> {
         let array_ty = self.expr(array);
-        let Some(element) = array_ty.element_type() else {
+        // A one-dimensional array's element resolves through the table when it
+        // is a NESTED (collection) element, so `buckets[0]` is a `List<E>` and
+        // not `Object` — `element_type` is table-free and can only answer the
+        // erased `read` class.
+        let element = match array_ty {
+            JType::Array { elem, dims: 1 } => Some(elem_value_type(elem, self.table)),
+            other => other.element_type(),
+        };
+        let Some(element) = element else {
             if array_ty != JType::Error {
                 self.error(
                     array.span(),
@@ -19738,7 +19780,14 @@ impl BodyGen<'_> {
             self.for_each_cursor(ty, name, iterable_ty, class, body, span);
             return;
         }
-        let Some(element) = iterable_ty.element_type() else {
+        // A one-dimensional array's element resolves through the table when it
+        // is a NESTED (collection) element, so `for (List<E> l : buckets)`
+        // types its loop variable as the list rather than as `Object`.
+        let element = match iterable_ty {
+            JType::Array { elem, dims: 1 } => Some(elem_value_type(elem, self.table)),
+            other => other.element_type(),
+        };
+        let Some(element) = element else {
             if iterable_ty != JType::Error {
                 self.error(
                     iterable.span(),
@@ -22527,7 +22576,12 @@ impl BodyGen<'_> {
             | Expr::ArrayLiteral { .. }
             | Expr::Lambda { .. }
             | Expr::MethodRef { .. } => JType::Error,
-            Expr::Index { array, .. } => self.type_of(array).element_type().unwrap_or(JType::Error),
+            Expr::Index { array, .. } => match self.type_of(array) {
+                // Mirrors `array_and_index`: a nested element resolves through
+                // the table, or the two paths disagree about `buckets[0]`.
+                JType::Array { elem, dims: 1 } => elem_value_type(elem, self.table),
+                other => other.element_type().unwrap_or(JType::Error),
+            },
             Expr::Field { object, name, .. }
                 if name == "class" && matches!(object.as_ref(), Expr::Name { .. }) =>
             {
@@ -24058,7 +24112,20 @@ impl BodyGen<'_> {
             self.error(span, "generic array creation");
             return JType::Error;
         }
-        let Some(element) = self.table.resolve_type(elem).and_then(elem_type_of) else {
+        // A COLLECTION element (`new List[2]`, `new Map[1]`) is a reference
+        // like any other; its type is interned so reading an element back
+        // gives the collection rather than `Object`. `elem_type_of` cannot do
+        // this — it is a free function with no table to intern into.
+        let resolved = self.table.resolve_type(elem);
+        let element = resolved.and_then(elem_type_of).or_else(|| {
+            resolved
+                .filter(|ty| ty.is_reference())
+                .map(|ty| ElemType::Nested {
+                    inner: self.table.intern_nested(ty),
+                    read: self.table.object_id,
+                })
+        });
+        let Some(element) = element else {
             self.error(span, "unknown array element type");
             return JType::Error;
         };
@@ -24168,6 +24235,20 @@ impl BodyGen<'_> {
             }
             ElemType::Throwable(id) => {
                 let class = intern_class(self.pool, exception_internal(id));
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
+            // `new List[n]` / `new Map[n]` — an array whose element is a
+            // COLLECTION. Its descriptor names that collection's class, so the
+            // elements read back as one rather than as `Object`.
+            ElemType::Nested { inner, .. } => {
+                let inner = self.table.nested_type(inner);
+                let descriptor = inner.descriptor(self.table);
+                let internal = descriptor
+                    .strip_prefix('L')
+                    .and_then(|d| d.strip_suffix(';'))
+                    .map_or_else(|| String::from("java/lang/Object"), String::from);
+                let class = intern_class(self.pool, &internal);
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
@@ -26838,6 +26919,14 @@ impl BodyGen<'_> {
             // A user class that implements `Iterator` assigned to an
             // `Iterator<E>` variable — the same shape, and the same trap.
             (JType::Object(_), JType::Iterator(_)) if widens(from, to, self.table) => {}
+            // An array of a RAW collection assigned to an array of a
+            // PARAMETERIZED one (`List<String>[] a = new List[2]`) — the
+            // unchecked conversion, judged in `widens`. The same trap again:
+            // both gates need the arm, and with only the `widens` half the
+            // message was the nonsense "Object[] cannot be converted to
+            // Object[]" (the two element types describe alike and differ only
+            // in an interned type argument).
+            (JType::Array { .. }, JType::Array { .. }) if widens(from, to, self.table) => {}
             // Two `Optional`s whose elements match by the variance rule (an
             // erased type-variable element accepts any). The two gates again:
             // `widens` allowing it is not enough, this matrix has to agree.

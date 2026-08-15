@@ -22139,6 +22139,140 @@ public class SubListCtor {
 "#
 );
 
+// An array whose element is a COLLECTION — `new List[n]`, the bucket array.
+// It was refused with "arrays are not yet supported by caturra", which a
+// program that had just declared a `String[]` could only read as nonsense: the
+// message is the last-resort arm for a type that does not resolve, and the
+// element was what did not resolve, not the array.
+//
+// Four gates in a row had to learn the same thing, each with its own symptom:
+// the TYPE (else "arrays are not yet supported"), the CREATION opcode (a panic
+// — "reference elements are ANEWARRAY"), the ASSIGNMENT (the unchecked
+// conversion `List<String>[] a = new List[2]`, which is the only way to build
+// one since parameterized array creation is illegal), and the element READ (an
+// indexed access and a for-each variable, which came back as `Object` so
+// `buckets[0].add(x)` found no method).
+//
+// The assignment gate is the one the code had already been burned by: its
+// comment says "this matrix gates separately from `widens`, so both need the
+// arm — the same trap that once left List -> Collection widening
+// half-implemented". With only the `widens` half the message was the nonsense
+// "Object[] cannot be converted to Object[]".
+differential_test!(
+    an_array_of_collections,
+    "BucketArrays",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class BucketArrays {
+    public static void main(String[] args) {
+        @SuppressWarnings("unchecked")
+        List<String>[] arr = new List[2];
+        arr[0] = new ArrayList<>();
+        arr[0].add("x");
+        System.out.println(arr[0]);
+        System.out.println(arr[0].get(0).toUpperCase());
+        System.out.println(arr.length + "," + arr[1]);
+
+        @SuppressWarnings("unchecked")
+        List<String>[] buckets = new List[3];
+        for (int i = 0; i < 3; i++) {
+            buckets[i] = new ArrayList<>();
+        }
+        for (String w : new String[] { "ant", "bee", "cow" }) {
+            buckets[w.length() % 3].add(w);
+        }
+        System.out.println(buckets[0] + "," + buckets[1]);
+        for (List<String> b : buckets) {
+            System.out.println(b);
+        }
+        for (var b : buckets) {
+            System.out.println(b.size());
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Integer>[] maps = new Map[1];
+        maps[0] = new HashMap<>();
+        maps[0].put("k", 1);
+        System.out.println(maps[0]);
+
+        // The ordinary arrays beside it.
+        String[] strings = new String[2];
+        strings[0] = "s";
+        System.out.println(strings[0] + "," + strings[1]);
+        int[][] grid = new int[2][2];
+        grid[1][1] = 5;
+        System.out.println(grid[1][1]);
+        System.out.println(Arrays.toString(new int[] { 1, 2 }));
+        List<List<Integer>> nested = new ArrayList<>();
+        nested.add(new ArrayList<>(Arrays.asList(1, 2)));
+        System.out.println(nested.get(0).get(1));
+    }
+}
+"#
+);
+
+// Storing a PARAMETERIZED collection into a RAW-element array slot
+// (`Map[] raw; raw[0] = new HashMap<String, Integer>()`) is still refused: the
+// raw element resolves to `Map<Object, Object>`, and this pass cannot tell
+// that shape from a written one — allowing it would allow
+// `Map<Object, Object> m = new HashMap<String, Integer>()`, which javac
+// rejects. Before the array-of-collections work the whole program was refused,
+// so this is a narrower limit than it replaces, and the safe direction.
+stricter_than_javac!(
+    stricter_raw_element_array_store,
+    "RawElementStore",
+    r"
+import java.util.HashMap;
+import java.util.Map;
+
+public class RawElementStore {
+    public static void main(String[] args) {
+        Map[] raw = new Map[1];
+        raw[0] = new HashMap<String, Integer>();
+        System.out.println(raw[0]);
+    }
+}
+"
+);
+
+// The unchecked conversion is between arrays of the SAME container kind. An
+// array of lists is no array of maps, and no array of strings.
+differential_reject!(
+    an_array_of_lists_is_not_an_array_of_maps,
+    "ArrayKindMismatch",
+    r"
+import java.util.List;
+import java.util.Map;
+
+public class ArrayKindMismatch {
+    public static void main(String[] args) {
+        Map[] m = new List[2];
+        System.out.println(m.length);
+    }
+}
+"
+);
+
+differential_reject!(
+    an_array_of_lists_is_not_an_array_of_strings,
+    "ArrayNotStrings",
+    r"
+import java.util.List;
+
+public class ArrayNotStrings {
+    public static void main(String[] args) {
+        String[] s = new List[2];
+        System.out.println(s.length);
+    }
+}
+"
+);
+
 // `List<? super Integer>` — a WRAPPER lower bound. The `? super` machinery
 // worked for a user class and for `Object`, and dropped the bound entirely
 // when it named a wrapper, because wrappers are ELEMENTS and not classes in

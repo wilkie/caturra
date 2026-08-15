@@ -4190,6 +4190,38 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### An array of collections (2026-08-14)
+
+`new List[n]` — the bucket array — was refused with "arrays are not yet
+supported by caturra", which a program that had just declared a `String[]`
+could only read as nonsense. That message is the last-resort arm for a type
+that does not resolve, and it was the ELEMENT that did not resolve, not the
+array.
+
+Four gates in a row had to learn the same fact, each with its own symptom:
+
+1. **The type.** An array's element type mapped from a resolved `JType`, with
+   no arm for a collection. Now interned as a `Nested` element, the way
+   `List<List<Integer>>` already was.
+2. **The creation opcode** — a panic, "reference elements are ANEWARRAY". A
+   collection element is a reference; its descriptor names the class.
+3. **The assignment.** `List<String>[] a = new List[2]` is an unchecked
+   conversion, and the only way to build such an array at all, since
+   parameterized array creation is illegal. This is the gate the code had
+   already been burned by: its comment reads "this matrix gates separately from
+   `widens`, so both need the arm — the same trap that once left List ->
+   Collection widening half-implemented". With only the `widens` half the
+   message was the nonsense "Object[] cannot be converted to Object[]".
+4. **The element READ**, both indexed and as a for-each variable, which came
+   back as `Object` — so `buckets[0].add(x)` found no method.
+
+Still refused: storing a PARAMETERIZED collection into a RAW-element slot
+(`Map[] raw; raw[0] = new HashMap<String, Integer>()`). The raw element
+resolves to `Map<Object, Object>` and this pass cannot tell that shape from a
+written one; allowing it would allow `Map<Object, Object> m = new
+HashMap<String, Integer>()`, which javac rejects. The whole program was refused
+before this work, so the limit is narrower than the one it replaces.
+
 ### A wrapper lower bound (2026-08-14)
 
 `List<? super Integer>` accepted only a `List<Object>`. The `? super`
