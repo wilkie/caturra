@@ -22287,6 +22287,64 @@ public class EntryComparatorRef {
 "#
 );
 
+// A DIAMOND takes its type arguments from what it is given, and both paths
+// have to agree about what that is.
+//
+// `new AbstractMap.SimpleEntry<>(k, v)`: the emitter read the key and value
+// off the ARGUMENTS, `type_of` answered the context-adopting `Null`.
+// `new ArrayList<>(m.keySet())`: the reverse — `type_of` asked a shared helper
+// that knows a set and a map view carry elements, the emitter read the element
+// off a `List` alone and answered `Null` for everything else. One helper now,
+// so a `var` declared from either infers what javac infers.
+differential_test!(
+    a_diamond_takes_its_arguments_type,
+    "DiamondSources",
+    r#"
+import java.util.AbstractMap;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.TreeSet;
+
+public class DiamondSources {
+    static String keyOf(AbstractMap.SimpleEntry<String, Integer> e) { return e.getKey(); }
+
+    static AbstractMap.SimpleEntry<String, Integer> made() {
+        return new AbstractMap.SimpleEntry<>("m", 2);
+    }
+
+    public static void main(String[] args) {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("a", 1);
+        m.put("b", 2);
+        var keys = new ArrayList<>(m.keySet());
+        var values = new ArrayList<>(m.values());
+        System.out.println(keys.get(0).toUpperCase() + " " + (values.get(0) + 1));
+        var fromSet = new ArrayList<>(new TreeSet<>(Arrays.asList("z", "a")));
+        System.out.println(fromSet.get(0).toUpperCase());
+        var fromList = new ArrayList<>(Arrays.asList("q"));
+        System.out.println(fromList.get(0).toUpperCase());
+
+        var entry = new AbstractMap.SimpleEntry<>("k", 5);
+        System.out.println(entry.getKey().toUpperCase() + " " + (entry.getValue() + 1));
+        // A `SimpleEntry` could be CONSTRUCTED and not NAMED: the bare nested
+        // name splits at the last dot into a package that does not exist, so
+        // "package AbstractMap does not exist" — about a package that is a
+        // class. It names a type in every position now.
+        AbstractMap.SimpleEntry<String, Integer> declared =
+            new AbstractMap.SimpleEntry<>("j", 6);
+        declared.setValue(7);
+        System.out.println(declared + " " + keyOf(declared) + " " + made());
+        java.util.AbstractMap.SimpleEntry<String, Integer> qualified =
+            new java.util.AbstractMap.SimpleEntry<>("q", 1);
+        System.out.println(qualified);
+        System.out.println(new ArrayList<>(m.entrySet()));
+    }
+}
+"#
+);
+
 // The type of `i++` on a BOXED counter. JLS §15.14.2: the type of a postfix
 // increment is the TYPE OF THE VARIABLE, so `Integer i; i++` is an `Integer`
 // — javac agrees, inferring `Integer` for `var x = i++`.

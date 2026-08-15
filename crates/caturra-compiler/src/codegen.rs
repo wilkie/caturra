@@ -2853,7 +2853,12 @@ impl MethodTable {
             }
             TypeRef::Generic { base, args } => {
                 let mut simple =
-                    crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                // `nested_library_class`, not `canonical_library_class`: a NESTED
+                // library type written bare (`Map.Entry`, `AbstractMap.SimpleEntry`)
+                // splits at the last dot into a package that does not exist, so the
+                // canonical form alone could not see it — `AbstractMap.SimpleEntry`
+                // could be CONSTRUCTED and not NAMED.
+                    crate::imports::nested_library_class(base).unwrap_or(base.as_str());
                 // `List<E>` is the interface form of the ArrayList caturra models.
                 if simple == "List" && !self.has_class("List") {
                     simple = "ArrayList";
@@ -4303,6 +4308,23 @@ fn wrapper_face(elem: Option<ElemType>, class: ClassId, table: &MethodTable) -> 
 
 /// The [`ElemType`] for a base (non-array) type, if it can be an array
 /// element.
+/// The element a COPY CONSTRUCTOR takes from its source collection —
+/// `new ArrayList<>(x)`, `new HashSet<>(x)`. Shared by the emission path and
+/// `type_of`: the emitter read it off a `List` alone, so a set or a map view
+/// source fell back to the context-adopting `Null` while `type_of` had the
+/// element, and the two disagreed about every `new ArrayList<>(m.keySet())`.
+fn copy_element_of(source: JType) -> Option<ElemType> {
+    match source {
+        JType::List(elem)
+        | JType::Set(elem)
+        | JType::TreeSet(elem)
+        | JType::Collection(elem)
+        | JType::Stack(elem)
+        | JType::LinkedList { elem, .. } => Some(elem),
+        _ => None,
+    }
+}
+
 fn elem_type_of(ty: JType) -> Option<ElemType> {
     match ty {
         JType::Int => Some(ElemType::Int),
@@ -6841,7 +6863,10 @@ fn method_descriptor(
                 // about the DOTTED spelling, which is never in the table, so
                 // every qualified use of a bundled interface in a parameter,
                 // return or field type was "unknown generic type".
-                let lookup = crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                // `nested_library_class`: a bare nested name (`Map.Entry`,
+                // `AbstractMap.SimpleEntry`) is invisible to the canonical form,
+                // which splits at the last dot and asks about a package.
+                let lookup = crate::imports::nested_library_class(base).unwrap_or(base.as_str());
                 let mut simple = lookup;
                 if simple == "List" && !table.has_class("List") {
                     simple = "ArrayList";
@@ -16074,15 +16099,8 @@ impl BodyGen<'_> {
         let [source] = args else {
             return None;
         };
-        match self.type_of(source) {
-            JType::List(elem)
-            | JType::Set(elem)
-            | JType::TreeSet(elem)
-            | JType::Collection(elem)
-            | JType::Stack(elem)
-            | JType::LinkedList { elem, .. } => Some(elem),
-            _ => None,
-        }
+        let source_ty = self.type_of(source);
+        copy_element_of(source_ty)
     }
 
     #[allow(clippy::too_many_lines)] // one arm per constructible library type
@@ -16094,7 +16112,7 @@ impl BodyGen<'_> {
             "AbstractMap.SimpleEntry" | "java.util.AbstractMap.SimpleEntry"
         ) && !self.table.has_class("AbstractMap")
         {
-            return self.simple_entry_type(type_args);
+            return self.simple_entry_type(type_args, args);
         }
         let simple = crate::imports::canonical_library_class(class).unwrap_or(class);
         let class = if class.contains('.') { simple } else { class };
@@ -17086,10 +17104,14 @@ impl BodyGen<'_> {
                 // Copy constructor `new ArrayList<>(collection)`: seed the
                 // new list with the source collection's elements.
                 let source_ty = self.expr(source);
-                if elem.is_none()
-                    && let JType::List(source_elem) = source_ty
-                {
-                    elem = Some(source_elem);
+                // The element a copy takes from its source. Reading it off a
+                // `List` only meant `new ArrayList<>(m.keySet())` and every
+                // other view-or-set source answered the context-adopting
+                // `Null`, where `type_of` (which asks the shared
+                // `copy_source_element`) had the element all along. A `var`
+                // declared from one could not infer.
+                if elem.is_none() {
+                    elem = copy_element_of(source_ty);
                 }
                 let init_ref = intern_method_ref(
                     self.pool,
@@ -17154,7 +17176,7 @@ impl BodyGen<'_> {
     /// The static type of `new AbstractMap.SimpleEntry<…>` from its type
     /// arguments alone — `Null` (assignable to any `Map.Entry`) for a
     /// diamond, like the other diamond constructors in `type_of_new_object`.
-    fn simple_entry_type(&mut self, type_args: &[TypeRef]) -> JType {
+    fn simple_entry_type(&mut self, type_args: &[TypeRef], args: &[Expr]) -> JType {
         if let [key, value] = type_args
             && let (Some(key), Some(value)) = (
                 elem_from_type_arg(key, self.table),
@@ -17163,7 +17185,19 @@ impl BodyGen<'_> {
         {
             return JType::MapEntry { key, value };
         }
-        JType::Null
+        // A DIAMOND takes its key and value from the ARGUMENTS, which is what
+        // javac infers and what the emission path answers. Returning `Null`
+        // here — an entry that adopts its context — disagreed with the emitter
+        // about every `new AbstractMap.SimpleEntry<>(k, v)` in the suite.
+        let object = ElemType::Object(self.table.object_id);
+        let (key_ty, value_ty) = match args {
+            [key, value] => (self.type_of(key), self.type_of(value)),
+            _ => return JType::Null,
+        };
+        JType::MapEntry {
+            key: collection_elem_of(key_ty).unwrap_or(object),
+            value: collection_elem_of(value_ty).unwrap_or(object),
+        }
     }
 
     /// `new AbstractMap.SimpleEntry<>(key, value)` — a standalone

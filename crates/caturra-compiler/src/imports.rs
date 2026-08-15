@@ -300,7 +300,15 @@ const REQUIRES_IMPORT: &[&str] = &[
 /// The nested library types the compiler models, as (enclosing simple name,
 /// nested name, the two-part name the compiler uses). `Map.Entry` is the only
 /// one — but a qualified `java.util.Map.Entry` has to reach it.
-const NESTED_LIBRARY_CLASSES: &[(&str, &str, &str)] = &[("Map", "Entry", "Map.Entry")];
+const NESTED_LIBRARY_CLASSES: &[(&str, &str, &str)] = &[
+    ("Map", "Entry", "Map.Entry"),
+    // caturra models an `AbstractMap.SimpleEntry` AS a `Map.Entry` (an entry
+    // over a hidden one-mapping map), so the name resolves to that type. It
+    // could be CONSTRUCTED and not NAMED: `new AbstractMap.SimpleEntry<>(k, v)`
+    // compiled while `AbstractMap.SimpleEntry<K, V> e = …` was "package
+    // AbstractMap does not exist", about a package that is a class.
+    ("AbstractMap", "SimpleEntry", "Map.Entry"),
+];
 
 /// Resolve a fully qualified library name (`java.util.Scanner`) to the
 /// simple name the compiler models. Fully qualified uses never need an

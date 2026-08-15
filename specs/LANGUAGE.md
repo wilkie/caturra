@@ -4190,6 +4190,30 @@ operation and out-of-range index now agree.
 `subList` remains refused: a list VIEW, which is a feature rather than a
 message.
 
+### What a diamond takes its type from (2026-08-15)
+
+The second and third shapes from the suite sweep, both diamonds, and they
+disagreed in opposite directions — which is what kept either from looking
+obviously wrong.
+
+`new AbstractMap.SimpleEntry<>(k, v)`: the emitter read the key and value off
+the ARGUMENTS, `type_of` answered the context-adopting `Null`.
+`new ArrayList<>(m.keySet())`: the reverse — `type_of` asked a helper that
+knows a set and a map view carry elements, while the emitter read the element
+off a `List` alone and answered `Null` for anything else. That helper is now
+one function both call, so a `var` declared from either infers what javac
+infers.
+
+Writing the test for it turned up a fourth thing: a `SimpleEntry` could be
+CONSTRUCTED and not NAMED. `AbstractMap.SimpleEntry<K, V> e = …` was "package
+AbstractMap does not exist" — about a package that is a class. A bare nested
+name splits at its last dot into a package that does not exist, so the
+canonical-name lookup could not see it; `nested_library_class` (added for
+`Map.Entry::getKey`) can, and the type-resolution and descriptor paths both ask
+it now. The type is nameable in every position a program can write.
+
+82 → 51.
+
 ### Sweeping the differential suite for type divergence (2026-08-15)
 
 This file has said for some time that "the corpus and the differential suite
