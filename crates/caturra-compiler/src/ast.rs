@@ -158,6 +158,18 @@ pub struct MethodDecl {
     /// recovering the type argument erasure would otherwise drop. `None` when
     /// the return is not an inferable type variable.
     pub infer_return: Option<Vec<InferSource>>,
+    /// The parameter types AS WRITTEN, before type variables erase. A lambda
+    /// argument's target type is its declared parameter, and for a generic
+    /// method that parameter mentions a type VARIABLE — `<T> int pick(T v,
+    /// Box<T> f)` — which erasure replaces with a wildcard that says nothing
+    /// about which variable it was. Kept so the call site can put the variable
+    /// back; empty when the method declares no type parameters, since nothing
+    /// is lost then.
+    pub declared_params: Vec<TypeRef>,
+    /// How to pin each of the method's own type variables from the ARGUMENTS
+    /// at a call — the same plan `infer_return` holds for the return type,
+    /// computed for every variable rather than just the returned one.
+    pub type_var_sources: Vec<(String, Vec<InferSource>)>,
     pub return_type: TypeRef,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,

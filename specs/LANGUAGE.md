@@ -6120,6 +6120,45 @@ inferred from the OTHER argument at the call, which is machinery caturra has
 for inferring a generic RETURN type and not for a parameter. It has its own
 honest message, and three appearances is the argument for building it next.
 
+### A generic method's lambda argument
+
+`static <T> int pick(T v, Box<T> f)` had its own refusal message — "a
+functional interface parameterized on a method's own type variable is not
+supported by caturra" — and had come up in three separate units before this
+one. Probing the shape directly found it was not a corner: **14 of 15 forms
+failed**, including the library interfaces (`Consumer<T>`, `Predicate<T>`,
+`Function<T, Integer>`, `UnaryOperator<T>`), a variable pinned by a collection
+argument's ELEMENT, a bounded variable, a varargs one, a wildcard bound, a
+method reference in the lambda's place, and a variable belonging to the
+enclosing CLASS rather than the method.
+
+The cause was an ordering one. A lambda argument is target-typed by its
+declared parameter, and by the time the lambda pass runs, erasure has already
+replaced `Box<T>` with a wildcard that no longer says WHICH variable it held —
+so there was nothing left to type the lambda's parameter with. The information
+was destroyed before the pass that needed it.
+
+caturra already computes exactly the right thing for the RETURN type: an
+`infer_return` plan recording where a returned type variable is mentioned among
+the parameters, so a call can recover the argument. That plan is now computed
+for EVERY type variable, not just the returned one, and the parameter types as
+WRITTEN are kept beside the erased ones. At a call, each variable is pinned
+from the arguments — directly, from a collection argument's element, or from a
+varargs argument, which is a `T` itself rather than a container of them — and
+a variable the declaring class owns is pinned from the receiver's own type
+arguments instead.
+
+Substitution is all-or-nothing. A parameter mentioning a variable this call
+could not pin falls back to the erased signature, because a half-substituted
+target reaches codegen as a name nothing declares: the first version of this
+answered "unknown type 'R'", which is a worse reply than the honest erasure.
+
+One form is still out, and it is the one that needs a different mechanism:
+`<T, R> R conv(T v, Function<T, R> f)`, where `R` is pinned only by what the
+lambda BODY returns. javac infers it from the body; caturra types the lambda's
+parameter correctly and leaves the result `Object`, so a call assigned to an
+`Integer` is refused as an incompatible type rather than a missing feature.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

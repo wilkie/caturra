@@ -1399,6 +1399,8 @@ impl Parser<'_> {
                 is_abstract: false,
                 type_params: method_type_params,
                 infer_return: None,
+                declared_params: Vec::new(),
+                type_var_sources: Vec::new(),
                 return_type: TypeRef::Void,
                 params,
                 body: body.unwrap_or_default(),
@@ -1509,6 +1511,8 @@ impl Parser<'_> {
             is_abstract,
             type_params: method_type_params,
             infer_return: None,
+            declared_params: Vec::new(),
+            type_var_sources: Vec::new(),
             return_type: member_type,
             params,
             body: body.unwrap_or_default(),
@@ -4674,6 +4678,8 @@ fn desugar_enum(
             is_abstract: false,
             type_params: Vec::new(),
             infer_return: None,
+            declared_params: Vec::new(),
+            type_var_sources: Vec::new(),
             return_type: TypeRef::Void,
             params: lead_params(),
             body: store_stmts(),
@@ -4731,6 +4737,8 @@ fn desugar_enum(
         is_abstract: false,
         type_params: Vec::new(),
         infer_return: None,
+        declared_params: Vec::new(),
+        type_var_sources: Vec::new(),
         return_type: TypeRef::Named(String::from("Class")),
         params: Vec::new(),
         body: vec![Stmt::Return {
@@ -4766,6 +4774,8 @@ fn desugar_enum(
         is_abstract: false,
         type_params: Vec::new(),
         infer_return: None,
+        declared_params: Vec::new(),
+        type_var_sources: Vec::new(),
         return_type: TypeRef::Int,
         params: vec![Param {
             ty: enum_ty.clone(),
@@ -4812,6 +4822,8 @@ fn desugar_enum(
             is_abstract: false,
             type_params: Vec::new(),
             infer_return: None,
+            declared_params: Vec::new(),
+            type_var_sources: Vec::new(),
             return_type: TypeRef::Array(Box::new(enum_ty.clone())),
             params: Vec::new(),
             body: vec![Stmt::Return {
@@ -4910,6 +4922,8 @@ fn desugar_enum(
             is_abstract: false,
             type_params: Vec::new(),
             infer_return: None,
+            declared_params: Vec::new(),
+            type_var_sources: Vec::new(),
             return_type: enum_ty.clone(),
             params: vec![Param {
                 ty: str_ty,
@@ -5249,6 +5263,8 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
             erase_in_expr(init, &class_erasures, &tracked);
         }
     }
+    let class_type_params: Vec<String> =
+        class.type_params.iter().map(|tp| tp.name.clone()).collect();
     for method in &mut class.methods {
         let (to_object, tracked) = scope(method, synthesized);
         // Record the return-type inference plan BEFORE erasing the types away:
@@ -5256,6 +5272,24 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
         // parameter types, the call site can recover the type argument as the
         // join of those arguments (see `MethodDecl::infer_return`).
         method.infer_return = infer_return_plan(method, &to_object);
+        // …and the same plan for every type VARIABLE the parameters mention,
+        // with the parameter types as written beside it. A lambda argument is
+        // target-typed by its declared parameter, and erasure turns `Box<T>`
+        // into a wildcard that no longer says WHICH variable it held — so a
+        // generic method taking a functional interface could not type its own
+        // lambda. Only recorded for a method that declares type parameters;
+        // for every other method nothing is lost by erasing.
+        if !method.type_params.is_empty() || !class_type_params.is_empty() {
+            method.declared_params = method.params.iter().map(|p| p.ty.clone()).collect();
+            method.type_var_sources = method
+                .type_params
+                .iter()
+                .filter_map(|tp| {
+                    let sources = variable_sources(method, &tp.name);
+                    (!sources.is_empty()).then(|| (tp.name.clone(), sources))
+                })
+                .collect();
+        }
         erase_in_type_mode(&mut method.return_type, &to_object, &tracked, true);
         for param in &mut method.params {
             erase_in_type(&mut param.ty, &to_object, &tracked);
@@ -5277,6 +5311,38 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
 /// type of the parameters at `indices`. The call site joins those arguments'
 /// types to recover the type argument. A type variable that constrains no
 /// parameter (`<T> T empty()`) cannot be inferred, so it yields `None`.
+/// Where a method's own type VARIABLE is pinned by its parameters: the same
+/// reading `infer_return_plan` does for the returned variable, for any one.
+fn variable_sources(method: &MethodDecl, var: &str) -> Vec<crate::ast::InferSource> {
+    use crate::ast::InferSource;
+    method
+        .params
+        .iter()
+        .enumerate()
+        .filter_map(|(index, p)| match &p.ty {
+            TypeRef::Named(name) if name == var => Some(InferSource::Direct(index)),
+            // A container OF it (`List<T> xs`): the argument's ELEMENT pins it.
+            TypeRef::Generic { args, .. } => match args.as_slice() {
+                [TypeRef::Named(name)] if name == var => Some(InferSource::Element(index)),
+                // `List<? extends T>` / `Consumer<? super T>`: the variable
+                // is the wildcard's BOUND, and a wildcard is written as an
+                // encoded name rather than a type of its own.
+                [TypeRef::Named(name)] => crate::ast::wildcard_parts(name)
+                    .filter(|(_, bound)| *bound == var)
+                    .map(|_| InferSource::Element(index)),
+                _ => None,
+            },
+            // `T...` — the ARGUMENT at that position is a `T` itself, not a
+            // container of them, so it pins the variable directly.
+            TypeRef::Array(inner) => match inner.as_ref() {
+                TypeRef::Named(name) if name == var => Some(InferSource::Direct(index)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 fn infer_return_plan(
     method: &MethodDecl,
     erasures: &std::collections::HashMap<String, TypeRef>,
@@ -6009,6 +6075,8 @@ fn simple_return_method(
         is_abstract: false,
         type_params: Vec::new(),
         infer_return: None,
+        declared_params: Vec::new(),
+        type_var_sources: Vec::new(),
         return_type,
         params: Vec::new(),
         body: vec![Stmt::Return {

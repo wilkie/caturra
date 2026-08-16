@@ -30897,3 +30897,93 @@ public class UserFunctional {
 }
 "#
 );
+
+// A GENERIC method taking a functional interface — `<T> int pick(T v, Box<T> f)`
+// — which had its own refusal message and had come up in three separate units.
+// The lambda's target is its declared parameter, and erasure had already turned
+// `Box<T>` into a wildcard that no longer said WHICH variable it held, so there
+// was nothing left to type `s` with. The parameter types as WRITTEN are now
+// kept beside the erased ones, with a plan for pinning each variable from the
+// other arguments — the same plan the return type has used all along, computed
+// for every variable rather than just the returned one.
+differential_test!(
+    a_generic_method_types_its_lambda,
+    "GenericLambdaParam",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+interface Box<T> {
+    int of(T value);
+}
+
+class Holder<T> {
+    private final List<T> items = new ArrayList<>();
+
+    void add(T item) {
+        items.add(item);
+    }
+
+    void each(Consumer<T> action) {
+        for (T item : items) {
+            action.accept(item);
+        }
+    }
+}
+
+public class GenericLambdaParam {
+    static <T> int pick(T value, Box<T> f) { return f.of(value); }
+    static <T> int pickFirst(Box<T> f, T value) { return f.of(value); }
+    static <T> void each(List<T> l, Consumer<T> c) { for (T t : l) c.accept(t); }
+    static <T> int len(T v, Function<T, Integer> f) { return f.apply(v); }
+    static <T> boolean any(List<T> l, Predicate<T> p) {
+        for (T t : l) {
+            if (p.test(t)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    static <T> T twice(T v, UnaryOperator<T> f) { return f.apply(f.apply(v)); }
+    static <T> void feed(List<T> l, Consumer<? super T> c) { for (T t : l) c.accept(t); }
+    static <T> long count(List<T> l, Predicate<T> p) { return l.stream().filter(p).count(); }
+    static <T extends CharSequence> int size(T v, Box<T> f) { return f.of(v); }
+    static <T> int both(T a, T b, Box<T> f) { return f.of(a) + f.of(b); }
+    @SafeVarargs
+    static <T> int firstLen(Box<T> f, T... vs) { return f.of(vs[0]); }
+    static <T> int deep(List<T> l, Box<List<T>> f) { return f.of(l); }
+
+    public static void main(String[] args) {
+        // The variable is pinned by ANOTHER argument, before or after.
+        System.out.println(pick("abc", s -> s.length()));
+        System.out.println(pickFirst(s -> s.length(), "abcd"));
+        // …by a method reference in the same position.
+        System.out.println(pick("abcde", String::length));
+        // …by a collection argument's ELEMENT.
+        each(new ArrayList<>(Arrays.asList("a", "b")), s -> System.out.print(s.toUpperCase()));
+        System.out.println();
+        System.out.println(any(new ArrayList<>(Arrays.asList("", "x")), s -> s.isEmpty()));
+        System.out.println(count(new ArrayList<>(Arrays.asList("a", "")), s -> s.isEmpty()));
+        // …through a WILDCARD bound.
+        feed(new ArrayList<>(Arrays.asList("w")), s -> System.out.print(s));
+        System.out.println();
+        // …by a VARARGS argument, which is a `T` itself rather than a container.
+        System.out.println(firstLen(s -> s.length(), "abcdef"));
+        // …by two arguments at once, and under a bound.
+        System.out.println(both("ab", "cde", s -> s.length()));
+        System.out.println(size("abcde", s -> s.length()));
+        // …with the variable NESTED in the parameter's own type argument.
+        System.out.println(deep(new ArrayList<>(Arrays.asList("a", "b")), x -> x.size()));
+        // …and by the library interfaces, not only a user one.
+        System.out.println(len("abcde", s -> s.length()));
+        System.out.println(twice("a", s -> s + "!"));
+
+        // A variable the CLASS declares, pinned by the RECEIVER.
+        Holder<String> holder = new Holder<>();
+        holder.add("q");
+        holder.each(s -> System.out.print(s.toUpperCase()));
+        System.out.println();
+    }
+}
+"#
+);

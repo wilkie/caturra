@@ -30,6 +30,7 @@ struct Sam {
 /// see: generic type arguments are erased before codegen, so a pre-built
 /// function variable whose declared arguments don't fit the call is checked
 /// here, where the declaration is still visible.
+#[allow(clippy::too_many_lines)] // one context build per walked scope
 pub fn desugar_lambdas(
     units: &mut [(String, CompilationUnit)],
 ) -> Vec<crate::diagnostics::Diagnostic> {
@@ -38,6 +39,7 @@ pub fn desugar_lambdas(
     // Signatures for single-candidate method-argument target typing.
     let methods = method_signatures(units);
     let methods_in_class = method_signatures_by_class(units);
+    let generics = generic_signatures(units);
     // Constructor signatures per class, for `new T(…, lambda)` target typing.
     let constructors = constructor_signatures(units);
     let static_methods = static_method_names(units);
@@ -92,6 +94,7 @@ pub fn desugar_lambdas(
                     sams: &sams,
                     methods: &methods,
                     methods_in_class: &methods_in_class,
+                    generics: &generics,
                     constructors: &constructors,
                     static_methods: &static_methods,
                     class_names: &class_names,
@@ -118,6 +121,7 @@ pub fn desugar_lambdas(
                         sams: &sams,
                         methods: &methods,
                         methods_in_class: &methods_in_class,
+                        generics: &generics,
                         constructors: &constructors,
                         static_methods: &static_methods,
                         class_names: &class_names,
@@ -153,6 +157,9 @@ struct Ctx<'a> {
     /// known — the name-only map cannot separate two interfaces that declare
     /// one method name with different parameter types.
     methods_in_class: &'a HashMap<(String, String), Vec<Vec<TypeRef>>>,
+    /// Generic methods' parameter types as WRITTEN, for putting a type
+    /// variable back into a lambda argument's target type.
+    generics: &'a HashMap<String, Vec<GenericSig>>,
     /// Class name -> its constructors' parameter-type lists, for target
     /// typing a lambda passed to `new T(…)`.
     constructors: &'a HashMap<String, Vec<Vec<TypeRef>>>,
@@ -649,6 +656,215 @@ fn functional_erased_name(simple: &str) -> Option<String> {
         "Runnable" => "__Runnable",
         _ => return None,
     }))
+}
+
+/// A generic method's parameter types AS WRITTEN, with the plan for pinning
+/// each of its type variables from the arguments. Keyed by (class, name) and
+/// by name, like the erased signatures beside it.
+#[derive(Clone)]
+struct GenericSig {
+    params: Vec<TypeRef>,
+    /// Every type variable in scope for the declaration. A parameter that
+    /// mentions one this call could not pin is left to the ERASED signature:
+    /// a half-substituted target reaches codegen as a name nothing declares
+    /// ("unknown type 'R'"), which is a worse answer than the erasure.
+    vars: Vec<String>,
+    sources: Vec<(String, Vec<crate::ast::InferSource>)>,
+    /// The type parameters of the DECLARING class, so a variable the class
+    /// owns can be pinned from the receiver's own type arguments instead.
+    class_params: Vec<String>,
+}
+
+fn generic_signatures(units: &[(String, CompilationUnit)]) -> HashMap<String, Vec<GenericSig>> {
+    let mut out: HashMap<String, Vec<GenericSig>> = HashMap::new();
+    for (_, unit) in units {
+        for class in &unit.classes {
+            let class_params: Vec<String> =
+                class.type_params.iter().map(|tp| tp.name.clone()).collect();
+            for method in &class.methods {
+                if method.is_constructor || method.declared_params.is_empty() {
+                    continue;
+                }
+                let mut vars: Vec<String> = method
+                    .type_params
+                    .iter()
+                    .map(|tp| tp.name.clone())
+                    .collect();
+                vars.extend(class_params.iter().cloned());
+                out.entry(method.name.clone())
+                    .or_default()
+                    .push(GenericSig {
+                        params: method.declared_params.clone(),
+                        sources: method.type_var_sources.clone(),
+                        class_params: class_params.clone(),
+                        vars,
+                    });
+            }
+            // A method of a GENERIC CLASS that mentions the class's own
+            // variable — `class Holder<T> { void each(Consumer<T> c) }`. It
+            // declares no type parameters of its own, so nothing above records
+            // it, and the receiver is what pins `T`.
+            if class_params.is_empty() {
+                continue;
+            }
+            for method in &class.methods {
+                if method.is_constructor || !method.declared_params.is_empty() {
+                    continue;
+                }
+                let written: Vec<TypeRef> = method.params.iter().map(|p| p.ty.clone()).collect();
+                if written.iter().any(|ty| mentions_any(ty, &class_params)) {
+                    out.entry(method.name.clone())
+                        .or_default()
+                        .push(GenericSig {
+                            params: written,
+                            sources: Vec::new(),
+                            class_params: class_params.clone(),
+                            vars: class_params.clone(),
+                        });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether a written type mentions any of `names` as a type argument or as
+/// itself.
+fn mentions_any(ty: &TypeRef, names: &[String]) -> bool {
+    match ty {
+        TypeRef::Named(name) => names.iter().any(|n| n == name),
+        TypeRef::Generic { base, args } => {
+            names.iter().any(|n| n == base) || args.iter().any(|a| mentions_any(a, names))
+        }
+        TypeRef::Array(inner) => mentions_any(inner, names),
+        _ => false,
+    }
+}
+
+/// The target type for each argument of a call to a GENERIC method, with the
+/// method's type variables pinned from the arguments (and, for a variable the
+/// declaring class owns, from the receiver's own type arguments). `None` where
+/// a variable could not be pinned, so the caller falls back to the erased
+/// signature.
+fn generic_argument_targets(
+    method: &str,
+    receiver: Option<&Expr>,
+    args: &[Expr],
+    ctx: &Ctx,
+) -> Option<Vec<Option<TypeRef>>> {
+    use crate::ast::InferSource;
+    let sigs = ctx.generics.get(method)?;
+    let mut matching = sigs.iter().filter(|sig| sig.params.len() == args.len());
+    let sig = matching.next()?;
+    // More than one generic method of this name and arity: which one applies
+    // is an overload question this pass cannot answer, so it answers none.
+    if matching.next().is_some() {
+        return None;
+    }
+    let mut bound: HashMap<String, TypeRef> = HashMap::new();
+    for (var, sources) in &sig.sources {
+        let pinned = sources.iter().find_map(|source| match source {
+            InferSource::Direct(index) => static_type_of(args.get(*index)?, ctx),
+            InferSource::Element(index) => list_elem_type(args.get(*index)?, ctx),
+        });
+        if let Some(pinned) = pinned {
+            bound.insert(var.clone(), pinned);
+        }
+    }
+    // A variable the CLASS declares is pinned by the receiver: `Holder<String>
+    // h; h.each(c)` gives `T` = String, and no argument mentions it at all.
+    if !sig.class_params.is_empty()
+        && let Some(TypeRef::Generic { args: written, .. }) =
+            receiver.and_then(|r| static_type_of(r, ctx))
+    {
+        for (name, actual) in sig.class_params.iter().zip(written) {
+            bound.entry(name.clone()).or_insert(actual);
+        }
+    }
+    if bound.is_empty() {
+        return None;
+    }
+    Some(
+        sig.params
+            .iter()
+            .map(|declared| substitute_vars(declared, &bound, &sig.vars))
+            .collect(),
+    )
+}
+
+/// A written type with every bound variable replaced. `None` when a variable
+/// it mentions was not pinned — a partly-substituted target is worse than none,
+/// since the unbound half would reach codegen as a name nothing declares.
+fn substitute_vars(
+    ty: &TypeRef,
+    bound: &HashMap<String, TypeRef>,
+    vars: &[String],
+) -> Option<TypeRef> {
+    match ty {
+        TypeRef::Named(name) => {
+            if let Some(actual) = bound.get(name) {
+                return Some(actual.clone());
+            }
+            // A wildcard's bound may itself be the variable
+            // (`Consumer<? super T>`); the wildcard is an encoded NAME, so
+            // rewriting it is a name rewrite.
+            if let Some((_, inner)) = crate::ast::wildcard_parts(name) {
+                return match bound.get(inner) {
+                    Some(actual) => Some(actual.clone()),
+                    None if vars.iter().any(|v| v == inner) => None,
+                    None => Some(ty.clone()),
+                };
+            }
+            if vars.iter().any(|v| v == name) {
+                return None;
+            }
+            Some(ty.clone())
+        }
+        TypeRef::Generic { base, args } => {
+            let args: Option<Vec<TypeRef>> = args
+                .iter()
+                .map(|a| substitute_vars(a, bound, vars))
+                .collect();
+            Some(TypeRef::Generic {
+                base: base.clone(),
+                args: args?,
+            })
+        }
+        TypeRef::Array(inner) => Some(TypeRef::Array(Box::new(substitute_vars(
+            inner, bound, vars,
+        )?))),
+        other => Some(other.clone()),
+    }
+}
+
+/// The declared type of an expression, for the shapes this pass can see. Used
+/// to pin a type variable from an argument at a call.
+fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    use crate::ast::Literal;
+    match expr {
+        Expr::Literal { value, .. } => Some(TypeRef::Named(String::from(match value {
+            Literal::Str(_) => "String",
+            Literal::Int(_) => "Integer",
+            Literal::Long(_) => "Long",
+            Literal::Double(_) => "Double",
+            Literal::Float(_) => "Float",
+            Literal::Char(_) => "Character",
+            Literal::Bool(_) => "Boolean",
+            Literal::Null => return None,
+        }))),
+        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0]),
+        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+            ctx.lookup(name)
+        }
+        Expr::Cast { ty, .. } => Some(ty.clone()),
+        Expr::NewObject {
+            class, type_args, ..
+        } if !type_args.is_empty() => Some(TypeRef::Generic {
+            base: class.clone(),
+            args: type_args.clone(),
+        }),
+        _ => None,
+    }
 }
 
 fn method_signatures_by_class(
@@ -1623,8 +1839,17 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     .all(|params| params == first)
                     .then(|| first.clone())
             });
+            // A GENERIC method's lambda argument is target-typed by its
+            // declared parameter with the type variables PUT BACK: erasure
+            // turned `Box<T>` into a wildcard that no longer says which
+            // variable it held, so `pick("abc", s -> s.length())` had no
+            // element for `s` and was refused outright.
+            let substituted = generic_argument_targets(method, receiver.as_deref(), args, ctx);
             for (index, arg) in args.iter_mut().enumerate() {
-                let expected = param_types.as_ref().map(|types| types[index].clone());
+                let expected = substituted
+                    .as_ref()
+                    .and_then(|types| types[index].clone())
+                    .or_else(|| param_types.as_ref().map(|types| types[index].clone()));
                 desugar_expr(arg, expected.as_ref(), ctx);
             }
         }
@@ -1928,6 +2153,8 @@ fn super_bridge(
         is_abstract: false,
         type_params: Vec::new(),
         infer_return: None,
+        declared_params: Vec::new(),
+        type_var_sources: Vec::new(),
         return_type,
         params,
         body,
@@ -3842,6 +4069,8 @@ fn build_erased_lambda(
             is_abstract: false,
             type_params: Vec::new(),
             infer_return: None,
+            declared_params: Vec::new(),
+            type_var_sources: Vec::new(),
             return_type: ret.clone(),
             params: erased,
             body: method_body,
@@ -4094,6 +4323,8 @@ fn build_lambda_class(
         is_abstract: false,
         type_params: Vec::new(),
         infer_return: None,
+        declared_params: Vec::new(),
+        type_var_sources: Vec::new(),
         return_type: sam.ret.clone(),
         params: method_params,
         body: method_body,

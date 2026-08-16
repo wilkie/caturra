@@ -129,6 +129,8 @@ fn add_outer_binding(class: &mut ClassDecl, outer: &str) {
             is_abstract: false,
             type_params: Vec::new(),
             infer_return: None,
+            declared_params: Vec::new(),
+            type_var_sources: Vec::new(),
             return_type: TypeRef::Void,
             params: vec![param()],
             body: vec![store()],

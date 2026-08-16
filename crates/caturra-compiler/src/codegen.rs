@@ -209,6 +209,8 @@ fn emit_class(
             is_abstract: false,
             type_params: Vec::new(),
             infer_return: None,
+            declared_params: Vec::new(),
+            type_var_sources: Vec::new(),
             return_type: TypeRef::Void,
             params: Vec::new(),
             body: Vec::new(),

@@ -225,6 +225,8 @@ fn build_bridge(method: &MethodDecl, inherited: &MethodDecl) -> MethodDecl {
         is_abstract: false,
         type_params: Vec::new(),
         infer_return: None,
+        declared_params: Vec::new(),
+        type_var_sources: Vec::new(),
         // The bridge keeps the INHERITED return type, so a call through the
         // supertype sees the descriptor it expects.
         return_type: inherited.return_type.clone(),
