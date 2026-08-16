@@ -5810,6 +5810,65 @@ parameterized on a METHOD's own type variable (`static <T, R> R applyIt(
 Function<T, R> f, T v)`), which is a generics limit rather than a
 `java.util.function` one.
 
+### What a library object says it IS
+
+`getClass()` on a library object answered `java.lang.Object` for every
+collection VIEW (`keySet`, `values`, `entrySet`), every map ENTRY, every
+immutable factory result (`List.of`, `Set.of`, `Map.of`, `copyOf`), every
+`Collections` wrapper (`emptyList`, `singletonList`, `unmodifiableList` and
+friends), every comparator built by a factory, and every collector. An
+`Arrays.asList` said `java.util.ArrayList`, which is a different lie: those two
+share a name and nothing else, and which one a program holds decides whether
+`add` throws.
+
+A program reads this three ways, and only the first is obvious:
+
+1. `getClass().getName()` / `getSimpleName()`, and the class-identity idiom
+   (`a.getClass() == b.getClass()`).
+2. The `ArrayStoreException` a bad array store raises, which NAMES the value's
+   class.
+3. The `ClassCastException` a failed cast raises, which names it too — and
+   whose module parenthetical depends on the name (`java.*` is "module
+   java.base of loader 'bootstrap'").
+
+The last two had their own namer, which knew about instances, strings and
+arrays and nothing else — so casting any library object read "class <object>
+cannot be cast to …". Both now go through the same function `getClass()` uses,
+which is the half of the fix that keeps them from drifting apart again.
+
+The names are JDK 11's own, and several are not constant for a given method:
+
+- `List.of` is `ImmutableCollections$List12` for one or two elements and
+  `$ListN` otherwise (an EMPTY one is `ListN`); `Set.of` likewise; a map has
+  its own `Map1` only for a single pair.
+- A `LinkedHashMap`'s views are `LinkedKeySet`/`LinkedValues`/`LinkedEntrySet`
+  where a `HashMap`'s are `KeySet`/`Values`/`EntrySet`, and its entry is
+  `Entry` where a `HashMap`'s is `Node`.
+- `unmodifiableList` picks `UnmodifiableRandomAccessList` or
+  `UnmodifiableList` by whether what it wraps is `RandomAccess`.
+
+Since one `UnmodifiableList` wrapper stands for `emptyList`, `singletonList`,
+`List.of` and `unmodifiableList` alike, which class each is gets recorded per
+view when it is built — beside the index style, which is there for the same
+reason.
+
+Three left as recorded divergences rather than guesses:
+
+- **A stream.** A JDK names a pipeline after its LAST operation and its element
+  family (`ReferencePipeline$3` for a mapped object stream, `IntPipeline$9` for
+  a filtered int one). caturra's single `Stream` object does not record which
+  family it is, and inventing one would replace a known wrong answer with a new
+  one.
+- **A comparator built from a lambda.** A JDK names it after the lambda's
+  ADDRESS (`Comparator$$Lambda$3/0x0000000840066040`), which differs between
+  runs of the JDK itself. `naturalOrder`/`reverseOrder` have real classes and
+  are modelled.
+- **`new Random()`** reports `Random` rather than `java.util.Random`, because a
+  bundled library class is compiled as an ordinary class under its simple name
+  and the VM cannot tell it from a user class of that name — and a user class
+  called `Random` reports `Random` correctly today. Renaming by name alone
+  would break the case that works to fix the one that does not.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

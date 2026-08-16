@@ -156,6 +156,15 @@ pub(crate) struct Interpreter<'run> {
     /// (`Index: 0`) — messages a program can print, so they are recorded per
     /// view rather than guessed from the wrapper.
     view_index_style: HashMap<HeapRef, IndexStyle>,
+    /// The JDK class a WRAPPED collection reports. caturra builds
+    /// `emptyList()`, `singletonList(x)`, `List.of(...)` and
+    /// `unmodifiableList(l)` out of the same `UnmodifiableList` wrapper, and a
+    /// JDK gives each its own class — which a program sees through
+    /// `getClass()`, through the default `toString` of anything that does not
+    /// override it, and inside a `ClassCastException` message. Recorded per
+    /// view at construction, like the index style beside it, because the
+    /// wrapper itself cannot tell them apart.
+    view_class: HashMap<HeapRef, &'static str>,
     /// Streams whose pipeline has already been used — a stream is SINGLE-USE
     /// (JDK: "stream has already been operated upon or closed"), and both a
     /// terminal and an intermediate op spend it. Held aside rather than in the
@@ -251,6 +260,7 @@ impl<'run> Interpreter<'run> {
             map_views: HashMap::new(),
             checked_cursor_views: std::collections::HashSet::new(),
             view_index_style: HashMap::new(),
+            view_class: HashMap::new(),
             spent_streams: std::collections::HashSet::new(),
             stream_origins: HashMap::new(),
         }
@@ -1995,32 +2005,17 @@ impl<'run> Interpreter<'run> {
                             } else {
                                 // checkcast: null always passes; a mismatch throws.
                                 if reference.is_some() && !matches_type {
-                                    let actual = reference
-                                        .and_then(|r| {
-                                            intrinsics::array_class_name(&self.heap, r).or_else(
-                                                || match self.heap.get(r) {
-                                                    // A wrapper names itself like an
-                                                    // instance does, or the failed cast
-                                                    // reads "class <object> cannot be
-                                                    // cast to ...".
-                                                    Some(
-                                                        crate::value::HeapObject::Instance {
-                                                            class_name,
-                                                            ..
-                                                        }
-                                                        | crate::value::HeapObject::Boxed {
-                                                            class_name,
-                                                            ..
-                                                        },
-                                                    ) => Some(class_name.to_string()),
-                                                    Some(crate::value::HeapObject::JavaString(
-                                                        _,
-                                                    )) => Some(String::from("java/lang/String")),
-                                                    _ => None,
-                                                },
-                                            )
-                                        })
-                                        .unwrap_or_else(|| String::from("<object>"));
+                                    // The SAME namer `getClass()` uses. Written
+                                    // out separately here, it knew about
+                                    // instances and strings and nothing else,
+                                    // so casting any library object read
+                                    // "class <object> cannot be cast to …" —
+                                    // and every collection view and immutable
+                                    // factory result is a library object.
+                                    let actual = reference.map_or_else(
+                                        || String::from("<object>"),
+                                        |r| self.object_class_name(r),
+                                    );
                                     return Err(class_cast_error(&actual, &target));
                                 }
                                 frame.stack.push(JValue::Ref(reference));
@@ -3776,10 +3771,9 @@ impl<'run> Interpreter<'run> {
         let JValue::Ref(Some(value_ref)) = value else {
             return Ok(());
         };
-        let named = self
-            .heap
-            .get(value_ref)
-            .map_or_else(|| String::from("java.lang.Object"), heap_object_binary_name);
+        // The same namer `getClass()` uses, so a view or an immutable
+        // collection is named here as it is there rather than `java.lang.Object`.
+        let named = self.object_class_name(value_ref).replace('/', ".");
         Err(VmError::UncaughtException(format!(
             "java.lang.ArrayStoreException: {named}"
         )))
@@ -4283,6 +4277,8 @@ impl<'run> Interpreter<'run> {
             ("emptyList", []) => {
                 let empty = self.heap.alloc(HeapObject::ArrayList(Vec::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableList(empty));
+                self.view_class
+                    .insert(view, "java/util/Collections$EmptyList");
                 self.view_index_style.insert(view, IndexStyle::IndexOnly);
                 // The `empty*` factories share one `EmptyIterator`, whose
                 // `remove` is an IllegalStateException, not a refusal.
@@ -4294,6 +4290,8 @@ impl<'run> Interpreter<'run> {
             ("singletonList", [value]) => {
                 let inner = self.heap.alloc(HeapObject::ArrayList(vec![*value]));
                 let view = self.heap.alloc(HeapObject::UnmodifiableList(inner));
+                self.view_class
+                    .insert(view, "java/util/Collections$SingletonList");
                 self.view_index_style.insert(view, IndexStyle::WithSize);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
@@ -4328,6 +4326,8 @@ impl<'run> Interpreter<'run> {
                     .heap
                     .alloc(HeapObject::HashSet(crate::map::JavaHashMap::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableSet(inner));
+                self.view_class
+                    .insert(view, "java/util/Collections$EmptySet");
                 self.checked_cursor_views.insert(view);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
@@ -4337,6 +4337,8 @@ impl<'run> Interpreter<'run> {
                     .heap
                     .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableMap(inner));
+                self.view_class
+                    .insert(view, "java/util/Collections$EmptyMap");
                 self.checked_cursor_views.insert(view);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
@@ -4347,6 +4349,8 @@ impl<'run> Interpreter<'run> {
                     .alloc(HeapObject::HashSet(crate::map::JavaHashMap::new()));
                 self.set_add(inner, *element)?;
                 let view = self.heap.alloc(HeapObject::UnmodifiableSet(inner));
+                self.view_class
+                    .insert(view, "java/util/Collections$SingletonSet");
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
@@ -4356,6 +4360,8 @@ impl<'run> Interpreter<'run> {
                     .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
                 self.map_put(inner, *key, *value)?;
                 let view = self.heap.alloc(HeapObject::UnmodifiableMap(inner));
+                self.view_class
+                    .insert(view, "java/util/Collections$SingletonMap");
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
@@ -4366,17 +4372,45 @@ impl<'run> Interpreter<'run> {
             return Ok(false);
         };
         if method_name == "unmodifiableList" {
+            // The JDK picks the wrapper by whether the wrapped list is
+            // `RandomAccess`: an ArrayList gets
+            // `UnmodifiableRandomAccessList`, a LinkedList the plain one.
+            let random_access = !matches!(self.heap.get(list), Some(HeapObject::LinkedList(_)));
             let view = self.heap.alloc(HeapObject::UnmodifiableList(list));
+            self.view_class.insert(
+                view,
+                if random_access {
+                    "java/util/Collections$UnmodifiableRandomAccessList"
+                } else {
+                    "java/util/Collections$UnmodifiableList"
+                },
+            );
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
         if method_name == "unmodifiableSet" || method_name == "unmodifiableSortedSet" {
             let view = self.heap.alloc(HeapObject::UnmodifiableSet(list));
+            self.view_class.insert(
+                view,
+                if method_name == "unmodifiableSet" {
+                    "java/util/Collections$UnmodifiableSet"
+                } else {
+                    "java/util/Collections$UnmodifiableSortedSet"
+                },
+            );
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
         if method_name == "unmodifiableMap" || method_name == "unmodifiableSortedMap" {
             let view = self.heap.alloc(HeapObject::UnmodifiableMap(list));
+            self.view_class.insert(
+                view,
+                if method_name == "unmodifiableMap" {
+                    "java/util/Collections$UnmodifiableMap"
+                } else {
+                    "java/util/Collections$UnmodifiableSortedMap"
+                },
+            );
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
@@ -4390,6 +4424,9 @@ impl<'run> Interpreter<'run> {
                 HeapObject::UnmodifiableSet(list)
             };
             let view = self.heap.alloc(view);
+            // Whichever wrapper it needed, the CLASS is the Collection one.
+            self.view_class
+                .insert(view, "java/util/Collections$UnmodifiableCollection");
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
@@ -6498,10 +6535,32 @@ impl<'run> Interpreter<'run> {
                 "java.lang.NullPointerException",
             )));
         }
+        // `ImmutableCollections` picks its class by SIZE: one or two elements
+        // get the packed `List12`/`Set12`/`Map1`, anything else the general
+        // `ListN`/`SetN`/`MapN`. A program reads the difference through
+        // `getClass()`, so the view records which it is.
+        // ONE or TWO elements get the packed class; zero does not — an empty
+        // `Set.of()` is a `SetN`, not a `Set12`. A map counts PAIRS, and only
+        // a single-pair map has its own class (`Map1`).
+        let small = if kind == "__mapOf" {
+            items.len() == 2
+        } else {
+            items.len() == 1 || items.len() == 2
+        };
         Ok(match kind {
             "__listOf" => {
+                let count = items.len();
                 let backing = self.heap.alloc(HeapObject::ArrayList(items));
-                self.heap.alloc(HeapObject::UnmodifiableList(backing))
+                let view = self.heap.alloc(HeapObject::UnmodifiableList(backing));
+                self.view_class.insert(
+                    view,
+                    if count == 1 || count == 2 {
+                        "java/util/ImmutableCollections$List12"
+                    } else {
+                        "java/util/ImmutableCollections$ListN"
+                    },
+                );
+                view
             }
             "__setOf" => {
                 let backing = self.heap.alloc(HeapObject::HashSet(
@@ -6519,7 +6578,16 @@ impl<'run> Interpreter<'run> {
                     }
                     self.map_put(backing, item, JValue::NULL)?;
                 }
-                self.heap.alloc(HeapObject::UnmodifiableSet(backing))
+                let view = self.heap.alloc(HeapObject::UnmodifiableSet(backing));
+                self.view_class.insert(
+                    view,
+                    if small {
+                        "java/util/ImmutableCollections$Set12"
+                    } else {
+                        "java/util/ImmutableCollections$SetN"
+                    },
+                );
+                view
             }
             _ => {
                 let backing = self.heap.alloc(HeapObject::HashMap(
@@ -6535,7 +6603,16 @@ impl<'run> Interpreter<'run> {
                     }
                     self.map_put(backing, *key, *value)?;
                 }
-                self.heap.alloc(HeapObject::UnmodifiableMap(backing))
+                let view = self.heap.alloc(HeapObject::UnmodifiableMap(backing));
+                self.view_class.insert(
+                    view,
+                    if small {
+                        "java/util/ImmutableCollections$Map1"
+                    } else {
+                        "java/util/ImmutableCollections$MapN"
+                    },
+                );
+                view
             }
         })
     }
@@ -10310,6 +10387,10 @@ impl<'run> Interpreter<'run> {
                 // `AbstractMap.SimpleEntry` is a mutable standalone entry.
                 read_only: false,
             });
+            // It is NOT one of a map's own entries, so it does not answer that
+            // map's inner `Node` class even though one backs it here.
+            self.view_class
+                .insert(entry, "java/util/AbstractMap$SimpleEntry");
             frame.stack.push(JValue::Ref(Some(entry)));
             return Ok(None);
         }
@@ -11569,7 +11650,12 @@ impl<'run> Interpreter<'run> {
 
         // An unmodifiable view refuses every mutator and forwards the rest to
         // the list it wraps, so `size`, `get` and `toString` read through.
-        let receiver = if self.is_unmodifiable_list(receiver) {
+        // ...but NOT `getClass`, which asks about the WRAPPER: a JDK's
+        // `unmodifiableList(l)` is a `Collections$UnmodifiableRandomAccessList`
+        // and forwarding made it answer the ArrayList inside. `equals`,
+        // `hashCode` and `toString` do forward, because a JDK's wrapper
+        // delegates those.
+        let receiver = if self.is_unmodifiable_list(receiver) && method_name != "getClass" {
             // `Collections.emptyList().sort(cmp)` and `singletonList(x).sort(cmp)`
             // are fine in a JDK: those classes override `sort` to do nothing,
             // since nothing can move. Only a longer immutable list refuses.
@@ -12153,6 +12239,53 @@ impl<'run> Interpreter<'run> {
         }
     }
 
+    /// The class of a map's `keySet`/`values`/`entrySet` view, or of one of
+    /// its entries — all INNER classes of the map that made them, so a
+    /// `LinkedHashMap`'s keySet is `LinkedHashMap$LinkedKeySet` and not the
+    /// `HashMap$KeySet` a plain map answers. `None` for `kind` asks for the
+    /// ENTRY class instead of a view's.
+    fn map_member_class(&self, map: HeapRef, kind: Option<MapViewKind>) -> String {
+        use crate::value::{HeapObject, MapViewKind};
+        // A view over an UNMODIFIABLE map is the wrapper's own inner class.
+        if let Some(HeapObject::UnmodifiableMap(_)) = self.heap.get(map) {
+            return String::from(match kind {
+                Some(MapViewKind::Values) => "java/util/Collections$UnmodifiableCollection",
+                Some(MapViewKind::Keys) => "java/util/Collections$UnmodifiableSet",
+                Some(_) => "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet",
+                None => {
+                    "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet$UnmodifiableEntry"
+                }
+            });
+        }
+        let (owner, linked) = match self.heap.get(map) {
+            Some(HeapObject::TreeMap { .. }) => ("TreeMap", false),
+            Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) => {
+                ("HashMap", entries.is_linked())
+            }
+            _ => ("HashMap", false),
+        };
+        let owner = if linked { "LinkedHashMap" } else { owner };
+        let member = match (kind, linked) {
+            // A LinkedHashMap names its three views with a `Linked` prefix and
+            // its entry plainly `Entry`; a TreeMap's entry is `Entry` too, and
+            // only a plain HashMap calls it `Node`.
+            (Some(MapViewKind::Keys), true) => "LinkedKeySet",
+            (Some(MapViewKind::Values), true) => "LinkedValues",
+            (Some(_), true) => "LinkedEntrySet",
+            (Some(MapViewKind::Keys), false) => "KeySet",
+            (Some(MapViewKind::Values), false) => "Values",
+            (Some(_), false) => "EntrySet",
+            (None, _) => {
+                if owner == "HashMap" {
+                    "Node"
+                } else {
+                    "Entry"
+                }
+            }
+        };
+        format!("java/util/{owner}${member}")
+    }
+
     fn object_class_name(&self, receiver: HeapRef) -> String {
         use crate::value::HeapObject;
         match self.heap.get(receiver) {
@@ -12161,9 +12294,11 @@ impl<'run> Interpreter<'run> {
             ) => class_name.to_string(),
             Some(HeapObject::JavaString(_)) => String::from("java/lang/String"),
             Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
-            Some(HeapObject::ArrayList(_) | HeapObject::ArrayBackedList(_)) => {
-                String::from("java/util/ArrayList")
-            }
+            Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
+            // `Arrays.asList` answers its OWN fixed-size list class, not
+            // `java.util.ArrayList` — the two share a name and nothing else,
+            // and which one a program holds decides whether `add` throws.
+            Some(HeapObject::ArrayBackedList(_)) => String::from("java/util/Arrays$ArrayList"),
             Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
             Some(HeapObject::ArrayDeque(_)) => String::from("java/util/ArrayDeque"),
             Some(HeapObject::Stack(_)) => String::from("java/util/Stack"),
@@ -12210,6 +12345,53 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
+            }
+            // A WRAPPED collection: which JDK class it is was recorded when it
+            // was built, since one wrapper stands for `emptyList`,
+            // `singletonList`, `List.of` and `unmodifiableList` alike.
+            Some(
+                HeapObject::UnmodifiableList(_)
+                | HeapObject::UnmodifiableSet(_)
+                | HeapObject::UnmodifiableMap(_),
+            ) => String::from(
+                self.view_class
+                    .get(&receiver)
+                    .copied()
+                    .unwrap_or("java/util/Collections$UnmodifiableCollection"),
+            ),
+            // A map's three views and its entries are INNER classes of the map
+            // that made them, so the map's own kind decides the name — a
+            // LinkedHashMap's keySet is not a HashMap's.
+            Some(HeapObject::MapView { map, kind, .. }) => {
+                let (map, kind) = (*map, *kind);
+                self.map_member_class(map, Some(kind))
+            }
+            Some(HeapObject::MapEntry { map, .. }) => {
+                let map = *map;
+                self.view_class.get(&receiver).map_or_else(
+                    || self.map_member_class(map, None),
+                    |name| (*name).to_string(),
+                )
+            }
+            // A stream is deliberately absent: a JDK names a pipeline after
+            // its LAST operation AND its element family
+            // (`ReferencePipeline$3` for a mapped object stream,
+            // `IntPipeline$9` for a filtered int one), and caturra's single
+            // `Stream` object does not record which family it is. Guessing one
+            // would be a new wrong answer in place of a known one.
+            Some(HeapObject::Comparator(spec)) => String::from(match spec {
+                crate::value::ComparatorSpec::Natural => {
+                    "java/util/Comparators$NaturalOrderComparator"
+                }
+                crate::value::ComparatorSpec::Reversed(_) => {
+                    "java/util/Collections$ReverseComparator"
+                }
+                // Everything else is built from a lambda, and a JDK names a
+                // lambda's class after its address — unstable between runs.
+                _ => "java/lang/Object",
+            }),
+            Some(HeapObject::Collector(_)) => {
+                String::from("java/util/stream/Collectors$CollectorImpl")
             }
             _ => String::from("java/lang/Object"),
         }

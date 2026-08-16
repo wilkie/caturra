@@ -29991,3 +29991,127 @@ public class RawArrayFill {
 }
 "#
 );
+
+// Every library object's CLASS. A collection view, a map entry, an immutable
+// factory's result and an unmodifiable wrapper all answered `java.lang.Object`
+// — a lie a program reads three ways: through `getClass()`, through the
+// `ArrayStoreException` a bad array store raises, and through the
+// `ClassCastException` a failed cast raises. The last two named the object
+// separately from `getClass`, so unifying them was half the fix.
+//
+// The names are JDK 11's own and several are SIZE- or KIND-dependent:
+// `List.of` is `List12` up to two elements and `ListN` otherwise, a
+// LinkedHashMap's keySet is `LinkedKeySet` where a HashMap's is `KeySet`, and
+// `unmodifiableList` picks its wrapper by whether the list is `RandomAccess`.
+differential_test!(
+    every_library_object_names_its_class,
+    "LibraryClassNames",
+    r#"
+import java.util.*;
+
+public class LibraryClassNames {
+    static void show(String label, Object o) {
+        System.out.println(label + " " + o.getClass().getName()
+            + " " + o.getClass().getSimpleName());
+    }
+
+    public static void main(String[] args) {
+        show("asList", Arrays.asList("x"));
+        show("of0", List.of());
+        show("of1", List.of(1));
+        show("of2", List.of(1, 2));
+        show("of3", List.of(1, 2, 3));
+        show("set0", Set.of());
+        show("set2", Set.of(1, 2));
+        show("set3", Set.of(1, 2, 3));
+        show("map1", Map.of("a", 1));
+        show("map2", Map.of("a", 1, "b", 2));
+        show("copyOfList", List.copyOf(Arrays.asList(1, 2)));
+        show("emptyList", Collections.emptyList());
+        show("emptySet", Collections.emptySet());
+        show("emptyMap", Collections.emptyMap());
+        show("singletonList", Collections.singletonList("x"));
+        show("singleton", Collections.singleton("x"));
+        show("singletonMap", Collections.singletonMap("a", 1));
+        show("unmodList", Collections.unmodifiableList(new ArrayList<String>()));
+        show("unmodLinked", Collections.unmodifiableList(new LinkedList<String>()));
+        show("unmodSet", Collections.unmodifiableSet(new HashSet<String>()));
+        show("unmodMap", Collections.unmodifiableMap(new HashMap<String, Integer>()));
+        show("unmodColl", Collections.unmodifiableCollection(new ArrayList<String>()));
+
+        Map<String, Integer> hash = new HashMap<>();
+        hash.put("a", 1);
+        Map<String, Integer> linked = new LinkedHashMap<>();
+        linked.put("a", 1);
+        Map<String, Integer> tree = new TreeMap<>();
+        tree.put("a", 1);
+        show("hash.keySet", hash.keySet());
+        show("hash.values", hash.values());
+        show("hash.entrySet", hash.entrySet());
+        show("hash.entry", hash.entrySet().iterator().next());
+        show("linked.keySet", linked.keySet());
+        show("linked.values", linked.values());
+        show("linked.entrySet", linked.entrySet());
+        show("linked.entry", linked.entrySet().iterator().next());
+        show("tree.keySet", tree.keySet());
+        show("tree.values", tree.values());
+        show("tree.entrySet", tree.entrySet());
+        show("tree.entry", tree.entrySet().iterator().next());
+        show("simpleEntry", new AbstractMap.SimpleEntry<>("a", 1));
+        show("natural", Comparator.naturalOrder());
+        show("reverse", Comparator.reverseOrder());
+
+        // Class handles are INTERNED, so the identity idiom works on them.
+        System.out.println(hash.keySet().getClass() == hash.keySet().getClass());
+        System.out.println(List.of(1).getClass() == List.of(2).getClass());
+        System.out.println(List.of(1).getClass() == List.of(1, 2, 3).getClass());
+    }
+}
+"#
+);
+
+// The class a library object reports reaches a program through the EXCEPTIONS
+// that name it, not only through `getClass()` — and those had their own namer,
+// which knew about instances and strings and nothing else.
+differential_test!(
+    an_exception_names_a_library_object_the_same_way,
+    "LibraryClassInExceptions",
+    r#"
+import java.util.*;
+
+public class LibraryClassInExceptions {
+    public static void main(String[] args) {
+        Map<String, Integer> map = new HashMap<>();
+        map.put("k", 1);
+        Object[] strings = new String[1];
+        try {
+            strings[0] = map.keySet();
+        } catch (ArrayStoreException e) {
+            System.out.println("keySet " + e.getMessage());
+        }
+        try {
+            strings[0] = map.entrySet().iterator().next();
+        } catch (ArrayStoreException e) {
+            System.out.println("entry " + e.getMessage());
+        }
+        try {
+            strings[0] = List.of(1, 2);
+        } catch (ArrayStoreException e) {
+            System.out.println("listOf " + e.getMessage());
+        }
+        try {
+            strings[0] = Arrays.asList("x");
+        } catch (ArrayStoreException e) {
+            System.out.println("asList " + e.getMessage());
+        }
+        Object view = map.keySet();
+        try {
+            String bad = (String) view;
+            System.out.println(bad);
+        } catch (ClassCastException e) {
+            System.out.println("cast " + e.getMessage());
+        }
+    }
+}
+"#
+);
