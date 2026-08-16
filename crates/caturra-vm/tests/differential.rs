@@ -30987,3 +30987,160 @@ public class GenericLambdaParam {
 }
 "#
 );
+
+// BOXING contexts — the Integer cache, identity, ternary unboxing, unboxing a
+// null, switch on a wrapper, overload resolution between a primitive and its
+// box, and round trips through an array, a list and a map key. Forty-five
+// cases, of which forty-three already agreed; the two that did not turned out
+// not to be about boxing at all, but about the CONDITIONAL's own type.
+differential_test!(
+    boxing_keeps_the_jdks_identities,
+    "BoxingContexts",
+    r#"
+import java.util.*;
+
+public class BoxingContexts {
+    static int compound() { Integer n = 1000; n += 1; return n; }
+    static int increment() { Integer n = 1000; n++; return n; }
+
+    static String switchOn(Integer n) {
+        switch (n) {
+            case 1: return "one";
+            case 2: return "two";
+            default: return "other";
+        }
+    }
+
+    static String pick(int n) { return "int"; }
+    static String pick(Integer n) { return "Integer"; }
+    static String pickLong(long n) { return "long"; }
+    static String pickLong(Integer n) { return "Integer"; }
+    static int countArgs(Integer... vs) { return vs.length; }
+
+    public static void main(String[] args) {
+        // The cache boundaries, per wrapper.
+        System.out.println(Integer.valueOf(-129) == Integer.valueOf(-129));
+        System.out.println(Integer.valueOf(-128) == Integer.valueOf(-128));
+        System.out.println(Integer.valueOf(127) == Integer.valueOf(127));
+        System.out.println(Integer.valueOf(128) == Integer.valueOf(128));
+        System.out.println(Long.valueOf(127) == Long.valueOf(127));
+        System.out.println(Long.valueOf(128) == Long.valueOf(128));
+        System.out.println(Character.valueOf((char) 127) == Character.valueOf((char) 127));
+        System.out.println(Character.valueOf((char) 128) == Character.valueOf((char) 128));
+        System.out.println(Short.valueOf((short) 127) == Short.valueOf((short) 127));
+        System.out.println(Short.valueOf((short) 128) == Short.valueOf((short) 128));
+        System.out.println(Byte.valueOf((byte) 100) == Byte.valueOf((byte) 100));
+        System.out.println(Boolean.valueOf(true) == Boolean.valueOf(true));
+        System.out.println(Double.valueOf(1.0) == Double.valueOf(1.0));
+        // A wrapper compared with a PRIMITIVE unboxes, so the cache is irrelevant.
+        System.out.println(Integer.valueOf(1000) == 1000);
+        System.out.println(1000 == Integer.valueOf(1000));
+
+        // Arithmetic, comparison and equality across the boundary.
+        System.out.println(Integer.valueOf(1000) + Integer.valueOf(1000));
+        System.out.println(Integer.valueOf(1000) < Integer.valueOf(2000));
+        System.out.println(Integer.valueOf(1000).equals(1000));
+        System.out.println(Integer.valueOf(1).equals(1L));
+        System.out.println(compound() + " " + increment());
+
+        // Unboxing a null, in every context that does it.
+        Integer absent = null;
+        try {
+            int v = absent;
+            System.out.println(v);
+        } catch (NullPointerException e) {
+            System.out.println("unbox NPE");
+        }
+        try {
+            System.out.println(absent + 1);
+        } catch (NullPointerException e) {
+            System.out.println("arith NPE");
+        }
+        try {
+            System.out.println(absent < 1);
+        } catch (NullPointerException e) {
+            System.out.println("compare NPE");
+        }
+        try {
+            System.out.println(switchOn(absent));
+        } catch (NullPointerException e) {
+            System.out.println("switch NPE");
+        }
+        // A conditional whose OTHER branch is a primitive unboxes the null one.
+        try {
+            Object r = true ? 1 : absent;
+            System.out.println(r);
+        } catch (NullPointerException e) {
+            System.out.println("ternary NPE");
+        }
+
+        // Round trips: an array, a list, a map key.
+        Integer[] boxed = new Integer[2];
+        boxed[0] = 1000;
+        boxed[1] = 1000;
+        System.out.println(boxed[0] == boxed[1]);
+        List<Integer> list = new ArrayList<>();
+        list.add(1000);
+        list.add(1000);
+        System.out.println(list.get(0) == list.get(1));
+        Map<Integer, String> keyed = new HashMap<>();
+        keyed.put(1000, "a");
+        System.out.println(keyed.containsKey(1000) + " " + keyed.get(1000));
+
+        // Overload resolution prefers the exact primitive, then widening.
+        System.out.println(pick(1) + " " + pick(Integer.valueOf(1)));
+        System.out.println(pickLong(1));
+        System.out.println(countArgs(1, 2, 3));
+        System.out.println(switchOn(Integer.valueOf(2)));
+    }
+}
+"#
+);
+
+// The CONDITIONAL operator's own type (JLS §15.25), when the condition is a
+// CONSTANT. Folding it to the taken branch discarded the conditional's type,
+// so `true ? 1 : 2.0` printed `1` where Java prints `1.0` and
+// `false ? 'a' : 98` printed `98` where Java prints `b` — the same expression
+// written with a variable condition was already right, which is what made the
+// two disagree with each other.
+//
+// The `char` rule is the delicate one: a char beside an int CONSTANT that fits
+// in a char stays a char, but beside a `(byte)` cast — an operand of that TYPE
+// rather than a constant — both promote to int.
+differential_test!(
+    a_constant_conditional_keeps_its_type,
+    "ConstantConditional",
+    r#"
+public class ConstantConditional {
+    static double asDouble() { return true ? 1 : 2.0; }
+
+    public static void main(String[] args) {
+        boolean flag = true;
+        final boolean CONST = true;
+        byte b = 1;
+        char c = 'x';
+
+        System.out.println((flag ? 1 : 2.0) + " " + (true ? 1 : 2.0) + " " + (false ? 1 : 2.0));
+        System.out.println((flag ? 'a' : 98) + " " + (true ? 'a' : 98) + " " + (false ? 'a' : 98));
+        System.out.println((true ? 1 : 2L) + " " + (true ? 1 : 2f) + " " + (true ? (byte) 1 : 2.0));
+        System.out.println((CONST ? 1 : 2.0) + " " + asDouble());
+        System.out.println((true ? (n() > 0 ? 1 : 2) : 3.0));
+
+        // A char beside an int constant that fits stays a char…
+        System.out.println((true ? 'a' : 3) + " " + (false ? 'a' : 3));
+        // …beside one that does NOT fit, both promote to int…
+        System.out.println((true ? 'a' : 70000) + " " + (false ? 'a' : 70000));
+        // …and beside a `(byte)` cast, both promote to int as well.
+        System.out.println((true ? 'a' : (byte) 3) + " " + (false ? 'a' : (byte) 3));
+        System.out.println((true ? (byte) 3 : 'a') + " " + (false ? (byte) 3 : 'a'));
+
+        // The same pairs with a VARIABLE condition, which was already right.
+        System.out.println((flag ? c : 3) + " " + (flag ? b : 2.0) + " " + (flag ? c : 70000));
+    }
+
+    static int n() {
+        return 1;
+    }
+}
+"#
+);

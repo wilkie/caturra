@@ -125,15 +125,113 @@ pub(crate) fn fold(
         // the taken branch's VALUE matters, but the untaken one must still be
         // constant for the whole to be.
         Expr::Ternary {
-            cond, then, els, ..
+            cond,
+            then: then_expr,
+            els: els_expr,
+            ..
         } => {
             let ConstValue::Bool(taken) = fold(cond, resolve)? else {
                 return None;
             };
-            let (then, els) = (fold(then, resolve)?, fold(els, resolve)?);
-            Some(if taken { then } else { els })
+            let (then, els) = (fold(then_expr, resolve)?, fold(els_expr, resolve)?);
+            // The taken branch supplies the VALUE, but the conditional's own
+            // TYPE is the promotion of both branches (JLS §15.25) and the value
+            // converts to it. Returning the branch untouched made
+            // `true ? 1 : 2.0` print `1` where Java prints `1.0`, and
+            // `false ? 'a' : 98` print `98` where Java prints `b` — a folded
+            // constant answering with the wrong type, which the emitter's own
+            // conditional gets right when the condition is a variable.
+            let value = if taken { &then } else { &els };
+            // A `(byte)`/`(short)` cast makes the operand that TYPE, not an int
+            // constant — so `true ? 'a' : (byte) 3` promotes to int (97) where
+            // `true ? 'a' : 3` stays a char. `ConstValue` has no byte or short
+            // of its own, so the distinction is read off the expression.
+            let narrow = (is_narrow_cast(then_expr), is_narrow_cast(els_expr));
+            Some(
+                conditional_promotion(&then, &els, narrow)
+                    .map_or_else(|| value.clone(), |to| to.apply(value)),
+            )
         }
         _ => None,
+    }
+}
+
+/// The conversion a constant conditional's branches undergo (JLS §15.25). A
+/// non-numeric pair (two booleans, two strings) needs none, and a mixed one
+/// is not a constant conditional at all.
+fn conditional_promotion(
+    then: &ConstValue,
+    els: &ConstValue,
+    narrow: (bool, bool),
+) -> Option<Promotion> {
+    use ConstValue::{Char, Double, Float, Long};
+    let numeric = |v: &ConstValue| v.numeric().is_some();
+    let fits_char = |v: &ConstValue, is_narrow: bool| {
+        !is_narrow && matches!(v, ConstValue::Int(n) if u16::try_from(*n).is_ok())
+    };
+    if !numeric(then) || !numeric(els) {
+        return None;
+    }
+    // A `char` beside an int CONSTANT that fits in one stays a char — the rule
+    // that makes `flag ? 'a' : 98` a character rather than a number.
+    let char_pair = matches!((then, els), (Char(_), Char(_)))
+        || matches!(then, Char(_)) && fits_char(els, narrow.1)
+        || matches!(els, Char(_)) && fits_char(then, narrow.0);
+    Some(if char_pair {
+        Promotion::Char
+    } else if matches!(then, Double(_)) || matches!(els, Double(_)) {
+        Promotion::Double
+    } else if matches!(then, Float(_)) || matches!(els, Float(_)) {
+        Promotion::Float
+    } else if matches!(then, Long(_)) || matches!(els, Long(_)) {
+        Promotion::Long
+    } else {
+        Promotion::Int
+    })
+}
+
+/// Whether an expression is a cast to `byte` or `short` — an operand of that
+/// TYPE rather than an int constant, which the conditional's own typing rules
+/// distinguish.
+fn is_narrow_cast(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Cast {
+            ty: TypeRef::Byte | TypeRef::Short,
+            ..
+        }
+    )
+}
+
+#[derive(Clone, Copy)]
+enum Promotion {
+    Char,
+    Int,
+    Long,
+    Float,
+    Double,
+}
+
+impl Promotion {
+    fn apply(self, value: &ConstValue) -> ConstValue {
+        match self {
+            Self::Char => ConstValue::Char(
+                value
+                    .integral()
+                    .and_then(|v| u16::try_from(v).ok())
+                    .unwrap_or_default(),
+            ),
+            Self::Int => ConstValue::Int(
+                value
+                    .integral()
+                    .and_then(|v| i32::try_from(v).ok())
+                    .unwrap_or_default(),
+            ),
+            Self::Long => ConstValue::Long(value.integral().unwrap_or_default()),
+            #[allow(clippy::cast_possible_truncation)] // a float IS narrower
+            Self::Float => ConstValue::Float(value.numeric().unwrap_or_default() as f32),
+            Self::Double => ConstValue::Double(value.numeric().unwrap_or_default()),
+        }
     }
 }
 

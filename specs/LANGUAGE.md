@@ -6159,6 +6159,32 @@ lambda BODY returns. javac infers it from the body; caturra types the lambda's
 parameter correctly and leaves the result `Object`, so a call assigned to an
 `Integer` is refused as an incompatible type rather than a missing feature.
 
+### A constant conditional keeps its type
+
+Probing BOXING contexts — the `Integer` cache boundaries per wrapper, identity
+against a primitive, unboxing a null in every context that does it, `switch` on
+a wrapper, overload resolution between a primitive and its box, round trips
+through an array, a list and a map key — found **43 of 45 already right**. The
+two that were not turned out not to be about boxing at all.
+
+`true ? 1 : 2.0` printed `1` where Java prints `1.0`, and `false ? 'a' : 98`
+printed `98` where Java prints `b`. A conditional whose condition is a CONSTANT
+folds to the taken branch, and the fold returned that branch's value —
+discarding the conditional's own type, which JLS §15.25 makes the promotion of
+BOTH branches. The identical expression with a variable condition was already
+right, so the two forms disagreed with each other; a 441-pair cross-product of
+operand types with a variable condition came back clean, and the same 1152
+pairs with a constant condition did not.
+
+The `char` rule is the delicate one, and it is why the fold cannot work from
+values alone. A `char` beside an int CONSTANT representable in a char stays a
+char (`flag ? 'a' : 98` is `b`); beside one that does not fit, both promote to
+int; and beside a `(byte)` cast — an operand of that TYPE rather than a
+constant — both promote to int as well, so `true ? 'a' : (byte) 3` is `97`
+where `true ? 'a' : 3` is `a`. caturra's constant values have no byte or short
+of their own, so that last distinction is read off the EXPRESSION rather than
+the value.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
