@@ -3196,7 +3196,59 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         .then(|| args[0].clone())
 }
 
+/// Whether a simple class name is one of the collections whose single type
+/// argument IS its element — the set two places need, and the reason a
+/// constructed collection cannot be recognised by "not a user class": the
+/// name-disambiguation set deliberately holds `ArrayList`, so testing against
+/// it excluded exactly the most common collection there is.
+fn is_collection_class(simple: &str) -> bool {
+    matches!(
+        simple,
+        "ArrayList"
+            | "List"
+            | "Set"
+            | "HashSet"
+            | "LinkedHashSet"
+            | "TreeSet"
+            | "SortedSet"
+            | "NavigableSet"
+            | "LinkedList"
+            | "ArrayDeque"
+            | "Stack"
+            | "Queue"
+            | "Deque"
+            | "PriorityQueue"
+            | "Collection"
+            // A cursor declared `Iterator<E>` walks `E`s, for
+            // `forEachRemaining`.
+            | "Iterator"
+            | "ListIterator"
+    )
+}
+
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    // A collection CONSTRUCTED in place — `new ArrayList<>(source).removeIf(x
+    // -> …)`. Its element is written (`new ArrayList<String>()`) or comes from
+    // what it copies (`new ArrayList<>(aStringList)`). Without this the
+    // receiver had no element type and the lambda was refused for having no
+    // functional-interface position, though the same call on a DECLARED
+    // variable one line up compiled.
+    if let Expr::NewObject {
+        class,
+        type_args,
+        args,
+        ..
+    } = receiver
+        && is_collection_class(simple_base(class))
+    {
+        if let [written] = &type_args[..] {
+            return Some(written.clone());
+        }
+        // A diamond: read the element off the copy source.
+        if let [source] = &args[..] {
+            return list_elem_type(source, ctx);
+        }
+    }
     // `List.of("a", "b")` / `Set.of(...)` / `Arrays.asList(...)` used straight
     // as a source. The element is what the arguments agree on, which is all
     // this syntactic pass can see — the same reading `Stream.of(...)` already
@@ -3263,28 +3315,7 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     let TypeRef::Generic { base, args } = ty else {
         return None;
     };
-    let is_collection = matches!(
-        simple_base(base.as_str()),
-        "ArrayList"
-            | "List"
-            | "Set"
-            | "HashSet"
-            | "TreeSet"
-            | "SortedSet"
-            | "NavigableSet"
-            | "LinkedList"
-            | "ArrayDeque"
-            | "Stack"
-            | "Queue"
-            | "Deque"
-            | "PriorityQueue"
-            | "Collection"
-            // A cursor declared `Iterator<E>` walks `E`s, for
-            // `forEachRemaining`.
-            | "Iterator"
-            | "ListIterator"
-    );
-    (is_collection && args.len() == 1).then(|| args[0].clone())
+    (is_collection_class(simple_base(base.as_str())) && args.len() == 1).then(|| args[0].clone())
 }
 
 /// The lambda class for `map.forEach((k, v) -> ...)`. `__BiConsumer.accept`
@@ -3571,6 +3602,18 @@ fn build_erased_lambda(
         .map(|(i, ty)| unwrap(ty, format!("__caturraArg{i}"), &params[i].name))
         .collect();
 
+    // The lambda's OWN parameters are in scope for its body. Without them a
+    // nested lambda whose receiver is one of them —
+    // `grid.forEach(row -> row.forEach(v -> …))` — could not find the
+    // receiver's element type, and the inner lambda was refused for having no
+    // functional-interface position, in a program javac compiles.
+    ctx.scope.push(
+        params
+            .iter()
+            .zip(elem_types)
+            .map(|(param, ty)| (param.name.clone(), ty.clone()))
+            .collect(),
+    );
     let is_void = matches!(ret, TypeRef::Void);
     match std::mem::replace(body, LambdaBody::Block(Vec::new())) {
         LambdaBody::Expr(mut e) => {
@@ -3628,6 +3671,7 @@ fn build_erased_lambda(
             method_body.extend(stmts);
         }
     }
+    ctx.scope.pop();
 
     ctx.new_classes.push(ClassDecl {
         name: name.clone(),

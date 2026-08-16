@@ -30464,3 +30464,144 @@ public class HeapCursor {
 }
 "#
 );
+
+// WHEN a collection refuses, and in what order. caturra models `emptyList`,
+// `singletonList`, `List.of` and `unmodifiableList` with one wrapper, and the
+// JDK gives each its own class with its own answer:
+//
+//   - `unmodifiable*` and the `List.of` family OVERRIDE every mutator and
+//     refuse at once, so `removeAll(null)` is an UnsupportedOperationException;
+//   - `Arrays.asList`, `singletonList` and `emptyList` INHERIT
+//     `AbstractCollection`'s, which null-check first (NullPointerException),
+//     SCAN before removing (so removing what is absent answers false), and
+//     remove nothing from an empty collection (so `clear()` is a no-op);
+//   - a `singleton*` wrapper overrides `removeIf` to refuse where its `empty*`
+//     neighbour keeps the null-checking default.
+//
+// The UOE MESSAGE follows the cursor: `Iterator`'s default method carries
+// "remove", a cursor that overrides it throws the message-less form.
+differential_test!(
+    a_collection_refuses_in_the_jdks_order,
+    "RefusalOrder",
+    r#"
+import java.util.*;
+
+public class RefusalOrder {
+    public static void main(String[] args) {
+        try { List<Integer> c = Arrays.asList(1, 2, 3); c.remove(Integer.valueOf(2)); System.out.println("asList.removePresent ok"); }
+        catch (Throwable e) { System.out.println("asList.removePresent " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Arrays.asList(1, 2, 3); c.remove(Integer.valueOf(9)); System.out.println("asList.removeAbsent ok"); }
+        catch (Throwable e) { System.out.println("asList.removeAbsent " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Arrays.asList(1, 2, 3); c.removeIf(x -> false); System.out.println("asList.removeIfFalse ok"); }
+        catch (Throwable e) { System.out.println("asList.removeIfFalse " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Arrays.asList(1, 2, 3); c.removeIf(x -> true); System.out.println("asList.removeIfTrue ok"); }
+        catch (Throwable e) { System.out.println("asList.removeIfTrue " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Arrays.asList(1, 2, 3); c.addAll(null); System.out.println("asList.addAllNull ok"); }
+        catch (Throwable e) { System.out.println("asList.addAllNull " + e.getClass().getName() + " | " + e.getMessage()); }
+
+        try { List<Integer> c = Collections.singletonList(1); c.remove(Integer.valueOf(1)); System.out.println("singleton.removePresent ok"); }
+        catch (Throwable e) { System.out.println("singleton.removePresent " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Collections.singletonList(1); c.remove(Integer.valueOf(9)); System.out.println("singleton.removeAbsent ok"); }
+        catch (Throwable e) { System.out.println("singleton.removeAbsent " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Collections.singletonList(1); c.removeIf(x -> true); System.out.println("singleton.removeIf ok"); }
+        catch (Throwable e) { System.out.println("singleton.removeIf " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Collections.singletonList(1); c.clear(); System.out.println("singleton.clear ok"); }
+        catch (Throwable e) { System.out.println("singleton.clear " + e.getClass().getName() + " | " + e.getMessage()); }
+
+        try { List<Integer> c = Collections.emptyList(); c.clear(); System.out.println("empty.clear ok"); }
+        catch (Throwable e) { System.out.println("empty.clear " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { Set<Integer> c = Collections.emptySet(); c.clear(); System.out.println("emptySet.clear ok"); }
+        catch (Throwable e) { System.out.println("emptySet.clear " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { Map<Integer, String> c = Collections.emptyMap(); c.clear(); System.out.println("emptyMap.clear ok"); }
+        catch (Throwable e) { System.out.println("emptyMap.clear " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Collections.emptyList(); c.removeIf(x -> true); System.out.println("empty.removeIf ok"); }
+        catch (Throwable e) { System.out.println("empty.removeIf " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Collections.emptyList(); c.remove(Integer.valueOf(1)); System.out.println("empty.remove ok"); }
+        catch (Throwable e) { System.out.println("empty.remove " + e.getClass().getName() + " | " + e.getMessage()); }
+
+        try { List<Integer> c = Collections.unmodifiableList(new ArrayList<>(Arrays.asList(1, 2))); c.removeAll(null); System.out.println("unmod.removeAllNull ok"); }
+        catch (Throwable e) { System.out.println("unmod.removeAllNull " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = List.of(1, 2); c.removeAll(null); System.out.println("listOf.removeAllNull ok"); }
+        catch (Throwable e) { System.out.println("listOf.removeAllNull " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = List.of(1, 2); c.remove(Integer.valueOf(9)); System.out.println("listOf.removeAbsent ok"); }
+        catch (Throwable e) { System.out.println("listOf.removeAbsent " + e.getClass().getName() + " | " + e.getMessage()); }
+
+        // A null PROBE: the `of` family cannot hold null and says so.
+        try { List<Integer> c = List.of(1, 2); c.contains(null); System.out.println("listOf.containsNull ok"); }
+        catch (Throwable e) { System.out.println("listOf.containsNull " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = List.of(1, 2); c.indexOf(null); System.out.println("listOf.indexOfNull ok"); }
+        catch (Throwable e) { System.out.println("listOf.indexOfNull " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { Map<Integer, String> c = Map.of(1, "a"); c.get(null); System.out.println("mapOf.getNull ok"); }
+        catch (Throwable e) { System.out.println("mapOf.getNull " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { List<Integer> c = Arrays.asList(1, 2); c.contains(null); System.out.println("asList.containsNull ok"); }
+        catch (Throwable e) { System.out.println("asList.containsNull " + e.getClass().getName() + " | " + e.getMessage()); }
+
+        // The four cursor shapes, by the message each refusal carries.
+        try { var i = List.of(1, 2).iterator(); i.next(); i.remove(); System.out.println("listOf.iter ok"); }
+        catch (Throwable e) { System.out.println("listOf.iter " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { var i = Set.of(1, 2).iterator(); i.next(); i.remove(); System.out.println("setOf.iter ok"); }
+        catch (Throwable e) { System.out.println("setOf.iter " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { var i = Arrays.asList(1, 2).iterator(); i.next(); i.remove(); System.out.println("asList.iter ok"); }
+        catch (Throwable e) { System.out.println("asList.iter " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { var i = Collections.singletonList(1).iterator(); i.next(); i.remove(); System.out.println("singleton.iter ok"); }
+        catch (Throwable e) { System.out.println("singleton.iter " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { var i = Collections.<Integer>emptyList().iterator(); i.remove(); System.out.println("empty.iter ok"); }
+        catch (Throwable e) { System.out.println("empty.iter " + e.getClass().getName() + " | " + e.getMessage()); }
+
+        // Every collection NPEs on a null bulk argument — a priority queue's
+        // reached no arm at all and ended the run.
+        try { Collection<Integer> c = new PriorityQueue<>(Arrays.asList(1, 2)); c.forEach(null); System.out.println("pq.forEachNull ok"); }
+        catch (Throwable e) { System.out.println("pq.forEachNull " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { Collection<Integer> c = new PriorityQueue<>(Arrays.asList(1, 2)); c.addAll(null); System.out.println("pq.addAllNull ok"); }
+        catch (Throwable e) { System.out.println("pq.addAllNull " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { Collection<Integer> c = new ArrayList<>(Arrays.asList(1, 2)); c.removeIf(null); System.out.println("list.removeIfNull ok"); }
+        catch (Throwable e) { System.out.println("list.removeIfNull " + e.getClass().getName() + " | " + e.getMessage()); }
+        try { Collection<Integer> c = new ArrayList<>(Arrays.asList(1, 2)); c.toArray((Integer[]) null); System.out.println("list.toArrayNull ok"); }
+        catch (Throwable e) { System.out.println("list.toArrayNull " + e.getClass().getName() + " | " + e.getMessage()); }
+    }
+}
+"#
+);
+
+// A collection CONSTRUCTED in place is a receiver like any other, and a
+// lambda's own PARAMETERS are in scope for its body. Both were refused with
+// "a lambda or method reference is only allowed where a functional-interface
+// type is expected" — the first because the guard that recognises a collection
+// tested "not a user class", and the disambiguation set it tested against
+// deliberately holds `ArrayList`.
+differential_test!(
+    a_lambda_finds_its_element_type,
+    "LambdaElementType",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class LambdaElementType {
+    public static void main(String[] args) {
+        System.out.println(new ArrayList<>(Arrays.asList(1, 2)).removeIf(x -> x > 1));
+        System.out.println(new HashSet<>(Arrays.asList(1, 2)).removeIf(x -> x > 1));
+        System.out.println(new ArrayList<String>().stream().filter(v -> v.isEmpty()).count());
+        System.out.println(new ArrayList<>(Arrays.asList("a", "b")).stream()
+            .map(v -> v.toUpperCase()).count());
+        new LinkedList<>(Arrays.asList("a")).forEach(v -> System.out.print(v.toUpperCase()));
+        System.out.println();
+
+        // The inner lambda's receiver is the OUTER lambda's parameter.
+        List<List<Integer>> grid = new ArrayList<>();
+        grid.add(new ArrayList<>(Arrays.asList(1, 2)));
+        grid.forEach(row -> row.forEach(v -> System.out.print(v + " ")));
+        System.out.println();
+        grid.forEach(row -> System.out.println(row.stream().filter(v -> v > 1).count()));
+
+        // …and one whose receiver is an enclosing local.
+        List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
+        List<Integer> target = new ArrayList<>(Arrays.asList(1, 2, 3));
+        source.forEach(x -> target.removeIf(y -> y.equals(x)));
+        System.out.println(target);
+        Runnable r = () -> source.removeIf(x -> x > 2);
+        r.run();
+        System.out.println(source);
+    }
+}
+"#
+);

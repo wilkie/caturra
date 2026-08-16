@@ -5981,6 +5981,32 @@ impl<'run> Interpreter<'run> {
             .unwrap_or_default()
     }
 
+    /// Whether this collection refuses a mutator BEFORE looking at its
+    /// arguments. A JDK's `Collections.unmodifiable*` wrapper and the
+    /// `List.of` family override every mutator and throw at once, so
+    /// `unmodifiableList(l).removeAll(null)` is an
+    /// `UnsupportedOperationException`; `Arrays.asList`, `singletonList`,
+    /// `emptyList` and their set twins inherit `AbstractCollection`'s, which
+    /// null-check (and scan) FIRST, so the same call is a
+    /// `NullPointerException`. caturra models all of them with the same two
+    /// wrappers, so the class recorded when the view was built is what tells
+    /// them apart.
+    fn refuses_before_checking(&self, reference: HeapRef) -> bool {
+        use crate::value::HeapObject::{UnmodifiableList, UnmodifiableMap, UnmodifiableSet};
+        match self.view_class.get(&reference) {
+            Some(name) => {
+                name.starts_with("java/util/Collections$Unmodifiable")
+                    || name.starts_with("java/util/ImmutableCollections$")
+            }
+            // A wrapper built with no recorded class (a view of a view) is an
+            // `unmodifiable*` one, which refuses outright.
+            None => matches!(
+                self.heap.get(reference),
+                Some(UnmodifiableList(_) | UnmodifiableSet(_) | UnmodifiableMap(_))
+            ),
+        }
+    }
+
     fn is_unmodifiable_list(&self, reference: HeapRef) -> bool {
         matches!(
             self.heap.get(reference),
@@ -6356,14 +6382,19 @@ impl<'run> Interpreter<'run> {
         }
         let result = match (method_name, descriptor, args) {
             // A null action throws NPE (Map/Iterable.forEach null-checks it).
-            ("forEach", _, [JValue::Ref(None)]) => {
-                return Err(VmError::UncaughtException(String::from(
-                    "java.lang.NullPointerException",
-                )));
-            }
             ("forEach", _, [JValue::Ref(Some(consumer))]) => {
                 self.list_for_each(receiver, *consumer)?;
                 return Ok(Answered::Void);
+            }
+            // A null action throws NPE — for `forEach`, `removeIf` and
+            // `replaceAll` alike. Answered by the shared guard at the dispatch
+            // now, since writing it per method is how `removeIf(null)` came to
+            // have no arm at all and end the run with "unknown native member";
+            // kept here as the local backstop for the same three.
+            ("forEach" | "removeIf" | "replaceAll", _, [JValue::Ref(None)]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
             }
             ("removeIf", _, [JValue::Ref(Some(predicate))]) => {
                 let removed = self.list_remove_if(receiver, *predicate)?;
@@ -6872,6 +6903,17 @@ impl<'run> Interpreter<'run> {
             // to the backing collection (recursing with its own reference).
             Some(HeapObject::UnmodifiableSet(inner)) => {
                 let inner = *inner;
+                // An EMPTY wrapper that INHERITS its mutators removes nothing,
+                // so it refuses nothing: `emptySet().clear()` is a no-op where
+                // `unmodifiableSet(s).clear()` throws. Same rule as the list
+                // side, and the same reason — one wrapper here stands for
+                // several JDK classes.
+                if method_name == "clear"
+                    && !self.refuses_before_checking(receiver)
+                    && self.map_len(inner) == 0
+                {
+                    return Ok(Answered::Void);
+                }
                 if is_set_mutator(method_name) {
                     return Err(VmError::UncaughtException(String::from(
                         "java.lang.UnsupportedOperationException",
@@ -6898,6 +6940,12 @@ impl<'run> Interpreter<'run> {
             }
             Some(HeapObject::UnmodifiableMap(inner)) => {
                 let inner = *inner;
+                if method_name == "clear"
+                    && !self.refuses_before_checking(receiver)
+                    && self.map_len(inner) == 0
+                {
+                    return Ok(Answered::Void);
+                }
                 if is_map_mutator(method_name) {
                     return Err(VmError::UncaughtException(String::from(
                         "java.lang.UnsupportedOperationException",
@@ -9767,6 +9815,17 @@ impl<'run> Interpreter<'run> {
     /// The cursor a read-only collection hands out: its own refusing one, or a
     /// generic one that checks its state first (see `checked_cursor_views`).
     fn read_only_cursor(&self, view: HeapRef) -> IteratorWrites {
+        // An immutable SET's cursor does not implement `remove` at all, so
+        // `Iterator`'s default throws and the refusal carries its message —
+        // the same shape `Arrays.asList`'s cursor has. An immutable LIST's
+        // does override it, and throws the message-less form.
+        if self
+            .view_class
+            .get(&view)
+            .is_some_and(|name| name.starts_with("java/util/ImmutableCollections$Set"))
+        {
+            return IteratorWrites::ArrayCursor;
+        }
         if self.checked_cursor_views.contains(&view) {
             IteratorWrites::NoneChecked
         } else {
@@ -11761,6 +11820,63 @@ impl<'run> Interpreter<'run> {
             )));
         };
 
+        // `List.of(...)`/`Set.of(...)`/`Map.of(...)` reject a NULL PROBE:
+        // `contains(null)` is a NullPointerException there, not false, because
+        // those collections cannot hold null and say so rather than answering.
+        if matches!(
+            method_name,
+            "contains" | "indexOf" | "lastIndexOf" | "containsKey" | "get" | "containsValue"
+        ) && matches!(args[..], [JValue::Ref(None)])
+            && self
+                .view_class
+                .get(&receiver)
+                .is_some_and(|name| name.starts_with("java/util/ImmutableCollections$"))
+        {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
+        // The `singleton*` wrappers OVERRIDE `removeIf`/`replaceAll` to refuse
+        // outright, where their `empty*` neighbours inherit the null-checking
+        // default — one JDK class apart, and a program sees which.
+        if matches!(method_name, "removeIf" | "replaceAll")
+            && self
+                .view_class
+                .get(&receiver)
+                .is_some_and(|name| name.starts_with("java/util/Collections$Singleton"))
+        {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.UnsupportedOperationException",
+            )));
+        }
+        // The bulk methods NPE on a null argument, in EVERY collection: the
+        // JDK reaches `Objects.requireNonNull` (or a for-each over the null)
+        // before it does anything else. Written per kind it was written per
+        // kind INCONSISTENTLY — a list's `forEach(null)` threw while a priority
+        // queue's ended the run with "unknown native member", because a null
+        // matched no arm at all. `sort(null)` is deliberately absent: that one
+        // is legal, and means natural ordering.
+        //
+        // Placed BEFORE the refusals below, and skipped for a collection that
+        // refuses without looking, so each kind reports whichever of the two
+        // its JDK class reaches first.
+        if matches!(
+            method_name,
+            "forEach"
+                | "removeIf"
+                | "replaceAll"
+                | "addAll"
+                | "removeAll"
+                | "retainAll"
+                | "containsAll"
+        ) && matches!(args[..], [JValue::Ref(None)])
+            && self.try_collection_elements(receiver).is_some()
+            && !self.refuses_before_checking(receiver)
+        {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
         // An unmodifiable view refuses every mutator and forwards the rest to
         // the list it wraps, so `size`, `get` and `toString` read through.
         // ...but NOT `getClass`, which asks about the WRAPPER: a JDK's
@@ -11774,6 +11890,47 @@ impl<'run> Interpreter<'run> {
             // since nothing can move. Only a longer immutable list refuses.
             let harmless_sort = method_name == "sort"
                 && iterated_len_of(&self.heap, self.backing_list(receiver)) <= 1;
+            // The wrappers that INHERIT `AbstractCollection`'s mutators —
+            // `singletonList`, `emptyList` — reach them and fail (or not)
+            // wherever the inherited code does, which is not always at the
+            // call. `remove(Object)` SCANS first and answers false when the
+            // element is absent; `clear()` on an EMPTY one removes nothing and
+            // so throws nothing. Only a wrapper that OVERRIDES every mutator —
+            // `unmodifiable*`, the `List.of` family — refuses outright.
+            let refuses_outright = self.refuses_before_checking(receiver);
+            let length = iterated_len_of(&self.heap, self.backing_list(receiver));
+            if !refuses_outright {
+                if method_name == "clear" && length == 0 {
+                    return Ok(None);
+                }
+                // Nothing to remove, so the inherited code never reaches a
+                // mutator: `emptyList().removeIf(p)` is false, not a refusal.
+                if matches!(method_name, "removeIf" | "replaceAll") && length == 0 {
+                    frame.stack.push(JValue::Int(0));
+                    return Ok(None);
+                }
+                if method_name == "remove"
+                    && let Some(probe) = args.first().copied()
+                    && !matches!(probe, JValue::Int(_))
+                {
+                    let backing = self.backing_list(receiver);
+                    if self.list_index_of(backing, probe, false)? < 0 {
+                        frame.stack.push(JValue::Int(0));
+                        return Ok(None);
+                    }
+                    // Present, so the inherited code reaches the CURSOR's
+                    // `remove`, and the message is that cursor's: `Iterator`'s
+                    // default carries "remove", a cursor that overrides it
+                    // throws the message-less form.
+                    return Err(VmError::UncaughtException(String::from(
+                        if matches!(self.read_only_cursor(receiver), IteratorWrites::ArrayCursor) {
+                            "java.lang.UnsupportedOperationException: remove"
+                        } else {
+                            "java.lang.UnsupportedOperationException"
+                        },
+                    )));
+                }
+            }
             if LIST_MUTATORS.contains(&method_name) && !harmless_sort {
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.UnsupportedOperationException",
@@ -11845,6 +12002,40 @@ impl<'run> Interpreter<'run> {
             Some(crate::value::HeapObject::ArrayBackedList(_))
         ) && FIXED_SIZE_REFUSED.contains(&method_name)
         {
+            // `remove(Object)` and `removeIf` inherit `AbstractCollection`'s:
+            // they SCAN, and reach the cursor's `remove` only on a match — so
+            // removing what is not there answers false, and removing what IS
+            // fails with `Iterator`'s own default message.
+            if method_name == "remove"
+                && let Some(probe) = args.first().copied()
+                && !matches!(probe, JValue::Int(_))
+            {
+                if self.list_index_of(receiver, probe, false)? < 0 {
+                    frame.stack.push(JValue::Int(0));
+                    return Ok(None);
+                }
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.UnsupportedOperationException: remove",
+                )));
+            }
+            if method_name == "removeIf"
+                && let Some(JValue::Ref(Some(predicate))) = args.first().copied()
+            {
+                let mut matched = false;
+                for element in self.list_items(receiver) {
+                    if self.run_predicate(predicate, element)? {
+                        matched = true;
+                        break;
+                    }
+                }
+                if !matched {
+                    frame.stack.push(JValue::Int(0));
+                    return Ok(None);
+                }
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.UnsupportedOperationException: remove",
+                )));
+            }
             return Err(VmError::UncaughtException(String::from(
                 "java.lang.UnsupportedOperationException",
             )));
@@ -13279,6 +13470,31 @@ impl<'run> Interpreter<'run> {
 
     /// `list.removeIf(predicate)`: keep only the elements the predicate
     /// rejects, in order, and report whether any were removed.
+    /// Run an erased `__Predicate` on one element. Extracted so a collection
+    /// that must know WHETHER anything matches — without removing it — asks
+    /// the same way the removal itself does.
+    fn run_predicate(&mut self, predicate: HeapRef, element: JValue) -> Result<bool, VmError> {
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(predicate)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        let dispatched = self.user_virtual_dispatch(
+            predicate,
+            &class_name,
+            "test",
+            "(Ljava/lang/Object;)Z",
+            &[element],
+        )?;
+        let result = match dispatched {
+            UserDispatch::Call(frame) => self.run_nested(frame)?,
+            UserDispatch::Value(value) => value,
+        };
+        Ok(matches!(result, Some(JValue::Int(1))))
+    }
+
     fn list_remove_if(&mut self, receiver: HeapRef, predicate: HeapRef) -> Result<bool, VmError> {
         let items = self.list_items(receiver);
         let expected_len = items.len();

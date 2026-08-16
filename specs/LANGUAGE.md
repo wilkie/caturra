@@ -5961,6 +5961,59 @@ the other case. Doing one of the two unconditionally both revisited an element
 and skipped another — visible in `seen=1,10,2,11,10,12` where a JDK gives
 `1,10,2,11,12,3`. 271 randomized removals now agree, including a full drain.
 
+### When a collection refuses, and in what order
+
+A 208-call cross-product — sixteen collection kinds against thirteen illegal or
+edge-case operations, printing the exception CLASS and MESSAGE — found that
+caturra decided "is this immutable?" too early, and then, once ordered the
+other way, too early in the other direction. The JDK's answer is per WRAPPER
+CLASS, and caturra models four of them with one object:
+
+- `Collections.unmodifiable*` and the `List.of` family OVERRIDE every mutator
+  and refuse at once, so `unmodifiableList(l).removeAll(null)` is an
+  `UnsupportedOperationException`;
+- `Arrays.asList`, `singletonList` and `emptyList` INHERIT
+  `AbstractCollection`'s, which null-check first (so the same call is a
+  `NullPointerException`), SCAN before removing (so removing what is absent
+  answers false rather than throwing), and remove nothing from an empty
+  collection (so `emptyList().clear()` is a no-op and
+  `emptyList().removeIf(p)` is false);
+- a `singleton*` wrapper overrides `removeIf` to refuse where its `empty*`
+  neighbour keeps the null-checking default — one JDK class apart, and a
+  program sees which.
+
+The class recorded when each view is built (added for `getClass`, two units
+ago) is what tells them apart. The `UnsupportedOperationException` MESSAGE
+follows the CURSOR: `Iterator`'s default method carries "remove", a cursor that
+overrides it throws the message-less form — three of the fifty-two refusals in
+the matrix carry a message, and those are the three.
+
+Two more found alongside:
+
+- **Every collection NPEs on a null bulk argument**, and this was written per
+  kind — so a list's `forEach(null)` threw while a priority queue's ended the
+  run with "unknown native member: PriorityQueue.forEach", because a null
+  matched no arm at all. One guard at the dispatch, skipped for the wrappers
+  that refuse without looking.
+- **`List.of`/`Set.of`/`Map.of` reject a null PROBE**: `contains(null)` is a
+  `NullPointerException` there, not false.
+
+Along the way the probe would not COMPILE, which found two more:
+
+- **`removeIf(null)` was refused**, where javac compiles it and throws at the
+  call. Six functional parameters each carried their own copy of the same
+  "is it an instance of the bundled interface?" test, and the copies had
+  drifted: `null` was a `Comparator` and a `Collector` and not a `Predicate`.
+  They are one arm now. `null` satisfies an ARRAY parameter too
+  (`toArray((String[]) null)`), and `Collection` had no `toArray` at all.
+- **A collection CONSTRUCTED in place could not receive a lambda.**
+  `new ArrayList<>(source).removeIf(x -> …)` had no element type, because the
+  guard that recognises a collection tested "not a user class" — and the
+  name-disambiguation set it tested against deliberately holds `ArrayList`, so
+  it excluded exactly the most common collection there is. A lambda's own
+  PARAMETERS are now in scope for its body too, which is what
+  `grid.forEach(row -> row.forEach(v -> …))` needs.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

@@ -11129,6 +11129,16 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
 const VIEW_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
+    // Every `Collection` has both `toArray` shapes; this table had neither, so
+    // a `Collection`-typed variable could not answer a call every one of the
+    // concrete tables beside it does.
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
+    bm(
+        "toArray",
+        &[BParam::RefArray],
+        BRet::ObjectArray,
+        "([Ljava/lang/Object;)[Ljava/lang/Object;",
+    ),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     // `forEach(Consumer)` over the view's elements (keys or values).
@@ -12232,57 +12242,41 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         }
         // Any reference, or a primitive that boxes into one.
         BParam::Probe => arg.is_reference() || boxable_primitive(arg).is_some(),
-        BParam::RefArray => matches!(arg, JType::Array { .. }),
+        // `null` is an array too: `c.toArray((String[]) null)` compiles and
+        // throws NPE at the call, as every other reference parameter here
+        // already allows.
+        BParam::RefArray => matches!(arg, JType::Array { .. } | JType::Null),
         // Any reference (or boxable value) satisfies an `Object` parameter.
         BParam::Object => widens(arg, JType::Object(table.object_id), table),
-        BParam::BiConsumer => matches!(
-            (arg, table.class_id("__BiConsumer")),
-            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
-            // result argument now, so the raw form is no longer the only
-            // spelling that reaches here.
-            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
-                if table.is_subtype(id, target)
-        ),
-        BParam::Consumer => matches!(
-            (arg, table.class_id("__Consumer")),
-            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
-            // result argument now, so the raw form is no longer the only
-            // spelling that reaches here.
-            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
-                if table.is_subtype(id, target)
-        ),
-        BParam::Predicate => matches!(
-            (arg, table.class_id("__Predicate")),
-            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
-            // result argument now, so the raw form is no longer the only
-            // spelling that reaches here.
-            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
-                if table.is_subtype(id, target)
-        ),
-        BParam::UnaryOperator => matches!(
-            (arg, table.class_id("__UnaryOperator")),
-            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
-            // result argument now, so the raw form is no longer the only
-            // spelling that reaches here.
-            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
-                if table.is_subtype(id, target)
-        ),
-        BParam::Supplier => matches!(
-            (arg, table.class_id("__Supplier")),
-            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
-            // result argument now, so the raw form is no longer the only
-            // spelling that reaches here.
-            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
-                if table.is_subtype(id, target)
-        ),
-        BParam::BiFunction => matches!(
-            (arg, table.class_id("__BiFunction")),
-            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
-            // result argument now, so the raw form is no longer the only
-            // spelling that reaches here.
-            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
-                if table.is_subtype(id, target)
-        ),
+        // The ERASED functional parameters. All six ask the same question —
+        // is the argument an instance of the bundled interface? — and a
+        // PARAMETERIZED one counts too, since `Supplier<String>` keeps its
+        // result argument and the raw form is no longer the only spelling that
+        // reaches here. Written out per parameter, the six copies drifted:
+        // `null` was a `Comparator` and a `Collector` and not a `Predicate`,
+        // so `list.removeIf(null)` was refused where javac compiles it and
+        // throws NPE at the call.
+        BParam::BiConsumer
+        | BParam::Consumer
+        | BParam::Predicate
+        | BParam::UnaryOperator
+        | BParam::Supplier
+        | BParam::BiFunction => {
+            let erased = match param {
+                BParam::BiConsumer => "__BiConsumer",
+                BParam::Consumer => "__Consumer",
+                BParam::Predicate => "__Predicate",
+                BParam::UnaryOperator => "__UnaryOperator",
+                BParam::Supplier => "__Supplier",
+                _ => "__BiFunction",
+            };
+            arg == JType::Null
+                || matches!(
+                    (arg, table.class_id(erased)),
+                    (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
+                        if table.is_subtype(id, target)
+                )
+        }
         // `list.sort(null)` is legal and means natural ordering (JDK), so
         // `null` satisfies a `Comparator` parameter like any other reference.
         BParam::Comparator => {
