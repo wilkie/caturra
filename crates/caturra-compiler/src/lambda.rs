@@ -304,6 +304,10 @@ struct MethodShape {
     is_varargs: bool,
     /// The checked exceptions the method declares, as written.
     throws: Vec<String>,
+    /// The declared RETURN type. A call to a method that returns a collection
+    /// is a receiver like any other — `make().forEach(v -> …)` — and without
+    /// this the pass had no element for the lambda.
+    return_type: TypeRef,
 }
 
 impl MethodShape {
@@ -331,6 +335,7 @@ fn method_shapes(units: &[(String, CompilationUnit)]) -> HashMap<String, Vec<Met
                     arity: method.params.len(),
                     is_varargs: method.params.last().is_some_and(|p| p.is_varargs),
                     throws: method.throws.clone(),
+                    return_type: method.return_type.clone(),
                 });
             }
         }
@@ -3226,7 +3231,106 @@ fn is_collection_class(simple: &str) -> bool {
     )
 }
 
+/// The ELEMENT of a written collection type: `List<String>` → `String`.
+fn element_of_declared(ty: &TypeRef) -> Option<TypeRef> {
+    match ty {
+        TypeRef::Generic { base, args }
+            if is_collection_class(simple_base(base.as_str())) && args.len() == 1 =>
+        {
+            Some(args[0].clone())
+        }
+        _ => None,
+    }
+}
+
+/// The declared type of an expression that names an ARRAY, when the pass can
+/// see one — a local, or a `this` field.
+fn declared_array_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    match expr {
+        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0]),
+        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+            ctx.lookup(name)
+        }
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per receiver shape
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    // The shapes whose element is written down somewhere the pass can reach.
+    // Reading only a NAME (and a `this` field) meant that a collection reached
+    // through a CAST, a ternary, an array element or any library factory but
+    // `of`/`asList` had no element type, and every lambda over one was refused
+    // for having no functional-interface position — a cross-product of receiver
+    // shapes against the four consumers that need an element found 44 such
+    // cells and 0 among the shapes already handled.
+    match receiver {
+        // `((List<String>) o).forEach(…)` — the cast says what it is.
+        Expr::Cast { ty, .. } => return element_of_declared(ty),
+        // Both branches have the same type; either one answers.
+        Expr::Ternary { then, els, .. } => {
+            return list_elem_type(then, ctx).or_else(|| list_elem_type(els, ctx));
+        }
+        // `rows[0].forEach(…)` — the ARRAY's element is the collection.
+        Expr::Index { array, .. } => {
+            if let Some(TypeRef::Array(elem)) = declared_array_type(array, ctx) {
+                return element_of_declared(&elem);
+            }
+        }
+        _ => {}
+    }
+    // A call to a USER method that returns a collection. The receiver is
+    // whatever the method says it gives back, which the pass knows for a bare
+    // call in the current class and for one on `this`.
+    if let Expr::Call {
+        receiver: owner,
+        method,
+        args,
+        ..
+    } = receiver
+        && matches!(owner.as_deref(), None | Some(Expr::This { .. }))
+        && let Some(class) = ctx.current_class
+        && let Some(shapes) = ctx.shapes.get(class)
+        && let Some(shape) = shapes
+            .iter()
+            .find(|shape| shape.name == *method && shape.arity == args.len())
+        && let Some(elem) = element_of_declared(&shape.return_type)
+    {
+        return Some(elem);
+    }
+    // The `Collections` factories and `copyOf`, whose element comes from what
+    // they are given rather than from a type argument.
+    if let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        ..
+    } = receiver
+    {
+        let from_collections = names_library_class(owner.as_ref(), "Collections");
+        let from_factory = names_library_class(owner.as_ref(), "List")
+            || names_library_class(owner.as_ref(), "Set")
+            || names_library_class(owner.as_ref(), "Collection");
+        match (method.as_str(), &args[..]) {
+            // One element, written as the argument.
+            ("singletonList" | "singleton", [only]) if from_collections => {
+                return Some(literal_element_type(std::slice::from_ref(only)));
+            }
+            ("nCopies", [_, only]) if from_collections => {
+                return Some(literal_element_type(std::slice::from_ref(only)));
+            }
+            // A WRAPPER or a copy: the element is the source's.
+            (
+                "unmodifiableList"
+                | "unmodifiableSet"
+                | "unmodifiableCollection"
+                | "unmodifiableSortedSet",
+                [source],
+            ) if from_collections => return list_elem_type(source, ctx),
+            ("copyOf", [source]) if from_factory => return list_elem_type(source, ctx),
+            _ => {}
+        }
+    }
     // A collection CONSTRUCTED in place — `new ArrayList<>(source).removeIf(x
     // -> …)`. Its element is written (`new ArrayList<String>()`) or comes from
     // what it copies (`new ArrayList<>(aStringList)`). Without this the

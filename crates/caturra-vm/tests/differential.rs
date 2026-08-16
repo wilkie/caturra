@@ -30605,3 +30605,103 @@ public class LambdaElementType {
 }
 "#
 );
+
+// A collection's ELEMENT has to flow from however the collection was reached.
+// A cross-product of nineteen receiver shapes against the six consumers that
+// need one found 49 divergent cells: the four that pass a LAMBDA
+// (`forEach`, `removeIf`, `stream().map`, `stream().filter`) failed for eleven
+// of the nineteen shapes, while the two that do not (`iterator`, a for-each
+// loop) passed everywhere. The pass read a NAME, a `this` field, and three
+// factories; everything else — a cast, a ternary, an array element, a method's
+// declared return, and every `Collections` factory — had no element, and the
+// lambda over it was refused for having no functional-interface position.
+//
+// `Set.of` is deliberately absent: its iteration ORDER is salted per JVM run,
+// so a real JDK does not agree with itself between two runs of this program.
+differential_test!(
+    an_element_type_flows_from_every_receiver_shape,
+    "ElementFlow",
+    r#"
+import java.util.*;
+
+public class ElementFlow {
+    static final List<String> FIELD = new ArrayList<>(Arrays.asList("a", "b"));
+
+    static List<String> make() {
+        return new ArrayList<>(Arrays.asList("a", "b"));
+    }
+
+    static void show(String label, List<String> from) {
+        StringBuilder out = new StringBuilder();
+        from.forEach(v -> out.append(v.toUpperCase()));
+        System.out.println(label + " " + out + " "
+            + from.stream().map(v -> v.toUpperCase()).count() + " "
+            + from.stream().filter(v -> !v.isEmpty()).count() + " "
+            + new ArrayList<>(from).removeIf(v -> v.isEmpty()));
+    }
+
+    public static void main(String[] args) {
+        StringBuilder out = new StringBuilder();
+
+        // A METHOD's declared return type.
+        make().forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("methodReturn " + out);
+        out.setLength(0);
+        System.out.println("methodReturn.stream " + make().stream()
+            .map(v -> v.toUpperCase()).count());
+
+        // A CAST.
+        Object held = new ArrayList<>(Arrays.asList("a"));
+        ((List<String>) held).forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("cast " + out);
+        out.setLength(0);
+
+        // A TERNARY.
+        boolean flag = true;
+        (flag ? new ArrayList<String>(Arrays.asList("a")) : new ArrayList<String>())
+            .forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("ternary " + out);
+        out.setLength(0);
+
+        // An ARRAY element.
+        List<String>[] rows = new List[1];
+        rows[0] = new ArrayList<>(Arrays.asList("a"));
+        rows[0].forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("arrayElem " + out);
+        out.setLength(0);
+
+        // Every `Collections` factory, and `copyOf`.
+        show("copyOf", List.copyOf(Arrays.asList("a", "b")));
+        show("singletonList", Collections.singletonList("a"));
+        show("nCopies", Collections.nCopies(2, "a"));
+        show("unmodList", Collections.unmodifiableList(new ArrayList<>(Arrays.asList("a"))));
+        Collections.singleton("a").forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("singletonSet " + out);
+        out.setLength(0);
+        Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList("a", "b")))
+            .forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("unmodSet " + out);
+        out.setLength(0);
+        System.out.println("nCopies.stream " + Collections.nCopies(2, "a").stream()
+            .map(v -> v.toUpperCase()).count());
+        System.out.println("copyOf.removeIf "
+            + new ArrayList<>(List.copyOf(Arrays.asList("a", "b"))).removeIf(v -> v.isEmpty()));
+
+        // The shapes that already worked, so a regression in them shows here.
+        FIELD.forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("field " + out);
+        out.setLength(0);
+        Arrays.asList("a", "b").forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("asList " + out);
+        out.setLength(0);
+        List.of("a", "b").forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("listOf " + out);
+        out.setLength(0);
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        counts.put("a", 1);
+        counts.keySet().forEach(v -> out.append(v.toUpperCase()));
+        System.out.println("keySet " + out);
+    }
+}
+"#
+);

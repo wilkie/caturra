@@ -6014,6 +6014,49 @@ Along the way the probe would not COMPILE, which found two more:
   PARAMETERS are now in scope for its body too, which is what
   `grid.forEach(row -> row.forEach(v -> …))` needs.
 
+### Where a collection's element comes from
+
+The previous unit left three lambda-target gaps recorded. Cross-producting them
+showed they were one gap with many faces: **nineteen receiver shapes against the
+six consumers that need an element type, and 49 of the 114 cells diverged.**
+
+The structure was stark. The two consumers that do NOT pass a lambda —
+`iterator()` and a for-each loop — worked for every shape. The four that do
+(`forEach`, `removeIf`, `stream().map`, `stream().filter`) failed for eleven of
+the nineteen, always with the same message: "a lambda or method reference is
+only allowed where a functional-interface type is expected".
+
+The lambda pass read a NAME, a `this` field, and three factories
+(`List.of`/`Set.of`/`Arrays.asList`). Everything else had no element type at
+all: a CAST, a TERNARY, an ARRAY element, a call to a method whose declared
+return says exactly what it gives back, and every `Collections` factory —
+`singletonList`, `singleton`, `nCopies`, `unmodifiableList`,
+`unmodifiableSet` — plus `List.copyOf`. Each now answers, from wherever its
+element is written down: a cast from its own type, a ternary from either
+branch, an array element from the array's declared type, a method call from its
+return type (which needed the pass to carry one at all), a wrapper or a copy
+from its SOURCE, and `singletonList(x)`/`nCopies(n, x)` from the argument.
+
+49 divergent cells became 9, and none of the nine is a defect:
+
+- **Three are the JDK disagreeing with itself.** `Set.of`'s iteration order is
+  salted per JVM run — `Set.of("a","b","c","d","e")` printed three different
+  orders across five runs of the same program on the same JDK. Nothing to
+  match, and nothing pinned.
+- **Six are the discarded type WITNESS.** `Collections.<String>emptyList()`
+  parses its witness and throws it away, so the call types as the
+  context-adopting `null` and a lambda over it has no element. The witness has
+  nowhere to live — `Expr::Call` carries no type arguments — which is the same
+  recorded gap that makes a DISAGREEING witness ignored. Assigning the factory
+  to a declared variable first works, and is what the shape is normally
+  written as.
+
+Noted while probing, not chased: `(List<String>) Collections.emptyList()`
+compiles here and is an "inconvertible types" error in javac, because a cast is
+a context and caturra's `emptyList()` adopts one. Looser than javac, in the
+narrow place where the alternative is refusing a program whose meaning is
+unambiguous.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
