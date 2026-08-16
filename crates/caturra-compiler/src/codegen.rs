@@ -269,6 +269,8 @@ fn emit_clinit(
         code: CodeBuilder::new(),
         scopes: vec![Vec::new()],
         next_slot: 0,
+        max_slot: 0,
+        scope_slots: Vec::new(),
         loop_stack: Vec::new(),
         pending_label: None,
         finally_stack: Vec::new(),
@@ -278,7 +280,7 @@ fn emit_clinit(
     };
     body.emit_ordered_initializers(decl, true);
     body.code.push_op(op::RETURN, 0);
-    let max_locals = body.next_slot;
+    let max_locals = body.max_slot;
     let local_var_debug = std::mem::take(&mut body.local_var_debug);
     let (bytecode, max_stack, line_numbers, exception_table) = body.code.finish();
     finish_method_info(
@@ -6689,6 +6691,8 @@ fn emit_method(
         code: CodeBuilder::new(),
         scopes: vec![Vec::new()],
         next_slot: u16::from(!decl.is_static),
+        max_slot: u16::from(!decl.is_static),
+        scope_slots: Vec::new(),
         loop_stack: Vec::new(),
         pending_label: None,
         finally_stack: Vec::new(),
@@ -6702,8 +6706,7 @@ fn emit_method(
     }
     for param in &decl.params {
         let ty = table.resolve_type(&param.ty).unwrap_or(JType::Unsupported);
-        let slot = body.next_slot;
-        body.next_slot += ty.width();
+        let slot = body.take_slots(ty.width());
         body.record_local_debug(&param.name, ty, slot);
         body.scopes[0].push((
             param.name.clone(),
@@ -6798,7 +6801,7 @@ fn emit_method(
     }
     body.code.push_op(op::RETURN, 0);
 
-    let max_locals = body.next_slot;
+    let max_locals = body.max_slot;
     let local_var_debug = std::mem::take(&mut body.local_var_debug);
     let (bytecode, max_stack, line_numbers, exception_table) = body.code.finish();
 
@@ -12697,6 +12700,15 @@ struct BodyGen<'a> {
     /// so declaration checks search all of them.
     scopes: Vec<Vec<(String, LocalVar)>>,
     next_slot: u16,
+    /// `next_slot` as each open scope found it, so closing one releases
+    /// exactly the slots it declared.
+    scope_slots: Vec<u16>,
+    /// The PEAK `next_slot` reached anywhere in the method. `next_slot` itself
+    /// falls back when a block scope ends and its locals are released — which
+    /// is what javac does, and what keeps a method of many small scopes from
+    /// running out of the 255 slots a narrow `istore` can name. `max_locals`
+    /// has to be this peak, not the value left at the end.
+    max_slot: u16,
     /// Innermost-last enclosing loops, for `break`/`continue`.
     loop_stack: Vec<LoopLabels>,
     /// A source label seen just before a loop/switch, consumed by the
@@ -13184,11 +13196,11 @@ impl BodyGen<'_> {
         }
         match stmt {
             Stmt::Block(statements) => {
-                self.scopes.push(Vec::new());
+                self.enter_scope();
                 for inner in statements {
                     self.statement(inner);
                 }
-                self.scopes.pop();
+                self.leave_scope();
             }
             Stmt::LocalDecl {
                 ty,
@@ -13440,8 +13452,7 @@ impl BodyGen<'_> {
                 },
             );
         }
-        let selector_slot = self.next_slot;
-        self.next_slot += selector_ty.width().max(1);
+        let selector_slot = self.take_slots(selector_ty.width().max(1));
         self.emit_store(selector_slot, selector_ty);
 
         // A switch on an enum dereferences the selector (javac compiles it to
@@ -13643,7 +13654,7 @@ impl BodyGen<'_> {
         // `case 1: int v; … case 2: v = 20;` is legal, and a redeclaration in
         // a later group is "already defined". (It used to be a scope per arm,
         // so the second group said the variable did not exist.)
-        self.scopes.push(Vec::new());
+        self.enter_scope();
         for (index, arm) in arms.iter().enumerate() {
             self.code.bind(arm_labels[index]);
             self.code.mark_line(arm.span.start.line);
@@ -13669,7 +13680,7 @@ impl BodyGen<'_> {
                 falls_out = Some(self.assigned_flags());
             }
         }
-        self.scopes.pop();
+        self.leave_scope();
         let exits = self.loop_stack.pop().map(|entry| entry.break_flags);
         self.code.bind(end);
 
@@ -13760,11 +13771,11 @@ impl BodyGen<'_> {
 
         let before_flags = self.assigned_flags();
         self.open_protected();
-        self.scopes.push(Vec::new());
+        self.enter_scope();
         for stmt in body {
             self.statement(stmt);
         }
-        self.scopes.pop();
+        self.leave_scope();
         let ranges = self.close_protected();
         if ranges.is_empty() {
             // An empty protected range is illegal in the table; with
@@ -13782,10 +13793,9 @@ impl BodyGen<'_> {
                 if kinds.is_empty() {
                     continue;
                 }
-                self.scopes.push(Vec::new());
+                self.enter_scope();
                 let ty = self.catch_variable_type(kinds);
-                let slot = self.next_slot;
-                self.next_slot += 1;
+                let slot = self.take_slots(1);
                 self.scopes.last_mut().expect("scope pushed").push((
                     clause.name.clone(),
                     LocalVar {
@@ -13799,7 +13809,7 @@ impl BodyGen<'_> {
                 for stmt in &clause.body {
                     self.statement(stmt);
                 }
-                self.scopes.pop();
+                self.leave_scope();
             }
             self.code.bind(skip);
             self.restore_assigned(&before_flags);
@@ -13835,19 +13845,18 @@ impl BodyGen<'_> {
             // The VM pushes the thrown object before jumping here.
             self.code.assume_stack(1);
 
-            self.scopes.push(Vec::new());
+            self.enter_scope();
             if kinds.is_empty() {
                 // Unresolvable type: an error was reported; skip body
                 // emission to avoid cascades.
-                self.scopes.pop();
+                self.leave_scope();
                 let _ = self.close_protected();
                 continue;
             }
             // A multi-catch has ONE handler; the alternatives differ only in which
             // exceptions reach it, so the variable takes a type that covers them all.
             let ty = self.catch_variable_type(kinds);
-            let slot = self.next_slot;
-            self.next_slot += 1;
+            let slot = self.take_slots(1);
             self.emit_store(slot, ty);
             self.record_local_debug(&clause.name, ty, slot);
             if self.lookup(&clause.name).is_some() {
@@ -13876,7 +13885,7 @@ impl BodyGen<'_> {
             for stmt in &clause.body {
                 self.statement(stmt);
             }
-            self.scopes.pop();
+            self.leave_scope();
             catch_ranges.extend(self.close_protected());
             if let Some(finally_stmts) = finally_body {
                 let guard = self.finally_stack.pop();
@@ -13904,8 +13913,7 @@ impl BodyGen<'_> {
             self.finally_stack.pop();
             let handler = self.code.offset();
             self.code.assume_stack(1);
-            let scratch = self.next_slot;
-            self.next_slot += 1;
+            let scratch = self.take_slots(1);
             self.emit_store(scratch, JType::Exception(0));
             self.emit_block(finally_stmts);
             self.emit_load(scratch, JType::Exception(0));
@@ -13939,11 +13947,11 @@ impl BodyGen<'_> {
 
     /// Emit statements in a fresh scope (a finally copy).
     fn emit_block(&mut self, statements: &[Stmt]) {
-        self.scopes.push(Vec::new());
+        self.enter_scope();
         for stmt in statements {
             self.statement(stmt);
         }
-        self.scopes.pop();
+        self.leave_scope();
     }
 
     /// Duplicate the bodies of enclosing `finally` blocks before an
@@ -14354,7 +14362,7 @@ impl BodyGen<'_> {
         body: &Stmt,
     ) {
         // The init declaration is scoped to the loop.
-        self.scopes.push(Vec::new());
+        self.enter_scope();
         if let Some(init) = init {
             self.statement(init);
         }
@@ -14388,7 +14396,7 @@ impl BodyGen<'_> {
         }
         self.code.branch(op::GOTO, cond_label, 0);
         self.code.bind(end);
-        self.scopes.pop();
+        self.leave_scope();
     }
 
     // ----- branch-aware definite assignment -----
@@ -14702,8 +14710,7 @@ impl BodyGen<'_> {
                 );
                 continue;
             }
-            let slot = self.next_slot;
-            self.next_slot += var_ty.width();
+            let slot = self.take_slots(var_ty.width());
             let assigned = if let Some(init) = &declarator.init {
                 // `int[] a = {1, 2};` — the literal takes its type
                 // from the declaration.
@@ -14816,8 +14823,7 @@ impl BodyGen<'_> {
             );
             return;
         }
-        let slot = self.next_slot;
-        self.next_slot += var_ty.width();
+        let slot = self.take_slots(var_ty.width());
         let init = declarator
             .init
             .as_ref()
@@ -15939,11 +15945,11 @@ impl BodyGen<'_> {
                     // illegal. Without the context here the whole block was
                     // exempt, so `{ print(b); } int b = 5;` printed 0.
                     self.forward_ref = Some((block.order, std::rc::Rc::clone(&orders)));
-                    self.scopes.push(Vec::new());
+                    self.enter_scope();
                     for stmt in &block.body {
                         self.statement(stmt);
                     }
-                    self.scopes.pop();
+                    self.leave_scope();
                     self.forward_ref = None;
                 }
             }
@@ -20321,24 +20327,21 @@ impl BodyGen<'_> {
         };
 
         // Synthetic slots for the array and the index.
-        let array_slot = self.next_slot;
-        self.next_slot += 1;
-        let index_slot = self.next_slot;
-        self.next_slot += 1;
+        let array_slot = self.take_slots(1);
+        let index_slot = self.take_slots(1);
         self.emit_store(array_slot, iterable_ty);
         self.code.push_op(op::ICONST_0, 1);
         self.emit_store(index_slot, JType::Int);
 
         // The loop variable lives in its own scope.
-        self.scopes.push(Vec::new());
+        self.enter_scope();
         if self.lookup(name).is_some() {
             self.error(
                 span,
                 format!("variable '{name}' is already defined in this method"),
             );
         }
-        let var_slot = self.next_slot;
-        self.next_slot += var_ty.width();
+        let var_slot = self.take_slots(var_ty.width());
         self.record_local_debug(name, var_ty, var_slot);
         self.scopes.last_mut().expect("scope pushed").push((
             name.to_owned(),
@@ -20388,7 +20391,7 @@ impl BodyGen<'_> {
         self.emit_store(index_slot, JType::Int);
         self.code.branch(op::GOTO, cond_label, 0);
         self.code.bind(end);
-        self.scopes.pop();
+        self.leave_scope();
     }
 
     /// `for (T x : iterable)` over a class that implements `Iterable`, compiled
@@ -20453,22 +20456,20 @@ impl BodyGen<'_> {
             "()Ljava/lang/Object;",
         );
 
-        let cursor_slot = self.next_slot;
-        self.next_slot += 1;
+        let cursor_slot = self.take_slots(1);
         self.code.push_op_u16(op::INVOKEVIRTUAL, iterator_ref, 1);
         self.code.drop_stack(1);
         self.emit_store(cursor_slot, JType::Iterator(ElemType::Object(class)));
         let _ = iterable_ty;
 
-        self.scopes.push(Vec::new());
+        self.enter_scope();
         if self.lookup(name).is_some() {
             self.error(
                 span,
                 format!("variable '{name}' is already defined in this method"),
             );
         }
-        let var_slot = self.next_slot;
-        self.next_slot += var_ty.width();
+        let var_slot = self.take_slots(var_ty.width());
         self.record_local_debug(name, var_ty, var_slot);
         self.scopes.last_mut().expect("scope pushed").push((
             name.to_owned(),
@@ -20513,7 +20514,7 @@ impl BodyGen<'_> {
         self.code.bind(continue_label);
         self.code.branch(op::GOTO, cond_label, 0);
         self.code.bind(end);
-        self.scopes.pop();
+        self.leave_scope();
     }
 
     /// `for (T x : list)` desugared to an indexed loop over
@@ -20546,23 +20547,20 @@ impl BodyGen<'_> {
             resolved
         };
 
-        let list_slot = self.next_slot;
-        self.next_slot += 1;
-        let index_slot = self.next_slot;
-        self.next_slot += 1;
+        let list_slot = self.take_slots(1);
+        let index_slot = self.take_slots(1);
         self.emit_store(list_slot, iterable_ty);
         self.code.push_op(op::ICONST_0, 1);
         self.emit_store(index_slot, JType::Int);
 
-        self.scopes.push(Vec::new());
+        self.enter_scope();
         if self.lookup(name).is_some() {
             self.error(
                 span,
                 format!("variable '{name}' is already defined in this method"),
             );
         }
-        let var_slot = self.next_slot;
-        self.next_slot += var_ty.width();
+        let var_slot = self.take_slots(var_ty.width());
         self.record_local_debug(name, var_ty, var_slot);
         self.scopes.last_mut().expect("scope pushed").push((
             name.to_owned(),
@@ -20588,8 +20586,7 @@ impl BodyGen<'_> {
 
         // The size when the loop began — what every element fetch is checked
         // against, standing in for the JDK iterator's `expectedModCount`.
-        let expected_slot = self.next_slot;
-        self.next_slot += 1;
+        let expected_slot = self.take_slots(1);
         self.emit_load(list_slot, iterable_ty);
         self.code.push_op_u16(op::INVOKEVIRTUAL, size_ref, 1);
         self.code.drop_stack(1);
@@ -20640,7 +20637,7 @@ impl BodyGen<'_> {
         self.emit_store(index_slot, JType::Int);
         self.code.branch(op::GOTO, cond_label, 0);
         self.code.bind(end);
-        self.scopes.pop();
+        self.leave_scope();
     }
 
     fn expression_statement(&mut self, expr: &Expr) {
@@ -27494,6 +27491,32 @@ impl BodyGen<'_> {
         };
         self.local_op(base, short_base, slot);
         self.code.drop_stack(ty.width());
+    }
+
+    /// Reserve `width` consecutive local slots, remembering the peak. Every
+    /// allocation goes through here so that releasing a scope's slots (see
+    /// [`Self::leave_scope`]) cannot lose the frame size the method needs.
+    fn take_slots(&mut self, width: u16) -> u16 {
+        let slot = self.next_slot;
+        self.next_slot += width;
+        self.max_slot = self.max_slot.max(self.next_slot);
+        slot
+    }
+
+    /// Open a lexical scope. Its locals are released when it closes, so two
+    /// sibling blocks share slots exactly as javac's do — a method of many
+    /// small scopes used to allocate a slot per declaration and run out of the
+    /// 255 a narrow `istore` can name, in a program javac compiles.
+    fn enter_scope(&mut self) {
+        self.scopes.push(Vec::new());
+        self.scope_slots.push(self.next_slot);
+    }
+
+    fn leave_scope(&mut self) {
+        self.scopes.pop();
+        if let Some(slot) = self.scope_slots.pop() {
+            self.next_slot = slot;
+        }
     }
 
     fn local_op(&mut self, base: u8, short_base: u8, slot: u16) {

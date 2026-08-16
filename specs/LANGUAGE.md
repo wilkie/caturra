@@ -5920,6 +5920,47 @@ Two more found alongside:
   nothing to infer from. Re-typing it as if `<Object>` had been written keeps
   the CONCRETE face, so a `new Stack<>()` still has `push`.
 
+### Cross-producting the collections again
+
+Three more relations run over the whole collection zoo the way equality was:
+the BULK operations (`addAll`/`removeAll`/`retainAll`/`containsAll` between
+every pair of kinds, 288 calls), the `Collections` ALGORITHMS (sort, reverse,
+swap, fill, rotate, replaceAll, seeded shuffle, min/max, frequency,
+indexOfSubList, disjoint, binarySearch, nCopies over four list kinds, 88 calls)
+and the CURSOR operations (remove-first, remove-twice, remove-before-next,
+next-past-end and a plain walk over fifteen kinds, 75 calls).
+
+The first two came back **clean** — 288/288 and 88/88, the latter including
+`Collections.shuffle(list, new Random(42))`, which needs both the JDK's exact
+`Random` sequence and its exact shuffle. Two defects came out of the third and
+out of trying to run the first at all.
+
+**A closed scope did not release its locals.** The 288-call probe would not
+compile: "too many local variables in one method". javac frees a block's slots
+when the block ends, so sibling blocks share them; caturra allocated one slot
+per declaration and ran out of the 255 a narrow `istore` can name. Every scope
+push/pop now goes through one pair of helpers that saves and restores the
+allocator, and `max_locals` became the PEAK rather than the value left at the
+end — the two have to change together, or a method claims a frame smaller than
+it used. A method with 255 *simultaneously live* locals is still refused, which
+needs the `wide` prefix the VM does not decode; that is pathological where the
+scope case is routine.
+
+**A priority queue's cursor removed nothing.** The engine's element-vector
+removal knows every collection except this one — a heap needs `removeAt`, which
+repairs it and may run a user `compare`, so it cannot live in the heap-only
+cursor code. The machinery was already there: `pq_remove_at`, whose own doc
+says it returns the moved element "exactly the JDK's contract, which its
+iterator uses to know what it will miss". The iterator had never used it.
+
+That contract is the subtle half. `removeAt` fills the hole from the END, and
+that element can sift UP past the cursor, into territory already walked. A JDK
+keeps it aside (`forgetMeNot`) and yields it once the array is spent, so the
+walk still sees every element exactly once; it steps the cursor back only in
+the other case. Doing one of the two unconditionally both revisited an element
+and skipped another — visible in `seen=1,10,2,11,10,12` where a JDK gives
+`1,10,2,11,12,3`. 271 randomized removals now agree, including a full drain.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

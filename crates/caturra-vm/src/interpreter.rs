@@ -165,6 +165,14 @@ pub(crate) struct Interpreter<'run> {
     /// view at construction, like the index style beside it, because the
     /// wrapper itself cannot tell them apart.
     view_class: HashMap<HeapRef, &'static str>,
+    /// A PRIORITY QUEUE cursor's `forgetMeNot` queue, and the element it last
+    /// yielded from it. Removing through a heap cursor can move an element
+    /// UP past the cursor, into territory already walked; the JDK's iterator
+    /// keeps that element aside and yields it once the array is spent, so the
+    /// walk still sees every element exactly once. Held beside the cursor
+    /// rather than in it, like the index style and the view class, because
+    /// only this one collection needs it.
+    cursor_pending: HashMap<HeapRef, (Vec<JValue>, Option<JValue>)>,
     /// Streams whose pipeline has already been used — a stream is SINGLE-USE
     /// (JDK: "stream has already been operated upon or closed"), and both a
     /// terminal and an intermediate op spend it. Held aside rather than in the
@@ -261,6 +269,7 @@ impl<'run> Interpreter<'run> {
             checked_cursor_views: std::collections::HashSet::new(),
             view_index_style: HashMap::new(),
             view_class: HashMap::new(),
+            cursor_pending: HashMap::new(),
             spent_streams: std::collections::HashSet::new(),
             stream_origins: HashMap::new(),
         }
@@ -12072,6 +12081,123 @@ impl<'run> Interpreter<'run> {
         // Turning a value into text can call a user `toString()`, which needs
         // the interpreter; the intrinsic layer holds only the heap.
         if self.container_to_string(frame, receiver, method_name, descriptor)? {
+            return Ok(None);
+        }
+        // A heap cursor with elements set aside answers `hasNext`/`next` from
+        // them once the array is spent, so the walk sees every element exactly
+        // once. Only reached after a `remove` moved one up past the cursor.
+        if matches!(method_name, "hasNext" | "next")
+            && args.is_empty()
+            && let Some((pending, _)) = self.cursor_pending.get(&receiver)
+            && !pending.is_empty()
+            && let Some(crate::value::HeapObject::Iterator {
+                source,
+                index,
+                expected_len,
+                ..
+            }) = self.heap.get(receiver)
+        {
+            let (source, index, expected_len) = (*source, *index, *expected_len);
+            if index >= iterated_len_of(&self.heap, source) {
+                check_comodification(&self.heap, source, expected_len)?;
+                if method_name == "hasNext" {
+                    frame.stack.push(JValue::Int(1));
+                    return Ok(None);
+                }
+                let entry = self.cursor_pending.entry(receiver).or_default();
+                let value = entry.0.remove(0);
+                entry.1 = Some(value);
+                if let Some(crate::value::HeapObject::Iterator { last, .. }) =
+                    self.heap.get_mut(receiver)
+                {
+                    // Not an array position: a `remove` after this one has to
+                    // find the element by IDENTITY, which the arm below does.
+                    *last = None;
+                }
+                frame.stack.push(value);
+                return Ok(None);
+            }
+        }
+        // `remove()` after an element yielded from the set-aside queue: the JDK
+        // drops it by IDENTITY, having no array position to name.
+        if method_name == "remove"
+            && args.is_empty()
+            && let Some(last) = self.cursor_pending.get(&receiver).and_then(|entry| entry.1)
+            && let Some(crate::value::HeapObject::Iterator { source, .. }) = self.heap.get(receiver)
+            && matches!(
+                self.heap.get(*source),
+                Some(crate::value::HeapObject::PriorityQueue { .. })
+            )
+        {
+            let source = *source;
+            let comparator = self.pq_comparator(source);
+            let mut queue = self.pq_heap(source);
+            if let Some(at) = queue.iter().position(|value| *value == last) {
+                self.pq_remove_at(&mut queue, comparator, at)?;
+                self.set_pq_heap(source, queue);
+            }
+            let length = iterated_len_of(&self.heap, source);
+            if let Some(crate::value::HeapObject::Iterator { expected_len, .. }) =
+                self.heap.get_mut(receiver)
+            {
+                *expected_len = length;
+            }
+            if let Some(entry) = self.cursor_pending.get_mut(&receiver) {
+                entry.1 = None;
+            }
+            return Ok(None);
+        }
+        // `iterator().remove()` on a PRIORITY QUEUE repairs the heap the way
+        // `PriorityQueue.removeAt` does, which may run a user `compare` — so
+        // it belongs here and not in the heap-only cursor code, whose
+        // element-vector removal knows every collection EXCEPT this one and
+        // silently removed nothing.
+        if method_name == "remove"
+            && args.is_empty()
+            && let Some(crate::value::HeapObject::Iterator { source, last, .. }) =
+                self.heap.get(receiver)
+            && matches!(
+                self.heap.get(*source),
+                Some(crate::value::HeapObject::PriorityQueue { .. })
+            )
+        {
+            let (source, last) = (*source, *last);
+            let Some(position) = last else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.IllegalStateException",
+                )));
+            };
+            let comparator = self.pq_comparator(source);
+            let mut queue = self.pq_heap(source);
+            let mut moved = None;
+            if position < queue.len() {
+                moved = self.pq_remove_at(&mut queue, comparator, position)?;
+                self.set_pq_heap(source, queue);
+            }
+            if let Some(moved) = moved {
+                // It sifted UP, past the cursor. The walk keeps it aside and
+                // yields it after the array, and does NOT step back — the hole
+                // was not filled from the end.
+                self.cursor_pending
+                    .entry(receiver)
+                    .or_insert_with(|| (Vec::new(), None))
+                    .0
+                    .push(moved);
+            }
+            let length = iterated_len_of(&self.heap, source);
+            if let Some(crate::value::HeapObject::Iterator {
+                index,
+                last,
+                expected_len,
+                ..
+            }) = self.heap.get_mut(receiver)
+            {
+                if moved.is_none() {
+                    *index = position;
+                }
+                *last = None;
+                *expected_len = length;
+            }
             return Ok(None);
         }
         // Draining a cursor runs a user `accept` for each element, so it needs

@@ -30321,3 +30321,146 @@ public class DiamondReceiver {
 }
 "#
 );
+
+// A method of many small SCOPES. javac releases a block's locals when the
+// block ends, so two sibling blocks share slots; caturra allocated one slot per
+// declaration and ran out of the 255 a narrow `istore` can name — refusing a
+// program javac compiles. Every scope shape is exercised here, because a slot
+// released too EARLY is a wrong answer where one released too late is only a
+// refusal.
+differential_test!(
+    a_closed_scope_releases_its_slots,
+    "ScopeSlots",
+    r#"
+import java.util.*;
+
+public class ScopeSlots {
+    static int deep(int n) {
+        int total = 0;
+        for (int i = 0; i < n; i++) {
+            int a = i * 2;
+            { int b = a + 1; total += b; }
+            { long c = a; double d = c / 2.0; total += (int) d; }
+            for (String s : Arrays.asList("x", "y")) { int e = s.length(); total += e; }
+            try { int f = 10 / (i + 1); total += f; }
+            catch (ArithmeticException ex) { int g = 1; total += g; }
+            finally { int h = 1; total += h; }
+            switch (i % 3) {
+                case 0: { int k = 5; total += k; break; }
+                case 1: { long m = 7; total += (int) m; break; }
+                default: { double p = 0.5; total += (int) p; }
+            }
+            if (i > 0) { int q = i; total += q; } else { int r = -1; total += r; }
+            do { int v = 0; total += v; } while (false);
+        }
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (int i = 0; i < 3; i++) { counts.put("k" + i, i); }
+        for (Map.Entry<String, Integer> e : counts.entrySet()) { int w = e.getValue(); total += w; }
+        Iterator<String> it = counts.keySet().iterator();
+        while (it.hasNext()) { String s = it.next(); total += s.length(); }
+        return total;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(deep(5));
+        System.out.println(deep(0));
+
+        // A hundred sibling blocks: one slot per declaration would need 200.
+        int total = 0;
+        { int v = 1; total += v; } { int v = 2; total += v; } { int v = 3; total += v; }
+        { int v = 4; total += v; } { int v = 5; total += v; } { int v = 6; total += v; }
+        { long v = 7; total += (int) v; } { double v = 8; total += (int) v; }
+        { String v = "9"; total += v.length(); } { int[] v = {10}; total += v[0]; }
+        System.out.println(total);
+
+        // A local captured by a lambda must outlive the block's slot reuse.
+        List<Integer> out = new ArrayList<>();
+        { int base = 100; Arrays.asList(1, 2).forEach(x -> out.add(x + base)); }
+        { int other = 7; out.add(other); }
+        System.out.println(out);
+
+        // Nested scopes still see the enclosing ones.
+        StringBuilder sb = new StringBuilder();
+        { String s1 = "a"; { String s2 = "b"; { String s3 = "c"; sb.append(s1).append(s2).append(s3); } } }
+        System.out.println(sb);
+    }
+}
+"#
+);
+
+// Removing through a PRIORITY QUEUE's cursor. The engine's element-vector
+// removal knew every collection except this one and silently removed NOTHING;
+// a heap needs `removeAt`, which repairs it and may run a user `compare`.
+//
+// The subtle half is what the walk SEES. `removeAt` fills the hole from the
+// end, and that element can sift UP past the cursor — into territory already
+// walked. A JDK keeps it aside and yields it once the array is spent, so the
+// walk still sees every element exactly once; stepping the cursor back instead
+// (right when the hole IS filled from the end) both revisited one element and
+// skipped another.
+differential_test!(
+    a_heap_cursor_removes_and_still_sees_everything,
+    "HeapCursor",
+    r#"
+import java.util.*;
+
+public class HeapCursor {
+    static void run(String label, List<Integer> init, int at) {
+        PriorityQueue<Integer> queue = new PriorityQueue<>(init);
+        StringBuilder seen = new StringBuilder();
+        Iterator<Integer> it = queue.iterator();
+        int step = 0;
+        while (it.hasNext()) {
+            Integer value = it.next();
+            seen.append(value).append(",");
+            if (step == at) {
+                it.remove();
+            }
+            step++;
+        }
+        System.out.println(label + " seen=" + seen + " left=" + queue);
+    }
+
+    public static void main(String[] args) {
+        // The element sifts UP past the cursor: the case `forgetMeNot` exists for.
+        run("up", Arrays.asList(1, 10, 2, 11, 12, 3), 3);
+        run("up2", Arrays.asList(0, 50, 1, 51, 52, 2, 3, 60, 61, 62, 63, 4), 7);
+        run("up3", Arrays.asList(0, 50, 1, 51, 52, 2, 3, 60, 61, 62, 63, 4), 8);
+        // The hole is filled from the end and the cursor steps back.
+        run("back", Arrays.asList(1, 10, 2, 11, 12, 3), 1);
+        run("back2", Arrays.asList(1, 20, 2, 21, 22, 3, 4, 30, 31), 4);
+        for (int at = 0; at < 6; at++) {
+            run("mix" + at, Arrays.asList(5, 1, 4, 2, 6, 3), at);
+            run("dup" + at, Arrays.asList(2, 2, 1, 3, 2, 1), at);
+        }
+
+        // Removing every element through the cursor empties the queue.
+        PriorityQueue<Integer> queue = new PriorityQueue<>(Arrays.asList(5, 1, 4, 2, 6, 3, 9, 7));
+        Iterator<Integer> it = queue.iterator();
+        StringBuilder seen = new StringBuilder();
+        while (it.hasNext()) {
+            seen.append(it.next()).append(",");
+            it.remove();
+        }
+        System.out.println("drain " + seen + " " + queue + " " + queue.isEmpty());
+
+        // And the state checks a cursor owes: remove before next, and twice.
+        PriorityQueue<Integer> other = new PriorityQueue<>(Arrays.asList(1, 2, 3));
+        Iterator<Integer> cursor = other.iterator();
+        try {
+            cursor.remove();
+        } catch (IllegalStateException e) {
+            System.out.println("remove before next");
+        }
+        cursor.next();
+        cursor.remove();
+        try {
+            cursor.remove();
+        } catch (IllegalStateException e) {
+            System.out.println("remove twice");
+        }
+        System.out.println(other);
+    }
+}
+"#
+);
