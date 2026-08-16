@@ -6062,6 +6062,17 @@ impl<'run> Interpreter<'run> {
     /// Whether `reference` is a Set of any implementation — what
     /// `AbstractSet.equals` will compare against. A `values()` view is the one
     /// map view that is NOT (it is a bare `Collection`).
+    /// Whether `reference` is a `Map` of any implementation — including a
+    /// wrapper, which delegates every read to the map it holds.
+    fn is_map_like(&self, reference: HeapRef) -> bool {
+        use crate::value::HeapObject;
+        match self.heap.get(reference) {
+            Some(HeapObject::HashMap(_) | HeapObject::TreeMap { .. }) => true,
+            Some(HeapObject::UnmodifiableMap(inner)) => self.is_map_like(*inner),
+            _ => false,
+        }
+    }
+
     fn is_set_like(&self, reference: HeapRef) -> bool {
         use crate::value::HeapObject;
         match self.heap.get(reference) {
@@ -6940,11 +6951,31 @@ impl<'run> Interpreter<'run> {
             }
             Some(HeapObject::UnmodifiableMap(inner)) => {
                 let inner = *inner;
-                if method_name == "clear"
-                    && !self.refuses_before_checking(receiver)
-                    && self.map_len(inner) == 0
-                {
-                    return Ok(Answered::Void);
+                // A wrapper that INHERITS `AbstractMap`'s mutators reaches them
+                // and fails only where the inherited code does. `remove(key)`
+                // walks the entry set and touches the cursor only ON A MATCH,
+                // so removing a key that is not there answers null; `clear`
+                // and `replaceAll` over an EMPTY map do nothing at all. Only
+                // `unmodifiableMap` and `Map.of` override every mutator and
+                // refuse outright — the same split the list and set sides have.
+                if !self.refuses_before_checking(receiver) {
+                    if matches!(method_name, "clear" | "replaceAll") && self.map_len(inner) == 0 {
+                        return Ok(Answered::Void);
+                    }
+                    // Only the ONE-argument `remove(key)`, which is
+                    // `AbstractMap`'s and scans. `Collections.EmptyMap`
+                    // OVERRIDES the two-argument `remove(key, value)` — along
+                    // with `replace` and the `compute` family — to refuse
+                    // whatever the map holds, so that form keeps falling
+                    // through to the refusal below. (It also answers a
+                    // BOOLEAN, so handing it a null would be an int slot
+                    // holding a reference: a VerifyError at the next use.)
+                    if method_name == "remove"
+                        && let [key] = args[..]
+                        && self.map_find(inner, key)?.is_none()
+                    {
+                        return Ok(Answered::Value(JValue::NULL));
+                    }
                 }
                 if is_map_mutator(method_name) {
                     return Err(VmError::UncaughtException(String::from(
@@ -6999,11 +7030,6 @@ impl<'run> Interpreter<'run> {
                     _ => {}
                 }
                 return Ok(Answered::Void);
-            }
-            ("forEach", [JValue::Ref(None)]) => {
-                return Err(VmError::UncaughtException(String::from(
-                    "java.lang.NullPointerException",
-                )));
             }
             ("forEach", [JValue::Ref(Some(consumer))]) => {
                 self.map_for_each(receiver, *consumer)?;
@@ -7094,6 +7120,15 @@ impl<'run> Interpreter<'run> {
             // — the detail that makes `merge` usable as a counter that can also
             // delete. `merge` never passes null to its remapper: an absent key
             // stores the given value outright.
+            // A null ACTION, and `merge`'s null VALUE: the JDK's
+            // `requireNonNull` runs before anything else, so a null value to
+            // `merge` is not "leave it alone" but a programming error the map
+            // refuses to guess about.
+            ("forEach", [JValue::Ref(None)]) | ("merge", [_, JValue::Ref(None), _]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
             ("merge", [key, value, JValue::Ref(Some(remap))]) => {
                 let existing = match self.map_find(receiver, *key)? {
                     Some(at) => self.map_value_at(receiver, at),
@@ -11825,8 +11860,15 @@ impl<'run> Interpreter<'run> {
         // those collections cannot hold null and say so rather than answering.
         if matches!(
             method_name,
-            "contains" | "indexOf" | "lastIndexOf" | "containsKey" | "get" | "containsValue"
-        ) && matches!(args[..], [JValue::Ref(None)])
+            "contains"
+                | "indexOf"
+                | "lastIndexOf"
+                | "containsKey"
+                | "get"
+                | "getOrDefault"
+                | "containsValue" // The PROBE is the first argument; `getOrDefault(null, fallback)` has
+                                  // a second, and matching the whole argument list missed it.
+        ) && matches!(args.first(), Some(JValue::Ref(None)))
             && self
                 .view_class
                 .get(&receiver)
@@ -11871,6 +11913,18 @@ impl<'run> Interpreter<'run> {
                 | "containsAll"
         ) && matches!(args[..], [JValue::Ref(None)])
             && self.try_collection_elements(receiver).is_some()
+            && !self.refuses_before_checking(receiver)
+        {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
+        // The same rule for a MAP, whose bulk methods take a map or a function
+        // and null-check it first. `putAll(null)` reached no arm at all and
+        // ended the run with "unknown native member: HashMap.putAll".
+        if matches!(method_name, "putAll" | "forEach" | "replaceAll")
+            && matches!(args[..], [JValue::Ref(None)])
+            && self.is_map_like(receiver)
             && !self.refuses_before_checking(receiver)
         {
             return Err(VmError::UncaughtException(String::from(

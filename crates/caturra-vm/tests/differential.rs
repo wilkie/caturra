@@ -30705,3 +30705,87 @@ public class ElementFlow {
 }
 "#
 );
+
+// The MAP surface, cross-producted: seven map kinds against thirty-eight
+// operations including every null-key, null-value and `compute`-family edge —
+// 266 calls, of which 15 diverged. What a `Map.of` PRINTS is left out: its
+// iteration order is salted per JVM run, so a real JDK does not agree with
+// itself between two runs of the same program.
+differential_test!(
+    the_map_surface_answers_the_jdks_way,
+    "MapSurface",
+    r#"
+import java.util.*;
+
+public class MapSurface {
+    static Map<String, Integer> hash() {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("a", 1);
+        m.put("b", 2);
+        return m;
+    }
+
+    public static void main(String[] args) {
+        Object r = "-";
+        try { Map<String,Integer> m = hash(); r = m.merge("a", null, (x, y) -> x); System.out.println("hash.mergeNullValue ok " + r); }
+        catch (Throwable t) { System.out.println("hash.mergeNullValue " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = new TreeMap<>(hash()); r = m.merge("a", null, (x, y) -> x); System.out.println("tree.mergeNullValue ok " + r); }
+        catch (Throwable t) { System.out.println("tree.mergeNullValue " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); r = m.merge("a", 5, (x, y) -> x + y); System.out.println("hash.mergeExisting ok " + r); }
+        catch (Throwable t) { System.out.println("hash.mergeExisting " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); r = m.merge("a", 5, (x, y) -> null); System.out.println("hash.mergeToNull ok " + r); }
+        catch (Throwable t) { System.out.println("hash.mergeToNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); m.putAll(null); System.out.println("hash.putAllNull ok " + r); }
+        catch (Throwable t) { System.out.println("hash.putAllNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = new TreeMap<>(hash()); m.putAll(null); System.out.println("tree.putAllNull ok " + r); }
+        catch (Throwable t) { System.out.println("tree.putAllNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); m.forEach(null); System.out.println("hash.forEachNull ok " + r); }
+        catch (Throwable t) { System.out.println("hash.forEachNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); m.replaceAll(null); System.out.println("hash.replaceAllNull ok " + r); }
+        catch (Throwable t) { System.out.println("hash.replaceAllNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Map.of("a", 1); r = m.get(null); System.out.println("mapOf.getNull ok " + r); }
+        catch (Throwable t) { System.out.println("mapOf.getNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Map.of("a", 1); r = m.getOrDefault(null, 9); System.out.println("mapOf.getOrDefaultNull ok " + r); }
+        catch (Throwable t) { System.out.println("mapOf.getOrDefaultNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Map.of("a", 1); r = m.containsKey(null); System.out.println("mapOf.containsKeyNull ok " + r); }
+        catch (Throwable t) { System.out.println("mapOf.containsKeyNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.singletonMap("a", 1); r = m.remove("z"); System.out.println("singleton.removeMissing ok " + r); }
+        catch (Throwable t) { System.out.println("singleton.removeMissing " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.singletonMap("a", 1); r = m.remove(null); System.out.println("singleton.removeNullKey ok " + r); }
+        catch (Throwable t) { System.out.println("singleton.removeNullKey " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.singletonMap("a", 1); r = m.remove("a"); System.out.println("singleton.removePresent ok " + r); }
+        catch (Throwable t) { System.out.println("singleton.removePresent " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.emptyMap(); r = m.remove("a"); System.out.println("empty.removeKey ok " + r); }
+        catch (Throwable t) { System.out.println("empty.removeKey " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.emptyMap(); m.clear(); System.out.println("empty.clear ok " + r); }
+        catch (Throwable t) { System.out.println("empty.clear " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.emptyMap(); m.replaceAll((k, v) -> v); System.out.println("empty.replaceAll ok " + r); }
+        catch (Throwable t) { System.out.println("empty.replaceAll " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.emptyMap(); r = m.remove("a", 1); System.out.println("empty.removeKeyValue ok " + r); }
+        catch (Throwable t) { System.out.println("empty.removeKeyValue " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.emptyMap(); r = m.putIfAbsent("a", 1); System.out.println("empty.putIfAbsent ok " + r); }
+        catch (Throwable t) { System.out.println("empty.putIfAbsent " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.unmodifiableMap(hash()); r = m.remove("z"); System.out.println("unmod.removeMissing ok " + r); }
+        catch (Throwable t) { System.out.println("unmod.removeMissing " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.unmodifiableMap(new LinkedHashMap<String,Integer>()); m.clear(); System.out.println("unmod.clear ok " + r); }
+        catch (Throwable t) { System.out.println("unmod.clear " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = Collections.unmodifiableMap(hash()); m.putAll(null); System.out.println("unmod.putAllNull ok " + r); }
+        catch (Throwable t) { System.out.println("unmod.putAllNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); r = m.compute("a", (k, v) -> null); r = r + "/" + m; System.out.println("hash.computeToNull ok " + r); }
+        catch (Throwable t) { System.out.println("hash.computeToNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); r = m.compute("z", (k, v) -> null); r = r + "/" + m; System.out.println("hash.computeMissingNull ok " + r); }
+        catch (Throwable t) { System.out.println("hash.computeMissingNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); r = m.computeIfAbsent("z", k -> null); r = r + "/" + m; System.out.println("hash.computeIfAbsentNull ok " + r); }
+        catch (Throwable t) { System.out.println("hash.computeIfAbsentNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); r = m.computeIfPresent("a", (k, v) -> null); r = r + "/" + m; System.out.println("hash.computeIfPresentNull ok " + r); }
+        catch (Throwable t) { System.out.println("hash.computeIfPresentNull " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); r = m.computeIfPresent("z", (k, v) -> 5); r = r + "/" + m; System.out.println("hash.computeIfPresentNew ok " + r); }
+        catch (Throwable t) { System.out.println("hash.computeIfPresentNew " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = hash(); r = m.put("a", null); r = r + "/" + m; System.out.println("hash.putNullValue ok " + r); }
+        catch (Throwable t) { System.out.println("hash.putNullValue " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { Map<String,Integer> m = new TreeMap<>(hash()); r = m.put(null, 4); System.out.println("tree.putNullKey ok " + r); }
+        catch (Throwable t) { System.out.println("tree.putNullKey " + t.getClass().getName() + " | " + t.getMessage()); }
+    }
+}
+"#
+);

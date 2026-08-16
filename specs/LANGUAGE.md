@@ -6057,6 +6057,39 @@ a context and caturra's `emptyList()` adopts one. Looser than javac, in the
 narrow place where the alternative is refusing a program whose meaning is
 unambiguous.
 
+### The map surface
+
+Maps had never been cross-producted: seven map kinds against thirty-eight
+operations, including every null-key and null-value edge and the whole
+`compute` family — 266 calls, **15 divergent**. Four causes, three of them
+families already met on the list and set sides:
+
+- **`merge(k, null, f)`** answered the existing value where a JDK throws. Its
+  `Objects.requireNonNull(value)` runs before anything else: a null value is
+  not "leave it alone", it is a programming error the map refuses to guess
+  about.
+- **`putAll(null)`** ended the run with "unknown native member:
+  HashMap.putAll" — a null argument matched no arm at all. The shared
+  null-argument guard added for collections now covers a map's `putAll`,
+  `forEach` and `replaceAll` too.
+- **`Map.of(...).getOrDefault(null, d)`** answered the default where a JDK
+  rejects the null key. The null-probe rule was there; it matched the whole
+  argument list, and this probe has a second argument.
+- **The inherit-versus-override split**, again. `singletonMap` and `emptyMap`
+  inherit `AbstractMap`'s mutators, so `remove(missing)` scans and answers null
+  rather than refusing, and `clear`/`replaceAll` over an empty map do nothing.
+  `unmodifiableMap` and `Map.of` override everything and refuse without
+  looking.
+
+One JDK detail is worth writing down because it cost a VerifyError to find:
+`Collections.EmptyMap` inherits the ONE-argument `remove(key)` and OVERRIDES
+the two-argument `remove(key, value)` (along with `replace` and the `compute`
+family) to refuse whatever the map holds. Treating the two forms alike answered
+`null` for a call whose return is a BOOLEAN — an int slot holding a reference,
+which the verifier catches at the next use rather than at the call.
+
+15 became 1, and the one is `Map.of`'s salted iteration order.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
