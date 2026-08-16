@@ -6132,9 +6132,11 @@ impl<'run> Interpreter<'run> {
     /// `AbstractMap.equals`: same size, and every mapping of one is present
     /// with an equal value in the other.
     fn maps_equal(&mut self, a: HeapRef, b: HeapRef) -> Result<bool, VmError> {
-        use crate::value::HeapObject::{HashMap, TreeMap};
-        if !matches!(self.heap.get(b), Some(HashMap(_) | TreeMap { .. }))
-            || self.map_len(a) != self.map_len(b)
+        use crate::value::HeapObject::{HashMap, TreeMap, UnmodifiableMap};
+        if !matches!(
+            self.heap.get(b),
+            Some(HashMap(_) | TreeMap { .. } | UnmodifiableMap(_))
+        ) || self.map_len(a) != self.map_len(b)
         {
             return Ok(false);
         }
@@ -6158,7 +6160,7 @@ impl<'run> Interpreter<'run> {
     fn structural_equals(&mut self, a: HeapRef, b: JValue) -> Result<Option<bool>, VmError> {
         use crate::value::HeapObject::{
             ArrayBackedList, ArrayList, HashMap, HashSet, LinkedList, Stack, TreeMap, TreeSet,
-            UnmodifiableList, UnmodifiableSet,
+            UnmodifiableList, UnmodifiableMap, UnmodifiableSet,
         };
         let equal = match self.heap.get(a) {
             Some(
@@ -6173,8 +6175,23 @@ impl<'run> Interpreter<'run> {
                 JValue::Ref(Some(other)) => self.set_like_equals(a, other)?,
                 _ => false,
             },
-            Some(HashMap(_) | TreeMap { .. }) => match b {
+            Some(HashMap(_) | TreeMap { .. } | UnmodifiableMap(_)) => match b {
                 JValue::Ref(Some(other)) => self.maps_equal(a, other)?,
+                _ => false,
+            },
+            // A map's keySet/entrySet is a Set and its entries are entries;
+            // both compare structurally, and both were compared by IDENTITY
+            // here while their own `equals` compared them properly.
+            Some(crate::value::HeapObject::MapView { kind, .. })
+                if !matches!(kind, MapViewKind::Values) =>
+            {
+                match b {
+                    JValue::Ref(Some(other)) => self.set_like_equals(a, other)?,
+                    _ => false,
+                }
+            }
+            Some(crate::value::HeapObject::MapEntry { .. }) => match b {
+                JValue::Ref(Some(other)) => self.entries_equal(a, other)?,
                 _ => false,
             },
             _ => return Ok(None),
@@ -6185,11 +6202,57 @@ impl<'run> Interpreter<'run> {
     /// If `a` is a collection, its structural `hashCode` (the contracts that go
     /// with the `equals` above) — else `None`. A List folds `31*h + element`, a
     /// Set sums its elements, a Map sums `key ^ value` per entry.
+    /// `Map.Entry.equals`: another entry whose key AND value are both equal.
+    fn entries_equal(&mut self, a: HeapRef, b: HeapRef) -> Result<bool, VmError> {
+        use crate::value::HeapObject::MapEntry;
+        let (
+            Some(MapEntry { map, key, .. }),
+            Some(MapEntry {
+                map: bm, key: bk, ..
+            }),
+        ) = (self.heap.get(a).cloned(), self.heap.get(b).cloned())
+        else {
+            return Ok(false);
+        };
+        if !self.java_equals(key, bk)? {
+            return Ok(false);
+        }
+        let value = self.map_entry_value(map, key)?;
+        let other = self.map_entry_value(bm, bk)?;
+        self.java_equals(value, other)
+    }
+
+    /// `Map.Entry.hashCode`: the key's hash XOR the value's.
+    fn entry_hash(&mut self, entry: HeapRef) -> Result<i32, VmError> {
+        use crate::value::HeapObject::MapEntry;
+        let Some(MapEntry { map, key, .. }) = self.heap.get(entry).cloned() else {
+            return Ok(0);
+        };
+        let value = self.map_entry_value(map, key)?;
+        Ok(self.java_hash_code(key)? ^ self.java_hash_code(value)?)
+    }
+
     fn structural_hash(&mut self, a: HeapRef) -> Result<Option<i32>, VmError> {
         use crate::value::HeapObject::{
-            ArrayBackedList, ArrayList, HashMap, HashSet, LinkedList, Stack, TreeMap, TreeSet,
-            UnmodifiableList, UnmodifiableSet,
+            self, ArrayBackedList, ArrayList, HashMap, HashSet, LinkedList, Stack, TreeMap,
+            TreeSet, UnmodifiableList, UnmodifiableMap, UnmodifiableSet,
         };
+        // A VIEW, an ENTRY and a WRAPPED map hash by their contents too, and
+        // leaving them out here is not a missing feature but a CONTRADICTION:
+        // `hashCode()` called on one answered the structural hash all along,
+        // so a program could see `a.hashCode() == b.hashCode()` and then watch
+        // `set.contains(b)` say false, because the bucket was chosen by this
+        // function and the comparison by the one beside it.
+        if let Some(HeapObject::MapEntry { .. }) = self.heap.get(a) {
+            return Ok(Some(self.entry_hash(a)?));
+        }
+        if self.is_set_like(a) && !matches!(self.heap.get(a), Some(HashSet(_) | TreeSet { .. })) {
+            let mut sum = 0i32;
+            for element in self.collection_elements(a) {
+                sum = sum.wrapping_add(self.java_hash_code(element)?);
+            }
+            return Ok(Some(sum));
+        }
         let hash = match self.heap.get(a) {
             Some(
                 ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_) | UnmodifiableList(_),
@@ -6209,7 +6272,7 @@ impl<'run> Interpreter<'run> {
                 }
                 sum
             }
-            Some(HashMap(_) | TreeMap { .. }) => {
+            Some(HashMap(_) | TreeMap { .. } | UnmodifiableMap(_)) => {
                 let mut sum = 0i32;
                 for (key, value) in self.map_entries(a) {
                     sum = sum.wrapping_add(self.java_hash_code(key)? ^ self.java_hash_code(value)?);
@@ -6260,6 +6323,27 @@ impl<'run> Interpreter<'run> {
     ) -> Result<Answered, VmError> {
         if self.heap.list_values(receiver).is_none() {
             return Ok(Answered::No);
+        }
+        // An `ArrayDeque` reaches here because it shares the element vector,
+        // but it is NOT a List and overrides neither of these — so both are
+        // Object's, by identity. `new ArrayDeque<>(a).equals(new
+        // ArrayDeque<>(a))` is false in Java, and answering the list rule made
+        // a deque silently interchangeable with a list. Answered here rather
+        // than declined, because declining reaches no Object default: the call
+        // ends in "unknown native member: List.equals".
+        if !self.is_list_like(receiver) {
+            match method_name {
+                "equals" => {
+                    let same = matches!(args.first(), Some(JValue::Ref(Some(other))) if *other == receiver);
+                    return Ok(Answered::Value(JValue::Int(i32::from(same))));
+                }
+                "hashCode" => {
+                    return Ok(Answered::Value(JValue::Int(intrinsics::identity_hash(
+                        receiver,
+                    ))));
+                }
+                _ => {}
+            }
         }
         let result = match (method_name, descriptor, args) {
             // A null action throws NPE (Map/Iterable.forEach null-checks it).
@@ -6344,23 +6428,17 @@ impl<'run> Interpreter<'run> {
             }
             // `AbstractList.equals`: same size, and each element equal in
             // order — asking *this* list's element, not the other's.
+            // The SAME rule `java_equals` applies when a list is compared as
+            // an ELEMENT. Deciding it separately here is how a program's own
+            // `a.equals(b)` came to disagree with the identical comparison
+            // one level down: this arm compared anything the element vector
+            // could hold, so `aList.equals(anArrayDeque)` was true — a deque
+            // is not a List, and in Java that is false however alike they read.
             ("equals", _, [JValue::Ref(other)]) => {
-                let ours = self.list_items(receiver);
-                // An unmodifiable view equals the list it wraps.
-                let theirs = match other.map(|other| self.backing_list(other)) {
-                    Some(other) => match self.heap.list_values(other) {
-                        Some(items) => items.clone(),
-                        _ => return Ok(Answered::Value(JValue::Int(0))),
-                    },
-                    None => return Ok(Answered::Value(JValue::Int(0))),
+                let equal = match other.filter(|other| self.is_list_like(*other)) {
+                    Some(other) => self.lists_equal(receiver, other)?,
+                    None => false,
                 };
-                let mut equal = ours.len() == theirs.len();
-                for (ours, theirs) in ours.iter().zip(&theirs) {
-                    if !equal {
-                        break;
-                    }
-                    equal = self.java_equals(*ours, *theirs)?;
-                }
                 JValue::Int(i32::from(equal))
             }
             // `addAll(collection)` — intercepted here rather than left to the
@@ -7590,17 +7668,43 @@ impl<'run> Interpreter<'run> {
             // did) made a case-insensitive `TreeSet` unequal to a `HashSet`
             // holding the same element in another case, where a JDK says they
             // are equal.
+            // `AbstractSet.equals` asks whether the other object is a SET at
+            // all before comparing anything — without that,
+            // `aTreeSet.equals(aList)` was true, and a Set never equals a List
+            // in Java however alike their contents. Membership itself stays the
+            // TREE's: `equals` reaches `containsAll`, which on a sorted set
+            // uses its COMPARATOR, so a case-insensitive TreeSet holding
+            // "Apple" does equal a HashSet holding "apple".
             ("equals", [JValue::Ref(other)]) => {
                 let Some(other) = *other else {
                     return Ok(Answered::Value(JValue::Int(0)));
                 };
-                let theirs = self.collection_elements(other);
-                let mut equal = theirs.len() == self.tree_set_values(receiver).len();
+                // An entrySet's ELEMENTS are entries; `collection_elements`
+                // gives a view's keys, so comparing them let a TreeSet of the
+                // map's keys equal its entrySet.
+                let theirs = self.materialized_elements(other);
+                let mut equal =
+                    self.is_set_like(other) && theirs.len() == self.tree_set_values(receiver).len();
                 if equal {
                     for element in theirs {
-                        if self.tree_set_index_of(receiver, element)?.is_none() {
-                            equal = false;
-                            break;
+                        // `AbstractSet.equals` SWALLOWS the
+                        // ClassCastException (and NPE) that comparing an
+                        // element of the wrong kind raises, and answers false —
+                        // `containsAll` on its own lets the same failure out.
+                        match self.tree_set_index_of(receiver, element) {
+                            Ok(Some(_)) => {}
+                            Ok(None) => {
+                                equal = false;
+                                break;
+                            }
+                            Err(VmError::UncaughtException(thrown))
+                                if thrown.starts_with("java.lang.ClassCastException")
+                                    || thrown.starts_with("java.lang.NullPointerException") =>
+                            {
+                                equal = false;
+                                break;
+                            }
+                            Err(other) => return Err(other),
                         }
                     }
                 }
@@ -12807,9 +12911,26 @@ impl<'run> Interpreter<'run> {
         if let (Some(left), Some(right)) = (self.natural_class(a), self.natural_class(b))
             && left != right
         {
-            return Err(VmError::UncaughtException(format!(
-                "java.lang.ClassCastException: class {right} cannot be cast to class {left}"
-            )));
+            // Through the shared builder, so this cast reads like every other
+            // one — written out here it left off the module parenthetical that
+            // a JDK 11 message carries.
+            return Err(class_cast_error(right, left));
+        }
+        // A value with NO natural ordering at all — a collection, a map entry,
+        // a bare Object, an array. A JDK casts to `Comparable` and fails;
+        // caturra compared two references it could not order and answered
+        // EQUAL, so `aTreeSet.contains(anEntry)` said true.
+        for value in [a, b] {
+            if let JValue::Ref(Some(reference)) = value
+                && self.natural_class(value).is_none()
+                && !matches!(
+                    self.heap.get(reference),
+                    Some(crate::value::HeapObject::Instance { .. })
+                )
+            {
+                let named = self.object_class_name(reference);
+                return Err(class_cast_error(&named, "java/lang/Comparable"));
+            }
         }
         Ok(match self.compare_values(&a, &b) {
             std::cmp::Ordering::Less => -1,
@@ -13184,11 +13305,12 @@ impl<'run> Interpreter<'run> {
         let returned = match dispatched {
             Ok(UserDispatch::Call(frame)) => self.run_nested(frame)?,
             Ok(UserDispatch::Value(value)) => value,
+            // The SAME message a failed cast raises anywhere else, including
+            // the module parenthetical — written out separately here it named
+            // the class in INTERNAL form ("class java/lang/Object") and left
+            // the parenthetical off entirely.
             Err(VmError::UnknownIntrinsic(_)) => {
-                return Err(VmError::UncaughtException(format!(
-                    "java.lang.ClassCastException: class {class_name} cannot be cast to \
-                     class java.lang.Comparable"
-                )));
+                return Err(class_cast_error(class_name, "java/lang/Comparable"));
             }
             Err(other) => return Err(other),
         };
@@ -16543,6 +16665,17 @@ fn is_final_library_class(internal: &str) -> bool {
 /// class is in `module java.base of loader 'bootstrap'`, a user class in
 /// `unnamed module of loader 'app'`; the two are combined when they match.
 fn class_module_desc(dotted: &str) -> &'static str {
+    // An ARRAY names itself by descriptor (`[I`, `[Ljava.lang.String;`), and
+    // its module is its ELEMENT's: `[I` is java.base, like every primitive
+    // array, and reading the leading `[` as a package name put it in the
+    // application module.
+    let dotted = dotted.trim_start_matches('[');
+    let dotted = dotted.strip_prefix('L').map_or(dotted, |rest| rest);
+    // A one-letter descriptor is a PRIMITIVE element (`[I`, `[D`), which lives
+    // in java.base like every other array of one.
+    if matches!(dotted, "I" | "J" | "D" | "F" | "S" | "B" | "C" | "Z") {
+        return "module java.base of loader 'bootstrap'";
+    }
     if dotted.starts_with("java.") || dotted.starts_with("javax.") {
         "module java.base of loader 'bootstrap'"
     } else {

@@ -30115,3 +30115,209 @@ public class LibraryClassInExceptions {
 }
 "#
 );
+
+// Collection equality had TWO implementations: the one `java_equals` uses when
+// a collection is compared as an ELEMENT (correct), and the one a program's own
+// `a.equals(b)` reached (not). So `aList.equals(anArrayDeque)` was true — a
+// deque shares this engine's element vector with the lists but is not a List
+// and overrides NEITHER equals nor hashCode, so both are Object's, by identity.
+// A `Set` never equals a `List` either, however alike their contents.
+differential_test!(
+    collection_equality_is_decided_once,
+    "CollectionEquality",
+    r#"
+import java.util.*;
+
+public class CollectionEquality {
+    static String eq(Object a, Object b) {
+        return a.equals(b) + "/" + b.equals(a) + "/" + (a.hashCode() == b.hashCode());
+    }
+
+    public static void main(String[] args) {
+        List<Integer> list = new ArrayList<>(Arrays.asList(1, 2));
+        Deque<Integer> deque = new ArrayDeque<>(Arrays.asList(1, 2));
+        Deque<Integer> twin = new ArrayDeque<>(Arrays.asList(1, 2));
+        Set<Integer> set = new HashSet<>(Arrays.asList(1, 2));
+        Set<Integer> sorted = new TreeSet<>(Arrays.asList(1, 2));
+        Queue<Integer> heap = new PriorityQueue<>(Arrays.asList(1, 2));
+
+        System.out.println("list~deque " + eq(list, deque));
+        System.out.println("deque~deque " + eq(deque, twin));
+        System.out.println("deque~self " + eq(deque, deque));
+        System.out.println("list~set " + eq(list, set));
+        System.out.println("list~sorted " + eq(list, sorted));
+        System.out.println("set~sorted " + eq(set, sorted));
+        System.out.println("heap~heap " + eq(heap, new PriorityQueue<>(Arrays.asList(1, 2))));
+        System.out.println("heap~self " + eq(heap, heap));
+
+        // The lists that DO equal each other, across every implementation.
+        System.out.println("list~linked " + eq(list, new LinkedList<>(Arrays.asList(1, 2))));
+        System.out.println("list~asList " + eq(list, Arrays.asList(1, 2)));
+        System.out.println("list~of " + eq(list, List.of(1, 2)));
+        System.out.println("list~unmod " + eq(list, Collections.unmodifiableList(list)));
+
+        // A deque in a collection is found by IDENTITY, not by contents.
+        List<Object> holder = new ArrayList<>();
+        holder.add(deque);
+        System.out.println("contains " + holder.contains(twin) + " " + holder.contains(deque));
+    }
+}
+"#
+);
+
+// `hashCode()` on a map VIEW, an ENTRY and a wrapped map answered the
+// structural hash all along, but the hash the engine buckets BY did not know
+// those kinds — so a program could see `a.hashCode() == b.hashCode()` and then
+// watch `set.contains(b)` say false. The public method and the internal engine
+// have to agree, and now compute through the same functions.
+differential_test!(
+    a_view_hashes_the_way_it_says_it_does,
+    "ViewHashing",
+    r#"
+import java.util.*;
+
+public class ViewHashing {
+    public static void main(String[] args) {
+        Map<Integer, String> hash = new HashMap<>();
+        hash.put(1, "a");
+        hash.put(2, "b");
+        Map<Integer, String> tree = new TreeMap<>();
+        tree.put(1, "a");
+        tree.put(2, "b");
+
+        Set<Object> keys = new HashSet<>();
+        keys.add(new HashSet<>(Arrays.asList(1, 2)));
+        System.out.println("keySet " + keys.contains(hash.keySet()));
+
+        Set<Object> byView = new HashSet<>();
+        byView.add(hash.keySet());
+        System.out.println("view~set " + byView.contains(new HashSet<>(Arrays.asList(1, 2))));
+        System.out.println("view~view " + byView.contains(tree.keySet()));
+
+        Set<Object> byEntries = new HashSet<>();
+        byEntries.add(hash.entrySet());
+        System.out.println("entrySet " + byEntries.contains(tree.entrySet()));
+
+        Set<Object> byMap = new HashSet<>();
+        byMap.add(hash);
+        System.out.println("unmodMap " + byMap.contains(Collections.unmodifiableMap(tree)));
+        System.out.println("mapOf " + byMap.contains(Map.of(1, "a", 2, "b")));
+
+        Set<Object> byEntry = new HashSet<>();
+        byEntry.add(new AbstractMap.SimpleEntry<>(1, "a"));
+        System.out.println("entry " + byEntry.contains(hash.entrySet().iterator().next()));
+
+        Map<Map.Entry<Integer, String>, String> keyed = new HashMap<>();
+        keyed.put(new AbstractMap.SimpleEntry<>(1, "a"), "v");
+        System.out.println("keyed " + keyed.get(hash.entrySet().iterator().next()));
+
+        // …and the hashes they report directly, which always agreed.
+        System.out.println("direct "
+            + (hash.keySet().hashCode() == new HashSet<>(Arrays.asList(1, 2)).hashCode()) + " "
+            + (hash.hashCode() == Collections.unmodifiableMap(tree).hashCode()) + " "
+            + (hash.entrySet().iterator().next().hashCode()
+                == new AbstractMap.SimpleEntry<>(1, "a").hashCode()));
+
+        // `values()` is a plain Collection: identity equals, identity hash.
+        System.out.println("values " + hash.values().equals(hash.values()) + " "
+            + hash.values().equals(tree.values()));
+    }
+}
+"#
+);
+
+// A sorted collection casts its probe to `Comparable`, and a value with no
+// natural ordering fails that cast. caturra compared two references it could
+// not order and answered EQUAL, so `aTreeSet.contains(anEntry)` was true.
+// `AbstractSet.equals` SWALLOWS that exception and answers false, where
+// `containsAll` lets it out.
+differential_test!(
+    a_sorted_set_casts_its_probe_to_comparable,
+    "ComparableProbe",
+    r#"
+import java.util.*;
+
+public class ComparableProbe {
+    public static void main(String[] args) {
+        TreeSet<Integer> sorted = new TreeSet<>(Arrays.asList(1, 2));
+        Map<Integer, String> map = new HashMap<>();
+        map.put(1, "a");
+        map.put(2, "b");
+
+        try {
+            sorted.contains(map.entrySet().iterator().next());
+        } catch (ClassCastException e) {
+            System.out.println("entry: " + e.getMessage());
+        }
+        try {
+            sorted.contains(new ArrayList<Integer>());
+        } catch (ClassCastException e) {
+            System.out.println("list: " + e.getMessage());
+        }
+        try {
+            sorted.contains(new Object());
+        } catch (ClassCastException e) {
+            System.out.println("object: " + e.getMessage());
+        }
+        try {
+            sorted.contains(new int[1]);
+        } catch (ClassCastException e) {
+            System.out.println("array: " + e.getMessage());
+        }
+        try {
+            sorted.contains("text");
+        } catch (ClassCastException e) {
+            System.out.println("string: " + e.getMessage());
+        }
+
+        // `equals` SWALLOWS the failed cast and answers false. (The
+        // `containsAll` that lets the same failure out is not written here:
+        // caturra refuses a `containsAll` whose element type differs, which is
+        // its own recorded strictness.)
+        System.out.println("equals " + sorted.equals(map.entrySet()));
+    }
+}
+"#
+);
+
+// A bare diamond used STRAIGHT as a receiver — `new ArrayList<>().isEmpty()`.
+// It types as `null` here so it assigns to a collection of any element, and a
+// method called on one was refused as a call on null; javac infers `Object`
+// where there is nothing to infer from. The CONCRETE face has to survive, or a
+// `new Stack<>()` would lose `push`.
+differential_test!(
+    a_bare_diamond_can_be_a_receiver,
+    "DiamondReceiver",
+    r#"
+import java.util.*;
+
+public class DiamondReceiver {
+    public static void main(String[] args) {
+        System.out.println(new ArrayList<>().isEmpty());
+        System.out.println(new LinkedList<>().size());
+        System.out.println(new HashSet<>().size());
+        System.out.println(new LinkedHashSet<>().isEmpty());
+        System.out.println(new TreeSet<>().isEmpty());
+        System.out.println(new HashMap<>().isEmpty());
+        System.out.println(new LinkedHashMap<>().isEmpty());
+        System.out.println(new TreeMap<>().isEmpty());
+        System.out.println(new ArrayDeque<>().isEmpty());
+        System.out.println(new PriorityQueue<>().isEmpty());
+        System.out.println(new Stack<>().empty());
+        System.out.println(new StringBuilder().append("z"));
+
+        // The object is REAL, and its own Object methods work.
+        System.out.println(new ArrayList<>().equals(new ArrayList<>()));
+        System.out.println(new ArrayList<>().hashCode());
+        System.out.println(new HashMap<>().toString());
+        System.out.println(new ArrayList<>().getClass().getSimpleName());
+
+        // A diamond WITH arguments still infers from them.
+        List<String> source = new ArrayList<>();
+        source.add("x");
+        System.out.println(new ArrayList<>(source).get(0).toUpperCase());
+        System.out.println(new TreeSet<>(source).first().toUpperCase());
+    }
+}
+"#
+);

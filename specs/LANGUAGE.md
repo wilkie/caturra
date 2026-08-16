@@ -5869,6 +5869,57 @@ Three left as recorded divergences rather than guesses:
   called `Random` reports `Random` correctly today. Renaming by name alone
   would break the case that works to fix the one that does not.
 
+### Deciding equality once
+
+A 484-pair cross-product of every collection kind against every other — each
+pair asked for `a.equals(b)`, `b.equals(a)` and whether their hashes agree —
+found 31 divergent pairs, and behind them two implementations of the same rule.
+
+**Collection equality was written twice.** `java_equals`, which compares a
+collection held AS AN ELEMENT, had it right: a List only equals a List, a Set
+only a Set, a Map only a Map. The path a program's own `a.equals(b)` reached
+decided for itself, and compared anything the element vector could hold. So
+`aList.equals(anArrayDeque)` was true — an `ArrayDeque` shares this engine's
+element vector with the lists, but it is not a `List` and overrides NEITHER
+`equals` nor `hashCode`, so both are Object's, by identity:
+`new ArrayDeque<>(a).equals(new ArrayDeque<>(a))` is false in Java. The direct
+path now calls the same helpers, and a deque answers identity — which the
+existing `is_list_like` predicate already said it should, in a doc comment
+naming this exact case.
+
+**`hashCode()` and the hash the engine BUCKETS BY disagreed.** A map view, a
+map entry and an unmodifiable map all answered a structural `hashCode()` when
+asked directly, but the internal hash did not know those kinds, so it fell back
+to identity. A program could print `a.hashCode() == b.hashCode()` and see
+`true`, then put `a` in a `HashSet` and watch `contains(b)` say `false`. The
+public method and the engine now compute through the same functions.
+
+**A sorted collection casts its probe to `Comparable`.** caturra compared two
+references it could not order and answered EQUAL, so
+`aTreeSet.contains(anEntry)` was true. Now a value with no natural ordering
+raises the cast failure a JDK raises — and `AbstractSet.equals` SWALLOWS that
+exception and answers false, which is why `aTreeSet.equals(anEntrySet)` is
+false rather than fatal.
+
+Three separate places built a `ClassCastException` message by hand, and each
+was subtly wrong: one named the class in INTERNAL form ("class
+java/lang/Object"), one left the module parenthetical off entirely, and the
+module rule read a primitive array's leading `[` as a package name and put `[I`
+in the application module. All three go through the shared builder now.
+
+Two more found alongside:
+
+- **`TreeSet.equals` compares with the SET'S COMPARATOR**, not with `equals` —
+  it reaches `containsAll`, which on a sorted set uses the ordering. A
+  case-insensitive `TreeSet` holding "Apple" does equal a `HashSet` holding
+  "apple". Routing it through the plain set rule broke that, and the pinned
+  test for it is what said so.
+- **A bare diamond could not be a RECEIVER.** `new ArrayList<>().isEmpty()` was
+  "cannot call methods on null": a diamond types as `null` here so it assigns
+  to a collection of any element, and javac infers `Object` where there is
+  nothing to infer from. Re-typing it as if `<Object>` had been written keeps
+  the CONCRETE face, so a `new Stack<>()` still has `push`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

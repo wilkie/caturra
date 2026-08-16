@@ -18537,6 +18537,41 @@ impl BodyGen<'_> {
                         (JType::Optional(general), OPTIONAL_METHODS)
                     }
                     None if is_empty_stream(receiver) => (JType::Stream(general), STREAM_METHODS),
+                    // An EMPTY diamond used straight as a receiver —
+                    // `new ArrayList<>().isEmpty()`. It types as `null` so it
+                    // assigns to a collection of any element, but javac infers
+                    // `Object` for one with nothing to infer from, and the
+                    // object is real. Re-typing it as if `<Object>` had been
+                    // written keeps the CONCRETE face (a `new Stack<>()` still
+                    // has `push`), which a general List face would have lost.
+                    None if let Expr::NewObject {
+                        class,
+                        type_args,
+                        args: ctor_args,
+                        ..
+                    } = receiver
+                        && type_args.is_empty()
+                        && ctor_args.is_empty()
+                        && !self.table.has_class(class) =>
+                    {
+                        let object = TypeRef::Named(String::from("Object"));
+                        let class = class.clone();
+                        // One type argument for a collection, two for a map;
+                        // the class decides, so try the shapes rather than
+                        // keeping a second list of which class takes which.
+                        let widened = [
+                            self.type_of_new_object(&class, std::slice::from_ref(&object), &[]),
+                            self.type_of_new_object(&class, &[object.clone(), object], &[]),
+                        ]
+                        .into_iter()
+                        .find(|ty| !matches!(ty, JType::Null))
+                        .unwrap_or(JType::Null);
+                        if matches!(widened, JType::Null) {
+                            self.error(span, "cannot call methods on null");
+                            return None;
+                        }
+                        (widened, LIST_METHODS)
+                    }
                     None => {
                         self.error(span, "cannot call methods on null");
                         return None;
