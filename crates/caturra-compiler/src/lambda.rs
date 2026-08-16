@@ -505,7 +505,24 @@ fn combinator_argument_type(
     if arity != 1 {
         return None;
     }
-    let TypeRef::Generic { base, args } = functional_type_of(receiver, ctx)? else {
+    let receiver_ty = functional_type_of(receiver, ctx)?;
+    // The PRIMITIVE specializations take no type arguments, so their
+    // combinators are the simplest case of all: `IntPredicate.and`,
+    // `IntConsumer.andThen` and `IntUnaryOperator.andThen`/`compose` each take
+    // the very interface they are called on. Reading only a PARAMETERIZED
+    // receiver skipped the whole family, and an inline lambda argument was then
+    // refused for having no functional target.
+    if let TypeRef::Named(name) = &receiver_ty {
+        let simple = name.rsplit('.').next().unwrap_or(name);
+        let same_shape = match method {
+            "and" | "or" => simple.ends_with("Predicate"),
+            "andThen" => simple.ends_with("Consumer") || simple.ends_with("UnaryOperator"),
+            "compose" => simple.ends_with("UnaryOperator"),
+            _ => false,
+        };
+        return same_shape.then(|| receiver_ty.clone());
+    }
+    let TypeRef::Generic { base, args } = receiver_ty else {
         return None;
     };
     let object = || TypeRef::Named(String::from("Object"));
@@ -527,6 +544,11 @@ fn combinator_argument_type(
         ("Consumer", "andThen") => Some(TypeRef::Generic {
             base: String::from("Consumer"),
             args: vec![args.first()?.clone()],
+        }),
+        // The two-argument shapes: both halves see the same PAIR.
+        ("BiPredicate", "and" | "or") | ("BiConsumer", "andThen") => Some(TypeRef::Generic {
+            base: String::from(simple_base(&base)),
+            args: args.clone(),
         }),
         _ => None,
     }
@@ -785,6 +807,8 @@ fn assign_target_type(target: &crate::ast::AssignTarget, ctx: &Ctx) -> Option<Ty
 
 #[allow(clippy::too_many_lines)] // one arm per expression kind
 fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
+    // A target the identity arm below synthesizes for itself; see there.
+    let mut identity_target: Option<TypeRef> = None;
     // `Function.identity()` IS the lambda `x -> x`, and saying so here is the
     // whole implementation: everything below — target typing, the erased SAM,
     // the synthesized class — then treats it as one. Written out by hand it
@@ -798,9 +822,36 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
         && method == "identity"
         && args.is_empty()
         && matches!(owner.as_ref(), Expr::Name { path, .. }
-            if path.last().is_some_and(|name| name == "Function" || name == "UnaryOperator"))
+            if path.last().is_some_and(|name| matches!(name.as_str(),
+                "Function" | "UnaryOperator"
+                // The PRIMITIVE unary operators declare `identity()` too, and
+                // it means the same lambda.
+                | "IntUnaryOperator" | "LongUnaryOperator" | "DoubleUnaryOperator")))
     {
         let span = *span;
+        // `IntUnaryOperator.identity().applyAsInt(7)` — an identity used
+        // STRAIGHT, with no variable to read a target type from. The owner
+        // names the interface, so the arm supplies the target itself rather
+        // than leaving a bare lambda that "is only allowed where a
+        // functional-interface type is expected". Where javac has to infer
+        // (`Function.identity()`), it infers `Object`, and so does this.
+        if expected.is_none()
+            && let Expr::Name { path, .. } = owner.as_ref()
+            && let Some(simple) = path.last()
+        {
+            let object = || TypeRef::Named(String::from("Object"));
+            identity_target = Some(match simple.as_str() {
+                "Function" => TypeRef::Generic {
+                    base: String::from("Function"),
+                    args: vec![object(), object()],
+                },
+                "UnaryOperator" => TypeRef::Generic {
+                    base: String::from("UnaryOperator"),
+                    args: vec![object()],
+                },
+                other => TypeRef::Named(other.to_owned()),
+            });
+        }
         let name = String::from("__identity");
         *expr = Expr::Lambda {
             params: vec![crate::ast::LambdaParam {
@@ -814,6 +865,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             span,
         };
     }
+    let expected = identity_target.as_ref().or(expected);
     // `Predicate.not(p)` (Java 11) IS `p.negate()`, and `negate()` already
     // builds the bundled `__Negate`. Rewriting to that CLASS rather than to a
     // `.negate()` call keeps the argument in a target-typed position, so a
@@ -893,6 +945,46 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
         if stream {
             *method = String::from("__toArrayTyped");
         }
+    }
+    // `BinaryOperator.minBy(cmp)` / `maxBy(cmp)` — a two-argument function that
+    // keeps one side, built from the comparator. Like `Predicate.not`, the
+    // named CLASS is what the argument lands in, so an inline comparator lambda
+    // still has a functional target; the target it gets is a `Comparator` over
+    // the operator's own element.
+    if let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        span,
+    } = expr
+        && matches!(method.as_str(), "minBy" | "maxBy")
+        && args.len() == 1
+        && matches!(owner.as_ref(), Expr::Name { path, .. }
+            if path.last().is_some_and(|name| name == "BinaryOperator"))
+    {
+        let comparator = match expected {
+            Some(TypeRef::Generic { base, args: over })
+                if simple_base(base) == "BinaryOperator" =>
+            {
+                Some(TypeRef::Generic {
+                    base: String::from("Comparator"),
+                    args: over.clone(),
+                })
+            }
+            _ => None,
+        };
+        desugar_expr(&mut args[0], comparator.as_ref(), ctx);
+        *expr = Expr::NewObject {
+            class: String::from(if method == "minBy" {
+                "__MinBy"
+            } else {
+                "__MaxBy"
+            }),
+            type_args: Vec::new(),
+            args: std::mem::take(args),
+            outer: None,
+            span: *span,
+        };
     }
     // A method reference in a target-typed position becomes a lambda.
     if matches!(expr, Expr::MethodRef { .. }) {
@@ -2206,7 +2298,7 @@ fn sorted_ctor_elem(target: &TypeRef) -> Option<TypeRef> {
 /// How a lambda targeting a `java.util.function` interface desugars: which erased
 /// bundled interface and SAM it implements, and — read from the target's type
 /// arguments — the parameter types to cast to and the result type to coerce to.
-struct FunctionalSpec {
+pub(crate) struct FunctionalSpec {
     interface: &'static str,
     method: &'static str,
     /// The synthesized method's return type: the erased SAM's own return
@@ -2264,6 +2356,50 @@ fn unparameterized_spec(simple: &str) -> Option<FunctionalSpec> {
                 None,
             ),
             "IntSupplier" => ("__IntSupplier", "getAsInt", TypeRef::Int, vec![], None),
+            // The primitive-to-primitive conversions: both ends fixed by the
+            // name, so neither is written and neither takes a type argument.
+            "IntToLongFunction" => (
+                "__IntToLongFunction",
+                "applyAsLong",
+                TypeRef::Long,
+                vec![TypeRef::Int],
+                None,
+            ),
+            "IntToDoubleFunction" => (
+                "__IntToDoubleFunction",
+                "applyAsDouble",
+                TypeRef::Double,
+                vec![TypeRef::Int],
+                None,
+            ),
+            "LongToIntFunction" => (
+                "__LongToIntFunction",
+                "applyAsInt",
+                TypeRef::Int,
+                vec![TypeRef::Long],
+                None,
+            ),
+            "LongToDoubleFunction" => (
+                "__LongToDoubleFunction",
+                "applyAsDouble",
+                TypeRef::Double,
+                vec![TypeRef::Long],
+                None,
+            ),
+            "DoubleToIntFunction" => (
+                "__DoubleToIntFunction",
+                "applyAsInt",
+                TypeRef::Int,
+                vec![TypeRef::Double],
+                None,
+            ),
+            "DoubleToLongFunction" => (
+                "__DoubleToLongFunction",
+                "applyAsLong",
+                TypeRef::Long,
+                vec![TypeRef::Double],
+                None,
+            ),
             "IntConsumer" => (
                 "__IntConsumer",
                 "accept",
@@ -2354,7 +2490,7 @@ fn unparameterized_spec(simple: &str) -> Option<FunctionalSpec> {
 }
 
 #[allow(clippy::too_many_lines)] // one flat table, one line per interface
-fn functional_lambda_spec(target: &TypeRef) -> Option<FunctionalSpec> {
+pub(crate) fn functional_lambda_spec(target: &TypeRef) -> Option<FunctionalSpec> {
     // `Runnable` takes no type arguments, so it arrives as a plain NAMED type
     // rather than a parameterized one — which is why a `Runnable r = () -> …`
     // found no functional target at all.
@@ -2453,6 +2589,62 @@ fn functional_lambda_spec(target: &TypeRef) -> Option<FunctionalSpec> {
                 "applyAsLong",
                 TypeRef::Long,
                 vec![t.clone()],
+                None,
+            ),
+            ("DoubleFunction", [r]) => (
+                "__DoubleFunction",
+                "apply",
+                object(),
+                vec![TypeRef::Double],
+                Some(r.clone()),
+            ),
+            ("LongFunction", [r]) => (
+                "__LongFunction",
+                "apply",
+                object(),
+                vec![TypeRef::Long],
+                Some(r.clone()),
+            ),
+            ("ObjIntConsumer", [t]) => (
+                "__ObjIntConsumer",
+                "accept",
+                TypeRef::Void,
+                vec![t.clone(), TypeRef::Int],
+                None,
+            ),
+            ("ObjLongConsumer", [t]) => (
+                "__ObjLongConsumer",
+                "accept",
+                TypeRef::Void,
+                vec![t.clone(), TypeRef::Long],
+                None,
+            ),
+            ("ObjDoubleConsumer", [t]) => (
+                "__ObjDoubleConsumer",
+                "accept",
+                TypeRef::Void,
+                vec![t.clone(), TypeRef::Double],
+                None,
+            ),
+            ("ToIntBiFunction", [t, u]) => (
+                "__ToIntBiFunction",
+                "applyAsInt",
+                TypeRef::Int,
+                vec![t.clone(), u.clone()],
+                None,
+            ),
+            ("ToLongBiFunction", [t, u]) => (
+                "__ToLongBiFunction",
+                "applyAsLong",
+                TypeRef::Long,
+                vec![t.clone(), u.clone()],
+                None,
+            ),
+            ("ToDoubleBiFunction", [t, u]) => (
+                "__ToDoubleBiFunction",
+                "applyAsDouble",
+                TypeRef::Double,
+                vec![t.clone(), u.clone()],
                 None,
             ),
             ("BiPredicate", [t, u]) => (

@@ -4478,7 +4478,7 @@ fn functional_result_arg(simple: &str) -> bool {
     )
 }
 
-fn functional_erased(name: &str) -> Option<&'static str> {
+pub(crate) fn functional_erased(name: &str) -> Option<&'static str> {
     let simple = name.rsplit('.').next().unwrap_or(name);
     Some(match simple {
         "Comparator" => "__Comparator",
@@ -4515,6 +4515,20 @@ fn functional_erased(name: &str) -> Option<&'static str> {
         "LongBinaryOperator" => "__LongBinaryOperator",
         "ToLongFunction" => "__ToLongFunction",
         "BooleanSupplier" => "__BooleanSupplier",
+        "DoubleFunction" => "__DoubleFunction",
+        "LongFunction" => "__LongFunction",
+        "IntToLongFunction" => "__IntToLongFunction",
+        "IntToDoubleFunction" => "__IntToDoubleFunction",
+        "LongToIntFunction" => "__LongToIntFunction",
+        "LongToDoubleFunction" => "__LongToDoubleFunction",
+        "DoubleToIntFunction" => "__DoubleToIntFunction",
+        "DoubleToLongFunction" => "__DoubleToLongFunction",
+        "ObjIntConsumer" => "__ObjIntConsumer",
+        "ObjLongConsumer" => "__ObjLongConsumer",
+        "ObjDoubleConsumer" => "__ObjDoubleConsumer",
+        "ToIntBiFunction" => "__ToIntBiFunction",
+        "ToLongBiFunction" => "__ToLongBiFunction",
+        "ToDoubleBiFunction" => "__ToDoubleBiFunction",
         _ => return None,
     })
 }
@@ -4726,6 +4740,24 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             ) if from_dims == to_dims
                 && std::mem::discriminant(&table.nested_type(a))
                     == std::mem::discriminant(&table.nested_type(b))
+        )
+        // The RAW array of a parameterized type: `Supplier<String>[] a = new
+        // Supplier[2]`, which is the only way to build one (generic array
+        // creation is illegal), so refusing it refused the whole idea of an
+        // array of a functional interface. Unchecked, exactly as javac says.
+        || matches!(
+            (from, to),
+            (
+                JType::Array {
+                    elem: ElemType::Object(raw),
+                    dims: from_dims,
+                },
+                JType::Array {
+                    elem: ElemType::Nested { inner, .. },
+                    dims: to_dims,
+                },
+            ) if from_dims == to_dims
+                && matches!(table.nested_type(inner), JType::Generic { class, .. } if class == raw)
         )
         // A subclass stands in for its PARAMETERIZED supertype:
         // `Box<String> b = new SBox()` where `SBox extends Box<String>`, and

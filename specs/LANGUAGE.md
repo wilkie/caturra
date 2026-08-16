@@ -4888,11 +4888,10 @@ emits `Object` parameters and casts them back in the body, which is why
 worked. Only the method name and the RETURN are specialized, which is all a
 program can observe.
 
-Not included: the default COMBINATORS on the primitive forms
-(`IntPredicate.negate()`, `IntUnaryOperator.andThen(...)`). Each needs a helper
-class per interface — an anonymous class in a bundled source shares the
-`Anon$N` counter with the program's own and collides — for combinators that are
-rare on the primitive types. Stricter than javac, and pinned as such.
+~~Not included: the default COMBINATORS on the primitive forms~~ — **added
+later**; see "`java.util.function` as a set of real types" below. The reason
+recorded here (a helper class per interface) was real and expired: the classes
+are mechanical, and their absence left a whole family unusable.
 
 ### An entrySet you can keep (2026-08-14)
 
@@ -5753,6 +5752,64 @@ between two runs of a real JDK either.
 The one gap left open, a refusal: `IntFunction` as a named variable type
 (`IntFunction<String[]> gen = String[]::new; list.toArray(gen)`).
 
+### `java.util.function` as a set of real types
+
+The last unit left `IntFunction` as a named variable type open. Probing the
+whole package instead of the one case found that it was not one gap but a
+family of them: of the 43 interfaces `java.util.function` declares in Java 11,
+**29 were nameable and 14 were not**, and of those that were, the PRIMITIVE
+specializations carried no default combinators at all.
+
+That second half had been recorded as a deliberate strictness ("each would need
+its own helper class per interface, for combinators that are rare on the
+primitive forms"). The reason had expired: the helper classes are mechanical,
+and without them `IntPredicate`, `LongPredicate`, `DoublePredicate`, the three
+primitive `UnaryOperator`s, the three primitive `Consumer`s, `BiPredicate` and
+`BiConsumer` had no `negate`/`and`/`or`/`andThen`/`compose` between them. They
+all have them now, each with its own named helper class (an anonymous class in
+a bundled source shares the `Anon$N` counter with the program's own and
+collides). The pinned strictness test is what reported the expiry — it fails
+when caturra stops being stricter, which is exactly what it is for.
+
+Typing the ARGUMENT of those combinators needed one more thing: the primitive
+specializations take no type arguments, so a receiver read as a `TypeRef::Named`
+never reached the parameterized-receiver rule and an inline lambda argument was
+refused for having no functional target. They are the simplest case of all —
+`IntPredicate.and` takes the very interface it is called on.
+
+Also added: `BinaryOperator.minBy`/`maxBy` (ties go to the LEFT argument, as a
+JDK's do), and `identity()` on the primitive unary operators. `identity()` used
+STRAIGHT as a receiver — `IntUnaryOperator.identity().applyAsInt(7)` — has no
+variable to read a target from, so the desugaring now names the interface from
+the call's own owner; where javac has to infer (`Function.identity()`), it
+infers `Object`, and so does this.
+
+**The same fact in three files.** A `java.util.function` name has to be known in
+three places: `imports.rs` (that the name exists), `functional_erased` (its
+erased interface) and the lambda pass (its SAM shape). A name present in the
+first and missing from the others is a type a program may WRITE in a
+declaration and then cannot use — "java.util.function.ObjIntConsumer is not
+supported by caturra", which reads as a deliberate gap rather than an oversight.
+A unit test now walks the first list against the other two.
+
+Two structural gaps fell out of the same probe:
+
+- **A cast could not take a LAMBDA.** `(Runnable) () -> …` is the standard way
+  to give a lambda a target type where the position implies none, and it read as
+  "expected an expression": a lambda is parsed at assignment level, which the
+  cast's operand parse (`unary()`) cannot reach.
+- **A raw array would not fill a parameterized one.** `Supplier<String>[] a =
+  new Supplier[2]` is the ONLY way to build such an array (generic array
+  creation is illegal), so refusing the unchecked conversion refused the whole
+  idea of an array of a parameterized type — collections included
+  (`List<String>[] rows = new List[2]`). caturra already had the rule for two
+  parameterized element types and simply not for the raw source.
+
+One gap left open, a refusal with its own message: a functional interface
+parameterized on a METHOD's own type variable (`static <T, R> R applyIt(
+Function<T, R> f, T v)`), which is a generics limit rather than a
+`java.util.function` one.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -5787,9 +5844,6 @@ earn it.
 - `opt.map(String::toUpperCase).get().length()` — a `map` erases its result
   element (in an `Optional` and a `Stream` alike), so a chain cannot go on to
   call a method of the mapped-to type.
-- `IntPredicate.negate()` and the other default COMBINATORS on the primitive
-  `java.util.function` specializations — each needs a helper class per
-  interface, for a combinator that is rare on the primitive forms.
 - `list.subList(0, 2)` — a list VIEW, which is a feature rather than a
   message. Pinned in three contexts (argument, concatenation, constructor
   argument), because each reaches the refusal by a different path.

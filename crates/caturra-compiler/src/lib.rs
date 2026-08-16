@@ -922,6 +922,37 @@ mod tests {
         assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 
+    /// Every `java.util.function` interface caturra NAMES must also have an
+    /// erased interface and a SAM shape — three separate lists, in three
+    /// files, that a program experiences as one fact. When they disagreed the
+    /// symptom was a type a program could WRITE in a declaration and then
+    /// could not use: "java.util.function.ObjIntConsumer is not supported by
+    /// caturra", which reads as a deliberate gap rather than an oversight.
+    #[test]
+    fn every_named_functional_interface_is_usable() {
+        use crate::ast::TypeRef;
+        let object = || TypeRef::Named(String::from("Object"));
+        for name in imports::JAVA_UTIL_FUNCTION {
+            assert!(
+                codegen::functional_erased(name).is_some(),
+                "{name} is nameable but has no erased interface"
+            );
+            // The SAM is found either as an unparameterized name or at one of
+            // the arities the interface takes; WHICH one is the interface's own
+            // business, having none of them is the bug.
+            let named = TypeRef::Named((*name).to_owned());
+            let found = lambda::functional_lambda_spec(&named).is_some()
+                || (1..=3).any(|arity| {
+                    lambda::functional_lambda_spec(&TypeRef::Generic {
+                        base: (*name).to_owned(),
+                        args: vec![object(); arity],
+                    })
+                    .is_some()
+                });
+            assert!(found, "{name} is nameable but has no SAM shape");
+        }
+    }
+
     /// The two DESCRIPTOR builders must agree: one reads the written
     /// `TypeRef` (the signature the class file carries), the other the
     /// resolved `JType` (which every call site uses). When they differ the

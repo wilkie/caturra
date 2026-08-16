@@ -3714,7 +3714,15 @@ impl Parser<'_> {
                 let _ = self.type_ref()?;
             }
             self.expect_symbol(")", "to close the cast")?;
-            let operand = self.unary()?;
+            // The operand may be a LAMBDA — `(Runnable) () -> …`, the standard
+            // way to give one a target type where none is implied. `unary()`
+            // cannot reach a lambda (it is parsed at assignment level), so
+            // `() -> …` read as an empty parenthesized expression and the whole
+            // cast failed with "expected an expression".
+            let operand = match self.try_lambda()? {
+                Some(lambda) => lambda,
+                None => self.unary()?,
+            };
             let span = SourceSpan {
                 start: start.start,
                 end: operand.span().end,

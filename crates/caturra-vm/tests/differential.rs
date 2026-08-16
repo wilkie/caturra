@@ -24403,25 +24403,59 @@ public class MapErases {
 "#
 );
 
-// The primitive specializations carry no DEFAULT COMBINATORS: `Predicate` has
-// `negate`/`and`/`or` and `IntPredicate` does not, here. Each would need its
-// own helper class per interface (an anonymous one in a bundled source shares
-// the `Anon$N` counter with the program's own and collides), for combinators
-// that are rare on the primitive forms. Stricter than javac, which is the safe
-// direction, and recorded rather than quietly missing.
-stricter_than_javac!(
-    stricter_int_predicate_has_no_combinators,
-    "NoIntNegate",
-    r"
-import java.util.function.IntPredicate;
+// The primitive specializations DO carry the default combinators — this was a
+// pinned strictness ("each would need its own helper class per interface") and
+// the pin is what reported that the reason had expired: the helper classes are
+// mechanical, and a whole family of `java.util.function` was unusable without
+// them. Every family's own shape is exercised, since each has its own erased
+// interface and its own helper classes.
+differential_test!(
+    the_primitive_families_have_their_combinators,
+    "PrimitiveCombinators",
+    r#"
+import java.util.Comparator;
+import java.util.function.*;
 
-public class NoIntNegate {
+public class PrimitiveCombinators {
     public static void main(String[] args) {
-        IntPredicate p = i -> i > 0;
-        System.out.println(p.negate().test(1));
+        IntPredicate positive = i -> i > 0;
+        System.out.println(positive.negate().test(1));
+        System.out.println(positive.and(i -> i < 10).test(5));
+        System.out.println(positive.or(i -> i == -1).test(-1));
+
+        LongPredicate big = n -> n > 100L;
+        System.out.println(big.negate().test(1L));
+        DoublePredicate half = d -> d > 0.5;
+        System.out.println(half.and(d -> d < 2.0).test(1.5));
+
+        IntUnaryOperator addOne = n -> n + 1;
+        System.out.println(addOne.andThen(n -> n * 2).applyAsInt(3));
+        System.out.println(addOne.compose((int n) -> n * 2).applyAsInt(3));
+        System.out.println(IntUnaryOperator.identity().applyAsInt(7));
+        LongUnaryOperator twice = n -> n * 2;
+        System.out.println(twice.andThen(n -> n + 1).applyAsLong(4L));
+        DoubleUnaryOperator halve = d -> d / 2;
+        System.out.println(halve.andThen(d -> d + 1).applyAsDouble(5.0));
+
+        IntConsumer show = n -> System.out.println("a" + n);
+        show.andThen(n -> System.out.println("b" + n)).accept(1);
+        DoubleConsumer showD = d -> System.out.println("c" + d);
+        showD.andThen(d -> System.out.println("d" + d)).accept(1.5);
+
+        BiPredicate<String, String> same = (a, b) -> a.equals(b);
+        System.out.println(same.negate().test("x", "x"));
+        System.out.println(same.and((a, b) -> a.length() > 0).test("x", "x"));
+        BiConsumer<String, Integer> pair = (s, n) -> System.out.println(s + n);
+        pair.andThen((s, n) -> System.out.println(n)).accept("p", 2);
+
+        // The object families keep theirs, and the STATIC factories work.
+        System.out.println(BinaryOperator.<String>minBy(Comparator.naturalOrder())
+            .apply("b", "a"));
+        System.out.println(BinaryOperator.<String>maxBy(Comparator.naturalOrder())
+            .apply("b", "a"));
     }
 }
-"
+"#
 );
 
 // A class caturra models only as a NAMESPACE for its static members cannot
@@ -29797,6 +29831,162 @@ public class UnmodifiableCollectors {
         } catch (NullPointerException e) {
             System.out.println("unmodifiable rejects a null element");
         }
+    }
+}
+"#
+);
+
+// `java.util.function` has 43 interfaces in Java 11 and 29 of them were
+// nameable — a line no program can be expected to know is there. Each needs
+// its name known (imports), an erased interface (codegen) and a SAM shape (the
+// lambda pass), three lists in three files that a program experiences as one
+// fact; a unit test now walks the first against the other two.
+differential_test!(
+    the_whole_function_package_is_nameable,
+    "WholeFunctionPackage",
+    r#"
+import java.util.function.*;
+
+public class WholeFunctionPackage {
+    public static void main(String[] args) {
+        ObjIntConsumer<String> objInt = (s, i) -> System.out.println(s + i);
+        objInt.accept("a", 1);
+        ObjLongConsumer<String> objLong = (s, n) -> System.out.println(s + n);
+        objLong.accept("b", 2L);
+        ObjDoubleConsumer<String> objDouble = (s, d) -> System.out.println(s + d);
+        objDouble.accept("c", 1.5);
+
+        DoubleFunction<String> fromDouble = d -> "d" + d;
+        System.out.println(fromDouble.apply(1.5));
+        LongFunction<String> fromLong = n -> "l" + n;
+        System.out.println(fromLong.apply(7L));
+
+        IntToLongFunction intToLong = n -> n * 2L;
+        System.out.println(intToLong.applyAsLong(3));
+        IntToDoubleFunction intToDouble = n -> n / 2.0;
+        System.out.println(intToDouble.applyAsDouble(3));
+        LongToIntFunction longToInt = n -> (int) (n + 1);
+        System.out.println(longToInt.applyAsInt(3L));
+        LongToDoubleFunction longToDouble = n -> n / 2.0;
+        System.out.println(longToDouble.applyAsDouble(3L));
+        DoubleToIntFunction doubleToInt = d -> (int) d;
+        System.out.println(doubleToInt.applyAsInt(3.7));
+        DoubleToLongFunction doubleToLong = d -> (long) d;
+        System.out.println(doubleToLong.applyAsLong(3.7));
+
+        ToIntBiFunction<String, String> toInt = (a, b) -> a.length() + b.length();
+        System.out.println(toInt.applyAsInt("ab", "c"));
+        ToLongBiFunction<String, String> toLong = (a, b) -> a.length() + b.length();
+        System.out.println(toLong.applyAsLong("ab", "c"));
+        ToDoubleBiFunction<String, String> toDouble =
+            (a, b) -> (a.length() + b.length()) / 2.0;
+        System.out.println(toDouble.applyAsDouble("ab", "c"));
+
+        // A method reference reaches the new shapes too.
+        DoubleFunction<String> viaRef = String::valueOf;
+        System.out.println(viaRef.apply(1.5));
+        ToIntBiFunction<String, String> compare = String::compareTo;
+        System.out.println(compare.applyAsInt("a", "b"));
+    }
+}
+"#
+);
+
+// Each specialization keeps its OWN erased interface, so the method of one is
+// not the method of another however alike their shapes: `IntSupplier.get()`
+// and `ToLongFunction.applyAsInt(...)` are javac errors and must stay errors
+// here. Folding the families onto shared SAMs would be fewer lines and would
+// make both compile.
+differential_reject!(
+    a_specialization_does_not_answer_another_ones_method,
+    "WrongSamMethod",
+    r"
+import java.util.function.*;
+
+public class WrongSamMethod {
+    public static void main(String[] args) {
+        IntSupplier supplier = () -> 1;
+        System.out.println(supplier.get());
+    }
+}
+"
+);
+
+// A LAMBDA may be the operand of a cast — the standard way to give one a
+// target type where the position implies none. `unary()` cannot reach a
+// lambda (it is parsed at assignment level), so `(Runnable) () -> …` read as
+// an empty parenthesized expression: "expected an expression".
+differential_test!(
+    a_cast_can_take_a_lambda,
+    "CastALambda",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class CastALambda {
+    static Object take(Object o) {
+        return o;
+    }
+
+    public static void main(String[] args) {
+        Object held = (Supplier<String>) () -> "C";
+        System.out.println(((Supplier<String>) held).get());
+        Runnable run = (Runnable) () -> System.out.println("R");
+        run.run();
+        System.out.println(((Supplier<String>) () -> "inline").get());
+        System.out.println(take((Runnable) () -> { }) != null);
+        List<Object> holder = new ArrayList<>();
+        holder.add((Function<String, Integer>) s -> s.length());
+        System.out.println(((Function<String, Integer>) holder.get(0)).apply("abcd"));
+        System.out.println(((Supplier<ArrayList<String>>) ArrayList::new).get().size());
+
+        // An ordinary cast, and a PARENTHESIZED expression, are untouched.
+        Object text = "s";
+        System.out.println(((String) text).length());
+        System.out.println((int) 3.7);
+        int five = 5;
+        System.out.println((five) + 1);
+    }
+}
+"#
+);
+
+// `Supplier<String>[] a = new Supplier[2]` — the RAW array assigned to the
+// parameterized one, which is the only way to build such an array at all
+// (generic array creation is illegal). caturra had the rule for two
+// parameterized element types and not for the raw source, so an array of any
+// parameterized type could be declared and never filled.
+differential_test!(
+    a_raw_array_fills_a_parameterized_one,
+    "RawArrayFill",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class RawArrayFill {
+    public static void main(String[] args) {
+        Supplier<String>[] suppliers = new Supplier[2];
+        suppliers[0] = () -> "A";
+        System.out.println(suppliers[0].get().toUpperCase() + " " + suppliers.length
+            + " " + (suppliers[1] == null));
+
+        Runnable[] runnables = new Runnable[1];
+        runnables[0] = () -> System.out.println("R");
+        runnables[0].run();
+
+        Comparator<String>[] orders = new Comparator[1];
+        orders[0] = (a, b) -> a.compareTo(b);
+        System.out.println(orders[0].compare("a", "b"));
+
+        List<String>[] lists = new List[2];
+        lists[0] = new ArrayList<>();
+        lists[0].add("x");
+        System.out.println(lists[0].get(0).toUpperCase() + " " + (lists[1] == null));
+
+        Map<String, Integer>[] maps = new Map[1];
+        maps[0] = new HashMap<>();
+        maps[0].put("k", 1);
+        System.out.println(maps[0].get("k") + 1);
     }
 }
 "#

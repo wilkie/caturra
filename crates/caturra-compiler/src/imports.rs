@@ -83,7 +83,12 @@ const JAVA_IO: &[&str] = &[
 const JAVA_NIO_FILE: &[&str] = &["Files", "Path", "Paths"];
 /// `java.util.function` — the standard functional interfaces. They alias the
 /// bundled erased `__`-interfaces (see `functional_erased` in codegen).
-const JAVA_UTIL_FUNCTION: &[&str] = &[
+/// Every `java.util.function` interface caturra names. The SAME set has to be
+/// known in two other places — its erased interface (`functional_erased`) and
+/// its SAM shape (the lambda pass) — and a name present here but missing there
+/// is a type that a program may WRITE and then cannot use. A test walks this
+/// list against both.
+pub(crate) const JAVA_UTIL_FUNCTION: &[&str] = &[
     "Function",
     "BiFunction",
     "UnaryOperator",
@@ -118,6 +123,23 @@ const JAVA_UTIL_FUNCTION: &[&str] = &[
     "ToIntFunction",
     "ToDoubleFunction",
     "ToLongFunction",
+    // The rest of the package. `java.util.function` has 43 interfaces in Java
+    // 11 and 29 of them were nameable, which is not a line a program can be
+    // expected to know is there.
+    "DoubleFunction",
+    "LongFunction",
+    "IntToLongFunction",
+    "IntToDoubleFunction",
+    "LongToIntFunction",
+    "LongToDoubleFunction",
+    "DoubleToIntFunction",
+    "DoubleToLongFunction",
+    "ObjIntConsumer",
+    "ObjLongConsumer",
+    "ObjDoubleConsumer",
+    "ToIntBiFunction",
+    "ToLongBiFunction",
+    "ToDoubleBiFunction",
 ];
 /// `java.util.stream` — the Stream pipeline and its collectors.
 /// `Pattern`/`Matcher` are not modelled — caturra compiles patterns inside
