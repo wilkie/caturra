@@ -286,6 +286,43 @@ fn functional_interfaces(units: &[(String, CompilationUnit)]) -> HashMap<String,
             }
         }
     }
+    // An interface may declare NO abstract method of its own and still be
+    // functional by INHERITING one: `interface Sub extends Op { }` is a target
+    // for `Sub f = x -> x + 1`, and caturra refused every such lambda for
+    // having no functional-interface position. Repeated to a fixed point, so a
+    // chain of extending interfaces all resolve; an interface that inherits
+    // two DIFFERENT SAMs is not functional and is left out.
+    loop {
+        let mut added = false;
+        for (_, unit) in units {
+            for class in &unit.classes {
+                if !class.is_interface || out.contains_key(&class.name) {
+                    continue;
+                }
+                if class
+                    .methods
+                    .iter()
+                    .any(|m| m.is_abstract && !m.is_static && !is_object_method_redeclaration(m))
+                {
+                    continue;
+                }
+                let mut inherited: Vec<&Sam> = class
+                    .interfaces
+                    .iter()
+                    .filter_map(|name| out.get(name))
+                    .collect();
+                inherited.dedup_by(|a, b| a.method == b.method && a.params.len() == b.params.len());
+                if let [only] = inherited[..] {
+                    let sam = only.clone();
+                    out.insert(class.name.clone(), sam);
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            break;
+        }
+    }
     out
 }
 
@@ -3968,6 +4005,28 @@ fn build_lambda_class(
         .filter(|spec| spec.ret != sam.ret)
         .map(|spec| spec.ret.clone());
 
+    // The lambda's OWN parameters are in scope for its body — the same rule
+    // the erased builder beside this one applies, and it has to be written
+    // here too because a USER functional interface takes this path. Without
+    // it a lambda whose parameter is a collection could not have a lambda
+    // inside it: `Box<List<String>> f = l -> l.stream().map(v -> …)` was
+    // refused for the INNER lambda having no functional-interface position.
+    ctx.scope.push(
+        params
+            .iter()
+            .enumerate()
+            .filter_map(|(i, param)| {
+                // The SPECIALIZED type when the target pinned one (what the
+                // prelude casts to), else the SAM's own.
+                let declared = casts
+                    .get(i)
+                    .cloned()
+                    .flatten()
+                    .or_else(|| sam.params.get(i).cloned())?;
+                Some((param.name.clone(), declared))
+            })
+            .collect(),
+    );
     // The body: an expression lambda becomes `return e;` (or `e;` when
     // the SAM is void); a block lambda's statements are used directly.
     let mut method_body = prelude;
@@ -4022,6 +4081,7 @@ fn build_lambda_class(
             method_body.extend(stmts);
         }
     }
+    ctx.scope.pop();
     let method_body = method_body;
 
     let method = MethodDecl {

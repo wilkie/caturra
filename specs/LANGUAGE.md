@@ -6090,6 +6090,36 @@ which the verifier catches at the next use rather than at the call.
 
 15 became 1, and the one is `Map.of`'s salted iteration order.
 
+### A user-defined functional interface
+
+`java.util.function` was probed as a package; the interfaces a PROGRAM declares
+had not been. Twenty-five shapes — every position a lambda can occupy, plus
+method references, default methods, captures and nesting — found twenty already
+working and two families that were not.
+
+**An interface can be functional by INHERITANCE.** `interface Sub extends Op {}`
+declares no abstract method of its own and is a perfectly good target for
+`Sub f = x -> x + 1`; caturra collected single abstract methods per interface
+and never looked at supertypes, so every such lambda was refused. The
+collection now closes over `extends` to a fixed point, so a chain of extending
+interfaces all resolve — and an interface that would inherit two DIFFERENT
+abstract methods is left out, because it is not functional.
+
+**A lambda's own parameters are in scope for its body here too.** The previous
+unit put them in scope in the erased builder, which is the path a
+`java.util.function` target takes; a USER interface takes the other one, and
+had the same hole. `Box<List<String>> f = l -> l.stream().map(v -> …)` was
+refused for the INNER lambda having no functional-interface position. The same
+rule, written in both places — which is how it was missed the first time.
+
+One shape is still refused, and it has now come up three times (in the
+`java.util.function` unit, while writing a test harness for the map surface,
+and here): **a functional interface parameterized on a METHOD's own type
+variable** — `static <T> int pick(T v, Box<T> f)`. Typing the lambda needs `T`
+inferred from the OTHER argument at the call, which is machinery caturra has
+for inferring a generic RETURN type and not for a parameter. It has its own
+honest message, and three appearances is the argument for building it next.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

@@ -30789,3 +30789,111 @@ public class MapSurface {
 }
 "#
 );
+
+// A USER-DEFINED functional interface, in every position a lambda can take
+// one. Twenty-five shapes were probed and twenty passed; the two families that
+// did not are here.
+//
+// An interface may declare NO abstract method of its own and still be
+// functional by INHERITING one — `interface Sub extends Op { }` is a target for
+// `Sub f = x -> x + 1`, and every such lambda was refused. And a lambda's own
+// PARAMETERS are in scope for its body on this path too, not only the erased
+// one beside it: without that, a lambda whose parameter is a collection could
+// not contain a lambda.
+differential_test!(
+    a_user_functional_interface_takes_a_lambda,
+    "UserFunctional",
+    r#"
+import java.util.*;
+
+interface Op {
+    int apply(int x);
+
+    default int twiceOver(int x) {
+        return apply(apply(x));
+    }
+}
+
+interface Sub extends Op { }
+
+interface Deeper extends Sub { }
+
+interface Box<T> {
+    int of(T value);
+}
+
+interface Maker {
+    String make();
+}
+
+public class UserFunctional {
+    static final Op FIELD = x -> x * 7;
+
+    static int twice(int x) {
+        return x * 2;
+    }
+
+    static Op make() {
+        return x -> x * 8;
+    }
+
+    static int use(Op f) {
+        return f.apply(3);
+    }
+
+    static int useBox(Box<String> f) {
+        return f.of("abcd");
+    }
+
+    public static void main(String[] args) {
+        // An INHERITED single abstract method, at one and two removes.
+        Sub sub = x -> x + 100;
+        System.out.println(sub.apply(1) + " " + sub.twiceOver(1));
+        Deeper deeper = x -> x + 1000;
+        System.out.println(deeper.apply(1) + " " + deeper.twiceOver(1));
+
+        // A lambda whose parameter is a COLLECTION, containing a lambda.
+        Box<List<String>> counted = l -> (int) l.stream().map(v -> v.toUpperCase()).count();
+        System.out.println(counted.of(new ArrayList<>(Arrays.asList("a", "b"))));
+        Box<List<String>> filtered = l -> new ArrayList<>(l).removeIf(v -> v.isEmpty()) ? 1 : 0;
+        System.out.println(filtered.of(new ArrayList<>(Arrays.asList("a"))));
+        Box<List<String>> joined = l -> {
+            StringBuilder sb = new StringBuilder();
+            l.forEach(v -> sb.append(v));
+            return sb.length();
+        };
+        System.out.println(joined.of(new ArrayList<>(Arrays.asList("a", "b"))));
+
+        // A lambda inside a lambda's BLOCK body.
+        Maker outer = () -> {
+            Op inner = x -> x + 1;
+            return "" + inner.apply(1);
+        };
+        System.out.println(outer.make());
+
+        // The shapes that already worked, so a regression shows here.
+        Op plain = x -> x * 2;
+        System.out.println(plain.apply(3) + " " + plain.twiceOver(3));
+        System.out.println(use(x -> x * 2));
+        System.out.println(useBox(s -> s.length()));
+        Op viaRef = UserFunctional::twice;
+        System.out.println(viaRef.apply(5));
+        System.out.println(FIELD.apply(6) + " " + make().apply(7));
+        Op[] holder = new Op[1];
+        holder[0] = x -> x * 3;
+        System.out.println(holder[0].apply(3));
+        List<Op> list = new ArrayList<>();
+        list.add(x -> x * 4);
+        System.out.println(list.get(0).apply(3));
+        boolean flag = true;
+        Op chosen = flag ? x -> x + 1 : x -> x - 1;
+        System.out.println(chosen.apply(3));
+        Object erased = (Op) (x -> x * 5);
+        System.out.println(((Op) erased).apply(3));
+        int base = 10;
+        Op captures = x -> x + base;
+        System.out.println(captures.apply(3));
+    }
+}
+"#
+);
