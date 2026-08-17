@@ -6185,6 +6185,36 @@ where `true ? 'a' : 3` is `a`. caturra's constant values have no byte or short
 of their own, so that last distinction is read off the EXPRESSION rather than
 the value.
 
+### One constant folder
+
+The previous unit found a folded constant answering with a different type from
+the same expression emitted. That generalises to a question worth asking
+directly: **wherever caturra folds a constant, does the folded answer match the
+unfolded one?** Every operator over every operand-type pair, each written twice
+— once foldable and once behind variables — is 954 cells, and they agreed with
+the JDK and with each other throughout. The arithmetic core is sound.
+
+The disagreement was elsewhere. **Reachability analysis had its own miniature
+constant folder**, which knew literals and boolean constant variables but not
+`FOUR < TWO` over two constant ints. JLS §14.21 makes a loop with a
+constant-false condition an error — its body is unreachable — and javac rejects
+such a program; caturra accepted it, because its folder could not see through
+the comparison. An accepts-invalid, which this engine holds at zero.
+
+Reachability now asks the same folder codegen uses, so it recognises the full
+constant expressions of §15.28: `while (FALSE)`, `while (1 > 2)`,
+`while (FOUR < TWO)`, `while (FOUR - 4 != 0)` and `while (!(FOUR > TWO))` are
+all rejected, `while (FOUR > TWO)` runs, and `if (FOUR < TWO)` stays legal —
+the `if` carve-out is deliberate in the JLS, so that a `DEBUG` block compiles.
+The second folder is gone rather than extended; the module that held it now
+says so.
+
+Checked alongside and already correct: a folded concatenation is INTERNED
+(`"a" + "b" == "ab"` is true, `a + "b" == "ab"` is false, `.intern()` makes it
+true again), a constant expression stands in a `case` label and an array size,
+constant overflow wraps as the runtime does, and definite assignment through a
+constant condition matches.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

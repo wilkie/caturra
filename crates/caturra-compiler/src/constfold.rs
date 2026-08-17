@@ -235,6 +235,12 @@ impl Promotion {
     }
 }
 
+/// A declared constant's literal as a foldable value — what a caller holding
+/// a class's constant fields hands to [`fold`]'s resolver.
+pub(crate) fn literal_const(value: &Literal) -> Option<ConstValue> {
+    literal_value(value)
+}
+
 fn literal_value(value: &Literal) -> Option<ConstValue> {
     Some(match value {
         Literal::Int(v) => ConstValue::Int(i32::try_from(*v).ok()?),

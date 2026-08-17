@@ -2504,15 +2504,15 @@ impl MethodTable {
     /// Reachability needs them: `while (Cfg.DEBUG)` over a false constant makes
     /// the body unreachable, which javac reports as an error — and the flow
     /// pass sees one class at a time, so it cannot find another's alone.
-    pub(crate) fn boolean_constants(
+    pub(crate) fn constant_literals(
         &self,
         current: &str,
-    ) -> std::collections::HashMap<String, bool> {
+    ) -> std::collections::HashMap<String, Literal> {
         let mut out = std::collections::HashMap::new();
         for (name, info) in &self.classes {
             for field in &info.fields {
-                if let Some(Literal::Bool(value)) = field.const_literal {
-                    out.insert(format!("{name}.{}", field.name), value);
+                if let Some(value) = field.const_literal.clone() {
+                    out.insert(format!("{name}.{}", field.name), value.clone());
                     if name == current {
                         out.insert(field.name.clone(), value);
                     }

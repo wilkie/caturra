@@ -10,12 +10,14 @@
 //!
 //! **Conservative by construction.** A missed error is a nuisance; a spurious
 //! one rejects a valid program, so every rule here errs toward saying nothing.
-//! In particular `constant_bool` only recognises literals, not the full
-//! constant expressions of JLS §15.28 — `while (DEBUG)` with a `static final
-//! boolean DEBUG = false` is accepted where javac reports the body
-//! unreachable. That is the safe direction, and the narrowing is deliberate.
+//! `constant_bool` asks the SHARED constant folder — the one codegen uses — so
+//! it recognises the full constant expressions of JLS §15.28: `while (DEBUG)`
+//! over a `static final boolean`, and `while (FOUR < TWO)` over two constant
+//! ints alike. A second, narrower folder lived here once, and the loops it
+//! could not see through were ACCEPTED where javac reports the body
+//! unreachable.
 
-use crate::ast::{BinaryOp, ClassDecl, Expr, FieldDecl, Literal, MethodDecl, Stmt};
+use crate::ast::{ClassDecl, Expr, FieldDecl, MethodDecl, Stmt};
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
 /// Report unreachable statements and blank-final violations in `decl`.
@@ -25,7 +27,7 @@ pub(crate) fn check(
     table: &crate::codegen::MethodTable,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let constants = table.boolean_constants(&decl.name);
+    let constants = table.constant_literals(&decl.name);
     for method in &decl.methods {
         if method.is_abstract {
             continue;
@@ -167,7 +169,7 @@ struct Reporter<'a> {
     /// The class's own `static final boolean` CONSTANT VARIABLES with a
     /// literal initializer — `while (FLAG)` is as constant as `while (true)`
     /// when `FLAG` is one (JLS §15.28), so what follows is unreachable.
-    constants: std::collections::HashMap<String, bool>,
+    constants: std::collections::HashMap<String, crate::ast::Literal>,
 }
 
 impl Reporter<'_> {
@@ -435,67 +437,21 @@ pub(crate) fn constant_bool(expr: &Expr) -> Option<bool> {
 
 fn constant_bool_in(
     expr: &Expr,
-    constants: &std::collections::HashMap<String, bool>,
+    constants: &std::collections::HashMap<String, crate::ast::Literal>,
 ) -> Option<bool> {
-    match expr {
-        Expr::Literal {
-            value: Literal::Bool(value),
-            ..
-        } => Some(*value),
-        // A constant VARIABLE — of the enclosing class by simple name, or of
-        // any class as `Cfg.DEBUG`.
-        Expr::Name { path, .. } => constants.get(&path.join(".")).copied(),
-        Expr::Unary {
-            op: crate::ast::UnaryOp::Not,
-            operand,
-            ..
-        } => constant_bool_in(operand, constants).map(|value| !value),
-        Expr::Binary { op, lhs, rhs, .. } => match op {
-            BinaryOp::And => {
-                Some(constant_bool_in(lhs, constants)? && constant_bool_in(rhs, constants)?)
-            }
-            BinaryOp::Or => {
-                Some(constant_bool_in(lhs, constants)? || constant_bool_in(rhs, constants)?)
-            }
-            BinaryOp::Eq | BinaryOp::Ne => {
-                let (a, b) = (constant_int(lhs), constant_int(rhs));
-                let equal = match (a, b) {
-                    (Some(a), Some(b)) => a == b,
-                    _ => constant_bool_in(lhs, constants)? == constant_bool_in(rhs, constants)?,
-                };
-                Some(if *op == BinaryOp::Eq { equal } else { !equal })
-            }
-            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-                let (a, b) = (constant_int(lhs)?, constant_int(rhs)?);
-                Some(match op {
-                    BinaryOp::Lt => a < b,
-                    BinaryOp::Le => a <= b,
-                    BinaryOp::Gt => a > b,
-                    _ => a >= b,
-                })
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// A constant integral value, for the comparison folding above.
-fn constant_int(expr: &Expr) -> Option<i64> {
-    match expr {
-        Expr::Literal {
-            value: Literal::Int(value) | Literal::Long(value),
-            ..
-        } => Some(*value),
-        Expr::Literal {
-            value: Literal::Char(value),
-            ..
-        } => Some(i64::from(u32::from(*value))),
-        Expr::Unary {
-            op: crate::ast::UnaryOp::Neg,
-            operand,
-            ..
-        } => constant_int(operand).map(|value| -value),
+    // The SAME folder codegen uses, rather than a second one here. Reachability
+    // asks a JLS §15.28 question ("is this condition a constant expression, and
+    // which one?"), and the miniature folder that used to answer it knew
+    // literals and boolean constant variables but not, say, `FOUR < TWO` over
+    // two constant ints — which javac rejects as an unreachable loop body and
+    // caturra accepted.
+    let mut resolve = |path: &[String]| {
+        constants
+            .get(&path.join("."))
+            .and_then(crate::constfold::literal_const)
+    };
+    match crate::constfold::fold(expr, &mut resolve) {
+        Some(crate::constfold::ConstValue::Bool(value)) => Some(value),
         _ => None,
     }
 }

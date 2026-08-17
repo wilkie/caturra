@@ -31144,3 +31144,109 @@ public class ConstantConditional {
 }
 "#
 );
+
+// A CONSTANT EXPRESSION is one thing, and two places used to decide what it
+// was. The arithmetic core agreed already — 954 cells of every operator over
+// every operand-type pair, each written twice, once foldable and once behind
+// variables — but the REACHABILITY analysis had its own miniature folder, and
+// what it could not see through it accepted.
+//
+// It now asks the same folder codegen does, so a loop whose condition is a
+// constant EXPRESSION (not merely a literal) makes its body unreachable, which
+// is a compile error. `if` is exempt by JLS §14.21, deliberately, so that
+// `if (DEBUG)` blocks stay compilable.
+differential_test!(
+    a_constant_condition_is_folded_everywhere,
+    "ConstantCondition",
+    r#"
+public class ConstantCondition {
+    static final int FOUR = 4;
+    static final int TWO = 2;
+    static final boolean FALSE = false;
+    static final String CONST = "ab";
+    static final String PREFIX = "a";
+
+    static String runtime() {
+        return "a";
+    }
+
+    public static void main(String[] args) {
+        // A constant-TRUE loop runs; the `if` carve-out keeps its body legal.
+        int rounds = 0;
+        while (FOUR > TWO) {
+            rounds++;
+            if (rounds > 2) {
+                break;
+            }
+        }
+        System.out.println(rounds);
+        if (FOUR < TWO) {
+            System.out.println("never");
+        }
+        do {
+            System.out.println("do runs once");
+        } while (FOUR < TWO);
+
+        // A folded concatenation is INTERNED; a runtime one is not.
+        String a = "a";
+        System.out.println(("a" + "b" == "ab") + " " + (CONST == "ab")
+            + " " + (PREFIX + "b" == "ab"));
+        System.out.println((a + "b" == "ab") + " " + (runtime() + "b" == "ab")
+            + " " + ((a + "b").intern() == "ab"));
+
+        // A constant expression in a `case` label, an array size, and overflow.
+        int n = 8;
+        switch (n) {
+            case FOUR * TWO:
+                System.out.println("case eight");
+                break;
+            case 1 + 2:
+                System.out.println("case three");
+                break;
+            default:
+                System.out.println("case other");
+        }
+        int[] sized = new int[FOUR * TWO];
+        int big = Integer.MAX_VALUE;
+        System.out.println(sized.length + " " + (2147483647 + 1) + " " + (big + 1));
+
+        // Definite assignment through a constant condition.
+        int x;
+        if (true) {
+            x = 1;
+        } else {
+            x = 2;
+        }
+        final int LOCAL = 3;
+        int y;
+        if (LOCAL > 0) {
+            y = 1;
+        } else {
+            y = 2;
+        }
+        System.out.println(x + " " + y);
+    }
+}
+"#
+);
+
+// A loop whose condition is a constant EXPRESSION over constant variables —
+// not a literal — makes its body unreachable, which javac rejects and caturra
+// accepted, because the reachability analysis folded literals only.
+differential_reject!(
+    a_constant_expression_loop_body_is_unreachable,
+    "UnreachableLoop",
+    r"
+public class UnreachableLoop {
+    static final int FOUR = 4;
+    static final int TWO = 2;
+
+    public static void main(String[] args) {
+        while (FOUR < TWO) {
+            System.out.println('x');
+        }
+        System.out.println('end');
+    }
+}
+"
+);
