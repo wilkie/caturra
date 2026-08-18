@@ -5805,10 +5805,10 @@ Two structural gaps fell out of the same probe:
   (`List<String>[] rows = new List[2]`). caturra already had the rule for two
   parameterized element types and simply not for the raw source.
 
-One gap left open, a refusal with its own message: a functional interface
-parameterized on a METHOD's own type variable (`static <T, R> R applyIt(
-Function<T, R> f, T v)`), which is a generics limit rather than a
-`java.util.function` one.
+~~One gap left open, a refusal with its own message: a functional interface
+parameterized on a METHOD's own type variable~~ — **closed later**, see "A
+generic method's lambda argument". What remains of it is narrower: a return
+variable pinned only by what the lambda BODY gives back.
 
 ### What a library object says it IS
 
@@ -6215,6 +6215,34 @@ true again), a constant expression stands in a `case` label and an array size,
 constant overflow wraps as the runtime does, and definite assignment through a
 constant condition matches.
 
+### Auditing the divergence lists again
+
+The previous unit found a narrowness documented as deliberate that was in fact
+an accepts-invalid. That is a reason to distrust the documentation generally,
+so this unit ran every bullet of the two divergence lists rather than reading
+them — the same audit the lists themselves record having had on 2026-08-14.
+
+**Every bullet still held.** All ten strictnesses and the one recorded
+permissiveness are exactly as described.
+
+The lists had stopped being EXHAUSTIVE instead, which is the other half of what
+they claim. Four strictnesses and one permissiveness had been recorded in the
+PROSE of later entries and never added to either list or pinned by a test:
+`IntFunction` as a named variable for `toArray`, a return variable pinned only
+by a lambda's body, a discarded type WITNESS, `Arrays.stream(a, from, to)`, and
+— the one that matters most, because the looser list said "one known case" —
+`(List<String>) Collections.emptyList()`, which caturra accepts and javac calls
+inconvertible. All five are now enumerated and pinned, so the count is honest
+again.
+
+One stale claim was corrected in the same pass: "a functional interface
+parameterized on a METHOD's own type variable" was written down as an open gap
+and closed two entries later.
+
+Prose is where a divergence is explained; the list is where it is COUNTED. An
+entry that only explains leaves the count wrong, and a list that says it is
+exhaustive has to earn it every time it grows.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -6239,6 +6267,16 @@ which has three pinned tests, had never been written down. A strictness that
 stops being true is not a bug, but a list that says it is exhaustive has to
 earn it.
 
+Audited again on 2026-08-17, the same way. Every bullet above still held —
+but the list had stopped being EXHAUSTIVE, which is the other half of what it
+claims. Four strictnesses and one permissiveness had been recorded in the prose
+of later entries and never added here or pinned; they are the last four bullets
+above and the second bullet below. Prose is where a divergence is explained;
+this list is where it is counted, and an entry that only explains does not keep
+the count honest. A stale claim was corrected in the same pass: a functional
+interface parameterized on a method's own type variable had been fixed two
+entries after it was written down.
+
 - `Arrays.fill(new String[1], 5)` — javac erases to `fill(Object[], Object)`
   and throws `ArrayStoreException` at run time.
 - `Arrays.sort(new Plain[2])` where `Plain` is not `Comparable` — javac
@@ -6262,9 +6300,23 @@ earn it.
   but the refusal has to say so: written in full it gave the honest reason,
   written simply it read as a typo — "unknown type 'Math'", about a class
   every program has used.
+- `IntFunction<String[]> gen = String[]::new; list.toArray(gen)` — the
+  generator overload is modelled by reducing `String[]::new` to the array it
+  makes, which a VARIABLE holding the same function cannot be.
+- `<T, R> R conv(T v, Function<T, R> f)` assigned to an `Integer` — the
+  lambda's PARAMETER types are inferred (see "A generic method's lambda
+  argument"), but a return variable pinned only by what the lambda BODY gives
+  back stays `Object`.
+- `Collections.<String>emptyList().forEach(…)` — an explicit type WITNESS is
+  parsed and discarded (`Expr::Call` carries no type arguments), so a
+  context-adopting factory written with one has no element for the lambda.
+  Assigning it to a declared variable first works, and is how the shape is
+  normally written.
+- `Arrays.stream(array, from, to)` — the RANGE overload; the whole-array form
+  is modelled.
 
-**More permissive than javac** (caturra accepts; javac rejects). **One
-known case**, asserted by `looser_than_javac!` so it cannot be forgotten:
+**More permissive than javac** (caturra accepts; javac rejects). **Two
+known cases**, each asserted by `looser_than_javac!` so it cannot be forgotten:
 
 - `Map.Entry.comparingByValue().reversed()` with no type witness. javac
   infers `Comparator<Entry<Object, V>>` for the bare factory call, and
@@ -6276,6 +6328,11 @@ known case**, asserted by `looser_than_javac!` so it cannot be forgotten:
   All three forms javac accepts do work, so nothing legitimate is blocked by
   leaving it permissive. Recorded when the two factories were added
   (2026-08-14) rather than left for a later sweep to find.
+- `(List<String>) Collections.emptyList()`. The factory types as a `null` that
+  adopts its context, and a CAST is a context — so caturra reads this as an
+  identity cast, where javac infers `List<Object>` for the bare call and calls
+  the cast inconvertible. Assigning the factory to a `List<String>` first is
+  legal in both, and is the ordinary spelling.
 
 It held a worse one on 2026-08-13: a cast to `String` accepted ANY reference
 source, so `(String) Integer.valueOf(1)`, `(String) aStringBuilder` and

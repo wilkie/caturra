@@ -31250,3 +31250,106 @@ public class UnreachableLoop {
 }
 "
 );
+
+// The strictness and permissiveness lists in LANGUAGE.md claim to enumerate
+// EVERY known divergence, each pinned here so neither can grow unnoticed. An
+// audit that ran every bullet found the bullets all still true — and found five
+// cases recorded in the prose of later entries that had never been added to
+// either list. These are those five, so the claim is true again.
+
+// `IntFunction` names a variable, but `toArray` does not take one: the
+// generator overload is modelled by reducing `String[]::new` to the array it
+// makes, which a VARIABLE holding the same function cannot be.
+stricter_than_javac!(
+    stricter_to_array_needs_a_generator_written_out,
+    "ToArrayGeneratorVar",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class ToArrayGeneratorVar {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("x"));
+        IntFunction<String[]> generator = String[]::new;
+        System.out.println(Arrays.toString(list.toArray(generator)));
+    }
+}
+"#
+);
+
+// A generic method whose RETURN variable is pinned only by what the lambda body
+// gives back. The lambda's PARAMETER types are inferred; the result stays
+// `Object`, so a call assigned to an `Integer` is an incompatible type here.
+stricter_than_javac!(
+    stricter_return_variable_pinned_only_by_a_lambda,
+    "ReturnFromLambdaBody",
+    r#"
+import java.util.function.*;
+
+public class ReturnFromLambdaBody {
+    static <T, R> R conv(T value, Function<T, R> f) {
+        return f.apply(value);
+    }
+
+    public static void main(String[] args) {
+        Integer length = conv("abc", s -> s.length());
+        System.out.println(length);
+    }
+}
+"#
+);
+
+// An explicit type WITNESS is parsed and discarded — `Expr::Call` carries no
+// type arguments — so a context-adopting factory written with one has no
+// element for a lambda to take. Assigning it to a declared variable first works,
+// and is how the shape is normally written.
+stricter_than_javac!(
+    stricter_type_witness_is_discarded,
+    "WitnessedEmptyList",
+    r#"
+import java.util.*;
+
+public class WitnessedEmptyList {
+    public static void main(String[] args) {
+        Collections.<String>emptyList().forEach(s -> System.out.println(s.length()));
+        System.out.println("ran");
+    }
+}
+"#
+);
+
+// `Arrays.stream(array, from, to)` — the RANGE overload, which caturra does not
+// model; the whole-array form does.
+stricter_than_javac!(
+    stricter_arrays_stream_takes_no_range,
+    "ArraysStreamRange",
+    r"
+import java.util.*;
+
+public class ArraysStreamRange {
+    public static void main(String[] args) {
+        int[] values = {1, 2, 3};
+        System.out.println(Arrays.stream(values, 0, 2).sum());
+    }
+}
+"
+);
+
+// The SECOND permissiveness. `Collections.emptyList()` types as a `null` that
+// adopts its context, and a CAST is a context — so caturra reads
+// `(List<String>) Collections.emptyList()` as an identity cast, where javac
+// infers `List<Object>` for the bare call and calls the cast inconvertible.
+// Assigning the factory to a `List<String>` first is legal in both.
+looser_than_javac!(
+    empty_factory_adopts_a_cast_as_its_context,
+    "CastAnEmptyList",
+    r"
+import java.util.*;
+
+public class CastAnEmptyList {
+    public static void main(String[] args) {
+        System.out.println(((List<String>) Collections.emptyList()).size());
+    }
+}
+"
+);
