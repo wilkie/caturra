@@ -1481,23 +1481,31 @@ impl<'a> Matcher<'a> {
             self.run(node, pos, caps, &next)
         };
 
-        // A SIMPLE body — one that consumes exactly one unit and has no
-        // internal choice — repeats in a LOOP rather than one stack frame per
-        // repetition. `a*b` over a thousand characters is an ordinary pattern,
-        // and recursing per iteration overflowed the stack long before the
-        // step budget noticed. The behaviour is identical: match as far as the
-        // body goes, then try the continuation from the longest run down to
-        // the minimum, which is what the recursion did.
+        // A SIMPLE body — one with no internal choice — repeats in a LOOP
+        // rather than one stack frame per repetition. `a*b` over a thousand
+        // characters is an ordinary pattern, and recursing per iteration
+        // overflowed the stack long before the step budget noticed. The
+        // behaviour is identical: match as far as the body goes, then try the
+        // continuation from the longest run down to the minimum, which is what
+        // the recursion did.
+        //
+        // Each repetition's END is recorded rather than assumed. A body that
+        // consumes a SUPPLEMENTARY code point takes two code units, so backing
+        // off by one landed BETWEEN the surrogates — and from there the
+        // positions the loop visited were not the ones the repetitions had
+        // reached, so `"a\ud83d\ude00b".matches(".*a.*")` gave up before
+        // trying position 0 and answered false.
         if kind == RepeatKind::Greedy
             && done == 0
             && matches!(node, Node::Literal(_) | Node::Class(_) | Node::AnyChar)
         {
-            let mut end = pos;
+            let mut ends = vec![pos];
             let mut taken = 0u32;
             while max.is_none_or(|max| taken < max) {
                 if !self.step() {
                     return None;
                 }
+                let end = *ends.last().expect("seeded with the start");
                 let mut probe = caps.clone();
                 let Some(next) = self.run(node, end, &mut probe, &Cont::Done) else {
                     break;
@@ -1505,11 +1513,12 @@ impl<'a> Matcher<'a> {
                 if next == end {
                     break; // a zero-width body would loop forever
                 }
-                end = next;
+                ends.push(next);
                 taken += 1;
             }
             while taken >= min {
                 let saved = caps.clone();
+                let end = ends[taken as usize];
                 if let Some(matched) = self.resume(end, caps, cont) {
                     return Some(matched);
                 }
@@ -1518,7 +1527,6 @@ impl<'a> Matcher<'a> {
                     break;
                 }
                 taken -= 1;
-                end -= 1;
             }
             return None;
         }

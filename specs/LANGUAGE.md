@@ -6243,6 +6243,33 @@ Prose is where a divergence is explained; the list is where it is COUNTED. An
 entry that only explains leaves the count wrong, and a list that says it is
 exhaustive has to earn it every time it grows.
 
+### A greedy repeat backs off by code point
+
+Two API surfaces were cross-producted as matrices and came back almost clean:
+`java.util.Arrays` — every method over all nine element types, 180 cells, no
+divergence — and `String`, every method against ten subjects including an
+empty one, whitespace, mixed case, accented characters and a SURROGATE PAIR:
+479 cells, one divergence.
+
+`"a😀b".matches(".*a.*")` answered false. The `.` itself was already
+code-point aware — `"a😀b".matches("...")` was right, and so was
+`replaceAll(".", "#")` — and only the BACKTRACKING was not.
+
+A greedy repeat over a simple body runs as a loop rather than one stack frame
+per repetition, which is what keeps `a*b` over a thousand characters off the
+stack. The loop counted how many repetitions it had taken and assumed each
+consumed one code UNIT, so backing off decremented the position by one and
+landed BETWEEN the surrogates. From there the positions it tried were not the
+ones the repetitions had actually reached, and it ran out of repetitions before
+reaching the start of the string. Each repetition's END is now recorded, so
+backing off returns to a position the body really stopped at, whatever its
+width.
+
+The shapes affected were exactly those that must give a repetition back across
+the pair — `.*a.*`, `.*a.+`, `(.*)a(.*)`, `replaceAll(".*a", …)`. A lazy repeat
+was unaffected, because it never backs off; so was a greedy one whose backtrack
+lands after the pair rather than inside it.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

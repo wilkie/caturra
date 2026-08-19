@@ -31353,3 +31353,56 @@ public class CastAnEmptyList {
 }
 "
 );
+
+// A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
+// repeats a simple body recorded how many repetitions it had taken and assumed
+// each consumed one code UNIT, so backing off decremented the position by one
+// and landed BETWEEN the surrogates — from there the positions it tried were
+// not the ones the repetitions had reached, and it gave up before reaching the
+// start. `"a😀b".matches(".*a.*")` answered false.
+//
+// Found by a 479-cell cross-product of String's methods against ten subjects,
+// of which this was the only divergence: `.` itself was already code-point
+// aware, and only the BACKTRACKING was not.
+differential_test!(
+    a_greedy_repeat_backs_off_by_code_point,
+    "GreedySurrogate",
+    r##"
+import java.util.*;
+
+public class GreedySurrogate {
+    static void show(String label, String s, String p) {
+        System.out.println(label + " " + s.matches(p) + " " + s.replaceAll(p, "#")
+            + " " + Arrays.toString(s.split(p)));
+    }
+
+    public static void main(String[] args) {
+        String emoji = "😀";
+        String mixed = "a" + emoji + "b";
+
+        // The shapes that must BACK OFF past the pair.
+        show("dotStar", mixed, ".*a.*");
+        show("plusTail", mixed, ".*a.+");
+        show("grouped", mixed, "(.*)a(.*)");
+        show("leadingRun", emoji + "a", ".*a.*");
+        show("trailingRun", "a" + emoji, ".*a.*");
+        show("replaceRun", mixed, ".*a");
+
+        // …and the ones that already worked, so a regression shows here.
+        show("dotAll", mixed, ".*");
+        show("threeDots", mixed, "...");
+        show("aDotB", mixed, "a.b");
+        show("lazy", mixed, ".*?a.*");
+        show("classRun", mixed, "[^x]*b");
+        show("emojiOnly", emoji, ".");
+        System.out.println(mixed.length() + " " + mixed.codePointCount(0, mixed.length()));
+        System.out.println(mixed.replaceAll(".", "#") + " " + emoji.replaceAll(".", "#"));
+
+        // A long ordinary run still backtracks correctly (the loop's own case).
+        String run = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaab";
+        show("longRun", run, ".*a.*");
+        show("longAnchored", run, "a*b");
+    }
+}
+"##
+);
