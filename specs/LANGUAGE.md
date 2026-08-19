@@ -6270,6 +6270,39 @@ the pair — `.*a.*`, `.*a.+`, `(.*)a(.*)`, `replaceAll(".*a", …)`. A lazy rep
 was unaffected, because it never backs off; so was a greedy one whose backtrack
 lands after the pair rather than inside it.
 
+### Counting code units, not characters
+
+The previous unit ended with a rule worth applying rather than just recording:
+put a SURROGATE PAIR in every text matrix. Doing that across the rest of the
+text surface — `StringBuilder`'s index-taking methods, `Character`'s
+code-point helpers, the special-case foldings, ordering, `String.format` —
+found 34 of 35 already right, and one that was not.
+
+**`String.format("%5s", "😀")` padded one space too far.** A JDK's `Formatter`
+measures with `CharSequence.length()`, so a width counts UTF-16 code UNITS and
+a supplementary code point is two of them; caturra counted code points. The
+same rule governs precision. A 306-cell matrix of every conversion against
+every argument kind confirms nothing else moved.
+
+Already right, and pinned so they stay that way: `StringBuilder.reverse` keeps
+a surrogate pair together (and reverses back to the original), the builder's
+`insert`/`delete`/`replace`/`subSequence` work in code units,
+`Character.charCount`/`toChars`/`isHighSurrogate` and
+`String.offsetByCodePoints` agree, and the foldings that change LENGTH —
+ß→SS, ﬁ→FI, final sigma — all match.
+
+**One recorded runtime divergence.** A string holding an UNPAIRED surrogate
+prints as U+FFFD here where a JDK writes `?`: its UTF-8 encoder cannot encode
+one and substitutes, and caturra decodes lossily at the boundary between its
+UTF-16 storage and Rust text. Distinguishing the two downstream is impossible —
+a real U+FFFD in the program is by then the same character — so the fix belongs
+at the decode, which 35 call sites share and which every string operation goes
+through. Left alone deliberately: the input is degenerate (an unpaired
+surrogate can only be built by splicing one), and moving that decode to satisfy
+it would put every string operation at risk. `%.1s` of an emoji is the same
+divergence from the other end: the JDK truncates to one code unit and prints
+the half as `?`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

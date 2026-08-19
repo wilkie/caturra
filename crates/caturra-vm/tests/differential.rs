@@ -31406,3 +31406,79 @@ public class GreedySurrogate {
 }
 "##
 );
+
+// Text beyond the BMP, everywhere a character count decides something. The
+// previous unit's lesson was to put a SURROGATE PAIR in every text matrix, and
+// applying it here found `%5s` padding one space too far: a JDK's `Formatter`
+// measures with `CharSequence.length()`, so its width counts UTF-16 code UNITS
+// and a supplementary code point is two of them.
+//
+// `StringBuilder.reverse` keeping a pair together, the builder's index-taking
+// methods, `Character`'s code-point helpers and the special-case foldings
+// (ß→SS, ﬁ→FI, final sigma) were all already right.
+differential_test!(
+    text_beyond_the_bmp_counts_code_units,
+    "BeyondTheBmp",
+    r#"
+import java.util.*;
+
+public class BeyondTheBmp {
+    static final String EM = "😀";
+    static final String CLEF = "𝄞";
+
+    static void p(String label, Object v) {
+        System.out.println(label + " " + v);
+    }
+
+    public static void main(String[] args) {
+        String mixed = "a" + EM + "b";
+
+        // A width counts CODE UNITS, so an emoji takes two of them.
+        p("width", "[" + String.format("%5s", EM) + "]");
+        p("left", "[" + String.format("%-5s", EM) + "]");
+        p("exact", "[" + String.format("%2s", EM) + "]");
+        p("under", "[" + String.format("%1s", EM) + "]");
+        p("len", String.format("%5s", EM).length());
+        p("plain", "[" + String.format("%5s", "ab") + "]");
+        p("accented", "[" + String.format("%5s", "é") + "]");
+
+        // `reverse` keeps a surrogate pair together.
+        p("reverse", new StringBuilder(mixed).reverse());
+        p("reverseLen", new StringBuilder(mixed).reverse().length());
+        p("reverseRound",
+            new StringBuilder(new StringBuilder(mixed).reverse().toString()).reverse());
+        p("reverseTwo", new StringBuilder(EM + CLEF).reverse());
+
+        // The builder's index-taking methods work in code units.
+        p("insert", new StringBuilder(mixed).insert(1, "Z"));
+        p("deleteCharAt", new StringBuilder(mixed).deleteCharAt(1).length());
+        p("delete", new StringBuilder(mixed).delete(1, 3));
+        p("replace", new StringBuilder(mixed).replace(1, 3, "Z"));
+        StringBuilder b = new StringBuilder(mixed);
+        p("codePointAt", b.codePointAt(1) + " " + b.codePointCount(0, b.length()));
+        p("subSequence", b.subSequence(1, 3));
+
+        // `Character`'s code-point helpers.
+        p("charCount", Character.charCount(0x1F600));
+        p("surrogates", Character.isHighSurrogate(mixed.charAt(1))
+            + " " + Character.isLowSurrogate(mixed.charAt(2)));
+        p("toChars", Arrays.toString(Character.toChars(0x1F600)));
+        p("offsetBy", mixed.offsetByCodePoints(0, 2));
+
+        // Special-case foldings, which change LENGTH.
+        p("upperSs", "ß".toUpperCase());
+        p("upperFi", "ﬁ".toUpperCase());
+        p("upperSigma", "σς".toUpperCase());
+        p("lowerSigma", "Σ".toLowerCase());
+        p("upperEmoji", mixed.toUpperCase());
+
+        // Ordering and joining.
+        String[] sorted = {"b", EM, "a", "é"};
+        Arrays.sort(sorted);
+        p("sorted", Arrays.toString(sorted));
+        p("compare", EM.compareTo("z") + " " + "a".compareTo(EM));
+        p("join", String.join("-", "a", EM, "b"));
+    }
+}
+"#
+);

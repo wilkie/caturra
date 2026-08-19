@@ -454,9 +454,13 @@ fn illegal_format_flags(flags: &str) -> VmError {
 }
 
 /// Apply width padding (spaces; the numeric zero-pad happens earlier).
+///
+/// The width counts UTF-16 code UNITS, because a JDK's `Formatter` measures
+/// with `CharSequence.length()`. A supplementary code point is two of them, so
+/// counting code points padded `%5s` of an emoji one space too far.
 fn pad(spec: &Spec, body: &str) -> String {
     let width = spec.width.unwrap_or(0);
-    let len = body.chars().count();
+    let len = body.encode_utf16().count();
     if len >= width {
         return body.to_owned();
     }
