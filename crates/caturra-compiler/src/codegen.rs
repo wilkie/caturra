@@ -2247,13 +2247,25 @@ impl MethodTable {
             let Some(info) = self.info_by_id(id) else {
                 break;
             };
-            // The type's OWN concrete declaration counts (a class override, or
-            // an interface resolving its inherited conflict with its own
+            // The type's OWN declaration counts (a class override, or an
+            // interface resolving its inherited conflict with its own
             // default); ancestors are reached only through `superclass`, which
             // is a class chain, so no inherited interface default sneaks in.
-            if info.methods.iter().any(|m| {
-                m.name == name && !m.is_abstract && self.params_override(&m.params, params)
-            }) {
+            //
+            // An ABSTRACT declaration counts too, but only where the type may
+            // have one: `interface C extends A, B { String tag(); }`
+            // RE-ABSTRACTS the method, which resolves the ambiguity for C and
+            // pushes the obligation onto whoever implements it (JLS §9.4.1.3).
+            // Requiring a concrete body reported the conflict against C, for a
+            // program javac accepts.
+            let declares_it =
+                |m: &MethodSig| m.name == name && self.params_override(&m.params, params);
+            let abstract_counts = info.is_interface || info.is_abstract;
+            if info
+                .methods
+                .iter()
+                .any(|m| declares_it(m) && (!m.is_abstract || abstract_counts))
+            {
                 return true;
             }
             current = info.superclass;
@@ -2300,8 +2312,27 @@ impl MethodTable {
                 };
                 for ma in ia.methods.iter().filter(|m| is_default(m)) {
                     for mb in ib.methods.iter().filter(|m| is_default(m)) {
+                        // A SUB-INTERFACE of both resolves the conflict for
+                        // everything below it: `interface C extends A, B` that
+                        // declares the method is more specific than either
+                        // (JLS §9.4.1.3), so `class Impl implements C { }` is
+                        // legal and was refused here. Asking only whether the
+                        // CLASS overrides missed the case where the diamond had
+                        // already been closed one level up.
+                        let resolved_above = ifaces.iter().any(|&c| {
+                            c != a
+                                && c != b
+                                && self.is_subtype(c, a)
+                                && self.is_subtype(c, b)
+                                && self.info_by_id(c).is_some_and(|ic| {
+                                    ic.methods
+                                        .iter()
+                                        .any(|m| m.name == ma.name && m.params == ma.params)
+                                })
+                        });
                         if ma.name == mb.name
                             && ma.params == mb.params
+                            && !resolved_above
                             && !self.class_overrides(class, &ma.name, &ma.params)
                         {
                             return Some((
@@ -2373,9 +2404,22 @@ impl MethodTable {
                     break;
                 }
                 if let Some(info) = self.info_by_id(id) {
-                    if info.methods.iter().any(|m| {
-                        m.name == name && !m.is_abstract && self.params_override(&m.params, &params)
-                    }) {
+                    // A default in an interface that `owner` EXTENDS does not
+                    // implement `owner`'s abstract declaration — the more
+                    // specific declaration wins, and re-abstracting is how an
+                    // interface deliberately pushes the obligation down
+                    // (`interface C extends A { String tag(); }`). Accepting
+                    // any concrete method anywhere let a class implement
+                    // nothing and inherit the default `C` had just discarded.
+                    let overridden_by_owner =
+                        info.is_interface && id != owner && self.is_subtype(owner, id);
+                    if !overridden_by_owner
+                        && info.methods.iter().any(|m| {
+                            m.name == name
+                                && !m.is_abstract
+                                && self.params_override(&m.params, &params)
+                        })
+                    {
                         continue 'outer;
                     }
                     if let Some(parent) = info.superclass {

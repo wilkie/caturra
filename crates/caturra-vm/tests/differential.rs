@@ -31482,3 +31482,152 @@ public class BeyondTheBmp {
 }
 "#
 );
+
+// Which implementation runs. A dispatch matrix — every declaration site
+// (class, abstract class, interface default, interface static, private) against
+// every static type it can be called through — came back clean at 37 cells,
+// including private methods not dispatching, fields hiding by STATIC type,
+// `super.m()`, `Iface.super.m()`, covariant returns and an inline-cache mix of
+// receiver types at one call site. The corners are where it was not.
+//
+// A DIAMOND is resolved by whichever declaration is most specific, and caturra
+// asked only whether the CLASS resolved it: `interface C extends A, B` that
+// declares the method resolves it for everything below, so
+// `class Impl implements C { }` is legal and was refused. RE-ABSTRACTING
+// resolves it too — and then binds: the class really must implement it, where a
+// default from the interface `C` overrode no longer counts.
+differential_test!(
+    a_diamond_is_resolved_by_the_most_specific_declaration,
+    "DiamondResolution",
+    r#"
+interface A {
+    default String tag() {
+        return "A";
+    }
+}
+
+interface B {
+    default String tag() {
+        return "B";
+    }
+}
+
+// Resolved by a DEFAULT one level up…
+interface C extends A, B {
+    default String tag() {
+        return "C";
+    }
+}
+
+interface Deep extends C { }
+
+// …by a RE-ABSTRACTION, which pushes the obligation down…
+interface Abstracted extends A, B {
+    String tag();
+}
+
+// …and by inheriting the two through separate parents.
+interface LeftOnly extends A { }
+
+interface RightOnly extends B { }
+
+class FromDefault implements C { }
+
+class FromDeep implements Deep { }
+
+class FromAbstract implements Abstracted {
+    public String tag() {
+        return "FromAbstract";
+    }
+}
+
+class Overrides implements A, B {
+    public String tag() {
+        return "Overrides";
+    }
+}
+
+class Split implements LeftOnly, RightOnly {
+    public String tag() {
+        return "Split";
+    }
+}
+
+class Sup {
+    public String tag() {
+        return "Sup";
+    }
+}
+
+// A superclass method wins over any interface default.
+class ClassWins extends Sup implements A, B { }
+
+public class DiamondResolution {
+    public static void main(String[] args) {
+        System.out.println(new FromDefault().tag());
+        System.out.println(new FromDeep().tag());
+        System.out.println(new FromAbstract().tag());
+        System.out.println(new Overrides().tag());
+        System.out.println(new Split().tag());
+        System.out.println(new ClassWins().tag());
+        A viaA = new FromDefault();
+        B viaB = new FromDefault();
+        System.out.println(viaA.tag() + " " + viaB.tag());
+    }
+}
+"#
+);
+
+// A RE-ABSTRACTED method must actually be implemented: the default it overrode
+// no longer counts, and a class that implements nothing is not abstract and
+// does not override it.
+differential_reject!(
+    a_reabstracted_method_must_be_implemented,
+    "ReabstractedMissing",
+    r"
+interface A {
+    default String tag() {
+        return 'A';
+    }
+}
+
+interface Abstracted extends A {
+    String tag();
+}
+
+class Impl implements Abstracted { }
+
+public class ReabstractedMissing {
+    public static void main(String[] args) {
+        System.out.println(new Impl().tag());
+    }
+}
+"
+);
+
+// …and two UNRELATED defaults with nothing more specific are still a conflict.
+differential_reject!(
+    unrelated_defaults_still_conflict,
+    "UnrelatedDefaults",
+    r"
+interface A {
+    default String tag() {
+        return 'A';
+    }
+}
+
+interface B {
+    default String tag() {
+        return 'B';
+    }
+}
+
+class Impl implements A, B { }
+
+public class UnrelatedDefaults {
+    public static void main(String[] args) {
+        System.out.println(new Impl().tag());
+    }
+}
+"
+);

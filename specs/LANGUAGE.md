@@ -6303,6 +6303,36 @@ it would put every string operation at risk. `%.1s` of an emoji is the same
 divergence from the other end: the JDK truncates to one code unit and prints
 the half as `?`.
 
+### Which implementation runs
+
+Virtual dispatch had never been cross-producted: every declaration site (class,
+abstract class, interface default, interface static, private) against every
+static type it can be called through. **37 cells, all clean** — private methods
+do not dispatch, fields hide by STATIC type, `super.m()` and `Iface.super.m()`
+reach the right one, covariant returns work through the erased signature, and a
+call site fed alternating receiver types answers correctly each time, which is
+what an inline cache is easiest to get wrong. The corners were where it was not.
+
+**A DIAMOND is resolved by whichever declaration is most specific**, and caturra
+asked only whether the CLASS resolved it. `interface C extends A, B` that
+declares the method resolves it for everything below, so
+`class Impl implements C { }` is legal Java — and was refused, with the conflict
+reported against a diamond that had already been closed one level up.
+
+**RE-ABSTRACTING resolves it too, and then binds.** `interface C extends A { T
+m(); }` deliberately discards `A`'s default and pushes the obligation onto
+implementers. Two rules had to move in opposite directions for that to work: an
+abstract declaration now COUNTS as resolving an inherited conflict, and a
+default in an interface the re-abstracting one extends no longer counts as
+implementing it. Fixing only the first made `class Impl implements C { }`
+compile and silently run `A`'s discarded default — the mirror mistake, and the
+matrix caught it on the next run.
+
+Eleven diamond shapes now agree with javac, in both directions: resolved by a
+default, by a re-abstraction, by the class itself, through separate parents,
+through a longer chain, and by a superclass method — which wins over any
+interface default — as well as the two that must still be REJECTED.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
