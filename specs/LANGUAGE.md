@@ -6333,6 +6333,36 @@ default, by a re-abstraction, by the class itself, through separate parents,
 through a longer chain, and by a superclass method — which wins over any
 interface default — as well as the two that must still be REJECTED.
 
+### count() may not run the pipeline
+
+Exception selection and control flow were cross-producted: eleven throw kinds
+against a nine-clause catch ladder, `finally` overriding a return, `finally`
+with `continue`/`break`/labelled jumps, nested try, precise rethrow, cause
+chains, a `finally` replacing the exception in flight, try-with-resources with
+suppression from the body and from each close, and the return-value-before-
+`finally` rule (`try { return x++; } finally { x = 99; }` is 1). **Thirty-nine
+cells, all already correct.**
+
+The one divergence was in the probe's control case: an exception thrown from a
+`map` inside `count()`. **A JDK never threw it.** `Stream.count()` is specified
+to skip execution of the pipeline when it can compute the count directly from
+the source, so the side effects of a size-preserving operation — a `map`, a
+`peek`, even a mapper that throws — do not happen at all. caturra ran them.
+
+Which operations allow the skip is empirical, and worth writing down: `map`,
+`peek`, `sorted`, `boxed` and the `mapToX` family do; `filter`, `limit`,
+`skip`, `distinct`, `flatMap` and `takeWhile` do not, and neither does anything
+after one of them.
+
+Two properties survive the shortcut, and both took a pinned test to get right.
+The stream stays LATE-BINDING: the size is the source's as it stands when
+`count()` runs, not as it stood when the stream was opened. And it does NOT
+fail fast — appending to the source and then counting answers the new size
+rather than throwing, because the JDK's modCount check lives in the
+spliterator's `forEachRemaining`, which a skipped pipeline never reaches. The
+first attempt kept the fail-fast check and broke the late-binding test that had
+already pinned exactly this.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

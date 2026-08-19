@@ -9253,6 +9253,40 @@ impl<'run> Interpreter<'run> {
             _ => {}
         }
 
+        // `count()` may answer WITHOUT running the pipeline. The JDK's does so
+        // whenever the source size is known and no operation can change it
+        // (`Stream.count`'s javadoc says as much), which makes the side effects
+        // of a `map` or a `peek` in such a pipeline vanish — including an
+        // exception the mapper would have thrown. An operation that CAN change
+        // the count (filter, limit, skip, distinct, takeWhile, dropWhile) makes
+        // it run as usual, and so does anything that has already run eagerly.
+        if method == "count"
+            && args.is_empty()
+            && let Some(crate::value::HeapObject::Stream { ops, .. }) = self.heap.get(receiver)
+            && ops.iter().all(|op| {
+                matches!(
+                    op,
+                    StreamOp::Map(_)
+                        | StreamOp::Peek(_)
+                        | StreamOp::Box
+                        | StreamOp::WidenToLong
+                        | StreamOp::WidenToDouble
+                )
+            })
+        {
+            // The size is the SOURCE's as it stands NOW — a stream is
+            // late-binding — and there is no fail-fast check, because nothing
+            // traverses: the JDK's modCount check lives in the spliterator's
+            // `forEachRemaining`, which this path never reaches. Appending to
+            // the source between opening the stream and counting it therefore
+            // answers the new size rather than throwing, which is what the
+            // late-binding test already pinned.
+            let (current, _) = self.stream_pipeline(receiver);
+            let known = current.len();
+            return Ok(Answered::Value(JValue::Long(
+                i64::try_from(known).unwrap_or(i64::MAX),
+            )));
+        }
         // The remaining terminals consume every element, so materialize the
         // whole pipeline (peeks and all) and post-process.
         let elements = self.stream_materialize(receiver)?;

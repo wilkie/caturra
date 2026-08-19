@@ -31631,3 +31631,246 @@ public class UnrelatedDefaults {
 }
 "
 );
+
+// EXCEPTION selection and control flow, cross-producted: eleven throw kinds
+// against a nine-clause catch ladder, `finally` overriding a return, `finally`
+// with `continue`/`break`/labelled jumps, nested try, precise rethrow, cause
+// chains, a `finally` replacing the exception in flight, and try-with-resources
+// with suppression from the body and from each close. Thirty-nine cells, all
+// already correct — the return-value-before-`finally` rule included.
+differential_test!(
+    exception_selection_and_control_flow,
+    "ExceptionFlow",
+    r#"
+import java.util.*;
+
+class AppError extends RuntimeException {
+    AppError(String m) {
+        super(m);
+    }
+}
+
+class SubError extends AppError {
+    SubError(String m) {
+        super(m);
+    }
+}
+
+public class ExceptionFlow {
+    static int returnThenFinally() {
+        int x = 1;
+        try {
+            return x;
+        } finally {
+            x = 99;
+        }
+    }
+
+    static int returnIncrement() {
+        int x = 1;
+        try {
+            return x++;
+        } finally {
+            x = 99;
+        }
+    }
+
+    static StringBuilder returnObject() {
+        StringBuilder b = new StringBuilder("a");
+        try {
+            return b;
+        } finally {
+            b.append("!");
+        }
+    }
+
+    static int finallyReturns() {
+        try {
+            return 1;
+        } finally {
+            return 2;
+        }
+    }
+
+    static String labelled() {
+        StringBuilder sb = new StringBuilder();
+        outer:
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                try {
+                    if (j == 1) {
+                        continue outer;
+                    }
+                    if (i == 2) {
+                        break outer;
+                    }
+                    sb.append(i).append(j);
+                } finally {
+                    sb.append("f");
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    static String selects(int kind) {
+        try {
+            switch (kind) {
+                case 1: throw new SubError("sub");
+                case 2: throw new AppError("app");
+                case 3: throw new IllegalStateException("ise");
+                case 4: throw new NullPointerException("npe");
+                default: return "none";
+            }
+        } catch (SubError e) {
+            return "SubError";
+        } catch (AppError e) {
+            return "AppError";
+        } catch (IllegalStateException | ArithmeticException e) {
+            return "multi:" + e.getClass().getSimpleName();
+        } catch (RuntimeException e) {
+            return "RTE:" + e.getClass().getSimpleName();
+        }
+    }
+
+    static String rethrown() {
+        try {
+            try {
+                throw new SubError("deep");
+            } catch (AppError e) {
+                throw e;
+            }
+        } catch (SubError e) {
+            return "precise:" + e.getMessage();
+        }
+    }
+
+    static class Res implements AutoCloseable {
+        final StringBuilder log;
+        final String name;
+        final boolean bad;
+
+        Res(StringBuilder log, String name, boolean bad) {
+            this.log = log;
+            this.name = name;
+            this.bad = bad;
+            log.append("open").append(name).append(";");
+        }
+
+        public void close() {
+            log.append("close").append(name).append(";");
+            if (bad) {
+                throw new IllegalStateException("close-" + name);
+            }
+        }
+    }
+
+    static String bothThrow() {
+        StringBuilder log = new StringBuilder();
+        try (Res a = new Res(log, "A", true); Res b = new Res(log, "B", true)) {
+            throw new RuntimeException("body");
+        } catch (Throwable e) {
+            log.append("caught:").append(e.getMessage()).append(";sup=");
+            for (Throwable s : e.getSuppressed()) {
+                log.append(s.getMessage()).append(",");
+            }
+        }
+        return log.toString();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(returnThenFinally() + " " + returnIncrement()
+            + " " + returnObject() + " " + finallyReturns());
+        System.out.println(labelled());
+        for (int k = 0; k <= 4; k++) {
+            System.out.println("select" + k + " " + selects(k));
+        }
+        System.out.println(rethrown());
+        System.out.println(bothThrow());
+        try {
+            try {
+                throw new AppError("first");
+            } finally {
+                throw new IllegalStateException("second");
+            }
+        } catch (Throwable e) {
+            System.out.println("finallyReplaces " + e.getMessage()
+                + " suppressed=" + e.getSuppressed().length);
+        }
+    }
+}
+"#
+);
+
+// `count()` may answer WITHOUT running the pipeline. The JDK's does whenever
+// the source size is known and no operation can change it, which makes the side
+// effects of a `map` or a `peek` vanish — including an exception the mapper
+// would have thrown. An operation that CAN change the count makes it run.
+//
+// The stream stays late-binding (the size is the source's as it stands now) and
+// does NOT fail fast, because nothing traverses: the modCount check lives in
+// the spliterator's `forEachRemaining`, which this path never reaches.
+differential_test!(
+    count_may_skip_the_pipeline,
+    "CountSkips",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class CountSkips {
+    static StringBuilder log = new StringBuilder();
+
+    static <T> T note(String s, T v) {
+        log.append(s);
+        return v;
+    }
+
+    static void run(String label, java.util.function.Supplier<Long> f) {
+        log.setLength(0);
+        try {
+            System.out.println(label + " " + f.get() + " side=[" + log + "]");
+        } catch (Throwable e) {
+            System.out.println(label + " EX " + e.getMessage() + " side=[" + log + "]");
+        }
+    }
+
+    public static void main(String[] args) {
+        List<Integer> src = new ArrayList<>(Arrays.asList(1, 2, 3));
+        // Size-preserving: the pipeline never runs.
+        run("plain", () -> src.stream().count());
+        run("map", () -> src.stream().map(v -> note("m", v)).count());
+        run("peek", () -> src.stream().peek(v -> note("p", v)).count());
+        run("mapPeek", () -> src.stream().map(v -> note("m", v)).peek(v -> note("p", v)).count());
+        run("sorted", () -> src.stream().sorted().peek(v -> note("p", v)).count());
+        run("boxed", () -> IntStream.of(1, 2, 3).map(v -> note("m", v)).count());
+        run("of", () -> Stream.of(1, 2, 3).map(v -> note("m", v)).count());
+        run("mapToInt", () -> src.stream().mapToInt(v -> note("m", v)).count());
+        run("mapThrows", () -> src.stream()
+            .map(v -> {
+                if (v == 2) {
+                    throw new IllegalStateException("at2");
+                }
+                return v;
+            })
+            .count());
+
+        // Size-changing: it runs, side effects and all.
+        run("filter", () -> src.stream().filter(v -> note("f", true)).count());
+        run("limit", () -> src.stream().peek(v -> note("p", v)).limit(2).count());
+        run("skip", () -> src.stream().peek(v -> note("p", v)).skip(1).count());
+        run("distinct", () -> src.stream().peek(v -> note("p", v)).distinct().count());
+        run("flatMap", () -> src.stream().flatMap(v -> Stream.of(note("x", v))).count());
+        run("takeWhile", () -> src.stream().peek(v -> note("p", v)).takeWhile(v -> true).count());
+        run("afterFilter", () -> src.stream().filter(v -> v > 0).map(v -> note("m", v)).count());
+        run("filterThrows", () -> src.stream()
+            .filter(v -> {
+                if (v == 2) {
+                    throw new IllegalStateException("at2");
+                }
+                return true;
+            })
+            .count());
+    }
+}
+"#
+);
