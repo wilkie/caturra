@@ -4055,6 +4055,17 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 /// carries the stream's element — so
 /// `list.stream().filter(p).findFirst().ifPresent(x -> ...)` types its lambda.
 fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    // A call to one of the PROGRAM's own generic methods that answers an
+    // `Optional<T>` — with `T` pinned from the arguments or an explicit
+    // witness, the same reading a collection-returning one gets. Asked BEFORE
+    // the shapes below, which all want a receiver: a bare `opt("ab")` in the
+    // same class has none.
+    if let Some(TypeRef::Generic { base, args }) = generic_call_return(receiver, ctx)
+        && base.rsplit('.').next().unwrap_or(base.as_str()) == "Optional"
+        && args.len() == 1
+    {
+        return Some(args[0].clone());
+    }
     if let Expr::Call {
         receiver: Some(prev),
         method,

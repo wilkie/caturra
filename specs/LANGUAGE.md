@@ -6509,6 +6509,11 @@ left alone, because this pass knows each class's members and not its ancestry,
 and a wrong REJECTION would be worse than the missing check. That residue is
 the third bullet in the permissiveness list, pinned rather than left implicit.
 
+A generic method that answers an `Optional<T>` reads the same way (added
+2026-08-20): `first(list).map(s -> s.length())` had no element, because every
+shape the Optional reader knew wanted a RECEIVER and a bare call in the same
+class has none — so the pinned return is asked for first now.
+
 Pinned by `a_type_witness_types_the_call_it_is_written_on`,
 `a_generic_methods_return_is_pinned_by_its_arguments`,
 `a_witness_that_contradicts_its_argument`,

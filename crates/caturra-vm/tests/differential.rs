@@ -31404,11 +31404,20 @@ public class InferredReturn {
         return set;
     }
 
+    static <T> Optional<T> first(List<T> values) {
+        return values.isEmpty() ? Optional.<T>empty() : Optional.of(values.get(0));
+    }
+
     public static void main(String[] args) {
         box("ab").forEach(s -> System.out.println(s.length()));
         setOf("abc").forEach(s -> System.out.println(s.length()));
         pair("k", 1).forEach((k, v) -> System.out.println(k.length() + v));
         System.out.println(box("ab").stream().map(s -> s.length()).count());
+        // An `Optional<T>` the same method pins — asked before the shapes that
+        // want a receiver, since a bare call in the same class has none.
+        System.out.println(first(box("abc")).map(s -> s.length()).get());
+        System.out.println(InferredReturn.<String>first(box("abcd")).map(s -> s.length()).get());
+        System.out.println(first(box("ab")).filter(s -> s.length() > 1).isPresent());
     }
 }
 "#
