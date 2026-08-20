@@ -32397,6 +32397,101 @@ public class DuplicateParam {
 "
 );
 
+// A hash or tree cursor's `hasNext` is `next != null` — a pointer computed as
+// each element is handed out, BEFORE any later insertion — so adding to a
+// one-entry map while iterating it ends the loop quietly, where the same code
+// over a list throws. caturra read the CURRENT size for both (a list's rule,
+// `cursor != size`) and threw where a JDK finishes.
+//
+// The removals must still throw: there the pointer already pointed at an
+// element, so the next step reaches the modification count check.
+differential_test!(
+    a_hash_cursor_stops_where_its_pointer_stopped,
+    "HashCursorEnd",
+    r#"
+import java.util.*;
+
+public class HashCursorEnd {
+    public static void main(String[] args) {
+        Map<String, Integer> one = new HashMap<String, Integer>();
+        one.put("a", 1);
+        for (String key : one.keySet()) {
+            one.put("b", 2);
+        }
+        System.out.println(one.size());
+
+        Set<Integer> single = new HashSet<Integer>(Arrays.asList(1));
+        for (int value : single) {
+            single.add(9);
+        }
+        System.out.println(single.size());
+
+        Map<String, Integer> sorted = new TreeMap<String, Integer>();
+        sorted.put("a", 1);
+        for (String key : sorted.keySet()) {
+            sorted.put("b", 2);
+        }
+        System.out.println("finished");
+
+        Map<String, Integer> entries = new HashMap<String, Integer>();
+        entries.put("a", 1);
+        for (Map.Entry<String, Integer> entry : entries.entrySet()) {
+            entries.clear();
+        }
+        System.out.println(entries);
+
+        // An untouched walk is unaffected.
+        Map<String, Integer> plain = new HashMap<String, Integer>();
+        plain.put("a", 1);
+        plain.put("b", 2);
+        for (String key : plain.keySet()) {
+            System.out.print(key);
+        }
+        System.out.println();
+
+        // A cursor's own remove is the one legal modification.
+        Set<Integer> three = new HashSet<Integer>(Arrays.asList(1, 2, 3));
+        Iterator<Integer> cursor = three.iterator();
+        while (cursor.hasNext()) {
+            if (cursor.next() == 2) {
+                cursor.remove();
+            }
+        }
+        System.out.println(three);
+    }
+}
+"#
+);
+
+// A `switch` on a String dereferences the selector — javac compiles it to
+// `selector.hashCode()` before any comparison — so a null selector throws.
+// With case labels the comparisons did that already; with only a `default`,
+// nothing touched the selector and the default arm simply ran.
+differential_test!(
+    a_switch_on_a_null_string,
+    "SwitchNull",
+    r#"
+public class SwitchNull {
+    public static void main(String[] args) {
+        String missing = null;
+        try {
+            switch (missing) {
+                default:
+                    System.out.println("default ran");
+            }
+        } catch (NullPointerException e) {
+            System.out.println("threw");
+        }
+        String present = "a";
+        switch (present) {
+            default:
+                System.out.println("still runs");
+        }
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

@@ -6833,6 +6833,34 @@ Pinned by `a_private_method_is_not_inherited`,
 (the neighbours the rule must leave alone), `a_primitive_cannot_be_dereferenced`,
 `a_primitive_double_cannot_be_dereferenced` and `two_parameters_with_one_name`.
 
+### Where a hash cursor stops (2026-08-20)
+
+Adding to a one-entry map while iterating it threw `ConcurrentModificationException`
+here and finishes quietly on a JDK. The fail-fast model was built on
+`ArrayList`'s rule — `hasNext` is a bare `cursor != size`, which is what makes
+removing the second-to-last element end a for-each silently — and a HASH or
+TREE cursor's is different: `hasNext` is `next != null`, a pointer computed as
+each element is handed out, before any later insertion. When the last element
+has been returned that pointer is already null, so nothing the loop body does
+afterwards can be noticed.
+
+The size the loop STARTED with stands in for that pointer, both in the for-each
+lowering (which is an indexed loop) and in an explicit cursor's `hasNext`. A
+`Collection` face keeps the list rule, since it may be either. The removals
+still throw — there the pointer was pointing AT an element, so the next step
+reaches the modification-count check — and so does an insertion with elements
+still to come.
+
+Found by a sweep of 46 programs that THROW: null dereferences of every shape,
+the arithmetic and index failures, bad casts and stores, the empty-collection
+accessors, the fail-fast paths, and a user exception with a cause. Two
+divergences came back — this, and a `switch` on a null String with only a
+`default` label, which ran the default arm where javac's compiled
+`selector.hashCode()` throws.
+
+Pinned by `a_hash_cursor_stops_where_its_pointer_stopped` (including the
+neighbours that must still throw) and `a_switch_on_a_null_string`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

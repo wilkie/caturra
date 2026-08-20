@@ -13674,6 +13674,20 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
         }
 
+        // A switch on a STRING dereferences the selector too — javac compiles
+        // it to `selector.hashCode()` before any comparison — so a null
+        // selector throws NPE. With case labels the comparisons do that
+        // already; with only a `default`, nothing touched the selector and
+        // `switch (null) { default: … }` ran the default arm.
+        if is_string && arms.iter().flat_map(|arm| &arm.labels).all(Option::is_none) {
+            self.emit_load(selector_slot, selector_ty);
+            let hash = intern_method_ref(self.pool, "java/lang/String", "hashCode", "()I");
+            self.code.push_op_u16(op::INVOKEVIRTUAL, hash, 1);
+            self.code.drop_stack(1);
+            self.code.push_op(op::POP, 0);
+            self.code.drop_stack(1);
+        }
+
         let end = self.code.new_label();
         let arm_labels: Vec<Label> = arms.iter().map(|_| self.code.new_label()).collect();
         let mut default_arm: Option<usize> = None;
@@ -20806,11 +20820,26 @@ impl BodyGen<'_> {
         let continue_label = self.code.new_label();
         let end = self.code.new_label();
 
+        // A HASH or TREE cursor's `hasNext` is `next != null` — a pointer the
+        // last step computed, before any later insertion — so adding to a
+        // one-entry map while iterating it ends the loop quietly, where the
+        // same code over a list throws. Reading the CURRENT size for both made
+        // caturra throw where a JDK finishes; the size the loop STARTED with
+        // stands in for that pointer. A `Collection` face keeps the list rule,
+        // since it may be either.
+        let hash_ordered = matches!(
+            iterable_ty,
+            JType::Set(_) | JType::TreeSet(_) | JType::EntrySet { .. }
+        );
         self.code.bind(cond_label);
         self.emit_load(index_slot, JType::Int);
-        self.emit_load(list_slot, iterable_ty);
-        self.code.push_op_u16(op::INVOKEVIRTUAL, size_ref, 1);
-        self.code.drop_stack(1);
+        if hash_ordered {
+            self.emit_load(expected_slot, JType::Int);
+        } else {
+            self.emit_load(list_slot, iterable_ty);
+            self.code.push_op_u16(op::INVOKEVIRTUAL, size_ref, 1);
+            self.code.drop_stack(1);
+        }
         // `index != size`, NOT `index < size`: the JDK's `hasNext` is
         // `cursor != size`, and the difference is observable. After a `clear()`
         // mid-loop the cursor sits PAST the (now zero) size, and `!=` keeps

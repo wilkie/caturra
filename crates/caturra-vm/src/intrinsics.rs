@@ -3748,6 +3748,25 @@ fn sublist_resize(heap: &mut Heap, view: HeapRef, delta: isize) {
     }
 }
 
+/// Whether a cursor's source hands out its elements the way `HashMap`'s and
+/// `TreeMap`'s iterators do — computing the NEXT one as each is returned,
+/// rather than comparing a cursor against the collection's current size.
+fn hash_like(heap: &Heap, source: HeapRef) -> bool {
+    let source = match heap.get(source) {
+        Some(HeapObject::MapView { map, .. }) => *map,
+        _ => source,
+    };
+    matches!(
+        heap.get(source),
+        Some(
+            HeapObject::HashMap(_)
+                | HeapObject::HashSet(_)
+                | HeapObject::TreeMap { .. }
+                | HeapObject::TreeSet { .. }
+        )
+    )
+}
+
 fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
     if let Some(values) = heap.list_values(source) {
         return values.get(index).copied().unwrap_or(JValue::NULL);
@@ -3913,9 +3932,18 @@ fn iterator_method(
         // comparison either way, which is what lets removing the
         // second-to-last element end a for-each silently rather than throw.
         "hasNext" if descending => Ok(Some(JValue::Int(i32::from(index != 0)))),
-        "hasNext" => Ok(Some(JValue::Int(i32::from(
-            index != iterated_len(heap, source),
-        )))),
+        "hasNext" => Ok(Some(JValue::Int(i32::from(if hash_like(heap, source) {
+            // A HASH or TREE cursor's `hasNext` is `next != null` — a pointer
+            // the LAST `next()` computed, before any later insertion. So
+            // adding to a one-entry map while iterating it ends the loop
+            // quietly, where the same code over an ArrayList throws: the list
+            // cursor's `hasNext` is a bare `cursor != size`, and the longer
+            // size makes it true. Reading the CURRENT length for both made
+            // caturra throw where a JDK finishes.
+            index < expected_len
+        } else {
+            index != iterated_len(heap, source)
+        })))),
         // `next()` on a descending cursor is `previous()`: step back first,
         // then read. The index is the position AFTER the element returned, so
         // `remove()` lands on the one just handed out.
