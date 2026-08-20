@@ -242,20 +242,29 @@ fn run_with_caturra_stdin(class_name: &str, source: &str, stdin: &str) -> String
 }
 
 fn assert_same_output(class_name: &str, source: &str) {
-    let expected = run_with_jdk(class_name, source);
-    let actual = run_with_caturra(class_name, source);
-    assert_eq!(
-        actual, expected,
-        "output diverges from the reference JDK for {class_name}"
-    );
+    assert_same_output_with_stdin(class_name, source, "");
 }
 
 fn assert_same_output_with_stdin(class_name: &str, source: &str, stdin: &str) {
     let expected = run_with_jdk_stdin(class_name, source, stdin);
     let actual = run_with_caturra_stdin(class_name, source, stdin);
+    if actual == expected {
+        return;
+    }
+    // A mismatch is the interesting case, so pay for a second JDK run only
+    // here. Both engines are deterministic: if the reference disagrees with
+    // ITSELF, the first run was contention (six hundred JVMs compete for this
+    // machine) and blaming the program under test would send someone hunting a
+    // divergence that never happened.
+    let again = run_with_jdk_stdin(class_name, source, stdin);
     assert_eq!(
-        actual, expected,
-        "output diverges from the reference JDK for {class_name} (with stdin)"
+        expected, again,
+        "the reference JDK gave two different answers for {class_name}, so the \
+         first run was contention rather than a result"
+    );
+    assert_eq!(
+        actual, again,
+        "output diverges from the reference JDK for {class_name}"
     );
 }
 
