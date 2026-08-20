@@ -1211,6 +1211,37 @@ public class Entries {
 }
 """,
     ),
+    dict(
+        id="lambda-after-map",
+        category="Collections",
+        title="A lambda after map()",
+        summary=(
+            "A stream's element type survives `map`: the lambda's body is typed, "
+            "so a later filter, map or collect sees its parameter as what the "
+            "map produced rather than as Object."
+        ),
+        main="AfterMap",
+        source="""
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class AfterMap {
+    public static void main(String[] args) {
+        List<String> words = List.of("a", "bb");
+        System.out.println(words.stream()
+            .map(String::toUpperCase)
+            .filter(w -> w.length() > 1)
+            .count());
+        List<Integer> lengths = words.stream()
+            .map(w -> w.length())
+            .collect(Collectors.toList());
+        System.out.println(lengths);
+        int first = words.stream().map(w -> w.length()).findFirst().get();
+        System.out.println(first + 1);
+    }
+}
+""",
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -1283,31 +1314,6 @@ public class SubList {
         List<String> middle = letters.subList(1, 3);
         middle.set(0, "B");
         System.out.println(letters);
-    }
-}
-""",
-    ),
-    dict(
-        id="lambda-after-map",
-        category="Collections",
-        title="A lambda after map()",
-        summary=(
-            "caturra reads a stream's element type SYNTACTICALLY, before typing, "
-            "so `map` erases it: a later filter/map/collect lambda sees its "
-            "parameter as Object. Everything before the map, and method "
-            "references after it, are unaffected."
-        ),
-        main="AfterMap",
-        source="""
-import java.util.List;
-
-public class AfterMap {
-    public static void main(String[] args) {
-        List<String> words = List.of("a", "bb");
-        System.out.println(words.stream()
-            .map(String::toUpperCase)
-            .filter(w -> w.length() > 1)
-            .count());
     }
 }
 """,

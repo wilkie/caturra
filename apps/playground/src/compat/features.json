@@ -360,6 +360,16 @@
     "expected": "a=1 a 1\nk=1 k\ntrue\ntrue\n3\nc=4\n"
   },
   {
+    "id": "lambda-after-map",
+    "category": "Collections",
+    "title": "A lambda after map()",
+    "summary": "A stream's element type survives `map`: the lambda's body is typed, so a later filter, map or collect sees its parameter as what the map produced rather than as Object.",
+    "main": "AfterMap",
+    "source": "import java.util.List;\nimport java.util.stream.Collectors;\n\npublic class AfterMap {\n    public static void main(String[] args) {\n        List<String> words = List.of(\"a\", \"bb\");\n        System.out.println(words.stream()\n            .map(String::toUpperCase)\n            .filter(w -> w.length() > 1)\n            .count());\n        List<Integer> lengths = words.stream()\n            .map(w -> w.length())\n            .collect(Collectors.toList());\n        System.out.println(lengths);\n        int first = words.stream().map(w -> w.length()).findFirst().get();\n        System.out.println(first + 1);\n    }\n}\n",
+    "status": "supported",
+    "expected": "1\n[1, 2]\n2\n"
+  },
+  {
     "id": "vector",
     "category": "Collections",
     "title": "Vector and Hashtable",
@@ -400,16 +410,6 @@
     "reason": "ArrayList.subList exists in Java, but list views are not supported by caturra"
   },
   {
-    "id": "lambda-after-map",
-    "category": "Collections",
-    "title": "A lambda after map()",
-    "summary": "caturra reads a stream's element type SYNTACTICALLY, before typing, so `map` erases it: a later filter/map/collect lambda sees its parameter as Object. Everything before the map, and method references after it, are unaffected.",
-    "main": "AfterMap",
-    "source": "import java.util.List;\n\npublic class AfterMap {\n    public static void main(String[] args) {\n        List<String> words = List.of(\"a\", \"bb\");\n        System.out.println(words.stream()\n            .map(String::toUpperCase)\n            .filter(w -> w.length() > 1)\n            .count());\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "cannot find symbol: method length() in class java/lang/Object"
-  },
-  {
     "id": "element-types",
     "category": "Collections",
     "title": "Any object as a collection element",
@@ -438,7 +438,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-i3gy3_p0/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-jqke5rrt/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -449,7 +449,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-4limanrw/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-lz3rf9cq/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -460,7 +460,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-vz331z06/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-i7d8sfwo/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",

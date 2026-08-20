@@ -12568,11 +12568,34 @@ fn numeric_stream_conversion(receiver: JType, method: &str) -> bool {
 /// point of the overload. The method table has no way to say "the type of
 /// argument 0", so the emitter and `type_of` both refine the table's answer
 /// through here rather than each deciding for itself.
-fn refine_builtin_return(method: &str, ret: Option<JType>, arg_types: &[JType]) -> Option<JType> {
+fn refine_builtin_return(
+    method: &str,
+    ret: Option<JType>,
+    arg_types: &[JType],
+    table: &MethodTable,
+) -> Option<JType> {
     if matches!(method, "toArray" | "__toArrayTyped")
         && let [model @ JType::Array { .. }] = arg_types
     {
         return Some(*model);
+    }
+    // `map` erases its element, which is faithful to erasure and useless
+    // downstream: `map(s -> s.length())` could not be assigned to an `int`,
+    // added to one, or collected into a `List<Integer>`. The lambda pass typed
+    // the body and left the answer on the synthesized class, which is the only
+    // thing that still knows it here.
+    if matches!(method, "map" | "mapToObj")
+        && matches!(ret, Some(JType::Stream(_)))
+        && let [JType::Object(lambda)] = arg_types
+        && let Some((_, produces)) =
+            table.field(table.class_name(*lambda), crate::lambda::PRODUCES_FIELD)
+        && let Some(elem) = elem_type_of(produces.ty)
+    {
+        // A `Stream<Integer>` holds INTEGERS: the body's type is `int`, and
+        // the element it becomes is the wrapper (JLS §5.1.7 — the lambda's
+        // result is boxed to fit the erased `Function`).
+        let elem = Prim::of(elem).map_or(elem, ElemType::Wrapper);
+        return Some(JType::Stream(elem));
     }
     ret
 }
@@ -19166,6 +19189,7 @@ impl BodyGen<'_> {
             chosen.name,
             bret_type(chosen.ret, elem, self.table),
             &arg_types,
+            self.table,
         );
         let ret_width = ret.map_or(0, JType::width);
         self.code
@@ -23610,6 +23634,7 @@ impl BodyGen<'_> {
                                             m.name,
                                             bret_type(m.ret, elem, self.table),
                                             &arg_types,
+                                            self.table,
                                         )
                                     })
                             {

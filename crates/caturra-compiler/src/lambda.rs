@@ -3456,6 +3456,212 @@ fn desugar_key_extractor(arg: &mut Expr, ctx: &mut Ctx) -> bool {
     );
     true
 }
+/// The synthetic static field recording what a lambda class answers, so the
+/// element of a mapped stream survives erasure into codegen.
+pub(crate) const PRODUCES_FIELD: &str = "__caturraProduces";
+
+/// What a `map`'s lambda ANSWERS, so the mapped stream keeps an element type.
+///
+/// `map` erased its result to `Object`, which is faithful to erasure and
+/// useless downstream: `map(s -> s.length())` could not be filtered on, added
+/// to, collected into a `List<Integer>` or assigned to an `int`, though javac
+/// types every one of them. Only the shapes whose type is written down
+/// somewhere are read; anything else stays `Object`, which is what it was.
+fn mapped_element_type(args: &[Expr], ctx: &Ctx) -> Option<TypeRef> {
+    // By the time an outer call asks, the lambda is already a synthesized
+    // CLASS — the pass desugars a receiver before it types what the receiver
+    // yields. The class says everything needed: its body opens by unwrapping
+    // each erased argument into the parameter's declared type, and ends in the
+    // expression whose type is the answer.
+    let [Expr::NewObject { class, .. }] = args else {
+        return None;
+    };
+    let decl = ctx.new_classes.iter().find(|decl| decl.name == *class)?;
+    produced_type(decl, ctx)
+}
+
+/// What a synthesized lambda class ANSWERS, read off the class itself: its
+/// body opens by unwrapping each erased argument into the parameter's declared
+/// type, and ends in the expression whose type is the answer.
+fn produced_type(decl: &ClassDecl, ctx: &Ctx) -> Option<TypeRef> {
+    let body = decl.methods.iter().find(|method| !method.is_constructor)?;
+    let mut bound: HashMap<String, TypeRef> = HashMap::new();
+    let mut answer = None;
+    for stmt in &body.body {
+        match stmt {
+            Stmt::LocalDecl {
+                ty, declarators, ..
+            } => {
+                for declarator in declarators {
+                    let unwraps = matches!(
+                        &declarator.init,
+                        Some(Expr::Cast { operand, .. })
+                            if matches!(
+                                operand.as_ref(),
+                                Expr::Name { path, .. }
+                                    if path.len() == 1 && path[0].starts_with("__caturraArg")
+                            )
+                    );
+                    if unwraps {
+                        bound.insert(declarator.name.clone(), ty.clone());
+                    }
+                }
+            }
+            Stmt::Return {
+                value: Some(value), ..
+            } => answer = Some(value),
+            _ => {}
+        }
+    }
+    body_type(answer?, &bound, ctx)
+}
+
+/// The type of a lambda BODY, given what its parameter is. Deliberately a
+/// subset: a name, a literal, an operator, a call to a method of the program,
+/// and the handful of library methods whose return is a scalar or a String.
+/// Anything unrecognized answers `None`, which leaves the caller exactly where
+/// it was before this existed.
+fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option<TypeRef> {
+    use crate::ast::BinaryOp as B;
+    match expr {
+        Expr::Name { path, .. } if path.len() == 1 => bound
+            .get(&path[0])
+            .cloned()
+            .or_else(|| static_type_of(expr, ctx)),
+        Expr::Cast { ty, .. } => Some(ty.clone()),
+        Expr::Ternary { then, els, .. } => {
+            let then = body_type(then, bound, ctx)?;
+            (then == body_type(els, bound, ctx)?).then_some(then)
+        }
+        Expr::Unary { op, operand, .. } => match op {
+            crate::ast::UnaryOp::Not => Some(TypeRef::Boolean),
+            _ => body_type(operand, bound, ctx),
+        },
+        Expr::Binary { op, lhs, rhs, .. } => match op {
+            B::Lt | B::Le | B::Gt | B::Ge | B::Eq | B::Ne | B::And | B::Or => {
+                Some(TypeRef::Boolean)
+            }
+            _ => {
+                let (l, r) = (body_type(lhs, bound, ctx), body_type(rhs, bound, ctx));
+                let string = TypeRef::Named(String::from("String"));
+                if *op == B::Add && (l.as_ref() == Some(&string) || r.as_ref() == Some(&string)) {
+                    return Some(string);
+                }
+                numeric_join(&l?, &r?)
+            }
+        },
+        Expr::Call {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            // A method of the program: its declared return, with a generic
+            // one pinned the way any other call to it would be.
+            if let Some(ty) = generic_call_return(expr, ctx) {
+                return Some(ty);
+            }
+            if matches!(receiver.as_deref(), None | Some(Expr::This { .. }))
+                && let Some(class) = ctx.current_class
+                && let Some(shape) = ctx
+                    .shapes
+                    .get(class)?
+                    .iter()
+                    .find(|shape| shape.name == *method && shape.takes(args.len()))
+            {
+                return Some(shape.return_type.clone());
+            }
+            let receiver = receiver.as_deref()?;
+            let on = body_type(receiver, bound, ctx)?;
+            library_return(&on, method, args.len())
+        }
+        _ => static_type_of(expr, ctx),
+    }
+}
+
+/// The result of the library methods a lambda body commonly ends in. A SUBSET,
+/// kept here only to type a mapped element: a method missing from it leaves the
+/// element `Object`, which is where every one of them stood before.
+fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeRef> {
+    let base = match receiver {
+        TypeRef::Named(name) => name.rsplit('.').next().unwrap_or(name),
+        TypeRef::Generic { base, .. } => base.rsplit('.').next().unwrap_or(base),
+        _ => return None,
+    };
+    let string = || TypeRef::Named(String::from("String"));
+    // A collection face, for the methods every one of them shares.
+    let collection = matches!(
+        base,
+        "List"
+            | "ArrayList"
+            | "LinkedList"
+            | "Set"
+            | "HashSet"
+            | "TreeSet"
+            | "Map"
+            | "HashMap"
+            | "TreeMap"
+            | "Collection"
+    );
+    match (base, method, argc) {
+        ("String", "charAt", 1) | ("Character", "charValue", 0) => Some(TypeRef::Char),
+        (
+            "String",
+            "length" | "indexOf" | "lastIndexOf" | "compareTo" | "compareToIgnoreCase",
+            _,
+        )
+        | ("Integer" | "Short" | "Byte", "intValue", 0)
+        | (_, "hashCode", 0) => Some(TypeRef::Int),
+        ("Long", "longValue", 0) => Some(TypeRef::Long),
+        ("Double" | "Float", "doubleValue", 0) => Some(TypeRef::Double),
+        (
+            "String",
+            "isEmpty" | "isBlank" | "contains" | "startsWith" | "endsWith" | "equalsIgnoreCase"
+            | "matches",
+            _,
+        )
+        | (_, "equals", 1) => Some(TypeRef::Boolean),
+        (
+            "String",
+            "toUpperCase" | "toLowerCase" | "trim" | "strip" | "substring" | "replace" | "concat"
+            | "repeat",
+            _,
+        )
+        | (_, "toString", 0) => Some(string()),
+        (_, "size", 0) if collection => Some(TypeRef::Int),
+        (_, "isEmpty" | "contains" | "containsKey" | "containsValue", _) if collection => {
+            Some(TypeRef::Boolean)
+        }
+        ("List" | "ArrayList" | "LinkedList", "get", 1) => element_of_declared(receiver),
+        ("Map" | "HashMap" | "TreeMap", "get", 1) => match receiver {
+            TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[1].clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The type binary numeric promotion gives two operands (JLS §5.6.2), over the
+/// BOXED spellings a stream element wears as well as the primitives.
+fn numeric_join(lhs: &TypeRef, rhs: &TypeRef) -> Option<TypeRef> {
+    let rank = |t: &TypeRef| match t {
+        TypeRef::Double | TypeRef::Float => Some(3),
+        TypeRef::Long => Some(2),
+        TypeRef::Int | TypeRef::Short | TypeRef::Byte | TypeRef::Char => Some(1),
+        TypeRef::Named(name) => match name.rsplit('.').next().unwrap_or(name) {
+            "Double" | "Float" => Some(3),
+            "Long" => Some(2),
+            "Integer" | "Short" | "Byte" | "Character" => Some(1),
+            _ => None,
+        },
+        _ => None,
+    };
+    Some(match rank(lhs)?.max(rank(rhs)?) {
+        3 => TypeRef::Double,
+        2 => TypeRef::Long,
+        _ => TypeRef::Int,
+    })
+}
 
 /// The current element type of a stream-pipeline receiver, for typing a stream
 /// lambda's parameter. `X.stream()` yields the collection `X`'s element; the
@@ -3541,9 +3747,17 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // the element keeps its width. Only an object stream's `map` erases.
         "map" => Some(match stream_elem_type(prev, ctx) {
             Some(prim @ (TypeRef::Int | TypeRef::Long | TypeRef::Double)) => prim,
-            _ => TypeRef::Named(String::from("Object")),
+            _ => mapped_element_type(args, ctx)
+                .unwrap_or_else(|| TypeRef::Named(String::from("Object"))),
         }),
-        "mapToObj" | "flatMap" => Some(TypeRef::Named(String::from("Object"))),
+        // `mapToObj` leaves the primitive pipeline for an object one, and
+        // what the lambda answers is that stream's element — the same reading
+        // `map` gets. `flatMap`'s lambda answers a STREAM, whose own element
+        // this does not chase, so it stays erased.
+        "mapToObj" => Some(
+            mapped_element_type(args, ctx).unwrap_or_else(|| TypeRef::Named(String::from("Object"))),
+        ),
+        "flatMap" => Some(TypeRef::Named(String::from("Object"))),
         _ => None,
     }
 }
@@ -4337,7 +4551,7 @@ fn build_erased_lambda(
     }
     ctx.scope.pop();
 
-    ctx.new_classes.push(ClassDecl {
+    let mut decl = ClassDecl {
         name: name.clone(),
         is_public: false,
         is_nested: false,
@@ -4380,7 +4594,26 @@ fn build_erased_lambda(
         init_blocks: Vec::new(),
         nested: Vec::new(),
         span,
-    });
+    };
+    // What this lambda ANSWERS, recorded where the next pass can read it: the
+    // element of `stream.map(f)` is the type of `f`'s body, and codegen sees
+    // only the erased `Object` the synthesized method returns. A synthetic
+    // static field carries the type across; nothing reads its value, and a
+    // lambda whose body cannot be typed simply has no field — its stream keeps
+    // the erased element it always had.
+    if let Some(produces) = produced_type(&decl, ctx) {
+        decl.fields.push(crate::ast::FieldDecl {
+            name: String::from(PRODUCES_FIELD),
+            ty: produces,
+            is_static: true,
+            is_private: false,
+            is_final: false,
+            init: None,
+            order: 0,
+            span,
+        });
+    }
+    ctx.new_classes.push(decl);
 
     Expr::NewObject {
         class: name,

@@ -6557,6 +6557,36 @@ Pinned by `a_reference_optional_holds_a_reference`,
 `a_primitive_streams_optional_follows_its_element` and
 `a_primitive_stream_folds_without_an_identity`.
 
+### The element a `map` produces (2026-08-19)
+
+A stream's element type erased to `Object` at `map`, which is faithful to
+erasure and useless downstream: a later `filter`, `map` or `collect` saw its
+parameter as `Object`, and the result would not assign to an `int`, add to one,
+or collect into a `List<Integer>`. Eleven of sixteen probed shapes were
+refused, in programs javac compiles.
+
+The type is read off the lambda's BODY, in a deliberate subset — a name, a
+literal, an operator (with binary numeric promotion and string concatenation),
+a call to one of the program's own methods, and the library methods whose
+return is a scalar or a `String`. A body outside the subset answers nothing and
+the element stays `Object`, exactly where it stood before.
+
+Two passes need it, and the second cannot see the first's reasoning: by the
+time an outer call asks, the lambda is already a synthesized CLASS (a receiver
+is desugared before what it yields is typed), and codegen sees only the erased
+`Object` that class's method returns. So the class carries the answer: the same
+reading is done from the class itself — its body opens by unwrapping each
+erased argument into the parameter's declared type and ends in the expression
+whose type is the answer — and the result is recorded as a synthetic static
+field, `__caturraProduces`, that nothing reads at run time. The element codegen
+takes from it is the WRAPPER (`Stream<Integer>`, not a stream of `int`), since
+the lambda's result is boxed to fit the erased `Function`.
+
+This retired the compatibility page's `lambda-after-map` GAP, which is now a
+supported feature recorded against a real JDK rather than a refusal.
+
+Pinned by `a_mapped_stream_keeps_its_element_type` (sixteen shapes).
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

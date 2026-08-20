@@ -31630,6 +31630,60 @@ public class PrimitiveReduce {
 "
 );
 
+// A stream's element type survives `map`. It used to erase to `Object`, which
+// is faithful to erasure and useless downstream: a later `filter`, `map` or
+// `collect` saw its parameter as `Object`, and the result would not assign to
+// an `int`, add to one, or collect into a `List<Integer>` — eleven of sixteen
+// probed shapes were refused, in programs javac compiles.
+//
+// The lambda pass types the body (a subset: names, operators, calls to the
+// program's own methods, and the library methods whose return is a scalar or a
+// String) and leaves the answer on the synthesized class, which is the only
+// thing that still knows it by the time codegen types the call.
+differential_test!(
+    a_mapped_stream_keeps_its_element_type,
+    "MappedElement",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class MappedElement {
+    static int twice(int value) {
+        return value * 2;
+    }
+
+    public static void main(String[] args) {
+        List<String> words = new ArrayList<String>(Arrays.asList("ab", "c"));
+        List<Integer> numbers = new ArrayList<Integer>(Arrays.asList(3, 1, 2));
+
+        int first = words.stream().map(s -> s.length()).findFirst().get();
+        System.out.println(first);
+        Integer boxed = words.stream().map(s -> s.length()).findFirst().get();
+        System.out.println(boxed);
+        System.out.println(words.stream().map(s -> s.length()).findFirst().get() + 1);
+
+        List<Integer> lengths = words.stream().map(s -> s.length()).collect(Collectors.toList());
+        System.out.println(lengths);
+        System.out.println(words.stream().map(s -> s.length()).collect(Collectors.toList()).get(0) + 1);
+        System.out.println(words.stream().map(s -> s.length()).map(x -> x + 1).collect(Collectors.toList()));
+        System.out.println(words.stream().map(s -> s.length()).filter(x -> x > 1).count());
+        System.out.println(words.stream().map(s -> s.length()).sorted().collect(Collectors.toList()));
+        words.stream().map(s -> s.length()).forEach(v -> System.out.println(v + 1));
+        System.out.println(words.stream().map(s -> s.length()).min(Integer::compare).get());
+        System.out.println(words.stream().map(s -> s.length()).max(Comparator.naturalOrder()).get());
+
+        System.out.println(numbers.stream().map(x -> "n" + x).collect(Collectors.joining(",")));
+        System.out.println(numbers.stream().map(x -> twice(x)).collect(Collectors.toList()));
+        System.out.println(words.stream().map(s -> s.toUpperCase()).map(s -> s.length()).collect(Collectors.toList()));
+        System.out.println(IntStream.range(0, 2).mapToObj(i -> "x" + i).map(s -> s.length()).collect(Collectors.toList()));
+
+        Stream<Integer> held = words.stream().map(s -> s.length());
+        System.out.println(held.collect(Collectors.toList()));
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one
