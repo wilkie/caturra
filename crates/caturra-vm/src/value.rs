@@ -162,11 +162,13 @@ pub enum SumKind {
 }
 
 /// Which flavour of `Optional` a [`HeapObject::Optional`] is — only its
-/// `toString` prefix differs (`Optional[x]` / `OptionalInt[x]` / `OptionalDouble[x]`).
+/// `toString` prefix differs (`Optional[x]` / `OptionalInt[x]` /
+/// `OptionalLong[x]` / `OptionalDouble[x]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionalKind {
     Ref,
     Int,
+    Long,
     Double,
 }
 
@@ -177,6 +179,7 @@ impl OptionalKind {
         match self {
             OptionalKind::Ref => "Optional",
             OptionalKind::Int => "OptionalInt",
+            OptionalKind::Long => "OptionalLong",
             OptionalKind::Double => "OptionalDouble",
         }
     }

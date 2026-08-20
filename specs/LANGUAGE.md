@@ -6514,6 +6514,49 @@ Pinned by `a_type_witness_types_the_call_it_is_written_on`,
 `a_witness_wider_than_the_argument_is_accepted` (eleven shapes the check must
 NOT refuse) and `a_witness_naming_the_wrong_user_class`.
 
+### The Optional a stream answers with (2026-08-19)
+
+Two defects behind one shape, found by probing what a stream terminal HANDS
+BACK rather than what it computes.
+
+**A reference Optional holds a reference.** `get()` is bytecode-typed to return
+one, so a primitive stored raw came back off a terminal as an `Int` where the
+verifier wanted an object: `list.stream().map(s -> s.length()).findFirst()
+.get()` was a **VerifyError**, not an answer — and so were `orElse`, a mapped
+`sorted` chain, and every other stream whose lambda answered a primitive.
+`Optional.map` already boxed for exactly this reason, with a comment saying
+why; every OTHER way a reference Optional is built did not. The rule now lives
+in `alloc_optional`, where all of them pass. An `OptionalInt`/`OptionalLong`/
+`OptionalDouble` is the primitive-typed one and keeps its value as it is.
+
+**A primitive stream is not only an `IntStream`.** One builtin table serves all
+three, and the Optional flavour was hardcoded, so `mapToDouble(…).max()`
+printed `OptionalInt[3]` where the JDK prints `OptionalDouble[3.0]` — a wrong
+answer, not a refusal. `BRet::OptionalElem` follows the element, `OptionalLong`
+is now a type (with `getAsLong`, and a `toString` that says so), and the
+descriptor rewrite that adapts a primitive stream's signature no longer edits
+the letters INSIDE a class name — a blind `I`→`D` had been turning
+`Ljava/util/OptionalInt;` into `Ljava/util/OptionalDnt;`, which is how the VM
+lost track of which flavour it was building.
+
+Two more, underneath: `mapToLong`/`mapToDouble` did not WIDEN what the lambda
+answered, so a "DoubleStream" built from `x -> x` over `Integer` elements held
+ints (`sum` looked right only because it accumulates in the wider type), and
+`max`/`min`/`average` read only the `Int` elements, so a widened stream's max
+came back EMPTY. The primitive fold `reduce(op)` — the form with no identity to
+answer with, which needs an Optional — was missing from the primitive table
+altogether.
+
+Known gaps beside this, both refusals: `DoubleStream.of(…)`/`LongStream.of(…)`
+as NAMED static factories (the streams themselves work, reached through
+`mapToDouble`), and a lambda's RESULT type, which erases to `Object` — so
+`map(s -> s.length()).findFirst().get()` prints correctly but cannot be
+assigned to an `int` or added to one.
+
+Pinned by `a_reference_optional_holds_a_reference`,
+`a_primitive_streams_optional_follows_its_element` and
+`a_primitive_stream_folds_without_an_identity`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

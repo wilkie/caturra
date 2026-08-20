@@ -8647,6 +8647,22 @@ impl<'run> Interpreter<'run> {
         value: Option<JValue>,
         kind: crate::value::OptionalKind,
     ) -> JValue {
+        // A REFERENCE Optional holds a reference: `get()` is bytecode-typed to
+        // return one, so a primitive stored raw came back off a stream terminal
+        // as an `Int` where the verifier wanted an object — a VerifyError from
+        // `list.stream().map(s -> s.length()).findFirst().get()`. `Optional.map`
+        // already boxed for exactly this reason; every OTHER way a reference
+        // Optional is built did not, so the rule lives here now. An
+        // `OptionalInt`/`OptionalDouble` is the primitive-typed one and keeps
+        // its value as it is.
+        let value = match (kind, value) {
+            (crate::value::OptionalKind::Ref, Some(primitive))
+                if !matches!(primitive, JValue::Ref(_)) =>
+            {
+                Some(JValue::Ref(Some(self.box_primitive_value(primitive))))
+            }
+            (_, value) => value,
+        };
         JValue::Ref(Some(
             self.heap
                 .alloc(crate::value::HeapObject::Optional { value, kind }),
@@ -9061,9 +9077,25 @@ impl<'run> Interpreter<'run> {
                 "map" | "mapToInt" | "mapToObj" | "mapToLong" | "mapToDouble",
                 [JValue::Ref(Some(function))],
             ) => {
-                return Ok(Answered::Value(
-                    self.stream_with_op(receiver, StreamOp::Map(*function)),
-                ));
+                let mapped = self.stream_with_op(receiver, StreamOp::Map(*function));
+                // `mapToLong`/`mapToDouble` produce a stream OF that primitive:
+                // the lambda answers whatever its body does (`x -> x` over
+                // `Integer` elements answers an int), so without widening here
+                // a "DoubleStream" held ints and its `max()` was
+                // `OptionalDouble[3]` where the JDK says `[3.0]`. `sum` looked
+                // right only because it computes in the wider type anyway.
+                let widen = match method {
+                    "mapToLong" => Some(StreamOp::WidenToLong),
+                    "mapToDouble" => Some(StreamOp::WidenToDouble),
+                    _ => None,
+                };
+                let Some(widen) = widen else {
+                    return Ok(Answered::Value(mapped));
+                };
+                let JValue::Ref(Some(mapped)) = mapped else {
+                    return Ok(Answered::Value(mapped));
+                };
+                return Ok(Answered::Value(self.stream_with_op(mapped, widen)));
             }
             ("peek", [JValue::Ref(Some(consumer))]) => {
                 return Ok(Answered::Value(
@@ -9161,9 +9193,12 @@ impl<'run> Interpreter<'run> {
                         Some(total) => self.call_apply_two(accumulator, total, element)?,
                     });
                 }
-                return Ok(Answered::Value(
-                    self.alloc_optional(folded, OptionalKind::Ref),
-                ));
+                // On a PRIMITIVE pipeline the answer is an `OptionalInt` (or
+                // `OptionalDouble`/`OptionalLong`), whose accessor is
+                // `getAsInt` and whose `toString` says so. The descriptor is
+                // what still knows which, as it is for `findFirst`.
+                let kind = optional_kind_of(descriptor);
+                return Ok(Answered::Value(self.alloc_optional(folded, kind)));
             }
             // `sorted` is a stateful BARRIER: it consumes the whole upstream
             // (running its side effects in order) before emitting anything, so
@@ -9192,16 +9227,7 @@ impl<'run> Interpreter<'run> {
                 let StreamSink::FindFirst(found) = sink else {
                     unreachable!("FindFirst sink");
                 };
-                // An `IntStream` terminal is typed `OptionalInt`; a `Stream`
-                // one `Optional`. The descriptor is the only thing that still
-                // knows which.
-                let kind = if descriptor.contains("OptionalInt") {
-                    OptionalKind::Int
-                } else if descriptor.contains("OptionalDouble") {
-                    OptionalKind::Double
-                } else {
-                    OptionalKind::Ref
-                };
+                let kind = optional_kind_of(descriptor);
                 return Ok(Answered::Value(self.alloc_optional(found, kind)));
             }
             ("anyMatch", [JValue::Ref(Some(pred))]) => {
@@ -9432,35 +9458,39 @@ impl<'run> Interpreter<'run> {
                 self.alloc_optional(best, OptionalKind::Ref)
             }
             ("max" | "min", []) => {
+                // A primitive stream is not only an IntStream: reading just
+                // the `Int` elements answered EMPTY for a `DoubleStream`, and
+                // the answer keeps the element's own width so an
+                // `OptionalDouble` holds a double.
                 let want_max = method == "max";
-                let mut best: Option<i32> = None;
+                let mut best: Option<JValue> = None;
                 for element in &elements {
-                    if let JValue::Int(n) = element {
-                        best = Some(match best {
-                            None => *n,
-                            Some(current) if want_max => current.max(*n),
-                            Some(current) => current.min(*n),
-                        });
-                    }
+                    let candidate = *element;
+                    best = Some(match best {
+                        None => candidate,
+                        Some(current) => {
+                            let (a, b) = (
+                                self.numeric_as_double(candidate),
+                                self.numeric_as_double(current),
+                            );
+                            if (a > b) == want_max && (a - b).abs() > 0.0 {
+                                candidate
+                            } else {
+                                current
+                            }
+                        }
+                    });
                 }
-                self.alloc_optional(best.map(JValue::Int), OptionalKind::Int)
+                let kind = optional_kind_of(descriptor);
+                self.alloc_optional(best, kind)
             }
             ("average", []) => {
                 let value = if elements.is_empty() {
                     None
                 } else {
-                    let sum: i64 = elements
-                        .iter()
-                        .map(|e| {
-                            if let JValue::Int(n) = e {
-                                i64::from(*n)
-                            } else {
-                                0
-                            }
-                        })
-                        .sum();
+                    let sum: f64 = elements.iter().map(|e| self.numeric_as_double(*e)).sum();
                     #[allow(clippy::cast_precision_loss)]
-                    let mean = sum as f64 / elements.len() as f64;
+                    let mean = sum / elements.len() as f64;
                     Some(JValue::Double(mean))
                 };
                 self.alloc_optional(value, OptionalKind::Double)
@@ -17094,6 +17124,23 @@ fn is_final_library_class(internal: &str) -> bool {
 /// A JDK 11 `ClassCastException` names each class's module and loader: a `java.*`
 /// class is in `module java.base of loader 'bootstrap'`, a user class in
 /// `unnamed module of loader 'app'`; the two are combined when they match.
+/// Which flavour of `Optional` a terminal answers. A primitive pipeline's
+/// terminal is typed `OptionalInt`/`OptionalDouble`, whose accessor is
+/// `getAsInt`/`getAsDouble` and whose `toString` says so — and after erasure
+/// the DESCRIPTOR is the only thing that still knows which.
+fn optional_kind_of(descriptor: &str) -> crate::value::OptionalKind {
+    use crate::value::OptionalKind;
+    if descriptor.contains("OptionalInt") {
+        OptionalKind::Int
+    } else if descriptor.contains("OptionalLong") {
+        OptionalKind::Long
+    } else if descriptor.contains("OptionalDouble") {
+        OptionalKind::Double
+    } else {
+        OptionalKind::Ref
+    }
+}
+
 fn class_module_desc(dotted: &str) -> &'static str {
     // An ARRAY names itself by descriptor (`[I`, `[Ljava.lang.String;`), and
     // its module is its ELEMENT's: `[I` is java.base, like every primitive

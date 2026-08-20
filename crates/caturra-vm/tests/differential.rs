@@ -31539,6 +31539,97 @@ public class WrongUserWitness {
 "#
 );
 
+// A REFERENCE Optional holds a reference. `get()` is bytecode-typed to return
+// one, so a primitive stored raw came back off a stream terminal as an `Int`
+// where the verifier wanted an object: `list.stream().map(s -> s.length())
+// .findFirst().get()` was a VerifyError, not an answer. `Optional.map` boxed
+// for exactly this reason and every other way a reference Optional is built
+// did not — one rule, written down once now.
+differential_test!(
+    a_reference_optional_holds_a_reference,
+    "BoxedOptional",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class BoxedOptional {
+    public static void main(String[] args) {
+        List<String> words = new ArrayList<String>(Arrays.asList("ab", "c"));
+        List<Integer> numbers = new ArrayList<Integer>(Arrays.asList(3, 1, 2));
+        System.out.println(words.stream().map(s -> s.length()).findFirst().get());
+        System.out.println(words.stream().map(s -> s.length()).findFirst());
+        System.out.println(words.stream().map(s -> s.length()).findFirst().orElse(0));
+        System.out.println(words.stream().map(s -> s.isEmpty()).findFirst().get());
+        System.out.println(words.stream().map(s -> s.charAt(0)).findFirst().get());
+        System.out.println(numbers.stream().map(x -> x * 1.5).findFirst().get());
+        System.out.println(numbers.stream().sorted().map(x -> x + 1).findFirst().get());
+        System.out.println(numbers.stream().reduce((x, y) -> x + y).get());
+        System.out.println(words.stream().filter(s -> false).findFirst().orElse("none"));
+        System.out.println(Optional.of("ab").map(s -> s.length()).get());
+    }
+}
+"#
+);
+
+// A primitive stream is not only an `IntStream`. One builtin table serves all
+// three, and the Optional flavour was hardcoded to `OptionalInt`, so
+// `mapToDouble(…).max()` printed `OptionalInt[3]` where the JDK prints
+// `OptionalDouble[3.0]` — a wrong answer, not a refusal. Two things were wrong
+// underneath: `mapToLong`/`mapToDouble` did not WIDEN what the lambda answered
+// (the "DoubleStream" held ints), and `max`/`min`/`average` read only the `Int`
+// elements, so a widened stream's max came back EMPTY.
+differential_test!(
+    a_primitive_streams_optional_follows_its_element,
+    "PrimitiveOptional",
+    r"
+import java.util.*;
+import java.util.stream.*;
+
+public class PrimitiveOptional {
+    public static void main(String[] args) {
+        List<Integer> numbers = new ArrayList<Integer>(Arrays.asList(3, 1, 2));
+        System.out.println(numbers.stream().mapToInt(x -> x).max());
+        System.out.println(numbers.stream().mapToLong(x -> x).max());
+        System.out.println(numbers.stream().mapToDouble(x -> x).max());
+        System.out.println(numbers.stream().mapToDouble(x -> x).max().getAsDouble());
+        System.out.println(numbers.stream().mapToLong(x -> x).min().getAsLong());
+        System.out.println(numbers.stream().mapToInt(x -> x).min().getAsInt());
+        System.out.println(numbers.stream().mapToDouble(x -> x).average().getAsDouble());
+        System.out.println(numbers.stream().mapToInt(x -> x).average().getAsDouble());
+        System.out.println(numbers.stream().mapToLong(x -> x).sum());
+        System.out.println(numbers.stream().mapToDouble(x -> x).sum());
+        System.out.println(numbers.stream().mapToLong(x -> x).findFirst());
+        System.out.println(numbers.stream().mapToDouble(x -> x).findFirst().getAsDouble());
+    }
+}
+"
+);
+
+// The one-argument fold has no identity to answer with when the pipeline is
+// empty, so it answers an Optional of the element's own flavour. The object
+// stream had both forms and the primitive one only the seeded fold.
+differential_test!(
+    a_primitive_stream_folds_without_an_identity,
+    "PrimitiveReduce",
+    r"
+import java.util.*;
+import java.util.stream.*;
+
+public class PrimitiveReduce {
+    public static void main(String[] args) {
+        List<Integer> numbers = new ArrayList<Integer>(Arrays.asList(3, 1, 2));
+        System.out.println(IntStream.range(1, 4).reduce((x, y) -> x + y).getAsInt());
+        System.out.println(IntStream.range(1, 4).reduce((x, y) -> x * y));
+        System.out.println(IntStream.range(1, 1).reduce((x, y) -> x + y));
+        System.out.println(IntStream.range(1, 1).reduce((x, y) -> x + y).orElse(-1));
+        System.out.println(IntStream.range(1, 4).reduce((x, y) -> x + y).isPresent());
+        System.out.println(numbers.stream().mapToInt(x -> x).reduce((x, y) -> x + y).getAsInt());
+        System.out.println(numbers.stream().mapToLong(x -> x).reduce((x, y) -> x + y).getAsLong());
+    }
+}
+"
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

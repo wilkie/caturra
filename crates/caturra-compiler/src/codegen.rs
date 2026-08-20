@@ -2884,6 +2884,7 @@ impl MethodTable {
                     }
                     "OptionalInt" if !self.has_class(simple) => Some(JType::OptionalInt),
                     "OptionalDouble" if !self.has_class(simple) => Some(JType::OptionalDouble),
+                    "OptionalLong" if !self.has_class(simple) => Some(JType::OptionalLong),
                     "Class" => Some(JType::Class),
                     "StackTraceElement" if !self.has_class(simple) => Some(JType::StackFrame),
                     "Field" => Some(JType::Field),
@@ -4418,12 +4419,30 @@ fn prim_stream_descriptor(
     receiver: JType,
     descriptor: &'static str,
 ) -> std::borrow::Cow<'static, str> {
-    let letter = match receiver {
-        JType::DoubleStream => 'D',
-        JType::LongStream => 'J',
+    let (letter, optional) = match receiver {
+        JType::DoubleStream => ('D', "java/util/OptionalDouble"),
+        JType::LongStream => ('J', "java/util/OptionalLong"),
         _ => return std::borrow::Cow::Borrowed(descriptor),
     };
-    std::borrow::Cow::Owned(descriptor.replace('I', &letter.to_string()))
+    // The `I`s to rewrite are the int PARAMETERS and returns — not the ones
+    // inside a class name, where a blind replace turned
+    // `Ljava/util/OptionalInt;` into `Ljava/util/OptionalDnt;` and left the VM
+    // unable to tell which flavour of Optional it was building.
+    let mut out = String::with_capacity(descriptor.len());
+    let mut rest = descriptor;
+    while let Some(start) = rest.find('L') {
+        let (before, from) = rest.split_at(start);
+        out.push_str(&before.replace('I', &letter.to_string()));
+        let Some(end) = from.find(';') else {
+            rest = from;
+            break;
+        };
+        let (class, after) = from.split_at(end + 1);
+        out.push_str(&class.replace("java/util/OptionalInt", optional));
+        rest = after;
+    }
+    out.push_str(&rest.replace('I', &letter.to_string()));
+    std::borrow::Cow::Owned(out)
 }
 
 /// The element a `collection.stream()` yields: the collection's own element,
@@ -5453,6 +5472,8 @@ enum JType {
     OptionalInt,
     /// `java.util.OptionalDouble` — `getAsDouble` returns `double`.
     OptionalDouble,
+    /// `java.util.OptionalLong` — `getAsLong` returns `long`.
+    OptionalLong,
     /// `java.util.LinkedList<E>` and its `Queue`/`Deque` interface views. The
     /// storage is a list; the `role` restricts which methods the receiver
     /// exposes, so `Queue<E>.get(i)` is rejected exactly as javac rejects it.
@@ -5610,6 +5631,7 @@ impl JType {
             JType::Optional(elem) => format!("Optional<{}>", elem.base_type().describe(table)),
             JType::OptionalInt => String::from("OptionalInt"),
             JType::OptionalDouble => String::from("OptionalDouble"),
+            JType::OptionalLong => String::from("OptionalLong"),
             JType::LinkedList { elem, role } => {
                 let name = match role {
                     SeqRole::Full => "LinkedList",
@@ -5719,6 +5741,7 @@ impl JType {
                 | JType::Optional(_)
                 | JType::OptionalInt
                 | JType::OptionalDouble
+                | JType::OptionalLong
                 | JType::Collection(_)
                 | JType::EntrySet { .. }
                 | JType::MapEntry { .. }
@@ -5795,6 +5818,7 @@ impl JType {
             JType::Optional(_) => String::from("Ljava/util/Optional;"),
             JType::OptionalInt => String::from("Ljava/util/OptionalInt;"),
             JType::OptionalDouble => String::from("Ljava/util/OptionalDouble;"),
+            JType::OptionalLong => String::from("Ljava/util/OptionalLong;"),
             JType::LinkedList { role, .. } => format!("L{};", role.internal()),
             JType::Collection(_) => String::from("Ljava/util/Collection;"),
             JType::MapEntry { .. } => String::from("Ljava/util/Map$Entry;"),
@@ -7377,10 +7401,14 @@ enum BRet {
     Optional,
     /// `Optional.map` — an `Optional` whose element is erased to `Object`.
     OptionalErased,
-    /// `OptionalInt` (`IntStream.max`/`min`).
-    OptionalInt,
     /// `OptionalDouble` (`IntStream.average`).
     OptionalDouble,
+    /// The Optional flavour of the stream's OWN element: `IntStream.max` is an
+    /// `OptionalInt`, but a `DoubleStream`'s is an `OptionalDouble` and a
+    /// `LongStream`'s an `OptionalLong`. One table serves all three primitive
+    /// streams, so a hardcoded `OptionalInt` made `mapToDouble(…).max()` print
+    /// `OptionalInt[3]` where the JDK prints `OptionalDouble[3.0]`.
+    OptionalElem,
     /// `Collector` (a `Collectors.toX()` factory result).
     Collector,
     /// A `Comparator` (the `Comparator` static factories / combinators) — the
@@ -9122,8 +9150,17 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
         BRet::Elem,
         "(ILjava/util/function/IntBinaryOperator;)I",
     ),
-    bm("max", &[], BRet::OptionalInt, "()Ljava/util/OptionalInt;"),
-    bm("min", &[], BRet::OptionalInt, "()Ljava/util/OptionalInt;"),
+    // The one-argument fold has no identity to answer with when the pipeline
+    // is empty, so it answers an `OptionalInt` — the object stream had both
+    // forms and the primitive one only the seeded fold.
+    bm(
+        "reduce",
+        &[BParam::BiFunction],
+        BRet::OptionalElem,
+        "(Ljava/util/function/IntBinaryOperator;)Ljava/util/OptionalInt;",
+    ),
+    bm("max", &[], BRet::OptionalElem, "()Ljava/util/OptionalInt;"),
+    bm("min", &[], BRet::OptionalElem, "()Ljava/util/OptionalInt;"),
     bm(
         "summaryStatistics",
         &[],
@@ -9141,13 +9178,13 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
     bm(
         "findFirst",
         &[],
-        BRet::OptionalInt,
+        BRet::OptionalElem,
         "()Ljava/util/OptionalInt;",
     ),
     bm(
         "findAny",
         &[],
-        BRet::OptionalInt,
+        BRet::OptionalElem,
         "()Ljava/util/OptionalInt;",
     ),
     bm(
@@ -9384,6 +9421,22 @@ const OPTIONALINT_METHODS: &[BuiltinMethod] = &[
         &[BParam::Consumer],
         BRet::Void,
         "(Ljava/util/function/IntConsumer;)V",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.util.OptionalLong` — `getAsLong`/`orElse` yield a `long`.
+const OPTIONALLONG_METHODS: &[BuiltinMethod] = &[
+    bm("isPresent", &[], BRet::Boolean, "()Z"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("getAsLong", &[], BRet::Long, "()J"),
+    bm("orElseThrow", &[], BRet::Long, "()J"),
+    bm("orElse", &[BParam::Long], BRet::Long, "(J)J"),
+    bm(
+        "ifPresent",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/util/function/LongConsumer;)V",
     ),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
@@ -11749,6 +11802,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Optional(_) => Some(("java/util/Optional", OPTIONAL_METHODS)),
         JType::OptionalInt => Some(("java/util/OptionalInt", OPTIONALINT_METHODS)),
         JType::OptionalDouble => Some(("java/util/OptionalDouble", OPTIONALDOUBLE_METHODS)),
+        JType::OptionalLong => Some(("java/util/OptionalLong", OPTIONALLONG_METHODS)),
         JType::LinkedList { role, .. } => Some(match role {
             SeqRole::Full => ("java/util/LinkedList", LINKEDLIST_METHODS),
             SeqRole::ArrayDeque => ("java/util/ArrayDeque", DEQUE_METHODS),
@@ -12612,8 +12666,12 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Optional => Some(args.first.map_or(JType::Error, JType::Optional)),
         // `Optional.map` erases its result element to `Object`, like a stream's.
         BRet::OptionalErased => Some(JType::Optional(ElemType::Object(table.object_id))),
-        BRet::OptionalInt => Some(JType::OptionalInt),
         BRet::OptionalDouble => Some(JType::OptionalDouble),
+        BRet::OptionalElem => Some(match args.first {
+            Some(ElemType::Double) => JType::OptionalDouble,
+            Some(ElemType::Long) => JType::OptionalLong,
+            _ => JType::OptionalInt,
+        }),
         BRet::Collector => Some(JType::Collector),
         BRet::Comparator => Some(
             table
@@ -18525,6 +18583,7 @@ impl BodyGen<'_> {
             | JType::Optional(_)
             | JType::OptionalInt
             | JType::OptionalDouble
+            | JType::OptionalLong
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
@@ -22908,6 +22967,7 @@ impl BodyGen<'_> {
             | JType::Optional(_)
             | JType::OptionalInt
             | JType::OptionalDouble
+            | JType::OptionalLong
             | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
@@ -27102,6 +27162,7 @@ impl BodyGen<'_> {
             | JType::Optional(_)
             | JType::OptionalInt
             | JType::OptionalDouble
+            | JType::OptionalLong
             | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
