@@ -31817,6 +31817,49 @@ public class JoinAmbiguous {
 "#
 );
 
+// `DoubleStream` and `LongStream` were TYPES with no way to make one: their
+// pipelines worked, reached through `mapToDouble`/`mapToLong`, but the names
+// resolved nowhere as a static-call target — sixteen of twenty probed shapes
+// were refused. Their elements carry their own width, which is what makes
+// `sum`, `max` and `toArray` answer in it.
+differential_test!(
+    the_primitive_streams_have_their_own_factories,
+    "PrimitiveSources",
+    r"
+import java.util.*;
+import java.util.stream.*;
+
+public class PrimitiveSources {
+    public static void main(String[] args) {
+        double[] doubles = {1.5, 2.5};
+        long[] longs = {7L, 8L};
+
+        System.out.println(DoubleStream.of(1.5, 2.5).sum());
+        System.out.println(DoubleStream.of(doubles).sum());
+        System.out.println(DoubleStream.of(doubles).average().getAsDouble());
+        System.out.println(DoubleStream.of(doubles).max().getAsDouble());
+        System.out.println(DoubleStream.of(doubles).map(x -> x * 2).sum());
+        System.out.println(DoubleStream.of(doubles).filter(x -> x > 2).count());
+        System.out.println(DoubleStream.of(doubles).boxed().collect(Collectors.toList()));
+        System.out.println(Arrays.toString(DoubleStream.of(doubles).toArray()));
+        System.out.println(DoubleStream.empty().count());
+
+        System.out.println(LongStream.of(7L, 8L).sum());
+        System.out.println(LongStream.of(longs).map(x -> x * 2).sum());
+        System.out.println(LongStream.range(1, 4).sum());
+        System.out.println(LongStream.rangeClosed(1, 3).sum());
+        System.out.println(LongStream.range(1, 4).max().getAsLong());
+        System.out.println(Arrays.toString(LongStream.of(longs).toArray()));
+        System.out.println(LongStream.empty().count());
+
+        System.out.println(IntStream.of(1, 2).sum());
+        System.out.println(Arrays.stream(doubles).sum());
+        System.out.println(Arrays.stream(longs).sum());
+    }
+}
+"
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

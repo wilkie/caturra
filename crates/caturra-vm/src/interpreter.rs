@@ -10707,16 +10707,34 @@ impl<'run> Interpreter<'run> {
         }
         // `IntStream.range(a, b)` / `rangeClosed(a, b)` — a stream of consecutive
         // ints (the VM models an IntStream as a Stream of unboxed ints).
-        if (class_name == "IntStream" || class_name == "java/util/stream/IntStream")
-            && let ("range" | "rangeClosed", [JValue::Int(from), JValue::Int(to)]) =
-                (method_name, args)
+        let ranges = matches!(
+            class_name,
+            "IntStream"
+                | "java/util/stream/IntStream"
+                | "LongStream"
+                | "java/util/stream/LongStream"
+        );
+        if ranges
+            && let ("range" | "rangeClosed", [from, to]) = (method_name, args)
+            && let (Some(from), Some(to)) = (int_or_long(*from), int_or_long(*to))
         {
             let end = if method_name == "rangeClosed" {
                 to.saturating_add(1)
             } else {
-                *to
+                to
             };
-            let ints: Vec<JValue> = (*from..end).map(JValue::Int).collect();
+            // A `LongStream`'s range is of LONGS — the elements carry their own
+            // width, which is what makes `sum()` and `max()` answer in it.
+            let long = class_name.ends_with("LongStream");
+            let ints: Vec<JValue> = (from..end)
+                .map(|n| {
+                    if long {
+                        JValue::Long(n)
+                    } else {
+                        JValue::Int(i32::try_from(n).unwrap_or(i32::MAX))
+                    }
+                })
+                .collect();
             let stream = self.heap.alloc(crate::value::HeapObject::Stream {
                 source: ints,
                 ops: Vec::new(),
@@ -10730,7 +10748,14 @@ impl<'run> Interpreter<'run> {
         // as two streams to run one after the other.
         if matches!(
             class_name,
-            "Stream" | "java/util/stream/Stream" | "IntStream" | "java/util/stream/IntStream"
+            "Stream"
+                | "java/util/stream/Stream"
+                | "IntStream"
+                | "java/util/stream/IntStream"
+                | "LongStream"
+                | "java/util/stream/LongStream"
+                | "DoubleStream"
+                | "java/util/stream/DoubleStream"
         ) {
             let source = match (method_name, args) {
                 ("empty", []) => Some(Vec::new()),
@@ -17138,6 +17163,15 @@ fn optional_kind_of(descriptor: &str) -> crate::value::OptionalKind {
         OptionalKind::Double
     } else {
         OptionalKind::Ref
+    }
+}
+
+/// An `int` or a `long` as a `long` — the range factories take either width.
+fn int_or_long(value: JValue) -> Option<i64> {
+    match value {
+        JValue::Int(n) => Some(i64::from(n)),
+        JValue::Long(n) => Some(n),
+        _ => None,
     }
 }
 

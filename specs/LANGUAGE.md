@@ -6617,6 +6617,30 @@ Pinned by `a_literal_collection_joins_at_a_shared_interface` (including seven
 joins that already worked, which the new one must not disturb) and
 `a_join_over_several_interfaces_names_the_first`.
 
+### DoubleStream and LongStream have their own factories (2026-08-19)
+
+Both were TYPES with no way to make one. The pipelines worked — reached through
+`mapToDouble`/`mapToLong`, whose results are `DoubleStream` and `LongStream`
+and whose terminals answer in the element's own width — but the NAMES resolved
+nowhere as a static-call target, so `DoubleStream.of(…)`, `LongStream.of(…)`,
+`LongStream.range(…)` and `empty()` were all "cannot find symbol": sixteen of
+twenty probed shapes.
+
+They are registered as static owners now, `LongStream` with the two range
+factories the JDK gives it (a `DoubleStream` has none there either), and the
+source emitter takes the element from the factory's own class rather than from
+the arguments — a primitive pipeline's elements carry their width, and joining
+`1.5, 2.5` would have boxed them.
+
+The same call had a THIRD reading in `type_of`, which mirrors the emitter so
+the two can be checked against each other: it knew only `Stream` and
+`IntStream`, so `Arrays.toString(DoubleStream.of(d).toArray())` — a source used
+straight as an argument — had no type, while the identical stream held in a
+variable first passed. It also read `Stream.of`'s element from the FIRST
+argument where the emitter joins them; both now join.
+
+Pinned by `the_primitive_streams_have_their_own_factories`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

@@ -9228,6 +9228,22 @@ const INTSTREAM_STATIC_METHODS: &[BuiltinMethod] = &[
     ),
 ];
 
+/// `java.util.stream.LongStream` static factories.
+const LONGSTREAM_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "range",
+        &[BParam::Long, BParam::Long],
+        BRet::LongStream,
+        "(JJ)Ljava/util/stream/LongStream;",
+    ),
+    bm(
+        "rangeClosed",
+        &[BParam::Long, BParam::Long],
+        BRet::LongStream,
+        "(JJ)Ljava/util/stream/LongStream;",
+    ),
+];
+
 /// `java.util.Optional<E>` — `get`/`orElse`/`orElseThrow` yield the element.
 const ENTRY_ITERATOR_METHODS: &[BuiltinMethod] = &[
     // Every reference has the Object methods; a cursor overrides none of
@@ -12089,6 +12105,13 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
         "IntStream" => Some(("java/util/stream/IntStream", INTSTREAM_STATIC_METHODS)),
+        // `LongStream.range` answers a stream of LONGS; the tables are keyed by
+        // the receiver's element, so the name is what separates them here.
+        "LongStream" => Some(("java/util/stream/LongStream", LONGSTREAM_STATIC_METHODS)),
+        // A `DoubleStream` has no range factory (there is no such thing in the
+        // JDK either); the entry exists so the NAME resolves as a static-call
+        // target and `emit_stream_source` answers `of`/`empty`/`concat`.
+        "DoubleStream" => Some(("java/util/stream/DoubleStream", &[])),
         // `Stream`'s statics are all variadic or array-taking, so none fits a
         // fixed table; the entry exists so the NAME resolves as a static-call
         // target, and `emit_stream_source` answers each one.
@@ -21104,9 +21127,10 @@ impl BodyGen<'_> {
         // fixed method table: `Stream.of(...)`, `IntStream.of(...)` and
         // `Arrays.stream(array)` all lower to one array plus a call.
         let stream_source = match (class, method) {
-            ("Stream" | "IntStream", "of" | "empty" | "concat" | "ofNullable") => {
-                !self.table.has_class(class)
-            }
+            (
+                "Stream" | "IntStream" | "LongStream" | "DoubleStream",
+                "of" | "empty" | "concat" | "ofNullable",
+            ) => !self.table.has_class(class),
             ("Arrays", "stream") => true,
             _ => false,
         };
@@ -22508,10 +22532,18 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) -> Option<Option<JType>> {
         let object_elem = ElemType::Object(self.table.object_id);
-        let internal = if class == "IntStream" {
-            "java/util/stream/IntStream"
-        } else {
-            "java/util/stream/Stream"
+        // A primitive pipeline's own element, when the factory names one.
+        let primitive_elem = match class {
+            "IntStream" => Some(ElemType::Int),
+            "LongStream" => Some(ElemType::Long),
+            "DoubleStream" => Some(ElemType::Double),
+            _ => None,
+        };
+        let internal = match class {
+            "IntStream" => "java/util/stream/IntStream",
+            "LongStream" => "java/util/stream/LongStream",
+            "DoubleStream" => "java/util/stream/DoubleStream",
+            _ => "java/util/stream/Stream",
         };
         if method == "empty" {
             if !args.is_empty() {
@@ -22527,10 +22559,11 @@ impl BodyGen<'_> {
             // incompatible assignment, and passing one to a method that wants a
             // `Stream<String>` an incompatible argument. An `IntStream` has no
             // element to adopt, so it keeps its own type.
-            return Some(Some(if class == "IntStream" {
-                JType::IntStream
-            } else {
-                JType::Null
+            return Some(Some(match primitive_elem {
+                Some(ElemType::Long) => JType::LongStream,
+                Some(ElemType::Double) => JType::DoubleStream,
+                Some(_) => JType::IntStream,
+                None => JType::Null,
             }));
         }
         if method == "concat" {
@@ -22554,10 +22587,11 @@ impl BodyGen<'_> {
                 (JType::Stream(a), JType::Stream(b)) if a == b => a,
                 _ => object_elem,
             };
-            return Some(Some(if class == "IntStream" {
-                JType::IntStream
-            } else {
-                JType::Stream(elem)
+            return Some(Some(match primitive_elem {
+                Some(ElemType::Long) => JType::LongStream,
+                Some(ElemType::Double) => JType::DoubleStream,
+                Some(_) => JType::IntStream,
+                None => JType::Stream(elem),
             }));
         }
         // `of` / `Arrays.stream`: a lone array argument IS the source;
@@ -22590,11 +22624,9 @@ impl BodyGen<'_> {
             // only the FIRST argument made `Stream.of(new Circle(), new
             // Square())` a stream of `Circle`, and the second argument an
             // incompatible one.
-            let scalar = if class == "IntStream" {
-                ElemType::Int
-            } else {
-                self.joined_literal_elem(args)
-            };
+            // A PRIMITIVE pipeline's elements carry their own width, so the
+            // factory's own class decides; everything else joins.
+            let scalar = primitive_elem.unwrap_or_else(|| self.joined_literal_elem(args));
             self.emit_array_literal(
                 args,
                 JType::Array {
@@ -23470,18 +23502,27 @@ impl BodyGen<'_> {
                         // argument had no type: `n(Stream.of("a", "b"))` was
                         // "cannot determine the type of an argument", while the
                         // same stream held in a variable first passed fine.
-                        if matches!(path[0].as_str(), "Stream" | "IntStream") {
+                        if matches!(
+                            path[0].as_str(),
+                            "Stream" | "IntStream" | "LongStream" | "DoubleStream"
+                        ) {
                             match (path[0].as_str(), method.as_str()) {
                                 (
                                     "IntStream",
                                     "of" | "range" | "rangeClosed" | "concat" | "empty",
                                 ) => return JType::IntStream,
+                                (
+                                    "LongStream",
+                                    "of" | "range" | "rangeClosed" | "concat" | "empty",
+                                ) => return JType::LongStream,
+                                ("DoubleStream", "of" | "concat" | "empty") => {
+                                    return JType::DoubleStream;
+                                }
                                 ("Stream", "of" | "ofNullable") => {
-                                    let elem = args
-                                        .first()
-                                        .and_then(|a| collection_elem_of(self.type_of(a)))
-                                        .unwrap_or(ElemType::Object(self.table.object_id));
-                                    return JType::Stream(elem);
+                                    // The JOIN, as the emitter uses — reading
+                                    // the FIRST argument made the two
+                                    // disagree about `Stream.of(a, b)`.
+                                    return JType::Stream(self.joined_literal_elem(args));
                                 }
                                 // An EMPTY stream adopts its context, the way
                                 // `Optional.empty()` and `Collections.emptyList()`

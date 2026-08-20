@@ -3713,11 +3713,18 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         return Some(TypeRef::Int);
     }
     // `IntStream.range(a, b)` / `rangeClosed(a, b)` / `IntStream.of(...)` —
-    // sources of `int`s.
-    if matches!(method.as_str(), "range" | "rangeClosed" | "of")
-        && names_library_class(prev.as_ref(), "IntStream")
-    {
-        return Some(TypeRef::Int);
+    // sources of `int`s, and the same factories on the other two primitive
+    // pipelines, whose elements carry their own width.
+    if matches!(method.as_str(), "range" | "rangeClosed" | "of" | "empty") {
+        for (class, elem) in [
+            ("IntStream", TypeRef::Int),
+            ("LongStream", TypeRef::Long),
+            ("DoubleStream", TypeRef::Double),
+        ] {
+            if names_library_class(prev.as_ref(), class) {
+                return Some(elem);
+            }
+        }
     }
     // `Stream.of(...)` — the element is what the arguments agree on, which is
     // all this syntactic pass can see; a mixed or computed list erases to
