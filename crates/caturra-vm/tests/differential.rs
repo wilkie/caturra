@@ -31860,6 +31860,46 @@ public class PrimitiveSources {
 "
 );
 
+// A map's ENTRY SET is a `Set<Map.Entry<K, V>>` like any other, and copying one
+// into a list is how a map's entries get sorted. Every constructor that takes a
+// collection listed the shapes it accepts FOR ITSELF — six copies of one fact —
+// and not one of them listed this one, so `new ArrayList<>(m.entrySet())` was
+// refused with a message about needing a Collection.
+differential_test!(
+    an_entry_set_is_a_collection_like_any_other,
+    "CopyEntrySet",
+    r#"
+import java.util.*;
+
+public class CopyEntrySet {
+    public static void main(String[] args) {
+        Map<String, Integer> counts = new TreeMap<String, Integer>();
+        counts.put("b", 2);
+        counts.put("a", 1);
+
+        System.out.println(new ArrayList<>(counts.entrySet()).size());
+        System.out.println(new ArrayList<>(counts.entrySet()).get(0).getKey());
+        System.out.println(new HashSet<>(counts.entrySet()).size());
+        System.out.println(new LinkedList<>(counts.entrySet()).size());
+        System.out.println(new ArrayDeque<>(counts.entrySet()).size());
+        for (Map.Entry<String, Integer> entry : new ArrayList<>(counts.entrySet())) {
+            System.out.println(entry.getKey() + "=" + entry.getValue());
+        }
+        List<Map.Entry<String, Integer>> entries = new ArrayList<>(counts.entrySet());
+        entries.sort(Map.Entry.comparingByValue());
+        System.out.println(entries);
+
+        // The sources that always worked, which the shared reading must keep.
+        System.out.println(new ArrayList<>(counts.keySet()));
+        System.out.println(new ArrayList<>(counts.values()));
+        System.out.println(new TreeSet<>(counts.keySet()).first());
+        System.out.println(new PriorityQueue<>(counts.keySet()).peek());
+        System.out.println(new HashSet<>(Arrays.asList(1, 1, 2)).size());
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

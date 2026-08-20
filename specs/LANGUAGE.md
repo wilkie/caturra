@@ -6641,6 +6641,25 @@ argument where the emitter joins them; both now join.
 
 Pinned by `the_primitive_streams_have_their_own_factories`.
 
+### An entry set is a collection like any other (2026-08-19)
+
+`new ArrayList<>(map.entrySet())` — how a map's entries get sorted — was
+refused with a message about needing a Collection, and so were the `HashSet`,
+`LinkedList` and `ArrayDeque` forms. A map's entry set IS a
+`Set<Map.Entry<K, V>>`; what it was not was a shape any of the copy
+constructors recognized.
+
+Every one of them had listed the accepted shapes for itself — SIX copies of one
+fact (`LinkedList`, `ArrayDeque`, `HashSet`, `TreeSet`, `PriorityQueue`, and the
+`copy_element_of` that the `ArrayList` emitter and `type_of` share). None
+listed the entry set, and each would have needed its own arm. They all read one
+`collection_element_type` now, which is also what a stream source reads, so a
+seventh shape can only ever be added once.
+
+Pinned by `an_entry_set_is_a_collection_like_any_other`, which also runs the
+sources that always worked, since collapsing six readings into one is exactly
+the change that could lose one of them.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

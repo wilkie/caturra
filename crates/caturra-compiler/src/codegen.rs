@@ -4382,16 +4382,8 @@ fn wrapper_face(elem: Option<ElemType>, class: ClassId, table: &MethodTable) -> 
 /// `type_of`: the emitter read it off a `List` alone, so a set or a map view
 /// source fell back to the context-adopting `Null` while `type_of` had the
 /// element, and the two disagreed about every `new ArrayList<>(m.keySet())`.
-fn copy_element_of(source: JType) -> Option<ElemType> {
-    match source {
-        JType::List(elem)
-        | JType::Set(elem)
-        | JType::TreeSet(elem)
-        | JType::Collection(elem)
-        | JType::Stack(elem)
-        | JType::LinkedList { elem, .. } => Some(elem),
-        _ => None,
-    }
+fn copy_element_of(source: JType, table: &MethodTable) -> Option<ElemType> {
+    any_collection_elem(source, table)
 }
 
 fn elem_type_of(ty: JType) -> Option<ElemType> {
@@ -4453,34 +4445,37 @@ fn prim_stream_descriptor(
 /// The element a `collection.stream()` yields: the collection's own element,
 /// or a whole `Map.Entry` for an `entrySet()`.
 fn stream_element_of(ty: JType, table: &MethodTable) -> Option<ElemType> {
-    if let JType::EntrySet { key, value } = ty {
-        return Some(ElemType::Nested {
-            inner: table.intern_nested(JType::MapEntry { key, value }),
-            read: table.object_id,
-        });
-    }
-    TypeArgs::of(ty).first
+    collection_element_type(ty, table).or_else(|| TypeArgs::of(ty).first)
 }
 
 /// The element of any `Collection` face, including a `Stack` — what a method
 /// declared over `Collection<E>` accepts.
-fn any_collection_elem(ty: JType) -> Option<ElemType> {
+fn any_collection_elem(ty: JType, table: &MethodTable) -> Option<ElemType> {
     match ty {
         JType::Stack(elem) => Some(elem),
-        other => collection_element_type(other),
+        other => collection_element_type(other, table),
     }
 }
 
 /// The element type of any single-element collection type (a `List`, `Set`,
 /// `TreeSet`, `Collection`, or `LinkedList`/`Queue`/`Deque`), for a constructor
 /// that copies one.
-fn collection_element_type(ty: JType) -> Option<ElemType> {
+fn collection_element_type(ty: JType, table: &MethodTable) -> Option<ElemType> {
     match ty {
         JType::List(elem)
         | JType::Set(elem)
         | JType::TreeSet(elem)
         | JType::Collection(elem)
         | JType::LinkedList { elem, .. } => Some(elem),
+        // A map's ENTRY SET is a `Set<Map.Entry<K, V>>` like any other, and
+        // copying one is how a map's entries get sorted. Every constructor
+        // that takes a collection listed the shapes it accepts for itself, and
+        // none of the five listed this one — `new ArrayList<>(m.entrySet())`
+        // was "takes a Collection", about a Collection.
+        JType::EntrySet { key, value } => Some(ElemType::Nested {
+            inner: table.intern_nested(JType::MapEntry { key, value }),
+            read: table.object_id,
+        }),
         _ => None,
     }
 }
@@ -16560,7 +16555,7 @@ impl BodyGen<'_> {
             return None;
         };
         let source_ty = self.type_of(source);
-        copy_element_of(source_ty)
+        copy_element_of(source_ty, self.table)
     }
 
     #[allow(clippy::too_many_lines)] // one arm per constructible library type
@@ -17572,7 +17567,7 @@ impl BodyGen<'_> {
                 // `copy_source_element`) had the element all along. A `var`
                 // declared from one could not infer.
                 if elem.is_none() {
-                    elem = copy_element_of(source_ty);
+                    elem = copy_element_of(source_ty, self.table);
                 }
                 let init_ref = intern_method_ref(
                     self.pool,
@@ -17839,19 +17834,12 @@ impl BodyGen<'_> {
             }
             [source] => {
                 let source_ty = self.expr(source);
-                match source_ty {
-                    JType::List(source_elem)
-                    | JType::Set(source_elem)
-                    | JType::Collection(source_elem)
-                    | JType::LinkedList {
-                        elem: source_elem, ..
-                    } => {
-                        if elem.is_none() {
-                            elem = Some(source_elem);
-                        }
+                if let Some(source_elem) = collection_element_type(source_ty, self.table) {
+                    if elem.is_none() {
+                        elem = Some(source_elem);
                     }
-                    JType::Null => {}
-                    _ => self.error(span, "new LinkedList(...) takes a Collection"),
+                } else if source_ty != JType::Null {
+                    self.error(span, "new LinkedList(...) takes a Collection");
                 }
                 let init_ref = intern_method_ref(
                     self.pool,
@@ -17917,22 +17905,15 @@ impl BodyGen<'_> {
                 let descriptor = if source_ty == JType::Int {
                     "(I)V"
                 } else {
-                    match source_ty {
-                        JType::List(source_elem)
-                        | JType::Set(source_elem)
-                        | JType::Collection(source_elem)
-                        | JType::LinkedList {
-                            elem: source_elem, ..
-                        } => {
-                            if elem.is_none() {
-                                elem = Some(source_elem);
-                            }
+                    if let Some(source_elem) = collection_element_type(source_ty, self.table) {
+                        if elem.is_none() {
+                            elem = Some(source_elem);
                         }
-                        JType::Null => {}
-                        _ => self.error(
+                    } else if source_ty != JType::Null {
+                        self.error(
                             span,
                             "new ArrayDeque(...) takes an int capacity or a Collection",
-                        ),
+                        );
                     }
                     "(Ljava/util/Collection;)V"
                 };
@@ -18108,7 +18089,7 @@ impl BodyGen<'_> {
                 let ty = self.expr(only);
                 if self.is_comparator_type(ty) {
                     "(Ljava/util/Comparator;)V"
-                } else if let Some(source_elem) = collection_element_type(ty) {
+                } else if let Some(source_elem) = collection_element_type(ty, self.table) {
                     if elem.is_none() {
                         elem = Some(source_elem);
                     }
@@ -18205,16 +18186,13 @@ impl BodyGen<'_> {
             [source] => {
                 let source_ty = self.expr(source);
                 // `new HashSet<>(c)` copies a collection; `new HashSet<>(16)` sizes.
-                let descriptor = match source_ty {
-                    JType::List(source_elem)
-                    | JType::Set(source_elem)
-                    | JType::Collection(source_elem) => {
+                let descriptor =
+                    if let Some(source_elem) = collection_element_type(source_ty, self.table) {
                         if elem.is_none() {
                             elem = Some(source_elem);
                         }
                         "(Ljava/util/Collection;)V"
-                    }
-                    _ => {
+                    } else {
                         if !widens(source_ty, JType::Int, self.table) {
                             self.error(
                                 span,
@@ -18222,8 +18200,7 @@ impl BodyGen<'_> {
                             );
                         }
                         "(I)V"
-                    }
-                };
+                    };
                 let init_ref = intern_method_ref(self.pool, class, "<init>", descriptor);
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(2); // the dup'd receiver + the argument
@@ -18272,31 +18249,25 @@ impl BodyGen<'_> {
             }
             [source] => {
                 let source_ty = self.expr(source);
-                let descriptor = match source_ty {
-                    JType::List(source_elem)
-                    | JType::Set(source_elem)
-                    | JType::TreeSet(source_elem)
-                    | JType::Collection(source_elem) => {
+                let descriptor =
+                    if let Some(source_elem) = collection_element_type(source_ty, self.table) {
                         if elem.is_none() {
                             elem = Some(source_elem);
                         }
                         "(Ljava/util/Collection;)V"
-                    }
-                    // A comparator: a `__Comparator` instance (a desugared
-                    // lambda, a method reference, or a Comparator variable).
-                    JType::Object(id)
-                        if self
-                            .table
-                            .class_id("__Comparator")
-                            .is_some_and(|target| self.table.is_subtype(id, target)) =>
+                    } else if matches!(source_ty, JType::Object(id)
+                    if self
+                        .table
+                        .class_id("__Comparator")
+                        .is_some_and(|target| self.table.is_subtype(id, target)))
                     {
+                        // A comparator: a `__Comparator` instance (a desugared
+                        // lambda, a method reference, or a Comparator variable).
                         "(Ljava/util/Comparator;)V"
-                    }
-                    _ => {
+                    } else {
                         self.error(span, "new TreeSet(...) takes a Collection or a Comparator");
                         "(Ljava/util/Collection;)V"
-                    }
-                };
+                    };
                 let init_ref =
                     intern_method_ref(self.pool, "java/util/TreeSet", "<init>", descriptor);
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
@@ -21179,7 +21150,7 @@ impl BodyGen<'_> {
                     "__setCopyOf",
                     "java/util/HashSet",
                     JType::Set(
-                        copy_element_of(source_ty)
+                        copy_element_of(source_ty, self.table)
                             .unwrap_or(ElemType::Object(self.table.object_id)),
                     ),
                 ),
@@ -21187,7 +21158,7 @@ impl BodyGen<'_> {
                     "__listCopyOf",
                     "java/util/ArrayList",
                     JType::List(
-                        copy_element_of(source_ty)
+                        copy_element_of(source_ty, self.table)
                             .unwrap_or(ElemType::Object(self.table.object_id)),
                     ),
                 ),
@@ -21647,7 +21618,7 @@ impl BodyGen<'_> {
                 return None;
             };
             let collection_ty = self.expr(collection);
-            let Some(elem) = any_collection_elem(collection_ty) else {
+            let Some(elem) = any_collection_elem(collection_ty, self.table) else {
                 self.error(
                     collection.span(),
                     String::from("Collections.unmodifiableCollection takes a Collection"),
@@ -21670,7 +21641,7 @@ impl BodyGen<'_> {
         // outright, though a set is the commonest receiver for it.
         if method == "addAll"
             && let Some(collection) = args.first()
-            && let Some(elem) = any_collection_elem(self.type_of(collection))
+            && let Some(elem) = any_collection_elem(self.type_of(collection), self.table)
             && !matches!(self.type_of(collection), JType::List(_))
         {
             self.expr(collection);
@@ -21853,7 +21824,7 @@ impl BodyGen<'_> {
                 (format!("(Ljava/util/ArrayList;{e}{e})Z"), JType::Boolean)
             } else {
                 let source = self.type_of(&args[1]);
-                if any_collection_elem(source).is_none() {
+                if any_collection_elem(source, self.table).is_none() {
                     self.no_suitable_library_method("Collections", method, args, span);
                     return None;
                 }
@@ -21875,7 +21846,7 @@ impl BodyGen<'_> {
             // which a `LinkedList`- or `Stack`-typed variable also is.
             let first = self.type_of(&args[0]);
             let elem = if method == "disjoint" {
-                any_collection_elem(first)
+                any_collection_elem(first, self.table)
             } else {
                 match first {
                     JType::List(elem)
@@ -21921,7 +21892,7 @@ impl BodyGen<'_> {
                     let compatible = if method == "copy" {
                         source == JType::List(elem)
                     } else {
-                        collection_element_type(source).is_some()
+                        collection_element_type(source, self.table).is_some()
                     };
                     if !compatible {
                         self.no_suitable_library_method("Collections", method, args, span);
@@ -22014,7 +21985,7 @@ impl BodyGen<'_> {
         // `LinkedList`- or `Stack`-typed variable is a List and was refused.
         let over_collection = matches!(method, "max" | "min" | "frequency" | "disjoint" | "addAll");
         let elem = if over_collection {
-            any_collection_elem(list_ty)
+            any_collection_elem(list_ty, self.table)
         } else {
             match list_ty {
                 JType::List(elem)
@@ -23740,13 +23711,13 @@ impl BodyGen<'_> {
                         // passed on or concatenated into a `var`.
                         "max" | "min" => {
                             let source = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return any_collection_elem(source)
+                            return any_collection_elem(source, self.table)
                                 .map_or(JType::Error, ElemType::base_type);
                         }
                         // An unmodifiable wrapper is its source's own face.
                         "unmodifiableCollection" => {
                             let source = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return any_collection_elem(source)
+                            return any_collection_elem(source, self.table)
                                 .map_or(JType::Error, JType::Collection);
                         }
                         // `indexOfSubList`/`lastIndexOfSubList` answer an index
