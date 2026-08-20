@@ -22075,64 +22075,95 @@ public class NarrowOne {
 "
 );
 
-// A construct caturra refuses must refuse in EVERY position, not only as a
-// statement. Four silent miscompiles came from a diagnostic that only the
-// EMITTING path produced: `type_of` answered `Error` quietly, the enclosing
-// call emitted nothing at all, and the program ran with a hole in it. A
-// refused member in an argument, in a concatenation and as a `new` argument
-// pins the three positions that hid one.
-stricter_than_javac!(
-    stricter_sublist_in_argument_position,
-    "SubListArg",
+// `subList` is a live VIEW of a range of another list — the last of the
+// enumerated "list views are not supported" refusals. Reads and writes go
+// through to the backing list, `clear()` on the view removes the range, and a
+// structural change made AROUND the view invalidates it, which is what
+// separates a view from a copy.
+//
+// These three programs were `stricter_than_javac!` pins for the refusal, kept
+// because a construct caturra refuses must refuse in EVERY position: four
+// silent miscompiles once came from a diagnostic only the EMITTING path
+// produced. They stay as the three positions, now answering.
+differential_test!(
+    a_sublist_is_a_view_of_its_list,
+    "SubListView",
     r#"
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
-public class SubListArg {
+public class SubListView {
     static void take(Object o) {
         System.out.println("take " + o);
     }
 
     public static void main(String[] args) {
-        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c", "d"));
-        System.out.println("start");
+        List<String> list = new ArrayList<String>(Arrays.asList("a", "b", "c", "d"));
         take(list.subList(1, 3));
-        System.out.println("end");
-    }
-}
-"#
-);
-
-stricter_than_javac!(
-    stricter_sublist_in_concatenation,
-    "SubListConcat",
-    r#"
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
-public class SubListConcat {
-    public static void main(String[] args) {
-        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c", "d"));
         System.out.println("v" + list.subList(1, 3));
+        System.out.println(new ArrayList<Object>(list.subList(1, 3)));
+
+        List<Integer> numbers = new ArrayList<Integer>(Arrays.asList(0, 1, 2, 3, 4));
+        System.out.println(numbers.subList(1, 4));
+        System.out.println(numbers.subList(1, 4).size());
+        System.out.println(numbers.subList(1, 4).get(0));
+        System.out.println(numbers.subList(2, 2));
+        System.out.println(numbers.subList(0, 5));
+        System.out.println(numbers.subList(1, 4).contains(2));
+        System.out.println(numbers.subList(1, 4).indexOf(2));
+        System.out.println(numbers.subList(1, 4).equals(Arrays.asList(1, 2, 3)));
+        System.out.println(numbers.subList(1, 4).stream().mapToInt(Integer::intValue).sum());
+        System.out.println(numbers.subList(1, 4).subList(1, 2));
+        for (int each : numbers.subList(1, 3)) {
+            System.out.println(each);
+        }
+
+        // Writes go through, in both directions.
+        List<Integer> view = numbers.subList(1, 4);
+        view.set(1, 55);
+        System.out.println(view + " " + numbers);
+        numbers.set(1, 77);
+        System.out.println(view);
+        view.add(99);
+        System.out.println(numbers);
+        view.remove(0);
+        System.out.println(numbers);
+        Collections.reverse(view);
+        System.out.println(numbers);
+        view.clear();
+        System.out.println(numbers);
     }
 }
 "#
 );
 
-stricter_than_javac!(
-    stricter_sublist_as_constructor_argument,
-    "SubListCtor",
+// The two ways of asking for a range that is not one, which the JDK words as
+// two DIFFERENT exceptions, and the structural change that invalidates a view.
+differential_test!(
+    a_sublist_refuses_a_range_that_is_not_one,
+    "SubListBounds",
     r#"
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
-public class SubListCtor {
+public class SubListBounds {
     public static void main(String[] args) {
-        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c", "d"));
-        System.out.println(new ArrayList<Object>(list.subList(1, 3)));
+        List<Integer> numbers = new ArrayList<Integer>(Arrays.asList(0, 1, 2, 3, 4));
+        try {
+            numbers.subList(1, 9);
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println("out of bounds");
+        }
+        try {
+            numbers.subList(3, 1);
+        } catch (IllegalArgumentException e) {
+            System.out.println("illegal range");
+        }
+        List<Integer> view = numbers.subList(1, 4);
+        numbers.add(9);
+        try {
+            System.out.println(view);
+        } catch (ConcurrentModificationException e) {
+            System.out.println("the view noticed");
+        }
     }
 }
 "#

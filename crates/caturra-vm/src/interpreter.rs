@@ -4104,6 +4104,13 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::UnmodifiableList(_) | HeapObject::ArrayBackedList(_)) => {
                 Renderable::List(self.list_items(reference))
             }
+            // Rendering a view iterates it, and iterating one checks that the
+            // backing list has not been structurally changed around it — which
+            // is where a JDK's `AbstractList.toString` throws.
+            Some(HeapObject::SubList { .. }) => {
+                self.sublist_range(reference)?;
+                Renderable::List(self.list_items(reference))
+            }
             Some(HeapObject::HashMap(map)) => Renderable::Map(map.entries_in_order()),
             // A TreeMap prints `{k=v, ...}` with its entries already key-sorted.
             Some(HeapObject::TreeMap { entries, .. }) => Renderable::Map(entries.clone()),
@@ -5833,6 +5840,7 @@ impl<'run> Interpreter<'run> {
                     | HeapObject::LinkedList(_)
                     | HeapObject::ArrayDeque(_)
                     | HeapObject::Stack(_)
+                    | HeapObject::SubList { .. }
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::UnmodifiableSet(_)
                     | HeapObject::UnmodifiableMap(_)
@@ -5975,10 +5983,43 @@ impl<'run> Interpreter<'run> {
     /// The list's elements, detached from the heap borrow. An unmodifiable
     /// view reads through to what it wraps.
     fn list_items(&self, receiver: HeapRef) -> Vec<JValue> {
+        // A `subList` view is a RANGE of another list, so it has no vector of
+        // its own to hand back — every read of one is a read of that range.
+        if let Some(crate::value::HeapObject::SubList {
+            backing, from, len, ..
+        }) = self.heap.get(receiver)
+        {
+            let (from, len) = (*from, *len);
+            let items = self.list_items(*backing);
+            return items.into_iter().skip(from).take(len).collect();
+        }
         self.heap
             .list_values(self.backing_list(receiver))
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// The backing list a `subList` view reads and writes through, with the
+    /// range it covers — after checking that the backing has not been
+    /// structurally changed AROUND the view, which a JDK answers with a
+    /// `ConcurrentModificationException` on the next use of one.
+    fn sublist_range(&self, view: HeapRef) -> Result<Option<(HeapRef, usize, usize)>, VmError> {
+        let Some(crate::value::HeapObject::SubList {
+            backing,
+            from,
+            len,
+            seen,
+        }) = self.heap.get(view)
+        else {
+            return Ok(None);
+        };
+        let (backing, from, len, seen) = (*backing, *from, *len, *seen);
+        if self.list_items(backing).len() != seen {
+            return Err(VmError::UncaughtException(String::from(
+                "java.util.ConcurrentModificationException",
+            )));
+        }
+        Ok(Some((backing, from, len)))
     }
 
     /// Whether this collection refuses a mutator BEFORE looking at its
@@ -6149,10 +6190,12 @@ impl<'run> Interpreter<'run> {
     /// `PriorityQueue`, whose `equals` is identity (they are not Lists).
     fn is_list_like(&self, reference: HeapRef) -> bool {
         use crate::value::HeapObject::{
-            ArrayBackedList, ArrayList, LinkedList, Stack, UnmodifiableList,
+            ArrayBackedList, ArrayList, LinkedList, Stack, SubList, UnmodifiableList,
         };
         match self.heap.get(reference) {
-            Some(ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_)) => true,
+            Some(ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_) | SubList { .. }) => {
+                true
+            }
             Some(UnmodifiableList(inner)) => self.is_list_like(*inner),
             _ => false,
         }
@@ -6280,8 +6323,8 @@ impl<'run> Interpreter<'run> {
 
     fn structural_hash(&mut self, a: HeapRef) -> Result<Option<i32>, VmError> {
         use crate::value::HeapObject::{
-            self, ArrayBackedList, ArrayList, HashMap, HashSet, LinkedList, Stack, TreeMap,
-            TreeSet, UnmodifiableList, UnmodifiableMap, UnmodifiableSet,
+            self, ArrayBackedList, ArrayList, HashMap, HashSet, LinkedList, Stack, SubList,
+            TreeMap, TreeSet, UnmodifiableList, UnmodifiableMap, UnmodifiableSet,
         };
         // A VIEW, an ENTRY and a WRAPPED map hash by their contents too, and
         // leaving them out here is not a missing feature but a CONTRADICTION:
@@ -6301,7 +6344,12 @@ impl<'run> Interpreter<'run> {
         }
         let hash = match self.heap.get(a) {
             Some(
-                ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_) | UnmodifiableList(_),
+                ArrayList(_)
+                | LinkedList(_)
+                | Stack(_)
+                | ArrayBackedList(_)
+                | SubList { .. }
+                | UnmodifiableList(_),
             ) => {
                 let mut hash = 1i32;
                 for item in self.list_items(a) {
@@ -6328,6 +6376,157 @@ impl<'run> Interpreter<'run> {
             _ => return Ok(None),
         };
         Ok(Some(hash))
+    }
+
+    /// The methods a `subList` VIEW cannot inherit from the ordinary list path:
+    /// every one that WRITES (which must reach the backing list at a shifted
+    /// index, and resize the view), plus the two that answer from a size the
+    /// view alone knows. Everything else reads through `list_items`.
+    #[allow(clippy::too_many_lines)] // one arm per writing list method
+    fn sublist_intrinsic(
+        &mut self,
+        receiver: HeapRef,
+        method: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Answered, VmError> {
+        let Some((backing, from, len)) = self.sublist_range(receiver)? else {
+            return Ok(Answered::No);
+        };
+        // An index into the VIEW, checked against the view's own size and
+        // shifted onto the backing list. `insert` allows one past the end.
+        let translate = |index: i32, insert: bool| -> Result<usize, VmError> {
+            let limit = if insert { len } else { len.saturating_sub(1) };
+            let at = usize::try_from(index).ok().filter(|at| {
+                if insert {
+                    *at <= limit
+                } else {
+                    len > 0 && *at <= limit
+                }
+            });
+            at.map(|at| from + at).ok_or_else(|| {
+                VmError::UncaughtException(format!(
+                    "java.lang.IndexOutOfBoundsException: Index: {index}, Size: {len}"
+                ))
+            })
+        };
+        // Re-agree with the backing after a write THROUGH the view: the range
+        // grew or shrank by `delta`, and so did the backing.
+        let resize = |vm: &mut Self, delta: isize| {
+            if let Some(crate::value::HeapObject::SubList { len, seen, .. }) =
+                vm.heap.get_mut(receiver)
+            {
+                *len = len.saturating_add_signed(delta);
+                *seen = seen.saturating_add_signed(delta);
+            }
+        };
+        let result = match (method, args) {
+            ("size", []) => JValue::Int(i32::try_from(len).unwrap_or(i32::MAX)),
+            ("isEmpty", []) => JValue::Int(i32::from(len == 0)),
+            ("__get" | "get", [JValue::Int(index)]) => {
+                let at = translate(*index, false)?;
+                self.list_items(backing)
+                    .get(at)
+                    .copied()
+                    .unwrap_or(JValue::NULL)
+            }
+            ("set", [JValue::Int(index), value]) => {
+                let at = translate(*index, false)?;
+                let value = *value;
+                let Some(values) = self.heap.list_values_mut(backing) else {
+                    return Ok(Answered::No);
+                };
+                let previous = values[at];
+                values[at] = value;
+                previous
+            }
+            // `add(e)` appends at the END of the RANGE, which is where the
+            // view ends and not where the backing does.
+            ("add", [value]) if descriptor.starts_with("(Ljava/lang/Object;)") => {
+                let value = *value;
+                if let Some(values) = self.heap.list_values_mut(backing) {
+                    values.insert(from + len, value);
+                }
+                resize(self, 1);
+                JValue::Int(1)
+            }
+            ("add", [JValue::Int(index), value]) => {
+                let at = translate(*index, true)?;
+                let value = *value;
+                if let Some(values) = self.heap.list_values_mut(backing) {
+                    values.insert(at, value);
+                }
+                resize(self, 1);
+                return Ok(Answered::Void);
+            }
+            ("remove", [JValue::Int(index)]) if descriptor.starts_with("(I)") => {
+                let at = translate(*index, false)?;
+                let Some(values) = self.heap.list_values_mut(backing) else {
+                    return Ok(Answered::No);
+                };
+                let removed = values.remove(at);
+                resize(self, -1);
+                removed
+            }
+            ("clear", []) => {
+                if let Some(values) = self.heap.list_values_mut(backing) {
+                    values.drain(from..from + len);
+                }
+                resize(self, -isize::try_from(len).unwrap_or(0));
+                return Ok(Answered::Void);
+            }
+            // `subList` of a subList is a range of the SAME backing list: the
+            // offsets compose, and every write still lands in one place.
+            ("subList", [JValue::Int(start), JValue::Int(end)]) => {
+                let (start, end) = (*start, *end);
+                Self::check_sublist_bounds(start, end, len)?;
+                let view = self.heap.alloc(crate::value::HeapObject::SubList {
+                    backing,
+                    from: from + usize::try_from(start).unwrap_or(0),
+                    len: usize::try_from(end - start).unwrap_or(0),
+                    seen: self.list_items(backing).len(),
+                });
+                JValue::Ref(Some(view))
+            }
+            _ => return Ok(Answered::No),
+        };
+        Ok(Answered::Value(result))
+    }
+
+    /// `subList(from, to)`'s own argument checks, which the JDK words as two
+    /// different exceptions: an index outside the list is out of BOUNDS, and a
+    /// `from` after `to` is an illegal ARGUMENT.
+    fn check_sublist_bounds(from: i32, to: i32, size: usize) -> Result<(), VmError> {
+        let size = i32::try_from(size).unwrap_or(i32::MAX);
+        if from < 0 || to > size {
+            let which = if from < 0 {
+                format!("fromIndex = {from}")
+            } else {
+                format!("toIndex = {to}")
+            };
+            return Err(VmError::UncaughtException(format!(
+                "java.lang.IndexOutOfBoundsException: {which}"
+            )));
+        }
+        if from > to {
+            return Err(VmError::UncaughtException(format!(
+                "java.lang.IllegalArgumentException: fromIndex({from}) > toIndex({to})"
+            )));
+        }
+        Ok(())
+    }
+
+    /// `list.subList(from, to)` on a list that is not itself a view.
+    fn make_sublist(&mut self, list: HeapRef, from: i32, to: i32) -> Result<JValue, VmError> {
+        let size = self.list_items(list).len();
+        Self::check_sublist_bounds(from, to, size)?;
+        let view = self.heap.alloc(crate::value::HeapObject::SubList {
+            backing: list,
+            from: usize::try_from(from).unwrap_or(0),
+            len: usize::try_from(to - from).unwrap_or(0),
+            seen: size,
+        });
+        Ok(JValue::Ref(Some(view)))
     }
 
     fn list_contains(&mut self, list: HeapRef, probe: JValue) -> Result<bool, VmError> {
@@ -6367,7 +6566,19 @@ impl<'run> Interpreter<'run> {
         descriptor: &str,
         args: &[JValue],
     ) -> Result<Answered, VmError> {
-        if self.heap.list_values(receiver).is_none() {
+        // A `subList` VIEW answers the mutators by translating them onto the
+        // list it is a range of; everything else below reads through
+        // `list_items`, which knows the range, so the ordinary arms serve it.
+        match self.sublist_intrinsic(receiver, method_name, descriptor, args)? {
+            Answered::No => {}
+            answered => return Ok(answered),
+        }
+        if self.heap.list_values(receiver).is_none()
+            && !matches!(
+                self.heap.get(receiver),
+                Some(crate::value::HeapObject::SubList { .. })
+            )
+        {
             return Ok(Answered::No);
         }
         // An `ArrayDeque` reaches here because it shares the element vector,
@@ -6435,6 +6646,9 @@ impl<'run> Interpreter<'run> {
                     *slot = sorted;
                 }
                 return Ok(Answered::Void);
+            }
+            ("subList", _, [JValue::Int(from), JValue::Int(to)]) => {
+                self.make_sublist(receiver, *from, *to)?
             }
             ("contains", _, [probe]) => {
                 JValue::Int(i32::from(self.list_index_of(receiver, *probe, false)? >= 0))
@@ -8239,6 +8453,7 @@ impl<'run> Interpreter<'run> {
                     | HeapObject::LinkedList(_)
                     | HeapObject::ArrayDeque(_)
                     | HeapObject::Stack(_)
+                    | HeapObject::SubList { .. }
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::UnmodifiableSet(_)
                     | HeapObject::HashSet(_)
@@ -9808,6 +10023,7 @@ impl<'run> Interpreter<'run> {
                 | HeapObject::LinkedList(_)
                 | HeapObject::ArrayDeque(_)
                 | HeapObject::Stack(_)
+                | HeapObject::SubList { .. }
                 | HeapObject::UnmodifiableList(_),
             ) => self.list_items(reference),
             Some(HeapObject::TreeSet { values, .. }) => values.clone(),

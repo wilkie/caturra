@@ -1310,9 +1310,10 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     silently, and the enclosing call assumed the argument had reported its
     own problem. This is the same silent-non-emission shape as the diamond
     argument recorded above.
-  - Deferred: `subList` is not a live view (it is refused, by that name, on
-    every list face), and `java.util.Enumeration` — with it
-    `Collections.enumeration`/`list` — is refused by name rather than
+  - Deferred at the time: `subList` was not a live view (it was refused, by
+    that name, on every list face) — it is one now, see **subList as a live
+    view** — and `java.util.Enumeration`, with it
+    `Collections.enumeration`/`list`, is refused by name rather than
     reported as a missing symbol.
   - Pinned by `diff_collections_over_any_collection` and
     `diff_collection_view_messages`.
@@ -4186,8 +4187,9 @@ uses the SECOND form, because `rangeCheckForAdd` predates the shared check.
 caturra used the first everywhere. All 24 combinations of implementation,
 operation and out-of-range index now agree.
 
-`subList` remains refused: a list VIEW, which is a feature rather than a
-message.
+`subList` was refused here — a list VIEW, which is a feature rather than a
+message. It is a view now (see **subList as a live view**), and its own
+out-of-range wording joined the 24 combinations above.
 
 ### A descending cursor (2026-08-15)
 
@@ -6693,6 +6695,40 @@ Pinned by `a_stream_can_be_made_one_element_at_a_time` and
 `a_statement_expression_lambda_answers_when_asked` (both directions — the void
 side is what the lowering existed to serve).
 
+### subList as a live view (2026-08-19)
+
+The last of the "list views are not supported by caturra" refusals, and the
+most used of them: `list.subList(from, to)` is a window onto a range of the
+list itself. Reads see what the backing list holds NOW, writes go through in
+both directions, `clear()` on the view removes the range, and a structural
+change made AROUND the view invalidates it — that last part is what separates a
+view from a copy, and copying would have been the silent wrong answer.
+
+A view is a `(backing, from, len)` triple plus the backing length it last
+agreed with, which is how a change around it is noticed (caturra models
+modCount as the length, as the fail-fast cursors do). Reads need no new code:
+`list_items` knows the range, and every reader — `contains`, `indexOf`,
+`equals`, `hashCode`, the for-each cursor, `stream()`, the renderer — goes
+through it. What could NOT be inherited is every method that WRITES, since each
+must land in the backing list at a shifted index and resize the view, plus
+`size`/`isEmpty`, which answer from a size only the view knows. A `subList` OF
+a subList composes the offsets onto the same backing list, so a write still
+lands in one place.
+
+The exceptions are the JDK's, and it words them differently on purpose: an
+index outside the list is `IndexOutOfBoundsException`, `from` after `to` is
+`IllegalArgumentException`, and using a view after the list changed around it
+is `ConcurrentModificationException`.
+
+Three `stricter_than_javac!` pins recorded the refusal — one per position
+(argument, concatenation, constructor argument), because a construct caturra
+refuses must refuse in EVERY position. They are now one `differential_test!`
+covering the same three positions and answering.
+
+Pinned by `a_sublist_is_a_view_of_its_list` and
+`a_sublist_refuses_a_range_that_is_not_one`. The compatibility page's
+`sublist-view` GAP is now a supported feature, recorded against a real JDK.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -6737,9 +6773,6 @@ entries after it was written down.
 - `opt.map(String::toUpperCase).get().length()` — a `map` erases its result
   element (in an `Optional` and a `Stream` alike), so a chain cannot go on to
   call a method of the mapped-to type.
-- `list.subList(0, 2)` — a list VIEW, which is a feature rather than a
-  message. Pinned in three contexts (argument, concatenation, constructor
-  argument), because each reaches the refusal by a different path.
 - `Vector<Integer> v;` and the rest of the unmodeled library — a scope
   limit, reported by name wherever written rather than as a missing symbol.
   This bullet used to name `LinkedList`, `HashSet`, `TreeMap` and `TreeSet`

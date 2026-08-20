@@ -1242,6 +1242,47 @@ public class AfterMap {
 }
 """,
     ),
+    dict(
+        id="sublist-view",
+        category="Collections",
+        title="subList as a live view",
+        summary=(
+            "A window onto the list itself: writing through it writes through "
+            "to the original, clearing it removes the range, and changing the "
+            "list around the view invalidates it."
+        ),
+        main="SubList",
+        source="""
+import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
+import java.util.List;
+
+public class SubList {
+    public static void main(String[] args) {
+        List<String> letters = new ArrayList<>(List.of("a", "b", "c", "d"));
+        List<String> middle = letters.subList(1, 3);
+        middle.set(0, "B");
+        System.out.println(letters);
+        System.out.println(middle);
+
+        letters.set(2, "C");
+        System.out.println(middle);
+
+        middle.clear();
+        System.out.println(letters);
+
+        List<Integer> numbers = new ArrayList<>(List.of(0, 1, 2, 3, 4));
+        List<Integer> view = numbers.subList(1, 4);
+        numbers.add(5);
+        try {
+            System.out.println(view);
+        } catch (ConcurrentModificationException e) {
+            System.out.println("the view noticed");
+        }
+    }
+}
+""",
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -1294,26 +1335,6 @@ import java.lang.reflect.Modifier;
 public class Modifiers {
     public static void main(String[] args) {
         System.out.println(Modifier.toString(String.class.getModifiers()));
-    }
-}
-""",
-    ),
-    dict(
-        id="sublist-view",
-        category="Collections",
-        title="subList as a live view",
-        summary="A window onto the list itself: writing through it writes through to the original.",
-        main="SubList",
-        source="""
-import java.util.ArrayList;
-import java.util.List;
-
-public class SubList {
-    public static void main(String[] args) {
-        List<String> letters = new ArrayList<>(List.of("a", "b", "c", "d"));
-        List<String> middle = letters.subList(1, 3);
-        middle.set(0, "B");
-        System.out.println(letters);
     }
 }
 """,

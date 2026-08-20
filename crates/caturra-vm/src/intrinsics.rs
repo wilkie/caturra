@@ -3673,6 +3673,12 @@ fn iterated_len(heap: &Heap, source: HeapRef) -> usize {
     if let Some(values) = heap.list_values(source) {
         return values.len();
     }
+    // A `subList` view iterates ITS OWN range, not the backing list's length —
+    // reading the latter made an ordinary for-each over a view look like a
+    // concurrent modification.
+    if let Some(HeapObject::SubList { len, .. }) = heap.get(source) {
+        return *len;
+    }
     if let Some(map) = view_map(heap, source) {
         return iterated_len(heap, map);
     }
@@ -7113,6 +7119,18 @@ fn set_like_elements(heap: &Heap, reference: HeapRef) -> Option<Vec<JValue>> {
             .collect(),
         HeapObject::TreeSet { values, .. } => values.clone(),
         HeapObject::UnmodifiableSet(inner) => set_like_elements(heap, *inner)?,
+        // A `subList` VIEW is iterable like any other collection — reading it
+        // as a range of the backing list is what every other reader does.
+        HeapObject::SubList {
+            backing, from, len, ..
+        } => {
+            let (from, len) = (*from, *len);
+            let items = heap
+                .list_values(*backing)
+                .cloned()
+                .or_else(|| set_like_elements(heap, *backing))?;
+            items.into_iter().skip(from).take(len).collect()
+        }
         _ => return None,
     })
 }

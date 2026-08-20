@@ -370,6 +370,16 @@
     "expected": "1\n[1, 2]\n2\n"
   },
   {
+    "id": "sublist-view",
+    "category": "Collections",
+    "title": "subList as a live view",
+    "summary": "A window onto the list itself: writing through it writes through to the original, clearing it removes the range, and changing the list around the view invalidates it.",
+    "main": "SubList",
+    "source": "import java.util.ArrayList;\nimport java.util.ConcurrentModificationException;\nimport java.util.List;\n\npublic class SubList {\n    public static void main(String[] args) {\n        List<String> letters = new ArrayList<>(List.of(\"a\", \"b\", \"c\", \"d\"));\n        List<String> middle = letters.subList(1, 3);\n        middle.set(0, \"B\");\n        System.out.println(letters);\n        System.out.println(middle);\n\n        letters.set(2, \"C\");\n        System.out.println(middle);\n\n        middle.clear();\n        System.out.println(letters);\n\n        List<Integer> numbers = new ArrayList<>(List.of(0, 1, 2, 3, 4));\n        List<Integer> view = numbers.subList(1, 4);\n        numbers.add(5);\n        try {\n            System.out.println(view);\n        } catch (ConcurrentModificationException e) {\n            System.out.println(\"the view noticed\");\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "[a, B, c, d]\n[B, c]\n[B, C]\n[a, d]\nthe view noticed\n"
+  },
+  {
     "id": "vector",
     "category": "Collections",
     "title": "Vector and Hashtable",
@@ -400,16 +410,6 @@
     "reason": "Class.getModifiers exists in Java, but caturra does not model a class's access flags"
   },
   {
-    "id": "sublist-view",
-    "category": "Collections",
-    "title": "subList as a live view",
-    "summary": "A window onto the list itself: writing through it writes through to the original.",
-    "main": "SubList",
-    "source": "import java.util.ArrayList;\nimport java.util.List;\n\npublic class SubList {\n    public static void main(String[] args) {\n        List<String> letters = new ArrayList<>(List.of(\"a\", \"b\", \"c\", \"d\"));\n        List<String> middle = letters.subList(1, 3);\n        middle.set(0, \"B\");\n        System.out.println(letters);\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "ArrayList.subList exists in Java, but list views are not supported by caturra"
-  },
-  {
     "id": "element-types",
     "category": "Collections",
     "title": "Any object as a collection element",
@@ -438,7 +438,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-jqke5rrt/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-kxdu33yy/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -449,7 +449,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-lz3rf9cq/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-b957x1d1/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -460,7 +460,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-i7d8sfwo/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-z7ix_bym/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",

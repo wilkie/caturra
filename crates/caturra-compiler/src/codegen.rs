@@ -7475,6 +7475,8 @@ enum BRet {
     Values,
     /// `Set<Map.Entry<K, V>>` (`map.entrySet()`).
     Entries,
+    /// A `List` of the receiver's OWN element — `subList`'s live view.
+    SelfList,
     /// `java.nio.file.Path` (`Path.of`, `path.getFileName()`).
     Path,
 }
@@ -7949,10 +7951,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Class", "getPackage", "caturra does not model java.lang.Package"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
     ("ArrayList", "parallelStream", "caturra runs on one thread, so a parallel stream would only be a sequential one under another name"),
-    ("ArrayList", "subList", "list views are not supported by caturra"),
-    ("LinkedList", "subList", "list views are not supported by caturra"),
-    ("Stack", "subList", "list views are not supported by caturra"),
-    ("Collection", "subList", "list views are not supported by caturra"),
     ("Scanner", "useDelimiter", "caturra's Scanner splits on whitespace and does not take a delimiter pattern"),
     ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
     ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
@@ -8086,6 +8084,15 @@ const PATH_METHODS: &[BuiltinMethod] = &[
 ];
 
 const LIST_METHODS: &[BuiltinMethod] = &[
+    // `subList(from, to)` is a live VIEW of the range: reads and writes go
+    // through to this list, and a structural change made AROUND the view
+    // invalidates it, which is `List.subList`'s own contract.
+    bm(
+        "subList",
+        &[BParam::Int, BParam::Int],
+        BRet::SelfList,
+        "(II)Ljava/util/List;",
+    ),
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     // `toArray(T[] model)` — the model gives the RUNTIME element type, and
@@ -8273,6 +8280,15 @@ const LIST_METHODS: &[BuiltinMethod] = &[
 /// the five LIFO operations. `push`/`pop`/`peek` act on the top (the end);
 /// `empty` mirrors `isEmpty`; `search` is a 1-based distance from the top.
 const STACK_METHODS: &[BuiltinMethod] = &[
+    // `subList(from, to)` is a live VIEW of the range: reads and writes go
+    // through to this list, and a structural change made AROUND the view
+    // invalidates it, which is `List.subList`'s own contract.
+    bm(
+        "subList",
+        &[BParam::Int, BParam::Int],
+        BRet::SelfList,
+        "(II)Ljava/util/List;",
+    ),
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     // `toArray(T[] model)` — the model gives the RUNTIME element type, and
@@ -8654,6 +8670,15 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    // `subList(from, to)` is a live VIEW of the range: reads and writes go
+    // through to this list, and a structural change made AROUND the view
+    // invalidates it, which is `List.subList`'s own contract.
+    bm(
+        "subList",
+        &[BParam::Int, BParam::Int],
+        BRet::SelfList,
+        "(II)Ljava/util/List;",
+    ),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     // `descendingIterator()` — the same cursor walked from the END.
     bm(
@@ -12650,6 +12675,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             elem: ElemType::Byte,
             dims: 1,
         }),
+        BRet::SelfList => Some(args.first.map_or(JType::Error, JType::List)),
         BRet::Elem => Some(
             args.first
                 .map_or(JType::Error, |elem| elem_value_type(elem, table)),

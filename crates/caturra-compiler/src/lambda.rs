@@ -4093,6 +4093,19 @@ fn declared_array_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 
 #[allow(clippy::too_many_lines)] // one arm per receiver shape
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    // `list.subList(a, b)` is a live view OF that list, so its element is the
+    // same one — as `unmodifiableList` below already knew.
+    if let Expr::Call {
+        receiver: Some(inner),
+        method,
+        args,
+        ..
+    } = receiver
+        && method == "subList"
+        && args.len() == 2
+    {
+        return list_elem_type(inner, ctx);
+    }
     // A call to a generic method says what it returns once its variables are
     // pinned — by an explicit witness, or by the arguments. Both say more than
     // any of the shapes below: `Collections.<String>emptyList()` has no

@@ -456,6 +456,18 @@ pub enum HeapObject {
         source: StreamSource,
         ops: Vec<StreamOp>,
     },
+    /// `list.subList(from, to)` — a live RANGE of another list. Reads and
+    /// writes go through to the backing list, and a structural change made
+    /// AROUND the view (rather than through it) invalidates it, exactly as a
+    /// JDK's does. `seen` is the backing length the view last agreed with,
+    /// which is how that change is noticed (caturra models modCount as the
+    /// length; see the fail-fast cursors).
+    SubList {
+        backing: HeapRef,
+        from: usize,
+        len: usize,
+        seen: usize,
+    },
     /// The recipe a `Stream.collect` gathers into, from a `Collectors` factory.
     Collector(CollectorKind),
     /// A `Comparator` built by the `Comparator` static factories / combinators
