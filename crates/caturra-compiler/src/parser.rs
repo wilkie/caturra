@@ -3254,54 +3254,14 @@ impl Parser<'_> {
     /// enclosing field. A plain value expression (`x -> x + 1`) stays an
     /// expression body.
     fn lambda_expression_body(&mut self) -> Parsed<LambdaBody> {
-        // Prefix `++x` / `--x`.
-        if self.at_symbol("++") || self.at_symbol("--") {
-            let start = self.here();
-            let increment = self.at_symbol("++");
-            self.pos += 1;
-            let operand = self.postfix_expression()?;
-            if assignment_target(&operand).is_none() {
-                self.error_at(operand.span(), "++/-- can only be applied to a variable");
-                return Err(Abort);
-            }
-            let end = operand.span().end;
-            let stmt = increment_statement(operand, increment, start.start, end);
-            return Ok(LambdaBody::Block(vec![stmt]));
-        }
-
-        let expr = self.expression()?;
-
-        // `x -> count++`: a postfix increment used for effect.
-        if let Expr::IncDec {
-            target,
-            increment,
-            span,
-            ..
-        } = &expr
-            && assignment_target(target).is_some()
-        {
-            let stmt = increment_statement((**target).clone(), *increment, span.start, span.end);
-            return Ok(LambdaBody::Block(vec![stmt]));
-        }
-
-        // `n -> total[0] += n`: an assignment, unwrapped to a statement so it
-        // takes the same code path a bare `total[0] += n;` would.
-        if let Expr::Assign {
-            target,
-            op,
-            value,
-            span,
-        } = expr
-        {
-            return Ok(LambdaBody::Block(vec![Stmt::Assign {
-                target,
-                op,
-                value: *value,
-                span,
-            }]));
-        }
-
-        Ok(LambdaBody::Expr(Box::new(expr)))
+        // A statement-EXPRESSION body (`x -> count++`, `n -> total[0] += n`)
+        // is compatible with a void descriptor AND with a value-returning one
+        // (JLS §15.27.2), so only the TARGET can say which it is: a `Consumer`
+        // discards the value and a `Supplier` answers it. Lowering it to a
+        // statement here — which is what happened until the assignment
+        // expression itself worked — decided for the target, and
+        // `Supplier<Integer> s = () -> count++` was "missing return statement".
+        Ok(LambdaBody::Expr(Box::new(self.expression()?)))
     }
 
     /// `cond ? then : else` (right-associative, lowest precedence

@@ -1798,6 +1798,65 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 desugar_collector(&mut args[0], &elem, ctx);
                 return;
             }
+            // The two INFINITE stream sources take their lambdas as a STATIC
+            // call, so there is no receiver whose element could type them:
+            // `Stream.iterate(seed, x -> x + 1)` steps from the seed's own
+            // type, and `Stream.generate(() -> …)` takes a supplier.
+            if matches!(method.as_str(), "iterate" | "generate")
+                && let Some(owner) = receiver.as_deref()
+                && (names_library_class(owner, "Stream")
+                    || names_library_class(owner, "IntStream")
+                    || names_library_class(owner, "LongStream")
+                    || names_library_class(owner, "DoubleStream"))
+            {
+                let object = TypeRef::Named(String::from("Object"));
+                if method == "generate" && args.len() == 1 {
+                    let sam = Sam {
+                        method: String::from("get"),
+                        params: Vec::new(),
+                        ret: object.clone(),
+                    };
+                    if matches!(args[0], Expr::MethodRef { .. }) {
+                        args[0] = method_ref_to_lambda(&args[0], &sam, ctx);
+                    }
+                    args[0] = build_erased_lambda(
+                        &mut args[0],
+                        "__Supplier",
+                        "get",
+                        &object,
+                        &[],
+                        None,
+                        ctx,
+                    );
+                    return;
+                }
+                if method == "iterate" && args.len() == 2 {
+                    let elem = static_type_of(&args[0], ctx).unwrap_or_else(|| object.clone());
+                    desugar_expr(&mut args[0], None, ctx);
+                    // A method REFERENCE first becomes the equivalent lambda,
+                    // as every other library callback does — handing one
+                    // straight to the erased-lambda builder was a compiler
+                    // PANIC, which is the one answer a program may never get.
+                    let sam = Sam {
+                        method: String::from("apply"),
+                        params: vec![elem.clone()],
+                        ret: object.clone(),
+                    };
+                    if matches!(args[1], Expr::MethodRef { .. }) {
+                        args[1] = method_ref_to_lambda(&args[1], &sam, ctx);
+                    }
+                    args[1] = build_erased_lambda(
+                        &mut args[1],
+                        "__UnaryOperator",
+                        "apply",
+                        &object,
+                        &[elem],
+                        None,
+                        ctx,
+                    );
+                    return;
+                }
+            }
             // A stream op with a lambda: the parameter type is the stream's
             // current element, walked back through the pipeline to `.stream()`.
             // (After a `map` the element is erased to `Object`.)
@@ -3725,6 +3784,12 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
                 return Some(elem);
             }
         }
+    }
+    // `Stream.iterate(seed, next)` — every element is a `next` of the seed, so
+    // the seed's type is the element's. `generate`'s supplier answers a type
+    // this pass cannot read, so that one erases.
+    if method == "iterate" && args.len() == 2 && names_library_class(prev.as_ref(), "Stream") {
+        return static_type_of(&args[0], ctx);
     }
     // `Stream.of(...)` — the element is what the arguments agree on, which is
     // all this syntactic pass can see; a mixed or computed list erases to

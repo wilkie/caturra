@@ -1285,7 +1285,7 @@ fn string_method(
                 line_refs.push(JValue::Ref(Some(heap.alloc_string(&current))));
             }
             let stream = heap.alloc(HeapObject::Stream {
-                source: line_refs,
+                source: crate::value::StreamSource::Fixed(line_refs),
                 ops: Vec::new(),
             });
             Ok(Some(JValue::Ref(Some(stream))))
@@ -1313,7 +1313,7 @@ fn string_method(
                 }
             }
             let stream = heap.alloc(HeapObject::Stream {
-                source,
+                source: crate::value::StreamSource::Fixed(source),
                 ops: Vec::new(),
             });
             Ok(Some(JValue::Ref(Some(stream))))
@@ -1322,7 +1322,7 @@ fn string_method(
         ("chars", []) => {
             let source: Vec<JValue> = units.iter().map(|u| JValue::Int(i32::from(*u))).collect();
             let stream = heap.alloc(HeapObject::Stream {
-                source,
+                source: crate::value::StreamSource::Fixed(source),
                 ops: Vec::new(),
             });
             Ok(Some(JValue::Ref(Some(stream))))
@@ -1969,7 +1969,7 @@ fn builder_method(
         ("chars", []) => {
             let source: Vec<JValue> = units.iter().map(|u| JValue::Int(i32::from(*u))).collect();
             let stream = heap.alloc(HeapObject::Stream {
-                source,
+                source: crate::value::StreamSource::Fixed(source),
                 ops: Vec::new(),
             });
             Ok(Some(JValue::Ref(Some(stream))))
@@ -1981,7 +1981,7 @@ fn builder_method(
                 .map(|c| JValue::Int(i32::try_from(u32::from(c)).unwrap_or(i32::MAX)))
                 .collect();
             let stream = heap.alloc(HeapObject::Stream {
-                source,
+                source: crate::value::StreamSource::Fixed(source),
                 ops: Vec::new(),
             });
             Ok(Some(JValue::Ref(Some(stream))))

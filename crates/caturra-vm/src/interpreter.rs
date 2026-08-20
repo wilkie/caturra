@@ -8269,7 +8269,7 @@ impl<'run> Interpreter<'run> {
             let elements = self.materialized_elements(receiver);
             let length = iterated_len_of(&self.heap, receiver);
             let stream = self.heap.alloc(HeapObject::Stream {
-                source: elements,
+                source: crate::value::StreamSource::Fixed(elements),
                 ops: Vec::new(),
             });
             self.stream_origins.insert(stream, (receiver, length));
@@ -8338,13 +8338,19 @@ impl<'run> Interpreter<'run> {
     /// The stored vector still stands for a source with no origin —
     /// `Stream.of(...)`, and the fresh stream `sorted` materializes, whose
     /// order is its own and must not be re-read away.
-    fn stream_pipeline(&mut self, stream: HeapRef) -> (Vec<JValue>, Vec<crate::value::StreamOp>) {
+    fn stream_pipeline(
+        &mut self,
+        stream: HeapRef,
+    ) -> (crate::value::StreamSource, Vec<crate::value::StreamOp>) {
         let (source, ops) = match self.heap.get(stream) {
             Some(crate::value::HeapObject::Stream { source, ops }) => (source.clone(), ops.clone()),
-            _ => return (Vec::new(), Vec::new()),
+            _ => return (crate::value::StreamSource::Fixed(Vec::new()), Vec::new()),
         };
         match self.stream_origins.get(&stream).map(|(origin, _)| *origin) {
-            Some(origin) => (self.materialized_elements(origin), ops),
+            Some(origin) => (
+                crate::value::StreamSource::Fixed(self.materialized_elements(origin)),
+                ops,
+            ),
             None => (source, ops),
         }
     }
@@ -8383,7 +8389,7 @@ impl<'run> Interpreter<'run> {
 
     fn alloc_stream(&mut self, elements: Vec<JValue>) -> JValue {
         JValue::Ref(Some(self.heap.alloc(crate::value::HeapObject::Stream {
-            source: elements,
+            source: crate::value::StreamSource::Fixed(elements),
             ops: Vec::new(),
         })))
     }
@@ -8405,7 +8411,7 @@ impl<'run> Interpreter<'run> {
     /// the lazy model.
     fn stream_drive(
         &mut self,
-        source: &[JValue],
+        source: &crate::value::StreamSource,
         ops: &[crate::value::StreamOp],
         sink: &mut StreamSink,
     ) -> Result<(), VmError> {
@@ -8415,7 +8421,7 @@ impl<'run> Interpreter<'run> {
     fn stream_drive_from(
         &mut self,
         origin: Option<(HeapRef, usize)>,
-        source: &[JValue],
+        source: &crate::value::StreamSource,
         ops: &[crate::value::StreamOp],
         sink: &mut StreamSink,
     ) -> Result<(), VmError> {
@@ -8432,10 +8438,40 @@ impl<'run> Interpreter<'run> {
                 _ => StreamOpState::None,
             })
             .collect();
-        for element in source {
-            if !self.stream_feed(ops, &mut states, sink, 0, *element)? {
-                break;
+        match source {
+            crate::value::StreamSource::Fixed(elements) => {
+                for element in elements {
+                    if !self.stream_feed(ops, &mut states, sink, 0, *element)? {
+                        break;
+                    }
+                }
             }
+            // An INFINITE source: make one element at a time and stop when the
+            // pipeline says it has enough. Nothing bounds it here, exactly as
+            // nothing bounds a JDK's — an unbounded terminal over one runs
+            // until the instruction budget ends the program, which is the
+            // nearest thing this engine has to never returning.
+            crate::value::StreamSource::Iterate { seed, next } => {
+                let mut element = *seed;
+                loop {
+                    if !self.stream_feed(ops, &mut states, sink, 0, element)? {
+                        break;
+                    }
+                    let stepped = self.call_functional(
+                        *next,
+                        "apply",
+                        "(Ljava/lang/Object;)Ljava/lang/Object;",
+                        element,
+                    )?;
+                    element = self.unbox_functional_result(stepped);
+                }
+            }
+            crate::value::StreamSource::Generate { supplier } => loop {
+                let element = self.call_apply_supplier(*supplier)?;
+                if !self.stream_feed(ops, &mut states, sink, 0, element)? {
+                    break;
+                }
+            },
         }
         // FAIL FAST — but AFTER the traversal, exactly where
         // `ArrayList$ArrayListSpliterator.forEachRemaining` checks its
@@ -9288,7 +9324,10 @@ impl<'run> Interpreter<'run> {
         // it run as usual, and so does anything that has already run eagerly.
         if method == "count"
             && args.is_empty()
-            && let Some(crate::value::HeapObject::Stream { ops, .. }) = self.heap.get(receiver)
+            && let Some(crate::value::HeapObject::Stream { source, ops }) = self.heap.get(receiver)
+            // A GENERATED source has no known size — the JDK's shortcut is for
+            // a sized spliterator, and an infinite one is the opposite of that.
+            && matches!(source, crate::value::StreamSource::Fixed(_))
             && ops.iter().all(|op| {
                 matches!(
                     op,
@@ -9308,7 +9347,7 @@ impl<'run> Interpreter<'run> {
             // answers the new size rather than throwing, which is what the
             // late-binding test already pinned.
             let (current, _) = self.stream_pipeline(receiver);
-            let known = current.len();
+            let known = current.fixed().len();
             return Ok(Answered::Value(JValue::Long(
                 i64::try_from(known).unwrap_or(i64::MAX),
             )));
@@ -10736,7 +10775,7 @@ impl<'run> Interpreter<'run> {
                 })
                 .collect();
             let stream = self.heap.alloc(crate::value::HeapObject::Stream {
-                source: ints,
+                source: crate::value::StreamSource::Fixed(ints),
                 ops: Vec::new(),
             });
             frame.stack.push(JValue::Ref(Some(stream)));
@@ -10757,6 +10796,31 @@ impl<'run> Interpreter<'run> {
                 | "DoubleStream"
                 | "java/util/stream/DoubleStream"
         ) {
+            // The two INFINITE sources: their elements do not exist until a
+            // terminal pulls them, so they are recorded as the rule for making
+            // the next one rather than as a vector.
+            let generated = match (method_name, args) {
+                ("iterate", [seed, JValue::Ref(Some(step))]) => {
+                    Some(crate::value::StreamSource::Iterate {
+                        seed: *seed,
+                        next: *step,
+                    })
+                }
+                ("generate", [JValue::Ref(Some(supplier))]) => {
+                    Some(crate::value::StreamSource::Generate {
+                        supplier: *supplier,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(source) = generated {
+                let stream = self.heap.alloc(crate::value::HeapObject::Stream {
+                    source,
+                    ops: Vec::new(),
+                });
+                frame.stack.push(JValue::Ref(Some(stream)));
+                return Ok(None);
+            }
             let source = match (method_name, args) {
                 ("empty", []) => Some(Vec::new()),
                 // `Stream.ofNullable(x)` (Java 9) — one element, or none when
@@ -10786,7 +10850,7 @@ impl<'run> Interpreter<'run> {
             if let Some(source) = source {
                 let length = source.len();
                 let stream = self.heap.alloc(crate::value::HeapObject::Stream {
-                    source,
+                    source: crate::value::StreamSource::Fixed(source),
                     ops: Vec::new(),
                 });
                 // `Arrays.stream(a)` and `Stream.of(a)` are backed BY that

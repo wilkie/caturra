@@ -6660,6 +6660,39 @@ Pinned by `an_entry_set_is_a_collection_like_any_other`, which also runs the
 sources that always worked, since collapsing six readings into one is exactly
 the change that could lose one of them.
 
+### A stream made one element at a time (2026-08-19)
+
+`Stream.iterate(seed, next)` and `Stream.generate(supplier)` are INFINITE: the
+elements do not exist until a terminal pulls them. A source modelled as a
+vector of values cannot express that, so both factories were missing outright —
+and the lambda passed to one had no functional-interface position, which is how
+the gap announced itself.
+
+A stream's source is now a `StreamSource`: a vector, or the rule for making the
+next element. The driver pulls from it one element at a time either way, which
+the lazy pipeline already did, so the short-circuiting operations end an
+infinite traversal exactly as they end a finite one. Nothing bounds an
+unbounded terminal, as nothing bounds a JDK's — it runs until the instruction
+budget ends the program, which is the nearest thing this engine has to never
+returning. Two readings had to learn the difference: `count()`'s shortcut
+(which answers from the source's size without running the pipeline, and a
+generated source HAS no size) and `type_of`'s mirror of the source factories.
+
+Probing it found a compiler PANIC — a method reference handed straight to the
+erased-lambda builder, which every other library callback converts first — and,
+underneath, a parser workaround that had outlived its reason. A lambda body
+that is a statement-EXPRESSION (`x -> count++`, `n -> total[0] += n`) fits a
+void descriptor AND a value-returning one (JLS §15.27.2), so only the target
+can say which it is. The parser decided for it, lowering the body to a
+statement: right for a `Consumer`, and for a `Supplier` it threw the value away
+and left "missing return statement". The lowering was there because an
+assignment EXPRESSION did not compile yet; that was fixed in round 5, and this
+outlived it.
+
+Pinned by `a_stream_can_be_made_one_element_at_a_time` and
+`a_statement_expression_lambda_answers_when_asked` (both directions — the void
+side is what the lowering existed to serve).
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

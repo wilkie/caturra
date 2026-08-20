@@ -274,6 +274,39 @@ impl ClassLayout {
     }
 }
 
+/// Where a stream's elements come from.
+///
+/// Almost always a vector the source already holds. The two `Stream.iterate`
+/// and `Stream.generate` shapes are INFINITE, though — the elements exist only
+/// as a rule for making the next one, and only a short-circuiting operation
+/// downstream ever ends the traversal (as in a JDK, where an unbounded
+/// terminal simply never returns).
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamSource {
+    Fixed(Vec<JValue>),
+    /// `Stream.iterate(seed, next)`: the seed, then `next` of the one before.
+    Iterate {
+        seed: JValue,
+        next: HeapRef,
+    },
+    /// `Stream.generate(supplier)`: a fresh call per element.
+    Generate {
+        supplier: HeapRef,
+    },
+}
+
+impl StreamSource {
+    /// The elements already in hand — empty for a generated source, whose
+    /// elements do not exist until they are pulled.
+    #[must_use]
+    pub fn fixed(&self) -> &[JValue] {
+        match self {
+            StreamSource::Fixed(values) => values,
+            _ => &[],
+        }
+    }
+}
+
 /// An object on the heap.
 ///
 /// Deliberately not `PartialEq`: Java equality is heap-aware (two `Integer`
@@ -420,7 +453,7 @@ pub enum HeapObject {
     /// JDK does, and unlike the previous eager `Vec` that ran every stage in
     /// full. `sorted` is a barrier: it materializes and re-sources.
     Stream {
-        source: Vec<JValue>,
+        source: StreamSource,
         ops: Vec<StreamOp>,
     },
     /// The recipe a `Stream.collect` gathers into, from a `Collectors` factory.

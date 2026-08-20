@@ -31900,6 +31900,101 @@ public class CopyEntrySet {
 "#
 );
 
+// `Stream.iterate(seed, next)` and `Stream.generate(supplier)` are INFINITE:
+// their elements do not exist until a terminal pulls them, which a source
+// modelled as a vector of values cannot express. The source is now a rule for
+// making the next element, and only a short-circuiting operation downstream
+// ends the traversal — as in a JDK, where an unbounded terminal never returns.
+differential_test!(
+    a_stream_can_be_made_one_element_at_a_time,
+    "InfiniteSources",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class InfiniteSources {
+    static int step(int value) {
+        return value + 3;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(Stream.iterate(1, x -> x + 1).limit(4).collect(Collectors.toList()));
+        System.out.println(Stream.iterate(1, x -> x + 1).skip(2).limit(3).collect(Collectors.toList()));
+        System.out.println(Stream.iterate(1, x -> x + 1).map(x -> x * x).limit(3).collect(Collectors.toList()));
+        System.out.println(Stream.iterate(2, x -> x * 2).filter(x -> x > 10).findFirst().get());
+        System.out.println(Stream.iterate(1, x -> x + 1).takeWhile(x -> x < 5).collect(Collectors.toList()));
+        System.out.println(Stream.iterate(1, InfiniteSources::step).limit(3).collect(Collectors.toList()));
+        System.out.println(Stream.iterate("a", s -> s + "b").limit(3).collect(Collectors.toList()));
+        System.out.println(Stream.iterate(1.5, x -> x + 0.5).limit(3).collect(Collectors.toList()));
+        System.out.println(Stream.iterate(1, x -> x + 1).anyMatch(x -> x == 10));
+        System.out.println(Stream.iterate(1, x -> x + 1).limit(6).count());
+        System.out.println(Stream.iterate(5, x -> x - 1).limit(4).sorted().collect(Collectors.toList()));
+        System.out.println(Arrays.toString(Stream.iterate(1, x -> x + 1).limit(3).toArray()));
+        System.out.println(Stream.iterate(1, x -> x + 1).limit(4).reduce(0, (x, y) -> x + y));
+
+        System.out.println(Stream.generate(() -> "z").limit(2).collect(Collectors.toList()));
+        System.out.println(Stream.generate(() -> 5).findFirst().get());
+        int[] counter = {0};
+        System.out.println(Stream.generate(() -> counter[0]++).limit(4).collect(Collectors.toList()));
+
+        Stream<Integer> held = Stream.iterate(1, x -> x + 1);
+        System.out.println(held.limit(2).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// A lambda body that is a statement-EXPRESSION fits a void descriptor AND a
+// value-returning one (JLS §15.27.2), so only the target can say which it is.
+// The parser decided for it — lowering `x -> count++` to a statement, which is
+// right for a `Consumer` and throws the value away for a `Supplier`, where it
+// was "missing return statement". That lowering was a workaround for an
+// assignment expression that did not yet compile, and outlived the fix.
+differential_test!(
+    a_statement_expression_lambda_answers_when_asked,
+    "StatementBody",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class StatementBody {
+    static int field = 0;
+
+    public static void main(String[] args) {
+        int[] counter = {0};
+        List<Integer> values = new ArrayList<Integer>(Arrays.asList(1, 2, 3));
+
+        Supplier<Integer> post = () -> counter[0]++;
+        System.out.println(post.get() + "," + post.get() + "," + counter[0]);
+        Supplier<Integer> pre = () -> ++counter[0];
+        System.out.println(pre.get() + "," + counter[0]);
+        Function<Integer, Integer> assign = x -> counter[0] = x * 2;
+        System.out.println(assign.apply(5) + "," + counter[0]);
+        Predicate<Integer> assigns = x -> (counter[0] = x) > 1;
+        System.out.println(assigns.test(2) + "," + counter[0]);
+        System.out.println(values.stream().map(x -> counter[0]++).collect(Collectors.toList()));
+
+        // The void side, which the lowering existed to serve.
+        counter[0] = 0;
+        values.forEach(x -> counter[0]++);
+        System.out.println(counter[0]);
+        values.forEach(x -> counter[0] += x);
+        System.out.println(counter[0]);
+        Runnable increment = () -> field++;
+        increment.run();
+        increment.run();
+        System.out.println(field);
+        Runnable set = () -> counter[0] = 9;
+        set.run();
+        System.out.println(counter[0]);
+        values.forEach(x -> --counter[0]);
+        System.out.println(counter[0]);
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

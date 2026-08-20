@@ -21100,7 +21100,7 @@ impl BodyGen<'_> {
         let stream_source = match (class, method) {
             (
                 "Stream" | "IntStream" | "LongStream" | "DoubleStream",
-                "of" | "empty" | "concat" | "ofNullable",
+                "of" | "empty" | "concat" | "ofNullable" | "iterate" | "generate",
             ) => !self.table.has_class(class),
             ("Arrays", "stream") => true,
             _ => false,
@@ -22495,6 +22495,7 @@ impl BodyGen<'_> {
     /// that array) and calls the VM, which builds the pipeline — so a stream
     /// can start from something other than a collection.
     #[allow(clippy::option_option)] // call-dispatch return shape
+    #[allow(clippy::too_many_lines)] // one arm per stream-source factory
     fn emit_stream_source(
         &mut self,
         class: &str,
@@ -22535,6 +22536,46 @@ impl BodyGen<'_> {
                 Some(ElemType::Double) => JType::DoubleStream,
                 Some(_) => JType::IntStream,
                 None => JType::Null,
+            }));
+        }
+        // `Stream.iterate(seed, next)` / `Stream.generate(supplier)`: INFINITE
+        // sources, so nothing is packed into an array — the lambdas go to the
+        // VM as they are and it makes elements on demand. The element is the
+        // seed's type for `iterate` (`next` answers another one) and the
+        // supplier's lambda for `generate`, which this pass cannot read, so a
+        // generated stream's element is erased.
+        if matches!(method, "iterate" | "generate") {
+            let mut arg_types = Vec::new();
+            for arg in args {
+                arg_types.push(self.expr(arg));
+            }
+            if !matches!((method, args.len()), ("iterate", 2) | ("generate", 1)) {
+                self.no_suitable_library_method(class, method, args, span);
+                return None;
+            }
+            let elem = if method == "iterate" {
+                arg_types
+                    .first()
+                    .and_then(|ty| collection_elem_of(*ty))
+                    .unwrap_or(object_elem)
+            } else {
+                object_elem
+            };
+            let descriptor = match method {
+                "iterate" => {
+                    "(Ljava/lang/Object;Ljava/util/function/UnaryOperator;)\
+                     Ljava/util/stream/Stream;"
+                }
+                _ => "(Ljava/util/function/Supplier;)Ljava/util/stream/Stream;",
+            };
+            let method_ref = intern_method_ref(self.pool, internal, method, descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(u16::try_from(args.len()).unwrap_or(1));
+            return Some(Some(match primitive_elem {
+                Some(ElemType::Long) => JType::LongStream,
+                Some(ElemType::Double) => JType::DoubleStream,
+                Some(_) => JType::IntStream,
+                None => JType::Stream(elem),
             }));
         }
         if method == "concat" {
@@ -23480,7 +23521,8 @@ impl BodyGen<'_> {
                             match (path[0].as_str(), method.as_str()) {
                                 (
                                     "IntStream",
-                                    "of" | "range" | "rangeClosed" | "concat" | "empty",
+                                    "of" | "range" | "rangeClosed" | "concat" | "empty" | "iterate"
+                                    | "generate",
                                 ) => return JType::IntStream,
                                 (
                                     "LongStream",
@@ -23488,6 +23530,19 @@ impl BodyGen<'_> {
                                 ) => return JType::LongStream,
                                 ("DoubleStream", "of" | "concat" | "empty") => {
                                     return JType::DoubleStream;
+                                }
+                                // `Stream.iterate(seed, next)` is a stream of
+                                // the seed; `generate`'s element is its
+                                // supplier's, which is not readable here.
+                                ("Stream", "iterate") => {
+                                    let elem = args
+                                        .first()
+                                        .and_then(|a| collection_elem_of(self.type_of(a)))
+                                        .unwrap_or(ElemType::Object(self.table.object_id));
+                                    return JType::Stream(elem);
+                                }
+                                ("Stream", "generate") => {
+                                    return JType::Stream(ElemType::Object(self.table.object_id));
                                 }
                                 ("Stream", "of" | "ofNullable") => {
                                     // The JOIN, as the emitter uses — reading
