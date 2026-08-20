@@ -40,6 +40,11 @@ pub(crate) struct Interpreter<'run> {
     /// the `false` branch, so `equals`, `List.contains` and `HashSet` dedup all
     /// silently disagreed with a real JDK.
     class_pool: HashMap<String, HeapRef>,
+    /// The first `Scanner(System.in)` to read anything. A JDK's Scanner
+    /// BUFFERS the stream, so whatever it took is gone: a second one over
+    /// standard input finds nothing — a real trap in a program that makes two,
+    /// and one this engine has to reproduce rather than paper over.
+    stdin_scanner: Option<HeapRef>,
     rng: intrinsics::JavaRng,
     /// Static field values per user class, created on first use.
     statics: HashMap<String, HashMap<String, JValue>>,
@@ -237,6 +242,7 @@ impl<'run> Interpreter<'run> {
             intrinsic_statics: IntrinsicStatics::default(),
             string_pool: HashMap::new(),
             class_pool: HashMap::new(),
+            stdin_scanner: None,
             rng: intrinsics::JavaRng::new(random_seed),
             statics: HashMap::new(),
             field_slots: HashMap::new(),
@@ -13092,6 +13098,27 @@ impl<'run> Interpreter<'run> {
             let mut args = args;
             if matches!(method_name, "printf" | "format") {
                 self.prerender_format_args(&descriptor, &mut args)?;
+            }
+            // A JDK's `Scanner` reads the stream in BLOCKS, so the first one
+            // over standard input takes what a second would have read: the
+            // second finds end of input, however much is left. Marking the
+            // later scanner spent is how that shows here, where each reads a
+            // line at a time.
+            if matches!(
+                self.heap.get(receiver),
+                Some(crate::value::HeapObject::Scanner { stdin: true, .. })
+            ) {
+                match self.stdin_scanner {
+                    None => self.stdin_scanner = Some(receiver),
+                    Some(first) if first != receiver => {
+                        if let Some(crate::value::HeapObject::Scanner { eof, .. }) =
+                            self.heap.get_mut(receiver)
+                        {
+                            *eof = true;
+                        }
+                    }
+                    Some(_) => {}
+                }
             }
             intrinsics::invoke_virtual(
                 &mut self.heap,

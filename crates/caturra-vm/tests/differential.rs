@@ -32516,6 +32516,37 @@ public class PrimitiveOptionalFactories {
 "#
 );
 
+// A JDK's `Scanner` reads standard input in BLOCKS, so the first one takes
+// what a second would have read: a program that makes two finds the second
+// empty, however much input is left. A real trap — and one this engine has to
+// reproduce rather than paper over, since a student who writes it here and
+// runs it on a JDK gets the opposite answer.
+differential_test_stdin!(
+    a_second_scanner_over_standard_input,
+    "TwoScanners",
+    r#"
+import java.util.*;
+
+public class TwoScanners {
+    public static void main(String[] args) {
+        Scanner first = new Scanner(System.in);
+        System.out.println(first.nextInt() + first.nextInt());
+
+        // A scanner over a STRING is its own stream, unaffected.
+        Scanner text = new Scanner("7 8");
+        System.out.println(text.nextInt() + text.nextInt());
+
+        Scanner second = new Scanner(System.in);
+        System.out.println(second.hasNextInt());
+
+        // The first one keeps reading what it buffered.
+        System.out.println(first.hasNextInt() ? first.nextInt() : -1);
+    }
+}
+"#,
+    "1 2 3\n"
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

@@ -48,7 +48,16 @@ fn main() {
     }
 
     let mut vfs = VirtualFileSystem::new();
-    let mut console = BufferedConsole::with_input(Vec::<String>::new());
+    // Standard input, when the program reads any: passed through as lines, the
+    // shape `BufferedConsole` scripts. A probe that compares a Scanner-driven
+    // program needs the same input on both engines.
+    let mut stdin_lines: Vec<String> = Vec::new();
+    if args.next().as_deref() == Some("--stdin") {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).expect("read stdin");
+        stdin_lines = text.lines().map(ToOwned::to_owned).collect();
+    }
+    let mut console = BufferedConsole::with_input(stdin_lines);
     let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
     for class in compilation.classes {
         if let Err(err) = vm.load_class(class.class_file) {

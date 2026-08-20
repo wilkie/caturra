@@ -6871,6 +6871,30 @@ divergences came back — this, and a `switch` on a null String with only a
 Pinned by `a_hash_cursor_stops_where_its_pointer_stopped` (including the
 neighbours that must still throw) and `a_switch_on_a_null_string`.
 
+### A second Scanner over standard input (2026-08-20)
+
+A JDK's `Scanner` reads its source in BLOCKS, so the first one over
+`System.in` takes what a second would have read: a program that makes two finds
+the second at end of input, however much is left. caturra gave the second
+scanner the rest of the stream, which is the friendlier answer and the wrong
+one — a student who writes this here and runs it on a JDK gets the opposite
+behaviour, which is the failure this engine exists to prevent.
+
+The stream is a shared resource, and the engine already modelled one half of
+that (`close()` on a `System.in` scanner closes the stream, so every later
+scanner reads nothing). The other half is buffering: the first scanner to read
+OWNS standard input, and a later one is spent from the start. Each still reads
+a line at a time, which is what an interactive console can serve — draining the
+stream at the first read would block a program that prompts.
+
+Found by a sweep of 26 Scanner-driven programs — the `nextInt`-then-`nextLine`
+trap, blank lines, tabs, `\r\n`, a missing final newline, `hasNextInt` over
+non-numbers, an empty stream, the two exception paths, a string scanner, a
+closed scanner. Only this and one documented refusal (`useDelimiter`) differed.
+The probe harness learned to pass standard input for it.
+
+Pinned by `a_second_scanner_over_standard_input`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
