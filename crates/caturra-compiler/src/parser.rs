@@ -4125,6 +4125,11 @@ impl Parser<'_> {
         // Optional generic arguments: `new ArrayList<Integer>()` or the
         // diamond `new ArrayList<>()`.
         let mut type_args = Vec::new();
+        // Whether every argument was written as the UNBOUNDED `?`, which is
+        // the one shape that leaves an ARRAY of the type reifiable (JLS §4.7).
+        // The arguments themselves flatten to `Object` here, so the
+        // distinction has to be kept beside them.
+        let mut all_unbounded = true;
         if matches!(base, TypeRef::Named(_)) && self.at_symbol("<") {
             self.pos += 1;
             if !self.at_symbol(">") {
@@ -4137,9 +4142,11 @@ impl Parser<'_> {
                         ) {
                             self.pos += 1;
                             let _ = self.type_ref()?;
+                            all_unbounded = false;
                         }
                         type_args.push(TypeRef::Named(String::from("Object")));
                     } else {
+                        all_unbounded = false;
                         type_args.push(self.type_ref()?);
                     }
                     if !self.eat_symbol(",") {
@@ -4177,6 +4184,17 @@ impl Parser<'_> {
         // so keep going into the array dimensions.
         if !type_args.is_empty() && !self.at_symbol("[") {
             self.error_at(start, "expected '(' after the generic type");
+            return Err(Abort);
+        }
+        // JLS §15.10.1: the component type of a created array must be
+        // REIFIABLE, and a PARAMETERIZED type is not — `new List<String>[2]`
+        // is javac's "generic array creation", the same error `new T[n]`
+        // gets. An unbounded wildcard IS reifiable (`new List<?>[2]` is
+        // legal), and so is the raw `new List[2]`. Reported here because the
+        // arguments erase on the way out of this function, and codegen — which
+        // reports the type-variable half — never sees them.
+        if !type_args.is_empty() && !all_unbounded {
+            self.error_at(start, "generic array creation");
             return Err(Abort);
         }
 

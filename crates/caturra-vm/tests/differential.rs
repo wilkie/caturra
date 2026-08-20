@@ -32198,6 +32198,72 @@ public class ConstructedElements {
 "#
 );
 
+// JLS §15.10.1: the component type of a created array must be REIFIABLE. Two
+// shapes are not — a type VARIABLE and a PARAMETERIZED type — and only the
+// first was refused, so `new List<String>[2]` compiled here and is javac's
+// "generic array creation". An array whose store check cannot exist is the
+// whole reason the rule is there.
+differential_reject!(
+    an_array_of_a_parameterized_type,
+    "GenericArray",
+    r"
+import java.util.*;
+
+public class GenericArray {
+    public static void main(String[] args) {
+        List<String>[] rows = new List<String>[2];
+        System.out.println(rows.length);
+    }
+}
+"
+);
+
+differential_reject!(
+    an_array_of_a_bounded_wildcard,
+    "BoundedWildcardArray",
+    r"
+import java.util.*;
+
+public class BoundedWildcardArray {
+    public static void main(String[] args) {
+        List<? extends Number>[] rows = new List<? extends Number>[2];
+        System.out.println(rows.length);
+    }
+}
+"
+);
+
+// The reifiable neighbours the rule must leave alone: the UNBOUNDED wildcard
+// (which promises nothing a store could violate), the raw type, and the cast
+// every generic-array idiom is written with.
+differential_test!(
+    the_arrays_of_generics_that_are_legal,
+    "ReifiableArrays",
+    r#"
+import java.util.*;
+
+public class ReifiableArrays {
+    public static void main(String[] args) {
+        List<?>[] any = new List<?>[2];
+        System.out.println(any.length);
+        Map<?, ?>[] pairs = new Map<?, ?>[1];
+        System.out.println(pairs.length);
+        List[] raw = new List[2];
+        System.out.println(raw.length);
+        @SuppressWarnings("unchecked")
+        List<String>[] cast = (List<String>[]) new List[2];
+        cast[0] = new ArrayList<String>();
+        cast[0].add("a");
+        System.out.println(cast[0]);
+        ArrayList<String>[] rawer = new ArrayList[2];
+        System.out.println(rawer.length);
+        String[] plain = new String[] {"a"};
+        System.out.println(plain[0]);
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

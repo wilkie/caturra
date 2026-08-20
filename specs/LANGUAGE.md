@@ -6771,6 +6771,33 @@ the earlier rounds built carefully — and this was the twenty-sixth.
 Pinned by `a_constructed_element_says_what_it_is`, which also runs the shapes
 that must STAY erased (a builder, a diamond, a mixed pair with no join).
 
+### An array of a parameterized type (2026-08-20)
+
+`new List<String>[2]` compiled. JLS §15.10.1 requires a created array's
+component type to be REIFIABLE, and two shapes are not: a type VARIABLE and a
+parameterized type. Only the first was refused — with javac's own wording,
+"generic array creation" — so the rule was half there, and the half that was
+missing is the one a program is likely to write.
+
+The check lives in the PARSER, which is the last place the type ARGUMENTS
+exist: a `new` expression flattens them (`new ArrayList<Integer>()` needs only
+the raw class), so codegen — which reports the type-variable half from a marker
+the parser leaves behind — never sees them. What it needs is not the arguments
+themselves but whether every one was written as the unbounded `?`, since that
+is the one form that leaves the array reifiable; the flag is carried beside
+them.
+
+Found by a sweep of 46 programs javac REJECTS, one per rule — type mismatches,
+flow, access, overriding, exceptions, lambdas, switch labels — asking only
+whether caturra rejects them too. Forty-five did; this was the exception, and
+it is the dangerous direction: a program that compiles here and does not
+compile on a JDK.
+
+Pinned by `an_array_of_a_parameterized_type`, `an_array_of_a_bounded_wildcard`
+and `the_arrays_of_generics_that_are_legal` (the reifiable neighbours the rule
+must leave alone — an unbounded wildcard, a raw type, and the cast every
+generic-array idiom is written with).
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

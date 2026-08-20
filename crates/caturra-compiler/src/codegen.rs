@@ -24935,7 +24935,9 @@ impl BodyGen<'_> {
         };
         // JLS §15.10.1: an array of a TYPE VARIABLE cannot be created — its
         // component type is not reifiable. The parser leaves the variable
-        // marked so it can be told apart from its erasure here.
+        // marked so it can be told apart from its erasure here. (A
+        // PARAMETERIZED element is refused in the parser, which is the last
+        // place its type ARGUMENTS still exist.)
         if let TypeRef::Named(name) = elem
             && crate::ast::wildcard_parts(name).is_some()
         {
