@@ -141,11 +141,6 @@ fn javac_in(dir: &std::path::Path, java_file: &std::path::Path) -> std::process:
     attempt
 }
 
-/// Run `source` through javac+java, returning stdout.
-fn run_with_jdk(class_name: &str, source: &str) -> String {
-    run_with_jdk_stdin(class_name, source, "")
-}
-
 /// Run through the JDK with piped standard input.
 fn run_with_jdk_stdin(class_name: &str, source: &str, stdin: &str) -> String {
     // Two tests may legitimately declare the same class name; give each its
@@ -207,11 +202,6 @@ fn run_with_jdk_stdin(class_name: &str, source: &str, stdin: &str) -> String {
         String::from_utf8_lossy(&run.stderr)
     );
     String::from_utf8_lossy(&run.stdout).into_owned()
-}
-
-/// Run `source` through the caturra engine, returning stdout.
-fn run_with_caturra(class_name: &str, source: &str) -> String {
-    run_with_caturra_stdin(class_name, source, "")
 }
 
 /// Run through caturra with scripted standard input.
