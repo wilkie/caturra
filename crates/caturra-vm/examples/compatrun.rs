@@ -48,6 +48,29 @@ fn main() {
     }
 
     let mut vfs = VirtualFileSystem::new();
+    // Any file beside the program is staged into the virtual filesystem under
+    // its bare name, so a probe that reads `data.txt` finds the same bytes the
+    // JDK reads from the directory it ran in.
+    let dir = match std::path::Path::new(&path).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let is_source = entry.path().extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("java") || ext.eq_ignore_ascii_case("class")
+                });
+                if is_source {
+                    continue;
+                }
+                if let Ok(bytes) = std::fs::read(entry.path()) {
+                    let _ = vfs.write_file(&name, bytes);
+                }
+            }
+        }
+    }
     // Standard input, when the program reads any: passed through as lines, the
     // shape `BufferedConsole` scripts. A probe that compares a Scanner-driven
     // program needs the same input on both engines.

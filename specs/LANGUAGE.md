@@ -6939,6 +6939,38 @@ The output ends with an UNEXPLAINED count, which is now zero on both halves and
 is the number a future sweep should watch: a real regression shows up there
 rather than in a total that has to be remembered.
 
+### Files a program keeps beside itself (2026-08-20)
+
+A sweep of 20 file-reading and file-writing programs — a `Scanner` over a
+`File`, `BufferedReader`, the `Files` helpers, `PrintWriter`, `FileWriter`,
+existence and length, a missing file — found four gaps, one of them the kind
+that changes what a program DOES rather than whether it compiles.
+
+**`catch (IOException e)` did not catch a missing file.** The
+`java.nio.file` failures were not in the throwable table at all, so a
+`NoSuchFileException` was caught by nothing: a program that handles a missing
+file died instead of recovering. The table now carries
+`FileSystemException` and its four subclasses under `IOException`, which is
+where the JDK puts them, so `catch (IOException)`, `catch (Exception)` and a
+multi-catch naming `NoSuchFileException` all behave.
+
+**`FileWriter` was refused outright** though the engine already had the writer
+it needs — what was missing is the APPEND flag, which is the reason a program
+reaches for a `FileWriter` over a `PrintWriter`. Both forms work now, over a
+path or a `File`, and appending to a file that does not exist creates it.
+
+**`Files.lines(path)`** had no stream form of `readAllLines`, in either engine
+or in the element the lambda after it needs.
+
+The probe harness learned to stage data files (as did the differential suite,
+which now clears a file test's directory first — it is keyed by the source, so
+an APPEND test accumulated across runs and the JDK answered differently each
+time. The re-run check added earlier caught that as "the reference gave two
+different answers", which is exactly what it is for).
+
+Pinned by `a_program_that_reads_and_writes_files` and
+`a_missing_file_is_an_io_exception`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

@@ -191,6 +191,32 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
     ),
     ("java/io/IOException", "java/lang/Exception"),
     ("java/io/FileNotFoundException", "java/io/IOException"),
+    ("java/io/UncheckedIOException", "java/lang/RuntimeException"),
+    // The `java.nio.file` failures a program can catch. They are IOExceptions,
+    // and were not in this table at all: `Files.readAllLines` on a missing file
+    // threw a `NoSuchFileException` that `catch (IOException e)` did not catch,
+    // so a program that handles a missing file died instead.
+    ("java/nio/file/FileSystemException", "java/io/IOException"),
+    (
+        "java/nio/file/NoSuchFileException",
+        "java/nio/file/FileSystemException",
+    ),
+    (
+        "java/nio/file/FileAlreadyExistsException",
+        "java/nio/file/FileSystemException",
+    ),
+    (
+        "java/nio/file/DirectoryNotEmptyException",
+        "java/nio/file/FileSystemException",
+    ),
+    (
+        "java/nio/file/AccessDeniedException",
+        "java/nio/file/FileSystemException",
+    ),
+    (
+        "java/nio/file/InvalidPathException",
+        "java/lang/IllegalArgumentException",
+    ),
 ];
 
 /// Whether `name` (internal form) is a known throwable class.

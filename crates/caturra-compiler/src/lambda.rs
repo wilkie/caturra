@@ -3779,6 +3779,11 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     if method == "stream" && args.is_empty() {
         return list_elem_type(prev, ctx);
     }
+    // `Files.lines(path)` — a stream of the file's lines, like `"text".lines()`
+    // below. Without this a lambda over one had no element and was refused.
+    if method == "lines" && args.len() == 1 && names_library_class(prev.as_ref(), "Files") {
+        return Some(TypeRef::Named(String::from("String")));
+    }
     // `"text".lines()` — a Stream<String>; `chars()` — an IntStream.
     if method == "lines" && args.is_empty() {
         return Some(TypeRef::Named(String::from("String")));

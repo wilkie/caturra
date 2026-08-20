@@ -141,8 +141,15 @@ fn javac_in(dir: &std::path::Path, java_file: &std::path::Path) -> std::process:
     attempt
 }
 
-/// Run through the JDK with piped standard input.
-fn run_with_jdk_stdin(class_name: &str, source: &str, stdin: &str) -> String {
+/// The same, with data files beside the program — what a program that READS a
+/// file needs, on both engines: the JDK reads them from the directory it runs
+/// in, and caturra from the virtual filesystem.
+fn run_with_jdk_files(
+    class_name: &str,
+    source: &str,
+    stdin: &str,
+    files: &[(&str, &str)],
+) -> String {
     // Two tests may legitimately declare the same class name; give each its
     // own directory, or javac's output races between them.
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -156,6 +163,21 @@ fn run_with_jdk_stdin(class_name: &str, source: &str, stdin: &str) -> String {
     file.write_all(source.as_bytes()).expect("write source");
     drop(file);
 
+    if !files.is_empty() {
+        // A file-based program WRITES, and this directory is reused between
+        // runs (it is keyed by the source, not by the run), so whatever the
+        // last run left would still be there — an append test accumulated
+        // across runs and the JDK answered differently each time. Only the
+        // program and its staged data may be present.
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if entry.path() != java_file {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        for (name, contents) in files {
+            std::fs::write(dir.join(name), contents).expect("write data file");
+        }
+    }
     let compile = javac_in(&dir, &java_file);
     assert!(
         compile.status.success(),
@@ -204,8 +226,12 @@ fn run_with_jdk_stdin(class_name: &str, source: &str, stdin: &str) -> String {
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
-/// Run through caturra with scripted standard input.
-fn run_with_caturra_stdin(class_name: &str, source: &str, stdin: &str) -> String {
+fn run_with_caturra_files(
+    class_name: &str,
+    source: &str,
+    stdin: &str,
+    files: &[(&str, &str)],
+) -> String {
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
         path: format!("{class_name}.java"),
         text: source.to_owned(),
@@ -217,6 +243,10 @@ fn run_with_caturra_stdin(class_name: &str, source: &str, stdin: &str) -> String
     );
 
     let mut vfs = VirtualFileSystem::new();
+    for (name, contents) in files {
+        vfs.write_file(name, contents.as_bytes().to_vec())
+            .expect("stage data file");
+    }
     let mut console = BufferedConsole::with_input(stdin.lines().map(str::to_owned));
     let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
     for class in compilation.classes {
@@ -236,8 +266,17 @@ fn assert_same_output(class_name: &str, source: &str) {
 }
 
 fn assert_same_output_with_stdin(class_name: &str, source: &str, stdin: &str) {
-    let expected = run_with_jdk_stdin(class_name, source, stdin);
-    let actual = run_with_caturra_stdin(class_name, source, stdin);
+    assert_same_output_with_files(class_name, source, stdin, &[]);
+}
+
+fn assert_same_output_with_files(
+    class_name: &str,
+    source: &str,
+    stdin: &str,
+    files: &[(&str, &str)],
+) {
+    let expected = run_with_jdk_files(class_name, source, stdin, files);
+    let actual = run_with_caturra_files(class_name, source, stdin, files);
     if actual == expected {
         return;
     }
@@ -246,7 +285,7 @@ fn assert_same_output_with_stdin(class_name: &str, source: &str, stdin: &str) {
     // ITSELF, the first run was contention (six hundred JVMs compete for this
     // machine) and blaming the program under test would send someone hunting a
     // divergence that never happened.
-    let again = run_with_jdk_stdin(class_name, source, stdin);
+    let again = run_with_jdk_files(class_name, source, stdin, files);
     assert_eq!(
         expected, again,
         "the reference JDK gave two different answers for {class_name}, so the \
@@ -341,6 +380,20 @@ macro_rules! looser_than_javac {
                  in LANGUAGE.md",
                 $class
             );
+        }
+    };
+}
+
+/// The same, for a program that reads a data FILE beside it.
+macro_rules! differential_test_files {
+    ($name:ident, $class:literal, $source:literal, $files:expr) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            assert_same_output_with_files($class, $source, "", $files);
         }
     };
 }
@@ -32619,6 +32672,113 @@ public class ScannerDelimiter {
         // The default is unchanged: any run of whitespace, trimmed at both ends.
         Scanner plain = new Scanner("  a  b  ");
         System.out.println("[" + plain.next() + "][" + plain.next() + "]" + plain.hasNext());
+    }
+}
+"#
+);
+
+// Reading and writing FILES, the way a program that keeps data beside itself
+// does. `FileWriter` was refused outright though the engine already had the
+// writer it needs — what was missing is the APPEND flag, which is the reason a
+// program reaches for `FileWriter` over `PrintWriter` in the first place. And
+// `Files.lines` had no stream form of `readAllLines`.
+differential_test_files!(
+    a_program_that_reads_and_writes_files,
+    "FileRoundTrip",
+    r#"
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.*;
+
+public class FileRoundTrip {
+    public static void main(String[] args) throws Exception {
+        Scanner lines = new Scanner(new File("data.txt"));
+        while (lines.hasNextLine()) {
+            System.out.println("[" + lines.nextLine() + "]");
+        }
+        System.out.println(new File("data.txt").exists() + " " + new File("nope.txt").exists());
+        System.out.println(Files.readAllLines(Paths.get("data.txt")));
+        System.out.println(Files.lines(Paths.get("data.txt")).count());
+        System.out.println(Files.lines(Paths.get("data.txt"))
+            .filter(line -> line.length() > 3)
+            .collect(Collectors.toList()));
+        System.out.println(Files.lines(Paths.get("data.txt"))
+            .map(line -> line.toUpperCase())
+            .collect(Collectors.joining(",")));
+
+        FileWriter writer = new FileWriter("out.txt");
+        writer.write("first");
+        writer.close();
+        FileWriter appender = new FileWriter("out.txt", true);
+        appender.write("-second");
+        appender.close();
+        System.out.println(Files.readString(Path.of("out.txt")));
+
+        FileWriter truncating = new FileWriter(new File("out.txt"));
+        truncating.write("replaced");
+        truncating.close();
+        System.out.println(Files.readString(Path.of("out.txt")));
+
+        // Appending to a file that does not exist yet creates it.
+        FileWriter fresh = new FileWriter("fresh.txt", true);
+        fresh.write("new");
+        fresh.close();
+        System.out.println(Files.readString(Path.of("fresh.txt")));
+
+        PrintWriter printer = new PrintWriter("printed.txt");
+        printer.println("l1");
+        printer.println("l2");
+        printer.close();
+        System.out.println(Files.readAllLines(Paths.get("printed.txt")).size());
+    }
+}
+"#,
+    &[("data.txt", "one\ntwo\nthree\n")]
+);
+
+// The `java.nio.file` failures were not in the throwable table at all, so a
+// `NoSuchFileException` was caught by nothing: `catch (IOException e)` around a
+// missing file did not run, and the program died where a JDK's recovers.
+differential_test!(
+    a_missing_file_is_an_io_exception,
+    "MissingFile",
+    r#"
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+
+public class MissingFile {
+    public static void main(String[] args) {
+        try {
+            Files.readAllLines(Paths.get("gone.txt"));
+        } catch (IOException e) {
+            System.out.println("io " + e.getClass().getSimpleName());
+        }
+        try {
+            Files.readString(Path.of("gone.txt"));
+        } catch (Exception e) {
+            System.out.println("any");
+        }
+        try {
+            Files.readAllLines(Paths.get("gone.txt"));
+        } catch (NoSuchFileException | IllegalArgumentException e) {
+            System.out.println("specific");
+        } catch (IOException e) {
+            System.out.println("general");
+        }
+        try {
+            new Scanner(new File("gone.txt"));
+        } catch (IOException e) {
+            System.out.println("scanner " + e.getClass().getSimpleName());
+        }
+        try {
+            Files.readString(Path.of("gone.txt"));
+        } catch (IOException e) {
+            System.out.print("caught ");
+        } finally {
+            System.out.println("finally");
+        }
     }
 }
 "#

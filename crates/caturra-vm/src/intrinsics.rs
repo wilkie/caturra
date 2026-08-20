@@ -449,6 +449,30 @@ pub fn invoke_special(
             set_exception_cause(heap, receiver, class, message, cause);
             Ok(())
         }
+        // `new FileWriter(path, append)` / `(File, append)`: the writer keeps
+        // what the file already holds when the flag is set, and truncates when
+        // it is not — the same two behaviours a JDK's FileWriter has.
+        ("<init>", "(Ljava/lang/String;Z)V" | "(Ljava/io/File;Z)V") => {
+            let target = if descriptor.starts_with("(Ljava/io/File;") {
+                file_arg(heap, &args[0])?
+            } else {
+                match &args[0] {
+                    JValue::Ref(Some(reference)) => {
+                        heap.string_text(*reference).unwrap_or_default()
+                    }
+                    _ => return Err(throw("java.lang.NullPointerException")),
+                }
+            };
+            let appends = matches!(args.get(1), Some(JValue::Int(flag)) if *flag != 0);
+            if !appends || vfs.read_file(&target).is_err() {
+                vfs.write_file(&target, Vec::new())
+                    .map_err(|e| throw(format!("java.io.FileNotFoundException: {e}")))?;
+            }
+            if let Some(HeapObject::Writer { path }) = heap.get_mut(receiver) {
+                *path = target;
+            }
+            Ok(())
+        }
         ("<init>", "(Ljava/io/File;)V") => {
             let target = file_arg(heap, &args[0])?;
             match heap.get(receiver) {
@@ -5228,6 +5252,21 @@ fn files_static(
             Ok(Some(JValue::Ref(Some(
                 heap.alloc(HeapObject::ArrayList(lines)),
             ))))
+        }
+        // `Files.lines(path)` is `readAllLines` as a stream. A JDK's is lazy and
+        // closeable; this one reads at once, which a program that counts,
+        // filters or collects the lines cannot tell apart.
+        "lines" => {
+            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            let text = String::from_utf8_lossy(&content).into_owned();
+            let lines: Vec<JValue> = text
+                .lines()
+                .map(|line| JValue::Ref(Some(heap.alloc_string(line))))
+                .collect();
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Stream {
+                source: crate::value::StreamSource::Fixed(lines),
+                ops: Vec::new(),
+            })))))
         }
         "writeString" => {
             let text = arg_string(heap, &args[1])?;

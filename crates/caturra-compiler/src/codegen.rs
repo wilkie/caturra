@@ -2884,7 +2884,7 @@ impl MethodTable {
                     "StringBuilder" => Some(JType::StringBuilder),
                     "CharSequence" => Some(JType::CharSequence),
                     "File" => Some(JType::File),
-                    "PrintWriter" => Some(JType::Writer),
+                    "PrintWriter" | "FileWriter" => Some(JType::Writer),
                     "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader" => {
                         Some(JType::Reader)
                     }
@@ -7167,7 +7167,8 @@ fn method_descriptor(
                     out.push_str("Ljava/util/Scanner;");
                 } else if simple == "File" && !table.has_class(simple) {
                     out.push_str("Ljava/io/File;");
-                } else if simple == "PrintWriter" && !table.has_class(simple) {
+                } else if matches!(simple, "PrintWriter" | "FileWriter") && !table.has_class(simple)
+                {
                     out.push_str("Ljava/io/PrintWriter;");
                 } else if matches!(
                     simple,
@@ -17038,7 +17039,10 @@ impl BodyGen<'_> {
                 "ArrayDeque" => return self.new_array_deque(type_args, args, span),
                 "PriorityQueue" => return self.new_priority_queue(type_args, args, span),
                 "File" => return self.new_file(args, span),
-                "PrintWriter" => return self.new_writer(args, span),
+                // A `FileWriter` is the same thing this engine calls a
+                // writer, plus the APPEND flag: `new FileWriter(path, true)`
+                // adds to what is there instead of truncating.
+                "PrintWriter" | "FileWriter" => return self.new_writer(args, span),
                 "Integer" | "Double" | "Long" | "Float" | "Short" | "Byte" | "Character"
                 | "Boolean"
                     if wrapper_elem(class_name).is_some() =>
@@ -17581,22 +17585,40 @@ impl BodyGen<'_> {
         let writer_class = intern_class(self.pool, "java/io/PrintWriter");
         self.code.push_op_u16(op::NEW, writer_class, 1);
         self.code.push_op(op::DUP, 1);
-        if let [target] = args {
+        if let [target] | [target, _] = args {
             let target_ty = self.expr(target);
             if target_ty == JType::Error {
                 self.error_bail(span, "writer target");
                 return JType::Error;
             }
-            let descriptor = match target_ty {
-                JType::Str => Some("(Ljava/lang/String;)V"),
-                JType::File => Some("(Ljava/io/File;)V"),
+            // `new FileWriter(path, append)` — the second argument says
+            // whether to keep what the file already holds.
+            let appends = match args {
+                [_, flag] => {
+                    let flag_ty = self.expr(flag);
+                    if flag_ty != JType::Boolean {
+                        self.error(
+                            span,
+                            "the second argument of a FileWriter is the append flag",
+                        );
+                        return JType::Error;
+                    }
+                    true
+                }
+                _ => false,
+            };
+            let descriptor = match (target_ty, appends) {
+                (JType::Str, false) => Some("(Ljava/lang/String;)V"),
+                (JType::Str, true) => Some("(Ljava/lang/String;Z)V"),
+                (JType::File, false) => Some("(Ljava/io/File;)V"),
+                (JType::File, true) => Some("(Ljava/io/File;Z)V"),
                 _ => None,
             };
             if let Some(descriptor) = descriptor {
                 let init_ref =
                     intern_method_ref(self.pool, "java/io/PrintWriter", "<init>", descriptor);
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
-                self.code.drop_stack(2);
+                self.code.drop_stack(if appends { 3 } else { 2 });
                 return JType::Writer;
             }
         }
@@ -19770,6 +19792,16 @@ impl BodyGen<'_> {
                 &[(JType::Path, "Ljava/nio/file/Path;")],
                 "Ljava/util/List;",
                 Some(JType::List(ElemType::Str)),
+            )),
+            // `Files.lines(path)` is `readAllLines` as a STREAM. A JDK's is
+            // lazy and closeable; this one reads the file at once, which is
+            // observable only in when the read happens — and a program that
+            // counts or collects the lines cannot tell.
+            ("Files", "lines") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                "Ljava/util/stream/Stream;",
+                Some(JType::Stream(ElemType::Str)),
             )),
             ("Files", "write") => Some((
                 "java/nio/file/Files",
@@ -24118,6 +24150,7 @@ impl BodyGen<'_> {
                         }
                         ("Files", "readString") => return JType::Str,
                         ("Files", "readAllLines") => return JType::List(ElemType::Str),
+                        ("Files", "lines") => return JType::Stream(ElemType::Str),
                         ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => {
                             return JType::Boolean;
                         }
