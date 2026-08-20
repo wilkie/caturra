@@ -6742,6 +6742,30 @@ the range, so the one legal modification during iteration re-agrees the view
 instead of invalidating it. Pinned by
 `a_view_meets_the_rest_of_the_collection_surface`.
 
+### A constructed element says what it is (2026-08-20)
+
+`Stream.of(new Point(1, 2)).map(p -> p.x)` had no element type: the pass read
+only LITERAL arguments, so the lambda after it saw `Object` — while the same
+stream taken from a declared `List<Point>` had the element all along. A `new`
+expression says its type outright, which is all this needed.
+
+Two of them can say two types, and the pass had no class hierarchy to join them
+with: `Stream.of(new Circle(), new Square()).map(s -> s.area())` stayed
+`Object` even after codegen learned that join (see **The element a literal
+collection joins at**). The pass carries each class's DIRECT supertypes now and
+reads them nearest-first, so a class's own `extends`/`implements` clause wins
+over what those extend — the same answer codegen gives, from the same shape of
+walk.
+
+Found by probing what a collection does with a USER class: `Comparable`,
+`equals`, `hashCode` and `toString` through every container, sorted, hashed,
+deduplicated, printed and compared. Twenty-five of twenty-six shapes were
+already right — the surface where user code is called FROM native code is one
+the earlier rounds built carefully — and this was the twenty-sixth.
+
+Pinned by `a_constructed_element_says_what_it_is`, which also runs the shapes
+that must STAY erased (a builder, a diamond, a mixed pair with no join).
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

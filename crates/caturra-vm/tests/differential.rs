@@ -32108,6 +32108,87 @@ public class ViewMeetsAll {
 "#
 );
 
+// A stream written over CONSTRUCTED elements — `Stream.of(new Point(1, 2))` —
+// had no element type: the pass read only LITERAL arguments, so the lambda
+// after it saw `Object`, while the same stream taken from a declared
+// `List<Point>` had the element all along. A `new` says its type outright.
+//
+// Two of them say two types, and the pass had no class hierarchy to join them
+// with (`Stream.of(new Circle(), new Square())` stayed `Object` even after
+// codegen learned the join). It has the direct supertypes now, and reads them
+// the same way — nearest first, so a class's own `extends`/`implements` clause
+// wins over what those extend.
+differential_test!(
+    a_constructed_element_says_what_it_is,
+    "ConstructedElements",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class ConstructedElements {
+    static class Point {
+        int x;
+        String tag;
+
+        Point(int x, String tag) {
+            this.x = x;
+            this.tag = tag;
+        }
+
+        int get() {
+            return x;
+        }
+
+        public String toString() {
+            return tag + x;
+        }
+    }
+
+    static class Origin extends Point {
+        Origin() {
+            super(0, "o");
+        }
+    }
+
+    interface Shape {
+        double area();
+    }
+
+    static class Circle implements Shape {
+        public double area() {
+            return 3.0;
+        }
+    }
+
+    static class Square implements Shape {
+        public double area() {
+            return 4.0;
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(Stream.of(new Point(1, "a")).map(p -> p.x).collect(Collectors.toList()));
+        System.out.println(Stream.of(new Point(3, "c")).map(p -> p.get()).collect(Collectors.toList()));
+        System.out.println(Stream.of(new Point(1, "a"), new Point(2, "b")).filter(p -> p.x > 1).count());
+        System.out.println(Stream.of(new Point(1, "a")).collect(Collectors.groupingBy(p -> p.x)).size());
+        System.out.println(Stream.of(new Point(1, "a")).collect(Collectors.toMap(p -> p.x, p -> p.tag)));
+        Arrays.asList(new Point(1, "a")).forEach(p -> System.out.println(p.x));
+        List.of(new Point(1, "a")).forEach(p -> System.out.println(p.tag));
+
+        // Two types join at what they have in common.
+        System.out.println(Stream.of(new Point(1, "a"), new Origin()).map(p -> p.x).collect(Collectors.toList()));
+        System.out.println(Stream.of(new Circle(), new Square()).map(s -> s.area()).collect(Collectors.toList()));
+        System.out.println(Arrays.asList(new Circle(), new Square()).size());
+
+        // And the shapes that must stay erased.
+        System.out.println(Arrays.asList(new Point(1, "a"), "x").size());
+        System.out.println(Stream.of(new StringBuilder("ab")).map(b -> b.length()).collect(Collectors.toList()));
+        System.out.println(Stream.of(new HashMap<String, Integer>()).map(m -> m.size()).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

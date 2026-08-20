@@ -45,6 +45,17 @@ pub fn desugar_lambdas(
     let static_methods = static_method_names(units);
     let class_names = class_name_set(units);
     let shapes = method_shapes(units);
+    // Each class's DIRECT supertypes, for joining two elements at what they
+    // have in common — the same reading codegen does for a ternary's branches.
+    let supers: HashMap<String, Vec<String>> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .map(|class| {
+            let mut parents: Vec<String> = class.superclass.iter().cloned().collect();
+            parents.extend(class.interfaces.iter().cloned());
+            (class.name.clone(), parents)
+        })
+        .collect();
     let enums = enum_names(units);
     let field_types: HashMap<(String, String), TypeRef> = units
         .iter()
@@ -106,6 +117,7 @@ pub fn desugar_lambdas(
                     current_class: Some(class_name.as_str()),
                     bridges: &mut bridges,
                     shapes: &shapes,
+                    supers: &supers,
                     enums: &enums,
                     class_prefix: crate::LAMBDA_CLASS_PREFIX,
                     path,
@@ -133,6 +145,7 @@ pub fn desugar_lambdas(
                         current_class: Some(class_name.as_str()),
                         bridges: &mut bridges,
                         shapes: &shapes,
+                        supers: &supers,
                         enums: &enums,
                         class_prefix: crate::LAMBDA_CLASS_PREFIX,
                         path,
@@ -181,6 +194,8 @@ struct Ctx<'a> {
     current_class: Option<&'a str>,
     /// Declared methods per class, for method-reference validation.
     shapes: &'a HashMap<String, Vec<MethodShape>>,
+    /// Each class's DIRECT supertypes, for joining two element types.
+    supers: &'a HashMap<String, Vec<String>>,
     /// The `enum` classes, which have no accessible constructor.
     enums: &'a std::collections::HashSet<String>,
     /// The prefix for the next synthesized class — a method REFERENCE gets
@@ -3795,7 +3810,7 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // all this syntactic pass can see; a mixed or computed list erases to
     // `Object`, as it does after `map`.
     if method == "of" && names_library_class(prev.as_ref(), "Stream") {
-        return Some(literal_element_type(args));
+        return Some(literal_element_type(args, ctx.supers));
     }
     // `Arrays.stream(array)` — the array's element type.
     if method == "stream" && args.len() == 1 && names_library_class(prev.as_ref(), "Arrays") {
@@ -3929,10 +3944,63 @@ fn desugar_collector(expr: &mut Expr, elem: &TypeRef, ctx: &mut Ctx) {
 /// What `Stream.of(...)`'s arguments agree on, read from their literal forms —
 /// the only inference available to a syntactic pass. Anything mixed or computed
 /// erases to `Object`, exactly as a stream's element does after `map`.
-fn literal_element_type(args: &[Expr]) -> TypeRef {
+/// What two element types have in common: the same type, the more general of
+/// the two, or a supertype both reach. `Object` when nothing nearer is
+/// written down — the answer this pass gave for EVERY pair before.
+fn join_element_types(
+    left: &TypeRef,
+    right: &TypeRef,
+    supers: &HashMap<String, Vec<String>>,
+) -> TypeRef {
+    let object = || TypeRef::Named(String::from("Object"));
+    if left == right {
+        return left.clone();
+    }
+    let (TypeRef::Named(a), TypeRef::Named(b)) = (left, right) else {
+        return object();
+    };
+    // Every supertype of a name, nearest first (breadth first, so a class's
+    // own `extends`/`implements` clause is read before what those extend).
+    let ancestry = |start: &str| -> Vec<String> {
+        let mut found: Vec<String> = vec![start.to_owned()];
+        let mut queue: std::collections::VecDeque<String> =
+            std::collections::VecDeque::from(vec![start.to_owned()]);
+        while let Some(current) = queue.pop_front() {
+            if found.len() > supers.len() + 2 {
+                break;
+            }
+            for parent in supers.get(&current).into_iter().flatten() {
+                if !found.contains(parent) {
+                    found.push(parent.clone());
+                    queue.push_back(parent.clone());
+                }
+            }
+        }
+        found
+    };
+    let theirs = ancestry(b);
+    ancestry(a)
+        .into_iter()
+        .find(|name| theirs.contains(name))
+        .map_or_else(object, TypeRef::Named)
+}
+
+fn literal_element_type(args: &[Expr], supers: &HashMap<String, Vec<String>>) -> TypeRef {
     let object = TypeRef::Named(String::from("Object"));
     let mut kind: Option<TypeRef> = None;
     for arg in args {
+        // A `new Point(…)` argument says its type outright, and reading only
+        // LITERALS left `Stream.of(new Point(1, 2)).map(p -> p.x)` with an
+        // `Object` for `p` — while the same stream taken from a declared
+        // `List<Point>` had the element all along.
+        if let Expr::NewObject { class, .. } = arg {
+            let this = TypeRef::Named(class.clone());
+            kind = Some(match &kind {
+                Some(seen) => join_element_types(seen, &this, supers),
+                None => this,
+            });
+            continue;
+        }
         let Expr::Literal { value, .. } = arg else {
             return object;
         };
@@ -4003,7 +4071,7 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             && args.len() == 1
             && names_library_class(prev, "Optional")
         {
-            return Some(literal_element_type(args));
+            return Some(literal_element_type(args, ctx.supers));
         }
         return match method.as_str() {
             // Optional.filter: same element. (A STREAM's filter resolves to
@@ -4172,10 +4240,10 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         match (method.as_str(), &args[..]) {
             // One element, written as the argument.
             ("singletonList" | "singleton", [only]) if from_collections => {
-                return Some(literal_element_type(std::slice::from_ref(only)));
+                return Some(literal_element_type(std::slice::from_ref(only), ctx.supers));
             }
             ("nCopies", [_, only]) if from_collections => {
-                return Some(literal_element_type(std::slice::from_ref(only)));
+                return Some(literal_element_type(std::slice::from_ref(only), ctx.supers));
             }
             // A WRAPPER or a copy: the element is the source's.
             (
@@ -4229,7 +4297,7 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             || names_library_class(owner.as_ref(), "Set")
             || names_library_class(owner.as_ref(), "Arrays"))
     {
-        return Some(literal_element_type(args));
+        return Some(literal_element_type(args, ctx.supers));
     }
     if let Expr::Call {
         receiver: Some(inner),
