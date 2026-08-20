@@ -6971,6 +6971,15 @@ different answers", which is exactly what it is for).
 Pinned by `a_program_that_reads_and_writes_files` and
 `a_missing_file_is_an_io_exception`.
 
+**The whole table is now checked against a JDK.** A missing entry matches no
+handler and a wrong parent matches the wrong one, and neither shows up in a
+test that only throws — so `the_throwable_hierarchy_is_the_jdks` asks a real
+JVM, by reflection, for the superclass of every class in the table and compares.
+It found one more: `DuplicateFormatFlagsException` was recorded under
+`IllegalFormatFlagsException`, and the two are siblings however alike their
+names read. Every exception the engine names in its own sources was already in
+the table; the 55 parents are now the JDK's.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

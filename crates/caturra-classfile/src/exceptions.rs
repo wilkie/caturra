@@ -177,9 +177,11 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/util/IllegalFormatFlagsException",
         "java/util/IllegalFormatException",
     ),
+    // Its own IllegalFormatException, NOT a kind of IllegalFormatFlagsException
+    // — the two are siblings, however alike their names read.
     (
         "java/util/DuplicateFormatFlagsException",
-        "java/util/IllegalFormatFlagsException",
+        "java/util/IllegalFormatException",
     ),
     (
         "java/util/MissingFormatWidthException",

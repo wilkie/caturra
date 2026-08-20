@@ -32784,6 +32784,72 @@ public class MissingFile {
 "#
 );
 
+/// Every exception this engine can throw, and the parent it claims — checked
+/// against a real JDK, by reflection.
+///
+/// A wrong parent is invisible until a program CATCHES: an exception missing
+/// from the table matches no handler at all (`catch (IOException e)` did not
+/// catch a missing file until the `java.nio.file` failures were added), and a
+/// wrong one matches the wrong handler. Neither shows up in a test that only
+/// throws. This walks the whole table instead.
+#[test]
+fn the_throwable_hierarchy_is_the_jdks() {
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    let table = caturra_classfile::exceptions::EXCEPTIONS;
+    let mut names: Vec<String> = table
+        .iter()
+        .flat_map(|(child, parent)| [(*child).to_owned(), (*parent).to_owned()])
+        .collect();
+    names.sort();
+    names.dedup();
+    let mut calls = String::new();
+    for name in &names {
+        use std::fmt::Write as _;
+        let _ = writeln!(calls, "        show(\"{}\");", name.replace('/', "."));
+    }
+    let source = format!(
+        "public class Hierarchy {{\n\
+         \x20   static void show(String name) {{\n\
+         \x20       try {{\n\
+         \x20           Class<?> c = Class.forName(name);\n\
+         \x20           Class<?> s = c.getSuperclass();\n\
+         \x20           System.out.println(name + \" \" + (s == null ? \"none\" : s.getName()));\n\
+         \x20       }} catch (Throwable t) {{\n\
+         \x20           System.out.println(name + \" MISSING\");\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         \x20   public static void main(String[] args) {{\n{calls}    }}\n\
+         }}\n"
+    );
+    let printed = run_with_jdk_files("Hierarchy", &source, "", &[]);
+    let jdk: std::collections::HashMap<&str, &str> = printed
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .collect();
+    let mut wrong: Vec<String> = Vec::new();
+    for (child, parent) in table {
+        let dotted = child.replace('/', ".");
+        let expected = parent.replace('/', ".");
+        match jdk.get(dotted.as_str()) {
+            Some(&"MISSING") => wrong.push(format!("{child} is not a class in JDK 11")),
+            Some(actual) if *actual != expected => {
+                wrong.push(format!(
+                    "{child}: table says {parent}, the JDK says {actual}"
+                ));
+            }
+            // Absent from the printed list, or already agreeing.
+            _ => {}
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "throwable table disagrees with the JDK: {wrong:#?}"
+    );
+}
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one
