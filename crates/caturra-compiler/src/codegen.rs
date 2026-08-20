@@ -1193,6 +1193,21 @@ impl MethodTable {
                     } else {
                         method.name.clone()
                     };
+                    // Two parameters cannot share a name (JLS §8.4.1) — the
+                    // body would have no way to say which it means, and javac
+                    // refuses the DECLARATION rather than the use.
+                    for (at, param) in method.params.iter().enumerate() {
+                        if method.params[..at].iter().any(|p| p.name == param.name) {
+                            diagnostics.push(Diagnostic::error(
+                                path,
+                                format!(
+                                    "variable {} is already defined in method {key_name}",
+                                    param.name
+                                ),
+                                method.span,
+                            ));
+                        }
+                    }
                     if !method.throws.is_empty() {
                         table.throws_clauses.insert(
                             (key_class.clone(), key_name.clone(), method.params.len()),
@@ -3192,7 +3207,14 @@ impl MethodTable {
                 return None;
             }
             if let Some(info) = self.info_by_id(id) {
-                if let Some(field) = info.fields.iter().find(|f| f.name == name) {
+                // A PRIVATE field is not inherited (JLS §8.2): looked up
+                // THROUGH a subclass it is not there at all. Its own class
+                // still finds it, which is what `id == start` says.
+                if let Some(field) = info
+                    .fields
+                    .iter()
+                    .find(|f| f.name == name && (id == start || !f.is_private))
+                {
                     return Some((info.id, field));
                 }
                 if let Some(parent) = info.superclass {
@@ -3342,9 +3364,20 @@ impl MethodTable {
                 // a private interface method is visible only inside the
                 // interface, so `c.helper()` on an implementing class is "cannot
                 // find symbol", not a method that resolves and dies at run time.
-                let skip_inherited = info.is_interface && Some(id) != start;
+                let inherited = Some(id) != start;
+                let skip_inherited = info.is_interface && inherited;
                 for m in &info.methods {
-                    if skip_inherited && (m.is_static || m.is_private) {
+                    if skip_inherited && m.is_static {
+                        continue;
+                    }
+                    // A PRIVATE method is not inherited by a subclass either
+                    // (JLS §8.2), so a bare `f()` in the subclass does not
+                    // resolve to it — javac says "cannot find symbol". This
+                    // held for an interface's private methods and not for a
+                    // class's, so `f()` in a subclass silently called the
+                    // superclass's private one, and even chose it over an
+                    // applicable inherited overload.
+                    if inherited && m.is_private {
                         continue;
                     }
                     if m.name != name {
@@ -18513,6 +18546,14 @@ impl BodyGen<'_> {
         }
     }
 
+    /// Whether the class being compiled is one this compiler MADE (a lambda,
+    /// a method reference, an anonymous class): its body is not source a
+    /// student wrote, and the rules that judge written code do not apply to
+    /// the calls it synthesizes.
+    fn in_synthesized_class(&self) -> bool {
+        crate::is_lambda_class(self.current_class) || self.current_class.contains('$')
+    }
+
     /// A try-with-resources resource must be an `AutoCloseable` (JLS §14.20.3).
     ///
     /// Only CLASS types are judged: a builtin resource (`Scanner`,
@@ -18658,6 +18699,24 @@ impl BodyGen<'_> {
             | JType::Byte
             | JType::Char
             | JType::Boolean => {
+                // JLS §15.12: a primitive has no members — `x.toString()` on
+                // an `int` is javac's "int cannot be dereferenced", and NO
+                // method call on one is legal, not even a wrapper method the
+                // boxed value would answer. The autoboxing below exists for
+                // the calls this compiler SYNTHESIZES (a comparator body
+                // compares two unboxed values), so it is kept for a
+                // synthesized class and refused everywhere a program is
+                // written.
+                if !self.in_synthesized_class() {
+                    self.error(
+                        span,
+                        format!(
+                            "{} cannot be dereferenced",
+                            receiver_ty.describe(self.table)
+                        ),
+                    );
+                    return None;
+                }
                 if let Some(elem) = elem_type_of(receiver_ty) {
                     self.emit_box(elem);
                     return self.boxed_instance_call(elem, method, args, span, Some(receiver_ty));

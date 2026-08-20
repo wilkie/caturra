@@ -32264,6 +32264,139 @@ public class ReifiableArrays {
 "#
 );
 
+// A PRIVATE member is not inherited (JLS §8.2): a bare `f()` in a subclass does
+// not resolve to the superclass's private method, and javac says "cannot find
+// symbol". The rule was in place for an interface's private methods and for a
+// field looked up ACROSS top-level classes, and missing for the ordinary case —
+// so `f()` in a subclass silently called the superclass's private one.
+differential_reject!(
+    a_private_method_is_not_inherited,
+    "PrivateMethod",
+    r"
+public class PrivateMethod {
+    static class Base {
+        private int secret() {
+            return 1;
+        }
+    }
+
+    static class Derived extends Base {
+        int use() {
+            return secret();
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Derived().use());
+    }
+}
+"
+);
+
+differential_reject!(
+    a_private_field_is_not_inherited,
+    "PrivateField",
+    r"
+public class PrivateField {
+    static class Base {
+        private int secret = 7;
+    }
+
+    static class Derived extends Base {
+        int use() {
+            return secret;
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Derived().use());
+    }
+}
+"
+);
+
+// The neighbours the rule must leave alone: a private member reached through a
+// receiver of its OWN class is legal inside the same top-level type (JLS
+// §6.6.1), and a class always finds its own.
+differential_test!(
+    a_private_member_through_its_own_type,
+    "PrivateThroughOwner",
+    r"
+public class PrivateThroughOwner {
+    static class Base {
+        private int secret() {
+            return 1;
+        }
+
+        private int value = 7;
+
+        int own() {
+            return secret() + value;
+        }
+    }
+
+    static class Derived extends Base {
+        int use(Base base) {
+            return base.secret() + base.value;
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Base().own());
+        System.out.println(new Derived().use(new Base()));
+    }
+}
+"
+);
+
+// JLS §15.12: a primitive has no members, so `x.toString()` on an `int` is
+// javac's "int cannot be dereferenced" — and no method call on one is legal,
+// not even a wrapper method the boxed value would answer. caturra autoboxed
+// the receiver and refused only what the WRAPPER lacked.
+differential_reject!(
+    a_primitive_cannot_be_dereferenced,
+    "DerefPrimitive",
+    r"
+public class DerefPrimitive {
+    public static void main(String[] args) {
+        int x = 1;
+        System.out.println(x.toString());
+    }
+}
+"
+);
+
+differential_reject!(
+    a_primitive_double_cannot_be_dereferenced,
+    "DerefDouble",
+    r"
+public class DerefDouble {
+    public static void main(String[] args) {
+        double d = 1.0;
+        System.out.println(d.isNaN());
+    }
+}
+"
+);
+
+// Two parameters cannot share a name (JLS §8.4.1): the body would have no way
+// to say which it means, and javac refuses the DECLARATION rather than the use.
+differential_reject!(
+    two_parameters_with_one_name,
+    "DuplicateParam",
+    r"
+public class DuplicateParam {
+    static int add(int x, int x) {
+        return x;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(add(1, 2));
+    }
+}
+"
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

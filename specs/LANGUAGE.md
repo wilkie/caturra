@@ -6798,6 +6798,41 @@ and `the_arrays_of_generics_that_are_legal` (the reifiable neighbours the rule
 must leave alone — an unbounded wildcard, a raw type, and the cast every
 generic-array idiom is written with).
 
+### Three rules a second rejection sweep found (2026-08-20)
+
+The 46-program sweep that found the parameterized-array hole was cheap enough
+to repeat over a different 46 rules — interfaces, enums, inner classes,
+try-with-resources, constructors, varargs, generics, arrays, switch. Three more
+came back, all in the dangerous direction.
+
+**A private member is not inherited** (JLS §8.2). A bare `f()` in a subclass
+did resolve to the superclass's private method, and a bare field read to its
+private field. The rule was already written down twice — for an interface's
+private methods, which are skipped when the interface is reached THROUGH an
+implementor, and for a field whose owner shares no top-level class — and the
+ordinary case fell between them: two nested classes in one file share a
+top-level type, so the field check waved them through, and the method lookup
+had no check at all. Inheritance now skips a private member outright, which is
+where the rule belongs: it is not an ACCESS question (javac says "cannot find
+symbol", not "has private access") but a question of what is there to find. A
+private member reached through a receiver of its own class stays legal inside
+the same top-level type, which is §6.6.1 and a separate check.
+
+**A primitive cannot be dereferenced** (JLS §15.12). `x.toString()` on an `int`
+compiled: the receiver was autoboxed and only a method the WRAPPER lacked was
+refused. No method call on a primitive is legal in Java. The autoboxing is
+still there for the calls this compiler SYNTHESIZES — a comparator body
+compares two unboxed values — so it is kept for a synthesized class and refused
+wherever a program is written.
+
+**Two parameters cannot share a name** (JLS §8.4.1). `f(int x, int x)`
+compiled; javac refuses the declaration, in those words.
+
+Pinned by `a_private_method_is_not_inherited`,
+`a_private_field_is_not_inherited`, `a_private_member_through_its_own_type`
+(the neighbours the rule must leave alone), `a_primitive_cannot_be_dereferenced`,
+`a_primitive_double_cannot_be_dereferenced` and `two_parameters_with_one_name`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
