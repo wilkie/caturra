@@ -3256,11 +3256,14 @@ impl MethodTable {
     /// conditional needs when its branches are unrelated classes (two
     /// synthesized lambda classes, or two implementations of one interface).
     fn shared_interface(&self, a: ClassId, b: ClassId) -> Option<ClassId> {
+        // Breadth first, so the order is the one the program WRITES: a class's
+        // own `implements` clause first, then what those extend. Which matters
+        // when two are shared — see below.
         let interfaces_of = |id: ClassId| -> Vec<ClassId> {
             let mut found: Vec<ClassId> = Vec::new();
-            let mut stack = vec![id];
+            let mut queue = std::collections::VecDeque::from(vec![id]);
             let mut steps = 0usize;
-            while let Some(current) = stack.pop() {
+            while let Some(current) = queue.pop_front() {
                 steps += 1;
                 if steps > self.class_names.len() * 4 + 4 {
                     break;
@@ -3271,20 +3274,22 @@ impl MethodTable {
                 if info.is_interface && current != id && !found.contains(&current) {
                     found.push(current);
                 }
+                queue.extend(info.interfaces.iter().copied());
                 if let Some(parent) = info.superclass {
-                    stack.push(parent);
+                    queue.push_back(parent);
                 }
-                stack.extend(info.interfaces.iter().copied());
             }
             found
         };
-        let mine = interfaces_of(a);
         let theirs = interfaces_of(b);
-        let mut shared = mine.into_iter().filter(|id| theirs.contains(id));
-        let first = shared.next()?;
-        // More than one common interface is an intersection type caturra does
-        // not model; Object is the honest answer there.
-        shared.next().is_none().then_some(first)
+        // Java's answer when two classes share several interfaces is the
+        // INTERSECTION of them, which caturra has no type for — it must name
+        // one. `Object` names none, and nothing accepts it, so the FIRST one
+        // written is the pick: `class Circle implements Shape, Drawable` joins
+        // with `Square` at `Shape`, and code that wanted `Drawable` is refused
+        // where javac accepts it (the safe direction, and no worse than the
+        // `Object` that refused both).
+        interfaces_of(a).into_iter().find(|id| theirs.contains(id))
     }
 
     /// The class that DECLARES the static method `sig` reachable from `class`,
@@ -22581,12 +22586,14 @@ impl BodyGen<'_> {
         } else {
             // `IntStream.of(...)` packs a genuine `int[]`: its pipeline stores
             // elements UNBOXED, and a boxed source made `sum()` answer 0.
+            // The JOIN of every element, as the list factories use: reading
+            // only the FIRST argument made `Stream.of(new Circle(), new
+            // Square())` a stream of `Circle`, and the second argument an
+            // incompatible one.
             let scalar = if class == "IntStream" {
                 ElemType::Int
             } else {
-                args.first()
-                    .and_then(|a| collection_elem_of(self.type_of(a)))
-                    .unwrap_or(object_elem)
+                self.joined_literal_elem(args)
             };
             self.emit_array_literal(
                 args,
@@ -26226,14 +26233,25 @@ impl BodyGen<'_> {
         if self.table.is_subtype(right, left) {
             return Some(ElemType::Object(left));
         }
-        // Walk the left side's ancestors until one covers the right.
+        // Walk the left side's ancestors until one covers the right — but not
+        // as far as `Object`, which covers everything and would end the search
+        // before an INTERFACE both implement is considered. That interface is
+        // the answer javac gives: `Arrays.asList(new Circle(), new Square())`
+        // is a `List<Shape>`, and the identical pair in a ternary already
+        // joined there (`conditional_join`), so the two disagreed about the
+        // same two types.
         let mut current = Some(left);
         for _ in 0..=self.table.class_names.len() {
-            let id = current?;
-            if self.table.is_subtype(right, id) {
+            let Some(id) = current else {
+                break;
+            };
+            if id != self.table.object_id && self.table.is_subtype(right, id) {
                 return Some(ElemType::Object(id));
             }
             current = self.table.info_by_id(id).and_then(|info| info.superclass);
+        }
+        if let Some(shared) = self.table.shared_interface(left, right) {
+            return Some(ElemType::Object(shared));
         }
         Some(ElemType::Object(self.table.object_id))
     }

@@ -6587,6 +6587,36 @@ supported feature recorded against a real JDK rather than a refusal.
 
 Pinned by `a_mapped_stream_keeps_its_element_type` (sixteen shapes).
 
+### The element a literal collection joins at (2026-08-19)
+
+`Arrays.asList(new Circle(), new Square())` would not assign to the
+`List<Shape>` javac gives it: the element join walked SUPERCLASSES only, so two
+classes whose nearest common ancestor is an interface met at `Object`. The
+identical pair in a TERNARY joined at `Shape` — the rule was implemented twice
+and the copies disagreed, which is this session's recurring shape. The walk now
+stops short of `Object` (which covers everything, and would end the search
+before an interface is considered) and falls through to the same
+`shared_interface` the ternary uses.
+
+`Stream.of` had a THIRD reading: the first argument's type, which made the
+second argument an incompatible one. It joins like the list factories now.
+
+Two classes sharing SEVERAL interfaces is an intersection type (`Shape &
+Drawable`), which caturra has no type for. It used to answer `Object`, which is
+accepted nowhere; it now names the FIRST interface written, so
+`class Circle implements Shape, Drawable` joins with `Square` at `Shape`. Code
+that wanted `Drawable` is refused where javac accepts it — the safe direction,
+and no worse than the `Object` that refused both. The interface walk is
+breadth-first so "first" means what the program wrote.
+
+Known residue: the LAMBDA pass has its own element reading for a
+`Stream.of(...)` source and no class hierarchy to join with, so
+`Stream.of(new Circle(), new Square()).map(s -> s.area())` still sees `Object`.
+
+Pinned by `a_literal_collection_joins_at_a_shared_interface` (including seven
+joins that already worked, which the new one must not disturb) and
+`a_join_over_several_interfaces_names_the_first`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

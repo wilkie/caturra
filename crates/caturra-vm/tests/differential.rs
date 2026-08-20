@@ -31684,6 +31684,139 @@ public class MappedElement {
 "#
 );
 
+// A literal collection's element is the JOIN of its arguments. The walk went
+// up SUPERCLASSES only, so two classes whose common ancestor is an interface
+// joined at `Object` — `Arrays.asList(new Circle(), new Square())` would not
+// assign to the `List<Shape>` javac gives it, though the identical pair in a
+// TERNARY joined at `Shape` (one rule, two implementations, disagreeing).
+// `Stream.of` had a third reading of its own: the FIRST argument's type, which
+// made the second an incompatible one.
+differential_test!(
+    a_literal_collection_joins_at_a_shared_interface,
+    "JoinElements",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class JoinElements {
+    interface Shape {
+        double area();
+    }
+
+    static class Circle implements Shape {
+        public double area() {
+            return 3.0;
+        }
+
+        public String toString() {
+            return "C";
+        }
+    }
+
+    static class Square implements Shape {
+        public double area() {
+            return 4.0;
+        }
+
+        public String toString() {
+            return "S";
+        }
+    }
+
+    static class Base {
+        public String toString() {
+            return "B";
+        }
+    }
+
+    static class Left extends Base {
+    }
+
+    static class Right extends Base {
+    }
+
+    public static void main(String[] args) {
+        List<Shape> shapes = Arrays.asList(new Circle(), new Square());
+        System.out.println(shapes);
+        System.out.println(shapes.get(0).area());
+        System.out.println(new ArrayList<Shape>(Arrays.asList(new Circle(), new Square())));
+        System.out.println(Arrays.<Shape>asList(new Circle(), new Square()));
+        System.out.println(List.of(new Circle(), new Square()));
+        for (Shape each : Arrays.asList(new Circle(), new Square())) {
+            System.out.println(each.area());
+        }
+        List<Base> bases = Arrays.asList(new Left(), new Right());
+        System.out.println(bases);
+        System.out.println(Stream.of(new Circle(), new Square()).count());
+        System.out.println(new HashSet<Shape>(Arrays.asList(new Circle(), new Square())).size());
+
+        // The joins that already worked, which the new one must not disturb.
+        System.out.println(Arrays.asList(1, 2).get(0) + 1);
+        List<Number> mixed = Arrays.asList(1, 2.5);
+        System.out.println(mixed);
+        System.out.println(Arrays.asList("a", "b").get(0).length());
+        System.out.println(Arrays.asList("a", null));
+        System.out.println(Stream.of("a", "bb").map(s -> s.length()).collect(Collectors.toList()));
+        System.out.println(Stream.of(1, 2).mapToInt(x -> x).sum());
+        List<Object> anything = Arrays.asList(new Circle(), "x");
+        System.out.println(anything);
+    }
+}
+"#
+);
+
+// Two classes sharing SEVERAL interfaces is an intersection type, which caturra
+// has no type for: it names the first one written. `Object` named none and was
+// accepted nowhere, so this is strictly more useful — and code that wanted the
+// other interface is refused where javac accepts it, which is the safe
+// direction. Both the ternary and the collection literal read it the same way.
+differential_test!(
+    a_join_over_several_interfaces_names_the_first,
+    "JoinAmbiguous",
+    r#"
+import java.util.*;
+
+public class JoinAmbiguous {
+    interface Shape {
+        double area();
+    }
+
+    interface Drawable {
+        String draw();
+    }
+
+    static class Circle implements Shape, Drawable {
+        public double area() {
+            return 3.0;
+        }
+
+        public String draw() {
+            return "c";
+        }
+    }
+
+    static class Square implements Shape, Drawable {
+        public double area() {
+            return 4.0;
+        }
+
+        public String draw() {
+            return "s";
+        }
+    }
+
+    public static void main(String[] args) {
+        List<Shape> shapes = Arrays.asList(new Circle(), new Square());
+        System.out.println(shapes.get(0).area());
+        boolean flag = true;
+        Shape chosen = flag ? new Circle() : new Square();
+        System.out.println(chosen.area());
+        System.out.println(Arrays.asList(new Circle(), new Square(), new Circle()).size());
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one
