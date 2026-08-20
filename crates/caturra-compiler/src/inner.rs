@@ -139,6 +139,7 @@ fn add_outer_binding(class: &mut ClassDecl, outer: &str) {
             is_protected: false,
             span: zero,
             pre_init: 0,
+            declared_return: None,
         });
         return;
     }

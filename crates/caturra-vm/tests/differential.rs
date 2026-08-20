@@ -31298,20 +31298,168 @@ public class ReturnFromLambdaBody {
 "#
 );
 
-// An explicit type WITNESS is parsed and discarded — `Expr::Call` carries no
-// type arguments — so a context-adopting factory written with one has no
-// element for a lambda to take. Assigning it to a declared variable first works,
-// and is how the shape is normally written.
-stricter_than_javac!(
-    stricter_type_witness_is_discarded,
-    "WitnessedEmptyList",
+// An explicit type WITNESS (JLS §15.12.2.1) is what a call with nothing else to
+// infer from is typed by. It used to be parsed and DISCARDED — `Expr::Call`
+// carried no type arguments — so a factory written with one had no element for
+// a lambda to take, though assigning it to a declared variable first worked.
+differential_test!(
+    a_type_witness_types_the_call_it_is_written_on,
+    "WitnessedCalls",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class WitnessedCalls {
+    static <T> List<T> box(T value) {
+        List<T> list = new ArrayList<T>();
+        list.add(value);
+        return list;
+    }
+
+    static <T> T id(T value) {
+        return value;
+    }
+
+    <T> List<T> instanceBox(T value) {
+        return box(value);
+    }
+
+    public static void main(String[] args) {
+        Collections.<String>emptyList().forEach(s -> System.out.println(s.length()));
+        Collections.<String, Integer>emptyMap().forEach((k, v) -> System.out.println(k + v));
+        Collections.<String>singletonList("q").forEach(s -> System.out.println(s.length()));
+        WitnessedCalls.<String>box("ab").forEach(s -> System.out.println(s.length()));
+        System.out.println(WitnessedCalls.<String>box("ab").get(0).length());
+        System.out.println(new WitnessedCalls().<String>instanceBox("abc").get(0).length());
+        Supplier<String> s = WitnessedCalls.<Supplier<String>>id(() -> "hi");
+        System.out.println(s.get().length());
+        System.out.println(WitnessedCalls.<List<String>>id(new ArrayList<String>()).size());
+        System.out.println(WitnessedCalls.<Object>id(5));
+        System.out.println(WitnessedCalls.<Integer>id(5));
+        System.out.println("ran");
+    }
+}
+"#
+);
+
+// A generic method says what it RETURNS once its variables are pinned — by a
+// witness, or by the arguments. Reading the erased return instead left the
+// element a wildcard sentinel, and every lambda over one was refused as "a
+// functional interface parameterized on a method's own type variable" — while
+// the same call assigned to a declared variable first compiled.
+differential_test!(
+    a_generic_methods_return_is_pinned_by_its_arguments,
+    "InferredReturn",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class InferredReturn {
+    static <T> List<T> box(T value) {
+        List<T> list = new ArrayList<T>();
+        list.add(value);
+        return list;
+    }
+
+    static <K, V> Map<K, V> pair(K key, V value) {
+        Map<K, V> map = new HashMap<K, V>();
+        map.put(key, value);
+        return map;
+    }
+
+    static <T> Set<T> setOf(T value) {
+        Set<T> set = new HashSet<T>();
+        set.add(value);
+        return set;
+    }
+
+    public static void main(String[] args) {
+        box("ab").forEach(s -> System.out.println(s.length()));
+        setOf("abc").forEach(s -> System.out.println(s.length()));
+        pair("k", 1).forEach((k, v) -> System.out.println(k.length() + v));
+        System.out.println(box("ab").stream().map(s -> s.length()).count());
+    }
+}
+"#
+);
+
+// A witness is a claim about the ARGUMENTS too: `<String>id(5)` states that 5
+// is a String. Checked only where the mismatch is provable — a primitive boxes
+// to exactly one wrapper (JLS §5.1.7), so `<Long>` does not take an `int` — and
+// javac refuses each of these.
+differential_reject!(
+    a_witness_that_contradicts_its_argument,
+    "WrongWitness",
+    r"
+public class WrongWitness {
+    static <T> T id(T value) {
+        return value;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(WrongWitness.<String>id(5));
+    }
+}
+"
+);
+
+differential_reject!(
+    a_witness_that_names_the_wrong_wrapper,
+    "WrongWrapper",
+    r"
+public class WrongWrapper {
+    static <T> T id(T value) {
+        return value;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(WrongWrapper.<Long>id(5));
+    }
+}
+"
+);
+
+// The other direction of the same check: what a witness legitimately accepts.
+// A wrong REJECTION is worse than the missing check, so each of these is a
+// shape the check must stay away from.
+differential_test!(
+    a_witness_wider_than_the_argument_is_accepted,
+    "WitnessWidening",
     r#"
 import java.util.*;
 
-public class WitnessedEmptyList {
+public class WitnessWidening {
+    static <T> T id(T value) {
+        return value;
+    }
+
+    static <T extends Number> double sum(T a, T b) {
+        return a.doubleValue() + b.doubleValue();
+    }
+
+    interface Named {
+        String name();
+    }
+
+    static class Dog implements Named {
+        public String name() {
+            return "dog";
+        }
+    }
+
     public static void main(String[] args) {
-        Collections.<String>emptyList().forEach(s -> System.out.println(s.length()));
-        System.out.println("ran");
+        System.out.println(WitnessWidening.<Object>id(5));
+        System.out.println(WitnessWidening.<Number>id(5));
+        System.out.println(WitnessWidening.<Comparable<String>>id("s"));
+        System.out.println(WitnessWidening.<String>id(null));
+        System.out.println(WitnessWidening.<Character>id('c'));
+        System.out.println(WitnessWidening.<Long>id(5L));
+        System.out.println(WitnessWidening.<Named>id(new Dog()).name());
+        System.out.println(WitnessWidening.<Dog>id(new Dog()).name());
+        System.out.println(WitnessWidening.<Integer>sum(1, 2));
+        Integer boxed = 7;
+        System.out.println(WitnessWidening.<Integer>id(boxed));
+        System.out.println(String.join(",", Arrays.<String>asList("a", "b")));
     }
 }
 "#
@@ -31351,6 +31499,44 @@ public class CastAnEmptyList {
     }
 }
 "
+);
+
+// The THIRD permissiveness, and the residue of the type-witness check above: a
+// witness naming a USER class is not checked against the argument, because the
+// pass that reads witnesses knows each class's members but not its ANCESTRY, so
+// it cannot tell a wrong class from a supertype. The provable cases (a
+// primitive against a wrapper, and one concrete final library type against
+// another) are refused; this one compiles and would fail on a real JDK.
+looser_than_javac!(
+    a_witness_naming_the_wrong_user_class,
+    "WrongUserWitness",
+    r#"
+public class WrongUserWitness {
+    interface Named {
+        String name();
+    }
+
+    static class Dog implements Named {
+        public String name() {
+            return "dog";
+        }
+    }
+
+    static class Cat implements Named {
+        public String name() {
+            return "cat";
+        }
+    }
+
+    static <T> T id(T value) {
+        return value;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(WrongUserWitness.<Dog>id(new Cat()).name());
+    }
+}
+"#
 );
 
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that

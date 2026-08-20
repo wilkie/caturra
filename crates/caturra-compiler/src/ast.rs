@@ -166,6 +166,11 @@ pub struct MethodDecl {
     /// back; empty when the method declares no type parameters, since nothing
     /// is lost then.
     pub declared_params: Vec<TypeRef>,
+    /// The RETURN type as written, kept for the same reason and at the same
+    /// time: `<T> List<T> box(T v)` returns a `List<String>` for a call that
+    /// pins `T`, and the erased form says only that it is a list of some
+    /// wildcard. Empty when the method declares no type parameters.
+    pub declared_return: Option<TypeRef>,
     /// How to pin each of the method's own type variables from the ARGUMENTS
     /// at a call — the same plan `infer_return` holds for the return type,
     /// computed for every variable rather than just the returned one.
@@ -524,6 +529,12 @@ pub enum Expr {
         receiver: Option<Box<Expr>>,
         method: String,
         args: Vec<Expr>,
+        /// An explicit type witness — `Collections.<String>emptyList()`
+        /// (JLS §15.12.2.1). Empty for the usual call, which infers. The
+        /// arguments erase away at run time, but they are what a call with
+        /// nothing else to infer from is typed by, so a lambda written
+        /// against the result has an element type.
+        type_args: Vec<TypeRef>,
         span: SourceSpan,
     },
     Binary {

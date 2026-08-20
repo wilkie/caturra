@@ -206,6 +206,7 @@ fn build_bridge(method: &MethodDecl, inherited: &MethodDecl) -> MethodDecl {
         method: method.name.clone(),
         args,
         span: zero,
+        type_args: Vec::new(),
     };
     let body = if matches!(inherited.return_type, TypeRef::Void) {
         vec![Stmt::Expr(call)]
@@ -237,5 +238,6 @@ fn build_bridge(method: &MethodDecl, inherited: &MethodDecl) -> MethodDecl {
         is_protected: false,
         span: zero,
         pre_init: 0,
+        declared_return: None,
     }
 }

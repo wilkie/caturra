@@ -526,6 +526,7 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)], supers
         // class's field initializers, so one may read a captured local. (The
         // leading `super(...)` is not counted — codegen strips it first.)
         pre_init: caps.len(),
+        declared_return: None,
     });
 }
 
@@ -605,6 +606,7 @@ fn augment_local_ctors(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
             // The capture stores are javac's `val$x = x`: they run BEFORE the
             // class's field initializers, so one may read a captured local.
             pre_init: caps.len(),
+            declared_return: None,
         });
         return;
     }

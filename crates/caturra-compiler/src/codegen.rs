@@ -219,6 +219,7 @@ fn emit_class(
             is_protected: false,
             span: decl.span,
             pre_init: 0,
+            declared_return: None,
         };
         let compiled = emit_method(
             path,
@@ -15820,6 +15821,7 @@ impl BodyGen<'_> {
                 method,
                 args,
                 span,
+                ..
             } => {
                 let instance = self
                     .table
@@ -16738,6 +16740,7 @@ impl BodyGen<'_> {
                 method: String::from("requireNonNull"),
                 args: vec![bound],
                 span,
+                type_args: Vec::new(),
             }
         } else {
             bound
@@ -20687,6 +20690,7 @@ impl BodyGen<'_> {
                 method,
                 args,
                 span,
+                ..
             } => match self.call_target(receiver.as_deref(), *span) {
                 None => None,
                 Some(CallTarget::Stream(stream)) => {
@@ -23188,6 +23192,7 @@ impl BodyGen<'_> {
                 method,
                 args,
                 span,
+                ..
             } => {
                 // The immutable factories (`List.of`, `Set.of`,
                 // `Arrays.asList`), which the emission path types from their
@@ -23251,6 +23256,7 @@ impl BodyGen<'_> {
                         method: method.clone(),
                         args: args.clone(),
                         span: *span,
+                        type_args: Vec::new(),
                     });
                 }
                 // `Comparator` combinators build another comparator (mirrors the
@@ -24172,6 +24178,7 @@ impl BodyGen<'_> {
                 method,
                 args,
                 span,
+                ..
             } => {
                 let outcome = match self.call_target(receiver.as_deref(), *span) {
                     None => None,

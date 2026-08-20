@@ -116,6 +116,7 @@ fn desugar_try_with_resources(
             method: String::from(if checked { RESOURCE_CLOSE } else { "close" }),
             args: Vec::new(),
             span,
+            type_args: Vec::new(),
         })
     };
 
@@ -143,6 +144,7 @@ fn desugar_try_with_resources(
                     method: String::from("addSuppressed"),
                     args: vec![name_expr(&closing)],
                     span,
+                    type_args: Vec::new(),
                 })],
                 span,
             }],
@@ -1411,6 +1413,7 @@ impl Parser<'_> {
                     end: name_span.end,
                 },
                 pre_init: 0,
+                declared_return: None,
             }));
         }
 
@@ -1523,6 +1526,7 @@ impl Parser<'_> {
                 end: name_span.end,
             },
             pre_init: 0,
+            declared_return: None,
         }))
     }
 
@@ -1619,6 +1623,18 @@ impl Parser<'_> {
 
     /// Skip a `<...>` type-argument list on a supertype reference
     /// (`implements Comparable<Foo>`), balancing nested `<>`. Erased.
+    /// The type arguments of an explicit witness, as written. Empty when
+    /// there is no `<` here at all.
+    fn type_witness(&mut self) -> Parsed<Vec<TypeRef>> {
+        if !self.at_symbol("<") {
+            return Ok(Vec::new());
+        }
+        match self.parse_type_arguments(String::new())? {
+            TypeRef::Generic { args, .. } => Ok(args),
+            _ => Ok(Vec::new()),
+        }
+    }
+
     fn skip_type_args(&mut self) {
         if !self.at_symbol("<") {
             return;
@@ -3863,11 +3879,12 @@ impl Parser<'_> {
                 }
                 // An explicit type witness on a generic method call
                 // (`Collections.<String>emptyList()`, `this.<T>id(x)`,
-                // JLS §15.12): the arguments erase away, so skipping them is
-                // exactly what the call needs. A `<` HERE — directly after the
-                // `.` — can only be a witness; `a.b < c` puts the `<` after
-                // the name, not before it.
-                self.skip_type_args();
+                // JLS §15.12.2.1). A `<` HERE — directly after the `.` — can
+                // only be a witness; `a.b < c` puts the `<` after the name,
+                // not before it. The arguments erase away at run time, but
+                // they are the only thing a call like `emptyList()` can be
+                // typed by, so the call carries them.
+                let witness = self.type_witness()?;
                 let (segment, segment_span) = self.expect_ident("after '.'")?;
                 if self.at_symbol("(") {
                     let args = self.arguments()?;
@@ -3879,6 +3896,7 @@ impl Parser<'_> {
                         receiver: Some(Box::new(expr)),
                         method: segment,
                         args,
+                        type_args: witness,
                         span,
                     };
                 } else if let Expr::Name { path, span } = &mut expr {
@@ -3954,6 +3972,7 @@ impl Parser<'_> {
                         method,
                         args,
                         span,
+                        type_args: Vec::new(),
                     };
                 } else {
                     self.error_here("this call expression is not yet supported by caturra");
@@ -4690,6 +4709,7 @@ fn desugar_enum(
             // See the note on the augmented constructors above: these two
             // stores stand in for `java.lang.Enum`'s constructor.
             pre_init: 2,
+            declared_return: None,
         });
     }
 
@@ -4757,6 +4777,7 @@ fn desugar_enum(
         is_protected: false,
         span: zero,
         pre_init: 0,
+        declared_return: None,
     });
 
     // `int compareTo(E __other) { return __ordinal - __other.__ordinal; }` —
@@ -4801,6 +4822,7 @@ fn desugar_enum(
         is_protected: false,
         span: zero,
         pre_init: 0,
+        declared_return: None,
     });
 
     // `static E[] values() { return new E[]{ A, B, ... }; }`
@@ -4835,6 +4857,7 @@ fn desugar_enum(
             is_protected: false,
             span: zero,
             pre_init: 0,
+            declared_return: None,
         });
     }
 
@@ -4852,6 +4875,7 @@ fn desugar_enum(
             method: String::from("equals"),
             args: vec![var("__n")],
             span: zero,
+            type_args: Vec::new(),
         };
         let loop_body = Stmt::If {
             cond: match_test,
@@ -4870,6 +4894,7 @@ fn desugar_enum(
                 method: String::from("values"),
                 args: Vec::new(),
                 span: zero,
+                type_args: Vec::new(),
             },
             body: Box::new(loop_body),
             span: zero,
@@ -4941,6 +4966,7 @@ fn desugar_enum(
             is_protected: false,
             span: zero,
             pre_init: 0,
+            declared_return: None,
         });
     }
 
@@ -5281,6 +5307,7 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
         // for every other method nothing is lost by erasing.
         if !method.type_params.is_empty() || !class_type_params.is_empty() {
             method.declared_params = method.params.iter().map(|p| p.ty.clone()).collect();
+            method.declared_return = Some(method.return_type.clone());
             method.type_var_sources = method
                 .type_params
                 .iter()
@@ -6088,6 +6115,7 @@ fn simple_return_method(
         is_protected: false,
         span,
         pre_init: 0,
+        declared_return: None,
     }
 }
 

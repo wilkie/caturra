@@ -6479,6 +6479,41 @@ Pinned by `a_nested_lambda_reaches_the_enclosing_instance_and_its_locals`,
 `a_lambda_in_an_anonymous_class_cannot_reach_out_through_this` and
 `an_anonymous_class_passes_any_expression_to_its_super_constructor`.
 
+### Explicit type witnesses (2026-08-19)
+
+`Collections.<String>emptyList()` (JLS §15.12.2.1) was parsed and DISCARDED —
+`Expr::Call` carried no type arguments — so a call with nothing else to infer
+from had no type at all, and a lambda written against its result was refused
+for having no functional-interface position. The witness now rides on the call.
+
+That alone fixed only half the shapes, because reading a call's return type
+went through the ERASED signature: `<T> List<T> box(T v)` returns a list of a
+wildcard sentinel, and a lambda over it was refused as **"a functional
+interface parameterized on a method's own type variable"** — an item that had
+been recorded as open across three audit rounds. The declared return is now
+kept beside the declared parameters (both are erased at the same point, for the
+same reason), and one binder pins a call's type variables from three sources in
+priority order: an explicit witness first (JLS does not infer when one is
+written), then the arguments, then the receiver's own type arguments for a
+variable the declaring class owns. `box("ab").forEach(s -> …)` types `s`.
+
+A witness is also a claim about the ARGUMENTS — `W.<String>id(5)` states that
+`5` is a String, and javac refuses it. Nothing checked that, because without a
+witness the same call INFERS `T` from the argument and cannot be wrong. The
+check is deliberately narrow: a primitive boxes to exactly one wrapper
+(JLS §5.1.7), so `<Long>id(5)` is provably wrong, and one concrete final
+library type against another likewise — but a witness naming a USER class is
+left alone, because this pass knows each class's members and not its ancestry,
+and a wrong REJECTION would be worse than the missing check. That residue is
+the third bullet in the permissiveness list, pinned rather than left implicit.
+
+Pinned by `a_type_witness_types_the_call_it_is_written_on`,
+`a_generic_methods_return_is_pinned_by_its_arguments`,
+`a_witness_that_contradicts_its_argument`,
+`a_witness_that_names_the_wrong_wrapper`,
+`a_witness_wider_than_the_argument_is_accepted` (eleven shapes the check must
+NOT refuse) and `a_witness_naming_the_wrong_user_class`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -6543,32 +6578,35 @@ entries after it was written down.
   lambda's PARAMETER types are inferred (see "A generic method's lambda
   argument"), but a return variable pinned only by what the lambda BODY gives
   back stays `Object`.
-- `Collections.<String>emptyList().forEach(…)` — an explicit type WITNESS is
-  parsed and discarded (`Expr::Call` carries no type arguments), so a
-  context-adopting factory written with one has no element for the lambda.
-  Assigning it to a declared variable first works, and is how the shape is
-  normally written.
 - `Arrays.stream(array, from, to)` — the RANGE overload; the whole-array form
   is modelled.
 
-**More permissive than javac** (caturra accepts; javac rejects). **Two
+**More permissive than javac** (caturra accepts; javac rejects). **Three
 known cases**, each asserted by `looser_than_javac!` so it cannot be forgotten:
 
 - `Map.Entry.comparingByValue().reversed()` with no type witness. javac
   infers `Comparator<Entry<Object, V>>` for the bare factory call, and
   `.reversed()` freezes that before the target type can correct it, so javac
   demands `Map.Entry.<K, V>comparingByValue()`, a typed variable, or a
-  wrapper like `Collections.reverseOrder(...)`. caturra's generics are erased
-  and the parser DISCARDS a type witness, so both spellings are the same tree
-  here and cannot be told apart without carrying witnesses through the AST.
-  All three forms javac accepts do work, so nothing legitimate is blocked by
-  leaving it permissive. Recorded when the two factories were added
-  (2026-08-14) rather than left for a later sweep to find.
+  wrapper like `Collections.reverseOrder(...)`. A call now CARRIES its witness
+  (see **Explicit type witnesses**), so the two spellings are no longer the
+  same tree — but caturra's generics are erased, and it is the ABSENCE of a
+  witness that javac makes fatal here, which is a rule about inference this
+  engine does not model. All three forms javac accepts do work, so nothing
+  legitimate is blocked by leaving it permissive. Recorded when the two
+  factories were added (2026-08-14) rather than left for a later sweep to
+  find.
 - `(List<String>) Collections.emptyList()`. The factory types as a `null` that
   adopts its context, and a CAST is a context — so caturra reads this as an
   identity cast, where javac infers `List<Object>` for the bare call and calls
   the cast inconvertible. Assigning the factory to a `List<String>` first is
   legal in both, and is the ordinary spelling.
+- `W.<Dog>id(new Cat())` — a witness naming a USER class is not checked against
+  the argument. The pass that reads witnesses knows each class's members but
+  not its ANCESTRY, so it cannot tell a wrong class from a supertype, and a
+  wrong REJECTION would be worse than the missing check. The provable cases —
+  a primitive against the one wrapper it boxes to, and one concrete final
+  library type against another — ARE refused.
 
 It held a worse one on 2026-08-13: a cast to `String` accepted ANY reference
 source, so `(String) Integer.valueOf(1)`, `(String) aStringBuilder` and

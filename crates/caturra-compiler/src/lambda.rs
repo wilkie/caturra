@@ -352,6 +352,11 @@ struct MethodShape {
     /// is a receiver like any other — `make().forEach(v -> …)` — and without
     /// this the pass had no element for the lambda.
     return_type: TypeRef,
+    /// The method's OWN type parameters, in order, so an explicit witness
+    /// (`W.<String>box(x)`) can be substituted into the return type. Without
+    /// them the return stays `List<T>`, and a lambda written against it has
+    /// no element.
+    type_params: Vec<String>,
 }
 
 impl MethodShape {
@@ -380,6 +385,11 @@ fn method_shapes(units: &[(String, CompilationUnit)]) -> HashMap<String, Vec<Met
                     is_varargs: method.params.last().is_some_and(|p| p.is_varargs),
                     throws: method.throws.clone(),
                     return_type: method.return_type.clone(),
+                    type_params: method
+                        .type_params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect(),
                 });
             }
         }
@@ -673,6 +683,10 @@ struct GenericSig {
     /// The type parameters of the DECLARING class, so a variable the class
     /// owns can be pinned from the receiver's own type arguments instead.
     class_params: Vec<String>,
+    /// The method's OWN type parameters, in the order an explicit witness
+    /// gives them (`W.<String>box(v)`), and the return type they appear in.
+    own_params: Vec<String>,
+    return_type: TypeRef,
 }
 
 fn generic_signatures(units: &[(String, CompilationUnit)]) -> HashMap<String, Vec<GenericSig>> {
@@ -697,6 +711,15 @@ fn generic_signatures(units: &[(String, CompilationUnit)]) -> HashMap<String, Ve
                         params: method.declared_params.clone(),
                         sources: method.type_var_sources.clone(),
                         class_params: class_params.clone(),
+                        own_params: method
+                            .type_params
+                            .iter()
+                            .map(|tp| tp.name.clone())
+                            .collect(),
+                        return_type: method
+                            .declared_return
+                            .clone()
+                            .unwrap_or_else(|| method.return_type.clone()),
                         vars,
                     });
             }
@@ -719,6 +742,11 @@ fn generic_signatures(units: &[(String, CompilationUnit)]) -> HashMap<String, Ve
                             params: written,
                             sources: Vec::new(),
                             class_params: class_params.clone(),
+                            own_params: Vec::new(),
+                            return_type: method
+                                .declared_return
+                                .clone()
+                                .unwrap_or_else(|| method.return_type.clone()),
                             vars: class_params.clone(),
                         });
                 }
@@ -741,6 +769,80 @@ fn mentions_any(ty: &TypeRef, names: &[String]) -> bool {
     }
 }
 
+/// Bind a generic method's type variables for one call: from an explicit
+/// WITNESS where the call gives one, from the arguments where it does not, and
+/// from the receiver's own type arguments for a variable the declaring class
+/// owns (`Holder<String> h; h.each(c)` pins `T` with no argument mentioning
+/// it). A variable nothing pins is simply absent, and the caller falls back to
+/// the erased signature.
+fn pinned_vars(
+    sig: &GenericSig,
+    receiver: Option<&Expr>,
+    args: &[Expr],
+    witness: &[TypeRef],
+    ctx: &Ctx,
+) -> HashMap<String, TypeRef> {
+    use crate::ast::InferSource;
+    let mut bound: HashMap<String, TypeRef> = HashMap::new();
+    // The witness is the programmer saying it outright, so it wins over what
+    // the arguments would have inferred (JLS §15.12.2.1 does not infer at all
+    // when one is written).
+    if witness.len() == sig.own_params.len() {
+        for (name, actual) in sig.own_params.iter().zip(witness) {
+            bound.insert(name.clone(), actual.clone());
+        }
+    }
+    for (var, sources) in &sig.sources {
+        if bound.contains_key(var) {
+            continue;
+        }
+        let pinned = sources.iter().find_map(|source| match source {
+            InferSource::Direct(index) => static_type_of(args.get(*index)?, ctx),
+            InferSource::Element(index) => list_elem_type(args.get(*index)?, ctx),
+        });
+        if let Some(pinned) = pinned {
+            bound.insert(var.clone(), pinned);
+        }
+    }
+    if !sig.class_params.is_empty()
+        && let Some(TypeRef::Generic { args: written, .. }) =
+            receiver.and_then(|r| static_type_of(r, ctx))
+    {
+        for (name, actual) in sig.class_params.iter().zip(written) {
+            bound.entry(name.clone()).or_insert(actual);
+        }
+    }
+    bound
+}
+
+/// What a call to a GENERIC method of the program returns, with its type
+/// variables pinned. `box("ab")` returns `List<String>`, not `List<T>` — and
+/// the erased `T` reaching codegen is what made a lambda over the result
+/// "a functional interface parameterized on a method\'s own type variable".
+fn generic_call_return(call: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let Expr::Call {
+        receiver,
+        method,
+        args,
+        type_args,
+        ..
+    } = call
+    else {
+        return None;
+    };
+    let sigs = ctx.generics.get(method)?;
+    let mut matching = sigs.iter().filter(|sig| sig.params.len() == args.len());
+    let sig = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    let bound = pinned_vars(sig, receiver.as_deref(), args, type_args, ctx);
+    if bound.is_empty() {
+        return None;
+    }
+    substitute_vars(&sig.return_type, &bound, &sig.vars)
+}
+
 /// The target type for each argument of a call to a GENERIC method, with the
 /// method's type variables pinned from the arguments (and, for a variable the
 /// declaring class owns, from the receiver's own type arguments). `None` where
@@ -750,9 +852,9 @@ fn generic_argument_targets(
     method: &str,
     receiver: Option<&Expr>,
     args: &[Expr],
+    witness: &[TypeRef],
     ctx: &Ctx,
 ) -> Option<Vec<Option<TypeRef>>> {
-    use crate::ast::InferSource;
     let sigs = ctx.generics.get(method)?;
     let mut matching = sigs.iter().filter(|sig| sig.params.len() == args.len());
     let sig = matching.next()?;
@@ -761,26 +863,7 @@ fn generic_argument_targets(
     if matching.next().is_some() {
         return None;
     }
-    let mut bound: HashMap<String, TypeRef> = HashMap::new();
-    for (var, sources) in &sig.sources {
-        let pinned = sources.iter().find_map(|source| match source {
-            InferSource::Direct(index) => static_type_of(args.get(*index)?, ctx),
-            InferSource::Element(index) => list_elem_type(args.get(*index)?, ctx),
-        });
-        if let Some(pinned) = pinned {
-            bound.insert(var.clone(), pinned);
-        }
-    }
-    // A variable the CLASS declares is pinned by the receiver: `Holder<String>
-    // h; h.each(c)` gives `T` = String, and no argument mentions it at all.
-    if !sig.class_params.is_empty()
-        && let Some(TypeRef::Generic { args: written, .. }) =
-            receiver.and_then(|r| static_type_of(r, ctx))
-    {
-        for (name, actual) in sig.class_params.iter().zip(written) {
-            bound.entry(name.clone()).or_insert(actual);
-        }
-    }
+    let bound = pinned_vars(sig, receiver, args, witness, ctx);
     if bound.is_empty() {
         return None;
     }
@@ -1076,6 +1159,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
         method,
         args,
         span,
+        ..
     } = expr
         && method == "identity"
         && args.is_empty()
@@ -1134,6 +1218,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
         method,
         args,
         span,
+        ..
     } = expr
         && matches!(method.as_str(), "not" | "isEqual")
         && args.len() == 1
@@ -1214,6 +1299,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
         method,
         args,
         span,
+        ..
     } = expr
         && matches!(method.as_str(), "minBy" | "maxBy")
         && args.len() == 1
@@ -1331,7 +1417,8 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             receiver,
             method,
             args,
-            ..
+            type_args,
+            span,
         } => {
             // A comparator FACTORY or COMBINATOR: the whole chain shares one
             // element type, and the generic receiver walk below would throw
@@ -1874,7 +1961,17 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // turned `Box<T>` into a wildcard that no longer says which
             // variable it held, so `pick("abc", s -> s.length())` had no
             // element for `s` and was refused outright.
-            let substituted = generic_argument_targets(method, receiver.as_deref(), args, ctx);
+            let witness = type_args.clone();
+            let substituted =
+                generic_argument_targets(method, receiver.as_deref(), args, &witness, ctx);
+            // A witness is a claim about the arguments, not just about the
+            // result: `W.<String>id(5)` states that `5` is a String, and javac
+            // says so. Without the witness the same call INFERS `T` from the
+            // argument and cannot be wrong, which is why nothing checked it.
+            if !witness.is_empty() {
+                let span = *span;
+                check_witnessed_arguments(substituted.as_deref(), args, span, ctx);
+            }
             for (index, arg) in args.iter_mut().enumerate() {
                 let expected = substituted
                     .as_ref()
@@ -2192,6 +2289,7 @@ fn super_bridge(
         throws: Vec::new(),
         span,
         pre_init: 0,
+        declared_return: None,
     }
 }
 
@@ -2268,6 +2366,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 method: bridge,
                 args: param_names.iter().map(|n| name_expr(n)).collect(),
                 span,
+                type_args: Vec::new(),
             })),
             span,
         };
@@ -2320,6 +2419,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 method: method.clone(),
                 args: param_names.iter().map(|n| name_expr(n)).collect(),
                 span,
+                type_args: Vec::new(),
             }
         } else if param_names.is_empty() {
             // An unbound instance reference needs the SAM to supply a receiver
@@ -2333,6 +2433,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 method: method.clone(),
                 args: Vec::new(),
                 span,
+                type_args: Vec::new(),
             }
         } else {
             // Unbound instance: `p0.method(p1, ...)`.
@@ -2349,6 +2450,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 method: method.clone(),
                 args: param_names[1..].iter().map(|n| name_expr(n)).collect(),
                 span,
+                type_args: Vec::new(),
             }
         }
     } else {
@@ -2358,6 +2460,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
             method: method.clone(),
             args: param_names.iter().map(|n| name_expr(n)).collect(),
             span,
+            type_args: Vec::new(),
         }
     };
 
@@ -2482,6 +2585,54 @@ fn check_map_function_variable(
     ));
 }
 
+/// Report an argument a WITNESS says is something it is not. Only on footing
+/// where the mismatch is provable — a concrete final type against a primitive
+/// or another concrete final type — because a wrong REJECTION is worse than
+/// the missing check it replaces.
+fn check_witnessed_arguments(
+    targets: Option<&[Option<TypeRef>]>,
+    args: &[Expr],
+    span: crate::diagnostics::SourceSpan,
+    ctx: &mut Ctx,
+) {
+    let Some(targets) = targets else {
+        return;
+    };
+    for (target, arg) in targets.iter().zip(args) {
+        let Some(wanted) = target.as_ref().and_then(concrete) else {
+            continue;
+        };
+        let Some(actual) = static_type_of(arg, ctx) else {
+            continue;
+        };
+        // A primitive argument boxes to exactly one wrapper (JLS §5.1.7), so
+        // any other wrapper is a mismatch — `<Long>` does not accept an `int`,
+        // as no boxing-then-widening conversion exists.
+        let (described, boxes_to) = match actual {
+            TypeRef::Int => ("int", "Integer"),
+            TypeRef::Long => ("long", "Long"),
+            TypeRef::Double => ("double", "Double"),
+            TypeRef::Float => ("float", "Float"),
+            TypeRef::Short => ("short", "Short"),
+            TypeRef::Byte => ("byte", "Byte"),
+            TypeRef::Char => ("char", "Character"),
+            TypeRef::Boolean => ("boolean", "Boolean"),
+            ref other => match concrete(other) {
+                Some(name) => (name, name),
+                None => continue,
+            },
+        };
+        if boxes_to == wanted {
+            continue;
+        }
+        ctx.diags.push(crate::diagnostics::Diagnostic::error(
+            ctx.path,
+            format!("incompatible types: {described} cannot be converted to {wanted}"),
+            span,
+        ));
+    }
+}
+
 /// A concrete FINAL library type, for which `? super`/`? extends` collapse
 /// to equality — the only footing on which a mismatch is provable.
 fn concrete(t: &TypeRef) -> Option<&str> {
@@ -2518,62 +2669,139 @@ fn render_type(t: &TypeRef) -> String {
     }
 }
 
+/// The type a call with an explicit type WITNESS returns
+/// (`Collections.<String>emptyList()` is a `List<String>`, JLS §15.12.2.1).
+///
+/// A witness is the only thing an argument-less generic call can be typed by,
+/// so without this a lambda written against the result had no element type and
+/// was refused for having no functional-interface position — while the same
+/// call assigned to a declared variable first compiled.
+fn witnessed_return(call: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let Expr::Call {
+        receiver,
+        method,
+        args,
+        type_args,
+        ..
+    } = call
+    else {
+        return None;
+    };
+    if type_args.is_empty() {
+        return None;
+    }
+    // A method of the program: substitute the witness into the return type it
+    // declares, positionally, which is what the witness means.
+    let own = matches!(receiver.as_deref(), None | Some(Expr::This { .. }));
+    let class = if own {
+        ctx.current_class.map(ToOwned::to_owned)
+    } else {
+        match receiver.as_deref() {
+            Some(Expr::Name { path, .. }) if path.len() == 1 => Some(path[0].clone()),
+            _ => None,
+        }
+    };
+    if let Some(class) = class.as_deref()
+        && let Some(shapes) = ctx.shapes.get(class)
+        && let Some(shape) = shapes
+            .iter()
+            .find(|shape| shape.name == *method && shape.takes(args.len()))
+        && shape.type_params.len() == type_args.len()
+    {
+        let bound: HashMap<String, TypeRef> = shape
+            .type_params
+            .iter()
+            .cloned()
+            .zip(type_args.iter().cloned())
+            .collect();
+        return substitute_vars(&shape.return_type, &bound, &shape.type_params);
+    }
+    // A LIBRARY factory whose element type comes from nowhere else. Only the
+    // ones whose return shape is written down here: guessing that any
+    // one-argument witness means a collection of it would mistype
+    // `Collections.<String>max(…)`, which returns the element itself.
+    let owner = receiver.as_deref()?;
+    let base = match (method.as_str(), type_args.len()) {
+        ("emptyList" | "singletonList" | "nCopies", 1)
+            if names_library_class(owner, "Collections") =>
+        {
+            "List"
+        }
+        ("emptySet" | "singleton", 1) if names_library_class(owner, "Collections") => "Set",
+        ("emptyMap", 2) if names_library_class(owner, "Collections") => "Map",
+        ("asList", 1) if names_library_class(owner, "Arrays") => "List",
+        ("of" | "copyOf", 1) if names_library_class(owner, "List") => "List",
+        ("of" | "copyOf", 1) if names_library_class(owner, "Set") => "Set",
+        ("of" | "copyOf", 2) if names_library_class(owner, "Map") => "Map",
+        ("of" | "empty", 1) if names_library_class(owner, "Stream") => "Stream",
+        _ => return None,
+    };
+    Some(TypeRef::Generic {
+        base: String::from(base),
+        args: type_args.clone(),
+    })
+}
+
 /// The declared key and value types of a `Map`/`HashMap` receiver, read
 /// syntactically from the local, parameter or field it names. `getMap()
 /// .forEach(...)` has no declaration to read, so its lambda is left in place
 /// and codegen reports the honest "lambdas are not supported" it always did.
 fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
-    let ty = match receiver {
-        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
-        // `this.vocab`
-        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
-            ctx.lookup(name)?
-        }
-        // `new HashMap<String, Integer>().forEach(...)` — the arguments are
-        // written right there.
-        Expr::NewObject {
-            class, type_args, ..
-        } if type_args.len() == 2 => TypeRef::Generic {
-            base: class.clone(),
-            args: type_args.clone(),
-        },
-        // `Collections.unmodifiableMap(m).keySet()` — a read-only view keeps
-        // the map's key and value types.
-        Expr::Call { method, args, .. }
-            if matches!(method.as_str(), "unmodifiableMap" | "unmodifiableSortedMap")
-                && args.len() == 1 =>
-        {
-            return map_type_args(&args[0], ctx);
-        }
-        // The same receiver shapes a LIST's element is read from: a cast, a
-        // ternary, an array element, and a call to a method whose declared
-        // return says what it gives back. A map returned by a method
-        // (`config().forEach((k, v) -> …)`) had no key or value type, so the
-        // lambda over it was refused for having no functional target — while
-        // the identical call on a declared variable compiled.
-        Expr::Cast { ty, .. } => ty.clone(),
-        Expr::Ternary { then, els, .. } => {
-            return map_type_args(then, ctx).or_else(|| map_type_args(els, ctx));
-        }
-        Expr::Index { array, .. } => match declared_array_type(array, ctx) {
-            Some(TypeRef::Array(elem)) => *elem,
+    let witnessed = generic_call_return(receiver, ctx).or_else(|| witnessed_return(receiver, ctx));
+    let ty = match witnessed {
+        Some(ty) => ty,
+        None => match receiver {
+            Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
+            // `this.vocab`
+            Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+                ctx.lookup(name)?
+            }
+            // `new HashMap<String, Integer>().forEach(...)` — the arguments are
+            // written right there.
+            Expr::NewObject {
+                class, type_args, ..
+            } if type_args.len() == 2 => TypeRef::Generic {
+                base: class.clone(),
+                args: type_args.clone(),
+            },
+            // `Collections.unmodifiableMap(m).keySet()` — a read-only view keeps
+            // the map's key and value types.
+            Expr::Call { method, args, .. }
+                if matches!(method.as_str(), "unmodifiableMap" | "unmodifiableSortedMap")
+                    && args.len() == 1 =>
+            {
+                return map_type_args(&args[0], ctx);
+            }
+            // The same receiver shapes a LIST's element is read from: a cast, a
+            // ternary, an array element, and a call to a method whose declared
+            // return says what it gives back. A map returned by a method
+            // (`config().forEach((k, v) -> …)`) had no key or value type, so the
+            // lambda over it was refused for having no functional target — while
+            // the identical call on a declared variable compiled.
+            Expr::Cast { ty, .. } => ty.clone(),
+            Expr::Ternary { then, els, .. } => {
+                return map_type_args(then, ctx).or_else(|| map_type_args(els, ctx));
+            }
+            Expr::Index { array, .. } => match declared_array_type(array, ctx) {
+                Some(TypeRef::Array(elem)) => *elem,
+                _ => return None,
+            },
+            Expr::Call {
+                receiver: owner,
+                method,
+                args,
+                ..
+            } if matches!(owner.as_deref(), None | Some(Expr::This { .. })) => {
+                let class = ctx.current_class?;
+                let shape = ctx
+                    .shapes
+                    .get(class)?
+                    .iter()
+                    .find(|shape| shape.name == *method && shape.arity == args.len())?;
+                shape.return_type.clone()
+            }
             _ => return None,
         },
-        Expr::Call {
-            receiver: owner,
-            method,
-            args,
-            ..
-        } if matches!(owner.as_deref(), None | Some(Expr::This { .. })) => {
-            let class = ctx.current_class?;
-            let shape = ctx
-                .shapes
-                .get(class)?
-                .iter()
-                .find(|shape| shape.name == *method && shape.arity == args.len())?;
-            shape.return_type.clone()
-        }
-        _ => return None,
     };
     let TypeRef::Generic { base, args } = ty else {
         return None;
@@ -3579,6 +3807,15 @@ fn declared_array_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 
 #[allow(clippy::too_many_lines)] // one arm per receiver shape
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    // A call to a generic method says what it returns once its variables are
+    // pinned — by an explicit witness, or by the arguments. Both say more than
+    // any of the shapes below: `Collections.<String>emptyList()` has no
+    // argument to read, and `box("ab")` returns `List<T>` as written.
+    if let Some(ty) = generic_call_return(receiver, ctx).or_else(|| witnessed_return(receiver, ctx))
+        && let Some(elem) = element_of_declared(&ty)
+    {
+        return Some(elem);
+    }
     // The shapes whose element is written down somewhere the pass can reach.
     // Reading only a NAME (and a `this` field) meant that a collection reached
     // through a CAST, a ternary, an array element or any library factory but
@@ -3933,6 +4170,7 @@ fn build_erased_lambda(
         method: name,
         args,
         span,
+        ..
     } = lambda
         && name == "not"
         && args.len() == 1
@@ -4137,6 +4375,7 @@ fn build_erased_lambda(
             is_protected: false,
             span,
             pre_init: 0,
+            declared_return: None,
         }],
         init_blocks: Vec::new(),
         nested: Vec::new(),
@@ -4391,6 +4630,7 @@ fn build_lambda_class(
         is_protected: false,
         span,
         pre_init: 0,
+        declared_return: None,
     };
 
     // The target is known to be a functional interface (it is in `sams`),
