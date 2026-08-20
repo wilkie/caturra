@@ -3526,10 +3526,9 @@ final`, or `from an inner class` for an anonymous class. Copying a
   enclosing instance as `this$0`; caturra captures it as a synthetic
   `__caturraOuter` field and resolves instance references through it, live
   on the real object, so a lambda mutating `field` writes the enclosing
-  object. Scoped to a lambda **directly** in an instance method: a nested
-  lambda reaching an instance field two levels up needs transitive capture
-  and is a compile error (javac accepts it — the safe direction), as is
-  capturing a `StringBuilder`. Pinned by
+  object. A lambda nested in another one reaches the same instance and the
+  same locals (see **Nested capture**); capturing a `StringBuilder` is still
+  a compile error (javac accepts it — the safe direction). Pinned by
   `diff_lambda_captures_enclosing_instance`. A captured local must be
   effectively final, enforced as for anonymous classes above.
 
@@ -6417,9 +6416,68 @@ capture. All four nestings behave the same way — lambda in lambda, anonymous i
 lambda, lambda in anonymous, anonymous in anonymous — which says the limit is
 the chain and not the lambda desugaring.
 
-It is now a bullet in the strictness list with two pins, and the boundary is
+It was a bullet in the strictness list with two pins, and the boundary was
 pinned too, so a fix would show up as three failing tests rather than as a
-silent widening.
+silent widening — which is exactly how it went: the capture chain was made
+transitive the same week (see **Nested capture**, below), and the three tests
+came back to say so.
+
+### Nested capture (2026-08-19)
+
+A lambda or anonymous class nested inside another one now reaches the enclosing
+instance and the enclosing method's locals, at any depth. The chain used to be
+ONE level: `outer = () -> { inner = () -> field; … }` did not compile, and the
+previous entry had just finished pinning that as a strictness.
+
+The capture pass runs where a class is CREATED, and by then a nested lambda is
+already a class of its own — so the outer class's body no longer contains the
+inner one's names, and the outer captured nothing on its behalf. The fix has
+three parts, and each is load-bearing on its own:
+
+- **Pull the capture down.** A class's free names are collected over its own
+  body AND over every class created inside it, transitively, so an outer lambda
+  captures what an inner one needs. The creation relation is the inverse of the
+  owner map, which the same walk produces, so phase 1 runs to a FIXED POINT: it
+  learns who creates whom, then re-walks knowing it. A single extra pass would
+  reach two levels and stop.
+- **See it from below.** A synthesized class's captures are FIELDS, not locals,
+  so when the body nested inside it is scanned they stand in for the enclosing
+  method's locals — seeded into the scope for that walk. Without this the inner
+  body's `local` looked free and got captured by nobody.
+- **Walk out for the instance.** `__caturraOuter` is injected wherever a body
+  names an enclosing instance member, and the WANT propagates upward to a fixed
+  point: a class three levels down reaches its outer instance through every
+  level in between, so each of them must hold one too.
+
+The subtle part is `this`. A lambda has none of its own — JLS §15.27.2 says
+`this` in a lambda is the enclosing instance — so the walk out skips lambda
+levels. It must STOP at an anonymous class, which does have one: inside a lambda
+written in an anonymous class, `this` is the anonymous object, and javac REJECTS
+`this.field` there for exactly that reason. Getting this wrong is invisible in
+every name-resolution probe and shows up only in identity (`got == this`) and in
+what the compiler refuses; skipping the anonymous level made 46 of 47 probes
+agree while quietly answering the wrong object.
+
+Which member a name means is decided against the union of the members along the
+chain, not the nearest owner — `field` inside a lambda inside an anonymous class
+is the top-level class's, reached by one hop per level, and the existing
+`__caturraOuter` chain walk in codegen resolves it once the fields exist.
+
+Probing this found a second, unrelated defect in the same neighbourhood: an
+anonymous class's SUPER-ARGUMENTS were typed by guessing at the argument
+expression, which only worked for a literal or a plain local. `new Base(field){}`
+— or any arithmetic, call, comparison or ternary — refused to compile at all.
+The arguments are forwarded verbatim to `super(…)`, so the synthesized
+constructor is now typed by the superclass constructor they reach whenever only
+one has that arity; where the superclass is overloaded on arity, the argument
+types still decide, so the guess was extended to the shapes that carry a type
+(binary numeric promotion, string concatenation, comparisons, unary operators,
+an agreeing ternary, and a bare field or call of the enclosing class).
+
+Pinned by `a_nested_lambda_reaches_the_enclosing_instance_and_its_locals`,
+`this_in_a_lambda_is_the_nearest_instance_with_one`,
+`a_lambda_in_an_anonymous_class_cannot_reach_out_through_this` and
+`an_anonymous_class_passes_any_expression_to_its_super_constructor`.
 
 ## Divergences from javac
 
@@ -6492,16 +6550,6 @@ entries after it was written down.
   normally written.
 - `Arrays.stream(array, from, to)` — the RANGE overload; the whole-array form
   is modelled.
-- A class nested inside another INNER class cannot reach the enclosing
-  INSTANCE, nor an enclosing method's local: `outer = () -> { inner = () ->
-  field; … }`. The capture chain is one level deep — a lambda or anonymous
-  class captures the enclosing `this` and the locals it reads, but a second
-  level would have to capture them FROM the first, and the inner class's owner
-  is the synthesized outer one, whose members are its own captures. Everything
-  that needs no chain works, and is pinned as such: static fields and methods,
-  constants, the outer lambda's own parameter, and nesting three deep over any
-  of those. All four nestings are affected equally (lambda in lambda, anonymous
-  in lambda, lambda in anonymous, anonymous in anonymous).
 
 **More permissive than javac** (caturra accepts; javac rejects). **Two
 known cases**, each asserted by `looser_than_javac!` so it cannot be forgotten:

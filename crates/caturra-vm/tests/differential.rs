@@ -32019,54 +32019,42 @@ public class MapReceiverShapes {
 "#
 );
 
-// An audit of every test that asserts a program should NOT compile, run against
-// a live javac, found one strictness that had never been enumerated: a class
-// nested inside another inner class cannot reach the enclosing INSTANCE, nor an
-// enclosing method's local.
+// The capture chain used to be ONE level deep: a lambda or anonymous class
+// captured the enclosing `this` and the locals it read, but a SECOND level had
+// to capture them from the first, and the inner class's owner is the
+// synthesized outer one, whose only members are its own captures — so a name
+// from two levels up resolved against nothing.
 //
-// The capture chain is one level deep. A lambda or anonymous class captures the
-// enclosing `this` and the locals it reads, but a SECOND level would have to
-// capture them from the first — the inner class's owner is the synthesized
-// outer one, whose members are its own captures, so a name from two levels up
-// resolves against nothing. Everything that does not need the chain works:
-// static fields and methods, constants, the outer lambda's own parameter, and
-// nesting three deep over any of those.
-stricter_than_javac!(
-    stricter_nested_lambda_reaching_an_instance_field,
-    "NestedInstanceCapture",
+// Both halves of the fix are load-bearing. A capture is pulled DOWN (an outer
+// class captures what a class created inside it needs, to a fixed point), and
+// the level below sees it: a synthesized class's captures stand in for the
+// enclosing method's locals when the body nested in it is scanned. `this` is
+// the subtle part — a lambda has none of its own (JLS 15.27.2), so the walk
+// out skips lambda levels but STOPS at an anonymous class, which has one.
+differential_test!(
+    a_nested_lambda_reaches_the_enclosing_instance_and_its_locals,
+    "NestedCapture",
     r"
 interface Fn {
     int go();
 }
 
-public class NestedInstanceCapture {
+public class NestedCapture {
     int field = 1;
 
-    int r() {
+    int m() {
+        return 20;
+    }
+
+    int instanceReach() {
         Fn outer = () -> {
-            Fn inner = () -> field;
+            Fn inner = () -> field + m();
             return inner.go();
         };
         return outer.go();
     }
 
-    public static void main(String[] args) {
-        System.out.println(new NestedInstanceCapture().r());
-    }
-}
-"
-);
-
-stricter_than_javac!(
-    stricter_nested_lambda_reaching_an_enclosing_local,
-    "NestedLocalCapture",
-    r"
-interface Fn {
-    int go();
-}
-
-public class NestedLocalCapture {
-    static int r() {
+    static int localReach() {
         int local = 5;
         Fn outer = () -> {
             Fn inner = () -> local;
@@ -32075,11 +32063,175 @@ public class NestedLocalCapture {
         return outer.go();
     }
 
+    int mixedAndDeep(int param) {
+        int local = 5;
+        Fn a = new Fn() {
+            public int go() {
+                Fn b = () -> {
+                    Fn c = new Fn() {
+                        public int go() {
+                            return field + local + param + m();
+                        }
+                    };
+                    return c.go();
+                };
+                return b.go();
+            }
+        };
+        return a.go();
+    }
+
+    int writesThrough() {
+        Fn a = () -> {
+            Fn b = () -> {
+                field = field + 1;
+                return field;
+            };
+            return b.go() + b.go();
+        };
+        return a.go();
+    }
+
     public static void main(String[] args) {
-        System.out.println(r());
+        NestedCapture n = new NestedCapture();
+        System.out.println(n.instanceReach());
+        System.out.println(localReach());
+        System.out.println(n.mixedAndDeep(9));
+        System.out.println(n.writesThrough());
+        System.out.println(n.field);
     }
 }
 "
+);
+
+// `this` inside a lambda is the enclosing INSTANCE, and inside a lambda written
+// in an anonymous class that instance is the anonymous object — not the object
+// enclosing it. Reaching two levels out for a name must not drag `this` along:
+// the identity below is what tells the two apart, and javac REJECTS
+// `this.field` there for the same reason.
+differential_test!(
+    this_in_a_lambda_is_the_nearest_instance_with_one,
+    "NestedThis",
+    r#"
+interface Fn {
+    Object go();
+}
+
+public class NestedThis {
+    int field = 3;
+
+    Object r() {
+        final NestedThis self = this;
+        Fn a = new Fn() {
+            int mine = 11;
+
+            int myM() {
+                return 12;
+            }
+
+            public Object go() {
+                Fn b = () -> this.mine + this.myM();
+                Fn c = () -> this;
+                Object got = c.go();
+                return b.go() + " " + (got == this) + " " + (got == self);
+            }
+        };
+        return a.go();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new NestedThis().r());
+    }
+}
+"#
+);
+
+differential_reject!(
+    a_lambda_in_an_anonymous_class_cannot_reach_out_through_this,
+    "ThisReach",
+    r"
+interface Fn {
+    int go();
+}
+
+public class ThisReach {
+    int field = 3;
+
+    int r() {
+        Fn a = new Fn() {
+            public int go() {
+                Fn b = () -> this.field;
+                return b.go();
+            }
+        };
+        return a.go();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new ThisReach().r());
+    }
+}
+"
+);
+
+// An anonymous class's super-arguments are forwarded VERBATIM to `super(…)`,
+// so the constructor synthesized to carry them is typed by the superclass
+// constructor they reach. Guessing from the argument EXPRESSION only worked
+// for a literal or a plain local, so `new Base(field){}` — or any arithmetic,
+// call or ternary — refused to compile at all.
+differential_test!(
+    an_anonymous_class_passes_any_expression_to_its_super_constructor,
+    "SuperArgShapes",
+    r#"
+class Base {
+    Object v;
+
+    Base(int x) {
+        v = "int " + x;
+    }
+
+    Base(String s) {
+        v = "String " + s;
+    }
+
+    Base(boolean b) {
+        v = "boolean " + b;
+    }
+}
+
+class Single {
+    long v;
+
+    Single(long x) {
+        v = x;
+    }
+}
+
+public class SuperArgShapes {
+    int field = 3;
+
+    int m() {
+        return 4;
+    }
+
+    public static void main(String[] args) {
+        new SuperArgShapes().run();
+    }
+
+    void run() {
+        int local = 5;
+        System.out.println(new Base(field) {}.v);
+        System.out.println(new Base(local + 1) {}.v);
+        System.out.println(new Base(field + local) {}.v);
+        System.out.println(new Base(m()) {}.v);
+        System.out.println(new Base(local > 1 ? 2 : 3) {}.v);
+        System.out.println(new Base(field > local) {}.v);
+        System.out.println(new Base("a" + field) {}.v);
+        System.out.println(new Base(-field) {}.v);
+        System.out.println(new Single(field * 2) {}.v);
+    }
+}
+"#
 );
 
 // What a nested lambda CAN reach, so the strictness above stays as narrow as it

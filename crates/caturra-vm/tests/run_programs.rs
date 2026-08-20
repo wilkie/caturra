@@ -12204,29 +12204,20 @@ fn a_lambda_reaches_the_enclosing_instance() {
     assert_eq!(out, "100\n200\n110\n123\n");
 }
 
-/// The capture is scoped to a lambda directly in an instance method. A nested
-/// lambda reaching an instance field two levels up needs transitive capture,
-/// which is unsupported — a compile error (javac accepts it, so the safe
-/// direction) rather than a wrong answer.
+/// A lambda nested in a lambda reaches an instance field two levels up. This
+/// used to be a compile error (the capture chain was one level), pinned here
+/// as the safe direction; the equivalence is `differential.rs`'s
+/// `a_nested_lambda_reaches_the_enclosing_instance_and_its_locals`.
 #[test]
-fn a_nested_lambda_reaching_an_instance_field_is_a_clean_error() {
-    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
-        path: String::from("M.java"),
-        text: String::from(
-            "interface Fn { int go(); } class M { int field = 1; \
-             int r() { Fn outer = () -> { Fn inner = () -> field; return inner.go(); }; \
-             return outer.go(); } }",
-        ),
-    }]);
-    assert!(!compilation.success(), "nested capture is not supported");
-    // A diagnostic, not a panic or bad bytecode.
-    assert!(
-        compilation
-            .diagnostics
-            .iter()
-            .any(|d| matches!(d.severity, caturra_compiler::diagnostics::Severity::Error)),
-        "expected a compile error"
+fn a_nested_lambda_reaches_an_instance_field() {
+    let out = run_stdout(
+        "interface Fn { int go(); } public class M { int field = 1; \
+         int r() { Fn outer = () -> { Fn inner = () -> field; return inner.go(); }; \
+         return outer.go(); } \
+         public static void main(String[] a) { System.out.println(new M().r()); } }",
+        "M",
     );
+    assert_eq!(out, "1\n");
 }
 
 /// A lambda (or method reference) passed to `list.add(...)` / `list.set(...)`

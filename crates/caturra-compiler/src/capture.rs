@@ -46,77 +46,89 @@ pub fn resolve_captures(
 
     // Phase 1: capture set per anonymous class (sorted for determinism), plus
     // the type of each super-constructor argument at its `new` site.
+    //
+    // Run TWICE. The first pass learns which classes each body creates (the
+    // owner map); the second uses that to make a capture set TRANSITIVE, so an
+    // outer lambda captures what a lambda nested inside it needs. One pass
+    // cannot do both: the relation is only known once every body has been
+    // walked, and it is what the walk needs.
+    let mut created_in: HashMap<String, Vec<String>> = HashMap::new();
+    let mut outer_caps: HashMap<String, Vec<(String, TypeRef)>> = HashMap::new();
     let mut found = Found::default();
     let mut diagnostics: Vec<crate::diagnostics::Diagnostic> = Vec::new();
-    for (path, unit) in units.iter() {
-        for class in &unit.classes {
-            for method in &class.methods {
-                let mut scope: Vec<HashMap<String, TypeRef>> = vec![
-                    method
-                        .params
-                        .iter()
-                        .map(|p| (p.name.clone(), p.ty.clone()))
-                        .collect(),
-                ];
-                // A parameter arrives initialized, so any assignment to it
-                // costs it its effective finality.
-                let mut mutations = Mutations::default();
-                mutations
-                    .initialized
-                    .extend(method.params.iter().map(|p| p.name.clone()));
-                mutations_in_stmts(&method.body, &mut mutations);
-                find_in_stmts(
-                    &method.body,
-                    &mut scope,
-                    &anon_bodies,
-                    &mut found,
-                    &class.name,
-                    &mutations,
-                );
+    // Phase 1 runs to a fixed point: each pass learns which classes are
+    // created inside which (so a capture can be pulled DOWN transitively) and
+    // what the level above ended up holding (so a capture can be seen from
+    // below). One pass only ever reaches one level out.
+    for round in 0..6 {
+        if round > 0 {
+            created_in.clear();
+            for (inner, owner) in &found.owner {
+                created_in
+                    .entry(owner.clone())
+                    .or_default()
+                    .push(inner.clone());
             }
-            for block in &class.init_blocks {
-                let mut scope: Vec<HashMap<String, TypeRef>> = vec![HashMap::new()];
-                let mut mutations = Mutations::default();
-                mutations_in_stmts(&block.body, &mut mutations);
-                find_in_stmts(
-                    &block.body,
-                    &mut scope,
-                    &anon_bodies,
-                    &mut found,
-                    &class.name,
-                    &mutations,
-                );
+            let next = found.captures.clone();
+            if round > 1 && next == outer_caps {
+                break;
             }
-            // Field initializers hold `new Anon(){...}` too — both a field like
-            // `Runnable r = new Runnable(){...};` and, crucially, an enum
-            // constant's synthesized `new Anon$N("NAME", ordinal, ...)`. Without
-            // this the anon class never gets its super-forwarding constructor.
-            for field in &class.fields {
-                if let Some(init) = &field.init {
-                    let mut scope: Vec<HashMap<String, TypeRef>> = vec![HashMap::new()];
-                    find_in_expr(
-                        init,
-                        &mut scope,
-                        &anon_bodies,
-                        &mut found,
-                        &class.name,
-                        &Mutations::default(),
-                    );
-                }
-            }
+            outer_caps = next;
+            found = Found::default();
+            diagnostics.clear();
         }
-        diagnostics.extend(
-            found
-                .diagnostics
-                .drain(..)
-                .map(|(message, span)| crate::diagnostics::Diagnostic::error(path, message, span)),
+        collect_captures(
+            units,
+            &anon_bodies,
+            &created_in,
+            &outer_caps,
+            &mut found,
+            &mut diagnostics,
         );
     }
     let mut captures = found.captures;
-    let super_args = found.super_args;
+    let mut super_args = found.super_args;
     let owners = found.owner;
 
-    inject_outer_captures(units, &anon_bodies, &owners, &mut captures);
+    // The super-args a `new Base(expr){…}` site passes are forwarded VERBATIM
+    // to `super(…)`, so the constructor that carries them is typed by the
+    // superclass constructor they reach — guessing from the argument
+    // expression only works for a literal or a plain local, which left
+    // `new Base(field){}` (or any arithmetic, call or ternary) refusing to
+    // compile at all.
+    let super_ctors: HashMap<String, Vec<Vec<TypeRef>>> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .map(|c| {
+            (
+                c.name.clone(),
+                c.methods
+                    .iter()
+                    .filter(|m| m.is_constructor)
+                    .map(|m| m.params.iter().map(|p| p.ty.clone()).collect())
+                    .collect(),
+            )
+        })
+        .collect();
+    for (name, types) in &mut super_args {
+        let Some(body) = anon_bodies.get(name) else {
+            continue;
+        };
+        let Some(base) = body.superclass.as_ref().and_then(|s| super_ctors.get(s)) else {
+            continue;
+        };
+        // Only when ONE constructor can be the one called: with several of the
+        // same arity the site's own argument types are what picks between
+        // them, and that is overload resolution, which happens in codegen.
+        let mut matching = base.iter().filter(|params| params.len() == types.len());
+        if let Some(params) = matching.next()
+            && matching.next().is_none()
+        {
+            types.clone_from(params);
+        }
+    }
+
+    inject_outer_captures(units, &anon_bodies, &owners, &created_in, &mut captures);
 
     // Phase 2a: synthesize the fields and constructor on each anon class that
     // captures locals or forwards args to super.
@@ -175,6 +187,123 @@ pub fn resolve_captures(
     diagnostics
 }
 
+/// One walk over every body, recording each anonymous class's capture set,
+/// its owner, and its super-constructor argument types.
+fn collect_captures(
+    units: &[(String, CompilationUnit)],
+    anon_bodies: &HashMap<String, ClassDecl>,
+    created_in: &HashMap<String, Vec<String>>,
+    outer_caps: &HashMap<String, Vec<(String, TypeRef)>>,
+    found: &mut Found,
+    diagnostics: &mut Vec<crate::diagnostics::Diagnostic>,
+) {
+    for (path, unit) in units {
+        for class in &unit.classes {
+            // What a `new Base(expr){…}` site inside this class can name
+            // without a qualifier — the super-argument types are read off the
+            // expression, and a bare field or call is the common shape.
+            let members = MemberTypes {
+                fields: class
+                    .fields
+                    .iter()
+                    .map(|f| (f.name.clone(), f.ty.clone()))
+                    .collect(),
+                methods: class
+                    .methods
+                    .iter()
+                    .filter(|m| !m.is_constructor)
+                    .map(|m| (m.name.clone(), m.return_type.clone()))
+                    .collect(),
+            };
+
+            // A synthesized class's own captures are FIELDS, not locals — but
+            // to a class nested inside it they stand for the enclosing
+            // method's locals, so a name two levels up has to find them here
+            // or it looks free and gets captured by nobody.
+            let inherited: HashMap<String, TypeRef> = outer_caps
+                .get(&class.name)
+                .into_iter()
+                .flatten()
+                .filter(|(name, _)| name != OUTER_FIELD)
+                .cloned()
+                .collect();
+            for method in &class.methods {
+                let mut scope: Vec<HashMap<String, TypeRef>> = vec![
+                    inherited.clone(),
+                    method
+                        .params
+                        .iter()
+                        .map(|p| (p.name.clone(), p.ty.clone()))
+                        .collect(),
+                ];
+                // A parameter arrives initialized, so any assignment to it
+                // costs it its effective finality.
+                let mut mutations = Mutations::default();
+                mutations
+                    .initialized
+                    .extend(method.params.iter().map(|p| p.name.clone()));
+                mutations_in_stmts(&method.body, &mut mutations);
+                find_in_stmts(
+                    &method.body,
+                    &mut scope,
+                    found,
+                    &Walk {
+                        anon: anon_bodies,
+                        owner: &class.name,
+                        mutations: &mutations,
+                        created_in,
+                        members: &members,
+                    },
+                );
+            }
+            for block in &class.init_blocks {
+                let mut scope: Vec<HashMap<String, TypeRef>> = vec![inherited.clone()];
+                let mut mutations = Mutations::default();
+                mutations_in_stmts(&block.body, &mut mutations);
+                find_in_stmts(
+                    &block.body,
+                    &mut scope,
+                    found,
+                    &Walk {
+                        anon: anon_bodies,
+                        owner: &class.name,
+                        mutations: &mutations,
+                        created_in,
+                        members: &members,
+                    },
+                );
+            }
+            // Field initializers hold `new Anon(){...}` too — both a field like
+            // `Runnable r = new Runnable(){...};` and, crucially, an enum
+            // constant's synthesized `new Anon$N("NAME", ordinal, ...)`. Without
+            // this the anon class never gets its super-forwarding constructor.
+            for field in &class.fields {
+                if let Some(init) = &field.init {
+                    let mut scope: Vec<HashMap<String, TypeRef>> = vec![inherited.clone()];
+                    find_in_expr(
+                        init,
+                        &mut scope,
+                        found,
+                        &Walk {
+                            anon: anon_bodies,
+                            owner: &class.name,
+                            mutations: &Mutations::default(),
+                            created_in,
+                            members: &members,
+                        },
+                    );
+                }
+            }
+        }
+        diagnostics.extend(
+            found
+                .diagnostics
+                .drain(..)
+                .map(|(message, span)| crate::diagnostics::Diagnostic::error(path, message, span)),
+        );
+    }
+}
+
 /// A lambda that reads or writes an enclosing INSTANCE member captures the
 /// enclosing `this`, as Java does (its `this$0`). Prepend a synthetic
 /// `__caturraOuter` capture to each such lambda. Scoped to lambdas: they have
@@ -185,6 +314,7 @@ fn inject_outer_captures(
     units: &[(String, CompilationUnit)],
     anon_bodies: &HashMap<String, ClassDecl>,
     owners: &HashMap<String, String>,
+    created_in: &HashMap<String, Vec<String>>,
     captures: &mut HashMap<String, Vec<(String, TypeRef)>>,
 ) {
     let instance_members: HashMap<String, (HashSet<String>, HashSet<String>)> = units
@@ -213,13 +343,25 @@ fn inject_outer_captures(
         .filter_map(|c| c.superclass.clone().map(|s| (c.name.clone(), s)))
         .collect();
 
+    // Which classes want the enclosing instance, propagated to a FIXED POINT:
+    // a class three levels down reaches its outer instance through every
+    // level in between, so each of them has to hold it too.
+    let mut wants: HashMap<String, String> = HashMap::new();
     for (name, body) in anon_bodies {
-        let Some(owner) = owners.get(name) else {
+        // The enclosing INSTANCE is the first owner that is a real class: a
+        // lambda nested in a lambda is owned by a synthesized class, whose
+        // `this` is the outer lambda rather than the object whose members the
+        // body is reading. Walking to the first real owner is what makes the
+        // inner reach the same instance the outer one did.
+        let Some(owner) = enclosing_instance(name, owners) else {
             continue;
         };
-        let Some((fields, methods)) = instance_members.get(owner) else {
-            continue;
-        };
+        // What an enclosing name can mean is everything declared ANYWHERE up
+        // the chain, not just in the nearest owner: `field` inside a lambda
+        // inside an anonymous class is the top-level class's, reached by one
+        // hop per level. Lambda levels declare nothing of their own.
+        let (fields, methods) = enclosing_members(name, owners, &instance_members);
+        let (fields, methods) = (&fields, &methods);
         let needs = if crate::is_lambda_class(name) {
             lambda_needs_outer(body, fields, methods)
         } else {
@@ -231,15 +373,74 @@ fn inject_outer_captures(
             class_needs_outer(body, fields, methods, &own_fields, &own_methods)
         };
         if needs {
-            // The outer instance is captured first, so its constructor
-            // parameter precedes the local captures.
-            let caps = captures.entry(name.clone()).or_default();
-            caps.insert(
-                0,
-                (String::from(OUTER_FIELD), TypeRef::Named(owner.clone())),
-            );
+            wants.insert(name.clone(), owner);
         }
     }
+    loop {
+        let mut grew = false;
+        for (name, inners) in created_in {
+            if wants.contains_key(name) || !anon_bodies.contains_key(name) {
+                continue;
+            }
+            if inners.iter().any(|inner| wants.contains_key(inner))
+                && let Some(owner) = enclosing_instance(name, owners)
+            {
+                wants.insert(name.clone(), owner);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    for (name, owner) in wants {
+        // The outer instance is captured first, so its constructor
+        // parameter precedes the local captures.
+        let caps = captures.entry(name).or_default();
+        caps.insert(0, (String::from(OUTER_FIELD), TypeRef::Named(owner)));
+    }
+}
+
+/// Every instance member reachable by simple name from a class body: the
+/// union over the owner chain. A lambda level contributes nothing — its only
+/// fields are its own captures, which a nested body reaches as locals.
+fn enclosing_members(
+    name: &str,
+    owners: &HashMap<String, String>,
+    instance_members: &HashMap<String, (HashSet<String>, HashSet<String>)>,
+) -> (HashSet<String>, HashSet<String>) {
+    let mut fields = HashSet::new();
+    let mut methods = HashSet::new();
+    let mut current = name.to_owned();
+    for _ in 0..=owners.len() {
+        let Some(owner) = owners.get(&current) else {
+            break;
+        };
+        if !crate::is_lambda_class(owner)
+            && let Some((f, m)) = instance_members.get(owner)
+        {
+            fields.extend(f.iter().cloned());
+            methods.extend(m.iter().cloned());
+        }
+        current = owner.clone();
+    }
+    (fields, methods)
+}
+
+/// The instance an enclosing name is reached through — the first owner that
+/// HAS a `this` of its own. A lambda does not (JLS §15.27.2: its `this` is
+/// the enclosing instance), so a lambda inside a lambda reaches the same
+/// object the outer one did; an anonymous or local class does, so the walk
+/// stops there.
+fn enclosing_instance(name: &str, owners: &HashMap<String, String>) -> Option<String> {
+    let mut current = owners.get(name)?.clone();
+    for _ in 0..=owners.len() {
+        if !crate::is_lambda_class(&current) {
+            return Some(current);
+        }
+        current.clone_from(owners.get(&current)?);
+    }
+    None
 }
 
 /// Add a field per capture and a constructor that forwards `supers` to
@@ -461,9 +662,28 @@ fn scope_lookup(scope: &Scope, name: &str) -> Option<TypeRef> {
 /// students actually pass: a local/param name, a `new T(...)`, a cast, an
 /// array creation, or a literal. `super(...)` resolution then matches it (with
 /// assignability) against the real superclass constructor.
-fn infer_type(expr: &Expr, scope: &Scope) -> Option<TypeRef> {
+/// The types of the members a body can name without a qualifier: the field
+/// types and the method return types, kept apart because Java lets a field
+/// and a method share a name.
+#[derive(Default)]
+struct MemberTypes {
+    fields: HashMap<String, TypeRef>,
+    methods: HashMap<String, TypeRef>,
+}
+
+fn infer_type(expr: &Expr, scope: &Scope, members: &MemberTypes) -> Option<TypeRef> {
     match expr {
-        Expr::Name { path, .. } if path.len() == 1 => scope_lookup(scope, &path[0]),
+        Expr::Name { path, .. } if path.len() == 1 => {
+            scope_lookup(scope, &path[0]).or_else(|| members.fields.get(&path[0]).cloned())
+        }
+        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+            members.fields.get(name).cloned()
+        }
+        Expr::Call {
+            receiver: None,
+            method,
+            ..
+        } => members.methods.get(method).cloned(),
         Expr::NewObject { class, .. } => Some(TypeRef::Named(class.clone())),
         Expr::NewArray { elem, dims, .. } => {
             let mut ty = elem.clone();
@@ -473,6 +693,45 @@ fn infer_type(expr: &Expr, scope: &Scope) -> Option<TypeRef> {
             Some(ty)
         }
         Expr::Cast { ty, .. } => Some(ty.clone()),
+        // JLS §15.18/§15.20/§15.22: an arithmetic operator promotes, a
+        // comparison answers a boolean, and `+` with a String operand
+        // concatenates.
+        Expr::Binary { op, lhs, rhs, .. } => {
+            use crate::ast::BinaryOp as B;
+            match op {
+                B::Lt | B::Le | B::Gt | B::Ge | B::Eq | B::Ne | B::And | B::Or => {
+                    Some(TypeRef::Boolean)
+                }
+                B::Shl | B::Shr | B::Ushr => {
+                    promote(&infer_type(lhs, scope, members)?, &TypeRef::Int)
+                }
+                _ => {
+                    let (l, r) = (
+                        infer_type(lhs, scope, members)?,
+                        infer_type(rhs, scope, members)?,
+                    );
+                    let string = TypeRef::Named(String::from("String"));
+                    if *op == B::Add && (l == string || r == string) {
+                        return Some(string);
+                    }
+                    if matches!(l, TypeRef::Boolean) && matches!(r, TypeRef::Boolean) {
+                        return Some(TypeRef::Boolean);
+                    }
+                    promote(&l, &r)
+                }
+            }
+        }
+        Expr::Unary { op, operand, .. } => match op {
+            crate::ast::UnaryOp::Not => Some(TypeRef::Boolean),
+            _ => promote(&infer_type(operand, scope, members)?, &TypeRef::Int),
+        },
+        // Only when both arms agree: the full conditional-expression rules
+        // (JLS §15.25) are codegen's, and a wrong guess here would be worse
+        // than no guess.
+        Expr::Ternary { then, els, .. } => {
+            let then = infer_type(then, scope, members)?;
+            (then == infer_type(els, scope, members)?).then_some(then)
+        }
         Expr::Literal { value, .. } => Some(match value {
             crate::ast::Literal::Int(_) => TypeRef::Int,
             crate::ast::Literal::Long(_) => TypeRef::Long,
@@ -487,39 +746,52 @@ fn infer_type(expr: &Expr, scope: &Scope) -> Option<TypeRef> {
     }
 }
 
-fn find_in_stmts(
-    stmts: &[Stmt],
-    scope: &mut Scope,
-    anon: &HashMap<String, ClassDecl>,
-    out: &mut Found,
-    owner: &str,
-    mutations: &Mutations,
-) {
+/// Binary numeric promotion (JLS §5.6.2), for the primitive operands only —
+/// anything else (a boxed type, an unknown name) declines to guess.
+fn promote(lhs: &TypeRef, rhs: &TypeRef) -> Option<TypeRef> {
+    for wide in [TypeRef::Double, TypeRef::Float, TypeRef::Long] {
+        if *lhs == wide || *rhs == wide {
+            return Some(wide);
+        }
+    }
+    let numeric = |t: &TypeRef| {
+        matches!(
+            t,
+            TypeRef::Int | TypeRef::Short | TypeRef::Byte | TypeRef::Char
+        )
+    };
+    (numeric(lhs) && numeric(rhs)).then_some(TypeRef::Int)
+}
+
+/// The context a capture walk carries: what the synthesized classes are, whose
+/// body is being walked, and what a name in it can turn out to mean.
+struct Walk<'a> {
+    anon: &'a HashMap<String, ClassDecl>,
+    owner: &'a str,
+    mutations: &'a Mutations,
+    created_in: &'a HashMap<String, Vec<String>>,
+    members: &'a MemberTypes,
+}
+
+fn find_in_stmts(stmts: &[Stmt], scope: &mut Scope, out: &mut Found, walk: &Walk) {
     scope.push(HashMap::new());
     for stmt in stmts {
-        find_in_stmt(stmt, scope, anon, out, owner, mutations);
+        find_in_stmt(stmt, scope, out, walk);
     }
     scope.pop();
 }
 
 #[allow(clippy::match_same_arms)]
 #[allow(clippy::too_many_lines)] // capture walk, one arm per statement kind
-fn find_in_stmt(
-    stmt: &Stmt,
-    scope: &mut Scope,
-    anon: &HashMap<String, ClassDecl>,
-    out: &mut Found,
-    owner: &str,
-    mutations: &Mutations,
-) {
+fn find_in_stmt(stmt: &Stmt, scope: &mut Scope, out: &mut Found, walk: &Walk) {
     match stmt {
-        Stmt::Block(body) => find_in_stmts(body, scope, anon, out, owner, mutations),
+        Stmt::Block(body) => find_in_stmts(body, scope, out, walk),
         Stmt::LocalDecl {
             ty, declarators, ..
         } => {
             for d in declarators {
                 if let Some(init) = &d.init {
-                    find_in_expr(init, scope, anon, out, owner, mutations);
+                    find_in_expr(init, scope, out, walk);
                 }
                 // The variable is in scope for later statements.
                 if let Some(frame) = scope.last_mut() {
@@ -528,23 +800,23 @@ fn find_in_stmt(
             }
         }
         Stmt::Expr(e) | Stmt::Throw { value: e, .. } => {
-            find_in_expr(e, scope, anon, out, owner, mutations);
+            find_in_expr(e, scope, out, walk);
         }
-        Stmt::Assign { value, .. } => find_in_expr(value, scope, anon, out, owner, mutations),
-        Stmt::Return { value: Some(e), .. } => find_in_expr(e, scope, anon, out, owner, mutations),
+        Stmt::Assign { value, .. } => find_in_expr(value, scope, out, walk),
+        Stmt::Return { value: Some(e), .. } => find_in_expr(e, scope, out, walk),
         Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
         Stmt::If {
             cond, then, els, ..
         } => {
-            find_in_expr(cond, scope, anon, out, owner, mutations);
-            find_in_stmt(then, scope, anon, out, owner, mutations);
+            find_in_expr(cond, scope, out, walk);
+            find_in_stmt(then, scope, out, walk);
             if let Some(e) = els {
-                find_in_stmt(e, scope, anon, out, owner, mutations);
+                find_in_stmt(e, scope, out, walk);
             }
         }
         Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
-            find_in_expr(cond, scope, anon, out, owner, mutations);
-            find_in_stmt(body, scope, anon, out, owner, mutations);
+            find_in_expr(cond, scope, out, walk);
+            find_in_stmt(body, scope, out, walk);
         }
         Stmt::For {
             init,
@@ -555,15 +827,15 @@ fn find_in_stmt(
         } => {
             scope.push(HashMap::new());
             if let Some(s) = init {
-                find_in_stmt(s, scope, anon, out, owner, mutations);
+                find_in_stmt(s, scope, out, walk);
             }
             if let Some(c) = cond {
-                find_in_expr(c, scope, anon, out, owner, mutations);
+                find_in_expr(c, scope, out, walk);
             }
             for s in update {
-                find_in_stmt(s, scope, anon, out, owner, mutations);
+                find_in_stmt(s, scope, out, walk);
             }
-            find_in_stmt(body, scope, anon, out, owner, mutations);
+            find_in_stmt(body, scope, out, walk);
             scope.pop();
         }
         Stmt::ForEach {
@@ -573,19 +845,19 @@ fn find_in_stmt(
             body,
             ..
         } => {
-            find_in_expr(iterable, scope, anon, out, owner, mutations);
+            find_in_expr(iterable, scope, out, walk);
             scope.push(HashMap::new());
             if let Some(frame) = scope.last_mut() {
                 frame.insert(name.clone(), ty.clone());
             }
-            find_in_stmt(body, scope, anon, out, owner, mutations);
+            find_in_stmt(body, scope, out, walk);
             scope.pop();
         }
         Stmt::Switch { selector, arms, .. } => {
-            find_in_expr(selector, scope, anon, out, owner, mutations);
+            find_in_expr(selector, scope, out, walk);
             for arm in arms {
                 for stmt in &arm.body {
-                    find_in_stmt(stmt, scope, anon, out, owner, mutations);
+                    find_in_stmt(stmt, scope, out, walk);
                 }
             }
         }
@@ -595,7 +867,7 @@ fn find_in_stmt(
             finally_body,
             ..
         } => {
-            find_in_stmts(body, scope, anon, out, owner, mutations);
+            find_in_stmts(body, scope, out, walk);
             for c in catches {
                 scope.push(HashMap::new());
                 if let Some(frame) = scope.last_mut() {
@@ -605,31 +877,24 @@ fn find_in_stmt(
                         frame.insert(c.name.clone(), ty.clone());
                     }
                 }
-                find_in_stmts(&c.body, scope, anon, out, owner, mutations);
+                find_in_stmts(&c.body, scope, out, walk);
                 scope.pop();
             }
             if let Some(fin) = finally_body {
-                find_in_stmts(fin, scope, anon, out, owner, mutations);
+                find_in_stmts(fin, scope, out, walk);
             }
         }
-        Stmt::Labeled { body, .. } => find_in_stmt(body, scope, anon, out, owner, mutations),
+        Stmt::Labeled { body, .. } => find_in_stmt(body, scope, out, walk),
         Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => {
             for a in args {
-                find_in_expr(a, scope, anon, out, owner, mutations);
+                find_in_expr(a, scope, out, walk);
             }
         }
     }
 }
 
 #[allow(clippy::too_many_lines)] // capture walk, one arm per expression kind
-fn find_in_expr(
-    expr: &Expr,
-    scope: &mut Scope,
-    anon: &HashMap<String, ClassDecl>,
-    out: &mut Found,
-    owner: &str,
-    mutations: &Mutations,
-) {
+fn find_in_expr(expr: &Expr, scope: &mut Scope, out: &mut Found, walk: &Walk) {
     match expr {
         Expr::NewObject {
             class,
@@ -644,15 +909,15 @@ fn find_in_expr(
             // `o.new Inner()` failed with "cannot find variable 'o'" because
             // `o` was never captured.
             if let Some(outer) = outer {
-                find_in_expr(outer, scope, anon, out, owner, mutations);
+                find_in_expr(outer, scope, out, walk);
             }
             for a in args {
-                find_in_expr(a, scope, anon, out, owner, mutations);
+                find_in_expr(a, scope, out, walk);
             }
-            if let Some(body) = anon.get(class)
+            if let Some(body) = walk.anon.get(class)
                 && !out.captures.contains_key(class)
             {
-                let caps = captures_of(body, scope);
+                let caps = captures_of(body, scope, walk.anon, walk.created_in);
                 // JLS §4.12.4: a captured local must be final or effectively
                 // final. Copying it into a synthetic field hides a later
                 // write, so the program would quietly disagree with a JDK
@@ -667,7 +932,7 @@ fn find_in_expr(
                     if from_method_ref {
                         break;
                     }
-                    if !mutations.effectively_final(name) || written_inside.contains(name) {
+                    if !walk.mutations.effectively_final(name) || written_inside.contains(name) {
                         let what = if crate::is_lambda_class(class) {
                             "a lambda expression"
                         } else {
@@ -683,13 +948,13 @@ fn find_in_expr(
                     }
                 }
                 out.captures.insert(class.clone(), caps);
-                out.owner.insert(class.clone(), owner.to_owned());
+                out.owner.insert(class.clone(), walk.owner.to_owned());
                 // These args (the ones the parser recorded) are the super-args;
                 // captured locals get appended later, in phase 2b.
                 if !args.is_empty() {
                     let types = args
                         .iter()
-                        .map(|a| infer_type(a, scope))
+                        .map(|a| infer_type(a, scope, walk.members))
                         .collect::<Vec<_>>();
                     out.super_args.insert(
                         class.clone(),
@@ -703,20 +968,20 @@ fn find_in_expr(
         }
         Expr::Call { receiver, args, .. } => {
             if let Some(r) = receiver {
-                find_in_expr(r, scope, anon, out, owner, mutations);
+                find_in_expr(r, scope, out, walk);
             }
             for a in args {
-                find_in_expr(a, scope, anon, out, owner, mutations);
+                find_in_expr(a, scope, out, walk);
             }
         }
         Expr::SuperMethodCall { args, .. } => {
             for a in args {
-                find_in_expr(a, scope, anon, out, owner, mutations);
+                find_in_expr(a, scope, out, walk);
             }
         }
         Expr::Binary { lhs, rhs, .. } => {
-            find_in_expr(lhs, scope, anon, out, owner, mutations);
-            find_in_expr(rhs, scope, anon, out, owner, mutations);
+            find_in_expr(lhs, scope, out, walk);
+            find_in_expr(rhs, scope, out, walk);
         }
         Expr::Unary { operand, .. }
         | Expr::Cast { operand, .. }
@@ -724,58 +989,58 @@ fn find_in_expr(
             object: operand, ..
         }
         | Expr::InstanceOf { value: operand, .. } => {
-            find_in_expr(operand, scope, anon, out, owner, mutations);
+            find_in_expr(operand, scope, out, walk);
         }
         Expr::Index { array, index, .. } => {
-            find_in_expr(array, scope, anon, out, owner, mutations);
-            find_in_expr(index, scope, anon, out, owner, mutations);
+            find_in_expr(array, scope, out, walk);
+            find_in_expr(index, scope, out, walk);
         }
         Expr::Ternary {
             cond, then, els, ..
         } => {
-            find_in_expr(cond, scope, anon, out, owner, mutations);
-            find_in_expr(then, scope, anon, out, owner, mutations);
-            find_in_expr(els, scope, anon, out, owner, mutations);
+            find_in_expr(cond, scope, out, walk);
+            find_in_expr(then, scope, out, walk);
+            find_in_expr(els, scope, out, walk);
         }
-        Expr::IncDec { target, .. } => find_in_expr(target, scope, anon, out, owner, mutations),
+        Expr::IncDec { target, .. } => find_in_expr(target, scope, out, walk),
         Expr::NewArray { dims, init, .. } => {
             for d in dims.iter().flatten() {
-                find_in_expr(d, scope, anon, out, owner, mutations);
+                find_in_expr(d, scope, out, walk);
             }
             if let Some(elems) = init {
                 for e in elems {
-                    find_in_expr(e, scope, anon, out, owner, mutations);
+                    find_in_expr(e, scope, out, walk);
                 }
             }
         }
         Expr::ArrayLiteral { elements, .. } => {
             for e in elements {
-                find_in_expr(e, scope, anon, out, owner, mutations);
+                find_in_expr(e, scope, out, walk);
             }
         }
         Expr::MethodRef { qualifier, .. } => {
-            find_in_expr(qualifier, scope, anon, out, owner, mutations);
+            find_in_expr(qualifier, scope, out, walk);
         }
         Expr::Lambda { body, .. } => match body {
-            LambdaBody::Expr(e) => find_in_expr(e, scope, anon, out, owner, mutations),
+            LambdaBody::Expr(e) => find_in_expr(e, scope, out, walk),
             LambdaBody::Block(stmts) => {
                 for s in stmts {
-                    find_in_stmt(s, scope, anon, out, owner, mutations);
+                    find_in_stmt(s, scope, out, walk);
                 }
             }
         },
         Expr::Assign { target, value, .. } => {
             match target {
                 crate::ast::AssignTarget::Index { array, index } => {
-                    find_in_expr(array, scope, anon, out, owner, mutations);
-                    find_in_expr(index, scope, anon, out, owner, mutations);
+                    find_in_expr(array, scope, out, walk);
+                    find_in_expr(index, scope, out, walk);
                 }
                 crate::ast::AssignTarget::Field { object, .. } => {
-                    find_in_expr(object, scope, anon, out, owner, mutations);
+                    find_in_expr(object, scope, out, walk);
                 }
                 crate::ast::AssignTarget::Var(_) => {}
             }
-            find_in_expr(value, scope, anon, out, owner, mutations);
+            find_in_expr(value, scope, out, walk);
         }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
@@ -784,8 +1049,13 @@ fn find_in_expr(
 /// The captures of an anonymous class: its free simple names that are
 /// bound as locals in the enclosing scope, with their declared types,
 /// sorted by name.
-fn captures_of(body: &ClassDecl, enclosing: &Scope) -> Vec<(String, TypeRef)> {
-    let free = free_names(body);
+fn captures_of(
+    body: &ClassDecl,
+    enclosing: &Scope,
+    anon: &HashMap<String, ClassDecl>,
+    created_in: &HashMap<String, Vec<String>>,
+) -> Vec<(String, TypeRef)> {
+    let free = free_names_deep(body, anon, created_in);
     let mut caps: Vec<(String, TypeRef)> = free
         .into_iter()
         .filter_map(|name| scope_lookup(enclosing, &name).map(|ty| (name, ty)))
@@ -798,6 +1068,45 @@ fn captures_of(body: &ClassDecl, enclosing: &Scope) -> Vec<(String, TypeRef)> {
 
 /// Simple names referenced in the body that are not bound within it
 /// (its own fields, method parameters, or locals).
+/// The free names of a class AND of every anonymous or lambda class created
+/// inside it, transitively.
+///
+/// A capture set is computed where the class is CREATED, and by then a nested
+/// lambda is already a class of its own — its body is not part of the enclosing
+/// one, so its free names were invisible. The outer class then captured nothing
+/// on the inner's behalf and the inner had nowhere to read the name from:
+/// `outer = () -> { inner = () -> field; … }` could not see `field` two levels
+/// up, though one level worked. Every level must capture what the levels below
+/// it need.
+///
+/// `created_in` says which classes each body instantiates — the inverse of the
+/// owner map, which a first pass over the same bodies already produces.
+fn free_names_deep(
+    class: &ClassDecl,
+    anon: &HashMap<String, ClassDecl>,
+    created_in: &HashMap<String, Vec<String>>,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut stack = vec![class.name.clone()];
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Some(name) = stack.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let decl = if name == class.name {
+            Some(class)
+        } else {
+            anon.get(&name)
+        };
+        let Some(decl) = decl else { continue };
+        out.extend(free_names(decl));
+        for inner in created_in.get(&name).into_iter().flatten() {
+            stack.push(inner.clone());
+        }
+    }
+    out
+}
+
 fn free_names(class: &ClassDecl) -> HashSet<String> {
     let fields: HashSet<String> = class.fields.iter().map(|f| f.name.clone()).collect();
     let mut free = HashSet::new();
@@ -1170,6 +1479,10 @@ fn rewrite_expr(expr: &mut Expr, captures: &HashMap<String, Vec<(String, TypeRef
             // site. `__caturraOuter` is the enclosing instance itself.
             args.extend(caps.iter().map(|(name, _)| {
                 if name == OUTER_FIELD {
+                    // `this` is already the right object at either kind of
+                    // site: a real class's own instance, and — inside a
+                    // lambda, which has none — the instance it captured,
+                    // which is exactly what a lambda nested in it reaches.
                     Expr::This { span }
                 } else {
                     Expr::Name {
