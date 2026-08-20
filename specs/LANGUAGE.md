@@ -6646,7 +6646,17 @@ straight as an argument — had no type, while the identical stream held in a
 variable first passed. It also read `Stream.of`'s element from the FIRST
 argument where the emitter joins them; both now join.
 
-Pinned by `the_primitive_streams_have_their_own_factories`.
+The primitive OPTIONALS had the same shape of gap, closed the same way
+(2026-08-20): a stream's terminal answers an `OptionalInt`, and
+`OptionalInt.of(5)` resolved nowhere. They have `of` and `empty` now, over a
+value whose width the class name carries — found by a sweep of 46 expressions
+whose printed TEXT is subtle (grouping and padding in `format`, the radix and
+sign conversions, `Double.toString`'s thresholds, rounding halfway cases,
+`floorDiv` against `/`, the case-folding pairs, `deepToString` of a cycle), of
+which this and one documented refusal were the only two that differed.
+
+Pinned by `the_primitive_streams_have_their_own_factories` and
+`the_primitive_optionals_have_their_own_factories`.
 
 ### An entry set is a collection like any other (2026-08-19)
 

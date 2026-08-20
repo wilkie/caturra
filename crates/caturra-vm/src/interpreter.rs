@@ -11157,6 +11157,28 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(JValue::Ref(Some(comparator)));
             return Ok(None);
         }
+        // `OptionalInt.of(x)` and its two siblings: the same two factories over
+        // a primitive, whose flavour the class name carries (the accessor and
+        // the `toString` prefix both follow it).
+        if let Some(kind) = match class_name {
+            "OptionalInt" | "java/util/OptionalInt" => Some(crate::value::OptionalKind::Int),
+            "OptionalLong" | "java/util/OptionalLong" => Some(crate::value::OptionalKind::Long),
+            "OptionalDouble" | "java/util/OptionalDouble" => {
+                Some(crate::value::OptionalKind::Double)
+            }
+            _ => None,
+        } {
+            let value = match (method_name, args) {
+                ("empty", []) => Some(None),
+                ("of", [v]) => Some(Some(*v)),
+                _ => None,
+            };
+            if let Some(value) = value {
+                let optional = self.alloc_optional(value, kind);
+                frame.stack.push(optional);
+                return Ok(None);
+            }
+        }
         // `Optional.of(x)` / `empty()` / `ofNullable(x)`.
         if class_name == "Optional" || class_name == "java/util/Optional" {
             let value = match (method_name, args) {

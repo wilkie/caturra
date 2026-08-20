@@ -32492,6 +32492,30 @@ public class SwitchNull {
 "#
 );
 
+// The primitive Optionals were TYPES with no way to make one: a stream's
+// terminal answers `OptionalInt`, and `OptionalInt.of(5)` resolved nowhere.
+// The same two factories `Optional` has, over a value whose width the class
+// name carries.
+differential_test!(
+    the_primitive_optionals_have_their_own_factories,
+    "PrimitiveOptionalFactories",
+    r#"
+import java.util.*;
+
+public class PrimitiveOptionalFactories {
+    public static void main(String[] args) {
+        System.out.println(OptionalInt.of(5) + " " + OptionalInt.empty());
+        System.out.println(OptionalLong.of(7L) + " " + OptionalDouble.of(1.5));
+        System.out.println(OptionalInt.of(5).getAsInt() + " " + OptionalDouble.of(1.5).getAsDouble());
+        System.out.println(OptionalInt.empty().orElse(-1) + " " + OptionalInt.of(2).isPresent());
+        OptionalInt held = OptionalInt.of(3);
+        System.out.println(held.orElse(0));
+        System.out.println(OptionalLong.of(7L).getAsLong());
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

@@ -12158,6 +12158,12 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
         "IntStream" => Some(("java/util/stream/IntStream", INTSTREAM_STATIC_METHODS)),
+        // The primitive Optionals' factories are argument-typed like
+        // `Optional.of`, so no fixed table fits; the entries exist so the
+        // NAMES resolve as static-call targets.
+        "OptionalInt" => Some(("java/util/OptionalInt", &[])),
+        "OptionalLong" => Some(("java/util/OptionalLong", &[])),
+        "OptionalDouble" => Some(("java/util/OptionalDouble", &[])),
         // `LongStream.range` answers a stream of LONGS; the tables are keyed by
         // the receiver's element, so the name is what separates them here.
         "LongStream" => Some(("java/util/stream/LongStream", LONGSTREAM_STATIC_METHODS)),
@@ -21222,6 +21228,46 @@ impl BodyGen<'_> {
         if stream_source {
             return self.emit_stream_source(class, method, args, span);
         }
+        // `OptionalInt.of(x)` and its two siblings. The TYPES existed — a
+        // primitive stream's terminal answers one — but the names resolved
+        // nowhere as a call target, so the only way to have one was to take it
+        // off a stream.
+        if matches!(class, "OptionalInt" | "OptionalLong" | "OptionalDouble")
+            && matches!(method, "of" | "empty")
+        {
+            let kind = match class {
+                "OptionalLong" => JType::OptionalLong,
+                "OptionalDouble" => JType::OptionalDouble,
+                _ => JType::OptionalInt,
+            };
+            let (want, letter) = match kind {
+                JType::OptionalLong => (JType::Long, "J"),
+                JType::OptionalDouble => (JType::Double, "D"),
+                _ => (JType::Int, "I"),
+            };
+            let internal = format!("java/util/{class}");
+            if method == "empty" {
+                if !args.is_empty() {
+                    self.no_suitable_library_method(class, method, args, span);
+                    return None;
+                }
+                let descriptor = format!("()Ljava/util/{class};");
+                let method_ref = intern_method_ref(self.pool, &internal, "empty", &descriptor);
+                self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+                return Some(Some(kind));
+            }
+            let [value] = args else {
+                self.no_suitable_library_method(class, method, args, span);
+                return None;
+            };
+            let actual = self.expr(value);
+            self.numeric_conversion(actual, want);
+            let descriptor = format!("({letter})Ljava/util/{class};");
+            let method_ref = intern_method_ref(self.pool, &internal, "of", &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(want.width());
+            return Some(Some(kind));
+        }
         if !self.table.has_class(class) && builtin_static_table(class).is_some() {
             return self.builtin_static_call(class, method, args, span);
         }
@@ -21387,6 +21433,7 @@ impl BodyGen<'_> {
         if class == "Optional" && matches!(method, "of" | "ofNullable" | "empty") {
             return self.emit_optional_static(method, args, span);
         }
+
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
             // Emit the arguments so their own diagnostics surface.
