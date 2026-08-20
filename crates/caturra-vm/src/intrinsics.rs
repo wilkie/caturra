@@ -3728,9 +3728,35 @@ fn box_iterated_element(heap: &mut Heap, source: HeapRef, index: usize) -> JValu
     }
 }
 
+/// A `subList` view's backing list and the offset its index 0 sits at, so a
+/// cursor over one reads and writes the RANGE. Every reader and writer below
+/// asks here rather than carrying the arithmetic itself.
+fn sublist_target(heap: &Heap, source: HeapRef) -> Option<(HeapRef, usize, usize)> {
+    match heap.get(source)? {
+        HeapObject::SubList {
+            backing, from, len, ..
+        } => Some((*backing, *from, *len)),
+        _ => None,
+    }
+}
+
+/// Re-agree a view with its backing after a write THROUGH the view.
+fn sublist_resize(heap: &mut Heap, view: HeapRef, delta: isize) {
+    if let Some(HeapObject::SubList { len, seen, .. }) = heap.get_mut(view) {
+        *len = len.saturating_add_signed(delta);
+        *seen = seen.saturating_add_signed(delta);
+    }
+}
+
 fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
     if let Some(values) = heap.list_values(source) {
         return values.get(index).copied().unwrap_or(JValue::NULL);
+    }
+    if let Some((backing, from, len)) = sublist_target(heap, source) {
+        if index >= len {
+            return JValue::NULL;
+        }
+        return iterated_get(heap, backing, from + index);
     }
     if let Some(HeapObject::MapView { map, kind, .. }) = heap.get(source) {
         return match kind {
@@ -3780,6 +3806,16 @@ fn iterated_remove(heap: &mut Heap, source: HeapRef, index: usize) {
         && index < values.len()
     {
         values.remove(index);
+        return;
+    }
+    // Through a view: the element leaves the BACKING list, and the view is one
+    // shorter. A cursor's `remove` is the one legal modification during
+    // iteration, so the view must re-agree rather than call it a change.
+    if let Some((backing, from, len)) = sublist_target(heap, source)
+        && index < len
+    {
+        iterated_remove(heap, backing, from + index);
+        sublist_resize(heap, source, -1);
         return;
     }
     let target = view_map(heap, source).unwrap_or(source);
@@ -3961,8 +3997,12 @@ fn iterator_method(
             };
             check_comodification(heap, source, expected_len)?;
             let value = args.first().copied().unwrap_or(JValue::NULL);
-            if let Some(values) = heap.list_values_mut(source)
-                && let Some(slot) = values.get_mut(position)
+            let (target, at) = match sublist_target(heap, source) {
+                Some((backing, from, _)) => (backing, from + position),
+                None => (source, position),
+            };
+            if let Some(values) = heap.list_values_mut(target)
+                && let Some(slot) = values.get_mut(at)
             {
                 *slot = value;
             }
@@ -3974,9 +4014,21 @@ fn iterator_method(
         "add" => {
             check_comodification(heap, source, expected_len)?;
             let value = args.first().copied().unwrap_or(JValue::NULL);
-            if let Some(values) = heap.list_values_mut(source) {
-                let at = index.min(values.len());
-                values.insert(at, value);
+            match sublist_target(heap, source) {
+                Some((backing, from, len)) => {
+                    let at = from + index.min(len);
+                    if let Some(values) = heap.list_values_mut(backing) {
+                        let at = at.min(values.len());
+                        values.insert(at, value);
+                    }
+                    sublist_resize(heap, source, 1);
+                }
+                None => {
+                    if let Some(values) = heap.list_values_mut(source) {
+                        let at = index.min(values.len());
+                        values.insert(at, value);
+                    }
+                }
             }
             let len = iterated_len(heap, source);
             if let Some(HeapObject::Iterator {

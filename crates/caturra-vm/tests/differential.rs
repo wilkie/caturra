@@ -32026,6 +32026,88 @@ public class StatementBody {
 "#
 );
 
+// Where a new feature meets the old ones. A view answers reads by walking the
+// range, so `contains`, `equals` and `stream()` came free — but everything
+// that WRITES had to be taught, and until it was, each silently did NOTHING:
+// `view.removeIf(…)` left the list alone, `view.sort(…)` left it unsorted, and
+// a cursor over a view could not be made at all. The bulk operations are the
+// ordinary list ones, run over a scratch copy of the range and spliced back,
+// so a view's `removeIf` IS the same removeIf.
+differential_test!(
+    a_view_meets_the_rest_of_the_collection_surface,
+    "ViewMeetsAll",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class ViewMeetsAll {
+    public static void main(String[] args) {
+        List<Integer> numbers = new ArrayList<Integer>(Arrays.asList(0, 1, 2, 3, 4));
+        List<String> words = new ArrayList<String>(Arrays.asList("a", "b", "c", "d"));
+
+        System.out.println(Arrays.asList(1, 2, 3).subList(0, 2));
+        System.out.println(Collections.unmodifiableList(numbers).subList(1, 3));
+        System.out.println(new LinkedList<Integer>(numbers).subList(1, 3));
+        System.out.println(numbers.subList(1, 4).containsAll(Arrays.asList(2, 3)));
+        System.out.println(numbers.subList(1, 4).hashCode() == Arrays.asList(1, 2, 3).hashCode());
+        System.out.println(Arrays.toString(numbers.subList(1, 3).toArray()));
+        System.out.println(Collections.binarySearch(numbers.subList(1, 4), 3));
+        System.out.println(Collections.max(numbers.subList(1, 4)));
+        System.out.println(new HashSet<Integer>(numbers.subList(1, 4)).size());
+        System.out.println(numbers.subList(1, 3).equals(numbers.subList(1, 3)));
+        System.out.println(numbers.subList(1, 4).stream().map(x -> x * 2).collect(Collectors.toList()));
+
+        List<Integer> unmodifiable = Collections.unmodifiableList(numbers.subList(1, 4));
+        try {
+            unmodifiable.set(0, 9);
+        } catch (UnsupportedOperationException e) {
+            System.out.println("refused");
+        }
+        System.out.println(unmodifiable);
+
+        List<Integer> empty = numbers.subList(2, 2);
+        System.out.println(empty.isEmpty() + " " + empty.size());
+        try {
+            empty.get(0);
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println("out of bounds");
+        }
+
+        // Every write, each of which did nothing at all before.
+        List<Integer> view = numbers.subList(1, 4);
+        Iterator<Integer> cursor = view.iterator();
+        cursor.next();
+        cursor.remove();
+        System.out.println(numbers + " " + view);
+
+        ListIterator<Integer> listCursor = view.listIterator();
+        listCursor.next();
+        listCursor.set(9);
+        System.out.println(numbers);
+
+        view.removeIf(x -> x == 9);
+        System.out.println(numbers + " " + view);
+        view.replaceAll(x -> x * 10);
+        System.out.println(numbers);
+        view.addAll(Arrays.asList(8, 7));
+        System.out.println(numbers);
+        view.remove(Integer.valueOf(8));
+        System.out.println(numbers);
+        Collections.swap(numbers.subList(1, 4), 0, 2);
+        System.out.println(numbers);
+
+        List<String> sorted = words.subList(1, 4);
+        sorted.sort(Comparator.reverseOrder());
+        System.out.println(words);
+
+        List<Integer> outer = numbers.subList(1, 4);
+        outer.subList(1, 2).set(0, 42);
+        System.out.println(numbers);
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

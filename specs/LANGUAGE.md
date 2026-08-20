@@ -6729,6 +6729,19 @@ Pinned by `a_sublist_is_a_view_of_its_list` and
 `a_sublist_refuses_a_range_that_is_not_one`. The compatibility page's
 `sublist-view` GAP is now a supported feature, recorded against a real JDK.
 
+**Where the new feature met the old ones** is where the rest of it was. A
+24-shape sweep of a view against the collection surface found eight more, and
+five of them were SILENT: `view.removeIf(…)` left the list alone,
+`view.sort(…)` left it unsorted, and `addAll`/`replaceAll`/`remove(Object)`
+likewise did nothing — each read the range correctly and wrote to no one. They
+are the ordinary list operations now, run over a scratch copy of the range and
+spliced back, so a view's `removeIf` IS the same `removeIf` rather than a
+second implementation of it. A CURSOR over a view could not be made at all;
+every step of the iterator machinery (read, `remove`, `set`, `add`) resolves
+the range, so the one legal modification during iteration re-agrees the view
+instead of invalidating it. Pinned by
+`a_view_meets_the_rest_of_the_collection_surface`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

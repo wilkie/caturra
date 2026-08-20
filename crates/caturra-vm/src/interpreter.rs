@@ -6420,6 +6420,33 @@ impl<'run> Interpreter<'run> {
                 *seen = seen.saturating_add_signed(delta);
             }
         };
+        // The operations that rewrite the WHOLE range — a sort, a bulk removal,
+        // a replaceAll — are the ordinary list ones run over a scratch copy of
+        // the range and spliced back. Delegating rather than reimplementing is
+        // what keeps a view's `removeIf` the same removeIf: written again here,
+        // each would be a second copy of a rule that already exists, and every
+        // one of them silently did NOTHING before this arm.
+        if matches!(
+            method,
+            "sort" | "removeIf" | "replaceAll" | "addAll" | "removeAll" | "retainAll"
+        ) || (method == "remove" && descriptor.starts_with("(Ljava/lang/Object;)"))
+        {
+            let scratch = self.heap.alloc(crate::value::HeapObject::ArrayList(
+                self.list_items(receiver),
+            ));
+            let answered = self.list_equality_intrinsic(scratch, method, descriptor, args)?;
+            if matches!(answered, Answered::No) {
+                return Ok(Answered::No);
+            }
+            let replacement = self.list_items(scratch);
+            let delta =
+                isize::try_from(replacement.len()).unwrap_or(0) - isize::try_from(len).unwrap_or(0);
+            if let Some(values) = self.heap.list_values_mut(backing) {
+                values.splice(from..from + len, replacement);
+            }
+            resize(self, delta);
+            return Ok(answered);
+        }
         let result = match (method, args) {
             ("size", []) => JValue::Int(i32::try_from(len).unwrap_or(i32::MAX)),
             ("isEmpty", []) => JValue::Int(i32::from(len == 0)),
@@ -6467,6 +6494,44 @@ impl<'run> Interpreter<'run> {
                 let removed = values.remove(at);
                 resize(self, -1);
                 removed
+            }
+            // A cursor over a view walks the RANGE: its source is the view
+            // itself, which every step of the iterator machinery now resolves
+            // (read, remove, set and add alike).
+            ("iterator" | "listIterator", []) => {
+                let iterator = self.heap.alloc(crate::value::HeapObject::Iterator {
+                    source: receiver,
+                    index: 0,
+                    last: None,
+                    expected_len: len,
+                    writes: IteratorWrites::All,
+                    list: method != "iterator",
+                    descending: false,
+                });
+                JValue::Ref(Some(iterator))
+            }
+            ("toArray", []) => {
+                let items = self.list_items(receiver);
+                let boxed: Vec<JValue> = items
+                    .into_iter()
+                    .map(|element| match element {
+                        JValue::Ref(_) => element,
+                        primitive => JValue::Ref(Some(self.heap.box_wrapper(
+                            match primitive {
+                                JValue::Long(_) => "java/lang/Long",
+                                JValue::Double(_) => "java/lang/Double",
+                                JValue::Float(_) => "java/lang/Float",
+                                _ => "java/lang/Integer",
+                            },
+                            primitive,
+                        ))),
+                    })
+                    .collect();
+                let array = self.heap.alloc(crate::value::HeapObject::RefArray(
+                    String::from("java/lang/Object"),
+                    boxed,
+                ));
+                JValue::Ref(Some(array))
             }
             ("clear", []) => {
                 if let Some(values) = self.heap.list_values_mut(backing) {
