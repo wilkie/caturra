@@ -6394,6 +6394,33 @@ element. `config().forEach((k, v) -> …)` was refused while the identical call 
 a declared variable compiled. A test had pinned that refusal as intended
 behaviour; javac accepts the program, so the pin is gone.
 
+### Auditing the refusals
+
+Three separate units this session found a TEST that had pinned a caturra
+limitation as though it were the intended behaviour — the most recent being a
+map reached through a method's return, which javac accepts. Three is a pattern
+worth attacking directly: every test that asserts a program should NOT compile
+is a claim about javac as much as about caturra, and it is only true while javac
+agrees.
+
+Twenty-seven such tests were found and their programs run through a live javac.
+Most are honest — many say so in their names — and one strictness fell out that
+had never been enumerated: **a class nested inside another inner class cannot
+reach the enclosing instance, nor an enclosing method's local.**
+
+Probing it pinned the boundary much more narrowly than the test that recorded it
+("nested capture is not supported"). What fails is only the CAPTURE CHAIN. A
+nested lambda reads static fields, static methods, constants and the outer
+lambda's own parameter perfectly well, and nests three deep over any of them;
+what it cannot do is reach a name that the first level would itself have had to
+capture. All four nestings behave the same way — lambda in lambda, anonymous in
+lambda, lambda in anonymous, anonymous in anonymous — which says the limit is
+the chain and not the lambda desugaring.
+
+It is now a bullet in the strictness list with two pins, and the boundary is
+pinned too, so a fix would show up as three failing tests rather than as a
+silent widening.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -6465,6 +6492,16 @@ entries after it was written down.
   normally written.
 - `Arrays.stream(array, from, to)` — the RANGE overload; the whole-array form
   is modelled.
+- A class nested inside another INNER class cannot reach the enclosing
+  INSTANCE, nor an enclosing method's local: `outer = () -> { inner = () ->
+  field; … }`. The capture chain is one level deep — a lambda or anonymous
+  class captures the enclosing `this` and the locals it reads, but a second
+  level would have to capture them FROM the first, and the inner class's owner
+  is the synthesized outer one, whose members are its own captures. Everything
+  that needs no chain works, and is pinned as such: static fields and methods,
+  constants, the outer lambda's own parameter, and nesting three deep over any
+  of those. All four nestings are affected equally (lambda in lambda, anonymous
+  in lambda, lambda in anonymous, anonymous in anonymous).
 
 **More permissive than javac** (caturra accepts; javac rejects). **Two
 known cases**, each asserted by `looser_than_javac!` so it cannot be forgotten:

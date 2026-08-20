@@ -32018,3 +32018,119 @@ public class MapReceiverShapes {
 }
 "#
 );
+
+// An audit of every test that asserts a program should NOT compile, run against
+// a live javac, found one strictness that had never been enumerated: a class
+// nested inside another inner class cannot reach the enclosing INSTANCE, nor an
+// enclosing method's local.
+//
+// The capture chain is one level deep. A lambda or anonymous class captures the
+// enclosing `this` and the locals it reads, but a SECOND level would have to
+// capture them from the first — the inner class's owner is the synthesized
+// outer one, whose members are its own captures, so a name from two levels up
+// resolves against nothing. Everything that does not need the chain works:
+// static fields and methods, constants, the outer lambda's own parameter, and
+// nesting three deep over any of those.
+stricter_than_javac!(
+    stricter_nested_lambda_reaching_an_instance_field,
+    "NestedInstanceCapture",
+    r"
+interface Fn {
+    int go();
+}
+
+public class NestedInstanceCapture {
+    int field = 1;
+
+    int r() {
+        Fn outer = () -> {
+            Fn inner = () -> field;
+            return inner.go();
+        };
+        return outer.go();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new NestedInstanceCapture().r());
+    }
+}
+"
+);
+
+stricter_than_javac!(
+    stricter_nested_lambda_reaching_an_enclosing_local,
+    "NestedLocalCapture",
+    r"
+interface Fn {
+    int go();
+}
+
+public class NestedLocalCapture {
+    static int r() {
+        int local = 5;
+        Fn outer = () -> {
+            Fn inner = () -> local;
+            return inner.go();
+        };
+        return outer.go();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(r());
+    }
+}
+"
+);
+
+// What a nested lambda CAN reach, so the strictness above stays as narrow as it
+// is described: anything that needs no capture chain.
+differential_test!(
+    a_nested_lambda_reaches_what_needs_no_capture,
+    "NestedNoCapture",
+    r#"
+interface Fn {
+    int go();
+}
+
+interface Fn1 {
+    int go(int v);
+}
+
+public class NestedNoCapture {
+    static int shared = 4;
+    static final int CONSTANT = 5;
+
+    static int helper() {
+        return 9;
+    }
+
+    public static void main(String[] args) {
+        Fn viaStaticField = () -> {
+            Fn inner = () -> shared;
+            return inner.go();
+        };
+        Fn viaStaticMethod = () -> {
+            Fn inner = () -> helper();
+            return inner.go();
+        };
+        Fn viaConstant = () -> {
+            Fn inner = () -> CONSTANT;
+            return inner.go();
+        };
+        Fn1 viaOwnParameter = v -> {
+            Fn inner = () -> v;
+            return inner.go();
+        };
+        Fn threeDeep = () -> {
+            Fn second = () -> {
+                Fn third = () -> shared;
+                return third.go();
+            };
+            return second.go();
+        };
+        System.out.println(viaStaticField.go() + " " + viaStaticMethod.go()
+            + " " + viaConstant.go() + " " + viaOwnParameter.go(3) + " " + threeDeep.go());
+    }
+}
+"#
+);
