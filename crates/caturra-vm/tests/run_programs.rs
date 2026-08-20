@@ -12054,13 +12054,11 @@ fn map_for_each_rejects_what_it_cannot_target_type() {
              m.forEach(k -> System.out.println(k)); } }",
             "only allowed where a functional-interface type is expected",
         ),
-        // A receiver with no declaration to read: javac accepts, caturra does
-        // not — the safe direction, and it says which construct is missing.
-        (
-            "import java.util.*; class M { static Map<String, Integer> get() { return null; } \
-             static void r() { get().forEach((k, v) -> System.out.println(k)); } }",
-            "only allowed where a functional-interface type is expected",
-        ),
+        // (A receiver with no DECLARATION to read used to be here, refused
+        // because the pass could not reach a method's declared return type. It
+        // compiles now — see `a_map_from_any_receiver_shape` in the
+        // differential suite — so what is left below is only what javac
+        // refuses too.)
     ] {
         let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
             path: String::from("M.java"),

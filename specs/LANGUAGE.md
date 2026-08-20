@@ -6363,6 +6363,37 @@ spliterator's `forEachRemaining`, which a skipped pipeline never reaches. The
 first attempt kept the fail-fast check and broke the late-binding test that had
 already pinned exactly this.
 
+### How often a library call runs your callback
+
+The previous unit found a JDK optimization that is visible only through side
+effects. That is a dimension of its own: for every library method that takes a
+lambda, HOW MANY TIMES and in WHAT ORDER is it invoked? Thirty-nine calls —
+collection, map, `Optional` and stream — each logging every invocation, compared
+against a JDK's sequence rather than only its result.
+
+Most already agreed, and the agreements are worth naming because each is a rule
+someone could have got wrong: `removeIf` over an empty collection calls nothing,
+`sort` of fewer than two elements calls nothing, `computeIfAbsent` on a present
+key calls nothing, `merge` on an absent key calls nothing, `orElse` evaluates
+its argument EAGERLY while `orElseGet` does not, and the short-circuiting stream
+terminals stop exactly where a JDK stops.
+
+**The comparator-taking `Collections` statics did not.** `max`, `min` and
+`binarySearch` had no rule giving an INLINE lambda its target type — `sort` had
+one and these three never got it. So the lambda reached overload resolution
+untyped, the two-argument form did not apply, and the call silently resolved to
+the NATURAL-ORDERING one: the comparator was never called, and a reversing one
+gave the wrong answer. Assigning the result made it worse, because the unused
+comparator stayed on the stack and the verifier reported malformed bytecode.
+Two things were missing — the target-typing rule, and the trigger that pulls the
+bundled `__Comparator` into a program that never names it.
+
+**A map's key and value types now flow from every receiver shape** a list's
+element already did: a method's declared return, a cast, a ternary, an array
+element. `config().forEach((k, v) -> …)` was refused while the identical call on
+a declared variable compiled. A test had pinned that refusal as intended
+behaviour; javac accepts the program, so the pin is gone.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

@@ -620,6 +620,12 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
                 && (s.text.contains("TreeSet")
                     || s.text.contains("TreeMap")
                     || s.text.contains("PriorityQueue")))
+            // …and so does one handed to `Collections.max`/`min`/
+            // `binarySearch`, which name neither the interface nor `sort`.
+            || (s.text.contains("->")
+                && (s.text.contains(".max(")
+                    || s.text.contains(".min(")
+                    || s.text.contains(".binarySearch(")))
     }) && !units
         .iter()
         .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))

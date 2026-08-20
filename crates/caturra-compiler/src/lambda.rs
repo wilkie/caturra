@@ -1645,6 +1645,36 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `Collections.max(c, cmp)` / `min(c, cmp)` / `binarySearch(l, key,
+            // cmp)`: the comparator is the LAST argument and its parameters are
+            // the FIRST argument's element type — the same rule `sort` above
+            // has, which these three never got. Without it the lambda reached
+            // overload resolution untyped, the two-argument form did not
+            // apply, and the call silently resolved to the natural-ordering
+            // one — leaving the comparator on the stack, which the verifier
+            // reported as malformed bytecode at whatever ran next.
+            if matches!(method.as_str(), "max" | "min" | "binarySearch")
+                && receiver
+                    .as_deref()
+                    .is_some_and(|r| names_library_class(r, "Collections"))
+                && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
+                && let Some(elem) = list_elem_type(&args[0], ctx)
+            {
+                let last = args.len() - 1;
+                for arg in &mut args[..last] {
+                    desugar_expr(arg, None, ctx);
+                }
+                args[last] = build_erased_lambda(
+                    &mut args[last],
+                    "__Comparator",
+                    "compare",
+                    &TypeRef::Int,
+                    &[elem.clone(), elem],
+                    None,
+                    ctx,
+                );
+                return;
+            }
             // `Arrays.setAll(array, i -> ...)`: the generator's parameter is the
             // int index, its result the array's element type.
             if method == "setAll"
@@ -2514,6 +2544,34 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
                 && args.len() == 1 =>
         {
             return map_type_args(&args[0], ctx);
+        }
+        // The same receiver shapes a LIST's element is read from: a cast, a
+        // ternary, an array element, and a call to a method whose declared
+        // return says what it gives back. A map returned by a method
+        // (`config().forEach((k, v) -> …)`) had no key or value type, so the
+        // lambda over it was refused for having no functional target — while
+        // the identical call on a declared variable compiled.
+        Expr::Cast { ty, .. } => ty.clone(),
+        Expr::Ternary { then, els, .. } => {
+            return map_type_args(then, ctx).or_else(|| map_type_args(els, ctx));
+        }
+        Expr::Index { array, .. } => match declared_array_type(array, ctx) {
+            Some(TypeRef::Array(elem)) => *elem,
+            _ => return None,
+        },
+        Expr::Call {
+            receiver: owner,
+            method,
+            args,
+            ..
+        } if matches!(owner.as_deref(), None | Some(Expr::This { .. })) => {
+            let class = ctx.current_class?;
+            let shape = ctx
+                .shapes
+                .get(class)?
+                .iter()
+                .find(|shape| shape.name == *method && shape.arity == args.len())?;
+            shape.return_type.clone()
         }
         _ => return None,
     };

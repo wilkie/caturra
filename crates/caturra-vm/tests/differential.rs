@@ -31874,3 +31874,147 @@ public class CountSkips {
 }
 "#
 );
+
+// HOW MANY TIMES, and in what order, a library call invokes the callback it is
+// given. Thirty-nine calls — collection, map, Optional and stream — each
+// logging every invocation, compared with a JDK's sequence rather than only its
+// result. Most already agreed: `removeIf` over an empty collection calls
+// nothing, `sort` of fewer than two elements calls nothing, `computeIfAbsent`
+// on a present key calls nothing, `merge` on an absent key calls nothing,
+// `orElse` evaluates its argument EAGERLY while `orElseGet` does not, and the
+// short-circuiting stream terminals stop where a JDK stops.
+//
+// The comparator-taking `Collections` statics did not. `max`, `min` and
+// `binarySearch` had no rule giving an inline lambda its target type — `sort`
+// had one and they never got it — so the lambda reached overload resolution
+// untyped, the two-argument form did not apply, and the call silently resolved
+// to the NATURAL-ORDERING one, leaving the comparator on the stack. Assigning
+// the result made the verifier report malformed bytecode.
+differential_test!(
+    a_library_call_invokes_its_callback_the_jdks_way,
+    "CallbackCounts",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class CallbackCounts {
+    static StringBuilder log = new StringBuilder();
+
+    static <T> T note(String s, T v) {
+        log.append(s);
+        return v;
+    }
+
+    static List<Integer> src() {
+        return new ArrayList<>(Arrays.asList(3, 1, 2));
+    }
+
+    static Map<String, Integer> map() {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("a", 1);
+        m.put("b", 2);
+        return m;
+    }
+
+    static void show(String label, Object result) {
+        System.out.println(label + " " + result + " [" + log + "]");
+        log.setLength(0);
+    }
+
+    public static void main(String[] args) {
+        // A comparator handed to the `Collections` statics, written INLINE.
+        show("max", Collections.max(src(), (x, y) -> {
+            log.append("c");
+            return Integer.compare(y, x);
+        }));
+        show("min", Collections.min(src(), (x, y) -> {
+            log.append("c");
+            return Integer.compare(y, x);
+        }));
+        show("binarySearch", Collections.binarySearch(
+            new ArrayList<>(Arrays.asList(5, 4, 3, 2, 1)), 3, (x, y) -> {
+                log.append("c");
+                return Integer.compare(y, x);
+            }));
+        List<String> byLength = new ArrayList<>(Arrays.asList("bb", "a", "ccc"));
+        show("maxByLength", Collections.max(byLength,
+            (x, y) -> Integer.compare(x.length(), y.length())));
+
+        // Calls that must NOT invoke the callback at all.
+        show("removeIfEmpty", new ArrayList<Integer>().removeIf(v -> note("!", true)));
+        List<Integer> one = new ArrayList<>(Arrays.asList(1));
+        one.sort((x, y) -> note("!", 0));
+        show("sortOne", one);
+        show("computeIfAbsentPresent", map().computeIfAbsent("a", k -> note("!", 9)));
+        show("computeIfPresentAbsent", map().computeIfPresent("z", (k, v) -> note("!", v)));
+        show("mergeAbsent", map().merge("z", 5, (x, y) -> note("!", x)));
+        show("orElseGetPresent", Optional.of(1).orElseGet(() -> note("!", 2)));
+
+        // …and the ones that must.
+        show("mergePresent", map().merge("a", 5, (x, y) -> note("m", x + y)));
+        show("computeIfAbsentNew", map().computeIfAbsent("z", k -> note("k", 9)));
+        map().forEach((k, v) -> log.append(k).append(v));
+        show("mapForEach", "-");
+        map().replaceAll((k, v) -> note("r", v));
+        show("mapReplaceAll", "-");
+
+        // A map reached through a METHOD's declared return type.
+        show("methodReturnMap", map().entrySet().size());
+
+        // Short-circuiting terminals stop where a JDK stops.
+        show("anyMatchFirst", src().stream().peek(v -> log.append(v)).anyMatch(v -> v == 3));
+        show("allMatchFail", src().stream().peek(v -> log.append(v)).allMatch(v -> false));
+        show("findFirst", src().stream().peek(v -> log.append(v)).findFirst().get());
+        show("limitStops", src().stream().peek(v -> log.append(v)).limit(1).count());
+        show("mapFilterOrder", src().stream()
+            .map(v -> note("m", v))
+            .filter(v -> note("f", true))
+            .collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// A map's key and value types flow from every receiver shape a LIST's element
+// does — a method's declared return, a cast, a ternary, an array element —
+// not only from a declared variable.
+differential_test!(
+    a_map_from_any_receiver_shape,
+    "MapReceiverShapes",
+    r#"
+import java.util.*;
+
+public class MapReceiverShapes {
+    static Map<String, Integer> make() {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("a", 1);
+        return m;
+    }
+
+    public static void main(String[] args) {
+        StringBuilder out = new StringBuilder();
+        make().forEach((k, v) -> out.append(k.toUpperCase()).append(v + 1));
+        System.out.println(out);
+
+        Object held = make();
+        out.setLength(0);
+        ((Map<String, Integer>) held).forEach((k, v) -> out.append(k).append(v));
+        System.out.println(out);
+
+        boolean flag = true;
+        out.setLength(0);
+        (flag ? make() : make()).forEach((k, v) -> out.append(k).append(v));
+        System.out.println(out);
+
+        Map<String, Integer>[] rows = new Map[1];
+        rows[0] = make();
+        out.setLength(0);
+        rows[0].forEach((k, v) -> out.append(k).append(v));
+        System.out.println(out);
+
+        System.out.println(make().computeIfAbsent("z", k -> k.length()));
+        System.out.println(make().merge("a", 5, (x, y) -> x + y));
+    }
+}
+"#
+);
