@@ -6917,6 +6917,28 @@ first read.
 Pinned by `a_scanner_reads_on_its_own_delimiter`, which also runs the default
 whitespace behaviour it must not disturb.
 
+### The corpus divergences, adjudicated by the tool (2026-08-20)
+
+The grading sweep has sat at four divergences on the JUnit half and one on the
+`org.code` half for months, with a note in `compare.py`'s docstring saying they
+were all validators seeded with `Math.random()` — the reference itself flipping
+between runs. Re-running the reference five times on one of them confirmed it
+(FAIL, FAIL, PASS, PASS, FAIL against a stable caturra), which is the point:
+the note was a claim, and a claim is worth re-running.
+
+Half of it was stale. The tool now READS the staged sources and prints WHY each
+divergence is one, and the `org.code` case turned out to be a different defect
+entirely: two tests annotated `@Order(2)`, which JUnit runs in an unspecified
+order, sharing a static counter that one resets and the other does not. The
+same submission passes or fails depending on which runs first — the reference
+picks one order (stably, on this machine), caturra picks the other, and neither
+is wrong. The JVM's tie-break is `getDeclaredMethods` order, which is
+unspecified, and caturra already declines to imitate it elsewhere.
+
+The output ends with an UNEXPLAINED count, which is now zero on both halves and
+is the number a future sweep should watch: a real regression shows up there
+rather than in a total that has to be remembered.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
