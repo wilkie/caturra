@@ -6895,6 +6895,28 @@ The probe harness learned to pass standard input for it.
 
 Pinned by `a_second_scanner_over_standard_input`.
 
+### A scanner that reads on its own delimiter (2026-08-20)
+
+`useDelimiter(pattern)` was the last of the Scanner refusals, and the one a
+program reaches for to read a comma-separated line. caturra has its own regex
+engine, so the token scanner takes a pattern the way the JDK's does; what
+needed care was the fine print.
+
+A token is `delimiter? token delimiter?`: ONE delimiter match at the cursor is
+skipped before reading, and the one after it is LEFT for the next call.
+Consuming the trailing one instead looks identical until the edges — `",a"`
+answers an empty first token where a JDK answers `a`, and a `useDelimiter`
+BETWEEN two reads starts after a separator the new pattern no longer treats as
+one. An empty token between two delimiters is a token like any other, which is
+what makes `"a,,b"` three.
+
+The pattern is compiled where the JDK compiles it — in `useDelimiter` — so a
+malformed one is a `PatternSyntaxException` from that call rather than from the
+first read.
+
+Pinned by `a_scanner_reads_on_its_own_delimiter`, which also runs the default
+whitespace behaviour it must not disturb.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

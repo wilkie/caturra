@@ -72,6 +72,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             // Until a `File` claims it, a Scanner reads standard input.
             stdin: true,
             closed: false,
+            delimiter: None,
         }),
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
         "java/util/LinkedList" => Some(HeapObject::LinkedList(Vec::new())),
@@ -2816,6 +2817,24 @@ fn scanner_method(
             }
             Ok(None)
         }
+        // `useDelimiter(pattern)` answers the SCANNER, so it chains onto the
+        // constructor the way a program writes it.
+        "useDelimiter" => {
+            let pattern = match args.first() {
+                Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                _ => None,
+            };
+            let Some(pattern) = pattern else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            // Reject a malformed pattern HERE, where the JDK's
+            // `Pattern.compile` does, rather than at the first read.
+            compile_scanner_delimiter(&pattern)?;
+            if let Some(HeapObject::Scanner { delimiter, .. }) = heap.get_mut(receiver) {
+                *delimiter = Some(pattern);
+            }
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
         "next" => {
             let token = scanner_next_token(heap, console, receiver)?
                 .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
@@ -3164,15 +3183,12 @@ fn scanner_next_token(
     console: &mut dyn ConsoleIo,
     receiver: HeapRef,
 ) -> Result<Option<String>, VmError> {
-    let token = scanner_peek_token(heap, console, receiver)?;
-    if let Some(token) = &token {
-        let (buffer, pos, _) = scanner_state(heap, receiver);
-        let skip = buffer[pos..]
-            .find(token.as_str())
-            .expect("peeked token is present");
-        scanner_set_pos(heap, receiver, pos + skip + token.len());
-    }
-    Ok(token)
+    let Some((token, consumed)) = scanner_scan(heap, console, receiver)? else {
+        return Ok(None);
+    };
+    let (_, pos, _) = scanner_state(heap, receiver);
+    scanner_set_pos(heap, receiver, pos + consumed);
+    Ok(Some(token))
 }
 
 fn scanner_peek_token(
@@ -3180,15 +3196,64 @@ fn scanner_peek_token(
     console: &mut dyn ConsoleIo,
     receiver: HeapRef,
 ) -> Result<Option<String>, VmError> {
+    Ok(scanner_scan(heap, console, receiver)?.map(|(token, _)| token))
+}
+
+/// The next token AND how many bytes reading it consumes — the token itself
+/// plus whatever separated it from the last one. `next()` and `hasNext()` are
+/// the same scan; only one of them moves the cursor, which is why the two
+/// answers travel together (a token that is EMPTY, which a custom delimiter
+/// can produce, has no text to search for afterwards).
+fn scanner_scan(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+) -> Result<Option<(String, usize)>, VmError> {
     loop {
         let (buffer, pos, eof) = scanner_state(heap, receiver);
         let rest = &buffer[pos..];
+        if let Some(pattern) = scanner_delimiter(heap, receiver) {
+            // A CUSTOM delimiter: the token is whatever precedes the next
+            // match, and an empty one between two delimiters is a token like
+            // any other (`"a,,b"` split on `,` yields three). Reading on until
+            // a delimiter or EOF is the same rule the default follows — a
+            // token is only complete once something ends it.
+            let regex = compile_scanner_delimiter(&pattern)?;
+            let units: Vec<u16> = rest.encode_utf16().collect();
+            // A token is `delimiter? token delimiter?` in the JDK: ONE
+            // delimiter match at the cursor is skipped before reading, and the
+            // one after it is LEFT for the next call. Consuming the trailing
+            // one instead looks the same until the edges: `",a"` would answer
+            // an empty token first (a JDK answers `a`), and a `useDelimiter`
+            // between two reads would start after a separator the new pattern
+            // no longer treats as one.
+            let start = match regex.find_at(&units, 0) {
+                Some(found) if found.start == 0 && found.end > 0 => found.end,
+                _ => 0,
+            };
+            if let Some(found) = regex.find_at(&units, start)
+                && found.end > found.start
+            {
+                let token = String::from_utf16_lossy(&units[start..found.start]);
+                let upto = String::from_utf16_lossy(&units[..found.start]);
+                return Ok(Some((token, upto.len())));
+            }
+            if eof {
+                let token = String::from_utf16_lossy(&units[start..]);
+                let consumed = rest.len();
+                return Ok((!token.is_empty()).then_some((token, consumed)));
+            }
+            scanner_fill(heap, console, receiver);
+            continue;
+        }
         let trimmed = rest.trim_start();
         if !trimmed.is_empty() {
             // A complete token needs trailing whitespace or EOF.
             let token: String = trimmed.chars().take_while(|c| !c.is_whitespace()).collect();
             if trimmed.len() > token.len() || eof {
-                return Ok(Some(token));
+                let leading = rest.len() - trimmed.len();
+                let consumed = leading + token.len();
+                return Ok(Some((token, consumed)));
             }
         }
         if eof {
@@ -3196,6 +3261,27 @@ fn scanner_peek_token(
         }
         scanner_fill(heap, console, receiver);
     }
+}
+
+/// The delimiter pattern `useDelimiter` set, if any.
+fn scanner_delimiter(heap: &Heap, receiver: HeapRef) -> Option<String> {
+    match heap.get(receiver) {
+        Some(HeapObject::Scanner { delimiter, .. }) => delimiter.clone(),
+        _ => None,
+    }
+}
+
+/// The delimiter as a compiled pattern. A malformed one is the JDK's
+/// `PatternSyntaxException`, thrown from `useDelimiter` itself — but caturra
+/// compiles it lazily, so it surfaces at the first read.
+fn compile_scanner_delimiter(pattern: &str) -> Result<crate::regex::Regex, VmError> {
+    let units: Vec<u16> = pattern.encode_utf16().collect();
+    crate::regex::Regex::new(&units).map_err(|error| {
+        throw(format!(
+            "java.util.regex.PatternSyntaxException: {}",
+            error.message()
+        ))
+    })
 }
 
 /// Element equality for list membership: value equality for numbers

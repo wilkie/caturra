@@ -7436,6 +7436,9 @@ enum BRet {
     OptionalErased,
     /// `OptionalDouble` (`IntStream.average`).
     OptionalDouble,
+    /// The `Scanner` itself — `useDelimiter` answers the receiver so it can be
+    /// chained onto the constructor.
+    Scanner,
     /// The Optional flavour of the stream's OWN element: `IntStream.max` is an
     /// `OptionalInt`, but a `DoubleStream`'s is an `OptionalDouble` and a
     /// `LongStream`'s an `OptionalLong`. One table serves all three primitive
@@ -7984,7 +7987,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Class", "getPackage", "caturra does not model java.lang.Package"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
     ("ArrayList", "parallelStream", "caturra runs on one thread, so a parallel stream would only be a sequential one under another name"),
-    ("Scanner", "useDelimiter", "caturra's Scanner splits on whitespace and does not take a delimiter pattern"),
     ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
     ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
     ("Scanner", "skip", "caturra's Scanner reads whole tokens and cannot skip by pattern"),
@@ -8038,6 +8040,14 @@ fn unsupported_member(class: &str, method: &str) -> Option<&'static str> {
 }
 
 const SCANNER_METHODS: &[BuiltinMethod] = &[
+    // `useDelimiter(pattern)` answers the scanner itself, so it chains onto
+    // the constructor: `new Scanner(text).useDelimiter(",")`.
+    bm(
+        "useDelimiter",
+        &[BParam::Str],
+        BRet::Scanner,
+        "(Ljava/lang/String;)Ljava/util/Scanner;",
+    ),
     BuiltinMethod {
         name: "nextInt",
         params: &[],
@@ -12778,6 +12788,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         // `Optional.map` erases its result element to `Object`, like a stream's.
         BRet::OptionalErased => Some(JType::Optional(ElemType::Object(table.object_id))),
         BRet::OptionalDouble => Some(JType::OptionalDouble),
+        BRet::Scanner => Some(JType::Scanner),
         BRet::OptionalElem => Some(match args.first {
             Some(ElemType::Double) => JType::OptionalDouble,
             Some(ElemType::Long) => JType::OptionalLong,

@@ -373,6 +373,12 @@ pub enum HeapObject {
         /// `close()` was called. Every method but `close` then throws
         /// `IllegalStateException: Scanner closed`.
         closed: bool,
+        /// The token separator, as a REGEX source, when `useDelimiter` set
+        /// one. `None` is the JDK's default — any run of whitespace — which
+        /// is not the same as the pattern `\s+`: the default also trims the
+        /// input's leading and trailing whitespace away rather than yielding
+        /// an empty token for it.
+        delimiter: Option<String>,
     },
     /// A `java.io.BufferedReader`/`FileReader`/`InputStreamReader` — one reader
     /// kind. A file reader slurps the whole file into `buffer` up front; a

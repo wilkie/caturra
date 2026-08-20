@@ -32547,6 +32547,83 @@ public class TwoScanners {
     "1 2 3\n"
 );
 
+// `useDelimiter(pattern)` — the last of the Scanner refusals, and the one a
+// program reaches for to read a comma-separated line. caturra has its own
+// regex engine, so the token scanner takes a pattern the same way the JDK's
+// does; what needed care is the FINE PRINT.
+//
+// A token is `delimiter? token delimiter?`: one delimiter match at the cursor
+// is skipped before reading, and the one after it is LEFT for the next call.
+// Consuming the trailing one instead looks identical until the edges — `",a"`
+// answers an empty token first, and a `useDelimiter` BETWEEN two reads starts
+// after a separator the new pattern no longer treats as one.
+differential_test!(
+    a_scanner_reads_on_its_own_delimiter,
+    "ScannerDelimiter",
+    r#"
+import java.util.*;
+
+public class ScannerDelimiter {
+    public static void main(String[] args) {
+        Scanner commas = new Scanner("a,b,c").useDelimiter(",");
+        while (commas.hasNext()) {
+            System.out.print("[" + commas.next() + "]");
+        }
+        System.out.println();
+
+        Scanner empties = new Scanner("a,,b").useDelimiter(",");
+        while (empties.hasNext()) {
+            System.out.print("[" + empties.next() + "]");
+        }
+        System.out.println();
+
+        Scanner leading = new Scanner(",a").useDelimiter(",");
+        while (leading.hasNext()) {
+            System.out.print("[" + leading.next() + "]");
+        }
+        System.out.println();
+
+        Scanner trailing = new Scanner("a,").useDelimiter(",");
+        while (trailing.hasNext()) {
+            System.out.print("[" + trailing.next() + "]");
+        }
+        System.out.println();
+
+        Scanner digits = new Scanner("a1b22c").useDelimiter("[0-9]+");
+        while (digits.hasNext()) {
+            System.out.print("[" + digits.next() + "]");
+        }
+        System.out.println();
+
+        Scanner numbers = new Scanner("1,2,3").useDelimiter(",");
+        int sum = 0;
+        while (numbers.hasNextInt()) {
+            sum += numbers.nextInt();
+        }
+        System.out.println(sum);
+
+        System.out.println(new Scanner("x;y").useDelimiter(";").next());
+        Scanner spaces = new Scanner("a b,c d").useDelimiter(",");
+        System.out.println("[" + spaces.next() + "][" + spaces.next() + "]");
+        Scanner lines = new Scanner("a,b\nc").useDelimiter(",");
+        System.out.println("[" + lines.nextLine() + "]");
+        Scanner doubled = new Scanner("a::b").useDelimiter("::");
+        System.out.println(doubled.next() + "|" + doubled.next());
+
+        // Changing the delimiter mid-read resumes where the last one stopped.
+        Scanner changed = new Scanner("a,b c").useDelimiter(",");
+        System.out.println(changed.next());
+        changed.useDelimiter("\\s+");
+        System.out.println(changed.next());
+
+        // The default is unchanged: any run of whitespace, trimmed at both ends.
+        Scanner plain = new Scanner("  a  b  ");
+        System.out.println("[" + plain.next() + "][" + plain.next() + "]" + plain.hasNext());
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one
