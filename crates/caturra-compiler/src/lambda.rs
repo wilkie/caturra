@@ -1898,6 +1898,23 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 // `reduce(identity, (a, b) -> ...)` / `reduce((a, b) -> ...)`:
                 // a two-parameter fold over the stream's own element type,
                 // erased to the bundled `__BiFunction` like a map remapper.
+                // A METHOD REFERENCE is the same fold written shorter
+                // (`reduce(0, Integer::sum)`), and every other stream op
+                // converts one to the equivalent lambda before erasing it —
+                // this arm did not, so the reference had no functional
+                // position and the whole program was refused.
+                if method == "reduce"
+                    && matches!(args.last(), Some(Expr::MethodRef { .. }))
+                    && !args.is_empty()
+                {
+                    let synth = Sam {
+                        method: String::from("apply"),
+                        params: vec![elem.clone(), elem.clone()],
+                        ret: object.clone(),
+                    };
+                    let last = args.len() - 1;
+                    args[last] = method_ref_to_lambda(&args[last], &synth, ctx);
+                }
                 if method == "reduce"
                     && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
                 {

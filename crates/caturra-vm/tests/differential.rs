@@ -33134,6 +33134,32 @@ public class SyncPrimitive {
 "
 );
 
+// `reduce(0, Integer::sum)` — the same fold written shorter. Every other stream
+// operation converts a METHOD REFERENCE to the equivalent lambda before erasing
+// it; the two-argument fold did not, so the reference had no functional
+// position and the whole program was refused.
+differential_test!(
+    a_fold_written_as_a_method_reference,
+    "ReduceRef",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class ReduceRef {
+    public static void main(String[] args) {
+        System.out.println(Arrays.asList("x", "yy").stream().map(s -> s.length()).reduce(0, Integer::sum));
+        System.out.println(Arrays.asList(1, 2).stream().reduce(0, Integer::sum));
+        System.out.println(Stream.of(1, 2).reduce(Integer::sum).get());
+        System.out.println(Stream.of("a", "b").reduce("", String::concat));
+        System.out.println(Stream.of(1, 5, 3).reduce(Integer::max).get());
+        // The lambda spellings beside them, which always worked.
+        System.out.println(Stream.of(1, 2).reduce(0, (p, q) -> p + q));
+        System.out.println(Stream.of(1, 2).reduce((p, q) -> p * q).get());
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

@@ -7047,6 +7047,24 @@ Pinned by `a_synchronized_block_on_one_thread` and
 `a_primitive_is_not_a_monitor`; the compatibility page's `g-synchronized` gap is
 now a supported feature, recorded against a real JDK.
 
+### A fold written as a method reference (2026-08-20)
+
+`reduce(0, Integer::sum)` was refused: "a lambda or method reference is only
+allowed where a functional-interface type is expected". Every other stream
+operation converts a METHOD REFERENCE to the equivalent lambda before erasing
+it — the two-argument fold's arm matched only a two-parameter LAMBDA, so the
+reference reached codegen unconverted and took the whole program with it.
+
+Found by a different shape of probe: 130 programs composed by drawing six to
+nine independent, self-contained statements at random from a pool of forty and
+running the mixture. A unit-shaped probe never writes `reduce(0, Integer::sum)`
+next to a `synchronized` block and a `subList`, and this is the sort of gap that
+survives a hundred single-feature tests — the pool covered `reduce` and covered
+method references, and the pairing was what nothing had run.
+
+Pinned by `a_fold_written_as_a_method_reference`, alongside the lambda
+spellings that always worked.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
