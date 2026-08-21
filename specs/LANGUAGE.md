@@ -7047,6 +7047,15 @@ which has three pinned tests, had never been written down. A strictness that
 stops being true is not a bug, but a list that says it is exhaustive has to
 earn it.
 
+Audited a third time on 2026-08-20, from the other end: every bullet was run
+(all 13 still true — javac accepts each stricter one and rejects each looser
+one), and then the PINS were counted against the bullets. Twelve
+`stricter_than_javac!` tests, ten bullets: the entry-key method reference in a
+comparator and the raw-element array store were pinned and never enumerated,
+and are the last two bullets above now. Counting the pins is the cheaper half
+of this audit and the half that finds the omissions — running a bullet only
+tells you the bullets you have.
+
 Audited again on 2026-08-17, the same way. Every bullet above still held —
 but the list had stopped being EXHAUSTIVE, which is the other half of what it
 claims. Four strictnesses and one permissiveness had been recorded in the prose
@@ -7058,34 +7067,45 @@ interface parameterized on a method's own type variable had been fixed two
 entries after it was written down.
 
 - `Arrays.fill(new String[1], 5)` — javac erases to `fill(Object[], Object)`
-  and throws `ArrayStoreException` at run time.
+  and throws `ArrayStoreException` at run time. (`strict_fill_checks_the_element_type_of_a_reference_array`)
 - `Arrays.sort(new Plain[2])` where `Plain` is not `Comparable` — javac
-  throws `ClassCastException` at run time.
+  throws `ClassCastException` at run time. (`strict_array_sort_demands_a_comparable_element`)
 - `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
-  and it answers 0.
-- `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`.
+  and it answers 0. (`strict_frequency_demands_the_lists_element_type`)
+- `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`. (`strict_contains_all_demands_the_lists_element_type`)
 - `opt.map(String::toUpperCase).get().length()` — a `map` erases its result
   element (in an `Optional` and a `Stream` alike), so a chain cannot go on to
-  call a method of the mapped-to type.
+  call a method of the mapped-to type. (`stricter_map_erases_its_element`)
 - `Vector<Integer> v;` and the rest of the unmodeled library — a scope
   limit, reported by name wherever written rather than as a missing symbol.
   This bullet used to name `LinkedList`, `HashSet`, `TreeMap` and `TreeSet`
-  as well; all four are modeled now, and `Vector` is what is left of it.
+  as well; all four are modeled now, and `Vector` is what is left of it. (`strict_vector_is_refused_by_name`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
   but the refusal has to say so: written in full it gave the honest reason,
   written simply it read as a typo — "unknown type 'Math'", about a class
-  every program has used.
+  every program has used. (`stricter_namespace_class_as_a_variable_type`)
 - `IntFunction<String[]> gen = String[]::new; list.toArray(gen)` — the
   generator overload is modelled by reducing `String[]::new` to the array it
-  makes, which a VARIABLE holding the same function cannot be.
+  makes, which a VARIABLE holding the same function cannot be. (`stricter_to_array_needs_a_generator_written_out`)
 - `<T, R> R conv(T v, Function<T, R> f)` assigned to an `Integer` — the
   lambda's PARAMETER types are inferred (see "A generic method's lambda
   argument"), but a return variable pinned only by what the lambda BODY gives
-  back stays `Object`.
+  back stays `Object`. (`stricter_return_variable_pinned_only_by_a_lambda`)
 - `Arrays.stream(array, from, to)` — the RANGE overload; the whole-array form
-  is modelled.
+  is modelled. (`stricter_arrays_stream_takes_no_range`)
+- `Comparator.comparing(Map.Entry::getKey)` — the key extractor's parameter is
+  typed by the surrounding factory, which has no element to give, so the
+  reference resolves `getKey()` against `Object`. Both spellings a program
+  actually uses work (`Map.Entry.comparingByKey()`, and the lambda
+  `e -> e.getKey()`), as does the same reference in a STREAM, where the element
+  type is known. (`stricter_entry_method_ref_in_a_comparator`)
+- `Map[] raw; raw[0] = new HashMap<String, Integer>();` — storing a
+  PARAMETERIZED collection into a RAW-element array slot. The raw element
+  resolves to `Map<Object, Object>` and this pass cannot tell that shape from a
+  written one; allowing it would allow `Map<Object, Object> m = new
+  HashMap<String, Integer>()`, which javac rejects. (`stricter_raw_element_array_store`)
 
 **More permissive than javac** (caturra accepts; javac rejects). **Three
 known cases**, each asserted by `looser_than_javac!` so it cannot be forgotten:
@@ -7101,18 +7121,18 @@ known cases**, each asserted by `looser_than_javac!` so it cannot be forgotten:
   engine does not model. All three forms javac accepts do work, so nothing
   legitimate is blocked by leaving it permissive. Recorded when the two
   factories were added (2026-08-14) rather than left for a later sweep to
-  find.
+  find. (`entry_comparator_needs_a_witness_to_reverse`)
 - `(List<String>) Collections.emptyList()`. The factory types as a `null` that
   adopts its context, and a CAST is a context — so caturra reads this as an
   identity cast, where javac infers `List<Object>` for the bare call and calls
   the cast inconvertible. Assigning the factory to a `List<String>` first is
-  legal in both, and is the ordinary spelling.
+  legal in both, and is the ordinary spelling. (`empty_factory_adopts_a_cast_as_its_context`)
 - `W.<Dog>id(new Cat())` — a witness naming a USER class is not checked against
   the argument. The pass that reads witnesses knows each class's members but
   not its ANCESTRY, so it cannot tell a wrong class from a supertype, and a
   wrong REJECTION would be worse than the missing check. The provable cases —
   a primitive against the one wrapper it boxes to, and one concrete final
-  library type against another — ARE refused.
+  library type against another — ARE refused. (`a_witness_naming_the_wrong_user_class`)
 
 It held a worse one on 2026-08-13: a cast to `String` accepted ANY reference
 source, so `(String) Integer.valueOf(1)`, `(String) aStringBuilder` and

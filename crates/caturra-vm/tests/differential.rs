@@ -33042,6 +33042,38 @@ public class WrapperOk {
 "#
 );
 
+/// Every enumerated divergence is pinned, and every pin is enumerated.
+///
+/// `specs/LANGUAGE.md` claims its two divergence lists are EXHAUSTIVE, and the
+/// only thing that made that true was somebody re-reading both. Twice now an
+/// audit found strictnesses that were pinned by a test and never written down
+/// — most recently two of twelve. Counting is the half that finds those, so it
+/// is a test: each `stricter_than_javac!` and `looser_than_javac!` name must
+/// appear in the spec, which is what makes a new pin also a new bullet.
+#[test]
+fn every_divergence_pin_is_written_down() {
+    let spec = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specs/LANGUAGE.md");
+    let spec = std::fs::read_to_string(spec).expect("read the spec");
+    let source = include_str!("differential.rs");
+    let mut unnamed: Vec<&str> = Vec::new();
+    let mut lines = source.lines().peekable();
+    while let Some(line) = lines.next() {
+        if !(line.starts_with("stricter_than_javac!") || line.starts_with("looser_than_javac!")) {
+            continue;
+        }
+        let Some(name) = lines.peek().map(|next| next.trim().trim_end_matches(',')) else {
+            continue;
+        };
+        if !spec.contains(name) {
+            unnamed.push(name);
+        }
+    }
+    assert!(
+        unnamed.is_empty(),
+        "these divergences are pinned but not enumerated in specs/LANGUAGE.md: {unnamed:#?}"
+    );
+}
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one
