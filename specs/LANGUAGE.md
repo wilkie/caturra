@@ -7009,6 +7009,15 @@ program and threw at run time) and a varargs parameter that is not last, where
 breaking out of the parameter list left the `,` behind and the message blamed
 the punctuation — "expected ')'" for a rule about parameters.
 
+Two more messages named the wrong thing, and both are now javac's:
+`Map<String>` said "unknown type 'Map'" — the base is perfectly well known and
+what is wrong is the COUNT, which is not approximate for the containers however
+their arguments are modelled — and `Long l = anInteger;` said "int cannot be
+converted to Long", describing a type the program never wrote, because the
+conversion unboxes the wrapper before failing and the diagnostic followed it
+down. (Pinned by `a_container_with_the_wrong_number_of_arguments`,
+`a_wrapper_that_does_not_convert` and `the_wrapper_conversions_that_are_legal`.)
+
 Pinned by `a_checked_exception_escaping_a_lambda`,
 `a_checked_exception_escaping_an_anonymous_class`,
 `the_checked_exceptions_a_lambda_may_throw` (the shapes the rule must leave

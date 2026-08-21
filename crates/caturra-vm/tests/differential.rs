@@ -32982,6 +32982,66 @@ public class VarargsFirst {
 "
 );
 
+// Two messages that named the wrong thing. `Map<String>` said "unknown type
+// 'Map'" — the base is perfectly well known, and what is wrong is the COUNT,
+// which javac reports and which is not approximate for these types however
+// their arguments are modelled. And `Long l = anInteger;` said "int cannot be
+// converted to Long", describing a type the program never wrote: the
+// conversion unboxes the wrapper before failing, and the diagnostic followed
+// it down.
+differential_reject!(
+    a_container_with_the_wrong_number_of_arguments,
+    "ArgCount",
+    r"
+import java.util.*;
+
+public class ArgCount {
+    public static void main(String[] args) {
+        Map<String> pairs = null;
+        System.out.println(pairs);
+    }
+}
+"
+);
+
+differential_reject!(
+    a_wrapper_that_does_not_convert,
+    "WrapperConvert",
+    r"
+public class WrapperConvert {
+    public static void main(String[] args) {
+        Integer count = 1;
+        Long total = count;
+        System.out.println(total);
+    }
+}
+"
+);
+
+// The conversions around them that must keep working: a wrapper unboxes and
+// widens, and a correctly written container compiles.
+differential_test!(
+    the_wrapper_conversions_that_are_legal,
+    "WrapperOk",
+    r#"
+import java.util.*;
+
+public class WrapperOk {
+    public static void main(String[] args) {
+        Integer count = 1;
+        int plain = count;
+        double widened = count;
+        System.out.println(plain + " " + widened);
+        Map<String, Integer> pairs = new HashMap<String, Integer>();
+        pairs.put("a", 1);
+        System.out.println(pairs);
+        List raw = new ArrayList();
+        System.out.println(raw.size());
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

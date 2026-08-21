@@ -3982,6 +3982,22 @@ fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
 }
 
 fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
+    // A library container written with the WRONG NUMBER of type arguments
+    // (`Map<String>`): the base is perfectly well known, so blaming the type
+    // ("unknown type 'Map'") says the opposite of what is wrong. javac counts
+    // the arguments, and so can this — the arities of these are not
+    // approximate, whatever their type ARGUMENTS may be modelled as.
+    if let TypeRef::Generic { base, args } = ty {
+        let simple = base.rsplit('.').next().unwrap_or(base);
+        if let Some(declared) = raw_generic_arity(simple)
+            && table.class_id(simple).is_none()
+            && declared != args.len()
+        {
+            return format!(
+                "wrong number of type arguments; required {declared} in class {simple}"
+            );
+        }
+    }
     // A type-variable ERASURE sentinel reaching here means a shape caturra
     // does not model — a library functional interface parameterized on a
     // METHOD's own type variable (`<T> void run(T t, Consumer<T> c)`). Leaking
@@ -28052,11 +28068,30 @@ impl BodyGen<'_> {
             {
                 return;
             }
-            // Unbox a wrapper to its primitive (then widen if needed).
+            // Unbox a wrapper to its primitive (then widen if needed). If
+            // that fails, the DIAGNOSTIC must still name what the program
+            // wrote: `Long l = anInteger;` is javac's "Integer cannot be
+            // converted to Long", and reporting the unboxed `int` describes a
+            // type the program never mentions.
             if let JType::Boxed(elem) = from {
                 let primitive = elem.base_type();
+                let before = self.diagnostics.len();
                 self.emit_unbox(elem);
                 self.convert_for_assignment(primitive, to, span);
+                if let Some(reported) = self.diagnostics.get_mut(before)
+                    && reported.message
+                        == format!(
+                            "incompatible types: {} cannot be converted to {}",
+                            primitive.describe(self.table),
+                            to.describe(self.table)
+                        )
+                {
+                    reported.message = format!(
+                        "incompatible types: {} cannot be converted to {}",
+                        from.describe(self.table),
+                        to.describe(self.table)
+                    );
+                }
                 return;
             }
         }
