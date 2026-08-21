@@ -22733,6 +22733,24 @@ impl BodyGen<'_> {
     /// Each packs its elements into ONE array (a lone array argument already is
     /// that array) and calls the VM, which builds the pipeline — so a stream
     /// can start from something other than a collection.
+    /// What a SUPPLIER answers, read off the synthesized lambda class — the
+    /// same synthetic field `map` reads through [`refine_builtin_return`].
+    /// `Stream.generate(() -> 2)` is a stream of Integers, and erasing it made
+    /// the fold after it answer an `Object` that could not be assigned to an
+    /// `int`, printed as a raw value where a reference was expected.
+    fn supplier_element(&self, ty: JType) -> Option<ElemType> {
+        let JType::Object(lambda) = ty else {
+            return None;
+        };
+        let (_, produces) = self
+            .table
+            .field(self.table.class_name(lambda), crate::lambda::PRODUCES_FIELD)?;
+        let elem = elem_type_of(produces.ty)?;
+        // The element of an OBJECT stream is a reference: a body of type `int`
+        // becomes an `Integer` (JLS 5.1.7), exactly as `map`'s does.
+        Some(Prim::of(elem).map_or(elem, ElemType::Wrapper))
+    }
+
     #[allow(clippy::option_option)] // call-dispatch return shape
     #[allow(clippy::too_many_lines)] // one arm per stream-source factory
     fn emit_stream_source(
@@ -22798,7 +22816,10 @@ impl BodyGen<'_> {
                     .and_then(|ty| collection_elem_of(*ty))
                     .unwrap_or(object_elem)
             } else {
-                object_elem
+                arg_types
+                    .first()
+                    .and_then(|ty| self.supplier_element(*ty))
+                    .unwrap_or(object_elem)
             };
             let descriptor = match method {
                 "iterate" => {
@@ -23788,9 +23809,13 @@ impl BodyGen<'_> {
                                 ) => return JType::IntStream,
                                 (
                                     "LongStream",
-                                    "of" | "range" | "rangeClosed" | "concat" | "empty",
+                                    "of" | "range" | "rangeClosed" | "concat" | "empty" | "iterate"
+                                    | "generate",
                                 ) => return JType::LongStream,
-                                ("DoubleStream", "of" | "concat" | "empty") => {
+                                (
+                                    "DoubleStream",
+                                    "of" | "concat" | "empty" | "iterate" | "generate",
+                                ) => {
                                     return JType::DoubleStream;
                                 }
                                 // `Stream.iterate(seed, next)` is a stream of
@@ -23804,7 +23829,11 @@ impl BodyGen<'_> {
                                     return JType::Stream(elem);
                                 }
                                 ("Stream", "generate") => {
-                                    return JType::Stream(ElemType::Object(self.table.object_id));
+                                    let supplied = args.first().map(|a| self.type_of(a));
+                                    let elem = supplied
+                                        .and_then(|ty| self.supplier_element(ty))
+                                        .unwrap_or(ElemType::Object(self.table.object_id));
+                                    return JType::Stream(elem);
                                 }
                                 ("Stream", "of" | "ofNullable") => {
                                     // The JOIN, as the emitter uses — reading
@@ -23827,6 +23856,23 @@ impl BodyGen<'_> {
                                 }
                                 _ => {}
                             }
+                        }
+                        // The primitive Optionals' factories are emitted
+                        // inline too (their static table is empty, the way the
+                        // stream sources' are), so one used STRAIGHT as a value
+                        // had no type: `OptionalInt.of(3).getAsInt() + 1` was
+                        // "bad operand types", while the same Optional held in a
+                        // variable first added fine.
+                        if matches!(
+                            path[0].as_str(),
+                            "OptionalInt" | "OptionalLong" | "OptionalDouble"
+                        ) && matches!(method.as_str(), "of" | "empty")
+                        {
+                            return match path[0].as_str() {
+                                "OptionalLong" => JType::OptionalLong,
+                                "OptionalDouble" => JType::OptionalDouble,
+                                _ => JType::OptionalInt,
+                            };
                         }
                         // Intrinsic static (Math.abs, ...).
                         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();

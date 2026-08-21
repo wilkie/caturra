@@ -3662,6 +3662,25 @@ fn produced_type(decl: &ClassDecl, ctx: &Ctx) -> Option<TypeRef> {
     body_type(answer?, &bound, ctx)
 }
 
+/// The reference form of a primitive. An OBJECT stream's element is always a
+/// reference, so a supplier answering `2` makes a `Stream<Integer>` — reading
+/// the element as a bare `int` typed the fold's parameters as primitives and
+/// its result went back unboxed, which is a `VerifyError`, not a diagnostic.
+fn boxed_element(ty: TypeRef) -> TypeRef {
+    let name = match ty {
+        TypeRef::Int => "Integer",
+        TypeRef::Long => "Long",
+        TypeRef::Double => "Double",
+        TypeRef::Float => "Float",
+        TypeRef::Short => "Short",
+        TypeRef::Byte => "Byte",
+        TypeRef::Char => "Character",
+        TypeRef::Boolean => "Boolean",
+        other => return other,
+    };
+    TypeRef::Named(String::from(name))
+}
+
 /// The type of a lambda BODY, given what its parameter is. Deliberately a
 /// subset: a name, a literal, an operator, a call to a method of the program,
 /// and the handful of library methods whose return is a scalar or a String.
@@ -3866,7 +3885,10 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // `IntStream.range(a, b)` / `rangeClosed(a, b)` / `IntStream.of(...)` —
     // sources of `int`s, and the same factories on the other two primitive
     // pipelines, whose elements carry their own width.
-    if matches!(method.as_str(), "range" | "rangeClosed" | "of" | "empty") {
+    if matches!(
+        method.as_str(),
+        "range" | "rangeClosed" | "of" | "empty" | "iterate" | "generate"
+    ) {
         for (class, elem) in [
             ("IntStream", TypeRef::Int),
             ("LongStream", TypeRef::Long),
@@ -3882,6 +3904,20 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // this pass cannot read, so that one erases.
     if method == "iterate" && args.len() == 2 && names_library_class(prev.as_ref(), "Stream") {
         return static_type_of(&args[0], ctx);
+    }
+    // `Stream.generate(supplier)` — the element is what the supplier ANSWERS,
+    // and that is readable by the same route `map` uses: by the time an outer
+    // op asks, the supplier is already a synthesized class whose body ends in
+    // the value. A supplier this pass cannot read erases to `Object` rather
+    // than to NOTHING — an element of NOTHING left every downstream lambda in
+    // the chain with no target at all, so
+    // `generate(() -> 2).limit(2).reduce(0, (a, b) -> a + b)` was refused
+    // outright while the same chain over `iterate` compiled.
+    if method == "generate" && args.len() == 1 && names_library_class(prev.as_ref(), "Stream") {
+        return Some(
+            mapped_element_type(args, ctx)
+                .map_or_else(|| TypeRef::Named(String::from("Object")), boxed_element),
+        );
     }
     // `Stream.of(...)` — the element is what the arguments agree on, which is
     // all this syntactic pass can see; a mixed or computed list erases to

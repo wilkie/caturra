@@ -7110,6 +7110,41 @@ statement form had always failed the same way.)
 Pinned by `a_lambda_in_an_initializer_block` and
 `an_increment_of_an_enclosing_field`.
 
+### What a generated stream, and a primitive Optional, are (2026-08-20)
+
+The context cross-product was run a second time with a different pool — the
+statements stressing the features added this session rather than the language
+at large — and this time nothing was context-specific: both failures happened
+in all twelve contexts alike, which is its own result. The passes now agree
+about WHERE; they disagreed about WHAT.
+
+**`Stream.generate(supplier)` had no element.** A stream's element is what its
+source yields, and every other source says so: `of` joins its arguments,
+`iterate` reads its seed, `Arrays.stream` reads the array. `generate` erased —
+to `Object` in codegen, and in the lambda pass to nothing at all, which is
+worse: an element of NOTHING gives every downstream lambda in the chain no
+functional-interface position, so
+`Stream.generate(() -> 2).limit(2).reduce(0, (a, b) -> a + b)` was refused
+outright while the identical fold over `Stream.iterate` compiled. The
+supplier's answer was already being recorded — `map` reads it off the
+synthesized lambda class through the synthetic `__caturraProduces` field — so
+both sides now read the same field, and the element boxes on the way out
+because an object stream's element is a reference (a supplier answering `2`
+makes a `Stream<Integer>`, and reading it as a bare `int` sent the fold's
+result back unboxed, which is a `VerifyError` rather than a diagnostic).
+
+**A primitive Optional's factory had no type.** `OptionalInt.of` and its two
+siblings are emitted inline, the way the stream sources are, and their static
+table is deliberately EMPTY — so the mirror that types an expression found no
+method and answered `Error`. `OptionalInt.of(3).getAsInt() + 1` was "bad
+operand types for binary operator '+'"; the same Optional held in a variable
+first added fine. That is the recurring shape of this defect class — the
+emission path and the typing path are two readings of one fact, and only one of
+them was updated when the factories were added.
+
+Pinned by `a_generated_streams_element_is_its_suppliers` and
+`a_primitive_optional_factory_has_a_type`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

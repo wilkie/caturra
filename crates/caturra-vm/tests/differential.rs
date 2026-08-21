@@ -34243,3 +34243,67 @@ public class NestedNoCapture {
 }
 "#
 );
+
+// A generated stream's element is what its SUPPLIER answers. `Stream.generate`
+// erased its element to `Object` — in the lambda pass to NOTHING at all — so
+// every downstream lambda in the chain had no functional-interface position
+// and the whole program was refused, while the same chain over `Stream.of` or
+// `Stream.iterate` compiled. The supplier's type was already recorded on the
+// synthesized lambda class for `map` to read; `generate` now reads the same
+// field, on both the emission and the typing side.
+differential_test!(
+    a_generated_streams_element_is_its_suppliers,
+    "GenElem",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class GenElem {
+    public static void main(String[] args) {
+        System.out.println(Stream.generate(() -> 2).limit(2).reduce(0, Integer::sum));
+        System.out.println(Stream.generate(() -> 2).limit(3).reduce(0, (x, y) -> x + y));
+        int folded = Stream.generate(() -> 5).limit(2).reduce(0, (x, y) -> x + y);
+        System.out.println(folded);
+        System.out.println(Stream.generate(() -> "ab").limit(2).reduce("", (x, y) -> x + y));
+        System.out.println(Stream.generate(() -> "ab").limit(2).map(s -> s.length())
+            .collect(Collectors.toList()));
+        List<Integer> held = Stream.generate(() -> 3).limit(2).collect(Collectors.toList());
+        System.out.println(held);
+        System.out.println(Stream.generate(() -> 2).limit(2).mapToInt(x -> x).sum());
+        System.out.println(Stream.generate(() -> 2).limit(1).findFirst().get().getClass());
+        System.out.println(LongStream.iterate(1L, x -> x * 2).limit(3).sum());
+        System.out.println(IntStream.generate(() -> 5).limit(2).sum());
+    }
+}
+"#
+);
+
+// The primitive Optionals' FACTORIES are emitted inline (their static table is
+// empty), and only the emission path knew it: `OptionalInt.of(3).getAsInt() + 1`
+// was "bad operand types for binary operator '+'", because the mirror that
+// types an expression found no method and answered `Error`. Holding the same
+// Optional in a variable first added fine — the one shape a user would not
+// think to try.
+differential_test!(
+    a_primitive_optional_factory_has_a_type,
+    "OptFactory",
+    r"
+import java.util.*;
+import java.util.stream.*;
+
+public class OptFactory {
+    public static void main(String[] args) {
+        System.out.println(OptionalInt.of(3).getAsInt() + 1);
+        System.out.println(OptionalInt.of(3).getAsInt() + 1L);
+        System.out.println(OptionalLong.of(3).getAsLong() + 1);
+        System.out.println(OptionalDouble.of(3).getAsDouble() + 1L);
+        System.out.println(OptionalInt.of(3).orElse(0) + 1L);
+        System.out.println(OptionalInt.empty().orElse(7) + 1);
+        System.out.println(OptionalInt.of(3).isPresent());
+        System.out.println(Math.max(OptionalInt.of(3).getAsInt(), 4));
+        OptionalInt held = OptionalInt.of(3);
+        System.out.println(held.getAsInt() + 1);
+    }
+}
+"
+);
