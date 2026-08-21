@@ -87,9 +87,14 @@ pub(crate) fn check(
     table: &MethodTable,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Bundled units are trusted; synthesized lambda/anonymous/local classes
-    // carry their contract on an erased functional interface.
-    if path.starts_with('<') || class.is_anonymous || class.is_local {
+    // Bundled units are trusted.
+    //
+    // A synthesized lambda class is NOT: its body is source a program wrote,
+    // and a checked exception escaping it is javac's "unreported exception".
+    // Skipping every anonymous class hid that — the class carries the
+    // interface's own `throws` on its method, which is exactly what decides
+    // whether the body may throw.
+    if path.starts_with('<') {
         return;
     }
     // JLS §8.1.2: a generic class may not extend Throwable — the catch clause
@@ -200,6 +205,16 @@ fn check_method(
         .filter_map(|name| resolve_exc(name, table))
         .collect();
     let mut locals = HashMap::new();
+    // The class's own FIELDS are in scope for every method, and a bare
+    // `reader.readLine()` on a field is as much a typed receiver as one on a
+    // local. Without them the name fell through to the STATIC path, was not a
+    // class either, and the call was taken to throw nothing — so a `catch`
+    // around it read as "never thrown in body". A captured variable is a field
+    // of the synthesized class, which is how a lambda hit this too.
+    for field in &class.fields {
+        locals.insert(field.name.clone(), Binding::Declared(field.ty.clone()));
+    }
+    // A parameter shadows a field of the same name.
     for param in &method.params {
         locals.insert(param.name.clone(), Binding::Declared(param.ty.clone()));
     }

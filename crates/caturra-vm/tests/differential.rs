@@ -32850,6 +32850,138 @@ fn the_throwable_hierarchy_is_the_jdks() {
     );
 }
 
+// A lambda BODY is source a program wrote, so a checked exception escaping one
+// is javac's "unreported exception" — and the checked-exception pass skipped
+// every synthesized class, so `Runnable r = () -> { throw new Exception(); }`
+// compiled here and does not on a JDK. What a body may throw is what the
+// interface's own method declares, which the synthesized method now carries:
+// a user interface written `void go() throws Exception` permits it, and the
+// bundled ones (which declare nothing) do not.
+differential_reject!(
+    a_checked_exception_escaping_a_lambda,
+    "LambdaThrows",
+    r#"
+public class LambdaThrows {
+    public static void main(String[] args) {
+        Runnable task = () -> {
+            throw new Exception("x");
+        };
+        task.run();
+    }
+}
+"#
+);
+
+differential_reject!(
+    a_checked_exception_escaping_an_anonymous_class,
+    "AnonThrows",
+    r#"
+import java.io.*;
+
+public class AnonThrows {
+    public static void main(String[] args) {
+        Runnable task = new Runnable() {
+            public void run() {
+                throw new IOException("x");
+            }
+        };
+        task.run();
+    }
+}
+"#
+);
+
+// Everything the rule must leave alone: an unchecked throw, a caught one, an
+// interface that DECLARES the exception, and — the shape that made this
+// visible — a receiver whose type is a FIELD. The pass had only parameters and
+// locals in scope, so a field-typed receiver was not a typed receiver at all,
+// its call was taken to throw nothing, and the `catch` around it read as
+// "never thrown in body". A captured variable is a field of the synthesized
+// class, which is how a lambda reached the same hole.
+differential_test!(
+    the_checked_exceptions_a_lambda_may_throw,
+    "LambdaThrowsOk",
+    r#"
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.function.*;
+
+public class LambdaThrowsOk {
+    interface Risky {
+        void go() throws Exception;
+    }
+
+    BufferedReader reader;
+
+    String firstLine() {
+        try {
+            return reader == null ? "none" : reader.readLine();
+        } catch (IOException e) {
+            return "io";
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Runnable unchecked = () -> {
+            throw new IllegalStateException("fine");
+        };
+        System.out.println(unchecked instanceof Runnable);
+
+        Runnable caught = () -> {
+            try {
+                throw new Exception("x");
+            } catch (Exception e) {
+                System.out.println("caught " + e.getMessage());
+            }
+        };
+        caught.run();
+
+        Risky declared = () -> {
+            throw new Exception("allowed");
+        };
+        try {
+            declared.go();
+        } catch (Exception e) {
+            System.out.println("declared " + e.getMessage());
+        }
+
+        Runnable handled = () -> {
+            try {
+                Files.readString(Path.of("nope.txt"));
+            } catch (IOException e) {
+                System.out.println("read failed");
+            }
+        };
+        handled.run();
+
+        System.out.println(new LambdaThrowsOk().firstLine());
+        Arrays.asList("a").forEach(s -> System.out.println(s));
+        Supplier<String> supplier = () -> "value";
+        System.out.println(supplier.get());
+    }
+}
+"#
+);
+
+// javac's own words for a rule about PARAMETERS. Breaking out of the parameter
+// list at a varargs parameter left the `,` that followed it, and the closing
+// `)` then failed to match — so the message blamed the punctuation.
+differential_reject!(
+    a_varargs_parameter_that_is_not_last,
+    "VarargsFirst",
+    r"
+public class VarargsFirst {
+    static void take(int... values, int last) {
+    }
+
+    public static void main(String[] args) {
+        take(1, 2);
+    }
+}
+"
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

@@ -6980,6 +6980,40 @@ It found one more: `DuplicateFormatFlagsException` was recorded under
 names read. Every exception the engine names in its own sources was already in
 the table; the 55 parents are now the JDK's.
 
+### A checked exception escaping a lambda (2026-08-20)
+
+`Runnable r = () -> { throw new Exception("x"); };` compiled. A lambda body is
+source a program wrote, and a checked exception escaping one is javac's
+"unreported exception; must be caught or declared to be thrown" — but the
+checked-exception pass skipped every synthesized class, on the reasoning that
+such a class "carries its contract on an erased functional interface".
+
+It does, and that contract is the answer rather than a reason to skip: what a
+body may throw is what the INTERFACE's own method declares. The synthesized
+method now carries those `throws`, so a user interface written
+`void go() throws Exception` permits the throw and the bundled ones — which
+declare nothing — do not. Anonymous and local classes are checked the same way,
+which they were not before either.
+
+Lifting the skip immediately failed a pinned test, and the reason was a
+separate hole: the pass had only PARAMETERS and locals in scope, so a receiver
+whose type comes from a FIELD was not a typed receiver at all. Its call was
+taken to throw nothing, and a `catch` around it read as "never thrown in body of
+corresponding try statement". A captured variable is a field of the synthesized
+class, which is how a lambda reached the same hole — but a plain
+`reader.readLine()` on a field reached it too, and had all along.
+
+Found by comparing the WORDING of 131 rejected programs against javac's. Two of
+the differences were defects rather than style: this one (caturra accepted the
+program and threw at run time) and a varargs parameter that is not last, where
+breaking out of the parameter list left the `,` behind and the message blamed
+the punctuation — "expected ')'" for a rule about parameters.
+
+Pinned by `a_checked_exception_escaping_a_lambda`,
+`a_checked_exception_escaping_an_anonymous_class`,
+`the_checked_exceptions_a_lambda_may_throw` (the shapes the rule must leave
+alone, including the field receiver) and `a_varargs_parameter_that_is_not_last`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

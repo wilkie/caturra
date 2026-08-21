@@ -4754,7 +4754,17 @@ fn build_erased_lambda(
             params: erased,
             body: method_body,
             annotations: Vec::new(),
-            throws: Vec::new(),
+            // What the lambda's body is ALLOWED to throw: whatever the
+            // interface's own method declares. The bundled ones declare
+            // nothing, so a checked exception escaping a `Runnable` body is
+            // the error javac reports ("unreported exception"); a user
+            // interface written `void run() throws IOException` permits it.
+            throws: ctx
+                .shapes
+                .get(interface)
+                .and_then(|shapes| shapes.iter().find(|shape| shape.name == method))
+                .map(|shape| shape.throws.clone())
+                .unwrap_or_default(),
             is_protected: false,
             span,
             pre_init: 0,
@@ -5028,7 +5038,15 @@ fn build_lambda_class(
         params: method_params,
         body: method_body,
         annotations: Vec::new(),
-        throws: Vec::new(),
+        // What the body may throw is what the interface's own method declares
+        // — `void go() throws IOException` permits an IOException to escape,
+        // and an interface that declares nothing does not.
+        throws: ctx
+            .shapes
+            .get(interface)
+            .and_then(|shapes| shapes.iter().find(|shape| shape.name == sam.method))
+            .map(|shape| shape.throws.clone())
+            .unwrap_or_default(),
         is_protected: false,
         span,
         pre_init: 0,

@@ -1577,7 +1577,16 @@ impl Parser<'_> {
                     is_final,
                 });
                 if is_varargs {
-                    // A varargs parameter must be last.
+                    // JLS §8.4.1: a varargs parameter must be LAST. Breaking
+                    // here leaves the `,` that follows one, and the closing
+                    // `)` then failed to match — so the message blamed the
+                    // punctuation ("expected ')'") for a rule about
+                    // parameters, which is javac's "varargs parameter must be
+                    // the last parameter".
+                    if self.at_symbol(",") {
+                        self.error_here("varargs parameter must be the last parameter");
+                        return Err(Abort);
+                    }
                     break;
                 }
                 if !self.eat_symbol(",") {
