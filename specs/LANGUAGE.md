@@ -7145,6 +7145,52 @@ them was updated when the factories were added.
 Pinned by `a_generated_streams_element_is_its_suppliers` and
 `a_primitive_optional_factory_has_a_type`.
 
+### The mirror probe (2026-08-20)
+
+Naming that defect class made the probe for it obvious: take every library
+expression that is emitted INLINE — the stream sources, the `Optional` and
+collection factories, `String.format`, the nio calls, `Map.entry` — and put
+each one in eight positions that read its type by different routes: printed,
+passed as an argument, passed through a generic method, joined in a ternary, in
+a `var`, in a FIELD initializer, inside a lambda body, and as an array element.
+Thirty-four expressions, 272 programs.
+
+Three findings, and the first is the same shape as the last two units:
+
+- **`LongStream` and `DoubleStream` were not references.** The is-a-reference
+  list named `IntStream` and stopped. So a `LongStream` could not be passed as
+  an `Object`, held in a `var`, stored in an `Object[]`, or joined in a
+  ternary: "incompatible types: LongStream cannot be converted to Object", for
+  a value as much an object as the `IntStream` beside it. All eight positions
+  failed; the emitting position was fine, which is why nothing had noticed.
+- **An EMPTY stream had no context-free type.** `var s = Stream.of(1)` inferred
+  and `var s = Stream.empty()` did not, because a factory that adopts its
+  context has none to adopt in a `var`. The table that already answers this for
+  `Collections.emptyList()` gained the four stream empties.
+- **`String.valueOf(Collections.emptyList())` threw a ClassCastException.** The
+  JDK's most specific `valueOf` overload for a null-typed argument is
+  `valueOf(char[])`, and javac binds it — that is why `String.valueOf(null)`
+  throws. Right for the null LITERAL; wrong for the factories that type like
+  null because they ADOPT their context, and an overload set is the one place
+  where the context is what is being chosen.
+
+The last one has a wider version that is NOT fixed, and the attempt is worth
+recording: giving those factories their context-free type everywhere
+(`List<Object>`) makes `two(Collections.emptyList())` pick the list overload as
+javac does — and makes `list.addAll(Collections.emptyList())` a type error,
+because then the element is checked and `Object` is not `String`. The lenient
+null-like typing is load-bearing. It is now enumerated as a strictness with the
+reason attached, rather than left as a surprise.
+
+Everything the probe still disagrees about is a JDK-internal implementation
+class name — `ReferencePipeline$Head`, `UnixPath`, `KeyValueHolder`, a lambda's
+generated name. Those are platform detail (the `sun.nio.fs` one differs by
+operating system), and caturra does not mimic them.
+
+Pinned by `every_primitive_pipeline_is_a_reference`,
+`a_context_adopting_factory_is_not_the_null_literal`, and
+`stricter_a_context_free_factory_in_an_overload_set`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -7223,6 +7269,17 @@ entries after it was written down.
   actually uses work (`Map.Entry.comparingByKey()`, and the lambda
   `e -> e.getKey()`), as does the same reference in a STREAM, where the element
   type is known. (`stricter_entry_method_ref_in_a_comparator`)
+- A factory that ADOPTS its context (`Collections.emptyList()`,
+  `Optional.empty()`, `List.of()`) used as an argument where the OVERLOADS
+  disagree about it: `two(Collections.emptyList())`, against
+  `two(List<String>)` and `two(String)`, is "reference to two is ambiguous".
+  These factories are typed like the null literal, which is what lets one be
+  assigned to a `List<String>` with no element to check; in an overload set
+  that leniency matches both candidates, where javac infers `List<String>` and
+  matches one. Giving them their context-free type instead (`List<Object>`, the
+  one `var` gets) was tried and is worse — the element is then CHECKED, and
+  `list.addAll(Collections.emptyList())` becomes a type error. The lenient
+  typing stays. (`stricter_a_context_free_factory_in_an_overload_set`)
 - A local class declared inside a SWITCH arm
   (`case 0: class Helper { … }`). The switch block is one scope and its arms
   hold block statements like any other block, but the arm parser reads

@@ -5786,7 +5786,15 @@ impl JType {
                 | JType::TreeSet(_)
                 | JType::Stream(_)
                 | JType::Collector
+                // All THREE primitive pipelines are references. Only the `int`
+                // one was written down here, so a `LongStream` or a
+                // `DoubleStream` could not be passed as an `Object`, held in a
+                // `var`, or stored in an array — "incompatible types:
+                // LongStream cannot be converted to Object", for a value as
+                // much an object as the `IntStream` beside it.
                 | JType::IntStream
+                | JType::LongStream
+                | JType::DoubleStream
                 | JType::Optional(_)
                 | JType::OptionalInt
                 | JType::OptionalDouble
@@ -14836,89 +14844,9 @@ impl BodyGen<'_> {
                 };
             }
             if matches!(inferred, JType::Null | JType::Error)
-                && let Expr::Call {
-                    receiver: Some(owner),
-                    method,
-                    args,
-                    ..
-                } = init
-                && let Expr::Name { path, .. } = owner.as_ref()
-                // A QUALIFIED factory is the same factory: `java.util.List.of`
-                // is `List.of`, and keying on the first segment alone read it
-                // as a class called `java`, so only the simple spelling could
-                // infer.
-                && let path = self
-                    .strip_package_prefix(path)
-                    .unwrap_or_else(|| path.clone())
-                && path.len() == 1
-                // `Collections` IS a bundled class, so `has_class` cannot be
-                // the guard here; these three names are the library's own and
-                // a program that declares one of them shadows only the two
-                // interfaces, which are checked by the arm itself.
-                && (path[0] == "Collections" || !self.table.has_class(&path[0]))
+                && let Some(factory) = self.context_free_factory_type(init)
             {
-                let object = ElemType::Object(self.table.object_id);
-                let element = |this: &mut Self, at: usize| {
-                    args.get(at)
-                        .map(|a| this.type_of(a))
-                        .and_then(collection_elem_of)
-                        .unwrap_or(object)
-                };
-                inferred = match (path[0].as_str(), method.as_str()) {
-                    // The JOIN of every argument, as the emission path and
-                    // `literal_factory_type` use — this was a third copy that
-                    // read the first argument only, so `var l = List.of(1, 2.5)`
-                    // inferred `List<Integer>` and then refused its own
-                    // initializer.
-                    // `of(...)` reads its ELEMENTS from the arguments;
-                    // `copyOf(c)` reads them from the SOURCE COLLECTION, so
-                    // treating the argument as an element made
-                    // `List.copyOf(aStringList)` a `List<Object>`.
-                    ("List", "of") => JType::List(self.joined_literal_elem(args)),
-                    ("Set", "of") => JType::Set(self.joined_literal_elem(args)),
-                    ("List", "copyOf") => self
-                        .copy_source_element(args)
-                        .map_or(JType::Null, JType::List),
-                    ("Set", "copyOf") => self
-                        .copy_source_element(args)
-                        .map_or(JType::Null, JType::Set),
-                    ("Map", "copyOf") => self
-                        .copy_source_map(args)
-                        .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
-                    ("Map", "of" | "ofEntries") => JType::Map {
-                        key: element(self, 0),
-                        value: element(self, 1),
-                    },
-                    // `Stream.of(...)` and `new AbstractMap.SimpleEntry<>(k, v)`
-                    // are built by their own emitters, not a method table, so
-                    // neither had a return type to infer from.
-                    ("Stream", "of") => JType::Stream(element(self, 0)),
-                    ("Collections", "emptyList") => JType::List(object),
-                    ("Collections", "emptySet") => JType::Set(object),
-                    ("Collections", "emptyMap") => JType::Map {
-                        key: object,
-                        value: object,
-                    },
-                    // javac infers `Optional<Object>` here, the same way it
-                    // infers `List<Object>` for `List.of()` — the context-free
-                    // form of a type that otherwise adopts its context.
-                    // `ofNullable(null)` is the same empty Optional written
-                    // another way, and `var` needs a concrete type: the `Null`
-                    // that adopts a context has none to adopt here.
-                    ("Optional", "empty") => JType::Optional(object),
-                    ("Optional", "ofNullable")
-                        if matches!(
-                            args.first(),
-                            Some(Expr::Literal {
-                                value: Literal::Null,
-                                ..
-                            })
-                        ) =>
-                    {
-                        JType::Optional(object)
-                    }
-                    _ => JType::Null,
-                };
+                inferred = factory;
             }
             if matches!(inferred, JType::Null | JType::Error) {
                 self.error(
@@ -19911,6 +19839,37 @@ impl BodyGen<'_> {
         Some(ret_ty)
     }
 
+    /// `String.valueOf(x)`: the JDK's most specific overload for a NULL-typed
+    /// argument is `valueOf(char[])`, and javac really does bind it —
+    /// `String.valueOf(null)` compiles and throws at runtime. That is right for
+    /// the null LITERAL and wrong for everything else this compiler types
+    /// `Null`: `Collections.emptyList()`, `Optional.empty()` and
+    /// `Stream.empty()` type that way because they ADOPT their context, and an
+    /// overload set is the one place where the context is what is being
+    /// chosen. They bound to `char[]` and threw a `ClassCastException` on a
+    /// program the JDK prints an answer for.
+    fn retype_valueof_of_a_context_free_factory(
+        &self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        arg_types: &mut [JType],
+    ) {
+        if class == "String"
+            && method == "valueOf"
+            && let [JType::Null] = *arg_types
+            && !matches!(
+                args.first(),
+                Some(Expr::Literal {
+                    value: Literal::Null,
+                    ..
+                })
+            )
+        {
+            arg_types[0] = JType::Object(self.table.object_id);
+        }
+    }
+
     /// Emit an intrinsic static call (`Math.abs(...)`, ...).
     #[allow(clippy::option_option)]
     fn builtin_static_call(
@@ -19974,7 +19933,8 @@ impl BodyGen<'_> {
             return Some(Some(self.class_literal(simple)));
         }
         let (jvm_class, methods) = builtin_static_table(class).expect("caller checked");
-        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        let mut arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        self.retype_valueof_of_a_context_free_factory(class, method, args, &mut arg_types);
         if arg_types.contains(&JType::Error) {
             for arg in args {
                 self.expr(arg);
@@ -22726,6 +22686,107 @@ impl BodyGen<'_> {
         self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
         self.code.drop_stack(1);
         Some(Some(ret))
+    }
+
+    /// The CONTEXT-FREE type of a library factory that otherwise adopts its
+    /// context — `Collections.emptyList()`, `List.of(...)`, `Optional.empty()`.
+    /// javac infers one of these wherever there is no target type to adopt
+    /// (`var xs = List.of(1, 2)` is a `List<Integer>`), and an argument being
+    /// RESOLVED is such a place: the candidate is what the argument would
+    /// choose, so it cannot be the context. `None` for anything else.
+    fn context_free_factory_type(&mut self, init: &Expr) -> Option<JType> {
+        if let Expr::Call {
+                            receiver: Some(owner),
+                method,
+                args,
+                ..
+            } = init
+            && let Expr::Name { path, .. } = owner.as_ref()
+            // A QUALIFIED factory is the same factory: `java.util.List.of`
+            // is `List.of`, and keying on the first segment alone read it
+            // as a class called `java`, so only the simple spelling could
+            // infer.
+            && let path = self
+                .strip_package_prefix(path)
+                .unwrap_or_else(|| path.clone())
+            && path.len() == 1
+            // `Collections` IS a bundled class, so `has_class` cannot be
+            // the guard here; these three names are the library's own and
+            // a program that declares one of them shadows only the two
+            // interfaces, which are checked by the arm itself.
+            && (path[0] == "Collections" || !self.table.has_class(&path[0]))
+        {
+            let object = ElemType::Object(self.table.object_id);
+            let element = |this: &mut Self, at: usize| {
+                args.get(at)
+                    .map(|a| this.type_of(a))
+                    .and_then(collection_elem_of)
+                    .unwrap_or(object)
+            };
+            let inferred = match (path[0].as_str(), method.as_str()) {
+                // The JOIN of every argument, as the emission path and
+                // `literal_factory_type` use — this was a third copy that
+                // read the first argument only, so `var l = List.of(1, 2.5)`
+                // inferred `List<Integer>` and then refused its own
+                // initializer.
+                // `of(...)` reads its ELEMENTS from the arguments;
+                // `copyOf(c)` reads them from the SOURCE COLLECTION, so
+                // treating the argument as an element made
+                // `List.copyOf(aStringList)` a `List<Object>`.
+                ("List", "of") => JType::List(self.joined_literal_elem(args)),
+                ("Set", "of") => JType::Set(self.joined_literal_elem(args)),
+                ("List", "copyOf") => self
+                    .copy_source_element(args)
+                    .map_or(JType::Null, JType::List),
+                ("Set", "copyOf") => self
+                    .copy_source_element(args)
+                    .map_or(JType::Null, JType::Set),
+                ("Map", "copyOf") => self
+                    .copy_source_map(args)
+                    .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
+                ("Map", "of" | "ofEntries") => JType::Map {
+                    key: element(self, 0),
+                    value: element(self, 1),
+                },
+                // `Stream.of(...)` and `new AbstractMap.SimpleEntry<>(k, v)`
+                // are built by their own emitters, not a method table, so
+                // neither had a return type to infer from.
+                ("Stream", "of") => JType::Stream(element(self, 0)),
+                // An EMPTY stream has no context to adopt here either, and
+                // javac infers a `Stream<Object>` for one.
+                ("Stream", "empty") => JType::Stream(object),
+                ("IntStream", "empty") => JType::IntStream,
+                ("LongStream", "empty") => JType::LongStream,
+                ("DoubleStream", "empty") => JType::DoubleStream,
+                ("Collections", "emptyList") => JType::List(object),
+                ("Collections", "emptySet") => JType::Set(object),
+                ("Collections", "emptyMap") => JType::Map {
+                    key: object,
+                    value: object,
+                },
+                // javac infers `Optional<Object>` here, the same way it
+                // infers `List<Object>` for `List.of()` — the context-free
+                // form of a type that otherwise adopts its context.
+                // `ofNullable(null)` is the same empty Optional written
+                // another way, and `var` needs a concrete type: the `Null`
+                // that adopts a context has none to adopt here.
+                ("Optional", "empty") => JType::Optional(object),
+                ("Optional", "ofNullable")
+                    if matches!(
+                        args.first(),
+                        Some(Expr::Literal {
+                            value: Literal::Null,
+                            ..
+                        })
+                    ) =>
+                {
+                    JType::Optional(object)
+                }
+                _ => JType::Null,
+            };
+            return (!matches!(inferred, JType::Null | JType::Error)).then_some(inferred);
+        }
+        None
     }
 
     /// The stream sources: `Stream.of(...)`, `Stream.empty()`,

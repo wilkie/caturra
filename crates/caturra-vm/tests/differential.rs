@@ -33240,6 +33240,38 @@ public class InitBlockLambda {
 // (JLS §6.3), and its arms hold block statements like any other block — but
 // the arm parser reads STATEMENTS only, and a class declaration is not one.
 // Every other block position takes it.
+// A factory that ADOPTS its context — `Collections.emptyList()`,
+// `Optional.empty()`, `List.of()` — is typed like the null literal here, which
+// is what lets it be assigned to a `List<String>` without an element to check.
+// In an OVERLOAD SET that leniency is too much: javac infers `List<String>` and
+// picks the list candidate, while a type that matches everything matches both,
+// so this call is "reference to two is ambiguous". Giving these factories their
+// context-free type instead (`List<Object>`, which is what `var` gets) was
+// tried and is worse: it makes `list.addAll(Collections.emptyList())` a
+// type error, because then the element IS checked and `Object` is not `String`.
+// The lenient typing stays; the strictness is enumerated instead of hidden.
+stricter_than_javac!(
+    stricter_a_context_free_factory_in_an_overload_set,
+    "EmptyOverload",
+    r#"
+import java.util.*;
+
+public class EmptyOverload {
+    static void two(List<String> l) {
+        System.out.println("list");
+    }
+
+    static void two(String s) {
+        System.out.println("str");
+    }
+
+    public static void main(String[] args) {
+        two(Collections.emptyList());
+    }
+}
+"#
+);
+
 stricter_than_javac!(
     stricter_local_class_in_a_switch_arm,
     "SwitchLocalClass",
@@ -34306,4 +34338,78 @@ public class OptFactory {
     }
 }
 "
+);
+
+// The two primitive pipelines beside `IntStream` are references too. Only the
+// `int` one was written into the is-a-reference list, so a `LongStream` or a
+// `DoubleStream` could not be passed as an `Object`, held in a `var`, stored
+// in an array, or joined in a ternary — "incompatible types: LongStream cannot
+// be converted to Object", for a value as much an object as the `IntStream`
+// beside it. An EMPTY stream also had no context-free type, so `var s =
+// Stream.empty()` could not infer while `var s = Stream.of(1)` could.
+differential_test!(
+    every_primitive_pipeline_is_a_reference,
+    "PrimPipe",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class PrimPipe {
+    static String take(Object o) {
+        return o == null ? "null" : "object";
+    }
+
+    static Object held = LongStream.range(0, 2);
+
+    public static void main(String[] args) {
+        System.out.println(take(LongStream.range(0, 2)));
+        System.out.println(take(DoubleStream.of(1.0)));
+        System.out.println(take(IntStream.range(0, 2)));
+        Object[] each = { LongStream.of(1L), DoubleStream.of(1.0), IntStream.of(1) };
+        System.out.println(each.length);
+        System.out.println(take(held));
+        Object joined = args.length == 0 ? DoubleStream.of(1.0) : null;
+        System.out.println(take(joined));
+        var empty = Stream.empty();
+        System.out.println(empty.count());
+        var none = IntStream.empty();
+        System.out.println(none.sum());
+        var longs = LongStream.range(0, 3);
+        System.out.println(longs.sum());
+        var doubles = DoubleStream.of(1.5, 2.5);
+        System.out.println(doubles.sum());
+    }
+}
+"#
+);
+
+// `String.valueOf(x)`: for a NULL-typed argument the JDK's most specific
+// overload is `valueOf(char[])`, and javac really does bind it — that is why
+// `String.valueOf(null)` throws. It is the right answer for the null LITERAL
+// and the wrong one for everything else typed `null` here: the factories that
+// ADOPT their context type that way, and an overload set is the one place
+// where the context is what is being chosen. They bound to `char[]` and threw
+// a ClassCastException on a program the JDK prints an answer for.
+differential_test!(
+    a_context_adopting_factory_is_not_the_null_literal,
+    "ValueOfNull",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class ValueOfNull {
+    public static void main(String[] args) {
+        System.out.println(String.valueOf(Optional.empty()));
+        System.out.println(String.valueOf(Collections.emptyList()));
+        System.out.println(String.valueOf(Collections.emptyMap()));
+        System.out.println(String.valueOf(List.of(1, 2)));
+        System.out.println(String.valueOf(new char[] { 'a', 'b' }));
+        try {
+            System.out.println(String.valueOf(null));
+        } catch (Throwable t) {
+            System.out.println("caught " + t);
+        }
+    }
+}
+"#
 );
