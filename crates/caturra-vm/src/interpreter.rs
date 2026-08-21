@@ -7425,6 +7425,10 @@ impl<'run> Interpreter<'run> {
                     }
                 }
             }
+            ("comparator", []) => match self.tree_map_comparator(receiver) {
+                Some(comparator) => JValue::Ref(Some(comparator)),
+                None => JValue::NULL,
+            },
             ("floorKey" | "ceilingKey" | "lowerKey" | "higherKey", [probe]) => {
                 self.tree_map_navigate_key(receiver, method_name, *probe)?
             }
@@ -8090,6 +8094,13 @@ impl<'run> Interpreter<'run> {
             }
             // Navigation: floor ≤ e, ceiling ≥ e, lower < e, higher > e; absent
             // → null.
+            // The ordering the set was built with, or null for natural
+            // ordering — which is what a JDK answers, and what lets a copy
+            // adopt it.
+            ("comparator", []) => match self.tree_set_comparator(receiver) {
+                Some(comparator) => JValue::Ref(Some(comparator)),
+                None => JValue::NULL,
+            },
             ("floor" | "ceiling" | "lower" | "higher", [probe]) => {
                 self.tree_set_navigate(receiver, method_name, *probe)?
             }
@@ -8366,6 +8377,10 @@ impl<'run> Interpreter<'run> {
                     }
                 }
             }
+            ("comparator", []) => match self.source_sorted_comparator(receiver) {
+                Some(comparator) => JValue::Ref(Some(comparator)),
+                None => JValue::NULL,
+            },
             ("contains" | "containsKey", [probe]) => {
                 let mut found = false;
                 for (key, _) in &pairs {

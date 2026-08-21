@@ -34644,27 +34644,136 @@ public class NavUserOrder {
 "#
 );
 
-// The sorted collections have ONE compile-time face here, so the narrower
-// interfaces get the whole set of methods. In the JDK, `SortedSet` declares
-// `first`/`last`/`headSet`/`tailSet`/`subSet` and nothing more — the
-// navigation (`floor`, `pollFirst`, `descendingSet`) belongs to
-// `NavigableSet`, which is why `headSet(E)` returning a `SortedSet` cannot be
-// polled while `headSet(E, boolean)` returning a `NavigableSet` can. caturra
-// types every one of them as its `TreeSet`, so all of it is reachable.
-//
-// This predates the views: `SortedSet<Integer> s = new TreeSet<>(); s.floor(3)`
-// already compiled. The views make it reachable from more places, which is why
-// it is written down now rather than left to be discovered.
-looser_than_javac!(
-    looser_a_sorted_face_offers_the_navigable_methods,
-    "SortedFace",
+// The sorted collections have three FACES, and the JDK's split between them is
+// observable. `SortedSet` declares `comparator`, `first`, `last` and the three
+// range views and nothing else; the navigation (`floor`, `pollFirst`,
+// `descendingSet`) is `NavigableSet`'s, and `clone` only the class's. That is
+// what makes `headSet(E)` — which answers a `SortedSet` — unpollable, while
+// `headSet(E, boolean)` — which answers a `NavigableSet` — can be polled. Each
+// of these compiled here until the faces existed.
+differential_reject!(
+    a_sorted_face_has_no_navigation,
+    "NoFloor",
     r"
 import java.util.*;
 
-public class SortedFace {
+public class NoFloor {
     public static void main(String[] args) {
         SortedSet<Integer> narrow = new TreeSet<>(Arrays.asList(1, 3, 5));
         System.out.println(narrow.floor(4));
+    }
+}
+"
+);
+
+differential_reject!(
+    a_one_argument_head_set_answers_a_sorted_set,
+    "NoPollThroughHead",
+    r"
+import java.util.*;
+
+public class NoPollThroughHead {
+    public static void main(String[] args) {
+        TreeSet<Integer> whole = new TreeSet<>(Arrays.asList(1, 3, 5));
+        System.out.println(whole.headSet(5).pollLast());
+    }
+}
+"
+);
+
+differential_reject!(
+    a_sorted_map_face_has_no_entry_navigation,
+    "NoPollEntry",
+    r#"
+import java.util.*;
+
+public class NoPollEntry {
+    public static void main(String[] args) {
+        TreeMap<String, Integer> m = new TreeMap<>();
+        m.put("a", 1);
+        System.out.println(m.headMap("c").pollFirstEntry());
+    }
+}
+"#
+);
+
+differential_reject!(
+    a_narrow_face_does_not_widen_inward,
+    "NoNarrowing",
+    r"
+import java.util.*;
+
+public class NoNarrowing {
+    public static void main(String[] args) {
+        TreeSet<Integer> whole = new TreeSet<>(Arrays.asList(1, 3, 5));
+        TreeSet<Integer> narrowed = whole.descendingSet();
+        System.out.println(narrowed);
+    }
+}
+"
+);
+
+// The other half of the same fact: what each face DOES declare still works,
+// and a face widens outward.
+differential_test!(
+    each_sorted_face_offers_its_own_members,
+    "SortedFaces",
+    r#"
+import java.util.*;
+
+public class SortedFaces {
+    public static void main(String[] args) {
+        TreeSet<Integer> whole = new TreeSet<>(Arrays.asList(1, 3, 5, 7, 9));
+        SortedSet<Integer> sorted = whole;
+        System.out.println(sorted.first() + " " + sorted.last() + " " + sorted.size());
+        System.out.println(sorted.headSet(5) + " " + sorted.tailSet(5) + " " + sorted.subSet(3, 8));
+        // A natural-ordering collection answers null; a comparator OBJECT
+        // renders as an identity string no two runtimes agree on.
+        System.out.println(sorted.contains(3) + " " + sorted.comparator());
+        NavigableSet<Integer> navigable = whole;
+        System.out.println(navigable.floor(4) + " " + navigable.ceiling(4) + " " + navigable.descendingSet());
+        System.out.println(navigable.headSet(5, true) + " " + navigable.subSet(3, true, 7, true));
+        Set<Integer> plain = sorted;
+        System.out.println(plain.size());
+        SortedSet<Integer> fromView = whole.headSet(5);
+        NavigableSet<Integer> fromInclusive = whole.headSet(5, false);
+        System.out.println(fromView + " " + fromInclusive.pollFirst());
+        TreeMap<String, Integer> map = new TreeMap<>();
+        map.put("a", 1);
+        map.put("c", 3);
+        SortedMap<String, Integer> sortedMap = map;
+        System.out.println(sortedMap.firstKey() + " " + sortedMap.lastKey() + " " + sortedMap.headMap("c"));
+        NavigableMap<String, Integer> navigableMap = map;
+        System.out.println(navigableMap.floorKey("b") + " " + navigableMap.firstEntry());
+        System.out.println(navigableMap.descendingMap() + " " + navigableMap.navigableKeySet());
+        Map<String, Integer> plainMap = sortedMap;
+        System.out.println(plainMap.get("a"));
+        // Every face still prints, iterates and compares as the collection it is.
+        for (int each : sorted.headSet(6)) {
+            System.out.print(each + " ");
+        }
+        System.out.println();
+        System.out.println(whole.clone());
+    }
+}
+"#
+);
+
+// The HASH collections still have one compile-time face: `Set`/`HashSet` are
+// one type here and `Map`/`HashMap` another, so the interfaces offer `clone`,
+// which only the classes declare. The sorted side no longer does this — its
+// three faces are distinct — and the fix here is the same role, applied to a
+// second pair of types.
+looser_than_javac!(
+    looser_a_hash_face_offers_clone,
+    "HashFaceClone",
+    r"
+import java.util.*;
+
+public class HashFaceClone {
+    public static void main(String[] args) {
+        Set<Integer> narrow = new HashSet<>(Arrays.asList(1, 3));
+        System.out.println(narrow.clone());
     }
 }
 "

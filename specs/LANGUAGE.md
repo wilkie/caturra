@@ -7239,8 +7239,60 @@ sorted collections still have one compile-time FACE, so `SortedSet` offers the
 s.floor(3)` already compiled); they make it reachable from more places.
 
 Pinned by `a_sorted_collection_has_range_and_descending_views`,
-`a_sorted_map_view_writes_through`, `a_view_orders_itself_the_way_its_tree_does`
-and `looser_a_sorted_face_offers_the_navigable_methods`.
+`a_sorted_map_view_writes_through` and
+`a_view_orders_itself_the_way_its_tree_does`.
+
+### The sorted faces (2026-08-21)
+
+The divergence the views left behind, closed the next morning: a sorted
+collection has THREE compile-time faces, and the JDK's split between them is
+observable. `SortedSet` declares `comparator`, `first`, `last` and the three
+range views and nothing else; the navigation — `floor`, `ceiling`, `lower`,
+`higher`, `pollFirst`, `pollLast`, `descendingSet`, `descendingIterator` — is
+`NavigableSet`'s; `clone` is the class's alone. `SortedMap`/`NavigableMap`
+divide the same way, with the entry accessors and the key-set views on the
+navigable side.
+
+That split is exactly why the one-argument `headSet(E)` answers a `SortedSet`
+and cannot be polled, while `headSet(E, boolean)` answers a `NavigableSet` and
+can. Both compiled here until now.
+
+`JType::TreeSet` and `JType::TreeMap` carry a [`SortedRole`], the way
+`LinkedList` already carries its `Queue`/`Deque` role. Three decisions worth
+recording:
+
+- **One table, filtered by face.** The three faces are NESTED interfaces, not
+  three unrelated types, so splitting the method table three ways would have
+  been the same fact written three times. Each entry names the narrowest face
+  that declares it, and a receiver's own face is measured against that.
+- **The face rides in `TypeArgs`.** Every caller that resolves a member already
+  threads those through; a separate parameter would have had to be added at
+  each of them, and the one that was forgotten would silently offer the whole
+  table.
+- **A missing face-member is a missing SYMBOL.** Not a bad overload: javac says
+  "cannot find symbol: method floor(int)" for a `SortedSet`, and so does this
+  now — the name has to be invisible, not merely unmatched.
+
+A face widens only outward: a `TreeSet` is a `NavigableSet` is a `SortedSet`,
+and `TreeSet<Integer> t = s.descendingSet();` is now the error it always was.
+
+Two things the sweep behind it found, neither about faces:
+`sortedSet.comparator()` was missing from the tables entirely (and needed the
+`Comparator` return to fall back to `Object` for a program that names no
+comparator — a natural-ordering collection answers null); and `spliterator()`
+now gives its honest reason rather than "cannot find symbol", since caturra
+models no such type. The `Set` face also offered `descendingIterator`, which
+neither `Set` nor `HashSet` declares.
+
+What remains is the same shape one level over: the HASH collections still have
+one face, so `Set` and `Map` offer `clone`. It is enumerated, and the fix is
+this same role applied to a second pair of types.
+
+Pinned by `each_sorted_face_offers_its_own_members`,
+`a_sorted_face_has_no_navigation`,
+`a_one_argument_head_set_answers_a_sorted_set`,
+`a_sorted_map_face_has_no_entry_navigation`,
+`a_narrow_face_does_not_widen_inward` and `looser_a_hash_face_offers_clone`.
 
 ## Divergences from javac
 
@@ -7320,14 +7372,11 @@ entries after it was written down.
   actually uses work (`Map.Entry.comparingByKey()`, and the lambda
   `e -> e.getKey()`), as does the same reference in a STREAM, where the element
   type is known. (`stricter_entry_method_ref_in_a_comparator`)
-- The sorted collections have ONE compile-time face, so the narrower
-  interfaces offer the whole set of methods: `SortedSet<Integer> s = …;
-  s.floor(3)` compiles, though the JDK declares `floor` on `NavigableSet` and
-  a `SortedSet` has only `first`/`last`/`headSet`/`tailSet`/`subSet`. The same
-  split is what makes `headSet(E)` (a `SortedSet`) unpollable in the JDK while
-  `headSet(E, boolean)` (a `NavigableSet`) can be polled — here both can. The
-  fix is a ROLE on the type, as the `LinkedList`/`Queue`/`Deque` faces already
-  carry. (`looser_a_sorted_face_offers_the_navigable_methods`)
+- The HASH collections have ONE compile-time face: `Set` and `HashSet` are one
+  type here, `Map` and `HashMap` another, so the INTERFACES offer `clone`,
+  which only the classes declare. The sorted side no longer does this — its
+  three faces are distinct — and the fix is the same role applied to a second
+  pair of types. (`looser_a_hash_face_offers_clone`)
 - A factory that ADOPTS its context (`Collections.emptyList()`,
   `Optional.empty()`, `List.of()`) used as an argument where the OVERLOADS
   disagree about it: `two(Collections.emptyList())`, against
