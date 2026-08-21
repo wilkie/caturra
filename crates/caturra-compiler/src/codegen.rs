@@ -7536,6 +7536,14 @@ enum BRet {
     Values,
     /// `Set<Map.Entry<K, V>>` (`map.entrySet()`).
     Entries,
+    /// A `NavigableSet` over the receiver's own element or key — every
+    /// set-shaped sorted VIEW (`headSet`, `descendingSet`, `navigableKeySet`).
+    /// A map's first type argument is its KEY, which is what a key-set view
+    /// holds, so one shape serves both receivers.
+    SelfSortedSet,
+    /// A `NavigableMap` over the receiver's own key and value — `headMap`,
+    /// `subMap`, `descendingMap`.
+    SelfSortedMap,
     /// A `List` of the receiver's OWN element — `subList`'s live view.
     SelfList,
     /// `java.nio.file.Path` (`Path.of`, `path.getFileName()`).
@@ -8021,14 +8029,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Scanner", "nextBigDecimal", "BigDecimal is not supported by caturra"),
     ("HashMap", "of", "the immutable factories live on Map, not HashMap - write Map.of(...)"),
     ("HashMap", "ofEntries", "the immutable factories live on Map, not HashMap - write Map.ofEntries(...)"),
-    ("TreeMap", "headMap", "TreeMap range views are not supported by caturra"),
-    ("TreeMap", "tailMap", "TreeMap range views are not supported by caturra"),
-    ("TreeMap", "subMap", "TreeMap range views are not supported by caturra"),
-    ("TreeMap", "descendingMap", "TreeMap.descendingMap is not supported by caturra"),
-    ("TreeSet", "descendingSet", "TreeSet.descendingSet is not supported by caturra"),
-    ("TreeSet", "headSet", "TreeSet range views are not supported by caturra"),
-    ("TreeSet", "tailSet", "TreeSet range views are not supported by caturra"),
-    ("TreeSet", "subSet", "TreeSet range views are not supported by caturra"),
 ];
 
 /// The source-level class name of a receiver that [`UNSUPPORTED_MEMBERS`]
@@ -11297,6 +11297,90 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
     // `SimpleImmutableEntry`, whose `setValue` throws — and `null` for an
     // empty map. They were refused as "entry views are not supported", which
     // stopped being true once `Map.Entry` became a type a program can hold.
+    // The VIEWS. A head is exclusive of its bound and a tail inclusive,
+    // unless the four-argument forms say otherwise; each answers a live
+    // `NavigableMap` over the same map. `navigableKeySet` is the keys as a
+    // NAVIGABLE set (`keySet` answers the plain `Set` face), and
+    // `descendingKeySet` is that set the other way round.
+    bm(
+        "headMap",
+        &[BParam::Key],
+        BRet::SelfSortedMap,
+        "(Ljava/lang/Object;)Ljava/util/NavigableMap;",
+    ),
+    bm(
+        "headMap",
+        &[BParam::Key, BParam::Boolean],
+        BRet::SelfSortedMap,
+        "(Ljava/lang/Object;Z)Ljava/util/NavigableMap;",
+    ),
+    bm(
+        "tailMap",
+        &[BParam::Key],
+        BRet::SelfSortedMap,
+        "(Ljava/lang/Object;)Ljava/util/NavigableMap;",
+    ),
+    bm(
+        "tailMap",
+        &[BParam::Key, BParam::Boolean],
+        BRet::SelfSortedMap,
+        "(Ljava/lang/Object;Z)Ljava/util/NavigableMap;",
+    ),
+    bm(
+        "subMap",
+        &[BParam::Key, BParam::Key],
+        BRet::SelfSortedMap,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/NavigableMap;",
+    ),
+    bm(
+        "subMap",
+        &[BParam::Key, BParam::Boolean, BParam::Key, BParam::Boolean],
+        BRet::SelfSortedMap,
+        "(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableMap;",
+    ),
+    bm(
+        "descendingMap",
+        &[],
+        BRet::SelfSortedMap,
+        "()Ljava/util/NavigableMap;",
+    ),
+    bm(
+        "navigableKeySet",
+        &[],
+        BRet::SelfSortedSet,
+        "()Ljava/util/NavigableSet;",
+    ),
+    bm(
+        "descendingKeySet",
+        &[],
+        BRet::SelfSortedSet,
+        "()Ljava/util/NavigableSet;",
+    ),
+    // The four key navigations, as ENTRIES.
+    bm(
+        "floorEntry",
+        &[BParam::Key],
+        BRet::Entry,
+        "(Ljava/lang/Object;)Ljava/util/Map$Entry;",
+    ),
+    bm(
+        "ceilingEntry",
+        &[BParam::Key],
+        BRet::Entry,
+        "(Ljava/lang/Object;)Ljava/util/Map$Entry;",
+    ),
+    bm(
+        "lowerEntry",
+        &[BParam::Key],
+        BRet::Entry,
+        "(Ljava/lang/Object;)Ljava/util/Map$Entry;",
+    ),
+    bm(
+        "higherEntry",
+        &[BParam::Key],
+        BRet::Entry,
+        "(Ljava/lang/Object;)Ljava/util/Map$Entry;",
+    ),
     bm("firstEntry", &[], BRet::Entry, "()Ljava/util/Map$Entry;"),
     bm("lastEntry", &[], BRet::Entry, "()Ljava/util/Map$Entry;"),
     bm(
@@ -11638,6 +11722,52 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
         &[BParam::Key],
         BRet::BoxedElem,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    // The VIEWS. `headSet`/`tailSet` take the JDK's default inclusivity
+    // (a head excludes its bound, a tail includes it) or say which; `subSet`
+    // is `[from, to)` unless told otherwise. Each answers a live
+    // `NavigableSet` over the same set.
+    bm(
+        "headSet",
+        &[BParam::Key],
+        BRet::SelfSortedSet,
+        "(Ljava/lang/Object;)Ljava/util/NavigableSet;",
+    ),
+    bm(
+        "headSet",
+        &[BParam::Key, BParam::Boolean],
+        BRet::SelfSortedSet,
+        "(Ljava/lang/Object;Z)Ljava/util/NavigableSet;",
+    ),
+    bm(
+        "tailSet",
+        &[BParam::Key],
+        BRet::SelfSortedSet,
+        "(Ljava/lang/Object;)Ljava/util/NavigableSet;",
+    ),
+    bm(
+        "tailSet",
+        &[BParam::Key, BParam::Boolean],
+        BRet::SelfSortedSet,
+        "(Ljava/lang/Object;Z)Ljava/util/NavigableSet;",
+    ),
+    bm(
+        "subSet",
+        &[BParam::Key, BParam::Key],
+        BRet::SelfSortedSet,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/NavigableSet;",
+    ),
+    bm(
+        "subSet",
+        &[BParam::Key, BParam::Boolean, BParam::Key, BParam::Boolean],
+        BRet::SelfSortedSet,
+        "(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableSet;",
+    ),
+    bm(
+        "descendingSet",
+        &[],
+        BRet::SelfSortedSet,
+        "()Ljava/util/NavigableSet;",
     ),
     bm("pollFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm("pollLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
@@ -12830,6 +12960,11 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         // A map key and a queue/deque nullable element both box the first arg.
         BRet::Key | BRet::BoxedElem => Some(boxed_or_nested(args.first, table)),
         BRet::Wrapper(elem) => Some(JType::Boxed(elem)),
+        BRet::SelfSortedSet => Some(args.first.map_or(JType::Error, JType::TreeSet)),
+        BRet::SelfSortedMap => Some(match (args.first, args.second) {
+            (Some(key), Some(value)) => JType::TreeMap { key, value },
+            _ => JType::Error,
+        }),
         BRet::Keys => Some(args.first.map_or(JType::Error, JType::Set)),
         BRet::Values => Some(args.second.map_or(JType::Error, JType::Collection)),
         BRet::Entries => Some(match (args.first, args.second) {

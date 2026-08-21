@@ -9800,21 +9800,20 @@ fn linked_list_serves_as_queue_deque_and_list() {
     );
 }
 
-/// Java's `Map` members that caturra cannot model name a reason rather than
-/// pretending they do not exist. The reason has to win over the arguments'
-/// own errors: `map.forEach(lambda)` must blame the missing lambda support,
-/// not the lambda, which is in a perfectly good position.
+/// A Java 11 member caturra cannot model names a REASON rather than pretending
+/// it does not exist — students find these in the documentation, and "cannot
+/// find symbol" would read as a bug.
 ///
-/// `toArray` and `clone` both used to be pinned here, refused because "Object
-/// arrays are not supported" and "clone is not supported". Both are
-/// implemented now, so each is exercised rather than explained — a refusal
-/// pinned by a test outlives its reason just as quietly as one that is not,
-/// and the test then argues FOR keeping the gap.
+/// This test used to name `TreeMap.descendingMap`, and before that `toArray`
+/// and `clone`. Every one of them is implemented now: a refusal pinned by a
+/// test outlives its reason just as quietly as one that is not, and the test
+/// then argues FOR keeping the gap. So the subject moves to whatever is still
+/// honestly refused, and what is implemented gets exercised instead.
 #[test]
 fn unsupported_map_members_explain_themselves() {
-    let source = "import java.util.TreeMap; \
-                  class M { static void r() { new TreeMap<String, Integer>().descendingMap(); } }";
-    let want = "TreeMap.descendingMap exists in Java, but";
+    let source = "import java.util.ArrayList; \
+                  class M { static void r() { new ArrayList<String>().parallelStream(); } }";
+    let want = "ArrayList.parallelStream exists in Java, but";
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
         path: String::from("M.java"),
         text: String::from(source),

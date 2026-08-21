@@ -185,6 +185,27 @@ impl OptionalKind {
     }
 }
 
+/// One end of a [`HeapObject::SortedView`]'s range: the value the program
+/// named, and whether the range includes it. `headSet(x)` excludes, `tailSet(x)`
+/// includes, and the four-argument `subSet`/`subMap` say which for each end.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SortedBound {
+    pub value: JValue,
+    pub inclusive: bool,
+}
+
+/// Which face a [`HeapObject::SortedView`] presents: the set itself, the map
+/// itself, or a map's KEYS as a set (`navigableKeySet`/`descendingKeySet`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortedFace {
+    /// A view of a `TreeSet` — its elements.
+    Set,
+    /// A view of a `TreeMap` — its entries.
+    Map,
+    /// A view of a `TreeMap`'s KEYS, presented as a `NavigableSet`.
+    Keys,
+}
+
 /// Which of a map's three views a [`HeapObject::MapView`] presents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MapViewKind {
@@ -514,6 +535,38 @@ pub enum HeapObject {
     TreeSet {
         values: Vec<JValue>,
         comparator: Option<HeapRef>,
+    },
+    /// A live view of a sorted set or map: a RANGE of one, or the whole of it
+    /// REVERSED, or both. Every `NavigableSet`/`NavigableMap` view is this one
+    /// object — `headSet`/`tailSet`/`subSet`, `headMap`/`tailMap`/`subMap`,
+    /// `descendingSet`, `descendingMap`, `descendingKeySet` and
+    /// `navigableKeySet` differ only in their bounds, their direction, and
+    /// which face they present.
+    ///
+    /// The bounds are the VALUES the program named, never positions, which is
+    /// what keeps the view live: a key put into the backing map inside the
+    /// range shows through, and one outside it does not. `range` is those
+    /// bounds already resolved to a `from..to` slice of the backing's sorted
+    /// vector, refreshed by every call made THROUGH the view (where the
+    /// interpreter is at hand and the comparator may run user code). The plain
+    /// readers — printing, `for` each, hashing — re-resolve it themselves
+    /// whenever the ordering is NATIVE, which is every tree keyed by a number,
+    /// a character or a String; only a tree ordered by user code falls back to
+    /// the cached range.
+    SortedView {
+        backing: HeapRef,
+        lo: Option<SortedBound>,
+        hi: Option<SortedBound>,
+        descending: bool,
+        face: SortedFace,
+        range: (usize, usize),
+        /// The BACKING's length when the range was last resolved. A JDK's view
+        /// cursor carries the TREE's `modCount`, not the view's own — so
+        /// adding to the tree outside the range still ends an iteration of the
+        /// view with a `ConcurrentModificationException`, which the view's own
+        /// unchanged length could never notice. (caturra models `modCount` as
+        /// a length everywhere; see the fail-fast cursors.)
+        seen: usize,
     },
     /// A live `java.util.Iterator` over a list or set: the collection it walks,
     /// the position it will return next, and the position it last returned (for

@@ -2896,6 +2896,19 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
             {
                 return map_type_args(&args[0], ctx);
             }
+            // A RANGE or DESCENDING view of a sorted map holds the same keys
+            // and values it does: `m.headMap(k).forEach((key, value) -> …)`.
+            Expr::Call {
+                receiver: Some(inner),
+                method,
+                ..
+            } if matches!(
+                method.as_str(),
+                "headMap" | "tailMap" | "subMap" | "descendingMap"
+            ) =>
+            {
+                return map_type_args(inner, ctx);
+            }
             // `Map.of(k, v, …)` used STRAIGHT as a receiver: its key and value
             // are what the arguments look like, the same reading `List.of`
             // already gets. Without it a lambda over `Map.of(…).entrySet()
@@ -4285,6 +4298,20 @@ fn declared_array_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 
 #[allow(clippy::too_many_lines)] // one arm per receiver shape
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    // A RANGE or DESCENDING view of a sorted SET holds the same element it
+    // does, the way `subList` and `unmodifiableList` below already do.
+    if let Expr::Call {
+        receiver: Some(inner),
+        method,
+        ..
+    } = receiver
+        && matches!(
+            method.as_str(),
+            "headSet" | "tailSet" | "subSet" | "descendingSet"
+        )
+    {
+        return list_elem_type(inner, ctx);
+    }
     // `list.subList(a, b)` is a live view OF that list, so its element is the
     // same one — as `unmodifiableList` below already knew.
     if let Expr::Call {
@@ -4445,6 +4472,12 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
                 }),
                 _ => None,
             };
+        }
+        // A sorted map's KEYS as a navigable set.
+        if matches!(method.as_str(), "navigableKeySet" | "descendingKeySet")
+            && let Some((key, _)) = map_type_args(inner, ctx)
+        {
+            return Some(key);
         }
         // A cursor over a collection walks that collection's elements:
         // `list.iterator().forEachRemaining(x -> ...)`.

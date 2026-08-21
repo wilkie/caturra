@@ -3768,6 +3768,17 @@ pub(crate) fn check_comodification(
     source: HeapRef,
     expected_len: usize,
 ) -> Result<(), VmError> {
+    // A view of a sorted collection is checked against its BACKING, not
+    // against itself: a JDK's view cursor carries the TREE's `modCount`, so
+    // adding a key OUTSIDE the range still ends a walk of the view with a CME,
+    // and the view's own length — which that add never touched — could not
+    // notice. `seen` is the length stamped when the walk began.
+    if let Some(HeapObject::SortedView { backing, seen, .. }) = heap.get(source) {
+        if sorted_backing_pairs(heap, *backing).len() == *seen {
+            return Ok(());
+        }
+        return Err(throw("java.util.ConcurrentModificationException"));
+    }
     if iterated_len(heap, source) == expected_len {
         return Ok(());
     }
@@ -3791,6 +3802,11 @@ fn iterated_len(heap: &Heap, source: HeapRef) -> usize {
     }
     if let Some(map) = view_map(heap, source) {
         return iterated_len(heap, map);
+    }
+    // A sorted view iterates ITS OWN slice, the same reason a `subList` does.
+    if matches!(heap.get(source), Some(HeapObject::SortedView { .. })) {
+        let (from, to) = sorted_view_range(heap, source);
+        return to.saturating_sub(from);
     }
     // An unmodifiable wrapper iterates the collection it wraps. Missing these
     // made the length read as 0, which the comodification check saw as a
@@ -3873,6 +3889,10 @@ fn hash_like(heap: &Heap, source: HeapRef) -> bool {
                 | HeapObject::HashSet(_)
                 | HeapObject::TreeMap { .. }
                 | HeapObject::TreeSet { .. }
+                // A view of a tree hands out a TREE cursor: its `hasNext` is
+                // the pointer the last `next()` computed, so adding to the
+                // backing mid-loop ends the loop quietly rather than throwing.
+                | HeapObject::SortedView { .. }
         )
     )
 }
@@ -3893,6 +3913,20 @@ fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
             _ => map_key_at(heap, *map, index),
         };
     }
+    // A sorted view hands out the position within ITS slice, which is where
+    // the descending faces get their reversal from.
+    if let Some(HeapObject::SortedView { face, .. }) = heap.get(source) {
+        let face = *face;
+        return sorted_view_pairs(heap, source)
+            .get(index)
+            .map_or(JValue::NULL, |(key, value)| {
+                if matches!(face, crate::value::SortedFace::Map) {
+                    *value
+                } else {
+                    *key
+                }
+            });
+    }
     match heap.get(source) {
         // A HashSet stores its elements as the KEYS of its backing map.
         Some(HeapObject::HashSet(entries)) => entries.key_at(index),
@@ -3912,6 +3946,10 @@ fn map_key_at(heap: &Heap, map: HeapRef, index: usize) -> JValue {
         Some(HeapObject::TreeMap { entries, .. }) => {
             entries.get(index).map_or(JValue::NULL, |(key, _)| *key)
         }
+        // `subMap(...).keySet()` is a `MapView` whose map is the VIEW.
+        Some(HeapObject::SortedView { .. }) => sorted_view_pairs(heap, map)
+            .get(index)
+            .map_or(JValue::NULL, |(key, _)| *key),
         _ => JValue::NULL,
     }
 }
@@ -3922,6 +3960,9 @@ fn map_value_at(heap: &Heap, map: HeapRef, index: usize) -> JValue {
         Some(HeapObject::TreeMap { entries, .. }) => {
             entries.get(index).map_or(JValue::NULL, |(_, value)| *value)
         }
+        Some(HeapObject::SortedView { .. }) => sorted_view_pairs(heap, map)
+            .get(index)
+            .map_or(JValue::NULL, |(_, value)| *value),
         _ => JValue::NULL,
     }
 }
@@ -7324,6 +7365,27 @@ fn set_like_elements(heap: &Heap, reference: HeapRef) -> Option<Vec<JValue>> {
             .collect(),
         HeapObject::TreeSet { values, .. } => values.clone(),
         HeapObject::UnmodifiableSet(inner) => set_like_elements(heap, *inner)?,
+        // A sorted view is iterable like any other collection, and a MapView
+        // over one reaches here through the same door.
+        HeapObject::SortedView { .. } => sorted_view_pairs(heap, reference)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect(),
+        HeapObject::MapView { map, kind, .. }
+            if matches!(heap.get(*map), Some(HeapObject::SortedView { .. })) =>
+        {
+            let kind = *kind;
+            sorted_view_pairs(heap, *map)
+                .into_iter()
+                .map(|(key, value)| {
+                    if matches!(kind, MapViewKind::Values) {
+                        value
+                    } else {
+                        key
+                    }
+                })
+                .collect()
+        }
         // A `subList` VIEW is iterable like any other collection — reading it
         // as a range of the backing list is what every other reader does.
         HeapObject::SubList {
@@ -7642,6 +7704,177 @@ pub(crate) fn java_double_to_string(value: f64) -> String {
 /// `Float.toString`, matching `OpenJDK` 11's `FloatingDecimal`.
 pub(crate) fn java_float_to_string(value: f32) -> String {
     crate::floatdec::java_float_to_string(value)
+}
+
+/// A comparison that needs no user code: two numbers, two characters, two
+/// booleans, two Strings, or the boxed forms of those. `None` means the JDK
+/// would call the program's own `compareTo` (or a `Comparator` it wrote), which
+/// only the interpreter can do — see [`sorted_view_range`] for why a reader
+/// that has nothing but the heap still gets a right answer for every tree keyed
+/// by one of these.
+fn native_order(heap: &Heap, a: JValue, b: JValue) -> Option<std::cmp::Ordering> {
+    use crate::value::HeapObject;
+    match (a, b) {
+        (JValue::Int(x), JValue::Int(y)) => Some(x.cmp(&y)),
+        (JValue::Long(x), JValue::Long(y)) => Some(x.cmp(&y)),
+        (JValue::Double(x), JValue::Double(y)) => Some(crate::interpreter::java_double_order(x, y)),
+        (JValue::Float(x), JValue::Float(y)) => Some(crate::interpreter::java_double_order(
+            f64::from(x),
+            f64::from(y),
+        )),
+        (JValue::Ref(Some(left)), JValue::Ref(Some(right))) => {
+            match (heap.get(left), heap.get(right)) {
+                (Some(HeapObject::JavaString(x)), Some(HeapObject::JavaString(y))) => {
+                    Some(x.cmp(y))
+                }
+                (
+                    Some(HeapObject::Boxed { value: x, .. }),
+                    Some(HeapObject::Boxed { value: y, .. }),
+                ) => native_order(heap, *x, *y),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The vector a sorted view reads, as (key, value) pairs in the BACKING's own
+/// ascending order. A set's pairs are its elements twice over, which is what
+/// lets all three faces of a view share one resolver.
+pub(crate) fn sorted_backing_pairs(heap: &Heap, backing: HeapRef) -> Vec<(JValue, JValue)> {
+    use crate::value::HeapObject;
+    match heap.get(backing) {
+        Some(HeapObject::TreeSet { values, .. }) => values.iter().map(|v| (*v, *v)).collect(),
+        Some(HeapObject::TreeMap { entries, .. }) => entries.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether the tree a view reads orders itself with user code — a `Comparator`
+/// object, or elements whose `compareTo` is the program's. Such a tree's bounds
+/// can only be resolved by the interpreter.
+fn orders_natively(heap: &Heap, backing: HeapRef) -> bool {
+    use crate::value::HeapObject;
+    let comparator = match heap.get(backing) {
+        Some(HeapObject::TreeSet { comparator, .. } | HeapObject::TreeMap { comparator, .. }) => {
+            *comparator
+        }
+        _ => return false,
+    };
+    comparator.is_none()
+}
+
+/// Where a view's bounds fall in a sorted vector — the ONE statement of what a
+/// bound means, shared by the two callers that can ask. `order` is how this
+/// tree compares, which is the only thing that differs between them: a reader
+/// holding nothing but the heap passes a comparison that fails on anything
+/// needing user code, and the interpreter passes the tree's real comparator.
+pub(crate) fn resolve_sorted_range<E, F>(
+    pairs: &[(JValue, JValue)],
+    lo: Option<crate::value::SortedBound>,
+    hi: Option<crate::value::SortedBound>,
+    mut order: F,
+) -> Result<(usize, usize), E>
+where
+    F: FnMut(JValue, JValue) -> Result<std::cmp::Ordering, E>,
+{
+    use std::cmp::Ordering;
+    let mut from = 0;
+    if let Some(bound) = lo {
+        // Nothing is in range until something is found to be: an empty tree,
+        // or one whose every key sits below the bound, is an empty view.
+        from = pairs.len();
+        for (at, (key, _)) in pairs.iter().enumerate() {
+            let ordering = order(*key, bound.value)?;
+            let inside = if bound.inclusive {
+                ordering != Ordering::Less
+            } else {
+                ordering == Ordering::Greater
+            };
+            if inside {
+                from = at;
+                break;
+            }
+        }
+    }
+    let mut to = pairs.len();
+    if let Some(bound) = hi {
+        for (at, (key, _)) in pairs.iter().enumerate() {
+            let ordering = order(*key, bound.value)?;
+            let past = if bound.inclusive {
+                ordering == Ordering::Greater
+            } else {
+                ordering != Ordering::Less
+            };
+            if past {
+                to = at;
+                break;
+            }
+        }
+    }
+    // A `subMap(b, a)` with the ends crossed is an IllegalArgumentException at
+    // construction, so a range that comes out backwards here can only be an
+    // empty one.
+    Ok((from, to.max(from)))
+}
+
+/// The bounds resolved with NATIVE comparisons only. `None` when any
+/// comparison the resolution needs would run the program's code.
+fn native_sorted_range(
+    heap: &Heap,
+    backing: HeapRef,
+    lo: Option<crate::value::SortedBound>,
+    hi: Option<crate::value::SortedBound>,
+) -> Option<(usize, usize)> {
+    if !orders_natively(heap, backing) {
+        return None;
+    }
+    let pairs = sorted_backing_pairs(heap, backing);
+    resolve_sorted_range(&pairs, lo, hi, |a, b| native_order(heap, a, b).ok_or(())).ok()
+}
+
+/// The slice of the backing a sorted view presents, as `from..to`. Resolved
+/// from the BOUNDS whenever the ordering is native — which keeps the view live
+/// for every tree keyed by a number, a character or a String, even for a
+/// reader that holds nothing but the heap. A tree ordered by the program's own
+/// code falls back to the range the last call THROUGH the view resolved.
+pub(crate) fn sorted_view_range(heap: &Heap, view: HeapRef) -> (usize, usize) {
+    use crate::value::HeapObject;
+    let Some(HeapObject::SortedView {
+        backing,
+        lo,
+        hi,
+        range,
+        ..
+    }) = heap.get(view)
+    else {
+        return (0, 0);
+    };
+    let (backing, lo, hi, range) = (*backing, *lo, *hi, *range);
+    let len = sorted_backing_pairs(heap, backing).len();
+    native_sorted_range(heap, backing, lo, hi).unwrap_or((range.0.min(len), range.1.min(len)))
+}
+
+/// The (key, value) pairs a sorted view presents, in the VIEW's order — which
+/// is the backing's, reversed for a descending view.
+pub(crate) fn sorted_view_pairs(heap: &Heap, view: HeapRef) -> Vec<(JValue, JValue)> {
+    use crate::value::HeapObject;
+    let Some(HeapObject::SortedView {
+        backing,
+        descending,
+        ..
+    }) = heap.get(view)
+    else {
+        return Vec::new();
+    };
+    let (backing, descending) = (*backing, *descending);
+    let (from, to) = sorted_view_range(heap, view);
+    let pairs = sorted_backing_pairs(heap, backing);
+    let mut slice: Vec<(JValue, JValue)> = pairs[from.min(pairs.len())..to.min(pairs.len())].into();
+    if descending {
+        slice.reverse();
+    }
+    slice
 }
 
 #[cfg(test)]

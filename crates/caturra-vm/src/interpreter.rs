@@ -3205,7 +3205,7 @@ impl<'run> Interpreter<'run> {
                     )));
                 };
                 // A source TreeSet passes its comparator on; otherwise natural.
-                let comparator = self.tree_set_comparator(source);
+                let comparator = self.source_sorted_comparator(source);
                 if let Some(HeapObject::TreeSet {
                     comparator: slot, ..
                 }) = self.heap.get_mut(receiver)
@@ -3241,7 +3241,7 @@ impl<'run> Interpreter<'run> {
                         "java.lang.NullPointerException",
                     )));
                 };
-                let comparator = self.tree_map_comparator(source);
+                let comparator = self.source_sorted_comparator(source);
                 if let Some(HeapObject::TreeMap {
                     comparator: slot, ..
                 }) = self.heap.get_mut(receiver)
@@ -4130,13 +4130,28 @@ impl<'run> Interpreter<'run> {
             // A PriorityQueue prints its heap-array order (as Java's does).
             Some(HeapObject::PriorityQueue { heap, .. }) => Renderable::List(heap.clone()),
             Some(HeapObject::Optional { value, kind }) => Renderable::Optional(*value, *kind),
+            // A sorted view renders the slice its bounds resolve to: a map
+            // face as `{k=v, ...}`, the two set faces as `[a, b]`.
+            Some(HeapObject::SortedView { face, .. }) => {
+                let face = *face;
+                let pairs = intrinsics::sorted_view_pairs(&self.heap, reference);
+                if matches!(face, crate::value::SortedFace::Map) {
+                    Renderable::Map(pairs)
+                } else {
+                    Renderable::View(pairs, MapViewKind::Keys)
+                }
+            }
             Some(HeapObject::MapView { map, kind, .. }) => {
                 let (map, kind) = (*map, *kind);
                 // A view over any map (Hash or Tree) renders its entries in that
                 // map's iteration order.
                 if matches!(
                     self.heap.get(map),
-                    Some(HeapObject::HashMap(_) | HeapObject::TreeMap { .. })
+                    Some(
+                        HeapObject::HashMap(_)
+                            | HeapObject::TreeMap { .. }
+                            | HeapObject::SortedView { .. }
+                    )
                 ) {
                     Renderable::View(self.map_entries(map), kind)
                 } else {
@@ -6126,6 +6141,11 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::HashSet(_) | HeapObject::TreeSet { .. }) => true,
             Some(HeapObject::UnmodifiableSet(inner)) => self.is_set_like(*inner),
             Some(HeapObject::MapView { kind, .. }) => !matches!(kind, MapViewKind::Values),
+            // The two set-shaped faces of a sorted view ARE sets: a
+            // `headSet`, a `descendingSet`, a `navigableKeySet`.
+            Some(HeapObject::SortedView { face, .. }) => {
+                !matches!(face, crate::value::SortedFace::Map)
+            }
             _ => false,
         }
     }
@@ -6372,7 +6392,9 @@ impl<'run> Interpreter<'run> {
                 }
                 sum
             }
-            Some(HashMap(_) | TreeMap { .. } | UnmodifiableMap(_)) => {
+            Some(
+                HashMap(_) | TreeMap { .. } | UnmodifiableMap(_) | HeapObject::SortedView { .. },
+            ) => {
                 let mut sum = 0i32;
                 for (key, value) in self.map_entries(a) {
                     sum = sum.wrapping_add(self.java_hash_code(key)? ^ self.java_hash_code(value)?);
@@ -6854,10 +6876,17 @@ impl<'run> Interpreter<'run> {
             let inner = *inner;
             return self.map_find(inner, key);
         }
-        // A TreeMap locates a key by comparison, not hashing.
+        // A TreeMap locates a key by comparison, not hashing — and so does a
+        // VIEW of one, whose `map_entries` are the slice the bounds resolve
+        // to. Without this an entry taken from `subMap(…).entrySet()` looked
+        // its value up by HASH in a view that has no hash table, and every
+        // `getValue()` answered null.
         if matches!(
             self.heap.get(map),
-            Some(crate::value::HeapObject::TreeMap { .. })
+            Some(
+                crate::value::HeapObject::TreeMap { .. }
+                    | crate::value::HeapObject::SortedView { .. }
+            )
         ) {
             return self.tree_map_index_of(map, key);
         }
@@ -6870,6 +6899,10 @@ impl<'run> Interpreter<'run> {
     fn tree_map_comparator(&self, map: HeapRef) -> Option<HeapRef> {
         match self.heap.get(map) {
             Some(crate::value::HeapObject::TreeMap { comparator, .. }) => *comparator,
+            // A view orders keys the way the tree it reads does.
+            Some(crate::value::HeapObject::SortedView { backing, .. }) => {
+                self.sorted_backing_comparator(*backing)
+            }
             _ => None,
         }
     }
@@ -7043,6 +7076,11 @@ impl<'run> Interpreter<'run> {
             // Collections.singletonMap(k, v))` read no entries at all and
             // built an empty map.
             Some(crate::value::HeapObject::UnmodifiableMap(inner)) => self.map_entries(*inner),
+            // A sorted view's entries are the slice its bounds resolve to, in
+            // the view's own direction.
+            Some(crate::value::HeapObject::SortedView { .. }) => {
+                intrinsics::sorted_view_pairs(&self.heap, map)
+            }
             _ => Vec::new(),
         }
     }
@@ -7055,6 +7093,10 @@ impl<'run> Interpreter<'run> {
             ) => entries.len(),
             Some(crate::value::HeapObject::TreeMap { entries, .. }) => entries.len(),
             Some(crate::value::HeapObject::UnmodifiableMap(inner)) => self.map_len(*inner),
+            Some(crate::value::HeapObject::SortedView { .. }) => {
+                let (from, to) = intrinsics::sorted_view_range(&self.heap, map);
+                to.saturating_sub(from)
+            }
             _ => 0,
         }
     }
@@ -7164,9 +7206,16 @@ impl<'run> Interpreter<'run> {
                     HeapObject::HashSet(_)
                         | HeapObject::TreeSet { .. }
                         | HeapObject::MapView { .. }
+                        | HeapObject::SortedView { .. }
                 )
             )
         {
+            // A cursor over a sorted view carries the TREE's length as its
+            // expectation, taken now.
+            if matches!(self.heap.get(receiver), Some(HeapObject::SortedView { .. })) {
+                self.refresh_sorted_view(receiver)?;
+                self.stamp_sorted_view(receiver);
+            }
             let expected_len = iterated_len_of(&self.heap, receiver);
             // A view taken from an unmodifiable map hands out a read-only
             // cursor — `Collections.unmodifiableMap(m).keySet().iterator()`
@@ -7283,6 +7332,9 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::PriorityQueue { .. }) => {
                 return self.priority_queue_intrinsic(receiver, method_name, descriptor, args);
             }
+            Some(HeapObject::SortedView { .. }) => {
+                return self.sorted_view_intrinsic(receiver, method_name, descriptor, args);
+            }
             Some(HeapObject::MapView { map, kind, .. }) => {
                 let (map, kind) = (*map, *kind);
                 return self.map_view_intrinsic(receiver, map, kind, method_name, descriptor, args);
@@ -7376,6 +7428,33 @@ impl<'run> Interpreter<'run> {
             ("floorKey" | "ceilingKey" | "lowerKey" | "higherKey", [probe]) => {
                 self.tree_map_navigate_key(receiver, method_name, *probe)?
             }
+            // The same four navigations as ENTRIES. Each is the key navigation
+            // plus the value that key holds, snapshot into an immutable entry.
+            ("floorEntry" | "ceilingEntry" | "lowerEntry" | "higherEntry", [probe]) => {
+                let which = format!("{}Key", method_name.trim_end_matches("Entry"));
+                let key = self.tree_map_navigate_key(receiver, &which, *probe)?;
+                if key == JValue::NULL {
+                    JValue::NULL
+                } else {
+                    let value = self.map_entry_value(receiver, key)?;
+                    self.immutable_entry(key, value)?
+                }
+            }
+            // The VIEWS, and the two that present a map's KEYS as a
+            // NavigableSet rather than the plain `Set` that `keySet` answers.
+            (
+                "headMap" | "tailMap" | "subMap" | "descendingMap" | "navigableKeySet"
+                | "descendingKeySet",
+                _,
+            ) => match self.sorted_view_factory(
+                receiver,
+                method_name,
+                args,
+                crate::value::SortedFace::Map,
+            )? {
+                Some(view) => view,
+                None => return Ok(Answered::No),
+            },
             ("containsKey", [key]) => {
                 JValue::Int(i32::from(self.map_find(receiver, *key)?.is_some()))
             }
@@ -7837,6 +7916,16 @@ impl<'run> Interpreter<'run> {
     fn tree_set_values(&self, set: HeapRef) -> Vec<JValue> {
         match self.heap.get(set) {
             Some(crate::value::HeapObject::TreeSet { values, .. }) => values.clone(),
+            // A set-shaped VIEW answers its own slice, in its own direction —
+            // so `forEach` over a `descendingSet` runs backwards. The callers
+            // that need ASCENDING order (the tree's own navigation, and the
+            // index a `remove` writes at) are only ever handed the TREE.
+            Some(crate::value::HeapObject::SortedView { .. }) => {
+                intrinsics::sorted_view_pairs(&self.heap, set)
+                    .into_iter()
+                    .map(|(key, _)| key)
+                    .collect()
+            }
             _ => Vec::new(),
         }
     }
@@ -8004,6 +8093,19 @@ impl<'run> Interpreter<'run> {
             ("floor" | "ceiling" | "lower" | "higher", [probe]) => {
                 self.tree_set_navigate(receiver, method_name, *probe)?
             }
+            // The VIEWS. Each is the same object with different bounds and a
+            // direction; the factory reads them off the call.
+            ("headSet" | "tailSet" | "subSet" | "descendingSet", _) => {
+                match self.sorted_view_factory(
+                    receiver,
+                    method_name,
+                    args,
+                    crate::value::SortedFace::Set,
+                )? {
+                    Some(view) => view,
+                    None => return Ok(Answered::No),
+                }
+            }
             ("pollFirst" | "pollLast", []) => {
                 let values = self.tree_set_values(receiver);
                 if values.is_empty() {
@@ -8104,6 +8206,693 @@ impl<'run> Interpreter<'run> {
     }
 
     /// `floor`/`ceiling`/`lower`/`higher` over the sorted vector.
+    /// A call made THROUGH a sorted view. Every read answers from the slice
+    /// the bounds resolve to, in the VIEW's own direction; every write reaches
+    /// the backing tree, refusing a value outside the range exactly as a JDK's
+    /// does. Nothing here delegates to the tree's own dispatcher: those arms
+    /// read a sorted-ASCENDING vector, and half of what a view exists for is
+    /// running the other way.
+    #[allow(clippy::too_many_lines)] // one arm per NavigableSet/NavigableMap method
+    fn sorted_view_intrinsic(
+        &mut self,
+        receiver: HeapRef,
+        method_name: &str,
+        _descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Answered, VmError> {
+        use crate::value::{HeapObject, SortedFace};
+        self.refresh_sorted_view(receiver)?;
+        let Some((backing, lo, hi, descending, face)) = self.sorted_view_parts(receiver) else {
+            return Ok(Answered::No);
+        };
+        if let Some(built) = self.sorted_view_factory(receiver, method_name, args, face)? {
+            return Ok(Answered::Value(built));
+        }
+        let pairs = intrinsics::sorted_view_pairs(&self.heap, receiver);
+        let comparator = self.sorted_backing_comparator(backing);
+        // The view's own order: the backing's, or its opposite. Every
+        // navigation below is written once, in these terms, which is what
+        // keeps `descendingSet().floor(x)` from needing its own arm.
+        let order = |vm: &mut Self, a: JValue, b: JValue| -> Result<i32, VmError> {
+            let ordering = vm.compare_with(a, b, comparator)?;
+            Ok(if descending { -ordering } else { ordering })
+        };
+        let keys = |pairs: &[(JValue, JValue)]| -> Vec<JValue> {
+            pairs.iter().map(|(key, _)| *key).collect()
+        };
+        // A walk STARTS at `size()` — the enhanced-for asks once, and that
+        // answer is what every element fetch is checked against. A mutation
+        // made THROUGH the view re-stamps, which is exactly when a JDK cursor
+        // re-syncs its `expectedModCount`.
+        if matches!(
+            method_name,
+            "size"
+                | "iterator"
+                | "descendingIterator"
+                | "add"
+                | "remove"
+                | "put"
+                | "clear"
+                | "pollFirst"
+                | "pollLast"
+                | "pollFirstEntry"
+                | "pollLastEntry"
+        ) {
+            self.stamp_sorted_view(receiver);
+        }
+        let result = match (method_name, args) {
+            ("size", []) => JValue::Int(i32::try_from(pairs.len()).unwrap_or(i32::MAX)),
+            ("isEmpty", []) => JValue::Int(i32::from(pairs.is_empty())),
+            // `clear()` empties the RANGE, not the tree: the JDK's is the
+            // view's iterator walked to the end removing as it goes, which is
+            // the idiom `map.headMap(k).clear()` exists for.
+            ("clear", []) => {
+                for key in keys(&pairs) {
+                    self.remove_from_sorted_backing(backing, key)?;
+                }
+                return Ok(Answered::Void);
+            }
+            // `first`/`last` throw on an empty view; `firstKey`/`lastKey` too.
+            ("first" | "last" | "firstKey" | "lastKey", []) => {
+                let found = if method_name.starts_with("first") {
+                    pairs.first()
+                } else {
+                    pairs.last()
+                };
+                let Some((key, _)) = found else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.util.NoSuchElementException",
+                    )));
+                };
+                *key
+            }
+            (
+                "floor" | "ceiling" | "lower" | "higher" | "floorKey" | "ceilingKey" | "lowerKey"
+                | "higherKey",
+                [probe],
+            ) => {
+                let which = method_name.trim_end_matches("Key");
+                let mut best = JValue::NULL;
+                for (key, _) in &pairs {
+                    let ordering = order(self, *key, *probe)?;
+                    let matched = match which {
+                        "floor" => ordering <= 0,
+                        "lower" => ordering < 0,
+                        "ceiling" => ordering >= 0,
+                        _ => ordering > 0,
+                    };
+                    if matched {
+                        // The two that look BACKWARD want the last match, the
+                        // two that look forward the first.
+                        if which == "ceiling" || which == "higher" {
+                            return Ok(Answered::Value(*key));
+                        }
+                        best = *key;
+                    }
+                }
+                best
+            }
+            (
+                "firstEntry" | "lastEntry" | "pollFirstEntry" | "pollLastEntry" | "floorEntry"
+                | "ceilingEntry" | "lowerEntry" | "higherEntry",
+                _,
+            ) => {
+                let found = match (method_name, args) {
+                    (_, [probe]) => {
+                        let which = method_name.trim_end_matches("Entry");
+                        let mut best = None;
+                        for (key, value) in &pairs {
+                            let ordering = order(self, *key, *probe)?;
+                            let matched = match which {
+                                "floor" => ordering <= 0,
+                                "lower" => ordering < 0,
+                                "ceiling" => ordering >= 0,
+                                _ => ordering > 0,
+                            };
+                            if matched {
+                                best = Some((*key, *value));
+                                if which == "ceiling" || which == "higher" {
+                                    break;
+                                }
+                            }
+                        }
+                        best
+                    }
+                    _ if method_name.to_lowercase().contains("first") => pairs.first().copied(),
+                    _ => pairs.last().copied(),
+                };
+                match found {
+                    None => JValue::NULL,
+                    Some((key, value)) => {
+                        if method_name.starts_with("poll") {
+                            self.remove_from_sorted_backing(backing, key)?;
+                        }
+                        self.immutable_entry(key, value)?
+                    }
+                }
+            }
+            ("pollFirst" | "pollLast", []) => {
+                let found = if method_name == "pollFirst" {
+                    pairs.first()
+                } else {
+                    pairs.last()
+                };
+                match found {
+                    None => JValue::NULL,
+                    Some((key, _)) => {
+                        let key = *key;
+                        self.remove_from_sorted_backing(backing, key)?;
+                        key
+                    }
+                }
+            }
+            ("contains" | "containsKey", [probe]) => {
+                let mut found = false;
+                for (key, _) in &pairs {
+                    if order(self, *key, *probe)? == 0 {
+                        found = true;
+                        break;
+                    }
+                }
+                JValue::Int(i32::from(found))
+            }
+            ("containsValue", [probe]) => {
+                let mut found = false;
+                for (_, value) in &pairs {
+                    if self.java_equals(*value, *probe)? {
+                        found = true;
+                        break;
+                    }
+                }
+                JValue::Int(i32::from(found))
+            }
+            ("get", [probe]) | ("getOrDefault", [probe, _]) => {
+                let mut found = None;
+                for (key, value) in &pairs {
+                    if order(self, *key, *probe)? == 0 {
+                        found = Some(*value);
+                        break;
+                    }
+                }
+                match (found, args) {
+                    (Some(value), _) => value,
+                    (None, [_, fallback]) => *fallback,
+                    (None, _) => JValue::NULL,
+                }
+            }
+            // A range view's `add`/`put` writes THROUGH to the tree, and one
+            // outside the range is an IllegalArgumentException rather than a
+            // silent no-op. A KEY SET refuses `add` outright, as every map's
+            // key view does — there would be no value to put with it.
+            ("add", [element]) => {
+                if matches!(face, SortedFace::Keys) {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                }
+                if !self.sorted_bounds_admit(backing, lo, hi, *element)? {
+                    return Err(range_error("key out of range"));
+                }
+                JValue::Int(i32::from(self.tree_set_add(backing, *element)?))
+            }
+            ("put", [key, value]) => {
+                if !self.sorted_bounds_admit(backing, lo, hi, *key)? {
+                    return Err(range_error("key out of range"));
+                }
+                self.map_put(backing, *key, *value)?
+            }
+            // `remove` answers a BOOLEAN for a set face and the old VALUE for
+            // a map's; a key outside the range is simply absent, not an error.
+            ("remove", [probe]) => {
+                let mut held = None;
+                for (key, value) in &pairs {
+                    if order(self, *key, *probe)? == 0 {
+                        held = Some((*key, *value));
+                        break;
+                    }
+                }
+                match (held, face) {
+                    (Some((key, _)), SortedFace::Set | SortedFace::Keys) => {
+                        self.remove_from_sorted_backing(backing, key)?;
+                        JValue::Int(1)
+                    }
+                    (Some((key, value)), SortedFace::Map) => {
+                        self.remove_from_sorted_backing(backing, key)?;
+                        value
+                    }
+                    (None, SortedFace::Map) => JValue::NULL,
+                    (None, _) => JValue::Int(0),
+                }
+            }
+            // Both shapes of `forEach` already walk their receiver through a
+            // view-aware reader, so each is the tree's own.
+            ("forEach", [JValue::Ref(Some(consumer))]) => {
+                let consumer = *consumer;
+                if matches!(face, SortedFace::Map) {
+                    self.map_for_each(receiver, consumer)?;
+                } else {
+                    self.tree_set_for_each(receiver, consumer)?;
+                }
+                return Ok(Answered::Void);
+            }
+            // The three faces of a map VIEW are views of the view: they read
+            // the same slice, and an entry from one writes through to the tree.
+            ("keySet" | "values" | "entrySet", []) => {
+                let kind = match method_name {
+                    "keySet" => MapViewKind::Keys,
+                    "values" => MapViewKind::Values,
+                    _ => MapViewKind::Entries,
+                };
+                self.map_view_of(receiver, receiver, kind, false)
+            }
+            ("descendingIterator", []) => {
+                let expected_len = iterated_len_of(&self.heap, receiver);
+                let iterator = self.heap.alloc(HeapObject::Iterator {
+                    source: receiver,
+                    index: expected_len,
+                    last: None,
+                    expected_len,
+                    writes: IteratorWrites::All,
+                    list: false,
+                    descending: true,
+                });
+                JValue::Ref(Some(iterator))
+            }
+            // A view renders, hashes and compares as the collection it
+            // presents — `AbstractSet`/`AbstractMap` reach these through the
+            // view's own iterator, so the slice is what they see.
+            ("toString", []) => {
+                let text = self.string_value_of(JValue::Ref(Some(receiver)), 0)?;
+                JValue::Ref(Some(self.heap.alloc_string(&text)))
+            }
+            ("hashCode", []) => JValue::Int(self.structural_hash(receiver)?.unwrap_or_default()),
+            ("equals", [JValue::Ref(other)]) => {
+                let Some(other) = *other else {
+                    return Ok(Answered::Value(JValue::Int(0)));
+                };
+                let equal = if matches!(face, SortedFace::Map) {
+                    // `AbstractMap.equals`: another Map of the same size
+                    // holding exactly these mappings.
+                    let mut same = !self.is_set_like(other)
+                        && self.map_len(other) == pairs.len()
+                        && !matches!(self.heap.get(other), Some(HeapObject::Instance { .. }));
+                    if same {
+                        for (key, value) in &pairs {
+                            let held = self.map_entry_value(other, *key)?;
+                            if !self.java_equals(held, *value)? {
+                                same = false;
+                                break;
+                            }
+                        }
+                    }
+                    same
+                } else {
+                    // `AbstractSet.equals`: any Set of the same size holding
+                    // them all, membership decided by THIS view's ordering.
+                    let theirs = self.materialized_elements(other);
+                    let mut same = self.is_set_like(other) && theirs.len() == pairs.len();
+                    if same {
+                        for element in theirs {
+                            let mut found = false;
+                            for (key, _) in &pairs {
+                                if order(self, *key, element)? == 0 {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found {
+                                same = false;
+                                break;
+                            }
+                        }
+                    }
+                    same
+                };
+                JValue::Int(i32::from(equal))
+            }
+            // The enhanced-for's element fetch, by position in the VIEW.
+            ("__get", [JValue::Int(position)]) => {
+                let position = usize::try_from(*position).unwrap_or(usize::MAX);
+                let Some((key, value)) = pairs.get(position).copied() else {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: Index {position} out of bounds"
+                    )));
+                };
+                if matches!(face, SortedFace::Map) {
+                    value
+                } else {
+                    key
+                }
+            }
+            ("containsAll", [JValue::Ref(Some(source))]) => {
+                let theirs = self.materialized_elements(*source);
+                let mut all = true;
+                for element in theirs {
+                    let mut found = false;
+                    for (key, _) in &pairs {
+                        if order(self, *key, element)? == 0 {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        all = false;
+                        break;
+                    }
+                }
+                JValue::Int(i32::from(all))
+            }
+            ("toArray", []) => {
+                let values: Vec<JValue> = keys(&pairs)
+                    .into_iter()
+                    .map(|element| match element {
+                        JValue::Ref(_) => element,
+                        primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+                    })
+                    .collect();
+                JValue::Ref(Some(self.heap.alloc(HeapObject::RefArray(
+                    String::from("java/lang/Object"),
+                    values,
+                ))))
+            }
+            _ => return Ok(Answered::No),
+        };
+        Ok(Answered::Value(result))
+    }
+
+    /// Take a key out of the tree a view reads, whichever kind it is. Removing
+    /// THROUGH a view is removing from the tree — that is what makes
+    /// `map.headMap(k).clear()` delete a range.
+    fn remove_from_sorted_backing(
+        &mut self,
+        backing: HeapRef,
+        key: JValue,
+    ) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        match self.heap.get(backing) {
+            Some(HeapObject::TreeSet { .. }) => {
+                let Some(at) = self.tree_set_index_of(backing, key)? else {
+                    return Ok(false);
+                };
+                if let Some(HeapObject::TreeSet { values, .. }) = self.heap.get_mut(backing) {
+                    values.remove(at);
+                }
+                Ok(true)
+            }
+            Some(HeapObject::TreeMap { .. }) => {
+                let Some(at) = self.map_find(backing, key)? else {
+                    return Ok(false);
+                };
+                self.map_remove_at(backing, at);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// The immutable SNAPSHOT entry the `*Entry` accessors answer — the JDK's
+    /// `SimpleImmutableEntry`, modelled the way a standalone entry already is:
+    /// a hidden one-mapping map with the entry over it.
+    fn immutable_entry(&mut self, key: JValue, value: JValue) -> Result<JValue, VmError> {
+        use crate::value::HeapObject;
+        let holder = self
+            .heap
+            .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
+        self.map_put(holder, key, value)?;
+        let entry = self.heap.alloc(HeapObject::MapEntry {
+            map: holder,
+            key,
+            read_only: true,
+        });
+        Ok(JValue::Ref(Some(entry)))
+    }
+
+    /// Resolve a view's bounds against the backing AS IT IS NOW — with the
+    /// tree's own comparator, which may be the program's code — and cache the
+    /// answer. Every call made THROUGH a view starts here, so a view of a
+    /// user-ordered tree is exact for any sequence a program can write; only a
+    /// reader holding nothing but the heap (printing, a `for` each) can be
+    /// looking at a range resolved a moment earlier, and only for such a tree.
+    fn refresh_sorted_view(&mut self, view: HeapRef) -> Result<(usize, usize), VmError> {
+        use crate::value::HeapObject;
+        let Some(HeapObject::SortedView {
+            backing, lo, hi, ..
+        }) = self.heap.get(view)
+        else {
+            return Ok((0, 0));
+        };
+        let (backing, lo, hi) = (*backing, *lo, *hi);
+        let comparator = self.sorted_backing_comparator(backing);
+        let pairs = intrinsics::sorted_backing_pairs(&self.heap, backing);
+        let resolved = intrinsics::resolve_sorted_range(&pairs, lo, hi, |a, b| {
+            self.compare_with(a, b, comparator)
+                .map(|order| order.cmp(&0))
+        })?;
+        if let Some(HeapObject::SortedView { range, .. }) = self.heap.get_mut(view) {
+            *range = resolved;
+        }
+        Ok(resolved)
+    }
+
+    /// Record the backing's length as what a walk of this view expects to see
+    /// — the JDK's `expectedModCount`, taken when a cursor is made. Refreshing
+    /// the RANGE must not stamp it: that happens on every element fetch, and
+    /// re-syncing there would forgive the very change the check exists to
+    /// catch.
+    fn stamp_sorted_view(&mut self, view: HeapRef) {
+        use crate::value::HeapObject;
+        let Some(HeapObject::SortedView { backing, .. }) = self.heap.get(view) else {
+            return;
+        };
+        let length = intrinsics::sorted_backing_pairs(&self.heap, *backing).len();
+        if let Some(HeapObject::SortedView { seen, .. }) = self.heap.get_mut(view) {
+            *seen = length;
+        }
+    }
+
+    /// The comparator a SOURCE collection orders itself by, for the copy
+    /// constructors that adopt it (`new TreeSet<>(sortedSet)` keeps the
+    /// source's ordering — that is why copying a case-insensitive set stays
+    /// case-insensitive). A DESCENDING view orders by the reverse of its
+    /// tree's, so copying one has to build that comparator: without it,
+    /// `new TreeSet<>(s.descendingSet())` came back in ASCENDING order, having
+    /// quietly re-sorted the very thing the view existed to reverse.
+    fn source_sorted_comparator(&mut self, source: HeapRef) -> Option<HeapRef> {
+        use crate::value::{ComparatorSpec, HeapObject};
+        let Some(HeapObject::SortedView {
+            backing,
+            descending,
+            ..
+        }) = self.heap.get(source)
+        else {
+            return self
+                .tree_set_comparator(source)
+                .or_else(|| self.tree_map_comparator(source));
+        };
+        let (backing, descending) = (*backing, *descending);
+        let inner = self.sorted_backing_comparator(backing);
+        if !descending {
+            return inner;
+        }
+        let inner = inner.unwrap_or_else(|| {
+            self.heap
+                .alloc(HeapObject::Comparator(ComparatorSpec::Natural))
+        });
+        Some(
+            self.heap
+                .alloc(HeapObject::Comparator(ComparatorSpec::Reversed(inner))),
+        )
+    }
+
+    /// The `Comparator` a sorted collection orders itself by (`None` for
+    /// natural ordering), whichever of the two kinds it is.
+    fn sorted_backing_comparator(&self, backing: HeapRef) -> Option<HeapRef> {
+        use crate::value::HeapObject;
+        match self.heap.get(backing) {
+            Some(
+                HeapObject::TreeSet { comparator, .. } | HeapObject::TreeMap { comparator, .. },
+            ) => *comparator,
+            _ => None,
+        }
+    }
+
+    /// What a view is made of. A view is always taken directly on the TREE —
+    /// a view of a view composes its bounds rather than nesting, so there is
+    /// never a chain to walk.
+    fn sorted_view_parts(&self, view: HeapRef) -> Option<SortedViewParts> {
+        match self.heap.get(view)? {
+            crate::value::HeapObject::SortedView {
+                backing,
+                lo,
+                hi,
+                descending,
+                face,
+                ..
+            } => Some((*backing, *lo, *hi, *descending, *face)),
+            _ => None,
+        }
+    }
+
+    /// Whether a value falls inside a pair of bounds — what the JDK calls
+    /// `inRange`. A value outside is not merely absent from the view: putting
+    /// or adding one is an `IllegalArgumentException`, and a nested view may
+    /// not name one as its own bound.
+    fn sorted_bounds_admit(
+        &mut self,
+        backing: HeapRef,
+        lo: Option<crate::value::SortedBound>,
+        hi: Option<crate::value::SortedBound>,
+        value: JValue,
+    ) -> Result<bool, VmError> {
+        let comparator = self.sorted_backing_comparator(backing);
+        if let Some(bound) = lo {
+            let ordering = self.compare_with(value, bound.value, comparator)?;
+            if ordering < 0 || (ordering == 0 && !bound.inclusive) {
+                return Ok(false);
+            }
+        }
+        if let Some(bound) = hi {
+            let ordering = self.compare_with(value, bound.value, comparator)?;
+            if ordering > 0 || (ordering == 0 && !bound.inclusive) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Allocate a view and resolve its range once.
+    fn make_sorted_view(
+        &mut self,
+        backing: HeapRef,
+        lo: Option<crate::value::SortedBound>,
+        hi: Option<crate::value::SortedBound>,
+        descending: bool,
+        face: crate::value::SortedFace,
+    ) -> Result<JValue, VmError> {
+        let view = self.heap.alloc(crate::value::HeapObject::SortedView {
+            backing,
+            lo,
+            hi,
+            descending,
+            face,
+            range: (0, 0),
+            seen: 0,
+        });
+        self.refresh_sorted_view(view)?;
+        self.stamp_sorted_view(view);
+        Ok(JValue::Ref(Some(view)))
+    }
+
+    /// The view a `headSet`/`tailSet`/`subSet`/`headMap`/`tailMap`/`subMap`/
+    /// `descending*` call builds, from a receiver that may be a tree OR a view
+    /// of one. This is where the direction is paid for: on a DESCENDING view,
+    /// `headSet(x)` means the elements before `x` going down, which in the
+    /// backing's own ascending terms is everything ABOVE `x`.
+    fn sorted_view_factory(
+        &mut self,
+        receiver: HeapRef,
+        method: &str,
+        args: &[JValue],
+        face: crate::value::SortedFace,
+    ) -> Result<Option<JValue>, VmError> {
+        use crate::value::SortedBound;
+        let (backing, lo, hi, descending, current_face) = match self.sorted_view_parts(receiver) {
+            Some(parts) => parts,
+            // A tree is the whole range, ascending.
+            None => (receiver, None, None, false, face),
+        };
+        // A view of a MAP keeps the map face unless the call asks for keys.
+        let face = match method {
+            "navigableKeySet" | "descendingKeySet" => crate::value::SortedFace::Keys,
+            _ => current_face,
+        };
+        let bound = |value: JValue, inclusive: bool| Some(SortedBound { value, inclusive });
+        let (lo, hi, descending) = match (method, args) {
+            // The whole range, the other way round (or, for
+            // `navigableKeySet`, the same way): only the FACE moved, and the
+            // match above already decided that.
+            ("descendingSet" | "descendingMap" | "descendingKeySet", []) => (lo, hi, !descending),
+            ("navigableKeySet", []) => (lo, hi, descending),
+            // A HEAD is everything BEFORE its bound and a TAIL everything
+            // after, whichever way the view runs; the flag says whether the
+            // bound itself belongs, and the JDK's default is exclusive for a
+            // head and inclusive for a tail. Which END of the backing that
+            // lands on is what the direction decides.
+            ("headSet" | "headMap", [end] | [end, _]) => {
+                let inclusive = matches!(args, [_, JValue::Int(1)]);
+                if !self.sorted_bounds_admit(backing, lo, hi, *end)? {
+                    return Err(range_error("toKey out of range"));
+                }
+                if descending {
+                    (bound(*end, inclusive), hi, descending)
+                } else {
+                    (lo, bound(*end, inclusive), descending)
+                }
+            }
+            ("tailSet" | "tailMap", [start] | [start, _]) => {
+                let inclusive = !matches!(args, [_, JValue::Int(0)]);
+                if !self.sorted_bounds_admit(backing, lo, hi, *start)? {
+                    return Err(range_error("fromKey out of range"));
+                }
+                if descending {
+                    (lo, bound(*start, inclusive), descending)
+                } else {
+                    (bound(*start, inclusive), hi, descending)
+                }
+            }
+            ("subSet" | "subMap", [start, end]) => {
+                self.check_sorted_span(backing, lo, hi, *start, *end, descending)?;
+                if descending {
+                    (bound(*end, false), bound(*start, true), descending)
+                } else {
+                    (bound(*start, true), bound(*end, false), descending)
+                }
+            }
+            ("subSet" | "subMap", [start, JValue::Int(start_in), end, JValue::Int(end_in)]) => {
+                let (start_in, end_in) = (*start_in == 1, *end_in == 1);
+                self.check_sorted_span(backing, lo, hi, *start, *end, descending)?;
+                if descending {
+                    (bound(*end, end_in), bound(*start, start_in), descending)
+                } else {
+                    (bound(*start, start_in), bound(*end, end_in), descending)
+                }
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(
+            self.make_sorted_view(backing, lo, hi, descending, face)?,
+        ))
+    }
+
+    /// The two checks a `subSet`/`subMap` makes before it builds anything: the
+    /// ends must be the right way round, and both must lie inside the view
+    /// being narrowed.
+    fn check_sorted_span(
+        &mut self,
+        backing: HeapRef,
+        lo: Option<crate::value::SortedBound>,
+        hi: Option<crate::value::SortedBound>,
+        start: JValue,
+        end: JValue,
+        descending: bool,
+    ) -> Result<(), VmError> {
+        let comparator = self.sorted_backing_comparator(backing);
+        // "The wrong way round" is decided in the VIEW's order: on a
+        // descending set `subSet(7, 3)` is the perfectly ordinary range from 7
+        // down to 3, and reading it in the backing's terms refused it.
+        let span = self.compare_with(start, end, comparator)?;
+        if (descending && span < 0) || (!descending && span > 0) {
+            return Err(range_error("fromKey > toKey"));
+        }
+        if !self.sorted_bounds_admit(backing, lo, hi, start)? {
+            return Err(range_error("fromKey out of range"));
+        }
+        if !self.sorted_bounds_admit(backing, lo, hi, end)? {
+            return Err(range_error("toKey out of range"));
+        }
+        Ok(())
+    }
+
     fn tree_set_navigate(
         &mut self,
         set: HeapRef,
@@ -8531,6 +9320,12 @@ impl<'run> Interpreter<'run> {
                     | HeapObject::TreeSet { .. }
                     | HeapObject::PriorityQueue { .. }
                     | HeapObject::MapView { .. }
+                    // A set-shaped sorted view streams its slice. The MAP
+                    // face does not, exactly as a `Map` does not.
+                    | HeapObject::SortedView {
+                        face: crate::value::SortedFace::Set | crate::value::SortedFace::Keys,
+                        ..
+                    }
             )
         )
     }
@@ -10116,6 +10911,17 @@ impl<'run> Interpreter<'run> {
             }
             // An unmodifiable set view walks its backing set.
             Some(HeapObject::UnmodifiableSet(inner)) => self.collection_elements(*inner),
+            // A sorted view walks the slice its bounds resolve to. The two
+            // set-shaped faces answer keys; the MAP face is not a collection,
+            // exactly as a `TreeMap` is not.
+            Some(HeapObject::SortedView { face, .. })
+                if !matches!(face, crate::value::SortedFace::Map) =>
+            {
+                intrinsics::sorted_view_pairs(&self.heap, reference)
+                    .into_iter()
+                    .map(|(key, _)| key)
+                    .collect()
+            }
             _ => return None,
         })
     }
@@ -10131,6 +10937,13 @@ impl<'run> Interpreter<'run> {
             }
             // An immutable wrapper reads through, as its `map_find` does.
             Some(crate::value::HeapObject::UnmodifiableMap(inner)) => self.map_value_at(*inner, at),
+            // A view answers by position in ITS slice, which is where its
+            // `map_find` just looked.
+            Some(crate::value::HeapObject::SortedView { .. }) => {
+                intrinsics::sorted_view_pairs(&self.heap, map)
+                    .get(at)
+                    .map_or(JValue::NULL, |(_, value)| *value)
+            }
             _ => JValue::NULL,
         }
     }
@@ -10183,6 +10996,13 @@ impl<'run> Interpreter<'run> {
                 | crate::value::HeapObject::HashSet(entries),
             ) => entries.entry_at(at),
             Some(crate::value::HeapObject::TreeMap { entries, .. }) => entries.get(at).copied(),
+            // `subMap(...).entrySet()` is a `MapView` whose map is the VIEW,
+            // so a cursor over it asks the view for its own positions.
+            Some(crate::value::HeapObject::SortedView { .. }) => {
+                intrinsics::sorted_view_pairs(&self.heap, map)
+                    .get(at)
+                    .copied()
+            }
             _ => None,
         }
     }
@@ -16563,7 +17383,25 @@ fn is_hoisted_local(name: &str) -> bool {
 /// order): all NaNs are equal and greater than everything else, and -0.0 is
 /// strictly less than 0.0. Rust's `total_cmp` is that order once NaN is
 /// canonicalized to a positive one, which is what `doubleToLongBits` does.
-fn java_double_order(x: f64, y: f64) -> std::cmp::Ordering {
+/// What a [`crate::value::HeapObject::SortedView`] is made of: the tree it
+/// reads, its two bounds, its direction, and the face it presents.
+type SortedViewParts = (
+    HeapRef,
+    Option<crate::value::SortedBound>,
+    Option<crate::value::SortedBound>,
+    bool,
+    crate::value::SortedFace,
+);
+
+/// The `IllegalArgumentException` a sorted view throws for a bound outside the
+/// range it narrows, or a span whose ends are the wrong way round. The JDK's
+/// messages name the MAP's parameters even for a set, because `TreeSet`
+/// delegates every one of these to a `TreeMap`.
+fn range_error(reason: &str) -> VmError {
+    VmError::UncaughtException(format!("java.lang.IllegalArgumentException: {reason}"))
+}
+
+pub(crate) fn java_double_order(x: f64, y: f64) -> std::cmp::Ordering {
     let canonical = |value: f64| if value.is_nan() { f64::NAN } else { value };
     canonical(x).total_cmp(&canonical(y))
 }

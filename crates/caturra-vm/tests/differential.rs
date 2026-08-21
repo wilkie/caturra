@@ -34413,3 +34413,259 @@ public class ValueOfNull {
 }
 "#
 );
+
+// The `NavigableSet`/`NavigableMap` VIEWS: a range of a sorted collection, or
+// the whole of it reversed, or both. Ten methods that refused outright
+// ("TreeSet range views are not supported by caturra") are one object now — a
+// pair of bounds, a direction and a face — and it is a LIVE view: a key put
+// into the backing inside the range shows through, a write through the view
+// reaches the tree, and `map.headMap(k).clear()` deletes a range.
+differential_test!(
+    a_sorted_collection_has_range_and_descending_views,
+    "NavViews",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class NavViews {
+    public static void main(String[] args) {
+        TreeSet<Integer> s = new TreeSet<>(Arrays.asList(1, 3, 5, 7, 9));
+        System.out.println(s.headSet(5) + " " + s.headSet(5, true));
+        System.out.println(s.tailSet(5) + " " + s.tailSet(5, false));
+        System.out.println(s.subSet(3, 7) + " " + s.subSet(3, false, 7, true));
+        System.out.println(s.descendingSet() + " " + s.descendingSet().descendingSet());
+        System.out.println(s.headSet(5).size() + " " + s.headSet(0).isEmpty());
+        System.out.println(s.headSet(5).contains(3) + " " + s.headSet(5).contains(7));
+        System.out.println(s.subSet(3, 8).first() + " " + s.subSet(3, 8).last());
+        System.out.println(s.descendingSet().first() + " " + s.descendingSet().last());
+        // The navigation runs in the VIEW's direction, which is what makes a
+        // descending floor the ascending ceiling.
+        System.out.println(s.descendingSet().floor(5) + " " + s.descendingSet().ceiling(5));
+        System.out.println(s.descendingSet().lower(5) + " " + s.descendingSet().higher(5));
+        System.out.println(s.descendingSet().headSet(5) + " " + s.descendingSet().tailSet(5));
+        System.out.println(s.descendingSet().subSet(7, 3));
+        System.out.println(s.headSet(5).headSet(3) + " " + s.subSet(1, 9).subSet(3, 7));
+        for (int x : s.descendingSet()) {
+            System.out.print(x + " ");
+        }
+        for (int x : s.subSet(3, 8)) {
+            System.out.print(x + " ");
+        }
+        System.out.println();
+        System.out.println(s.headSet(5).toString() + s.tailSet(5) + s.descendingSet().toArray().length);
+        System.out.println(s.headSet(7).stream().mapToInt(Integer::intValue).sum());
+        System.out.println(s.headSet(7).containsAll(Arrays.asList(1, 3)));
+        System.out.println(s.headSet(5).equals(new TreeSet<>(Arrays.asList(1, 3))));
+        System.out.println(s.headSet(5).hashCode() == new TreeSet<>(Arrays.asList(1, 3)).hashCode());
+        Iterator<Integer> cursor = s.descendingSet().iterator();
+        System.out.println(cursor.next() + "" + cursor.next());
+        // A copy of a view keeps the ORDERING the view presents.
+        System.out.println(new TreeSet<>(s.descendingSet()) + " " + new ArrayList<>(s.descendingSet()));
+        System.out.println(Collections.max(s.headSet(6)) + " " + Collections.min(s.tailSet(4)));
+        // Live: the view is a pair of BOUNDS, not a snapshot of positions.
+        Set<Integer> live = s.headSet(6);
+        s.add(4);
+        s.add(8);
+        System.out.println(live);
+        s.remove(4);
+        System.out.println(live);
+    }
+}
+"#
+);
+
+// The same views on a map, and the writes THROUGH one.
+differential_test!(
+    a_sorted_map_view_writes_through,
+    "NavMapViews",
+    r#"
+import java.util.*;
+
+public class NavMapViews {
+    static TreeMap<String, Integer> sample() {
+        TreeMap<String, Integer> m = new TreeMap<>();
+        m.put("a", 1);
+        m.put("c", 3);
+        m.put("e", 5);
+        return m;
+    }
+
+    public static void main(String[] args) {
+        TreeMap<String, Integer> m = sample();
+        System.out.println(m.headMap("c") + " " + m.headMap("c", true));
+        System.out.println(m.tailMap("c") + " " + m.subMap("a", "e"));
+        System.out.println(m.subMap("a", false, "e", true) + " " + m.descendingMap());
+        System.out.println(m.navigableKeySet() + " " + m.descendingKeySet());
+        System.out.println(m.headMap("e").get("a") + " " + m.headMap("c").get("e"));
+        System.out.println(m.headMap("e").containsKey("c") + " " + m.headMap("b").containsKey("c"));
+        System.out.println(m.headMap("e").containsValue(3) + " " + m.headMap("b").containsValue(3));
+        System.out.println(m.headMap("c").getOrDefault("a", 0) + " " + m.headMap("c").getOrDefault("e", 0));
+        System.out.println(m.tailMap("b").firstKey() + " " + m.tailMap("b").lastKey());
+        System.out.println(m.descendingMap().firstKey() + " " + m.descendingMap().lastKey());
+        System.out.println(m.descendingMap().firstEntry() + " " + m.descendingMap().floorKey("c"));
+        System.out.println(m.headMap("e").keySet() + " " + m.headMap("e").values());
+        System.out.println(m.headMap("e").entrySet() + " " + m.descendingMap().headMap("c"));
+        System.out.println(m.descendingKeySet().headSet("c") + " " + m.subMap("a", "z").size());
+        for (Map.Entry<String, Integer> entry : m.descendingMap().entrySet()) {
+            System.out.print(entry.getKey() + entry.getValue() + " ");
+        }
+        for (String key : m.descendingKeySet()) {
+            System.out.print(key);
+        }
+        System.out.println();
+        m.headMap("e").forEach((key, value) -> System.out.print(key + "" + value + " "));
+        System.out.println();
+        System.out.println(String.join(",", m.descendingKeySet()));
+        System.out.println(new TreeMap<>(m.headMap("e")));
+        // The four navigations as ENTRIES, on the map itself.
+        System.out.println(m.floorEntry("d") + " " + m.ceilingEntry("d"));
+        System.out.println(m.lowerEntry("a") + " " + m.higherEntry("e"));
+        // Writes reach the tree.
+        m = sample();
+        m.headMap("c").put("b", 2);
+        System.out.println(m);
+        m.headMap("e").remove("c");
+        System.out.println(m);
+        m = sample();
+        m.tailMap("c").clear();
+        System.out.println(m);
+        m = sample();
+        // The two-argument form answers a `NavigableMap`, which is the face
+        // that can be polled — the one-argument form is a `SortedMap`.
+        System.out.println(m.headMap("e", false).pollFirstEntry() + " " + m);
+        TreeSet<Integer> s = new TreeSet<>(Arrays.asList(1, 3, 5, 7, 9));
+        s.headSet(5).add(2);
+        System.out.println(s);
+        s.headSet(5).remove(3);
+        System.out.println(s);
+        System.out.println(s.descendingSet().pollFirst() + " " + s);
+        s.headSet(5).clear();
+        System.out.println(s);
+        // A value outside the range is not merely absent: putting one throws.
+        try {
+            sample().headMap("c").put("z", 9);
+        } catch (Exception thrown) {
+            System.out.println(thrown);
+        }
+        try {
+            new TreeSet<>(Arrays.asList(1, 3)).headSet(5).add(7);
+        } catch (Exception thrown) {
+            System.out.println(thrown);
+        }
+        try {
+            new TreeSet<>(Arrays.asList(1, 3)).subSet(7, 3);
+        } catch (Exception thrown) {
+            System.out.println(thrown);
+        }
+        try {
+            new TreeSet<>(Arrays.asList(1, 3, 5)).headSet(3).headSet(9);
+        } catch (Exception thrown) {
+            System.out.println(thrown);
+        }
+        // A view's cursor carries the TREE's modCount, so a key added OUTSIDE
+        // the range still ends the walk — the view's own length never moved.
+        try {
+            TreeSet<Integer> walked = new TreeSet<>(Arrays.asList(1, 3, 5, 7, 9));
+            for (int x : walked.headSet(8)) {
+                walked.add(x + 100);
+            }
+        } catch (Exception thrown) {
+            System.out.println(thrown);
+        }
+        // An empty view, and one whose bounds exclude everything.
+        System.out.println(new TreeSet<Integer>().headSet(3) + " " + new TreeSet<Integer>().descendingSet());
+        try {
+            new TreeSet<Integer>().headSet(3).first();
+        } catch (Exception thrown) {
+            System.out.println(thrown);
+        }
+    }
+}
+"#
+);
+
+// A view of a tree ordered by USER code — a `Comparator` object, or elements
+// whose `compareTo` is the program's. The bounds are resolved by the tree's
+// own comparator, so `headSet` on a reverse-ordered set means what the SET
+// means by "before", not what the values do.
+differential_test!(
+    a_view_orders_itself_the_way_its_tree_does,
+    "NavUserOrder",
+    r#"
+import java.util.*;
+
+public class NavUserOrder {
+    static class Point implements Comparable<Point> {
+        int n;
+
+        Point(int n) {
+            this.n = n;
+        }
+
+        public int compareTo(Point other) {
+            return Integer.compare(n, other.n);
+        }
+
+        public String toString() {
+            return "P" + n;
+        }
+    }
+
+    public static void main(String[] args) {
+        TreeSet<String> reversed = new TreeSet<>(Comparator.reverseOrder());
+        reversed.add("a");
+        reversed.add("b");
+        reversed.add("c");
+        System.out.println(reversed.headSet("b") + " " + reversed.tailSet("b"));
+        System.out.println(reversed.descendingSet() + " " + new TreeSet<>(reversed.descendingSet()));
+        TreeSet<String> byLength = new TreeSet<>(Comparator.comparing(String::length));
+        byLength.add("bb");
+        byLength.add("a");
+        byLength.add("ccc");
+        System.out.println(byLength.tailSet("bb") + " " + byLength.headSet("bb"));
+        TreeMap<String, Integer> map = new TreeMap<>(Comparator.reverseOrder());
+        map.put("a", 1);
+        map.put("b", 2);
+        System.out.println(map.headMap("a") + " " + map.tailMap("a"));
+        TreeSet<Point> points = new TreeSet<>();
+        points.add(new Point(3));
+        points.add(new Point(1));
+        points.add(new Point(5));
+        System.out.println(points.headSet(new Point(4)) + " " + points.descendingSet());
+        for (Point point : points.tailSet(new Point(3))) {
+            System.out.print(point + " ");
+        }
+        System.out.println();
+        Set<Point> live = points.headSet(new Point(4));
+        points.add(new Point(2));
+        System.out.println(live);
+    }
+}
+"#
+);
+
+// The sorted collections have ONE compile-time face here, so the narrower
+// interfaces get the whole set of methods. In the JDK, `SortedSet` declares
+// `first`/`last`/`headSet`/`tailSet`/`subSet` and nothing more — the
+// navigation (`floor`, `pollFirst`, `descendingSet`) belongs to
+// `NavigableSet`, which is why `headSet(E)` returning a `SortedSet` cannot be
+// polled while `headSet(E, boolean)` returning a `NavigableSet` can. caturra
+// types every one of them as its `TreeSet`, so all of it is reachable.
+//
+// This predates the views: `SortedSet<Integer> s = new TreeSet<>(); s.floor(3)`
+// already compiled. The views make it reachable from more places, which is why
+// it is written down now rather than left to be discovered.
+looser_than_javac!(
+    looser_a_sorted_face_offers_the_navigable_methods,
+    "SortedFace",
+    r"
+import java.util.*;
+
+public class SortedFace {
+    public static void main(String[] args) {
+        SortedSet<Integer> narrow = new TreeSet<>(Arrays.asList(1, 3, 5));
+        System.out.println(narrow.floor(4));
+    }
+}
+"
+);

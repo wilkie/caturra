@@ -7191,6 +7191,57 @@ Pinned by `every_primitive_pipeline_is_a_reference`,
 `a_context_adopting_factory_is_not_the_null_literal`, and
 `stricter_a_context_free_factory_in_an_overload_set`.
 
+### The sorted views (2026-08-20)
+
+Ten methods refused outright — "TreeSet range views are not supported by
+caturra", "TreeMap.descendingMap is not supported by caturra". They are one
+object now: `headSet`/`tailSet`/`subSet`, `headMap`/`tailMap`/`subMap`,
+`descendingSet`, `descendingMap`, `descendingKeySet` and `navigableKeySet`
+differ only in their BOUNDS, their DIRECTION, and which face they present (the
+set, the map, or a map's keys as a set).
+
+**The bounds are values, never positions.** That is the whole design, and it is
+what makes the view LIVE the way a JDK's is: a key put into the tree inside the
+range shows through, one outside it does not, and `map.headMap(k).clear()`
+deletes a range from the tree. A snapshot would have been far less code and a
+silent wrong answer the first time a program mutated the backing.
+
+Resolving a bound means COMPARING, which may run the program's own
+`compareTo` — so the view resolves its range on every call made through it,
+where the interpreter is at hand. The readers that hold nothing but the heap
+(printing, a `for` each, hashing) re-resolve it themselves whenever the
+ordering is native, which covers every tree keyed by a number, a character or
+a String; only a tree ordered by user code reads the range the last call
+resolved. The bound rule itself is written ONCE, taking the comparison as a
+callback, so the two callers cannot drift apart.
+
+Three things the probe caught that the design did not anticipate:
+
+- **A view's cursor carries the TREE's `modCount`, not its own.** Adding a key
+  OUTSIDE the range still ends a walk of the view with a
+  `ConcurrentModificationException` — and the view's own length, which that add
+  never touched, could not notice. So the expectation is stamped where a walk
+  BEGINS (`size()`, which every enhanced-for calls first) and re-stamped by a
+  mutation made through the view, which is exactly when a JDK cursor re-syncs.
+  Stamping it on every range refresh — the obvious place — silently forgave the
+  very change the check exists for.
+- **"The wrong way round" is decided in the VIEW's order.** On a descending set
+  `subSet(7, 3)` is an ordinary range; read in the backing's ascending terms it
+  looked like `fromKey > toKey` and was refused.
+- **A copy of a view adopts the ordering the view presents.**
+  `new TreeSet<>(s.descendingSet())` is descending, because `TreeSet(SortedSet)`
+  takes the source's comparator — so a descending view has to be able to name
+  one, which it builds by reversing its tree's.
+
+What is NOT done, and is enumerated as a divergence rather than hidden: the
+sorted collections still have one compile-time FACE, so `SortedSet` offers the
+`NavigableSet` methods. That predates the views (`SortedSet<Integer> s = …;
+s.floor(3)` already compiled); they make it reachable from more places.
+
+Pinned by `a_sorted_collection_has_range_and_descending_views`,
+`a_sorted_map_view_writes_through`, `a_view_orders_itself_the_way_its_tree_does`
+and `looser_a_sorted_face_offers_the_navigable_methods`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -7269,6 +7320,14 @@ entries after it was written down.
   actually uses work (`Map.Entry.comparingByKey()`, and the lambda
   `e -> e.getKey()`), as does the same reference in a STREAM, where the element
   type is known. (`stricter_entry_method_ref_in_a_comparator`)
+- The sorted collections have ONE compile-time face, so the narrower
+  interfaces offer the whole set of methods: `SortedSet<Integer> s = …;
+  s.floor(3)` compiles, though the JDK declares `floor` on `NavigableSet` and
+  a `SortedSet` has only `first`/`last`/`headSet`/`tailSet`/`subSet`. The same
+  split is what makes `headSet(E)` (a `SortedSet`) unpollable in the JDK while
+  `headSet(E, boolean)` (a `NavigableSet`) can be polled — here both can. The
+  fix is a ROLE on the type, as the `LinkedList`/`Queue`/`Deque` faces already
+  carry. (`looser_a_sorted_face_offers_the_navigable_methods`)
 - A factory that ADOPTS its context (`Collections.emptyList()`,
   `Optional.empty()`, `List.of()`) used as an argument where the OVERLOADS
   disagree about it: `two(Collections.emptyList())`, against
