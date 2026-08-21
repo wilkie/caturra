@@ -22828,7 +22828,30 @@ impl BodyGen<'_> {
         }
         // `of` / `Arrays.stream`: a lone array argument IS the source;
         // otherwise the arguments pack into one, exactly as varargs do.
-        let elem = if let [single] = args
+        // A lone REFERENCE array IS the varargs array (`Stream.of(words)` is a
+        // stream of the words); a PRIMITIVE one is not, since `T` cannot be
+        // `int` — `Stream.of(new int[]{1, 2})` is ONE element, the array
+        // itself. The list factories learned this (the famous varargs gotcha);
+        // the stream factory spread both alike and answered 2 where a JDK
+        // answers 1.
+        let spreads_a_lone_array = match args {
+            [single] => match self.type_of(single) {
+                JType::Array { elem, dims: 1 } => {
+                    // A PRIMITIVE array spreads only where the factory's own
+                    // element IS that primitive: `IntStream.of(int...)` takes
+                    // it as the varargs array, and `Arrays.stream(array)` is
+                    // the array by definition. For the object factory `T`
+                    // cannot be `int`, so the array is one element.
+                    elem.base_type().is_reference()
+                        || primitive_elem.is_some()
+                        || method == "stream"
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        let elem = if spreads_a_lone_array
+            && let [single] = args
             && let JType::Array { elem, dims: 1 } = self.type_of(single)
         {
             self.expr(single);

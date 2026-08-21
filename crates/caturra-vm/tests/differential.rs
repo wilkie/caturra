@@ -33160,6 +33160,45 @@ public class ReduceRef {
 "#
 );
 
+// The varargs gotcha, on the stream factory this time. A lone REFERENCE array
+// IS the varargs array (`Stream.of(words)` streams the words); a PRIMITIVE one
+// is not, because `T` cannot be `int` — `Stream.of(new int[]{1, 2})` is ONE
+// element, the array itself. The list factories learned this; the stream
+// factory spread both alike and answered 2 where a JDK answers 1. It still
+// spreads for `IntStream.of`, whose element IS the primitive.
+//
+// And `Map.of(k, v)` used straight as a receiver had no key or value type, so
+// a lambda over its entrySet had no element — the same reading `List.of`
+// already got.
+differential_test!(
+    a_lone_array_handed_to_a_stream_factory,
+    "StreamOfArray",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class StreamOfArray {
+    public static void main(String[] args) {
+        System.out.println(Stream.of(new int[] {1, 2}).count());
+        System.out.println(Stream.of(new int[] {1, 2}).findFirst().get().length);
+        System.out.println(Stream.of(new String[] {"a", "b"}).count());
+        System.out.println(Stream.of(new int[] {1, 2}, new int[] {3}).count());
+        System.out.println(IntStream.of(new int[] {1, 2}).sum());
+        System.out.println(DoubleStream.of(new double[] {1.5, 2.5}).sum());
+        System.out.println(Arrays.stream(new int[] {1, 2}).sum());
+        System.out.println(Arrays.asList(new int[] {1, 2}).size());
+
+        System.out.println(Map.of("k", 1).entrySet().stream()
+            .map(e -> e.getKey() + e.getValue())
+            .collect(Collectors.toList()));
+        Map.of("a", 1).forEach((k, v) -> System.out.println(k + "=" + v));
+        System.out.println(Map.of("a", 1, "b", 2).keySet().stream().sorted().collect(Collectors.toList()));
+        System.out.println(Map.of("a", 1).values().stream().map(v -> v + 1).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

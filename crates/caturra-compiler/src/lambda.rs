@@ -2863,6 +2863,28 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
             {
                 return map_type_args(&args[0], ctx);
             }
+            // `Map.of(k, v, …)` used STRAIGHT as a receiver: its key and value
+            // are what the arguments look like, the same reading `List.of`
+            // already gets. Without it a lambda over `Map.of(…).entrySet()
+            // .stream()` had no element, though the identical chain over a
+            // DECLARED map compiled.
+            Expr::Call {
+                receiver: Some(owner),
+                method,
+                args,
+                ..
+            } if method == "of"
+                && args.len() >= 2
+                && args.len().is_multiple_of(2)
+                && names_library_class(owner, "Map") =>
+            {
+                let keys: Vec<Expr> = args.iter().step_by(2).cloned().collect();
+                let values: Vec<Expr> = args.iter().skip(1).step_by(2).cloned().collect();
+                return Some((
+                    literal_element_type(&keys, ctx.supers),
+                    literal_element_type(&values, ctx.supers),
+                ));
+            }
             // The same receiver shapes a LIST's element is read from: a cast, a
             // ternary, an array element, and a call to a method whose declared
             // return says what it gives back. A map returned by a method

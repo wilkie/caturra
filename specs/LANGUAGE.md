@@ -7065,6 +7065,21 @@ method references, and the pairing was what nothing had run.
 Pinned by `a_fold_written_as_a_method_reference`, alongside the lambda
 spellings that always worked.
 
+Widening the pool to seventy snippets — everything added this session included
+— found two more, both in the same shape of pairing:
+
+- **`Stream.of(new int[] {1, 2})` answered 2.** The varargs gotcha again: a
+  lone REFERENCE array IS the varargs array, and a primitive one is not, since
+  `T` cannot be `int`. The list factories learned this long ago; the stream
+  factory spread both alike. It still spreads for `IntStream.of`, whose element
+  IS the primitive, and for `Arrays.stream`, which takes an array by
+  definition.
+- **`Map.of(k, v)` used straight as a receiver** had no key or value type, so a
+  lambda over its `entrySet()` had no element — the reading `List.of` already
+  got, missing for the map factory.
+
+Pinned by `a_lone_array_handed_to_a_stream_factory`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
