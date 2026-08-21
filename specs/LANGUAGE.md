@@ -7023,6 +7023,30 @@ Pinned by `a_checked_exception_escaping_a_lambda`,
 `the_checked_exceptions_a_lambda_may_throw` (the shapes the rule must leave
 alone, including the field receiver) and `a_varargs_parameter_that_is_not_last`.
 
+### synchronized, on one thread (2026-08-20)
+
+`synchronized (lock) { … }` was refused as "not supported by caturra; programs
+run single-threaded" — which is the reason it needs no support. A monitor that
+is never contended does nothing: the statement means evaluate the lock, throw
+if it is null (`monitorenter` does, and a program can catch it), and run the
+body. The modifier form on a method had been accepted and ignored for the same
+reason all along; only the statement was refused, and a textbook's synchronized
+counter would not compile.
+
+It lowers to a block whose first statement dereferences the lock — the same
+check the instruction performs, which also refuses a primitive lock the way
+javac does ("int cannot be dereferenced" against javac's "unexpected type").
+
+Three tests had pinned the refusal, two of them using `synchronized` as their
+example of "valid Java caturra does not implement, worded so the corpus tooling
+can tell an engine gap from a student's mistake". They use a different example
+now — the fourth time this session that a test recorded a limitation as a
+requirement.
+
+Pinned by `a_synchronized_block_on_one_thread` and
+`a_primitive_is_not_a_monitor`; the compatibility page's `g-synchronized` gap is
+now a supported feature, recorded against a real JDK.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

@@ -2144,6 +2144,7 @@ impl Parser<'_> {
     }
 
     /// Parse one statement. `Ok(None)` means an empty statement (`;`).
+    #[allow(clippy::too_many_lines)] // one arm per statement form
     fn statement(&mut self) -> Parsed<Option<Stmt>> {
         if self.eat_symbol(";") {
             return Ok(None);
@@ -2241,6 +2242,34 @@ impl Parser<'_> {
             } else {
                 Stmt::ThisCall { args, span }
             }));
+        }
+
+        // `synchronized (lock) { … }`. On ONE thread a monitor is never
+        // contended, so the statement means: evaluate the lock, fail if it is
+        // null (`monitorenter` throws NPE, and a program can see that), and run
+        // the body. Refusing it kept perfectly ordinary Java out of an engine
+        // for which it is a no-op — the lock is dereferenced here by calling
+        // `getClass()` on it and discarding the answer, which is the same
+        // check the instruction performs, and which also refuses a primitive
+        // lock the way javac does.
+        if self.at_keyword(Keyword::Synchronized)
+            && matches!(self.peek_at(1), Some(TokenKind::Symbol("(")))
+        {
+            let span = self.here();
+            self.pos += 1;
+            self.expect_symbol("(", "after 'synchronized'")?;
+            let lock = self.expression()?;
+            self.expect_symbol(")", "to close the synchronized lock")?;
+            let mut body = vec![Stmt::Expr(Expr::Call {
+                receiver: Some(Box::new(lock)),
+                method: String::from("getClass"),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                span,
+            })];
+            self.expect_symbol("{", "to open the synchronized block")?;
+            body.extend(self.block_body());
+            return Ok(Some(Stmt::Block(body)));
         }
 
         // `super.method(...)` / `this.field` etc. are expression
@@ -6161,14 +6190,17 @@ mod tests {
         }
 
         // Valid Java that caturra does not implement DOES say so, so the corpus
-        // tooling can recognise it as an engine gap.
-        let sync = parse_errors(&in_main("synchronized (a) { }"));
+        // tooling can recognise it as an engine gap. (`synchronized` used to be
+        // the example here; on one thread it is a no-op with a null check, so
+        // it PARSES now — see `unsynchronized_blocks_run_their_body`.)
+        let native = parse_errors(&in_main("native void q();"));
         assert!(
-            sync.first()
-                .expect("synchronized")
+            native
+                .first()
+                .expect("native")
                 .message
-                .contains("caturra"),
-            "`synchronized` is valid Java we don't implement; say so"
+                .contains("illegal start of expression"),
+            "a member declaration in statement position is javac's error, not ours"
         );
 
         // `assert` IS implemented now (a runtime no-op, assertions off) — it
@@ -6264,26 +6296,29 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_statements_get_friendly_messages() {
-        let errors = parse_errors(
+    fn unsynchronized_blocks_run_their_body() {
+        // On ONE thread a monitor is never contended, so `synchronized (x)` is
+        // the body plus the null check `monitorenter` performs — which is why
+        // this parses to a block whose first statement dereferences the lock.
+        // It was refused with "not supported by caturra" until 2026-08-20.
+        let unit = parse_ok(
             r#"
             class Main {
                 static void run() {
-                    synchronized (this) { }
-                    System.out.println("still parsed");
+                    synchronized (Main.class) {
+                        System.out.println("inside");
+                    }
+                    System.out.println("after");
                 }
             }
             "#,
         );
-        let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-        assert!(!messages.is_empty(), "{messages:?}");
-        // `synchronized` is valid Java that caturra does not implement, so the
-        // message names caturra — which is how the corpus tooling recognises an
-        // engine gap rather than a mistake in the student's source.
-        assert!(
-            messages[0].contains("not supported by caturra"),
-            "{messages:?}"
-        );
+        let body = &unit.classes[0].methods[0].body;
+        assert_eq!(body.len(), 2, "the block and the statement after it");
+        let Stmt::Block(inner) = &body[0] else {
+            panic!("synchronized lowers to a block: {body:?}");
+        };
+        assert_eq!(inner.len(), 2, "the lock check and the body: {inner:?}");
     }
 
     #[test]

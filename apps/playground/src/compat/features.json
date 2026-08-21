@@ -438,7 +438,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-kxdu33yy/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-p3c3f02g/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -449,7 +449,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-b957x1d1/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-f9pu4qsd/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -460,7 +460,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-z7ix_bym/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-idzobkw6/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -736,11 +736,11 @@
     "id": "g-synchronized",
     "category": "Statements",
     "title": "synchronized",
-    "summary": "A program here runs on one thread, in one WASM instance.",
+    "summary": "A program here runs on one thread, so a monitor is never contended: the lock is evaluated (a null one still throws) and the body runs.",
     "main": "G",
-    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nObject lock = new Object();\n        synchronized (lock) {\n            System.out.println(\"locked\");\n        }\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "'synchronized' is not supported by caturra; programs run single-threaded"
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nObject lock = new Object();\n        synchronized (lock) {\n            System.out.println(\"locked\");\n        }\n        Object missing = null;\n        try {\n            synchronized (missing) {\n                System.out.println(\"never\");\n            }\n        } catch (NullPointerException e) {\n            System.out.println(\"null lock throws\");\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "locked\nnull lock throws\n"
   },
   {
     "id": "g-for-forms",

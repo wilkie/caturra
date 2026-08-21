@@ -33074,6 +33074,66 @@ fn every_divergence_pin_is_written_down() {
     );
 }
 
+// `synchronized (lock) { … }` on ONE thread: a monitor is never contended, so
+// the statement means evaluate the lock, fail if it is null (which is what
+// `monitorenter` does, and a program can see it), and run the body. Refusing it
+// kept perfectly ordinary Java out of an engine for which it is a no-op — a
+// textbook's synchronized counter would not compile.
+differential_test!(
+    a_synchronized_block_on_one_thread,
+    "Synchronized",
+    r#"
+public class Synchronized {
+    static int counter;
+
+    static synchronized void bump() {
+        counter++;
+    }
+
+    public static void main(String[] args) {
+        Object lock = new Object();
+        synchronized (lock) {
+            System.out.println("inside");
+            for (int i = 0; i < 2; i++) {
+                bump();
+            }
+        }
+        System.out.println("after " + counter);
+
+        synchronized (Synchronized.class) {
+            System.out.println("on the class");
+        }
+
+        Object missing = null;
+        try {
+            synchronized (missing) {
+                System.out.println("never");
+            }
+        } catch (NullPointerException e) {
+            System.out.println("a null lock throws");
+        }
+    }
+}
+"#
+);
+
+// A primitive is not a monitor, which javac words as "unexpected type" and
+// caturra as the dereference it is.
+differential_reject!(
+    a_primitive_is_not_a_monitor,
+    "SyncPrimitive",
+    r"
+public class SyncPrimitive {
+    public static void main(String[] args) {
+        int lock = 1;
+        synchronized (lock) {
+            System.out.println(lock);
+        }
+    }
+}
+"
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

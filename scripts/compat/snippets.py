@@ -1604,9 +1604,16 @@ GRAMMAR = [
          summary="A runtime no-op — assertions are off by default (only `-ea` enables them) — but the condition is still type-checked, as javac does.", main="G",
          source=_prog('assert 1 + 1 == 2 : "math";\n        System.out.println("asserted");')),
     dict(id="g-synchronized", category="Statements", title="synchronized",
-         summary="A program here runs on one thread, in one WASM instance.", main="G",
+         summary=("A program here runs on one thread, so a monitor is never contended: "
+                  "the lock is evaluated (a null one still throws) and the body runs."),
+         main="G",
          source=_prog('Object lock = new Object();\n        synchronized (lock) {\n'
-                      '            System.out.println("locked");\n        }')),
+                      '            System.out.println("locked");\n        }\n'
+                      '        Object missing = null;\n        try {\n'
+                      '            synchronized (missing) {\n'
+                      '                System.out.println("never");\n            }\n'
+                      '        } catch (NullPointerException e) {\n'
+                      '            System.out.println("null lock throws");\n        }')),
     dict(id="g-for-forms", category="Statements", title="Every for loop",
          summary="Comma-separated init/update, `for(;;)` with break, and the enhanced for.", main="G",
          source=_prog('for (int i = 0, j = 3; i < j; i++, j--) {\n'
