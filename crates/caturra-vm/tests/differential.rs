@@ -33199,6 +33199,118 @@ public class StreamOfArray {
 "#
 );
 
+// An INITIALIZER BLOCK holds statements like any method body, and a lambda
+// written in one had nowhere to be desugared: the lambda pass walked methods
+// and field initializers only. `static { … }` and `{ … }` are the two places a
+// class runs code that is not a method, and both refused a lambda.
+differential_test!(
+    a_lambda_in_an_initializer_block,
+    "InitBlockLambda",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class InitBlockLambda {
+    static List<String> names = new ArrayList<String>();
+    static int total;
+
+    static {
+        Arrays.asList("a", "bb").forEach(s -> names.add(s.toUpperCase()));
+        total = Stream.of(1, 2, 3).map(x -> x * 2).reduce(0, Integer::sum);
+    }
+
+    int seen;
+
+    {
+        Runnable count = () -> seen++;
+        count.run();
+        count.run();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(names);
+        System.out.println(total);
+        System.out.println(new InitBlockLambda().seen);
+    }
+}
+"#
+);
+
+// A local class declared inside a SWITCH arm. The switch block is one scope
+// (JLS §6.3), and its arms hold block statements like any other block — but
+// the arm parser reads STATEMENTS only, and a class declaration is not one.
+// Every other block position takes it.
+stricter_than_javac!(
+    stricter_local_class_in_a_switch_arm,
+    "SwitchLocalClass",
+    r"
+public class SwitchLocalClass {
+    public static void main(String[] args) {
+        switch (args.length) {
+            case 0:
+                class Helper {
+                    int value() {
+                        return 7;
+                    }
+                }
+                System.out.println(new Helper().value());
+                break;
+            default:
+                break;
+        }
+    }
+}
+"
+);
+
+// `count++` on a field of the ENCLOSING class, from inside a lambda or an
+// inner class. The read path walks the captured-outer chain and the assignment
+// path does too, so `count = count + 1` compiled — the INCREMENT path resolved
+// only against the class it stands in, and said "cannot find symbol" for the
+// same field in the same body.
+differential_test!(
+    an_increment_of_an_enclosing_field,
+    "IncrementOuter",
+    r#"
+public class IncrementOuter {
+    int seen;
+    static int total;
+
+    class Inner {
+        void bump() {
+            seen++;
+            seen--;
+            seen += 3;
+            total++;
+        }
+    }
+
+    void run() {
+        Runnable statement = () -> {
+            seen++;
+        };
+        statement.run();
+        Runnable expression = () -> seen++;
+        expression.run();
+        expression.run();
+        new Inner().bump();
+        System.out.println(seen + " " + total);
+
+        // The value of the increment itself, and the prefix form.
+        System.out.println(seen++ + " " + seen);
+        System.out.println(++seen + " " + seen--);
+        Runnable answers = () -> System.out.println(seen++ + " " + ++seen);
+        answers.run();
+        System.out.println(seen);
+    }
+
+    public static void main(String[] args) {
+        new IncrementOuter().run();
+    }
+}
+"#
+);
+
 // A greedy repeat backing off over a SUPPLEMENTARY code point. The loop that
 // repeats a simple body recorded how many repetitions it had taken and assumed
 // each consumed one code UNIT, so backing off decremented the position by one

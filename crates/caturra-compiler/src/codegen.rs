@@ -16291,13 +16291,28 @@ impl BodyGen<'_> {
         increment: bool,
         span: SourceSpan,
     ) -> JType {
+        // An ENCLOSING class's field reached by simple name, from inside an
+        // inner class or a lambda: `count++` where `count` belongs to the
+        // class this one was written in. The read path walks the
+        // `__caturraOuter` chain and the ASSIGNMENT path does too — this one
+        // did not, so `count = count + 1` compiled and `count++` said "cannot
+        // find symbol", for the same field in the same body.
+        let mut outer_chain: Option<OuterChain> = None;
         let (class_id, field) = match target {
             FieldTarget::Implicit(name) => {
-                let Some((owner, field)) = self.resolve_field(self.current_class_id, name, span)
-                else {
-                    return JType::Error;
-                };
-                (owner, field)
+                if self.table.field(self.current_class, name).is_none()
+                    && let Some((chain, owner, field)) = self.enclosing_instance_field(name)
+                {
+                    outer_chain = Some(chain);
+                    (owner, field)
+                } else {
+                    let Some((owner, field)) =
+                        self.resolve_field(self.current_class_id, name, span)
+                    else {
+                        return JType::Error;
+                    };
+                    (owner, field)
+                }
             }
             FieldTarget::Qualified(object, name) => {
                 let object_ty = self.type_of(object);
@@ -16392,6 +16407,10 @@ impl BodyGen<'_> {
         }
 
         match target {
+            FieldTarget::Implicit(_) if outer_chain.is_some() => {
+                let chain = outer_chain.clone().expect("checked");
+                self.push_captured_outer_chain(&chain);
+            }
             FieldTarget::Implicit(_) => self.code.push_op(op::ALOAD_0, 1),
             FieldTarget::Qualified(object, _) => {
                 if self.expr(object) == JType::Error {

@@ -7080,6 +7080,36 @@ Widening the pool to seventy snippets — everything added this session included
 
 Pinned by `a_lone_array_handed_to_a_stream_factory`.
 
+### A lambda in an initializer block (2026-08-20)
+
+`static { list.forEach(x -> …); }` was refused for having no
+functional-interface position. The lambda pass walked a class's METHODS and its
+FIELD initializers, and not its initializer BLOCKS — the two places a class
+runs code that is not a method, both of them missed. The capture pass had
+walked them all along, which is why the failure surfaced as a target-typing
+message rather than as a missing capture.
+
+Found by the other cross-product: every statement from a pool of
+twenty-five, placed in each of twenty-two syntactic CONTEXTS — a loop, an `if`,
+a lambda, an anonymous class, a static and an instance method, a constructor, a
+static and an instance initializer, an enum method, an interface default, a
+generic method, a recursive method, a lambda in an anonymous class and the
+reverse, nested blocks, a `finally`, a switch arm. 550 programs; the initializer
+blocks accounted for twelve failures and a local class in a switch arm for one
+(now enumerated as a strictness).
+
+The same sweep found a second, older defect the initializer case had been
+hiding behind: **`count++` on a field of the ENCLOSING class** — from a lambda
+or an inner class — resolved only against the class it stands in and said
+"cannot find symbol". The read path walks the captured-outer chain and the
+ASSIGNMENT path does too, so `count = count + 1` compiled while `count++` did
+not, for the same field in the same body. (It surfaced now because a lambda
+body that is a bare `x++` became an EXPRESSION body earlier this session; the
+statement form had always failed the same way.)
+
+Pinned by `a_lambda_in_an_initializer_block` and
+`an_increment_of_an_enclosing_field`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -7158,6 +7188,11 @@ entries after it was written down.
   actually uses work (`Map.Entry.comparingByKey()`, and the lambda
   `e -> e.getKey()`), as does the same reference in a STREAM, where the element
   type is known. (`stricter_entry_method_ref_in_a_comparator`)
+- A local class declared inside a SWITCH arm
+  (`case 0: class Helper { … }`). The switch block is one scope and its arms
+  hold block statements like any other block, but the arm parser reads
+  STATEMENTS only, and a class declaration is not one. Every other block
+  position takes it. (`stricter_local_class_in_a_switch_arm`)
 - `Map[] raw; raw[0] = new HashMap<String, Integer>();` — storing a
   PARAMETERIZED collection into a RAW-element array slot. The raw element
   resolves to `Map<Object, Object>` and this pass cannot tell that shape from a

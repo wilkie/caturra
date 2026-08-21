@@ -127,6 +127,39 @@ pub fn desugar_lambdas(
                     desugar_stmt(stmt, &mut ctx);
                 }
             }
+            // An INITIALIZER BLOCK holds statements like any method body, and
+            // a lambda written in one had nowhere to be desugared: this pass
+            // walked methods and field initializers only, so
+            // `static { list.forEach(x -> …); }` was refused for having no
+            // functional-interface position. The capture pass already walked
+            // them, which is why the failure looked like a target-typing one.
+            for block in &mut class.init_blocks {
+                let mut ctx = Ctx {
+                    sams: &sams,
+                    methods: &methods,
+                    methods_in_class: &methods_in_class,
+                    generics: &generics,
+                    constructors: &constructors,
+                    static_methods: &static_methods,
+                    class_names: &class_names,
+                    ret: None,
+                    new_classes: &mut new_classes,
+                    counter: &mut counter,
+                    scope: vec![fields.clone()],
+                    fields: &field_types,
+                    current_class: Some(class_name.as_str()),
+                    bridges: &mut bridges,
+                    shapes: &shapes,
+                    supers: &supers,
+                    enums: &enums,
+                    class_prefix: crate::LAMBDA_CLASS_PREFIX,
+                    path,
+                    diags: &mut diags,
+                };
+                for stmt in &mut block.body {
+                    desugar_stmt(stmt, &mut ctx);
+                }
+            }
             for field in &mut class.fields {
                 if let Some(init) = &mut field.init {
                     let mut ctx = Ctx {
