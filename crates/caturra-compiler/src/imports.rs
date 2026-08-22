@@ -49,6 +49,7 @@ const JAVA_UTIL: &[&str] = &[
     "Objects",
     "Random",
     "Collections",
+    "StringJoiner",
     "InputMismatchException",
     "NoSuchElementException",
     "EmptyStackException",
@@ -223,6 +224,13 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // and `Collections.list` are its only real uses today, and neither is
     // modelled.
     ("java.util", &["Enumeration"]),
+    // The enum-keyed collections. Their ITERATION ORDER is the constants'
+    // declaration order, which a `TreeMap`/`TreeSet` keyed by the enum
+    // reproduces exactly (an enum's natural ordering IS its ordinal) — so the
+    // refusal names the substitute rather than pretending the class is
+    // unknown. Modelling them properly means a distinct kind, if only so
+    // `getClass()` stays honest.
+    ("java.util", &["EnumMap", "EnumSet"]),
     ("java.util.regex", &["Pattern", "Matcher", "MatchResult"]),
     (
         "java.io",

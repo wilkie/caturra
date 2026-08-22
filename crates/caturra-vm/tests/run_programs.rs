@@ -6422,6 +6422,19 @@ fn stage6_compile_errors_match_javac_wording() {
             "import java.util.Vector; class M { }",
             "java.util.Vector is not supported by caturra (the class library covers the AP CS A subset)",
         ),
+        // The enum-keyed collections. A `TreeMap`/`TreeSet` keyed by the enum
+        // iterates in the same order (an enum's natural ordering IS its
+        // ordinal), so the scope limit is real but small — and it has to be
+        // reported by NAME: "unknown type 'EnumMap'" reads as a typo about a
+        // class the documentation shows.
+        (
+            "import java.util.EnumMap; class M { }",
+            "java.util.EnumMap is not supported by caturra (the class library covers the AP CS A subset)",
+        ),
+        (
+            "import java.util.EnumSet; class M { }",
+            "java.util.EnumSet is not supported by caturra (the class library covers the AP CS A subset)",
+        ),
         (
             // java.awt / javax.swing (and java.awt.event listeners) are
             // modeled now; an unmodeled package still reports honestly.

@@ -52,6 +52,36 @@ class Random {
 
   public float nextFloat() { return next(24) / ((float) (1 << 24)); }
 
+  // The STREAM factories (Java 8). Each is lazy, as the JDK's are, so the
+  // generator advances once per element PULLED — a `limit`ed or short-circuited
+  // pipeline leaves the seed exactly where a real one would.
+  public java.util.stream.IntStream ints(long streamSize) {
+    return java.util.stream.IntStream.generate(() -> nextInt()).limit(streamSize);
+  }
+
+  public java.util.stream.IntStream ints(long streamSize, int origin, int bound) {
+    return java.util.stream.IntStream.generate(() -> __boundedInt(origin, bound))
+        .limit(streamSize);
+  }
+
+  public java.util.stream.DoubleStream doubles(long streamSize) {
+    return java.util.stream.DoubleStream.generate(() -> nextDouble()).limit(streamSize);
+  }
+
+  // `internalNextInt`: a positive span is one bounded draw shifted, and a span
+  // that OVERFLOWS an int is drawn whole and rejected until it lands.
+  private int __boundedInt(int origin, int bound) {
+    int span = bound - origin;
+    if (span > 0) {
+      return nextInt(span) + origin;
+    }
+    int drawn = nextInt();
+    while (drawn < origin || drawn >= bound) {
+      drawn = nextInt();
+    }
+    return drawn;
+  }
+
   public double nextDouble() {
     return (((long) next(26) << 27) + next(27)) / 9007199254740992.0; // 2^53
   }
@@ -119,5 +149,98 @@ class Collections {
 
   public static void shuffle(java.util.ArrayList<Object> list) {
     shuffle(list, new Random());
+  }
+}
+
+// `java.util.StringJoiner` — the JDK's own shape, because the details are
+// observable: the builder holds the PREFIX and the elements (never the
+// suffix), which is what makes `merge` splice another joiner's contents
+// without its prefix, and what makes `length()` answer before `toString()`
+// ever runs. An empty joiner prints `setEmptyValue`'s text if one was set and
+// prefix+suffix otherwise.
+class StringJoiner {
+  private final String __delimiter;
+  private final String __prefix;
+  private final String __suffix;
+  private StringBuilder __value = null;
+  private String __empty;
+
+  public StringJoiner(CharSequence delimiter) {
+    this(delimiter, "", "");
+  }
+
+  public StringJoiner(CharSequence delimiter, CharSequence prefix, CharSequence suffix) {
+    if (prefix == null) {
+      throw new NullPointerException("The prefix must not be null");
+    }
+    if (delimiter == null) {
+      throw new NullPointerException("The delimiter must not be null");
+    }
+    if (suffix == null) {
+      throw new NullPointerException("The suffix must not be null");
+    }
+    __prefix = prefix.toString();
+    __delimiter = delimiter.toString();
+    __suffix = suffix.toString();
+    __empty = __prefix + __suffix;
+  }
+
+  public StringJoiner setEmptyValue(CharSequence emptyValue) {
+    if (emptyValue == null) {
+      throw new NullPointerException("The empty value must not be null");
+    }
+    __empty = emptyValue.toString();
+    return this;
+  }
+
+  // The builder is created on the FIRST add, holding the prefix; every later
+  // one appends the delimiter first. That is why an empty joiner can still
+  // answer a different text.
+  private StringBuilder __prepare() {
+    if (__value != null) {
+      __value.append(__delimiter);
+    } else {
+      __value = new StringBuilder();
+      __value.append(__prefix);
+    }
+    return __value;
+  }
+
+  public StringJoiner add(CharSequence newElement) {
+    StringBuilder builder = __prepare();
+    if (newElement == null) {
+      builder.append("null");
+    } else {
+      builder.append(newElement.toString());
+    }
+    return this;
+  }
+
+  // `merge` takes the other joiner's ELEMENTS, not its prefix — and a merged
+  // joiner counts as one element, so the delimiter goes in once.
+  public StringJoiner merge(StringJoiner other) {
+    if (other == null) {
+      throw new NullPointerException();
+    }
+    if (other.__value != null) {
+      String theirs = other.__value.toString().substring(other.__prefix.length());
+      __prepare().append(theirs);
+    }
+    return this;
+  }
+
+  public int length() {
+    if (__value == null) {
+      return __empty.length();
+    }
+    return __value.length() + __suffix.length();
+  }
+
+  @Override
+  public String toString() {
+    if (__value == null) {
+      return __empty;
+    }
+    return __value.toString() + __suffix;
   }
 }

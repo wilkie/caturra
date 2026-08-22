@@ -838,6 +838,14 @@ fn library_static_throws(
         ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => &[],
         ("Files", _) => &["java/io/IOException"],
         ("Class", "forName") => &["java/lang/ClassNotFoundException"],
+        // `Thread.sleep` throws `InterruptedException` in Java, and this table
+        // is a model of JAVA, not of what caturra runs: `java.lang.Thread` is
+        // refused (one thread, so a sleep would be a lie), and the refusal
+        // says so — but only if the CATCH clause around it is legal first.
+        // Without this entry the try was "exception InterruptedException is
+        // never thrown", which blames the one part of the program that is
+        // right.
+        ("Thread", "sleep" | "join") => &["java/lang/InterruptedException"],
         _ => &[],
     };
     let mut out = ThrownSet::default();

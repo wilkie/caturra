@@ -562,21 +562,32 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<reflect>"), unit));
     }
+    // Set when an injected library needs the functional interfaces itself.
+    let mut needs_function_lib = false;
     if (sources.iter().any(|s| s.text.contains("Random"))
-        || sources.iter().any(|s| s.text.contains("Collections.")))
+        || sources.iter().any(|s| s.text.contains("Collections."))
+        || sources.iter().any(|s| s.text.contains("StringJoiner")))
         && !units.iter().any(|(_, unit)| {
             unit.classes
                 .iter()
-                .any(|c| c.name == "Random" || c.name == "Collections")
+                .any(|c| c.name == "Random" || c.name == "Collections" || c.name == "StringJoiner")
         })
     {
         let (tokens, _) = lexer::lex("<util>", UTIL_LIB);
         let (unit, mut errs) = parser::parse("<util>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<util>"), unit));
+        // The bundled `Random` builds its stream factories out of LAMBDAS, so
+        // the functional interfaces they desugar to have to come with it. The
+        // trigger below reads the USER's text, which says nothing about what
+        // an injected library needs — `new Random(1).ints(3, 0, 10)` was
+        // "cannot find symbol: class __Supplier", about a class no program
+        // mentions.
+        needs_function_lib = true;
     }
-    if sources.iter().any(|s| {
-        s.text.contains(".forEach(")
+    if (needs_function_lib
+        || sources.iter().any(|s| {
+            s.text.contains(".forEach(")
             || s.text.contains(".forEachRemaining(")
             || s.text.contains(".removeIf(")
             || s.text.contains(".replaceAll(")
@@ -626,9 +637,10 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
                 && (s.text.contains(".max(")
                     || s.text.contains(".min(")
                     || s.text.contains(".binarySearch(")))
-    }) && !units
-        .iter()
-        .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))
+        }))
+        && !units
+            .iter()
+            .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))
     {
         let (tokens, _) = lexer::lex("<function>", FUNCTION_LIB);
         let (unit, mut errs) = parser::parse("<function>", tokens);

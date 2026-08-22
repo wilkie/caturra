@@ -219,6 +219,43 @@ class Arrays {
   // null-safely, as Objects.equals does. A double or float array compares
   // raw bits, so NaN equals itself and -0.0 does not equal 0.0 — which is
   // what Double.compare reports, and the opposite of what == would say.
+  // `mismatch` (Java 9): the first index where the two differ, or -1 when one
+  // is a prefix of the other and they are the same length. A SHORTER array
+  // that matches so far mismatches at its own length, which is what makes
+  // `mismatch([1], [1, 2])` answer 1 rather than -1.
+  public static int mismatch(int[] a, int[] b) {
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) if (a[i] != b[i]) return i;
+    return a.length == b.length ? -1 : shared;
+  }
+  public static int mismatch(long[] a, long[] b) {
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) if (a[i] != b[i]) return i;
+    return a.length == b.length ? -1 : shared;
+  }
+  public static int mismatch(double[] a, double[] b) {
+    int shared = a.length < b.length ? a.length : b.length;
+    // The DOUBLE comparison is `Double.compare`, not `==`: two NaNs match here
+    // and 0.0 does not match -0.0, exactly as `Arrays.equals` has it.
+    for (int i = 0; i < shared; i++) if (Double.compare(a[i], b[i]) != 0) return i;
+    return a.length == b.length ? -1 : shared;
+  }
+  public static int mismatch(char[] a, char[] b) {
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) if (a[i] != b[i]) return i;
+    return a.length == b.length ? -1 : shared;
+  }
+  public static int mismatch(Object[] a, Object[] b) {
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      Object x = a[i];
+      Object y = b[i];
+      boolean same = x == null ? y == null : x.equals(y);
+      if (!same) return i;
+    }
+    return a.length == b.length ? -1 : shared;
+  }
+
   public static boolean equals(Object[] a, Object[] b) {
     if (a == b) return true;
     if (a == null || b == null) return false;

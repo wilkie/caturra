@@ -34778,3 +34778,124 @@ public class HashFaceClone {
 }
 "
 );
+
+// `Iface.super.method()` — the way a class that inherits several defaults picks
+// one — aborted the VM for a NESTED interface: "unknown native member". The
+// method reference names the CLASS FILE, which for a nested type is
+// `Outer$Inner`, and the written name was interned instead. A top-level
+// interface, whose two names agree, worked all along.
+differential_test!(
+    an_interface_super_call_names_the_class_file,
+    "NestedSuper",
+    r#"
+public class NestedSuper {
+    interface Greeter {
+        default String greet() {
+            return "hi";
+        }
+    }
+
+    interface Louder {
+        default String greet() {
+            return "HI";
+        }
+    }
+
+    static class Impl implements Greeter {
+        public String greet() {
+            return Greeter.super.greet() + "!";
+        }
+    }
+
+    static class Both implements Greeter, Louder {
+        public String greet() {
+            return Greeter.super.greet() + Louder.super.greet();
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Impl().greet());
+        System.out.println(new Both().greet());
+    }
+}
+"#
+);
+
+// `java.util.StringJoiner`, whose details are observable: the builder holds the
+// prefix and the elements but never the suffix, so `merge` splices another
+// joiner's contents WITHOUT its prefix, `length()` answers before `toString()`
+// runs, and an empty joiner prints its `setEmptyValue` text if one was set.
+differential_test!(
+    a_string_joiner_matches_the_jdk,
+    "Joiner",
+    r#"
+import java.util.StringJoiner;
+
+public class Joiner {
+    public static void main(String[] args) {
+        StringJoiner bracketed = new StringJoiner(", ", "[", "]");
+        bracketed.add("a").add("b");
+        System.out.println(bracketed + " " + bracketed.length());
+        StringJoiner bare = new StringJoiner(",");
+        System.out.println("[" + bare + "]" + bare.length());
+        bare.add("only");
+        System.out.println(bare + " " + bare.length());
+        StringJoiner empty = new StringJoiner(",", "<", ">").setEmptyValue("EMPTY");
+        System.out.println(empty + " " + empty.length());
+        empty.add("x");
+        System.out.println(empty + " " + empty.length());
+        StringJoiner left = new StringJoiner("+", "(", ")");
+        left.add("1");
+        StringJoiner right = new StringJoiner("-", "{", "}");
+        right.add("x");
+        right.add("y");
+        System.out.println(left.merge(right) + " " + left.length());
+        StringJoiner intoEmpty = new StringJoiner("+", "(", ")");
+        System.out.println(intoEmpty.merge(right));
+        StringJoiner mergedEmpty = new StringJoiner("+", "(", ")");
+        mergedEmpty.add("1");
+        System.out.println(mergedEmpty.merge(new StringJoiner(",")));
+        StringJoiner mixed = new StringJoiner("|");
+        mixed.add(null);
+        mixed.add(new StringBuilder("sb"));
+        System.out.println(mixed);
+        try {
+            new StringJoiner(null);
+        } catch (Exception thrown) {
+            System.out.println(thrown);
+        }
+    }
+}
+"#
+);
+
+// `Random`'s STREAM factories, and `Arrays.mismatch`. The streams are lazy, as
+// the JDK's are, so the generator advances once per element pulled — which is
+// observable in the seed a later `nextInt()` draws from.
+differential_test!(
+    a_seeded_randoms_streams_replay_the_jdks,
+    "RandomStreams",
+    r#"
+import java.util.Arrays;
+import java.util.Random;
+
+public class RandomStreams {
+    public static void main(String[] args) {
+        System.out.println(new Random(1).ints(3, 0, 10).sum());
+        System.out.println(new Random(2).ints(4).count());
+        System.out.println(Arrays.toString(new Random(3).ints(3, 5, 6).toArray()));
+        System.out.println(Arrays.toString(new Random(4).ints(4, -2, 2).toArray()));
+        Random shared = new Random(7);
+        System.out.println(shared.doubles(2).sum() + ' ' + shared.nextInt(100));
+        Random pulled = new Random(9);
+        System.out.println(pulled.ints(10).limit(2).count() + ' ' + pulled.nextInt(100));
+        System.out.println(Arrays.mismatch(new int[] { 1, 2 }, new int[] { 1, 3 }));
+        System.out.println(Arrays.mismatch(new int[] { 1 }, new int[] { 1, 2 }));
+        System.out.println(Arrays.mismatch(new int[] { 1, 2 }, new int[] { 1, 2 }));
+        System.out.println(Arrays.mismatch(new String[] { "a" }, new String[] { "b" }));
+        System.out.println(Arrays.mismatch(new double[] { Double.NaN }, new double[] { Double.NaN }));
+        System.out.println(Arrays.mismatch(new char[] { 'a' }, new char[] { 'b' }));
+    }
+}
+"#
+);

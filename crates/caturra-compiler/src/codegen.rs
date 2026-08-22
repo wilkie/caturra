@@ -25561,14 +25561,20 @@ impl BodyGen<'_> {
         // `Iface.super.m(args)`: a NON-VIRTUAL call to that interface's default
         // method, which is how a class that inherits several picks one.
         if let Some(owner) = owner {
-            let implemented = self
-                .table
-                .class_id(owner)
-                .is_some_and(|id| self.table.is_subtype(self.current_class_id, id));
+            let named = self.table.class_id(owner);
+            let implemented =
+                named.is_some_and(|id| self.table.is_subtype(self.current_class_id, id));
             if !implemented {
                 self.error(span, format!("not a direct superinterface: {owner}"));
                 return None;
             }
+            // The method reference names the CLASS FILE, which for a nested
+            // interface is `Outer$Inner` and not the `Inner` the program
+            // wrote. Interning the written name made `G.super.g()` inside the
+            // class that declares `G` an "unknown native member" — a VM abort
+            // on ordinary Java — while the identical call to a TOP-LEVEL
+            // interface, whose two names agree, worked.
+            let owner = named.map_or(owner, |id| self.table.class_name(id));
             let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
             let Resolution::Found(sig) = self.table.resolve(owner, method, &arg_types) else {
                 self.error(

@@ -7294,6 +7294,45 @@ Pinned by `each_sorted_face_offers_its_own_members`,
 `a_sorted_map_face_has_no_entry_navigation`,
 `a_narrow_face_does_not_widen_inward` and `looser_a_hash_face_offers_clone`.
 
+### What a broad API sweep found (2026-08-21)
+
+Eighty-two programs, one per commonly-used library call or language shape,
+each run against a real JDK. Six of the ten disagreements were the honest
+refusals working as intended (`java.time`, `java.math`, `java.lang.Thread`) or
+the harness's own missing clock. The other four were real:
+
+- **`Iface.super.method()` aborted the VM for a NESTED interface.** The method
+  reference names the CLASS FILE, which for a nested type is `Outer$Inner`, and
+  the written name was interned instead — so the identical call to a top-level
+  interface, whose two names agree, worked all along. An abort on ordinary Java
+  is the worst answer available, and this one had been reachable since nested
+  types got their binary names.
+- **`catch (InterruptedException e)` did not compile**, because the class was
+  missing from the throwable table. `java.lang.Thread` is refused (one thread,
+  so a sleep would be a lie) and the refusal says so — but the catch clause
+  failed FIRST, with "cannot find symbol", which blames the one part of the
+  program that is right. The closed-world thrower table is a model of JAVA, not
+  of what caturra runs, so it now records that `Thread.sleep` throws it.
+- **`StringJoiner` did not exist.** It is bundled Java now, and its details are
+  observable: the builder holds the prefix and the elements but never the
+  suffix, which is what makes `merge` splice another joiner's contents WITHOUT
+  its prefix and `length()` answer before `toString()` ever runs.
+- **`Random.ints`/`doubles` and `Arrays.mismatch` were missing.** The random
+  streams are LAZY, as the JDK's are, so the generator advances once per
+  element pulled — observable in the seed a later `nextInt()` draws from. They
+  are built from lambdas, which uncovered a second thing: the trigger that
+  injects the functional interfaces reads the USER's text, and says nothing
+  about what an injected library itself needs.
+
+`EnumMap`/`EnumSet` moved from "unknown type" — which reads as a typo about a
+class the documentation shows — to the honest scope limit, with the substitute
+named in the code: a `TreeMap`/`TreeSet` keyed by the enum iterates in the very
+same order, an enum's natural ordering being its ordinal.
+
+Pinned by `an_interface_super_call_names_the_class_file`,
+`a_string_joiner_matches_the_jdk` and
+`a_seeded_randoms_streams_replay_the_jdks`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -7350,7 +7389,10 @@ entries after it was written down.
 - `Vector<Integer> v;` and the rest of the unmodeled library — a scope
   limit, reported by name wherever written rather than as a missing symbol.
   This bullet used to name `LinkedList`, `HashSet`, `TreeMap` and `TreeSet`
-  as well; all four are modeled now, and `Vector` is what is left of it. (`strict_vector_is_refused_by_name`)
+  as well; all four are modeled now. What is left is `Vector`/`Hashtable`, the
+  `Abstract*` skeletons, and the enum-keyed `EnumMap`/`EnumSet` — for which a
+  `TreeMap`/`TreeSet` keyed by the enum iterates in the very same order, an
+  enum's natural ordering being its ordinal. (`strict_vector_is_refused_by_name`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,

@@ -191,6 +191,13 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/util/IllegalFormatWidthException",
         "java/util/IllegalFormatException",
     ),
+    // A checked exception a program NAMES far more often than it can be
+    // thrown here: every `Thread.sleep` is written inside a `catch
+    // (InterruptedException e)`. `java.lang.Thread` itself is refused (caturra
+    // runs on one thread), and the refusal says so — but with this class
+    // missing from the table the catch clause failed FIRST, with "cannot find
+    // symbol", which names the wrong problem.
+    ("java/lang/InterruptedException", "java/lang/Exception"),
     ("java/io/IOException", "java/lang/Exception"),
     ("java/io/FileNotFoundException", "java/io/IOException"),
     ("java/io/UncheckedIOException", "java/lang/RuntimeException"),
