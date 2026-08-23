@@ -2117,21 +2117,7 @@ impl MethodTable {
     /// type-variable parameter accepts anything, as the erasure bridge does).
     fn overrides_something(&self, class: ClassId, name: &str, params: &[JType]) -> bool {
         let compatible = |owner: ClassId, sup_params: &[JType]| {
-            // The match is erasure-TOLERANT — an ancestor's `Object` parameter
-            // stands for an erased type variable, so `compare(Card, Card)`
-            // implements `__Comparator.compare(Object, Object)`. But
-            // `java.lang.Object`'s OWN parameters are genuinely `Object`, and
-            // tolerating those made `@Override boolean equals(Bad o)` — the
-            // classic bug `@Override` exists to catch — compile, and then hide
-            // the real `equals` at run time.
-            let erasure_tolerant = owner != self.object_id;
-            sup_params.len() == params.len()
-                && sup_params.iter().zip(params).all(|(sup, sub)| {
-                    sup == sub
-                        || matches!(sup, JType::TypeVar(_))
-                        || (erasure_tolerant
-                            && matches!(sup, JType::Object(id) if *id == self.object_id))
-                })
+            self.params_match_override(class, owner, sup_params, params)
         };
         let mut stack: Vec<ClassId> = Vec::new();
         if let Some(info) = self.info_by_id(class) {
@@ -2278,8 +2264,9 @@ impl MethodTable {
             // pushes the obligation onto whoever implements it (JLS §9.4.1.3).
             // Requiring a concrete body reported the conflict against C, for a
             // program javac accepts.
-            let declares_it =
-                |m: &MethodSig| m.name == name && self.params_override(&m.params, params);
+            let declares_it = |m: &MethodSig| {
+                m.name == name && self.params_match_override(class, id, &m.params, params)
+            };
             let abstract_counts = info.is_interface || info.is_abstract;
             if info
                 .methods
@@ -2437,7 +2424,7 @@ impl MethodTable {
                         && info.methods.iter().any(|m| {
                             m.name == name
                                 && !m.is_abstract
-                                && self.params_override(&m.params, &params)
+                                && self.params_match_override(class, owner, &params, &m.params)
                         })
                     {
                         continue 'outer;
@@ -2537,13 +2524,45 @@ impl MethodTable {
     /// `Object` parameter is satisfied by any reference argument (the
     /// generic-interface bridge, e.g. `compareTo(Foo)` implements
     /// `Comparable<Foo>.compareTo(T)`).
-    fn params_override(&self, concrete: &[JType], abstract_: &[JType]) -> bool {
-        concrete.len() == abstract_.len()
-            && concrete.iter().zip(abstract_).all(|(c, a)| {
-                c == a
-                    || matches!(a, JType::TypeVar(_))
-                    || (*a == JType::Object(self.object_id) && c.is_reference())
-            })
+    /// Whether `sub_params` (declared in `sub_class`) override or implement a
+    /// method declared in `owner` with `sup_params`. The one statement of what
+    /// an overriding SIGNATURE is — asked from both directions, by the
+    /// `@Override` check and by the not-abstract check, which used to disagree
+    /// about it.
+    ///
+    /// A parameter matches exactly, or the ancestor's is an ERASED type
+    /// variable and the subclass wrote the argument. That has two shapes: an
+    /// unbounded variable erases to the sentinel, and a bounded one to its
+    /// BOUND — so `Bound<T extends Comparable<T>>.take(T)` reads as
+    /// `take(Comparable)` and its implementor writes `take(String)`.
+    ///
+    /// A literal `Object` parameter is tolerated only for the bundled
+    /// functional interfaces, which ARE the erased forms
+    /// (`__Comparator.compare(Object, Object)`). Everywhere else `Object`
+    /// means `Object`: `@Override boolean equals(Bad o)` is the classic bug
+    /// the annotation exists to catch, and `speak(String)` does not override
+    /// `speak(Object)`.
+    fn params_match_override(
+        &self,
+        subclass: ClassId,
+        owner: ClassId,
+        declared: &[JType],
+        overriding: &[JType],
+    ) -> bool {
+        if declared.len() != overriding.len() {
+            return false;
+        }
+        let written = self.generic_supertype_arg(subclass, owner);
+        let erased_interface = self.class_name(owner).starts_with("__");
+        let object = JType::Object(self.object_id);
+        declared.iter().zip(overriding).all(|(sup, sub)| {
+            sup == sub
+                || matches!(sup, JType::TypeVar(_))
+                || (erased_interface && *sup == object && sub.is_reference())
+                || (*sup != object
+                    && written.is_some_and(|arg| arg.base_type() == *sub)
+                    && widens(*sub, *sup, self))
+        })
     }
 
     pub(crate) fn has_class(&self, name: &str) -> bool {
@@ -2678,7 +2697,9 @@ impl MethodTable {
             }
             let info = self.info_by_id(id)?;
             if let Some(sig) = info.methods.iter().find(|m| {
-                m.name == name && !m.is_abstract && self.params_override(&m.params, params)
+                m.name == name
+                    && !m.is_abstract
+                    && self.params_match_override(class, id, &m.params, params)
             }) {
                 return Some((id, sig.clone()));
             }

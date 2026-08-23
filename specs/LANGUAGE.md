@@ -7659,6 +7659,43 @@ All 266 agree.
 
 Pinned by `which_overload_runs`.
 
+### What counts as an override (2026-08-23)
+
+The third cross-product: ten superclass declarations against seventeen subclass
+ones — access, finality, staticness, return type, parameter type, throws
+clause — 170 programs, each dispatching through a supertype reference and
+printing which body ran.
+
+Twenty-six were accepted here and refused by javac, all the same shape:
+`@Override` on a method that OVERLOADS rather than overrides. A subclass
+writing `speak(String)` against a base's `speak(Object)` declares a second
+method, and the annotation is there to say so.
+
+The rule underneath was "an ancestor's `Object` parameter stands for an erased
+type variable", which is true of the bundled functional interfaces
+(`__Comparator.compare(Object, Object)`) and of nothing else. It was already
+carved out for `java.lang.Object` itself, because `@Override boolean
+equals(Bad o)` — the classic bug the annotation exists to catch — must fail;
+every ordinary user class needed the same carve-out.
+
+Tightening it exposed the opposite error in the same check: a BOUNDED type
+variable erases to its BOUND, so `Bounded<T extends Comparable<T>>.take(T)`
+reads as `take(Comparable)` while its implementor writes `take(String)`.
+That is an override, and it was refused — the tolerance had been hiding it.
+The rule now consults the type argument the subclass actually WROTE for the
+supertype, which is the substitution the JLS describes rather than a guess
+about `Object`.
+
+And there were FOUR copies of "is this an overriding signature" — the
+`@Override` check, the not-abstract check, the interface-default resolution and
+the implementation lookup — each with its own tolerance, none agreeing. They
+are one function now.
+
+All 170 agree, and so do the 266 overload selections and the 1369 assignments.
+
+Pinned by `what_counts_as_an_override` and
+`an_override_annotation_needs_the_same_signature`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

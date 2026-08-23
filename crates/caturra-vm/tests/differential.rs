@@ -35317,3 +35317,91 @@ public class Overloads {
 }
 "#
 );
+
+// What counts as an OVERRIDE. Swept as a 170-program cross-product of ten
+// superclass declarations against seventeen subclass ones — access, finality,
+// staticness, return type, parameter type, throws clause — each program
+// dispatching through a supertype reference and printing which body ran, so
+// the comparison is the JDK's dispatch and not merely its verdict.
+differential_test!(
+    what_counts_as_an_override,
+    "Overriding",
+    r#"
+public class Overriding {
+    interface Box<T> {
+        void put(T value);
+    }
+
+    interface Bounded<T extends Comparable<T>> {
+        String take(T value);
+    }
+
+    static class Base {
+        public String speak(Object what) { return "base"; }
+        public Object widen(String what) { return "baseWide"; }
+        protected String narrowable(String what) { return "baseNarrow"; }
+    }
+
+    static class Derived extends Base {
+        // A covariant RETURN overrides; a different PARAMETER does not, and
+        // this one deliberately carries no @Override for that reason.
+        @Override
+        public String speak(Object what) { return "derived"; }
+
+        public String speak(String what) { return "overloaded"; }
+
+        @Override
+        public String widen(String what) { return "derivedWide"; }
+
+        @Override
+        public String narrowable(String what) { return "derivedNarrow"; }
+    }
+
+    // A BOUNDED type variable erases to its bound, so the interface declares
+    // `take(Comparable)` and the implementor writes `take(String)`.
+    static class Strings implements Box<String>, Bounded<String> {
+        @Override
+        public void put(String value) { System.out.println("put " + value); }
+
+        @Override
+        public String take(String value) { return "took " + value; }
+    }
+
+    public static void main(String[] args) {
+        Base asBase = new Derived();
+        System.out.println(asBase.speak("s") + " " + asBase.speak(new Object()));
+        System.out.println(new Derived().speak("s") + " " + new Derived().speak((Object) "s"));
+        System.out.println(asBase.widen("w") + " " + asBase.narrowable("n"));
+        Box<String> box = new Strings();
+        box.put("v");
+        Bounded<String> bounded = new Strings();
+        System.out.println(bounded.take("t"));
+    }
+}
+"#
+);
+
+// `@Override` on a method that OVERLOADS rather than overrides. The check used
+// to tolerate an ancestor's `Object` parameter as if it were always an erased
+// type variable, so this compiled and dispatched to the base method — which is
+// exactly the mistake the annotation exists to report.
+differential_reject!(
+    an_override_annotation_needs_the_same_signature,
+    "OverloadNotOverride",
+    r#"
+public class OverloadNotOverride {
+    static class Base {
+        public String speak(Object what) { return "base"; }
+    }
+
+    static class Derived extends Base {
+        @Override
+        public String speak(String what) { return "derived"; }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Derived().speak("s"));
+    }
+}
+"#
+);
