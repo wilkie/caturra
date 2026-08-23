@@ -1283,6 +1283,148 @@ public class SubList {
 }
 """,
     ),
+    dict(
+        id="sorted-views",
+        category="Collections",
+        title="Range and descending views of a sorted collection",
+        summary=(
+            "headSet, subMap, descendingSet and their kin are live windows onto "
+            "the tree: a key added inside the range shows through, and clearing "
+            "the view deletes that range from the map."
+        ),
+        main="SortedViews",
+        source="""
+import java.util.NavigableMap;
+import java.util.NavigableSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public class SortedViews {
+    public static void main(String[] args) {
+        TreeSet<Integer> numbers = new TreeSet<>();
+        for (int n : new int[] { 1, 3, 5, 7, 9 }) {
+            numbers.add(n);
+        }
+        System.out.println(numbers.headSet(5) + " " + numbers.tailSet(5));
+        System.out.println(numbers.subSet(3, true, 7, true));
+        System.out.println(numbers.descendingSet());
+
+        NavigableSet<Integer> upper = numbers.tailSet(5, false);
+        numbers.add(6);
+        System.out.println(upper + " " + upper.first());
+
+        TreeMap<String, Integer> scores = new TreeMap<>();
+        scores.put("ana", 3);
+        scores.put("bo", 1);
+        scores.put("cy", 4);
+        System.out.println(scores.headMap("cy") + " " + scores.descendingMap());
+        System.out.println(scores.firstEntry() + " " + scores.ceilingKey("b"));
+
+        NavigableMap<String, Integer> tail = scores.tailMap("bo", true);
+        tail.clear();
+        System.out.println(scores);
+    }
+}
+""",
+    ),
+    dict(
+        id="string-joiner",
+        category="Library",
+        title="StringJoiner",
+        summary=(
+            "A delimiter, a prefix and a suffix, with an empty value of its own "
+            "and merge() splicing another joiner's elements in."
+        ),
+        main="Joining",
+        source="""
+import java.util.StringJoiner;
+
+public class Joining {
+    public static void main(String[] args) {
+        StringJoiner list = new StringJoiner(", ", "[", "]");
+        list.add("ana").add("bo").add("cy");
+        System.out.println(list + " length=" + list.length());
+
+        StringJoiner empty = new StringJoiner(", ", "[", "]").setEmptyValue("none");
+        System.out.println(empty);
+
+        StringJoiner left = new StringJoiner("+", "(", ")");
+        left.add("1");
+        StringJoiner right = new StringJoiner("-", "{", "}");
+        right.add("x").add("y");
+        System.out.println(left.merge(right));
+    }
+}
+""",
+    ),
+    dict(
+        id="raw-types",
+        category="Language",
+        title="Raw types and the unchecked conversion",
+        summary=(
+            "A collection written without type arguments, and the conversion "
+            "between it and a parameterized one that javac only warns about."
+        ),
+        main="RawTypes",
+        source="""
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+public class RawTypes {
+    public static void main(String[] args) {
+        List raw = new ArrayList();
+        raw.add("a");
+        raw.add(1);
+        System.out.println(raw + " " + raw.size());
+
+        List<String> typed = raw;
+        System.out.println(typed.get(0).toUpperCase());
+
+        List<String> words = new ArrayList<>();
+        words.add("hello");
+        List back = words;
+        back.add("also raw");
+        System.out.println(words);
+
+        Iterator cursor = raw.iterator();
+        System.out.println(cursor.next());
+    }
+}
+""",
+    ),
+    dict(
+        id="iface-super",
+        category="Language",
+        title="Interface.super.method()",
+        summary=(
+            "A class that inherits two default methods picks one by name — the "
+            "only way to call a default a class has overridden."
+        ),
+        main="Defaults",
+        source="""
+public class Defaults {
+    interface Greeter {
+        default String greet() { return "hello"; }
+    }
+
+    interface Shouter {
+        default String greet() { return "HELLO"; }
+    }
+
+    static class Polite implements Greeter, Shouter {
+        @Override
+        public String greet() {
+            return Greeter.super.greet() + " / " + Shouter.super.greet();
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Polite().greet());
+    }
+}
+""",
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -1292,8 +1434,13 @@ GAPS = [
     dict(
         id="vector",
         category="Collections",
-        title="Vector and Hashtable",
-        summary="The legacy synchronized collections. ArrayList and HashMap replace them.",
+        title="Vector, Hashtable, EnumMap, EnumSet",
+        summary=(
+            "The legacy synchronized collections, and the enum-keyed ones. "
+            "ArrayList and HashMap replace the first two; a TreeMap or TreeSet "
+            "keyed by the enum iterates in the very same order as the others, "
+            "an enum's natural ordering being its ordinal."
+        ),
         main="Legacy",
         source='''
 import java.util.Vector;

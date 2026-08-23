@@ -380,10 +380,50 @@
     "expected": "[a, B, c, d]\n[B, c]\n[B, C]\n[a, d]\nthe view noticed\n"
   },
   {
+    "id": "sorted-views",
+    "category": "Collections",
+    "title": "Range and descending views of a sorted collection",
+    "summary": "headSet, subMap, descendingSet and their kin are live windows onto the tree: a key added inside the range shows through, and clearing the view deletes that range from the map.",
+    "main": "SortedViews",
+    "source": "import java.util.NavigableMap;\nimport java.util.NavigableSet;\nimport java.util.TreeMap;\nimport java.util.TreeSet;\n\npublic class SortedViews {\n    public static void main(String[] args) {\n        TreeSet<Integer> numbers = new TreeSet<>();\n        for (int n : new int[] { 1, 3, 5, 7, 9 }) {\n            numbers.add(n);\n        }\n        System.out.println(numbers.headSet(5) + \" \" + numbers.tailSet(5));\n        System.out.println(numbers.subSet(3, true, 7, true));\n        System.out.println(numbers.descendingSet());\n\n        NavigableSet<Integer> upper = numbers.tailSet(5, false);\n        numbers.add(6);\n        System.out.println(upper + \" \" + upper.first());\n\n        TreeMap<String, Integer> scores = new TreeMap<>();\n        scores.put(\"ana\", 3);\n        scores.put(\"bo\", 1);\n        scores.put(\"cy\", 4);\n        System.out.println(scores.headMap(\"cy\") + \" \" + scores.descendingMap());\n        System.out.println(scores.firstEntry() + \" \" + scores.ceilingKey(\"b\"));\n\n        NavigableMap<String, Integer> tail = scores.tailMap(\"bo\", true);\n        tail.clear();\n        System.out.println(scores);\n    }\n}\n",
+    "status": "supported",
+    "expected": "[1, 3] [5, 7, 9]\n[3, 5, 7]\n[9, 7, 5, 3, 1]\n[6, 7, 9] 6\n{ana=3, bo=1} {cy=4, bo=1, ana=3}\nana=3 bo\n{ana=3}\n"
+  },
+  {
+    "id": "string-joiner",
+    "category": "Library",
+    "title": "StringJoiner",
+    "summary": "A delimiter, a prefix and a suffix, with an empty value of its own and merge() splicing another joiner's elements in.",
+    "main": "Joining",
+    "source": "import java.util.StringJoiner;\n\npublic class Joining {\n    public static void main(String[] args) {\n        StringJoiner list = new StringJoiner(\", \", \"[\", \"]\");\n        list.add(\"ana\").add(\"bo\").add(\"cy\");\n        System.out.println(list + \" length=\" + list.length());\n\n        StringJoiner empty = new StringJoiner(\", \", \"[\", \"]\").setEmptyValue(\"none\");\n        System.out.println(empty);\n\n        StringJoiner left = new StringJoiner(\"+\", \"(\", \")\");\n        left.add(\"1\");\n        StringJoiner right = new StringJoiner(\"-\", \"{\", \"}\");\n        right.add(\"x\").add(\"y\");\n        System.out.println(left.merge(right));\n    }\n}\n",
+    "status": "supported",
+    "expected": "[ana, bo, cy] length=13\nnone\n(1+x-y)\n"
+  },
+  {
+    "id": "raw-types",
+    "category": "Language",
+    "title": "Raw types and the unchecked conversion",
+    "summary": "A collection written without type arguments, and the conversion between it and a parameterized one that javac only warns about.",
+    "main": "RawTypes",
+    "source": "import java.util.ArrayList;\nimport java.util.Iterator;\nimport java.util.List;\n\npublic class RawTypes {\n    public static void main(String[] args) {\n        List raw = new ArrayList();\n        raw.add(\"a\");\n        raw.add(1);\n        System.out.println(raw + \" \" + raw.size());\n\n        List<String> typed = raw;\n        System.out.println(typed.get(0).toUpperCase());\n\n        List<String> words = new ArrayList<>();\n        words.add(\"hello\");\n        List back = words;\n        back.add(\"also raw\");\n        System.out.println(words);\n\n        Iterator cursor = raw.iterator();\n        System.out.println(cursor.next());\n    }\n}\n",
+    "status": "supported",
+    "expected": "[a, 1] 2\nA\n[hello, also raw]\na\n"
+  },
+  {
+    "id": "iface-super",
+    "category": "Language",
+    "title": "Interface.super.method()",
+    "summary": "A class that inherits two default methods picks one by name \u2014 the only way to call a default a class has overridden.",
+    "main": "Defaults",
+    "source": "public class Defaults {\n    interface Greeter {\n        default String greet() { return \"hello\"; }\n    }\n\n    interface Shouter {\n        default String greet() { return \"HELLO\"; }\n    }\n\n    static class Polite implements Greeter, Shouter {\n        @Override\n        public String greet() {\n            return Greeter.super.greet() + \" / \" + Shouter.super.greet();\n        }\n    }\n\n    public static void main(String[] args) {\n        System.out.println(new Polite().greet());\n    }\n}\n",
+    "status": "supported",
+    "expected": "hello / HELLO\n"
+  },
+  {
     "id": "vector",
     "category": "Collections",
-    "title": "Vector and Hashtable",
-    "summary": "The legacy synchronized collections. ArrayList and HashMap replace them.",
+    "title": "Vector, Hashtable, EnumMap, EnumSet",
+    "summary": "The legacy synchronized collections, and the enum-keyed ones. ArrayList and HashMap replace the first two; a TreeMap or TreeSet keyed by the enum iterates in the very same order as the others, an enum's natural ordering being its ordinal.",
     "main": "Legacy",
     "source": "import java.util.Vector;\n\npublic class Legacy {\n    public static void main(String[] args) {\n        Vector<String> items = new Vector<>();\n        items.add(\"one\");\n        System.out.println(items);\n    }\n}\n",
     "status": "unsupported",
@@ -438,7 +478,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-p3c3f02g/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-t43mynh6/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -449,7 +489,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-f9pu4qsd/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-ydxavfb9/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -460,7 +500,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-idzobkw6/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-_mdilzt7/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
