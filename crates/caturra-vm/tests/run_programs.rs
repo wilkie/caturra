@@ -11096,7 +11096,7 @@ fn math_and_random_additions_reject_like_javac() {
         ),
         (
             "int[] b = new int[2]; new java.util.Random(1).nextBytes(b);",
-            "no suitable method found for nextBytes(int[]) in class Random",
+            "incompatible types: int[] cannot be converted to byte[]",
         ),
     ] {
         let text = format!("class M {{ static void r() {{ {source} }} }}");
@@ -12053,11 +12053,14 @@ fn type_of_agrees_with_the_emitter_on_an_enclosing_static_field() {
 #[test]
 fn map_for_each_rejects_what_it_cannot_target_type() {
     for (source, want) in [
-        // javac: `int cannot be converted to BiConsumer`.
+        // javac: `int cannot be converted to BiConsumer<? super String,? super
+        // Integer>`. caturra names the interface without the type arguments —
+        // it used to report the overload, which said nothing about what was
+        // wrong with the 5.
         (
             "import java.util.*; class M { static void r() { \
              Map<String, Integer> m = new HashMap<String, Integer>(); m.forEach(5); } }",
-            "no suitable method found for forEach",
+            "incompatible types: int cannot be converted to BiConsumer",
         ),
         // javac: `incompatible parameter types in lambda expression`.
         (

@@ -652,8 +652,11 @@ enum Resolution<'t> {
     Found(&'t MethodSig),
     /// No method of that name exists in the class.
     UnknownName,
-    /// Methods of that name exist, but none accept these arguments.
-    NoneApplicable,
+    /// Methods of that name exist, but none accept these arguments. Carries
+    /// each candidate's PARAMETER LIST, because the wording depends on them:
+    /// javac blames the argument when exactly one candidate has the arity
+    /// written, and only otherwise reports no suitable method.
+    NoneApplicable(Vec<Vec<JType>>),
     /// Several maximally specific methods match.
     Ambiguous(Vec<String>),
 }
@@ -3471,7 +3474,7 @@ impl MethodTable {
                 .filter(|m| m.is_varargs && self.varargs_applicable(m, args))
                 .collect();
             return match varargs_applicable.len() {
-                0 => Resolution::NoneApplicable,
+                0 => Resolution::NoneApplicable(named.iter().map(|m| m.params.clone()).collect()),
                 1 => Resolution::Found(varargs_applicable[0]),
                 // Several varargs overloads apply: pick the most specific
                 // (JLS §15.12.2.5), so `f(Integer...)` beats `f(Object...)` for
@@ -3500,7 +3503,7 @@ impl MethodTable {
             };
         }
         match applicable.len() {
-            0 => Resolution::NoneApplicable,
+            0 => Resolution::NoneApplicable(named.iter().map(|m| m.params.clone()).collect()),
             1 => Resolution::Found(applicable[0]),
             _ => {
                 if let Some(exact) = applicable
@@ -13440,6 +13443,79 @@ enum CallTarget<'e> {
     Instance(&'e Expr),
 }
 
+/// The Java NAME of a parameter whose modelled type is an erased `Object` —
+/// the functional interfaces. A diagnostic has to say `BiConsumer`, not
+/// `Object`: "int cannot be converted to Object" is true of the model and
+/// says nothing about the mistake.
+fn bparam_java_name(param: BParam) -> Option<&'static str> {
+    Some(match param {
+        BParam::BiConsumer => "BiConsumer",
+        BParam::Consumer => "Consumer",
+        BParam::Predicate => "Predicate",
+        BParam::UnaryOperator => "Function",
+        BParam::Supplier => "Supplier",
+        BParam::BiFunction => "BiFunction",
+        BParam::Comparator => "Comparator",
+        BParam::Collector => "Collector",
+        _ => return None,
+    })
+}
+
+/// javac's wording for a call that matched no method, given every candidate's
+/// parameter list. The rule is the one javac's default (`-Xdiags:compact`)
+/// diagnostics use, and it is worth matching because it names the actual
+/// mistake:
+///
+/// * exactly ONE candidate has the arity written — blame the ARGUMENT, since
+///   there is no doubt which parameter it was meant for;
+/// * no candidate has that arity — say the lists differ in length;
+/// * several do — report no suitable method, as there is no single culprit.
+fn inapplicable_message(
+    method: &str,
+    class_description: &str,
+    candidates: &[Vec<JType>],
+    args: &[JType],
+    table: &MethodTable,
+) -> String {
+    let same_arity: Vec<&Vec<JType>> = candidates
+        .iter()
+        .filter(|params| params.len() == args.len())
+        .collect();
+    if let [only] = same_arity.as_slice()
+        && let Some((want, actual)) = only
+            .iter()
+            .zip(args)
+            .find(|(want, actual)| **want != **actual)
+    {
+        // The FIRST parameter that disagrees, which is the one javac points at.
+        if actual.is_numeric() && want.is_numeric() && !widens_strictly(*actual, *want, table) {
+            return format!(
+                "incompatible types: possible lossy conversion from {} to {}",
+                actual.describe(table),
+                want.describe(table)
+            );
+        }
+        return format!(
+            "incompatible types: {} cannot be converted to {}",
+            actual.describe(table),
+            want.describe(table)
+        );
+    }
+    if same_arity.is_empty() && candidates.len() == 1 {
+        // javac's headline ends at the semicolon and prints its `reason:` on a
+        // continuation line; joining the two keeps the headline word for word
+        // and still says which of the reasons it was.
+        return format!(
+            "method {method} in {class_description} cannot be applied to given types; \
+             actual and formal argument lists differ in length"
+        );
+    }
+    format!(
+        "no suitable method found for {method}({}) in {class_description}",
+        describe_types(args, table)
+    )
+}
+
 fn describe_types(types: &[JType], table: &MethodTable) -> String {
     let names: Vec<String> = types.iter().map(|t| t.describe(table)).collect();
     names.join(",")
@@ -17671,7 +17747,7 @@ impl BodyGen<'_> {
         let table = self.table;
         let sig = match table.resolve(class_name, "<init>", &arg_types) {
             Resolution::Found(sig) => sig.clone(),
-            Resolution::UnknownName | Resolution::NoneApplicable => {
+            Resolution::UnknownName | Resolution::NoneApplicable(_) => {
                 self.error(
                     span,
                     format!(
@@ -19763,40 +19839,57 @@ impl BodyGen<'_> {
                 .iter()
                 .any(|m| m.name == method && elem.role.offers(m.needs))
             {
-                // With exactly ONE candidate of this name and arity, javac
-                // blames the ARGUMENT — `"abc".charAt(aLong)` is "possible
-                // lossy conversion from long to int", not a missing overload.
-                let candidates: Vec<&BuiltinMethod> = methods
+                // The same rule the user-method path uses: with exactly ONE
+                // candidate of this name and arity, javac blames the ARGUMENT
+                // — `"abc".charAt(aLong)` is "possible lossy conversion from
+                // long to int" and `stringList.add(1)` is "int cannot be
+                // converted to String", neither a missing overload. The
+                // candidates' parameters are resolved against the RECEIVER
+                // first, which is what turns a `BParam::Elem` into the
+                // element type the message has to name.
+                let candidates: Vec<Vec<JType>> = methods
                     .iter()
-                    .filter(|m| m.name == method && m.params.len() == arg_types.len())
+                    .filter(|m| m.name == method && elem.role.offers(m.needs))
+                    .map(|m| {
+                        m.params
+                            .iter()
+                            .map(|param| bparam_type(*param, elem, self.table))
+                            .collect()
+                    })
                     .collect();
-                if let [only] = candidates.as_slice()
-                    && let Some((actual, want)) = only
-                        .params
-                        .iter()
-                        .zip(&arg_types)
-                        .map(|(param, actual)| (*actual, bparam_type(*param, elem, self.table)))
-                        .find(|(actual, want)| {
-                            actual.is_numeric() && want.is_numeric() && actual != want
-                        })
+                let described = format!("class {}", receiver_ty.describe(self.table));
+                // A functional parameter models as an erased `Object`, so the
+                // shared wording would say "cannot be converted to Object" —
+                // true of the model, and silent about the mistake.
+                let same_arity: Vec<&BuiltinMethod> = methods
+                    .iter()
+                    .filter(|m| {
+                        m.name == method
+                            && elem.role.offers(m.needs)
+                            && m.params.len() == arg_types.len()
+                    })
+                    .collect();
+                if let [only] = same_arity.as_slice()
+                    && let Some((actual, want)) =
+                        only.params
+                            .iter()
+                            .zip(&arg_types)
+                            .find_map(|(param, actual)| {
+                                bparam_java_name(*param).map(|name| (*actual, name))
+                            })
                 {
                     self.error(
                         span,
                         format!(
-                            "incompatible types: possible lossy conversion from {} to {}",
-                            actual.describe(self.table),
-                            want.describe(self.table)
+                            "incompatible types: {} cannot be converted to {want}",
+                            actual.describe(self.table)
                         ),
                     );
                     return None;
                 }
                 self.error(
                     span,
-                    format!(
-                        "no suitable method found for {method}({}) in class {}",
-                        describe_types(&arg_types, self.table),
-                        receiver_ty.describe(self.table)
-                    ),
+                    inapplicable_message(method, &described, &candidates, &arg_types, self.table),
                 );
             } else if method == "toString" && !renders_as_text(receiver_ty) {
                 // Every object has `toString`, so "cannot find symbol" is a
@@ -20685,13 +20778,11 @@ impl BodyGen<'_> {
                 );
                 return None;
             }
-            Resolution::NoneApplicable => {
+            Resolution::NoneApplicable(candidates) => {
+                let described = format!("class {class_name}");
                 self.error(
                     span,
-                    format!(
-                        "no suitable method found for {method}({}) in class {class_name}",
-                        describe_types(&arg_types, self.table)
-                    ),
+                    inapplicable_message(method, &described, &candidates, &arg_types, self.table),
                 );
                 return None;
             }
@@ -22058,13 +22149,11 @@ impl BodyGen<'_> {
                 );
                 return None;
             }
-            Resolution::NoneApplicable => {
+            Resolution::NoneApplicable(candidates) => {
+                let described = format!("class {class}");
                 self.error(
                     span,
-                    format!(
-                        "no suitable method found for {method}({}) in class {class}",
-                        describe_types(&arg_types, self.table)
-                    ),
+                    inapplicable_message(method, &described, &candidates, &arg_types, self.table),
                 );
                 return None;
             }

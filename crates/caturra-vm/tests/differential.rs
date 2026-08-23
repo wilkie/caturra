@@ -9539,6 +9539,51 @@ enum Wording {
 
 /// `(class, source, javac's headline, caturra's message, relation)`.
 const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
+    // The one-candidate rule, on a USER method: with exactly one method of
+    // that name and arity, javac blames the ARGUMENT rather than reporting
+    // overload resolution, because there is no doubt which parameter the
+    // argument was meant for.
+    (
+        "WordOneCandidateArg",
+        "public class WordOneCandidateArg { static int f(int a) { return a; } \
+         static void r() { f(\"s\"); } }",
+        "incompatible types: String cannot be converted to int",
+        "incompatible types: String cannot be converted to int",
+        Wording::Same,
+    ),
+    // Same rule, the other branch: no candidate of that ARITY, and only one
+    // candidate overall, so the lists differ in length. javac prints its
+    // `reason:` on a continuation line; caturra joins it to the headline.
+    (
+        "WordOneCandidateArity",
+        "public class WordOneCandidateArity { static int f(int a) { return a; } \
+         static void r() { f(1, 2); } }",
+        "method f in class WordOneCandidateArity cannot be applied to given types;",
+        "method f in class WordOneCandidateArity cannot be applied to given types; \
+         actual and formal argument lists differ in length",
+        Wording::Prefix,
+    ),
+    // Several candidates of that arity: no single culprit, so both report the
+    // overload set.
+    (
+        "WordTwoCandidates",
+        "public class WordTwoCandidates { static int f(int a) { return a; } \
+         static int f(char a) { return a; } static void r() { f(\"s\"); } }",
+        "no suitable method found for f(String)",
+        "no suitable method found for f(String) in class WordTwoCandidates",
+        Wording::Prefix,
+    ),
+    // A generic collection's element, through the same rule on the BUILTIN
+    // side: `add` has one candidate of arity one, whose parameter is the
+    // element type.
+    (
+        "WordAddElement",
+        "import java.util.*;\npublic class WordAddElement { static void r() { \
+         List<String> l = new ArrayList<>(); l.add(1); } }",
+        "incompatible types: int cannot be converted to String",
+        "incompatible types: int cannot be converted to String",
+        Wording::Same,
+    ),
     (
         "WordAbsExact",
         "public class WordAbsExact { static int r() { return Math.absExact(-5); } }",
@@ -9675,12 +9720,13 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         "WordNextBytes",
         "import java.util.Random;\npublic class WordNextBytes { static void r() { new Random(1).nextBytes(new int[2]); } }",
         "incompatible types: int[] cannot be converted to byte[]",
-        "no suitable method found for nextBytes(int[]) in class Random",
-        Wording::Differs(
-            "the mirror of `WordFill`: here javac names the argument and caturra \
-             reports the overload, because nextBytes is a bundled Java method \
-             and goes through user-method resolution",
-        ),
+        "incompatible types: int[] cannot be converted to byte[]",
+        // Was `Differs`: caturra reported the overload where javac named the
+        // argument, because `nextBytes` is a bundled Java method and goes
+        // through USER-method resolution, which had no such rule. It has one
+        // now — the same rule the builtin path already used — so the two agree
+        // word for word, which is what promoting a `Differs` is for.
+        Wording::Same,
     ),
     (
         "WordSortPlainList",

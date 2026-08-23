@@ -7333,6 +7333,45 @@ Pinned by `an_interface_super_call_names_the_class_file`,
 `a_string_joiner_matches_the_jdk` and
 `a_seeded_randoms_streams_replay_the_jdks`.
 
+### Which method the message blames (2026-08-22)
+
+A second sweep of the API surface came back clean — 80 of 82, both remaining
+being deliberate refusals — so the probe turned to the other half of what this
+engine owes a student: the DIAGNOSTICS. Fifty programs, each wrong in one
+ordinary way (an undeclared variable, a lossy assignment, a missing return, an
+unreachable statement, a catch out of order, a final override, `"5".length`),
+compared with javac's own wording.
+
+Every verdict agreed, and most messages already did — several are deliberately
+more specific than javac's, which says "cannot find symbol" where caturra names
+the symbol. Three did not, and they were one rule:
+
+**With exactly ONE candidate of that name and ARITY, javac blames the
+ARGUMENT** — "incompatible types: String cannot be converted to int" — because
+there is no doubt which parameter the argument was meant for. With no candidate
+of that arity and only one overall, it says the lists differ in length. Only
+when several candidates share the arity does it report no suitable method,
+there being no single culprit. (This is javac's default `-Xdiags:compact`
+behaviour; `-Xdiags:verbose` prints the full overload set either way.)
+
+caturra had a NARROW version of that rule on the builtin path — one candidate,
+both types numeric, report the lossy conversion — and none at all on the
+user-method path. So `f("s")` against a single `f(int)` reported an overload
+failure, and `stringList.add(1)` said "no suitable method found for add(int)"
+rather than naming the int. The rule is now written once and used by both;
+`Resolution::NoneApplicable` carries the candidates so the caller can apply it.
+
+One thing the shared rule needed: a functional parameter models as an erased
+`Object` here, so the message would have read "int cannot be converted to
+Object" — true of the model, and silent about the mistake. Those parameters
+name their Java interface instead.
+
+The change promoted a pinned wording divergence (`WordNextBytes`) to word-for-
+word agreement, which is what those pins are for.
+
+Pinned by `WordOneCandidateArg`, `WordOneCandidateArity`, `WordTwoCandidates`
+and `WordAddElement` in `reject_wording_tracks_javac`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
