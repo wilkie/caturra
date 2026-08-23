@@ -262,23 +262,19 @@ pub(crate) fn library_constant(path: &[String]) -> Option<ConstValue> {
         return None;
     };
     let class = class.rsplit('.').next().unwrap_or(class);
-    Some(match (class, name.as_str()) {
-        ("Integer", "MAX_VALUE") => ConstValue::Int(i32::MAX),
-        ("Integer", "MIN_VALUE") => ConstValue::Int(i32::MIN),
-        ("Long", "MAX_VALUE") => ConstValue::Long(i64::MAX),
-        ("Long", "MIN_VALUE") => ConstValue::Long(i64::MIN),
-        ("Short", "MAX_VALUE") => ConstValue::Int(i32::from(i16::MAX)),
-        ("Short", "MIN_VALUE") => ConstValue::Int(i32::from(i16::MIN)),
-        ("Byte", "MAX_VALUE") => ConstValue::Int(i32::from(i8::MAX)),
-        ("Byte", "MIN_VALUE") => ConstValue::Int(i32::from(i8::MIN)),
-        ("Character", "MAX_VALUE") => ConstValue::Char(u16::MAX),
-        ("Character", "MIN_VALUE") => ConstValue::Char(0),
-        ("Double", "MAX_VALUE") => ConstValue::Double(f64::MAX),
-        ("Double", "MIN_VALUE") => ConstValue::Double(f64::MIN_POSITIVE * f64::EPSILON / 2.0),
-        ("Float", "MAX_VALUE") => ConstValue::Float(f32::MAX),
-        ("Math", "PI") => ConstValue::Double(std::f64::consts::PI),
-        ("Math", "E") => ConstValue::Double(std::f64::consts::E),
-        _ => return None,
+    // ONE table, the emitter's. There used to be a second one here, and the
+    // two disagreed about `Double.MIN_VALUE`: this one spelled it
+    // `MIN_POSITIVE * EPSILON / 2.0`, which rounds to ZERO, so a folded
+    // `Double.MIN_VALUE <= 0.0` was true and a conditional took the branch a
+    // JDK does not. Nothing about a constant's value belongs to folding
+    // rather than emitting, so there is no second table to disagree with now.
+    crate::codegen::library_constant_value(class, name).map(|value| match value {
+        crate::codegen::BuiltinConstantValue::Int(v) => ConstValue::Int(v),
+        crate::codegen::BuiltinConstantValue::Long(v) => ConstValue::Long(v),
+        crate::codegen::BuiltinConstantValue::Float(v) => ConstValue::Float(v),
+        crate::codegen::BuiltinConstantValue::Double(v) => ConstValue::Double(v),
+        crate::codegen::BuiltinConstantValue::Bool(v) => ConstValue::Bool(v),
+        crate::codegen::BuiltinConstantValue::Char(v) => ConstValue::Char(v),
     })
 }
 

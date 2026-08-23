@@ -12812,8 +12812,16 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
 }
 
 /// A compile-time intrinsic constant's value.
+pub(crate) type BuiltinConstantValue = BuiltinConstant;
+
+/// The intrinsic constants, for the constant FOLDER — which used to keep a
+/// second copy of this table and disagree with it.
+pub(crate) fn library_constant_value(class: &str, field: &str) -> Option<BuiltinConstant> {
+    builtin_static_constant(class, field)
+}
+
 #[derive(Debug, Clone, Copy)]
-enum BuiltinConstant {
+pub(crate) enum BuiltinConstant {
     Int(i32),
     Double(f64),
     Char(u16),

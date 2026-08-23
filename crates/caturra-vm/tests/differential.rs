@@ -35149,3 +35149,37 @@ public class Collided {
 }
 "#
 );
+
+// The wrapper constants, in a CONSTANT expression — where the compiler folds
+// them rather than reading them at run time. The two paths used to keep
+// separate tables, and they disagreed about `Double.MIN_VALUE`: the folder
+// spelled it `MIN_POSITIVE * EPSILON / 2.0`, which rounds to ZERO, so a folded
+// `Double.MIN_VALUE <= 0.0` was true and a conditional took a branch a JDK
+// never takes. Found by fuzzing random expression trees; the value is only
+// visible through a fold, since printing it directly reads the runtime table.
+differential_test!(
+    the_folded_wrapper_constants_are_the_jdks,
+    "FoldedConstants",
+    r#"
+public class FoldedConstants {
+    public static void main(String[] args) {
+        // A ternary whose condition folds: the branch taken is the evidence.
+        System.out.println("a=" + ((Double.MIN_VALUE <= 0.0) ? "wrong" : "right"));
+        System.out.println("b=" + ((Float.MIN_VALUE <= 0.0f) ? "wrong" : "right"));
+        System.out.println("c=" + ((Double.MIN_NORMAL <= Double.MIN_VALUE) ? "wrong" : "right"));
+        System.out.println("d=" + ((Double.MAX_VALUE < 1e308) ? "wrong" : "right"));
+        System.out.println("e=" + ((Integer.MIN_VALUE < Integer.MAX_VALUE) ? "right" : "wrong"));
+        System.out.println("f=" + ((Long.MIN_VALUE < Long.MAX_VALUE) ? "right" : "wrong"));
+        System.out.println("g=" + ((Character.MAX_VALUE > Character.MIN_VALUE) ? "right" : "wrong"));
+        System.out.println("h=" + ((Math.PI > 3.14 && Math.E > 2.71) ? "right" : "wrong"));
+        System.out.println("i=" + ((Byte.MIN_VALUE == -128 && Short.MAX_VALUE == 32767) ? "right" : "wrong"));
+        // And the values themselves, folded into a constant string.
+        final double smallest = Double.MIN_VALUE;
+        final float smallestFloat = Float.MIN_VALUE;
+        System.out.println("j=" + smallest + " " + smallestFloat);
+        System.out.println("k=" + Double.MIN_NORMAL + " " + Double.MAX_VALUE);
+        System.out.println("l=" + (Double.MIN_VALUE * 2) + " " + (Double.MIN_VALUE / 2));
+    }
+}
+"#
+);

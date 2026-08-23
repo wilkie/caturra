@@ -7556,6 +7556,36 @@ execute.
 Pinned by `a_full_heap_is_a_catchable_java_error` and
 `a_program_may_ask_for_a_collection`.
 
+
+### Fuzzing the arithmetic (2026-08-23)
+
+Random expression trees over `int`/`long`/`double`/`char`/`boolean` — mixed
+operators, casts, shifts, comparisons, ternaries, edge literals — generated
+from a seed, printed, and compared with a real JDK. Roughly two thousand
+expressions; one disagreed, and it was a silent wrong answer:
+
+```java
+System.out.println("x=" + ((Double.MIN_VALUE <= 0.0) ? "then" : "else"));
+```
+
+A JDK takes the else. caturra took the then, because the constant FOLDER
+spelled `Double.MIN_VALUE` as `MIN_POSITIVE * EPSILON / 2.0` — and that rounds
+to ZERO. (`MIN_POSITIVE * EPSILON` is already the smallest subnormal; halving
+it underflows.) So the folded constant was zero, `zero <= 0.0` was true, and a
+conditional took a branch a JDK never takes.
+
+Only through a FOLD: printing `Double.MIN_VALUE` reads the emitter's table,
+which had the right value all along. Two tables of the same library constants,
+and only one of them right — the shape this file has recorded four times now.
+So the fix is not the value but the duplication: the folder reads the emitter's
+table, and there is no second table to disagree with.
+
+The rest of the fuzz agrees exactly, `Integer.MIN_VALUE / -1`, `>>>` masking,
+`-0.0`, subnormals, NaN comparisons, integer overflow and `/ by zero` messages
+included.
+
+Pinned by `the_folded_wrapper_constants_are_the_jdks`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
