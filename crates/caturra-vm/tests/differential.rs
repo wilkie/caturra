@@ -35059,3 +35059,34 @@ public class Failures {
 }
 "#
 );
+
+// `hasNext(pattern)` / `next(pattern)`: the token has to match the pattern in
+// FULL, and a token that does not is left where it is — which is the whole
+// point of the overload, since a program tries one pattern and then another.
+// A mismatch is an `InputMismatchException`, the refusal `nextInt` already
+// gives a token that is not a number.
+differential_test_stdin!(
+    a_scanner_reads_by_pattern,
+    "ScanPattern",
+    r#"
+import java.util.Scanner;
+
+public class ScanPattern {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        while (in.hasNext("[0-9]+")) {
+            System.out.print(in.next() + ".");
+        }
+        System.out.println(in.hasNext() + " " + in.hasNext("[0-9]+"));
+        System.out.println(in.next("[a-z]+"));
+        try {
+            System.out.println(in.next("[0-9]+"));
+        } catch (Exception thrown) {
+            System.out.println(thrown);
+        }
+        System.out.println(in.next() + " " + in.hasNext("x"));
+    }
+}
+"#,
+    "1 2 x yes zzz\n"
+);

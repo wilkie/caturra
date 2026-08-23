@@ -13117,3 +13117,48 @@ fn a_package_named_only_in_a_comment_pulls_nothing_in() {
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(console.stdout_text(), "javax.swing.JLabel\n");
 }
+
+/// Input that does NOT end with a newline. A JDK's Scanner reads a byte
+/// stream, so after `nextInt()` takes the last token there is no line
+/// terminator left: `hasNextLine()` is false and `nextLine()` throws
+/// "No line found". caturra's host contract hands the VM one LINE at a time
+/// (`ConsoleIo::read_line`, which the browser fills from the input box and the
+/// CLI from stdin), and a line-shaped stream cannot say whether the last one
+/// was terminated — so every line reads as terminated, and this program prints
+/// an empty line where a JDK throws.
+///
+/// The model matches an interactive console, where the student presses Enter
+/// and the terminator is real. It diverges only for input PIPED without a
+/// final newline. Written down here so the limit is a decision and not a
+/// surprise; fixing it means teaching both hosts to report the terminator.
+#[test]
+fn a_line_shaped_stream_treats_every_line_as_terminated() {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("NoTrailingNewline.java"),
+        text: r#"
+        import java.util.Scanner;
+
+        public class NoTrailingNewline {
+            public static void main(String[] args) {
+                Scanner in = new Scanner(System.in);
+                System.out.println(in.nextInt());
+                System.out.println(in.hasNextLine());
+                System.out.println("[" + in.nextLine() + "]");
+            }
+        }
+        "#
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    // One line, and the host cannot say it was unterminated: a JDK reading the
+    // same bytes answers `false` and then throws "No line found".
+    let mut console = BufferedConsole::with_input(["7"]);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let result = vm.run_main("NoTrailingNewline", &[]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "7\ntrue\n[]\n");
+}

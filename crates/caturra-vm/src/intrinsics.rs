@@ -2859,11 +2859,36 @@ fn scanner_method(
             }
             Ok(Some(JValue::Ref(Some(receiver))))
         }
+        // `next(pattern)` — the next token, but only if it MATCHES the
+        // pattern in full; anything else is an `InputMismatchException`, the
+        // same refusal `nextInt` gives a token that is not a number. The token
+        // is not consumed when it does not match, so a program can try another
+        // pattern (which is the whole point of the overload).
+        "next" if !args.is_empty() => {
+            let pattern = scanner_pattern_arg(heap, args)?;
+            let token = scanner_peek_token(heap, console, receiver)?
+                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            if !scanner_token_matches(&token, &pattern)? {
+                return Err(throw("java.util.InputMismatchException"));
+            }
+            scanner_next_token(heap, console, receiver)?;
+            let reference = heap.alloc_string(&token);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         "next" => {
             let token = scanner_next_token(heap, console, receiver)?
                 .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
             let reference = heap.alloc_string(&token);
             Ok(Some(JValue::Ref(Some(reference))))
+        }
+        "hasNext" if !args.is_empty() => {
+            let pattern = scanner_pattern_arg(heap, args)?;
+            let token = scanner_peek_token(heap, console, receiver)?;
+            let ok = match token {
+                Some(token) => scanner_token_matches(&token, &pattern)?,
+                None => false,
+            };
+            Ok(Some(JValue::Int(i32::from(ok))))
         }
         "hasNext" => {
             let token = scanner_peek_token(heap, console, receiver)?;
@@ -3293,6 +3318,22 @@ fn scanner_delimiter(heap: &Heap, receiver: HeapRef) -> Option<String> {
         Some(HeapObject::Scanner { delimiter, .. }) => delimiter.clone(),
         _ => None,
     }
+}
+
+/// The pattern argument of `hasNext(String)` / `next(String)`.
+fn scanner_pattern_arg(heap: &Heap, args: &[JValue]) -> Result<String, VmError> {
+    match args.first() {
+        Some(JValue::Ref(Some(reference))) => Ok(heap.string_text(*reference).unwrap_or_default()),
+        _ => Err(throw("java.lang.NullPointerException")),
+    }
+}
+
+/// Whether a token matches a pattern IN FULL — `String.matches` semantics,
+/// which is what the JDK's `hasNext(String)` asks of the token it peeked.
+fn scanner_token_matches(token: &str, pattern: &str) -> Result<bool, VmError> {
+    let token: Vec<u16> = token.encode_utf16().collect();
+    let pattern: Vec<u16> = pattern.encode_utf16().collect();
+    matches_regex(&token, &pattern)
 }
 
 /// The delimiter as a compiled pattern. A malformed one is the JDK's

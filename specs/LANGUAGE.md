@@ -7444,6 +7444,36 @@ Pinned by `the_runtime_failures_read_like_the_jdks`,
 `a_trace_names_the_programs_calls_not_the_bundled_librarys` and
 `stricter_a_null_literal_to_a_bounded_collections_method`.
 
+### Reading input by pattern (2026-08-22)
+
+Two more sweeps came back almost empty, which is worth recording as much as a
+fix: every `printf`/`String.format` specifier, flag, width, precision and
+malformed form — 75 programs, including the HALF_UP rounding corners
+(`%.0f` of 2.5 and of 3.5), `%,d`, `%(d`, `%#x`, `%a` and argument indexes —
+prints byte-identically. And 25 Scanner programs, the `nextInt()`-then-
+`nextLine()` trap included, agree on all but two.
+
+**`hasNext(pattern)` / `next(pattern)` did not exist.** The token has to match
+the pattern in FULL, which is what the bundled regex engine already answers for
+`String.matches`, and a token that does not match is LEFT WHERE IT IS — which
+is the whole point of the overload, since a program tries one pattern and then
+another. A mismatch is an `InputMismatchException`, the refusal `nextInt`
+already gives a token that is not a number.
+
+**Input that does not end with a newline** reads differently, and this one is
+enumerated rather than fixed. A JDK's Scanner reads a byte stream, so after
+`nextInt()` takes the last token there is no terminator left: `hasNextLine()`
+is false and `nextLine()` throws "No line found". caturra's host contract hands
+the VM one LINE at a time — `ConsoleIo::read_line`, which the browser fills
+from the input box and the CLI from stdin — and a line-shaped stream cannot say
+whether the last line was terminated, so every line reads as terminated. That
+matches an interactive console, where the student presses Enter and the
+terminator is real; it diverges only for input piped without a final newline.
+Fixing it means teaching both hosts to report the terminator.
+
+Pinned by `a_scanner_reads_by_pattern` and
+`a_line_shaped_stream_treats_every_line_as_terminated`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

@@ -8383,6 +8383,22 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         descriptor: "()Z",
         needs: SortedRole::Sorted,
     },
+    // `hasNext(pattern)` / `next(pattern)` — the token has to MATCH the
+    // pattern in full, which is what the bundled regex engine already answers
+    // for `String.matches`. `next` throws `InputMismatchException` when it
+    // does not, exactly as `nextInt` does for a token that is not a number.
+    bm(
+        "hasNext",
+        &[BParam::Str],
+        BRet::Boolean,
+        "(Ljava/lang/String;)Z",
+    ),
+    bm(
+        "next",
+        &[BParam::Str],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
     BuiltinMethod {
         name: "hasNextInt",
         params: &[],
