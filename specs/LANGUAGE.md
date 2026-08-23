@@ -7696,6 +7696,87 @@ All 170 agree, and so do the 266 overload selections and the 1369 assignments.
 Pinned by `what_counts_as_an_override` and
 `an_override_annotation_needs_the_same_signature`.
 
+### Which casts exist (2026-08-23)
+
+The fourth cross-product, and the first where both compile-time legality and
+run-time behaviour matter: 25 types cast to 25 types, 1100 programs, each
+printing either the value it got or the `ClassCastException` it caught — once
+directly and once through an erased `Object` so `instanceof` answers first.
+
+**206 disagreed.** 147 of them in the accepts-invalid direction, and all one
+cause: the rule was written once per TARGET family, and each of those arms
+carried its own list of source types it would accept. A family whose arm nobody
+had written accepted *everything*. `(int[]) "s"`, `(List<Object>) "s"` and
+`(int) aParent` all compiled and threw at run time, where a JDK refuses to
+compile them.
+
+JLS §5.5 is now asked ONCE, before any family gets a say:
+
+- **Primitive to primitive** — every numeric pair, and `boolean` with nothing
+  else.
+- **Primitive to reference** — a boxing conversion, then a widening reference
+  one. `(Number) 5` is legal (the box's own supertype) and was refused.
+- **Reference to primitive** — an unboxing conversion, optionally followed by a
+  WIDENING primitive one. `(long) anInteger` is legal, `(int) aDouble` is not:
+  a cast narrows a primitive it already has, never one it just unboxed. From
+  anything that is not itself a wrapper the cast goes through the TARGET's own
+  wrapper — `(int) aNumber` *is* `(Integer) aNumber` unboxed — and every
+  wrapper is `final`, which is what makes `(int) aParent` an error rather than
+  a run-time failure.
+- **Reference to reference** (§5.5.1) — one a subtype of the other, or some
+  class could still be both, which an INTERFACE always leaves open unless the
+  other side is `final`. Arrays cast when their elements do; a primitive
+  element must match exactly.
+- **Provably distinct parameterizations** (§4.5) — no class is both a
+  `List<String>` and a `List<Object>`, so that cast is an error, not the
+  unchecked warning a raw or wildcard one earns. Every wrapper is a
+  `Comparable`, but of ITSELF: `(Comparable<String>) Integer.valueOf(1)` is
+  refused too. This has to be asked BEFORE the subtype tests — a wrapper *is* a
+  `Comparable` and a `List<String>` *is* a `Collection`, so "related?" answers
+  yes about a pair whose arguments make it impossible.
+
+The rule answers "legal" for anything it cannot classify — the erased `Object`
+a bridge method or a specialized lambda parameter casts from is the everyday
+one — so it turns away only pairs it can prove unrelated.
+
+`instanceof` is the same question. JLS §15.20.2 says so outright ("if a cast of
+the operand to the type would be rejected as a compile-time error, then the
+instanceof likewise produces one"), and asking it any other way was the same
+fact written twice: the check here compared the two types for being
+`String`-or-a-wrapper, which caught `"x" instanceof Integer` and let every
+other impossible test — `"s" instanceof List`, `aSet instanceof Integer` —
+answer a plain `false`. A second cross-product over the same types (378
+programs) found 40 of those, of which 31 are now the error javac gives.
+
+Three things the sweep found besides:
+
+- The rejection MESSAGE was caturra's own — "cannot cast X to Y", a sentence
+  javac has never written. 245 of the 284 rejects the two engines already
+  agreed on differed in their wording. It is javac's now, with a nested class
+  named as the source wrote it (`Child`, not `Outer$Child`) and type arguments
+  spelled without the space after the comma that caturra had used.
+- A diagnostic about a WRITTEN type now renders what the program wrote rather
+  than the resolved `JType`: `List` and `ArrayList` are one type here, so a
+  message about a cast to `List<Object>` named `ArrayList<Object>` — a class
+  the program never mentioned.
+- `Number` and `Comparable` are modelled under a BARE name, since caturra does
+  not compile them from source. Every `ClassCastException` about one therefore
+  put a JDK class "in unnamed module of loader 'app'" — unless the program
+  really declares a class of that name, which the loaded classes are the record
+  of.
+
+**12 of 1100 remain**, all one shape, and enumerated under the divergences: a
+cast from a CONCRETE collection to an unrelated class. `List` and `ArrayList`
+are one type, so the rule answers for the interface — the choice that never
+turns away a legal program.
+
+All four cross-products now agree in both directions: 1369 assignments, 266
+overload selections, 170 overrides, 1088 of 1100 casts.
+
+Pinned by `diff_cast_conversions_that_exist`, the eleven cast and `instanceof`
+rejections in `stage6_compile_errors_match_javac_wording`, and
+`looser_a_concrete_collection_answers_for_its_interface`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -7782,6 +7863,14 @@ entries after it was written down.
   which only the classes declare. The sorted side no longer does this — its
   three faces are distinct — and the fix is the same role applied to a second
   pair of types. (`looser_a_hash_face_offers_clone`)
+- A cast from a CONCRETE collection to an unrelated class —
+  `(Parent) anArrayList` — compiles and throws at run time. `List` and
+  `ArrayList` are one type here, and where the two would answer differently the
+  cast rule answers for the INTERFACE, which is the choice that never turns
+  away a legal program: a `List` variable really can hold a class that is also
+  a `Parent`, and `(List<Object>) aParent` has to keep compiling. javac, which
+  knows the expression's type is the final-ish class, refuses it.
+  (`looser_a_concrete_collection_answers_for_its_interface`)
 - A factory that ADOPTS its context (`Collections.emptyList()`,
   `Optional.empty()`, `List.of()`) used as an argument where the OVERLOADS
   disagree about it: `two(Collections.emptyList())`, against

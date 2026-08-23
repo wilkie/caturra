@@ -29380,6 +29380,49 @@ public class ClassNaming {
 
 // ...and the other half of that rule: a program's OWN class takes the name
 // back, even from a library class synthesized before it was seen.
+// JLS §5.5, the casts that EXIST and the runtime checks behind them. Each of
+// these was refused at compile time: a boxing cast to a wrapper FACE
+// (`(Number) 5`), the unbox-through-a-supertype (`(int) aNumber`) and its way
+// back down (`(Integer) aNumber`), a library value cast to a user interface,
+// and `String` cast from an interface it implements. The `ClassCastException`
+// half is here too, because the message names `java.lang.Number` and
+// `java.lang.Comparable` — classes caturra models under a bare name, which put
+// them in the application module in every message about one.
+differential_test!(
+    diff_cast_conversions_that_exist,
+    "CastLegal",
+    r#"
+import java.util.*;
+public class CastLegal {
+  interface Greet { }
+  static class Parent { }
+  static class Child extends Parent implements Greet { }
+  static void cce(String what, Runnable body) {
+    try { body.run(); System.out.println(what + " ok"); }
+    catch (ClassCastException e) { System.out.println(what + " CCE " + e.getMessage()); }
+  }
+  public static void main(String[] args) {
+    Number boxed = (Number) 5;
+    System.out.println(boxed + " " + boxed.getClass().getName());
+    Number n = Integer.valueOf(7);
+    System.out.println((int) n);
+    System.out.println((Integer) n);
+    System.out.println((double) (Object) Double.valueOf(1.5));
+    CharSequence cs = "text";
+    System.out.println((String) (Comparable<String>) "cmp");
+    System.out.println(((Comparable<String>) cs).compareTo("text"));
+    Object o = new Child();
+    System.out.println(((Greet) o).getClass().getSimpleName());
+    cce("longFromNumber", () -> System.out.println((long) n));
+    cce("doubleWrapper", () -> System.out.println((Double) n));
+    cce("numberFromList", () -> System.out.println((Number) (Object) new ArrayList<String>()));
+    cce("comparableFromObject", () -> System.out.println((Comparable<String>) new Object()));
+    cce("greetFromList", () -> System.out.println((Greet) (Object) new ArrayList<String>()));
+  }
+}
+"#
+);
+
 differential_test!(
     diff_user_class_shadows_a_library_name,
     "ShadowedName",
@@ -34840,6 +34883,32 @@ public class HashFaceClone {
     public static void main(String[] args) {
         Set<Integer> narrow = new HashSet<>(Arrays.asList(1, 3));
         System.out.println(narrow.clone());
+    }
+}
+"
+);
+
+// A concrete collection and its interface are ONE type here (`List` and
+// `ArrayList` are both `JType::List`), and where the two would answer
+// differently the cast rule answers for the INTERFACE — the choice that never
+// turns away a legal program. So a cast from a concrete collection to an
+// unrelated class compiles and throws at run time, where javac refuses it: no
+// class is both an `ArrayList` and a `Parent`, but a `List` variable could
+// hold one that is. The reverse (`(List<Object>) aParent`) is legal Java and
+// must keep compiling, which is why the permissive face is the right one.
+looser_than_javac!(
+    looser_a_concrete_collection_answers_for_its_interface,
+    "ConcreteFace",
+    r"
+import java.util.*;
+
+public class ConcreteFace {
+    static class Parent { }
+
+    public static void main(String[] args) {
+        ArrayList<String> items = new ArrayList<>();
+        Parent held = (Parent) items;
+        System.out.println(held);
     }
 }
 "

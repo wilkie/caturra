@@ -2030,7 +2030,7 @@ impl<'run> Interpreter<'run> {
                                 } else if matches_type {
                                     frame.stack.push(value);
                                 } else {
-                                    return Err(class_cast_error(wrapper, &target));
+                                    return Err(class_cast_error(self.classes, wrapper, &target));
                                 }
                                 return Ok(Flow::Next);
                             }
@@ -2213,7 +2213,7 @@ impl<'run> Interpreter<'run> {
                                         || String::from("<object>"),
                                         |r| self.object_class_name(r),
                                     );
-                                    return Err(class_cast_error(&actual, &target));
+                                    return Err(class_cast_error(self.classes, &actual, &target));
                                 }
                                 frame.stack.push(JValue::Ref(reference));
                             }
@@ -14806,7 +14806,7 @@ impl<'run> Interpreter<'run> {
             // Through the shared builder, so this cast reads like every other
             // one — written out here it left off the module parenthetical that
             // a JDK 11 message carries.
-            return Err(class_cast_error(right, left));
+            return Err(class_cast_error(self.classes, right, left));
         }
         // A value with NO natural ordering at all — a collection, a map entry,
         // a bare Object, an array. A JDK casts to `Comparable` and fails;
@@ -14821,7 +14821,11 @@ impl<'run> Interpreter<'run> {
                 )
             {
                 let named = self.object_class_name(reference);
-                return Err(class_cast_error(&named, "java/lang/Comparable"));
+                return Err(class_cast_error(
+                    self.classes,
+                    &named,
+                    "java/lang/Comparable",
+                ));
             }
         }
         Ok(match self.compare_values(&a, &b) {
@@ -15227,7 +15231,11 @@ impl<'run> Interpreter<'run> {
             // the class in INTERNAL form ("class java/lang/Object") and left
             // the parenthetical off entirely.
             Err(VmError::UnknownIntrinsic(_)) => {
-                return Err(class_cast_error(class_name, "java/lang/Comparable"));
+                return Err(class_cast_error(
+                    self.classes,
+                    class_name,
+                    "java/lang/Comparable",
+                ));
             }
             Err(other) => return Err(other),
         };
@@ -18672,8 +18680,19 @@ fn class_module_desc(dotted: &str) -> &'static str {
 
 /// The `ClassCastException` a failed cast raises, named the way JDK 11 names it:
 /// BINARY names, dotted, with the module/loader parenthetical.
-fn class_cast_error(actual: &str, target: &str) -> VmError {
-    let (actual, target) = (actual.replace('/', "."), target.replace('/', "."));
+fn class_cast_error(classes: &HashMap<String, ClassFile>, actual: &str, target: &str) -> VmError {
+    // caturra models a few `java.lang` types under a BARE name (`Number`,
+    // `Comparable`) because it does not compile them from source, and a name
+    // with no package reads as the program's own — so every message about one
+    // put a JDK class in the application module. Unless the program really did
+    // declare a class of that name, which the loaded classes are the record of.
+    let qualify = |name: &str| {
+        if matches!(name, "Number" | "Comparable") && !classes.contains_key(name) {
+            return format!("java.lang.{name}");
+        }
+        name.replace('/', ".")
+    };
+    let (actual, target) = (qualify(actual), qualify(target));
     let (ma, mt) = (class_module_desc(&actual), class_module_desc(&target));
     let paren = if ma == mt {
         format!("({actual} and {target} are in {ma})")

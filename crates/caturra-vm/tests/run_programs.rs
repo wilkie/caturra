@@ -6533,6 +6533,64 @@ fn stage6_compile_errors_match_javac_wording() {
             "class M { static void f() { String s = (String) new StringBuilder(); } }",
             "incompatible types: StringBuilder cannot be converted to String",
         ),
+        // JLS §5.5 asked ONCE, for every target family. A cast to a
+        // PRIMITIVE unboxes and may then WIDEN — never narrow — and from
+        // anything that is not a wrapper it goes through the target's own
+        // wrapper, which is final: these four compiled here, three of them
+        // reaching a ClassCastException at run time that a JDK never lets the
+        // program get to.
+        (
+            "class M { static void f() { int x = (int) Double.valueOf(1); } }",
+            "incompatible types: Double cannot be converted to int",
+        ),
+        (
+            "class M { static void f() { char c = (char) Integer.valueOf(1); } }",
+            "incompatible types: Integer cannot be converted to char",
+        ),
+        (
+            "class M { static class Parent { } static void f() { int x = (int) new Parent(); } }",
+            "incompatible types: Parent cannot be converted to int",
+        ),
+        (
+            "class M { static void f() { Object o = (int[]) \"s\"; } }",
+            "incompatible types: String cannot be converted to int[]",
+        ),
+        (
+            "import java.util.*; class M { static void f() { List<Object> l = (List<Object>) \"s\"; } }",
+            "incompatible types: String cannot be converted to List<Object>",
+        ),
+        (
+            "class M { interface Greet { } static void f() { Object o = (Greet) \"s\"; } }",
+            "incompatible types: String cannot be converted to Greet",
+        ),
+        // JLS §4.5: two parameterizations of one generic type are PROVABLY
+        // DISTINCT — no class is ever both — so this is an error rather than
+        // the unchecked warning a raw cast earns. Every wrapper is a
+        // `Comparable`, but of ITSELF.
+        (
+            "import java.util.*; class M { static void f(List<String> in) { List<Object> l = (List<Object>) in; } }",
+            "cannot be converted to List<Object>",
+        ),
+        (
+            "class M { static void f() { Comparable<String> c = (Comparable<String>) Integer.valueOf(1); } }",
+            "incompatible types: Integer cannot be converted to Comparable<String>",
+        ),
+        // JLS §15.20.2: `instanceof` IS the cast rule ("if a cast of the
+        // operand to the type would be a compile-time error, so is this"), so
+        // it asks the same question — where it used to answer a plain `false`
+        // about a test no value can ever pass.
+        (
+            "import java.util.*; class M { static void f() { boolean b = \"s\" instanceof List; } }",
+            "incompatible types: String cannot be converted to List",
+        ),
+        (
+            "class M { static void f() { boolean b = Integer.valueOf(1) instanceof String[]; } }",
+            "incompatible types: Integer cannot be converted to String[]",
+        ),
+        (
+            "import java.util.*; class M { static void f(Set<String> s) { boolean b = s instanceof Integer; } }",
+            "incompatible types: Set<String> cannot be converted to Integer",
+        ),
         // A PRIMITIVE has no members at all, which is what javac says — where
         // caturra boxed it first and reported a missing `Integer` method, with
         // the slashed INTERNAL class name in the text.

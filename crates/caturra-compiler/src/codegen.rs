@@ -4634,6 +4634,61 @@ fn source_interface_name(name: &str) -> &str {
     simple.strip_prefix("__").unwrap_or(simple)
 }
 
+/// A `TypeRef` spelled the way the program WROTE it — the name a diagnostic
+/// about a written type should use. The resolved `JType` cannot stand in for
+/// it: `List` and `ArrayList` are one type there, so `describe` names whichever
+/// of the two it was built to say, and half the time that is a class the
+/// program never mentioned ("String cannot be converted to `ArrayList<Object>`"
+/// about a cast to `List<Object>`).
+fn written_type_name(ty: &TypeRef) -> String {
+    match ty {
+        TypeRef::Void => String::from("void"),
+        TypeRef::Int => String::from("int"),
+        TypeRef::Double => String::from("double"),
+        TypeRef::Boolean => String::from("boolean"),
+        TypeRef::Char => String::from("char"),
+        TypeRef::Long => String::from("long"),
+        TypeRef::Float => String::from("float"),
+        TypeRef::Short => String::from("short"),
+        TypeRef::Byte => String::from("byte"),
+        TypeRef::Var => String::from("var"),
+        TypeRef::Named(name) => source_interface_name(name).to_owned(),
+        // javac writes the arguments with no space after the comma.
+        TypeRef::Generic { base, args } => format!(
+            "{}<{}>",
+            source_interface_name(base),
+            args.iter()
+                .map(written_type_name)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        TypeRef::Array(inner) => format!("{}[]", written_type_name(inner)),
+    }
+}
+
+/// A type as the SOURCE wrote it, for a diagnostic: a nested class's binary
+/// name (`Outer$Inner`) and a bundled erased interface (`__Comparator`) are
+/// both implementation detail, and both can sit inside a type argument
+/// (`List<Outer$Inner>`) as easily as at the top.
+fn source_type_name(described: &str) -> String {
+    let mut out = String::with_capacity(described.len());
+    let mut token = String::new();
+    for ch in described.chars() {
+        if ch.is_alphanumeric() || ch == '_' {
+            token.push(ch);
+        } else if ch == '$' {
+            // Everything before the `$` is the ENCLOSING class's name.
+            token.clear();
+        } else {
+            out.push_str(source_interface_name(&token));
+            token.clear();
+            out.push(ch);
+        }
+    }
+    out.push_str(source_interface_name(&token));
+    out
+}
+
 fn comparator_alias(name: &str, declared: bool) -> &str {
     if declared {
         return name;
@@ -5563,6 +5618,17 @@ impl ElemType {
     }
 }
 
+/// How a reference type behaves in a cast (see [`Compiler::cast_face`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CastFace {
+    /// An interface, or a library type that stands in for one.
+    Interface,
+    /// A class that may still be extended.
+    Class,
+    /// A `final` class: nothing else is ever one of these.
+    Final,
+}
+
 /// The static type of an expression on the operand stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JType {
@@ -5856,6 +5922,10 @@ impl SeqRole {
 }
 
 impl JType {
+    /// The type as a DIAGNOSTIC names it. javac's spelling, down to the type
+    /// arguments having no space after the comma (`Map<String,Integer>`) —
+    /// caturra wrote them the readable way, which is one more thing for a
+    /// message to differ by when it is compared with a real one.
     #[allow(clippy::too_many_lines)] // one arm per JType variant
     fn describe(self, table: &MethodTable) -> String {
         match self {
@@ -5868,15 +5938,15 @@ impl JType {
                     args.push(next.base_type().describe(table));
                     index += 1;
                 }
-                format!("{}<{}>", table.class_name(class), args.join(", "))
+                format!("{}<{}>", table.class_name(class), args.join(","))
             }
             JType::Map { key, value } => format!(
-                "HashMap<{}, {}>",
+                "HashMap<{},{}>",
                 key.base_type().describe(table),
                 value.base_type().describe(table)
             ),
             JType::TreeMap { key, value, role } => format!(
-                "{}<{}, {}>",
+                "{}<{},{}>",
                 role.map_internal().rsplit('/').next().unwrap_or("TreeMap"),
                 key.base_type().describe(table),
                 value.base_type().describe(table)
@@ -5898,7 +5968,7 @@ impl JType {
                 format!("ListIterator<{}>", elem.base_type().describe(table))
             }
             JType::EntryIterator { key, value } => format!(
-                "Iterator<Map.Entry<{}, {}>>",
+                "Iterator<Map.Entry<{},{}>>",
                 key.base_type().describe(table),
                 value.base_type().describe(table)
             ),
@@ -5919,12 +5989,12 @@ impl JType {
                 format!("Collection<{}>", elem.base_type().describe(table))
             }
             JType::EntrySet { key, value } => format!(
-                "Set<Map.Entry<{}, {}>>",
+                "Set<Map.Entry<{},{}>>",
                 key.base_type().describe(table),
                 value.base_type().describe(table)
             ),
             JType::MapEntry { key, value } => format!(
-                "Map.Entry<{}, {}>",
+                "Map.Entry<{},{}>",
                 key.base_type().describe(table),
                 value.base_type().describe(table)
             ),
@@ -25716,6 +25786,24 @@ impl BodyGen<'_> {
                 );
                 return JType::Error;
             }
+            // The same JLS §15.20.2 gate the resolved path below applies: a
+            // RAW name took this early exit before reaching it, so
+            // `"s" instanceof List` — a test no value can ever pass — answered
+            // a plain `false` where javac refuses the program.
+            if let Some(target) = self.table.resolve_type(ty)
+                && value_ty != JType::Error
+                && !self.cast_conversion_exists(value_ty, target)
+            {
+                self.error(
+                    span,
+                    format!(
+                        "incompatible types: {} cannot be converted to {}",
+                        source_type_name(&value_ty.describe(self.table)),
+                        written_type_name(ty)
+                    ),
+                );
+                return JType::Error;
+            }
             let class_index = intern_class(self.pool, internal);
             self.code.push_op_u16(op::INSTANCEOF, class_index, 1);
             self.code.drop_stack(1);
@@ -25796,19 +25884,20 @@ impl BodyGen<'_> {
             );
             return JType::Error;
         }
-        // JLS §15.20.2: the test must be POSSIBLE — a cast from the operand's
-        // type to the target has to be legal. Two unrelated FINAL types can
-        // never be one another, so `"x" instanceof Integer` is a compile error,
-        // not an answer of `false`. Only the closed kinds are judged: a user
-        // class may be related through a subclass this pass cannot see.
-        let closed = |ty: JType| matches!(ty, JType::Str | JType::Boxed(_));
-        if closed(value_ty) && closed(target) && value_ty != target {
+        // JLS §15.20.2: the test must be POSSIBLE — "if a cast of the operand
+        // to the reference type would be rejected as a compile-time error,
+        // then the instanceof likewise produces one". So it is the CAST rule,
+        // and asking it any other way is the same fact written twice: this
+        // asked only whether both sides were `String`-or-a-wrapper, which
+        // caught `"x" instanceof Integer` and let `list instanceof String`
+        // (and every other provably unrelated pair) answer a plain `false`.
+        if value_ty != JType::Error && !self.cast_conversion_exists(value_ty, target) {
             self.error(
                 span,
                 format!(
                     "incompatible types: {} cannot be converted to {}",
-                    value_ty.describe(self.table),
-                    target.describe(self.table)
+                    source_type_name(&value_ty.describe(self.table)),
+                    written_type_name(ty)
                 ),
             );
             return JType::Error;
@@ -26931,6 +27020,250 @@ impl BodyGen<'_> {
         }
     }
 
+    /// JLS §5.5: whether a casting conversion from `source` to `target` exists
+    /// at all — the question javac answers with "incompatible types: X cannot
+    /// be converted to Y" before any run-time check is even considered.
+    ///
+    /// The rule used to be written once per TARGET family, and each of those
+    /// arms carried its own list of source types it would accept — so a family
+    /// whose arm nobody had written accepted *everything*. `(int[]) "s"`,
+    /// `(List<Object>) "s"` and `(int) aParent` all compiled here and threw
+    /// `ClassCastException` at run time, where a JDK refuses to compile them:
+    /// 147 accepts-invalid pairs over a cross-product of 25 types. One rule,
+    /// asked once, and every family inherits it.
+    ///
+    /// It answers `true` for anything it cannot classify. A cast the compiler
+    /// is unsure of must keep compiling — the erased `Object` a bridge method
+    /// or a specialized lambda parameter casts from is the everyday one — so
+    /// this only turns away pairs it can PROVE are unrelated.
+    fn cast_conversion_exists(&self, source: JType, target: JType) -> bool {
+        // A type variable erases to its bound, `null` is every reference type,
+        // and an unresolved type has been reported already.
+        if matches!(source, JType::TypeVar(_) | JType::Null | JType::Error)
+            || matches!(target, JType::TypeVar(_) | JType::Null | JType::Error)
+        {
+            return true;
+        }
+        match (source.is_reference(), target.is_reference()) {
+            // Primitive to primitive: every numeric pair converts, and
+            // `boolean` converts to nothing but itself.
+            (false, false) => (source == JType::Boolean) == (target == JType::Boolean),
+            // Primitive to reference: a BOXING conversion followed by a
+            // widening reference one — `(Object) 7`, `(Number) 7`.
+            (false, true) => boxable_primitive(source)
+                .is_some_and(|elem| self.reference_cast_exists(JType::Boxed(elem), target)),
+            // Reference to primitive: an UNBOXING conversion, optionally
+            // followed by a WIDENING primitive one — `(long) anInteger` is
+            // legal, `(int) aDouble` is not (that would be a narrowing, which
+            // a cast performs only on a primitive it already has).
+            //
+            // From anything that is not itself a wrapper the cast goes through
+            // the TARGET's own wrapper — `(int) aNumber` is `(Integer) aNumber`
+            // unboxed — so that reference cast has to exist first. Every
+            // wrapper is final, which is what makes `(int) aParent` an error.
+            (true, false) => match source {
+                JType::Boxed(elem) => {
+                    let unboxed = elem.base_type();
+                    unboxed == target || widens(unboxed, target, self.table)
+                }
+                _ => boxable_primitive(target)
+                    .is_some_and(|elem| self.reference_cast_exists(source, JType::Boxed(elem))),
+            },
+            (true, true) => self.reference_cast_exists(source, target),
+        }
+    }
+
+    /// JLS §5.5.1, the reference half of [`Self::cast_conversion_exists`]:
+    /// two reference types cast when one is a subtype of the other, or when
+    /// some class could still be both — which an INTERFACE always leaves open
+    /// unless the other side is `final`.
+    fn reference_cast_exists(&self, source: JType, target: JType) -> bool {
+        // Before the subtype tests, not after them: a wrapper IS a
+        // `Comparable` and a `List<String>` IS a `Collection`, so asking
+        // "related?" first answers yes about a pair whose type ARGUMENTS make
+        // it impossible, and `(Comparable<String>) Integer.valueOf(1)` came
+        // back legal on the strength of the raw relationship.
+        if self.provably_distinct(source, target) {
+            return false;
+        }
+        if widens(source, target, self.table) || widens(target, source, self.table) {
+            return true;
+        }
+        // A boxed value's SUPERTYPES: `Integer` is a `Number` and a
+        // `Comparable`, so `(Integer) aNumber` is the ordinary downcast — and
+        // `widens` knows only the `Comparable` half of that, which left the
+        // `Number` one to be turned away as unrelated.
+        if let JType::Boxed(elem) = source
+            && let JType::Object(id) | JType::Generic { class: id, .. } = target
+            && wrapper_face(Some(elem), id, self.table)
+        {
+            return true;
+        }
+        if let JType::Boxed(elem) = target
+            && let JType::Object(id) | JType::Generic { class: id, .. } = source
+            && wrapper_face(Some(elem), id, self.table)
+        {
+            return true;
+        }
+        let object = JType::Object(self.table.object_id);
+        if source == object || target == object {
+            return true;
+        }
+        // An array casts to another array when their ELEMENTS do (a primitive
+        // element must match exactly, since `int[]` has no subtypes); to a
+        // class only through `Object`, which the line above already answered.
+        match (source, target) {
+            (
+                JType::Array {
+                    elem: from,
+                    dims: from_dims,
+                },
+                JType::Array {
+                    elem: to,
+                    dims: to_dims,
+                },
+            ) => {
+                // `Object[]` covers an array of arrays: `(Object[]) new
+                // String[1][1]` is a widening, not a mismatch.
+                if from_dims != to_dims {
+                    let (fewer, elem) = if from_dims < to_dims {
+                        (from_dims, from)
+                    } else {
+                        (to_dims, to)
+                    };
+                    return fewer == 1 && elem.base_type() == object;
+                }
+                let (from, to) = (from.base_type(), to.base_type());
+                if !from.is_reference() || !to.is_reference() {
+                    return from == to;
+                }
+                self.reference_cast_exists(from, to)
+            }
+            (JType::Array { .. }, _) | (_, JType::Array { .. }) => false,
+            _ => {
+                let (source_face, target_face) = (self.cast_face(source), self.cast_face(target));
+                match (source_face, target_face) {
+                    // Two unrelated interfaces still cast: a class could
+                    // implement both. (javac also refuses the pair whose
+                    // methods clash; caturra does not model that.)
+                    (CastFace::Interface, CastFace::Interface) => true,
+                    // An interface and a class: only a FINAL class can rule
+                    // the cast out, since any other class could be extended
+                    // by one that implements the interface.
+                    (CastFace::Interface, other) | (other, CastFace::Interface) => {
+                        other != CastFace::Final
+                    }
+                    // Two unrelated classes: nothing can be both.
+                    _ => false,
+                }
+            }
+        }
+    }
+
+    /// JLS §4.5: two *provably distinct* parameterizations of one generic type
+    /// — no class is ever both a `List<String>` and a `List<Object>` — so the
+    /// cast between them is an error, not the unchecked warning a raw or
+    /// wildcard one earns. `(List<Object>) aListOfString` compiled here and
+    /// printed `ArrayList`; javac calls it inconvertible.
+    ///
+    /// Only DEFINITE arguments count: a raw or wildcard element matches
+    /// anything (that is `elem_matches`' whole job), so those pass through.
+    fn provably_distinct(&self, source: JType, target: JType) -> bool {
+        let distinct = |from: ElemType, to: ElemType| {
+            !elem_matches(from, to, self.table) && !elem_matches(to, from, self.table)
+        };
+        // Every collection face shares ONE type argument: a `List<String>` and
+        // a `Set<String>` could still be one class, a `List<String>` and a
+        // `Set<Object>` could not.
+        if let (Some(from), Some(to)) = (
+            any_collection_elem(source, self.table),
+            any_collection_elem(target, self.table),
+        ) {
+            return distinct(from, to);
+        }
+        if let (
+            JType::Map {
+                key: from_key,
+                value: from_value,
+            }
+            | JType::TreeMap {
+                key: from_key,
+                value: from_value,
+                ..
+            },
+            JType::Map {
+                key: to_key,
+                value: to_value,
+            }
+            | JType::TreeMap {
+                key: to_key,
+                value: to_value,
+                ..
+            },
+        ) = (source, target)
+        {
+            return distinct(from_key, to_key) || distinct(from_value, to_value);
+        }
+        // A `String` or a wrapper implements `Comparable` with ITSELF as the
+        // argument, so `(Comparable<String>) Integer.valueOf(1)` is refused
+        // even though every wrapper IS a `Comparable`.
+        let comparable = self.table.class_id("Comparable");
+        [(source, target), (target, source)]
+            .into_iter()
+            .any(|(one, other)| {
+                matches!(one, JType::Str | JType::Boxed(_))
+                    && matches!(other, JType::Generic { class, .. } if Some(class) == comparable)
+                    && elem_type_of(one).is_some_and(|own| {
+                        TypeArgs::of(other)
+                            .first
+                            .is_some_and(|arg| distinct(own, arg))
+                    })
+            })
+    }
+
+    /// How a reference type behaves in a cast (JLS §5.5.1): an interface leaves
+    /// room for a class that implements it, a `final` class leaves none.
+    ///
+    /// A library type caturra models as ONE `JType` is both the interface and
+    /// the class a program may have written — `List` and `ArrayList` are one
+    /// type here — so it answers for the wider of the two, the interface.
+    fn cast_face(&self, ty: JType) -> CastFace {
+        match ty {
+            JType::Str | JType::Boxed(_) | JType::StringBuilder => CastFace::Final,
+            JType::Object(id) | JType::Generic { class: id, .. } => {
+                self.table.info_by_id(id).map_or(CastFace::Class, |info| {
+                    if info.is_interface {
+                        CastFace::Interface
+                    } else if info.is_final_class {
+                        CastFace::Final
+                    } else {
+                        CastFace::Class
+                    }
+                })
+            }
+            JType::List(_)
+            | JType::Set(_)
+            | JType::TreeSet(_, _)
+            | JType::Collection(_)
+            | JType::EntrySet { .. }
+            | JType::MapEntry { .. }
+            | JType::Map { .. }
+            | JType::TreeMap { .. }
+            | JType::LinkedList { .. }
+            | JType::Stack(_)
+            | JType::Iterator(_)
+            | JType::ListIterator(_)
+            | JType::EntryIterator { .. }
+            | JType::CharSequence
+            | JType::Stream(_)
+            | JType::IntStream
+            | JType::LongStream
+            | JType::DoubleStream
+            | JType::Collector => CastFace::Interface,
+            _ => CastFace::Class,
+        }
+    }
+
     #[allow(clippy::too_many_lines)] // one conversion matrix
     fn cast(&mut self, ty: &TypeRef, operand: &Expr, span: SourceSpan) -> JType {
         let Some(target) = self.table.resolve_type(ty) else {
@@ -26943,38 +27276,30 @@ impl BodyGen<'_> {
             self.error_bail(span, "cast operand");
             return JType::Error;
         }
+        // JLS §5.5, asked ONCE, before any target family gets a say: the two
+        // types have to be convertible at all. Every arm below assumes this
+        // has passed, so none of them re-decides it — the duplication is what
+        // let each family accept whatever its own arm had not thought of.
+        if !self.cast_conversion_exists(source, target) {
+            self.error(
+                span,
+                format!(
+                    "incompatible types: {} cannot be converted to {}",
+                    source_type_name(&source.describe(self.table)),
+                    written_type_name(ty)
+                ),
+            );
+            return JType::Error;
+        }
         // Casting a reference (commonly an erased Object) to String: a
         // runtime checkcast to java/lang/String.
         if target == JType::Str && source.is_reference() {
-            // JLS §5.5: a reference cast needs ONE of the two types to be a
-            // subtype of the other. `String` is final, so only a supertype of
-            // it can be cast down — `Object`, `CharSequence`, an interface, a
-            // user class — never a wrapper, a builder or a collection. This
-            // accepted every reference, so `(String) Integer.valueOf(1)`
-            // compiled here and is a compile ERROR on a real JDK: the
-            // accepts-invalid direction, and the one caturra promises never to
-            // take.
-            if !matches!(
-                source,
-                JType::Str
-                    | JType::Null
-                    | JType::CharSequence
-                    | JType::Object(_)
-                    // A TYPE VARIABLE erases to Object, so a cast from one is
-                    // the same unchecked downcast — and it is what a BRIDGE
-                    // method does to its erased parameter, which is how this
-                    // restriction first broke a working program.
-                    | JType::TypeVar(_)
-            ) {
-                self.error(
-                    span,
-                    format!(
-                        "incompatible types: {} cannot be converted to String",
-                        source.describe(self.table)
-                    ),
-                );
-                return JType::Error;
-            }
+            // Whether the cast is legal at all was settled by the gate above —
+            // `String` is final, so only a supertype of it comes through
+            // (`Object`, `CharSequence`, `Comparable`, a non-final class, a
+            // type variable, and never a wrapper or a collection). This arm
+            // used to answer that question a second time, with a list of its
+            // own that had no room for the interfaces `String` implements.
             if source != JType::Str {
                 let class_index = intern_class(self.pool, "java/lang/String");
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
@@ -27137,8 +27462,8 @@ impl BodyGen<'_> {
                             span,
                             format!(
                                 "incompatible types: {} cannot be converted to {}",
-                                source_interface_name(&source.describe(self.table)),
-                                source_interface_name(&written.describe(self.table))
+                                source_type_name(&source.describe(self.table)),
+                                written_type_name(ty)
                             ),
                         );
                         return JType::Error;
@@ -27153,8 +27478,8 @@ impl BodyGen<'_> {
                         span,
                         format!(
                             "incompatible types: {} cannot be converted to {}",
-                            source.describe(self.table),
-                            target.describe(self.table)
+                            source_type_name(&source.describe(self.table)),
+                            written_type_name(ty)
                         ),
                     );
                     return JType::Error;
@@ -27174,20 +27499,42 @@ impl BodyGen<'_> {
                 // (JLS §5.5.1) — `(Object) i` is `(Object) Integer.valueOf(i)`,
                 // the cast counterpart of the assignment `Object o = i;` that
                 // already worked. `((Object)(long) 5).getClass()` is Long.
+                // `(Object) i` is `(Object) Integer.valueOf(i)`, the cast
+                // counterpart of the assignment `Object o = i;` that already
+                // worked, and `((Object)(long) 5).getClass()` is Long.
+                //
+                // The face the box presents is not only `Object`: a boxed 5 is
+                // a `Number` and a `Comparable` as well, so `(Number) 5` — the
+                // ordinary way to hand a literal to a `Number` parameter — was
+                // "cannot cast int to Number" for want of those two names.
                 source
-                    if target_id == self.table.object_id && boxable_primitive(source).is_some() =>
+                    if boxable_primitive(source)
+                        .is_some_and(|elem| wrapper_face(Some(elem), target_id, self.table)) =>
                 {
                     let elem = boxable_primitive(source).expect("checked by the guard");
                     self.emit_box(elem);
-                    return target;
+                    return written;
+                }
+                // Any other reference DOWN to a class or interface the
+                // program declared (or caturra bundles): a runtime checkcast,
+                // the target named as the source wrote it. The arm did not
+                // exist, so a library value could never be cast to a user
+                // type at all — `(Greet) list`, `(Comparable<String>) s`,
+                // `(Child) aCharSequence` were each "incompatible types"
+                // about a cast a JDK compiles and then decides at run time.
+                source if source.is_reference() => {
+                    let class_name = self.table.class_name(target_id).to_owned();
+                    let class_index = intern_class(self.pool, &class_name);
+                    self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+                    return written;
                 }
                 _ => {
                     self.error(
                         span,
                         format!(
                             "incompatible types: {} cannot be converted to {}",
-                            source.describe(self.table),
-                            target.describe(self.table)
+                            source_type_name(&source.describe(self.table)),
+                            source_type_name(&target.describe(self.table))
                         ),
                     );
                     return JType::Error;
@@ -27375,6 +27722,15 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
                 target
             }
+            // A reference DOWN to a wrapper: `(Integer) aNumber`, the other
+            // half of the unboxing cast — the value stays boxed, and the
+            // runtime checkcast is what makes `(Double) aNumber` holding an
+            // Integer throw, as it does on a JDK.
+            (source, JType::Boxed(elem)) if source.is_reference() => {
+                let class_index = intern_class(self.pool, wrapper_internal(elem));
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+                target
+            }
             // A boxing cast (JLS §5.5): `(Integer) 5`, `(Double) d`. The
             // primitive is boxed after any widening/narrowing the wrapper
             // needs, so `(Long) 5L` works and `(Integer) 5L` does not — javac
@@ -27397,8 +27753,8 @@ impl BodyGen<'_> {
                         span,
                         format!(
                             "incompatible types: {} cannot be converted to {}",
-                            source.describe(self.table),
-                            target.describe(self.table)
+                            source_type_name(&source.describe(self.table)),
+                            written_type_name(ty)
                         ),
                     );
                     return JType::Error;
@@ -27406,13 +27762,18 @@ impl BodyGen<'_> {
                 self.emit_box(elem);
                 target
             }
-            (source, target) => {
+            // A pair the gate let through that no arm above emits — the
+            // conversion exists but caturra cannot perform it. javac's own
+            // wording for a cast it refuses, so a program that hits one reads
+            // a Java diagnostic rather than caturra's ("cannot cast X to Y" is
+            // not a sentence javac has ever written).
+            (source, _) => {
                 self.error(
                     span,
                     format!(
-                        "cannot cast {} to {}",
-                        source.describe(self.table),
-                        target.describe(self.table)
+                        "incompatible types: {} cannot be converted to {}",
+                        source_type_name(&source.describe(self.table)),
+                        written_type_name(ty)
                     ),
                 );
                 JType::Error
