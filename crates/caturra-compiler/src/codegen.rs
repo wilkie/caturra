@@ -4827,8 +4827,13 @@ fn varargs_param_at(m: &MethodSig, index: usize) -> Option<JType> {
 
 fn widens_strictly(from: JType, to: JType, table: &MethodTable) -> bool {
     // These are exactly the boxing/unboxing arms of `widens`; identical types
-    // still pass, since that is not a conversion at all.
-    if matches!((from, to), (JType::Boxed(e), t) if e.base_type() == t)
+    // still pass, since that is not a conversion at all. UNBOXING is asked of
+    // the whole shape rather than of the matching width: an unboxing followed
+    // by a widening (`Integer` to `double`) is a loose conversion too, and
+    // letting it through here put `f(long)` and `f(double)` in PHASE ONE for
+    // an `Integer` argument — where `f(int)` is not, so the call picked the
+    // wrong overload rather than being refused.
+    if matches!((from, to), (JType::Boxed(_), t) if !t.is_reference())
         || matches!((from, to), (f, JType::Boxed(e)) if e.base_type() == f)
     {
         return from == to;
@@ -5221,6 +5226,15 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // Autoboxing / unboxing in assignment and method invocation.
         || matches!((from, to), (JType::Boxed(e), t) if e.base_type() == t)
         || matches!((from, to), (f, JType::Boxed(e)) if e.base_type() == f)
+        // JLS §5.3: an UNBOXING conversion may be followed by a WIDENING
+        // primitive one — `f(double)` takes an `Integer`, and `double d =
+        // anInteger;` assigns. Only the exact-width unboxing above was
+        // modelled, so both were "Integer cannot be converted to double".
+        || matches!(
+            (from, to),
+            (JType::Boxed(e), t)
+                if t.is_numeric() && widens(e.base_type(), t, table)
+        )
         // Array covariance: `Card[]` widens to `Comparable[]`.
         || matches!(
             (from, to),

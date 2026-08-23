@@ -35263,3 +35263,57 @@ public class RawToString {
 }
 "
 );
+
+// WHICH overload runs, not merely whether the call compiles. The phases of
+// JLS §15.12.2 are visible here: a fixed-arity method beats a varargs one, a
+// primitive argument reaches `f(int)` before `f(Integer)` because phase one
+// does no boxing at all, and an `Integer` reaches `f(int)` before `f(long)`
+// because unboxing is a phase-TWO conversion where every width competes on
+// specificity. Swept as a 266-program cross-product of overload sets against
+// argument types.
+differential_test!(
+    which_overload_runs,
+    "Overloads",
+    r#"
+public class Overloads {
+    static String numeric(int x) { return "int"; }
+    static String numeric(long x) { return "long"; }
+    static String numeric(double x) { return "double"; }
+
+    static String boxed(int x) { return "int"; }
+    static String boxed(Integer x) { return "Integer"; }
+    static String boxed(Object x) { return "Object"; }
+
+    static String varied(int x) { return "fixed"; }
+    static String varied(int... x) { return "varargs"; }
+
+    static String pair(double x) { return "double"; }
+    static String pair(Double x) { return "Double"; }
+
+    static String wide(long x) { return "long"; }
+    static String wide(Long x) { return "Long"; }
+
+    static String truth(boolean x) { return "boolean"; }
+    static String truth(Boolean x) { return "Boolean"; }
+
+    public static void main(String[] args) {
+        System.out.println(numeric(1) + " " + numeric('a') + " " + numeric(1L) + " " + numeric(1.0f));
+        System.out.println(numeric(Integer.valueOf(1)) + " " + numeric(Long.valueOf(1))
+            + " " + numeric(Double.valueOf(1)));
+        System.out.println(boxed(1) + " " + boxed(Integer.valueOf(1)) + " " + boxed("s")
+            + " " + boxed(1L) + " " + boxed(null));
+        System.out.println(varied() + " " + varied(1) + " " + varied(1, 2));
+        // A primitive and its wrapper are DIFFERENT erasures, so the pair may
+        // be declared at all — the key for `double` used to be the string
+        // "Double", which is the wrapper's name.
+        System.out.println(pair(1.0) + " " + pair(Double.valueOf(1)));
+        System.out.println(wide(1L) + " " + wide(Long.valueOf(1)));
+        System.out.println(truth(true) + " " + truth(Boolean.TRUE));
+        // Unboxing followed by a widening primitive conversion (JLS §5.3).
+        double widened = Integer.valueOf(7);
+        long alsoWidened = Integer.valueOf(8);
+        System.out.println(widened + " " + alsoWidened);
+    }
+}
+"#
+);

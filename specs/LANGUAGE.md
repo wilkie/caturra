@@ -7629,6 +7629,36 @@ Pinned by `a_diamond_is_a_collection_with_an_unwritten_element`,
 `a_diamond_is_not_assignable_to_anything` and
 `a_raw_collection_is_not_assignable_to_anything`.
 
+### Which overload runs (2026-08-23)
+
+The same cross-product, one level up: fourteen overload SETS against nineteen
+argument shapes, each program printing which method ran — so the comparison is
+the JDK's choice, not merely its verdict. 266 programs.
+
+Eleven failed to compile at all, and for one reason: `f(double)` and
+`f(Double)` were reported as a **name clash**. The erasure key for a parameter
+was the type's `Debug` text, and `TypeRef::Double` debug-prints as `Double` —
+the wrapper's name exactly. So the two collided, and with them `f(long)` and
+`f(Long)`, `f(float)`/`f(Float)`, `f(short)`, `f(byte)` and `f(boolean)`; only
+`int` and `char` were spelled differently enough to escape. A primitive's key
+now says it is a primitive.
+
+Two more chose the wrong method, and that was **unboxing followed by a widening
+primitive conversion** (JLS §5.3): `f(double)` accepts an `Integer`, and
+`double d = anInteger;` assigns. Only the exact-width unboxing was modelled.
+
+Adding it needed care, and the sweep is what showed why: the conversion is a
+phase-TWO one. Letting it into phase one put `f(long)` and `f(double)` among
+the strictly-applicable candidates for an `Integer` argument — where `f(int)`
+is NOT, since its unboxing is also phase two — so the call picked `f(long)`.
+It compiled, it ran, and it called the wrong method. Unboxing of any width is
+now excluded from phase one, which is what JLS §15.12.2 means by trying without
+boxing first.
+
+All 266 agree.
+
+Pinned by `which_overload_runs`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

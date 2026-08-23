@@ -5258,7 +5258,23 @@ fn erased_type_key(ty: &TypeRef) -> String {
         TypeRef::Named(name) => name.clone(),
         TypeRef::Generic { base, .. } => base.clone(),
         TypeRef::Array(inner) => format!("{}[]", erased_type_key(inner)),
-        other => format!("{other:?}"),
+        // A PRIMITIVE erases to itself, and its key must not collide with a
+        // class NAME. It used to be the variant's `Debug`, which prints
+        // `Double` for `double` — the wrapper's name exactly — so
+        // `f(double)` and `f(Double)` were reported as a name clash and the
+        // pair could not be declared. The same for long, float, short, byte
+        // and boolean; only int and char were spelled differently enough to
+        // escape it.
+        TypeRef::Void => String::from("prim void"),
+        TypeRef::Int => String::from("prim int"),
+        TypeRef::Double => String::from("prim double"),
+        TypeRef::Boolean => String::from("prim boolean"),
+        TypeRef::Char => String::from("prim char"),
+        TypeRef::Long => String::from("prim long"),
+        TypeRef::Float => String::from("prim float"),
+        TypeRef::Short => String::from("prim short"),
+        TypeRef::Byte => String::from("prim byte"),
+        TypeRef::Var => String::from("var"),
     }
 }
 
