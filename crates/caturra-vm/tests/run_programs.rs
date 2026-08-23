@@ -6533,6 +6533,73 @@ fn stage6_compile_errors_match_javac_wording() {
             "class M { static void f() { String s = (String) new StringBuilder(); } }",
             "incompatible types: StringBuilder cannot be converted to String",
         ),
+        // A collection's FACE: `List` and `ArrayList` are one type here (as
+        // are `Set`/`HashSet` and `Map`/`HashMap`), and the class widens to
+        // the interface, never back. Each of these compiled here, and the
+        // first three are the everyday mistake — a variable declared as the
+        // class, assigned the interface.
+        (
+            "import java.util.*; class M { static void f(List<String> l) { ArrayList<String> x = l; } }",
+            "incompatible types: List<String> cannot be converted to ArrayList<String>",
+        ),
+        (
+            "import java.util.*; class M { static void f(Set<String> s) { HashSet<String> x = s; } }",
+            "incompatible types: Set<String> cannot be converted to HashSet<String>",
+        ),
+        (
+            "import java.util.*; class M { static void f(Map<String,Integer> m) { HashMap<String,Integer> x = m; } }",
+            "incompatible types: Map<String,Integer> cannot be converted to HashMap<String,Integer>",
+        ),
+        (
+            "import java.util.*; class M { static void f(TreeMap<String,Integer> t) { HashMap<String,Integer> x = t; } }",
+            "incompatible types: TreeMap<String,Integer> cannot be converted to HashMap<String,Integer>",
+        ),
+        // `clone` is declared by the CLASSES and not by the interfaces —
+        // `Map`, `Set`, `List`, `Queue` and `Deque` have no such member.
+        (
+            "import java.util.*; class M { static void f(Map<String,Integer> m) { Object o = m.clone(); } }",
+            "cannot find symbol: method clone() in class Map<String,Integer>",
+        ),
+        (
+            "import java.util.*; class M { static void f(Queue<String> q) { Object o = q.clone(); } }",
+            "cannot find symbol: method clone() in class Queue<String>",
+        ),
+        // ...and the same face decides a CAST: no subclass of `ArrayList` is
+        // also a `Parent`, where a `List` variable could hold one that is (so
+        // `(Parent) aList` still compiles, and throws).
+        (
+            "import java.util.*; class M { static class Parent { } static void f(ArrayList<String> l) { Parent p = (Parent) l; } }",
+            "incompatible types: ArrayList<String> cannot be converted to Parent",
+        ),
+        // A diagnostic names the type the program WROTE: a raw collection has
+        // no argument at all, a wildcard is the wildcard rather than its
+        // bound, and a nested class is its simple name.
+        (
+            "import java.util.*; class M { static void f(List raw) { String s = raw; } }",
+            "incompatible types: List cannot be converted to String",
+        ),
+        (
+            "import java.util.*; class M { static void f(List<? extends Number> l) { String s = l; } }",
+            "incompatible types: List<? extends Number> cannot be converted to String",
+        ),
+        (
+            "class M { interface Greet { } static void f(Greet g) { String s = g; } }",
+            "incompatible types: Greet cannot be converted to String",
+        ),
+        // A WRAPPER that cannot reach a narrower primitive is incompatible,
+        // not "possible lossy conversion": the narrowing rule is about a
+        // primitive the program has, and a wrapper is not one.
+        (
+            "class M { static void f(Double d) { byte b = d; } }",
+            "incompatible types: Double cannot be converted to byte",
+        ),
+        // javac's shape for operands an operator has no meaning for: the
+        // OPERATOR in the headline, the two types on continuation lines, and
+        // the null TYPE spelled `<null>`.
+        (
+            "class M { static void f(double d) { boolean q = (d == null); } }",
+            "bad operand types for binary operator '=='\n  first type:  double\n  second type: <null>",
+        ),
         // JLS §5.5 asked ONCE, for every target family. A cast to a
         // PRIMITIVE unboxes and may then WIDEN — never narrow — and from
         // anything that is not a wrapper it goes through the target's own

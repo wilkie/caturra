@@ -586,8 +586,14 @@ fn substitute_member_type(
         other => other,
     };
     match ty {
-        JType::List(elem) => JType::List(arg(elem)),
-        JType::Set(elem) => JType::Set(arg(elem)),
+        JType::List { elem, face } => JType::List {
+            elem: arg(elem),
+            face,
+        },
+        JType::Set { elem, face } => JType::Set {
+            elem: arg(elem),
+            face,
+        },
         JType::TreeSet(elem, role) => JType::TreeSet(arg(elem), role),
         JType::Collection(elem) => JType::Collection(arg(elem)),
         JType::Iterator(elem) => JType::Iterator(arg(elem)),
@@ -599,9 +605,10 @@ fn substitute_member_type(
             elem: arg(elem),
             role,
         },
-        JType::Map { key, value } => JType::Map {
+        JType::Map { key, value, face } => JType::Map {
             key: arg(key),
             value: arg(value),
+            face,
         },
         JType::TreeMap { key, value, role } => JType::TreeMap {
             key: arg(key),
@@ -2743,15 +2750,16 @@ impl MethodTable {
             bound: WildcardBound::Raw,
         };
         match ty {
-            JType::List(_) => JType::List(raw),
-            JType::Set(_) => JType::Set(raw),
+            JType::List { face, .. } => JType::List { elem: raw, face },
+            JType::Set { face, .. } => JType::Set { elem: raw, face },
             JType::Collection(_) => JType::Collection(raw),
             JType::Stack(_) => JType::Stack(raw),
             JType::TreeSet(_, role) => JType::TreeSet(raw, role),
             JType::LinkedList { role, .. } => JType::LinkedList { elem: raw, role },
-            JType::Map { .. } => JType::Map {
+            JType::Map { face, .. } => JType::Map {
                 key: raw,
                 value: raw,
+                face,
             },
             JType::TreeMap { role, .. } => JType::TreeMap {
                 key: raw,
@@ -2985,6 +2993,16 @@ impl MethodTable {
                 // canonical form alone could not see it — `AbstractMap.SimpleEntry`
                 // could be CONSTRUCTED and not NAMED.
                     crate::imports::nested_library_class(base).unwrap_or(base.as_str());
+                // Which FACE the program wrote, before the name is normalized
+                // away: `List` is the interface, `ArrayList` the class, and a
+                // program can tell them apart (`ArrayList<String> a = aList;`
+                // needs a cast). Read here because this is the one place that
+                // still has the written name.
+                let face = if matches!(simple, "List" | "Set" | "Map") {
+                    CollFace::Iface
+                } else {
+                    CollFace::Concrete
+                };
                 // `List<E>` is the interface form of the ArrayList caturra models.
                 if simple == "List" && !self.has_class("List") {
                     simple = "ArrayList";
@@ -3000,13 +3018,13 @@ impl MethodTable {
                     simple = "Set";
                 }
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
-                    elem_from_type_arg(&args[0], self).map(JType::List)
+                    elem_from_type_arg(&args[0], self).map(|elem| JType::List { elem, face })
                 } else if simple == "Stack" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::Stack)
                 } else if simple == "HashMap" && args.len() == 2 && !self.has_class(simple) {
                     let key = elem_from_type_arg(&args[0], self)?;
                     let value = elem_from_type_arg(&args[1], self)?;
-                    Some(JType::Map { key, value })
+                    Some(JType::Map { key, value, face })
                 } else if matches!(simple, "TreeMap" | "SortedMap" | "NavigableMap")
                     && args.len() == 2
                     && !self.has_class(simple)
@@ -3033,7 +3051,7 @@ impl MethodTable {
                         let value = elem_from_type_arg(&entry_args[1], self)?;
                         Some(JType::EntrySet { key, value })
                     } else {
-                        elem_from_type_arg(&args[0], self).map(JType::Set)
+                        elem_from_type_arg(&args[0], self).map(|elem| JType::Set { elem, face })
                     }
                 } else if matches!(simple, "TreeSet" | "SortedSet" | "NavigableSet")
                     && args.len() == 1
@@ -4378,8 +4396,8 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
 fn has_wildcard_element(ty: JType) -> bool {
     let wildcard = |elem| matches!(elem, ElemType::Wildcard { .. });
     match ty {
-        JType::List(elem)
-        | JType::Set(elem)
+        JType::List { elem, .. }
+        | JType::Set { elem, .. }
         | JType::TreeSet(elem, _)
         | JType::Collection(elem)
         | JType::Stack(elem)
@@ -4389,7 +4407,7 @@ fn has_wildcard_element(ty: JType) -> bool {
         | JType::ListIterator(elem)
         | JType::Optional(elem)
         | JType::LinkedList { elem, .. } => wildcard(elem),
-        JType::Map { key, value } | JType::TreeMap { key, value, .. } => {
+        JType::Map { key, value, .. } | JType::TreeMap { key, value, .. } => {
             wildcard(key) || wildcard(value)
         }
         _ => false,
@@ -4594,8 +4612,8 @@ fn any_collection_elem(ty: JType, table: &MethodTable) -> Option<ElemType> {
 /// that copies one.
 fn collection_element_type(ty: JType, table: &MethodTable) -> Option<ElemType> {
     match ty {
-        JType::List(elem)
-        | JType::Set(elem)
+        JType::List { elem, .. }
+        | JType::Set { elem, .. }
         | JType::TreeSet(elem, _)
         | JType::Collection(elem)
         | JType::LinkedList { elem, .. } => Some(elem),
@@ -4858,11 +4876,17 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
     };
     let element = collection_elem_of(joined);
     let wrapped = match (sig.ret, element) {
-        (Some(JType::List(elem)), Some(inferred)) if erased_element(elem) => {
-            Some(JType::List(inferred))
+        (Some(JType::List { elem, face }), Some(inferred)) if erased_element(elem) => {
+            Some(JType::List {
+                elem: inferred,
+                face,
+            })
         }
-        (Some(JType::Set(elem)), Some(inferred)) if erased_element(elem) => {
-            Some(JType::Set(inferred))
+        (Some(JType::Set { elem, face }), Some(inferred)) if erased_element(elem) => {
+            Some(JType::Set {
+                elem: inferred,
+                face,
+            })
         }
         (Some(JType::Collection(elem)), Some(inferred)) if erased_element(elem) => {
             Some(JType::Collection(inferred))
@@ -4938,9 +4962,9 @@ fn widens_to_iterable(from: JType, to: JType, table: &MethodTable) -> bool {
         return false;
     }
     let element = match from {
-        JType::List(elem)
+        JType::List { elem, .. }
         | JType::Collection(elem)
-        | JType::Set(elem)
+        | JType::Set { elem, .. }
         | JType::TreeSet(elem, _)
         | JType::Stack(elem)
         | JType::LinkedList { elem, .. } => elem,
@@ -5127,7 +5151,16 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // The concrete LinkedList is a List; any of them is a Collection.
         || matches!(
             (from, to),
-            (JType::LinkedList { elem: a, role: SeqRole::Full }, JType::List(b))
+            (
+                JType::LinkedList {
+                    elem: a,
+                    role: SeqRole::Full,
+                },
+                JType::List {
+                    elem: b,
+                    face: CollFace::Iface,
+                },
+            )
                 if elem_matches(a, b, table)
         )
         || matches!(
@@ -5138,7 +5171,7 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // `Collection<E> c = list`.
         || matches!(
             (from, to),
-            (JType::List(a) | JType::Set(a), JType::Collection(b))
+            (JType::List { elem: a, .. } | JType::Set { elem: a, .. }, JType::Collection(b))
                 if elem_matches(a, b, table)
         )
         // A DIAMOND whose element the program never wrote, assigned to a
@@ -5148,7 +5181,13 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (
-                JType::Set(ElemType::Wildcard { bound: WildcardBound::Raw, .. }),
+                JType::Set {
+                    elem: ElemType::Wildcard {
+                        bound: WildcardBound::Raw,
+                        ..
+                    },
+                    ..
+                },
                 JType::EntrySet { .. }
             )
         )
@@ -5156,21 +5195,25 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // element type: `List<E> l = new Stack<>()`.
         || matches!(
             (from, to),
-            (JType::Stack(a), JType::List(b) | JType::Collection(b)) if elem_matches(a, b, table)
+            (
+                JType::Stack(a),
+                JType::List {
+                    elem: b,
+                    face: CollFace::Iface,
+                } | JType::Collection(b),
+            ) if elem_matches(a, b, table)
         )
         // A TreeSet is a Set (and a Collection) of its element type.
         || matches!(
             (from, to),
-            (JType::TreeSet(a, _), JType::Set(b) | JType::Collection(b))
-                if elem_matches(a, b, table)
-        )
-        // A TreeMap is a Map of its key/value types.
-        || matches!(
-            (from, to),
             (
-                JType::TreeMap { key: k1, value: v1, .. },
-                JType::Map { key: k2, value: v2 },
-            ) if k1 == k2 && v1 == v2
+                JType::TreeSet(a, _),
+                JType::Set {
+                    elem: b,
+                    face: CollFace::Iface,
+                } | JType::Collection(b),
+            )
+                if elem_matches(a, b, table)
         )
         // EVERY collection is an `Iterable` — that is what a for-each over one
         // means. `Iterable` is a synthesized interface here, registered for
@@ -5185,15 +5228,21 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // an invariant `List<Object>` still rejects a `List<Integer>`.
         || matches!(
             (from, to),
-            (JType::List(a), JType::List(ElemType::Wildcard { bound, .. }))
+            (
+                JType::List { elem: a, .. },
+                JType::List {
+                    elem: ElemType::Wildcard { bound, .. },
+                    ..
+                },
+            )
                 if wildcard_accepts(a, bound, table)
         )
         || matches!(
             (from, to),
             (
-                JType::List(a)
+                JType::List { elem: a, .. }
                     | JType::Collection(a)
-                    | JType::Set(a)
+                    | JType::Set { elem: a, .. }
                     | JType::TreeSet(a, _)
                     | JType::Stack(a)
                     | JType::LinkedList { elem: a, .. },
@@ -5203,8 +5252,11 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (
-                JType::Set(a) | JType::TreeSet(a, _),
-                JType::Set(ElemType::Wildcard { bound, .. }),
+                JType::Set { elem: a, .. } | JType::TreeSet(a, _),
+                JType::Set {
+                    elem: ElemType::Wildcard { bound, .. },
+                    ..
+                },
             ) if wildcard_accepts(a, bound, table)
         )
         // The same variance for the remaining families, so a generic method's
@@ -5228,14 +5280,44 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 // (`List<?> l = strings`) goes through the same rule; a
                 // concrete one (`List<Object> l = strings`) still does not,
                 // `Object` being an element and not a wildcard.
-                | (JType::List(a), JType::List(b))
-                | (JType::Set(a), JType::Set(b))
                 | (JType::Collection(a), JType::Collection(b))
                 // A cursor over a raw collection is raw too, and `Iterator it
                 // = raw.iterator();` then assigns to an `Iterator<String>`.
                 | (JType::Iterator(a), JType::Iterator(b))
                 | (JType::ListIterator(a), JType::ListIterator(b))
                 if elem_matches(a, b, table)
+        )
+        // A collection's FACE widens only OUTWARD too: the class is the
+        // interface, never the other way round. `List<String> l = anArrayList`
+        // is the everyday assignment; `ArrayList<String> a = aList` needs a
+        // cast, and compiled here — the two were one type with nothing to tell
+        // them apart. (The element rule is the one above: an erased
+        // type-variable element is applicable to a concrete one.)
+        || matches!(
+            (from, to),
+            (
+                JType::List {
+                    elem: a,
+                    face: from_face,
+                },
+                JType::List {
+                    elem: b,
+                    face: to_face,
+                },
+            ) if from_face.widens_to(to_face) && elem_matches(a, b, table)
+        )
+        || matches!(
+            (from, to),
+            (
+                JType::Set {
+                    elem: a,
+                    face: from_face,
+                },
+                JType::Set {
+                    elem: b,
+                    face: to_face,
+                },
+            ) if from_face.widens_to(to_face) && elem_matches(a, b, table)
         )
         // A sorted FACE widens only OUTWARD — a `TreeSet` is a `NavigableSet`
         // is a `SortedSet`, and none of them is the other way round. (The
@@ -5256,8 +5338,34 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (
-                JType::Map { key: k1, value: v1 } | JType::TreeMap { key: k1, value: v1, .. },
-                JType::Map { key: k2, value: v2 },
+                JType::Map {
+                    key: k1,
+                    value: v1,
+                    face: from_face,
+                },
+                JType::Map {
+                    key: k2,
+                    value: v2,
+                    face: to_face,
+                },
+            ) if from_face.widens_to(to_face)
+                && elem_matches(k1, k2, table)
+                && elem_matches(v1, v2, table)
+        )
+        // A `TreeMap` is a `Map` and never a `HashMap`.
+        || matches!(
+            (from, to),
+            (
+                JType::TreeMap {
+                    key: k1,
+                    value: v1,
+                    ..
+                },
+                JType::Map {
+                    key: k2,
+                    value: v2,
+                    face: CollFace::Iface,
+                },
             ) if elem_matches(k1, k2, table) && elem_matches(v1, v2, table)
         )
         || matches!(
@@ -5588,6 +5696,36 @@ impl ElemType {
         }
     }
 
+    /// This element as a written type ARGUMENT: a wildcard is the wildcard
+    /// (`? extends Number`), not the class it erases to. Describing it through
+    /// `base_type` printed the BOUND — `List<Number>` for a
+    /// `List<? extends Number>` — which reads as a different type entirely,
+    /// and one the assignment being complained about would have allowed.
+    fn describe_arg(self, table: &MethodTable) -> String {
+        let ElemType::Wildcard { bound, read } = self else {
+            return self.base_type().describe(table);
+        };
+        match bound {
+            WildcardBound::Unbounded => String::from("?"),
+            WildcardBound::Upper(class) if class == table.object_id => String::from("?"),
+            WildcardBound::Upper(class) => {
+                format!(
+                    "? extends {}",
+                    source_interface_name(table.class_name(class))
+                )
+            }
+            WildcardBound::Lower(class) => {
+                format!("? super {}", source_interface_name(table.class_name(class)))
+            }
+            WildcardBound::LowerWrapper(prim) => {
+                format!("? super {}", wrapper_name(prim.elem(), table))
+            }
+            // A raw or type-variable element has no written form of its own;
+            // `parameterized` drops a raw one before it gets here.
+            WildcardBound::Raw | WildcardBound::TypeVar => JType::Object(read).describe(table),
+        }
+    }
+
     fn base_type(self) -> JType {
         match self {
             ElemType::TypeVar(index) => JType::TypeVar(index),
@@ -5614,6 +5752,58 @@ impl ElemType {
             ElemType::Wildcard { read, .. } | ElemType::Nested { read, .. } => JType::Object(read),
             // A wrapper element reads as the WRAPPER — a reference.
             ElemType::Wrapper(prim) => JType::Boxed(prim.elem()),
+        }
+    }
+}
+
+/// Which FACE of a collection a value presents: the interface a program
+/// declares (`List`, `Set`, `Map`) or the concrete class it instantiates
+/// (`ArrayList`, `HashSet`, `HashMap`). caturra models each pair as ONE type —
+/// they share every member, and the same heap object answers for both — but a
+/// program can tell them apart three ways: `ArrayList<String> a = aList;` needs
+/// a cast, `clone` is declared by the classes and not by the interfaces, and a
+/// cast to an unrelated class is an error from a class where it is legal from
+/// an interface (some subclass could implement both).
+///
+/// This is the role `SortedRole` gives the sorted collections and `SeqRole`
+/// gives the queues, applied to the last pair of types without one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollFace {
+    /// `List` / `Set` / `Map` — the interface, and what every library method
+    /// that hands a collection back is declared to return.
+    Iface,
+    /// `ArrayList` / `HashSet` / `HashMap` — the class a `new` makes.
+    Concrete,
+}
+
+impl CollFace {
+    /// Whether a value of this face may be used where `other` is wanted: a
+    /// class widens to its interface, never the other way round.
+    fn widens_to(self, other: CollFace) -> bool {
+        self == other || (self == CollFace::Concrete && other == CollFace::Iface)
+    }
+
+    /// The name a DIAGNOSTIC gives this face of a list.
+    fn list_name(self) -> &'static str {
+        match self {
+            CollFace::Iface => "List",
+            CollFace::Concrete => "ArrayList",
+        }
+    }
+
+    /// ...of a set.
+    fn set_name(self) -> &'static str {
+        match self {
+            CollFace::Iface => "Set",
+            CollFace::Concrete => "HashSet",
+        }
+    }
+
+    /// ...and of a map.
+    fn map_name(self) -> &'static str {
+        match self {
+            CollFace::Iface => "Map",
+            CollFace::Concrete => "HashMap",
         }
     }
 }
@@ -5688,9 +5878,13 @@ enum JType {
     /// `java.nio.file.Path` (intrinsic) — a filesystem path, from `Path.of` /
     /// `Paths.get`, read and written through `Files`.
     Path,
-    /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
-    /// erased at runtime).
-    List(ElemType),
+    /// `java.util.ArrayList<E>` and its `List<E>` interface face (intrinsic;
+    /// E tracked at compile time, erased at runtime). The `face` records which
+    /// of the two the program wrote — see [`CollFace`].
+    List {
+        elem: ElemType,
+        face: CollFace,
+    },
     /// `java.util.Stack<E>` — a `Vector`-backed LIFO. It *is* a `List` (extends
     /// `Vector`), so it shares the list method surface and widens to
     /// `List`/`Collection`; distinct from `List` because it adds
@@ -5750,13 +5944,20 @@ enum JType {
         role: SeqRole,
     },
     /// `java.util.HashMap<K, V>` / `java.util.Map<K, V>` (intrinsic; K and
-    /// V tracked at compile time, erased at runtime).
+    /// V tracked at compile time, erased at runtime). The `face` records which
+    /// of the two the program wrote (see [`CollFace`]).
     Map {
         key: ElemType,
         value: ElemType,
+        face: CollFace,
     },
-    /// `java.util.Set<E>` — a map's `keySet()` view.
-    Set(ElemType),
+    /// `java.util.HashSet<E>` and its `Set<E>` interface face — which a map's
+    /// `keySet()` view also wears. The `face` records which of the two the
+    /// program wrote (see [`CollFace`]).
+    Set {
+        elem: ElemType,
+        face: CollFace,
+    },
     /// `java.util.TreeSet<E>` (also its `SortedSet`/`NavigableSet` faces): a
     /// sorted set, backed by an ordered vector. Distinct from `Set` because it
     /// adds the sorted navigation (`first`/`last`/`floor`/`ceiling`/…).
@@ -5921,7 +6122,100 @@ impl SeqRole {
     }
 }
 
+/// javac's diagnostic for two operands an operator has no meaning for: a
+/// headline naming the OPERATOR, and the two types on continuation lines. It
+/// used to be caturra's own sentence ("operator '==' cannot be applied to
+/// double and null"), which carries the same facts in a shape javac never
+/// prints — and `null` is `<null>` there, the null TYPE rather than the
+/// literal.
+fn bad_operand_types(symbol: &str, left: JType, right: JType, table: &MethodTable) -> String {
+    let named = |ty: JType| match ty {
+        JType::Null => String::from("<null>"),
+        other => other.describe(table),
+    };
+    format!(
+        "bad operand types for binary operator '{symbol}'\n  first type:  {}\n  second type: {}",
+        named(left),
+        named(right)
+    )
+}
+
+/// `Name<A,B>` as a DIAGNOSTIC spells it — or a bare `Name` when the type is
+/// RAW, which is how javac prints one. caturra models a raw collection as one
+/// whose argument is the raw marker, and describing that argument through its
+/// erasure printed `List<Object>`: a type the program did not write, and one
+/// javac reserves for the parameterization that really is `Object`.
+fn parameterized(name: &str, args: &[ElemType], table: &MethodTable) -> String {
+    if args.iter().any(|arg| {
+        matches!(
+            arg,
+            ElemType::Wildcard {
+                bound: WildcardBound::Raw,
+                ..
+            }
+        )
+    }) {
+        return name.to_owned();
+    }
+    let args: Vec<String> = args.iter().map(|arg| arg.describe_arg(table)).collect();
+    format!("{name}<{}>", args.join(","))
+}
+
 impl JType {
+    /// The same collection worn as its INTERFACE face — `ArrayList<E>` as a
+    /// `List<E>` — which is where two different collections meet. `None` for
+    /// everything else, including a collection that already IS an interface
+    /// (asking again would only repeat a test that failed).
+    fn as_interface_face(self) -> Option<JType> {
+        match self {
+            JType::List {
+                elem,
+                face: CollFace::Concrete,
+            } => Some(JType::library_list(elem)),
+            JType::Set {
+                elem,
+                face: CollFace::Concrete,
+            } => Some(JType::library_set(elem)),
+            JType::Map {
+                key,
+                value,
+                face: CollFace::Concrete,
+            } => Some(JType::library_map(key, value)),
+            _ => None,
+        }
+    }
+
+    /// A `List<E>` as the LIBRARY hands one back — `Arrays.asList`, `subList`,
+    /// `List.of`, `collect(toList())`, `Collections.emptyList()`. javac
+    /// declares every one of them to return the INTERFACE, so a program has to
+    /// cast before it can hold the result in an `ArrayList` variable.
+    fn library_list(elem: ElemType) -> JType {
+        JType::List {
+            elem,
+            face: CollFace::Iface,
+        }
+    }
+
+    /// A `Set<E>` as the library hands one back — `keySet()`, `Map.entry`
+    /// views, `Set.of`, `collect(toSet())`. The INTERFACE, as javac declares
+    /// every one of them.
+    fn library_set(elem: ElemType) -> JType {
+        JType::Set {
+            elem,
+            face: CollFace::Iface,
+        }
+    }
+
+    /// A `Map<K, V>` as the library hands one back — `Map.of`,
+    /// `Collectors.toMap`, `Collections.unmodifiableMap`. The INTERFACE.
+    fn library_map(key: ElemType, value: ElemType) -> JType {
+        JType::Map {
+            key,
+            value,
+            face: CollFace::Iface,
+        }
+    }
+
     /// The type as a DIAGNOSTIC names it. javac's spelling, down to the type
     /// arguments having no space after the comma (`Map<String,Integer>`) —
     /// caturra wrote them the readable way, which is one more thing for a
@@ -5930,49 +6224,53 @@ impl JType {
     fn describe(self, table: &MethodTable) -> String {
         match self {
             JType::Object(id) if id == table.object_id => String::from("Object"),
+            // A nested class's BINARY name (`Outer$Inner`) and a bundled erased
+            // interface (`__Comparator`) are implementation detail: javac names
+            // the class the source wrote, and a message showing either reads as
+            // caturra's bug rather than the program's. Done HERE rather than at
+            // each diagnostic — there are two hundred of them, and the ones
+            // that had been fixed were fixed one at a time.
+            JType::Object(id) => source_interface_name(table.class_name(id)).to_owned(),
             JType::Boxed(elem) => wrapper_name(elem, table),
             JType::Generic { class, arg, rest } => {
-                let mut args = vec![arg.base_type().describe(table)];
+                let mut args = vec![arg.describe_arg(table)];
                 let mut index = 1;
                 while let Some(next) = table.type_arg(arg, rest, index) {
-                    args.push(next.base_type().describe(table));
+                    args.push(next.describe_arg(table));
                     index += 1;
                 }
-                format!("{}<{}>", table.class_name(class), args.join(","))
+                format!(
+                    "{}<{}>",
+                    source_interface_name(table.class_name(class)),
+                    args.join(",")
+                )
             }
-            JType::Map { key, value } => format!(
-                "HashMap<{},{}>",
-                key.base_type().describe(table),
-                value.base_type().describe(table)
-            ),
-            JType::TreeMap { key, value, role } => format!(
-                "{}<{},{}>",
+            JType::Map { key, value, face } => parameterized(face.map_name(), &[key, value], table),
+            JType::TreeMap { key, value, role } => parameterized(
                 role.map_internal().rsplit('/').next().unwrap_or("TreeMap"),
-                key.base_type().describe(table),
-                value.base_type().describe(table)
+                &[key, value],
+                table,
             ),
-            JType::Set(elem) => format!("Set<{}>", elem.base_type().describe(table)),
-            JType::TreeSet(elem, role) => format!(
-                "{}<{}>",
+            JType::Set { elem, face } => parameterized(face.set_name(), &[elem], table),
+            JType::TreeSet(elem, role) => parameterized(
                 role.set_internal().rsplit('/').next().unwrap_or("TreeSet"),
-                elem.base_type().describe(table)
+                &[elem],
+                table,
             ),
-            JType::Stream(elem) => format!("Stream<{}>", elem.base_type().describe(table)),
+            JType::Stream(elem) => parameterized("Stream", &[elem], table),
             JType::Collector => String::from("Collector"),
             JType::IntStream => String::from("IntStream"),
             JType::IntSummaryStats => String::from("IntSummaryStatistics"),
             JType::DoubleStream => String::from("DoubleStream"),
             JType::LongStream => String::from("LongStream"),
-            JType::Iterator(elem) => format!("Iterator<{}>", elem.base_type().describe(table)),
-            JType::ListIterator(elem) => {
-                format!("ListIterator<{}>", elem.base_type().describe(table))
-            }
+            JType::Iterator(elem) => parameterized("Iterator", &[elem], table),
+            JType::ListIterator(elem) => parameterized("ListIterator", &[elem], table),
             JType::EntryIterator { key, value } => format!(
                 "Iterator<Map.Entry<{},{}>>",
-                key.base_type().describe(table),
-                value.base_type().describe(table)
+                key.describe_arg(table),
+                value.describe_arg(table)
             ),
-            JType::Optional(elem) => format!("Optional<{}>", elem.base_type().describe(table)),
+            JType::Optional(elem) => parameterized("Optional", &[elem], table),
             JType::OptionalInt => String::from("OptionalInt"),
             JType::OptionalDouble => String::from("OptionalDouble"),
             JType::OptionalLong => String::from("OptionalLong"),
@@ -5983,20 +6281,18 @@ impl JType {
                     SeqRole::Queue => "Queue",
                     SeqRole::Deque => "Deque",
                 };
-                format!("{name}<{}>", elem.base_type().describe(table))
+                parameterized(name, &[elem], table)
             }
-            JType::Collection(elem) => {
-                format!("Collection<{}>", elem.base_type().describe(table))
-            }
+            JType::Collection(elem) => parameterized("Collection", &[elem], table),
             JType::EntrySet { key, value } => format!(
                 "Set<Map.Entry<{},{}>>",
-                key.base_type().describe(table),
-                value.base_type().describe(table)
+                key.describe_arg(table),
+                value.describe_arg(table)
             ),
             JType::MapEntry { key, value } => format!(
                 "Map.Entry<{},{}>",
-                key.base_type().describe(table),
-                value.base_type().describe(table)
+                key.describe_arg(table),
+                value.describe_arg(table)
             ),
             JType::TypeVar(_) => String::from("Object"),
             JType::Int => String::from("int"),
@@ -6012,7 +6308,6 @@ impl JType {
                 }
                 out
             }
-            JType::Object(id) => table.class_name(id).to_owned(),
             JType::Long => String::from("long"),
             JType::Float => String::from("float"),
             JType::Short => String::from("short"),
@@ -6035,9 +6330,11 @@ impl JType {
             JType::Writer => String::from("PrintWriter"),
             JType::Reader => String::from("BufferedReader"),
             JType::Path => String::from("Path"),
-            JType::List(elem) => {
-                format!("ArrayList<{}>", wrapper_name(elem, table))
-            }
+            // The FACE the program wrote, not whichever of the two names
+            // caturra models the pair under: a diagnostic about a `List<String>`
+            // parameter named `ArrayList<String>`, a class the program never
+            // mentioned.
+            JType::List { elem, face } => parameterized(face.list_name(), &[elem], table),
             JType::Stack(elem) => {
                 format!("Stack<{}>", wrapper_name(elem, table))
             }
@@ -6072,12 +6369,12 @@ impl JType {
                 | JType::Writer
                 | JType::Reader
                 | JType::Path
-                | JType::List(_)
+                | JType::List { .. }
                 | JType::Stack(_)
                 | JType::LinkedList { .. }
                 | JType::Map { .. }
                 | JType::TreeMap { .. }
-                | JType::Set(_)
+                | JType::Set { .. }
                 | JType::TreeSet(_, _)
                 | JType::Stream(_)
                 | JType::Collector
@@ -6155,7 +6452,7 @@ impl JType {
             JType::Generic { class, .. } => format!("L{};", table.class_name(class)),
             JType::Map { .. } => String::from("Ljava/util/HashMap;"),
             JType::TreeMap { .. } => String::from("Ljava/util/TreeMap;"),
-            JType::Set(_) | JType::EntrySet { .. } => String::from("Ljava/util/Set;"),
+            JType::Set { .. } | JType::EntrySet { .. } => String::from("Ljava/util/Set;"),
             JType::TreeSet(_, role) => format!("L{};", role.set_internal()),
             JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
             JType::CharSequence => String::from("Ljava/lang/CharSequence;"),
@@ -6202,7 +6499,7 @@ impl JType {
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
             JType::Reader => String::from("Ljava/io/BufferedReader;"),
             JType::Path => String::from("Ljava/nio/file/Path;"),
-            JType::List(_) => String::from("Ljava/util/ArrayList;"),
+            JType::List { .. } => String::from("Ljava/util/ArrayList;"),
             JType::Stack(_) => String::from("Ljava/util/Stack;"),
             // Only reachable for methods that already produced a
             // diagnostic; the descriptor keeps the class file coherent.
@@ -8439,10 +8736,10 @@ fn receiver_class_name(receiver: JType) -> &'static str {
     match receiver {
         JType::Str => "String",
         JType::Scanner => "Scanner",
-        JType::List(_) => "ArrayList",
+        JType::List { .. } => "ArrayList",
         JType::Map { .. } => "HashMap",
         JType::TreeMap { role, .. } => role.map_internal().rsplit('/').next().unwrap_or("TreeMap"),
-        JType::Set(_) | JType::EntrySet { .. } => "Set",
+        JType::Set { .. } | JType::EntrySet { .. } => "Set",
         JType::TreeSet(_, role) => role.set_internal().rsplit('/').next().unwrap_or("TreeSet"),
         JType::LinkedList { .. } => "LinkedList",
         JType::Collection(_) => "Collection",
@@ -8601,8 +8898,16 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     // constructors already build. It was refused as "clone is not supported
     // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
     // returns `Object`, so a program casts the result, and casting back to a
-    // collection had to work first.
-    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
+    // collection had to work first. It is the CLASS's member, though:
+    // `ArrayList`, `HashSet`, `HashMap` and `LinkedList` declare it, and
+    // `List`, `Set`, `Map`, `Queue` and `Deque` do not.
+    bm_at(
+        "clone",
+        &[],
+        BRet::Object,
+        "()Ljava/lang/Object;",
+        SortedRole::Concrete,
+    ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     // `descendingIterator()` — the same cursor walked from the END.
@@ -9245,8 +9550,16 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
     // constructors already build. It was refused as "clone is not supported
     // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
     // returns `Object`, so a program casts the result, and casting back to a
-    // collection had to work first.
-    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
+    // collection had to work first. It is the CLASS's member, though:
+    // `ArrayList`, `HashSet`, `HashMap` and `LinkedList` declare it, and
+    // `List`, `Set`, `Map`, `Queue` and `Deque` do not.
+    bm_at(
+        "clone",
+        &[],
+        BRet::Object,
+        "()Ljava/lang/Object;",
+        SortedRole::Concrete,
+    ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
@@ -11539,8 +11852,16 @@ const MAP_METHODS: &[BuiltinMethod] = &[
     // constructors already build. It was refused as "clone is not supported
     // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
     // returns `Object`, so a program casts the result, and casting back to a
-    // collection had to work first.
-    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
+    // collection had to work first. It is the CLASS's member, though:
+    // `ArrayList`, `HashSet`, `HashMap` and `LinkedList` declare it, and
+    // `List`, `Set`, `Map`, `Queue` and `Deque` do not.
+    bm_at(
+        "clone",
+        &[],
+        BRet::Object,
+        "()Ljava/lang/Object;",
+        SortedRole::Concrete,
+    ),
     bm("size", &[], BRet::Int, "()I"),
     // `forEach(BiConsumer)`: the VM walks the entries in iteration order and
     // calls the lambda class's `accept` on each.
@@ -12089,8 +12410,16 @@ const SET_METHODS: &[BuiltinMethod] = &[
     // constructors already build. It was refused as "clone is not supported
     // by caturra" while `new ArrayList<>(list)` did the same work; the JDK
     // returns `Object`, so a program casts the result, and casting back to a
-    // collection had to work first.
-    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
+    // collection had to work first. It is the CLASS's member, though:
+    // `ArrayList`, `HashSet`, `HashMap` and `LinkedList` declare it, and
+    // `List`, `Set`, `Map`, `Queue` and `Deque` do not.
+    bm_at(
+        "clone",
+        &[],
+        BRet::Object,
+        "()Ljava/lang/Object;",
+        SortedRole::Concrete,
+    ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     // `descendingIterator()` — the same cursor walked from the END.
@@ -12610,7 +12939,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
-        JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
+        JType::List { .. } => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::ListIterator(_) => Some(("java/util/ListIterator", LIST_ITERATOR_METHODS)),
         JType::CharSequence => Some(("java/lang/CharSequence", CHAR_SEQUENCE_METHODS)),
         JType::Stack(_) => Some(("java/util/Stack", STACK_METHODS)),
@@ -12635,7 +12964,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         }),
         JType::Map { .. } => Some(("java/util/HashMap", MAP_METHODS)),
         JType::TreeMap { .. } => Some(("java/util/TreeMap", TREEMAP_METHODS)),
-        JType::Set(_) => Some(("java/util/Set", SET_METHODS)),
+        JType::Set { .. } => Some(("java/util/Set", SET_METHODS)),
         JType::TreeSet(_, role) => Some((role.set_internal(), TREESET_METHODS)),
         JType::Collection(_) => Some(("java/util/Collection", VIEW_METHODS)),
         JType::EntrySet { .. } => Some(("java/util/Set", ENTRY_SET_METHODS)),
@@ -13044,14 +13373,38 @@ impl TypeArgs {
         // that was forgotten would silently offer the whole table.
         let role = match receiver {
             JType::TreeSet(_, role) | JType::TreeMap { role, .. } => role,
+            // A hash collection's face is the same distinction with two values
+            // instead of three: the INTERFACE offers what `List`/`Set`/`Map`
+            // declare, and the class adds its own (`clone`, which only
+            // `ArrayList`/`HashSet`/`HashMap` have). Riding on the same `role`
+            // means the member lookup needed no new question asked of it.
+            JType::List {
+                face: CollFace::Iface,
+                ..
+            }
+            | JType::Set {
+                face: CollFace::Iface,
+                ..
+            }
+            | JType::Map {
+                face: CollFace::Iface,
+                ..
+            }
+            // ...and a queue's face is the same distinction a third time: a
+            // `LinkedList`/`ArrayDeque` declares `clone`, a `Queue`/`Deque`
+            // does not.
+            | JType::LinkedList {
+                role: SeqRole::Queue | SeqRole::Deque,
+                ..
+            } => SortedRole::Sorted,
             _ => SortedRole::Concrete,
         };
         let args = match receiver {
             // A list's element, and a view's own element, are the first
             // type argument; a map's key and value are the two.
-            JType::List(elem)
+            JType::List { elem, .. }
             | JType::Stack(elem)
-            | JType::Set(elem)
+            | JType::Set { elem, .. }
             | JType::TreeSet(elem, _)
             | JType::Stream(elem)
             | JType::Iterator(elem)
@@ -13088,7 +13441,7 @@ impl TypeArgs {
                 second: None,
                 ..Self::default()
             },
-            JType::Map { key, value }
+            JType::Map { key, value, .. }
             | JType::TreeMap { key, value, .. }
             | JType::EntrySet { key, value }
             | JType::EntryIterator { key, value }
@@ -13164,7 +13517,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
             elem: ElemType::Char,
             dims: 1,
         },
-        BParam::SelfList => args.first.map_or(JType::Error, JType::List),
+        BParam::SelfList => args.first.map_or(JType::Error, JType::library_list),
         BParam::SelfCollection => args.first.map_or(JType::Error, JType::Collection),
         // `add(E)`/`set(i, E)`/`contains(E)`: a nested element takes its true
         // inner type, so `grid.add("x")` on a `List<List<Integer>>` is refused.
@@ -13188,7 +13541,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Key => boxed_or_nested(args.first, table),
         BParam::Val => boxed_or_nested(args.second, table),
         BParam::SelfMap => match (args.first, args.second) {
-            (Some(key), Some(value)) => JType::Map { key, value },
+            (Some(key), Some(value)) => JType::library_map(key, value),
             _ => JType::Error,
         },
         BParam::Collector => JType::Collector,
@@ -13258,8 +13611,8 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         BParam::SelfCollection => match (arg, args.first) {
             (JType::Null, _) => true,
             (
-                JType::List(elem)
-                | JType::Set(elem)
+                JType::List { elem, .. }
+                | JType::Set { elem, .. }
                 | JType::TreeSet(elem, _)
                 | JType::Collection(elem)
                 | JType::Stack(elem)
@@ -13499,7 +13852,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             elem: ElemType::Byte,
             dims: 1,
         }),
-        BRet::SelfList => Some(args.first.map_or(JType::Error, JType::List)),
+        BRet::SelfList => Some(args.first.map_or(JType::Error, JType::library_list)),
         BRet::Elem => Some(
             args.first
                 .map_or(JType::Error, |elem| elem_value_type(elem, table)),
@@ -13604,7 +13957,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             },
             _ => JType::Error,
         }),
-        BRet::Keys => Some(args.first.map_or(JType::Error, JType::Set)),
+        BRet::Keys => Some(args.first.map_or(JType::Error, JType::library_set)),
         BRet::Values => Some(args.second.map_or(JType::Error, JType::Collection)),
         BRet::Entries => Some(match (args.first, args.second) {
             (Some(key), Some(value)) => JType::EntrySet { key, value },
@@ -14021,7 +14374,7 @@ impl BodyGen<'_> {
     fn record_local_debug(&mut self, name: &str, ty: JType, slot: u16) {
         let descriptor = ty.descriptor(self.table);
         let signature = match ty {
-            JType::List(elem) => Some(format!(
+            JType::List { elem, .. } => Some(format!(
                 "Ljava/util/ArrayList<{}>;",
                 ElemType::base_type(elem).descriptor(self.table)
             )),
@@ -15624,14 +15977,19 @@ impl BodyGen<'_> {
                 // very value being assigned to it.
                 if let [source] = args.as_slice() {
                     let copied = match self.type_of(source) {
-                        JType::Map { key, value } | JType::TreeMap { key, value, .. } => {
+                        JType::Map { key, value, .. } | JType::TreeMap { key, value, .. } => {
                             match crate::imports::canonical_library_class(class).unwrap_or(class) {
                                 "TreeMap" | "SortedMap" | "NavigableMap" => Some(JType::TreeMap {
                                     key,
                                     value,
                                     role: SortedRole::of_name(class),
                                 }),
-                                "HashMap" | "Map" => Some(JType::Map { key, value }),
+                                // A `new` makes the CLASS, whichever of the two names it wrote.
+                                "HashMap" | "Map" => Some(JType::Map {
+                                    key,
+                                    value,
+                                    face: CollFace::Concrete,
+                                }),
                                 _ => None,
                             }
                         }
@@ -15699,12 +16057,9 @@ impl BodyGen<'_> {
             {
                 let object = ElemType::Object(self.table.object_id);
                 inferred = match kind {
-                    EmptyKind::List => JType::List(object),
-                    EmptyKind::Set => JType::Set(object),
-                    EmptyKind::Map => JType::Map {
-                        key: object,
-                        value: object,
-                    },
+                    EmptyKind::List => JType::library_list(object),
+                    EmptyKind::Set => JType::library_set(object),
+                    EmptyKind::Map => JType::library_map(object, object),
                 };
             }
             if matches!(inferred, JType::Null | JType::Error)
@@ -15832,18 +16187,26 @@ impl BodyGen<'_> {
             _ => from == to,
         };
         match (init_ty, target) {
-            (JType::List(from), JType::List(to) | JType::Collection(to))
-            | (JType::Set(from), JType::Set(to) | JType::Collection(to))
-            | (JType::TreeSet(from, _), JType::TreeSet(to, _) | JType::Set(to))
+            (
+                JType::List { elem: from, .. },
+                JType::List { elem: to, .. } | JType::Collection(to),
+            )
+            | (
+                JType::Set { elem: from, .. },
+                JType::Set { elem: to, .. } | JType::Collection(to),
+            )
+            | (JType::TreeSet(from, _), JType::TreeSet(to, _) | JType::Set { elem: to, .. })
             | (JType::Collection(from), JType::Collection(to)) => widens(from, to),
             (
                 JType::Map {
                     key: from_key,
                     value: from_value,
+                    ..
                 },
                 JType::Map {
                     key: to_key,
                     value: to_value,
+                    ..
                 },
             ) => widens(from_key, to_key) && widens(from_value, to_value),
             _ => false,
@@ -17449,7 +17812,7 @@ impl BodyGen<'_> {
             return None;
         };
         match self.type_of(source) {
-            JType::Map { key, value } | JType::TreeMap { key, value, .. } => Some((key, value)),
+            JType::Map { key, value, .. } | JType::TreeMap { key, value, .. } => Some((key, value)),
             _ => None,
         }
     }
@@ -17463,7 +17826,7 @@ impl BodyGen<'_> {
             return None;
         };
         match self.type_of(source) {
-            JType::Map { key, value } => Some((key, value)),
+            JType::Map { key, value, .. } => Some((key, value)),
             _ => None,
         }
     }
@@ -17527,13 +17890,17 @@ impl BodyGen<'_> {
                 // UNWRITTEN, which is the raw marker — matching what
                 // `new_array_list` returns. It used to be `Null`, assignable
                 // to any reference at all.
-                [arg] => JType::List(
-                    elem_from_type_arg(arg, self.table).unwrap_or_else(|| self.diamond_elem()),
-                ),
-                _ => JType::List(
-                    self.copy_source_element(args)
+                [arg] => JType::List {
+                    elem: elem_from_type_arg(arg, self.table)
                         .unwrap_or_else(|| self.diamond_elem()),
-                ),
+                    face: CollFace::Concrete,
+                },
+                _ => JType::List {
+                    elem: self
+                        .copy_source_element(args)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                    face: CollFace::Concrete,
+                },
             },
             "Stack" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Stack),
@@ -17556,16 +17923,21 @@ impl BodyGen<'_> {
                 JType::Map {
                     key: key.unwrap_or_else(|| self.diamond_elem()),
                     value: value.unwrap_or_else(|| self.diamond_elem()),
+                    face: CollFace::Concrete,
                 }
             }
             "HashSet" | "Set" | "LinkedHashSet" => match type_args {
-                [arg] => JType::Set(
-                    elem_from_type_arg(arg, self.table).unwrap_or_else(|| self.diamond_elem()),
-                ),
-                _ => JType::Set(
-                    self.copy_source_element(args)
+                [arg] => JType::Set {
+                    elem: elem_from_type_arg(arg, self.table)
                         .unwrap_or_else(|| self.diamond_elem()),
-                ),
+                    face: CollFace::Concrete,
+                },
+                _ => JType::Set {
+                    elem: self
+                        .copy_source_element(args)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                    face: CollFace::Concrete,
+                },
             },
             "LinkedList" => match type_args {
                 [arg] => JType::LinkedList {
@@ -18545,7 +18917,11 @@ impl BodyGen<'_> {
             }
             _ => unreachable!("arg count checked above"),
         }
-        JType::List(elem.unwrap_or_else(|| self.diamond_elem()))
+        // The `new` makes the CLASS, the one shape in the language that does.
+        JType::List {
+            elem: elem.unwrap_or_else(|| self.diamond_elem()),
+            face: CollFace::Concrete,
+        }
     }
 
     /// `new Stack<E>()` — the only constructor `java.util.Stack` declares. (It
@@ -18731,7 +19107,7 @@ impl BodyGen<'_> {
                 // `new HashMap<>(map)` copies; `new HashMap<>(16)` sizes. A
                 // SORTED map is a Map too — `new HashMap<>(treeMap)` used to be
                 // refused as neither.
-                let descriptor = if let JType::Map { key, value }
+                let descriptor = if let JType::Map { key, value, .. }
                 | JType::TreeMap { key, value, .. } = source_ty
                 {
                     if entry.is_none() {
@@ -18750,11 +19126,17 @@ impl BodyGen<'_> {
             }
             _ => unreachable!("arg count checked above"),
         }
+        // The `new` makes the CLASS.
         match entry {
-            Some((key, value)) => JType::Map { key, value },
+            Some((key, value)) => JType::Map {
+                key,
+                value,
+                face: CollFace::Concrete,
+            },
             None => JType::Map {
                 key: self.diamond_elem(),
                 value: self.diamond_elem(),
+                face: CollFace::Concrete,
             },
         }
     }
@@ -18921,8 +19303,8 @@ impl BodyGen<'_> {
         };
         match factory {
             "joining" => JType::Str,
-            "toSet" | "toUnmodifiableSet" if !erased => JType::Set(stream_elem),
-            "toList" | "toUnmodifiableList" if !erased => JType::List(stream_elem),
+            "toSet" | "toUnmodifiableSet" if !erased => JType::library_set(stream_elem),
+            "toList" | "toUnmodifiableList" if !erased => JType::library_list(stream_elem),
             _ => JType::Null,
         }
     }
@@ -19179,9 +19561,16 @@ impl BodyGen<'_> {
             }
             _ => unreachable!("arg count checked above"),
         }
+        // The `new` makes the CLASS, whichever of the three names it wrote.
         match elem {
-            Some(elem) => JType::Set(elem),
-            None => JType::Set(self.diamond_elem()),
+            Some(elem) => JType::Set {
+                elem,
+                face: CollFace::Concrete,
+            },
+            None => JType::Set {
+                elem: self.diamond_elem(),
+                face: CollFace::Concrete,
+            },
         }
     }
 
@@ -19292,7 +19681,7 @@ impl BodyGen<'_> {
             [source] => {
                 let source_ty = self.expr(source);
                 let descriptor = match source_ty {
-                    JType::Map { key, value } | JType::TreeMap { key, value, .. } => {
+                    JType::Map { key, value, .. } | JType::TreeMap { key, value, .. } => {
                         if entry.is_none() {
                             entry = Some((key, value));
                         }
@@ -19574,12 +19963,12 @@ impl BodyGen<'_> {
             | JType::Writer
             | JType::Reader
             | JType::Path
-            | JType::List(_)
+            | JType::List { .. }
             | JType::Stack(_)
             | JType::LinkedList { .. }
             | JType::Map { .. }
             | JType::TreeMap { .. }
-            | JType::Set(_)
+            | JType::Set { .. }
             | JType::TreeSet(_, _)
             | JType::Stream(_)
             | JType::Collector
@@ -19660,15 +20049,9 @@ impl BodyGen<'_> {
                 let (table_ty, table) = match empty_collection_kind(receiver)
                     .or_else(|| collected_collection_kind(receiver))
                 {
-                    Some(EmptyKind::List) => (JType::List(general), LIST_METHODS),
-                    Some(EmptyKind::Set) => (JType::Set(general), SET_METHODS),
-                    Some(EmptyKind::Map) => (
-                        JType::Map {
-                            key: general,
-                            value: general,
-                        },
-                        MAP_METHODS,
-                    ),
+                    Some(EmptyKind::List) => (JType::library_list(general), LIST_METHODS),
+                    Some(EmptyKind::Set) => (JType::library_set(general), SET_METHODS),
+                    Some(EmptyKind::Map) => (JType::library_map(general, general), MAP_METHODS),
                     None if is_empty_optional(receiver) => {
                         (JType::Optional(general), OPTIONAL_METHODS)
                     }
@@ -19766,22 +20149,22 @@ impl BodyGen<'_> {
         // taking the first element's type.
         match (path[0].as_str(), method.as_str()) {
             ("List", "of") | ("Arrays", "asList") => {
-                Some(JType::List(self.joined_literal_elem(args)))
+                Some(JType::library_list(self.joined_literal_elem(args)))
             }
-            ("Set", "of") => Some(JType::Set(self.joined_literal_elem(args))),
+            ("Set", "of") => Some(JType::library_set(self.joined_literal_elem(args))),
             // `copyOf(c)` takes its element from the SOURCE, not from reading
             // the argument as an element of the result.
             ("Map", "copyOf") => Some(
                 self.copy_source_map(args)
-                    .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
+                    .map_or(JType::Null, |(key, value)| JType::library_map(key, value)),
             ),
             ("List", "copyOf") => Some(
                 self.copy_source_element(args)
-                    .map_or(JType::Null, JType::List),
+                    .map_or(JType::Null, JType::library_list),
             ),
             ("Set", "copyOf") => Some(
                 self.copy_source_element(args)
-                    .map_or(JType::Null, JType::Set),
+                    .map_or(JType::Null, JType::library_set),
             ),
             // `Map.of(k, v, ...)` — the keys and values alternate, so each
             // side joins its own half. Left out here, a map literal typed as
@@ -19789,10 +20172,10 @@ impl BodyGen<'_> {
             ("Map", "of") if args.len().is_multiple_of(2) => {
                 let keys: Vec<Expr> = args.iter().step_by(2).cloned().collect();
                 let values: Vec<Expr> = args.iter().skip(1).step_by(2).cloned().collect();
-                Some(JType::Map {
-                    key: self.joined_literal_elem(&keys),
-                    value: self.joined_literal_elem(&values),
-                })
+                Some(JType::library_map(
+                    self.joined_literal_elem(&keys),
+                    self.joined_literal_elem(&values),
+                ))
             }
             _ => None,
         }
@@ -19978,10 +20361,10 @@ impl BodyGen<'_> {
             && args.is_empty()
             && matches!(
                 receiver_ty,
-                JType::List(_)
+                JType::List { .. }
                     | JType::Stack(_)
                     | JType::LinkedList { .. }
-                    | JType::Set(_)
+                    | JType::Set { .. }
                     | JType::TreeSet(_, _)
                     | JType::Collection(_)
                     | JType::EntrySet { .. }
@@ -20457,10 +20840,10 @@ impl BodyGen<'_> {
                 continue;
             }
             let ty = match ty {
-                JType::List(_)
+                JType::List { .. }
                 | JType::Stack(_)
                 | JType::Map { .. }
-                | JType::Set(_)
+                | JType::Set { .. }
                 | JType::Collection(_)
                 | JType::EntrySet { .. }
                 | JType::MapEntry { .. }
@@ -20591,11 +20974,11 @@ impl BodyGen<'_> {
                 JType::Array {
                     elem: ElemType::Str,
                     dims: 1
-                } | JType::List(_)
+                } | JType::List { .. }
                     | JType::Collection(_)
                     // `join(delimiter, Iterable)` takes ANY collection, which is
                     // how a Set reaches it.
-                    | JType::Set(_)
+                    | JType::Set { .. }
                     | JType::TreeSet(_, _)
                     | JType::Stack(_)
                     | JType::LinkedList { .. }
@@ -20682,7 +21065,7 @@ impl BodyGen<'_> {
                 "java/nio/file/Files",
                 &[(JType::Path, "Ljava/nio/file/Path;")],
                 "Ljava/util/List;",
-                Some(JType::List(ElemType::Str)),
+                Some(JType::library_list(ElemType::Str)),
             )),
             // `Files.lines(path)` is `readAllLines` as a STREAM. A JDK's is
             // lazy and closeable; this one reads the file at once, which is
@@ -20698,7 +21081,7 @@ impl BodyGen<'_> {
                 "java/nio/file/Files",
                 &[
                     (JType::Path, "Ljava/nio/file/Path;"),
-                    (JType::List(ElemType::Str), "Ljava/lang/Iterable;"),
+                    (JType::library_list(ElemType::Str), "Ljava/lang/Iterable;"),
                 ],
                 "Ljava/nio/file/Path;",
                 Some(JType::Path),
@@ -20744,7 +21127,7 @@ impl BodyGen<'_> {
             // takes any list of strings.
             let ok = got == *want
                 || (*want == JType::Str && got == JType::Str)
-                || matches!((want, got), (JType::List(_), JType::List(_)));
+                || matches!((want, got), (JType::List { .. }, JType::List { .. }));
             if !ok {
                 self.error(
                     arg.span(),
@@ -20833,8 +21216,8 @@ impl BodyGen<'_> {
                 self.type_of(arg),
                 JType::Object(_)
                     | JType::StringBuilder
-                    | JType::List(_)
-                    | JType::Set(_)
+                    | JType::List { .. }
+                    | JType::Set { .. }
                     | JType::Map { .. }
                     | JType::Exception(_)
             )
@@ -21148,11 +21531,11 @@ impl BodyGen<'_> {
             JType::File => String::from("java/io/File"),
             JType::Path => String::from("java/nio/file/Path"),
             JType::StringBuilder => String::from("java/lang/StringBuilder"),
-            JType::List(_) => String::from("java/util/ArrayList"),
+            JType::List { .. } => String::from("java/util/ArrayList"),
             JType::Stack(_) => String::from("java/util/Stack"),
             JType::Object(class_id) => self.table.class_name(class_id).to_owned(),
             JType::Map { .. }
-            | JType::Set(_)
+            | JType::Set { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
@@ -21447,7 +21830,7 @@ impl BodyGen<'_> {
         // Every intrinsic collection compiles to the same index loop: caturra
         // has no iterators, so each exposes a positional accessor instead.
         let indexed = match iterable_ty {
-            JType::List(elem) | JType::Stack(elem) | JType::LinkedList { elem, .. } => {
+            JType::List { elem, .. } | JType::Stack(elem) | JType::LinkedList { elem, .. } => {
                 // A WILDCARD element (`List<?>`) resolves to `Object`, but the
                 // list may store unboxed primitives, so the fetch must BOX (the
                 // unboxed `get` would leave an `int` where the `Object` loop
@@ -21459,7 +21842,7 @@ impl BodyGen<'_> {
                     Some(("get", elem_value_type(elem, self.table)))
                 }
             }
-            JType::Set(elem) | JType::TreeSet(elem, _) | JType::Collection(elem) => {
+            JType::Set { elem, .. } | JType::TreeSet(elem, _) | JType::Collection(elem) => {
                 Some(("__get", boxed_or_nested(Some(elem), self.table)))
             }
             JType::EntrySet { key, value } => Some(("__get", JType::MapEntry { key, value })),
@@ -21793,7 +22176,7 @@ impl BodyGen<'_> {
         // since it may be either.
         let hash_ordered = matches!(
             iterable_ty,
-            JType::Set(_) | JType::TreeSet(_, _) | JType::EntrySet { .. }
+            JType::Set { .. } | JType::TreeSet(_, _) | JType::EntrySet { .. }
         );
         self.code.bind(cond_label);
         self.emit_load(index_slot, JType::Int);
@@ -22262,12 +22645,12 @@ impl BodyGen<'_> {
                     "__mapCopyOf",
                     "java/util/HashMap",
                     self.copy_source_map(args)
-                        .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
+                        .map_or(JType::Null, |(key, value)| JType::library_map(key, value)),
                 ),
                 "Set" => (
                     "__setCopyOf",
                     "java/util/HashSet",
-                    JType::Set(
+                    JType::library_set(
                         copy_element_of(source_ty, self.table)
                             .unwrap_or(ElemType::Object(self.table.object_id)),
                     ),
@@ -22275,7 +22658,7 @@ impl BodyGen<'_> {
                 _ => (
                     "__listCopyOf",
                     "java/util/ArrayList",
-                    JType::List(
+                    JType::library_list(
                         copy_element_of(source_ty, self.table)
                             .unwrap_or(ElemType::Object(self.table.object_id)),
                     ),
@@ -22637,7 +23020,7 @@ impl BodyGen<'_> {
                 intern_method_ref(self.pool, "Collections", "singletonList", &descriptor);
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
             self.code.drop_stack(value_ty.width());
-            return Some(Some(JType::List(elem)));
+            return Some(Some(JType::library_list(elem)));
         }
         // `emptySet()`/`emptyMap()` — immutable empty collections whose element
         // type comes from the assignment context, so they type as `null`.
@@ -22681,7 +23064,7 @@ impl BodyGen<'_> {
             let method_ref = intern_method_ref(self.pool, "Collections", "singleton", &descriptor);
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
             self.code.drop_stack(elem.base_type().width());
-            return Some(Some(JType::Set(elem)));
+            return Some(Some(JType::library_set(elem)));
         }
         // `singletonMap(k, v)` — an immutable one-entry `Map`.
         if method == "singletonMap" {
@@ -22718,7 +23101,7 @@ impl BodyGen<'_> {
                 intern_method_ref(self.pool, "Collections", "singletonMap", &descriptor);
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
             self.code.drop_stack(key_ty.width() + value_ty.width());
-            return Some(Some(JType::Map { key, value }));
+            return Some(Some(JType::library_map(key, value)));
         }
         // `unmodifiableCollection(c)` — the same read-only view its List/Set
         // siblings give, but typed (and usable) as the `Collection` face, so it
@@ -22753,7 +23136,7 @@ impl BodyGen<'_> {
         if method == "addAll"
             && let Some(collection) = args.first()
             && let Some(elem) = any_collection_elem(self.type_of(collection), self.table)
-            && !matches!(self.type_of(collection), JType::List(_))
+            && !matches!(self.type_of(collection), JType::List { .. })
         {
             self.expr(collection);
             let elements = JType::Array { elem, dims: 1 };
@@ -22785,7 +23168,7 @@ impl BodyGen<'_> {
             let collection_ty = self.expr(collection);
             let wants_set = method == "unmodifiableSet";
             let ok = if wants_set {
-                matches!(collection_ty, JType::Set(_) | JType::TreeSet(_, _))
+                matches!(collection_ty, JType::Set { .. } | JType::TreeSet(_, _))
             } else {
                 matches!(collection_ty, JType::Map { .. } | JType::TreeMap { .. })
             };
@@ -22851,7 +23234,7 @@ impl BodyGen<'_> {
             if value_ty == JType::Null {
                 return Some(Some(JType::Null));
             }
-            return Some(Some(JType::List(elem)));
+            return Some(Some(JType::library_list(elem)));
         }
 
         // `Collections.max(list, cmp)` / `min(list, cmp)` /
@@ -22865,7 +23248,7 @@ impl BodyGen<'_> {
                 self.is_comparator_type(last_ty)
             }
         {
-            let JType::List(elem) = self.type_of(&args[0]) else {
+            let JType::List { elem, .. } = self.type_of(&args[0]) else {
                 self.no_suitable_library_method("Collections", method, args, span);
                 return None;
             };
@@ -22911,7 +23294,7 @@ impl BodyGen<'_> {
             }
             let first = self.type_of(&args[0]);
             let Some(elem) = (match first {
-                JType::List(elem)
+                JType::List { elem, .. }
                 | JType::Stack(elem)
                 | JType::LinkedList {
                     elem,
@@ -22960,7 +23343,7 @@ impl BodyGen<'_> {
                 any_collection_elem(first, self.table)
             } else {
                 match first {
-                    JType::List(elem)
+                    JType::List { elem, .. }
                     | JType::Stack(elem)
                     | JType::LinkedList {
                         elem,
@@ -23001,7 +23384,7 @@ impl BodyGen<'_> {
                 _ => {
                     let source = self.type_of(&args[1]);
                     let compatible = if method == "copy" {
-                        source == JType::List(elem)
+                        matches!(source, JType::List { elem: from, .. } if from == elem)
                     } else {
                         collection_element_type(source, self.table).is_some()
                     };
@@ -23033,7 +23416,7 @@ impl BodyGen<'_> {
         // `Collections.sort(list, comparator)` — the comparator is a
         // desugared `__Comparator`, and the element need not be Comparable.
         if method == "sort" && args.len() == 2 {
-            let JType::List(elem) = self.type_of(&args[0]) else {
+            let JType::List { elem, .. } = self.type_of(&args[0]) else {
                 self.no_suitable_library_method("Collections", method, args, span);
                 return None;
             };
@@ -23085,7 +23468,7 @@ impl BodyGen<'_> {
         // denotes, and the result assigns onward like any other list.
         let diamond_argument = self.type_of(&args[0]) == JType::Null;
         let list_ty = if diamond_argument {
-            JType::List(ElemType::Object(self.table.object_id))
+            JType::library_list(ElemType::Object(self.table.object_id))
         } else {
             self.type_of(&args[0])
         };
@@ -23099,7 +23482,7 @@ impl BodyGen<'_> {
             any_collection_elem(list_ty, self.table)
         } else {
             match list_ty {
-                JType::List(elem)
+                JType::List { elem, .. }
                 | JType::Stack(elem)
                 | JType::LinkedList {
                     elem,
@@ -23529,7 +23912,7 @@ impl BodyGen<'_> {
         let method_ref = intern_method_ref(self.pool, "Arrays", "asList", &descriptor);
         self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
         self.code.drop_stack(1); // the array argument
-        Some(Some(JType::List(elem)))
+        Some(Some(JType::library_list(elem)))
     }
 
     /// `List.of(...)` / `Set.of(...)` / `Map.of(k, v, ...)` — Java 9's
@@ -23576,15 +23959,9 @@ impl BodyGen<'_> {
         };
         self.emit_array_literal(args, array_ty, span);
         let (name, ret) = match class {
-            "List" => ("__listOf", JType::List(elem)),
-            "Set" => ("__setOf", JType::Set(elem)),
-            _ => (
-                "__mapOf",
-                JType::Map {
-                    key: elem,
-                    value: value_elem,
-                },
-            ),
+            "List" => ("__listOf", JType::library_list(elem)),
+            "Set" => ("__setOf", JType::library_set(elem)),
+            _ => ("__mapOf", JType::library_map(elem, value_elem)),
         };
         let descriptor = format!(
             "([Ljava/lang/Object;)L{};",
@@ -23645,21 +24022,20 @@ impl BodyGen<'_> {
                 // `copyOf(c)` reads them from the SOURCE COLLECTION, so
                 // treating the argument as an element made
                 // `List.copyOf(aStringList)` a `List<Object>`.
-                ("List", "of") => JType::List(self.joined_literal_elem(args)),
-                ("Set", "of") => JType::Set(self.joined_literal_elem(args)),
+                ("List", "of") => JType::library_list(self.joined_literal_elem(args)),
+                ("Set", "of") => JType::library_set(self.joined_literal_elem(args)),
                 ("List", "copyOf") => self
                     .copy_source_element(args)
-                    .map_or(JType::Null, JType::List),
+                    .map_or(JType::Null, JType::library_list),
                 ("Set", "copyOf") => self
                     .copy_source_element(args)
-                    .map_or(JType::Null, JType::Set),
+                    .map_or(JType::Null, JType::library_set),
                 ("Map", "copyOf") => self
                     .copy_source_map(args)
-                    .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
-                ("Map", "of" | "ofEntries") => JType::Map {
-                    key: element(self, 0),
-                    value: element(self, 1),
-                },
+                    .map_or(JType::Null, |(key, value)| JType::library_map(key, value)),
+                ("Map", "of" | "ofEntries") => {
+                    JType::library_map(element(self, 0), element(self, 1))
+                }
                 // `Stream.of(...)` and `new AbstractMap.SimpleEntry<>(k, v)`
                 // are built by their own emitters, not a method table, so
                 // neither had a return type to infer from.
@@ -23670,12 +24046,9 @@ impl BodyGen<'_> {
                 ("IntStream", "empty") => JType::IntStream,
                 ("LongStream", "empty") => JType::LongStream,
                 ("DoubleStream", "empty") => JType::DoubleStream,
-                ("Collections", "emptyList") => JType::List(object),
-                ("Collections", "emptySet") => JType::Set(object),
-                ("Collections", "emptyMap") => JType::Map {
-                    key: object,
-                    value: object,
-                },
+                ("Collections", "emptyList") => JType::library_list(object),
+                ("Collections", "emptySet") => JType::library_set(object),
+                ("Collections", "emptyMap") => JType::library_map(object, object),
                 // javac infers `Optional<Object>` here, the same way it
                 // infers `List<Object>` for `List.of()` — the context-free
                 // form of a type that otherwise adopts its context.
@@ -24284,7 +24657,7 @@ impl BodyGen<'_> {
             | JType::Boxed(_)
             | JType::Map { .. }
             | JType::TreeMap { .. }
-            | JType::Set(_)
+            | JType::Set { .. }
             | JType::TreeSet(_, _)
             | JType::Stream(_)
             | JType::Collector
@@ -24320,7 +24693,7 @@ impl BodyGen<'_> {
             // consulted; File is coerced to its path string upstream.
             JType::Str
             | JType::Object(_)
-            | JType::List(_)
+            | JType::List { .. }
             | JType::Stack(_)
             | JType::Exception(_)
             | JType::File
@@ -24936,12 +25309,9 @@ impl BodyGen<'_> {
                             let table_ty = match empty_collection_kind(source)
                                 .or_else(|| collected_collection_kind(source))
                             {
-                                Some(EmptyKind::List) => JType::List(general),
-                                Some(EmptyKind::Set) => JType::Set(general),
-                                Some(EmptyKind::Map) => JType::Map {
-                                    key: general,
-                                    value: general,
-                                },
+                                Some(EmptyKind::List) => JType::library_list(general),
+                                Some(EmptyKind::Set) => JType::library_set(general),
+                                Some(EmptyKind::Map) => JType::library_map(general, general),
                                 None if is_empty_optional(source) => JType::Optional(general),
                                 None if is_empty_stream(source) => JType::Stream(general),
                                 // A factory WITH arguments knows its element,
@@ -25081,11 +25451,13 @@ impl BodyGen<'_> {
                             if value == JType::Null {
                                 return JType::Null;
                             }
-                            return collection_elem_of(value).map_or(JType::Error, JType::List);
+                            return collection_elem_of(value)
+                                .map_or(JType::Error, JType::library_list);
                         }
                         "singletonList" => {
                             let value = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return collection_elem_of(value).map_or(JType::Error, JType::List);
+                            return collection_elem_of(value)
+                                .map_or(JType::Error, JType::library_list);
                         }
                         "reverseOrder" => {
                             return self
@@ -25095,13 +25467,14 @@ impl BodyGen<'_> {
                         }
                         "singleton" => {
                             let value = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return collection_elem_of(value).map_or(JType::Error, JType::Set);
+                            return collection_elem_of(value)
+                                .map_or(JType::Error, JType::library_set);
                         }
                         "singletonMap" => {
                             let key = args.first().map_or(JType::Error, |a| self.type_of(a));
                             let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
                             return match (collection_elem_of(key), collection_elem_of(value)) {
-                                (Some(key), Some(value)) => JType::Map { key, value },
+                                (Some(key), Some(value)) => JType::library_map(key, value),
                                 _ => JType::Error,
                             };
                         }
@@ -25212,7 +25585,7 @@ impl BodyGen<'_> {
                                     .and_then(|a| collection_elem_of(self.type_of(a)))
                                     .unwrap_or(object_elem),
                             };
-                            return JType::List(elem);
+                            return JType::library_list(elem);
                         }
                         _ => {}
                     }
@@ -25226,7 +25599,7 @@ impl BodyGen<'_> {
                             return JType::Path;
                         }
                         ("Files", "readString") => return JType::Str,
-                        ("Files", "readAllLines") => return JType::List(ElemType::Str),
+                        ("Files", "readAllLines") => return JType::library_list(ElemType::Str),
                         ("Files", "lines") => return JType::Stream(ElemType::Str),
                         ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => {
                             return JType::Boolean;
@@ -25843,7 +26216,7 @@ impl BodyGen<'_> {
             JType::Boxed(elem) => wrapper_internal(elem).to_owned(),
             JType::Str => String::from("java/lang/String"),
             // `x instanceof ArrayList<…>` — a runtime list check.
-            JType::List(_) => String::from("java/util/ArrayList"),
+            JType::List { .. } => String::from("java/util/ArrayList"),
             JType::Stack(_) => String::from("java/util/Stack"),
             JType::Map { .. } => String::from("java/util/HashMap"),
             // `it instanceof Iterator` — the VM answers for a cursor whatever
@@ -27185,6 +27558,7 @@ impl BodyGen<'_> {
             JType::Map {
                 key: from_key,
                 value: from_value,
+                ..
             }
             | JType::TreeMap {
                 key: from_key,
@@ -27194,6 +27568,7 @@ impl BodyGen<'_> {
             JType::Map {
                 key: to_key,
                 value: to_value,
+                ..
             }
             | JType::TreeMap {
                 key: to_key,
@@ -27241,8 +27616,36 @@ impl BodyGen<'_> {
                     }
                 })
             }
-            JType::List(_)
-            | JType::Set(_)
+            // A collection whose FACE is the class behaves like one: no
+            // subclass of `ArrayList` is also a `Parent`, where a `List`
+            // variable could hold something that is.
+            JType::List {
+                face: CollFace::Concrete,
+                ..
+            }
+            | JType::Set {
+                face: CollFace::Concrete,
+                ..
+            }
+            | JType::Map {
+                face: CollFace::Concrete,
+                ..
+            }
+            // The same for the collections whose role already records it: a
+            // `TreeSet`/`TreeMap` written as its concrete name, a `Stack`
+            // (which has no interface at all), and the two concrete deques.
+            | JType::TreeSet(_, SortedRole::Concrete)
+            | JType::TreeMap {
+                role: SortedRole::Concrete,
+                ..
+            }
+            | JType::Stack(_)
+            | JType::LinkedList {
+                role: SeqRole::Full | SeqRole::ArrayDeque,
+                ..
+            } => CastFace::Class,
+            JType::List { .. }
+            | JType::Set { .. }
             | JType::TreeSet(_, _)
             | JType::Collection(_)
             | JType::EntrySet { .. }
@@ -27250,7 +27653,6 @@ impl BodyGen<'_> {
             | JType::Map { .. }
             | JType::TreeMap { .. }
             | JType::LinkedList { .. }
-            | JType::Stack(_)
             | JType::Iterator(_)
             | JType::ListIterator(_)
             | JType::EntryIterator { .. }
@@ -27347,10 +27749,10 @@ impl BodyGen<'_> {
         if source.is_reference()
             && matches!(
                 target,
-                JType::List(_)
+                JType::List { .. }
                     | JType::Map { .. }
                     | JType::TreeMap { .. }
-                    | JType::Set(_)
+                    | JType::Set { .. }
                     | JType::TreeSet(_, _)
                     | JType::LinkedList { .. }
                     | JType::Collection(_)
@@ -27952,6 +28354,20 @@ impl BodyGen<'_> {
         }
         if widens(els_ty, then_ty, self.table) {
             return then_ty;
+        }
+        // Two collections join at the INTERFACE they share: `flag ? new
+        // ArrayList<>() : new LinkedList<>()` is a `List<String>`, which is
+        // both what javac infers and the only thing the two have in common.
+        // Neither widens to the other now that a face is a class or an
+        // interface, so without this the join fell all the way to `Object` and
+        // the assignment that follows was refused.
+        for (one, other) in [(then_ty, els_ty), (els_ty, then_ty)] {
+            let Some(face) = one.as_interface_face() else {
+                continue;
+            };
+            if widens(other, face, self.table) {
+                return face;
+            }
         }
         // Two unrelated CLASSES that share an interface join there — which
         // is what makes `flag ? P::inc : P::dec` an `Op`: each branch is its
@@ -28608,12 +29024,7 @@ impl BodyGen<'_> {
             self.expr(rhs);
             self.error(
                 span,
-                format!(
-                    "operator '{}' cannot be applied to {} and {}",
-                    comparison_symbol(op),
-                    lt.describe(self.table),
-                    rt.describe(self.table)
-                ),
+                bad_operand_types(comparison_symbol(op), lt, rt, self.table),
             );
             return JType::Error;
         }
@@ -28839,7 +29250,7 @@ impl BodyGen<'_> {
             | JType::Boxed(_)
             | JType::Map { .. }
             | JType::TreeMap { .. }
-            | JType::Set(_)
+            | JType::Set { .. }
             | JType::TreeSet(_, _)
             | JType::Stream(_)
             | JType::Collector
@@ -28875,7 +29286,7 @@ impl BodyGen<'_> {
             JType::Char => "(C)Ljava/lang/StringBuilder;",
             JType::Str
             | JType::Object(_)
-            | JType::List(_)
+            | JType::List { .. }
             | JType::Stack(_)
             | JType::File
             | JType::Path
@@ -29253,10 +29664,10 @@ impl BodyGen<'_> {
             | JType::Scanner
             | JType::File
             | JType::Writer
-            | JType::List(_)
+            | JType::List { .. }
             | JType::Stack(_)
             | JType::Map { .. }
-            | JType::Set(_)
+            | JType::Set { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
@@ -29278,10 +29689,10 @@ impl BodyGen<'_> {
             | JType::Scanner
             | JType::File
             | JType::Writer
-            | JType::List(_)
+            | JType::List { .. }
             | JType::Stack(_)
             | JType::Map { .. }
-            | JType::Set(_)
+            | JType::Set { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
@@ -29440,13 +29851,29 @@ impl BodyGen<'_> {
                 let before = self.diagnostics.len();
                 self.emit_unbox(elem);
                 self.convert_for_assignment(primitive, to, span);
+                // Either shape the primitive attempt reports: `byte b =
+                // aDouble;` is javac's "Double cannot be converted to byte"
+                // and not "possible lossy conversion from double to byte" —
+                // the narrowing rule is about a primitive the program HAS,
+                // and a wrapper is not one.
+                let unboxed_message = |kind: &str| {
+                    format!(
+                        "incompatible types: {kind}from {} to {}",
+                        primitive.describe(self.table),
+                        to.describe(self.table)
+                    )
+                };
+                let reported_about_the_primitive = |message: &str| {
+                    message == unboxed_message("possible lossy conversion ")
+                        || message
+                            == format!(
+                                "incompatible types: {} cannot be converted to {}",
+                                primitive.describe(self.table),
+                                to.describe(self.table)
+                            )
+                };
                 if let Some(reported) = self.diagnostics.get_mut(before)
-                    && reported.message
-                        == format!(
-                            "incompatible types: {} cannot be converted to {}",
-                            primitive.describe(self.table),
-                            to.describe(self.table)
-                        )
+                    && reported_about_the_primitive(&reported.message)
                 {
                     reported.message = format!(
                         "incompatible types: {} cannot be converted to {}",
@@ -29558,8 +29985,8 @@ impl BodyGen<'_> {
                 JType::LinkedList { .. }
                 | JType::TreeSet(_, _)
                 | JType::TreeMap { .. }
-                | JType::List(_)
-                | JType::Set(_)
+                | JType::List { .. }
+                | JType::Set { .. }
                 | JType::Stack(_)
                 | JType::Map { .. }
                 // A map's VIEWS are collections too, and are the ones a

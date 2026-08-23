@@ -7301,15 +7301,15 @@ now gives its honest reason rather than "cannot find symbol", since caturra
 models no such type. The `Set` face also offered `descendingIterator`, which
 neither `Set` nor `HashSet` declares.
 
-What remains is the same shape one level over: the HASH collections still have
-one face, so `Set` and `Map` offer `clone`. It is enumerated, and the fix is
-this same role applied to a second pair of types.
+What remained was the same shape one level over — the HASH collections had one
+face, so `Set` and `Map` offered `clone` — and "Which face a collection wears"
+below applies this same role to them.
 
 Pinned by `each_sorted_face_offers_its_own_members`,
 `a_sorted_face_has_no_navigation`,
 `a_one_argument_head_set_answers_a_sorted_set`,
-`a_sorted_map_face_has_no_entry_navigation`,
-`a_narrow_face_does_not_widen_inward` and `looser_a_hash_face_offers_clone`.
+`a_sorted_map_face_has_no_entry_navigation` and
+`a_narrow_face_does_not_widen_inward`.
 
 ### What a broad API sweep found (2026-08-21)
 
@@ -7768,14 +7768,95 @@ Three things the sweep found besides:
 **12 of 1100 remain**, all one shape, and enumerated under the divergences: a
 cast from a CONCRETE collection to an unrelated class. `List` and `ArrayList`
 are one type, so the rule answers for the interface — the choice that never
-turns away a legal program.
+turns away a legal program. ("Which face a collection wears", below, gives them
+two types and closes these twelve as well.)
 
 All four cross-products now agree in both directions: 1369 assignments, 266
 overload selections, 170 overrides, 1088 of 1100 casts.
 
-Pinned by `diff_cast_conversions_that_exist`, the eleven cast and `instanceof`
-rejections in `stage6_compile_errors_match_javac_wording`, and
-`looser_a_concrete_collection_answers_for_its_interface`.
+Pinned by `diff_cast_conversions_that_exist` and the eleven cast and
+`instanceof` rejections in `stage6_compile_errors_match_javac_wording`.
+
+### Which face a collection wears (2026-08-23)
+
+`List` and `ArrayList` were ONE type here, as were `Set`/`HashSet` and
+`Map`/`HashMap` — they share every member, and the same heap object answers for
+both. A program can tell them apart three ways, though, and caturra could not:
+
+```java
+List<String> face = new ArrayList<>();
+ArrayList<String> back = face;   // javac: List<String> cannot be converted to ArrayList<String>
+Set<String> keys = counts.keySet();
+keys.clone();                    // javac: cannot find symbol — Set does not declare clone
+Parent held = (Parent) anArrayList;   // javac: inconvertible; no class is both
+```
+
+All three compiled. The fix is the role `SortedRole` already gives the sorted
+collections and `SeqRole` gives the queues, applied to the last three types
+without one: a `CollFace` of `Iface` or `Concrete`, read from the name the
+program wrote at the one place that still has it (`resolve_type`, just before
+it normalizes `List` to `ArrayList`).
+
+What the face decides:
+
+- **Widening** — the class stands in for the interface and never the other way
+  round, exactly as a `TreeSet` is a `NavigableSet`. `LinkedList`, `Stack`,
+  `TreeSet`, `TreeMap` and `ArrayDeque` reach only the INTERFACE face, since
+  none of them is an `ArrayList` or a `HashMap`. (Two copies of "a `TreeMap` is
+  a `Map`" had to be collapsed for that to hold — the older one ignored the
+  face, so it let a `TreeMap` through to a `HashMap` variable.)
+- **Member lookup** — `clone` is the class's, not the interface's. It rides on
+  the SAME `role` the sorted faces use, so nothing new had to be threaded
+  through the lookup; a `Queue`/`Deque` face lost `clone` in the same move.
+- **Casting** — the `cast_face` of a concrete collection is a class, so
+  `(Parent) anArrayList` is now the error javac calls it, while
+  `(Parent) aList` keeps compiling (some class really could be both).
+
+Everything the library hands back is the INTERFACE, which is how javac declares
+every one of them (`Arrays.asList`, `keySet`, `subList`, `List.of`,
+`collect(toList())`, `Collections.unmodifiable*`). The one shape that makes a
+class is `new`.
+
+Two collections join at the interface they share, which is what `flag ? new
+ArrayList<>() : new LinkedList<>()` means — with a face, neither branch widens
+to the other, and without the rule the join fell all the way to `Object` and
+the assignment after it was refused.
+
+**The sweep.** The assignment cross-product ("What assigns to what") had built
+every source as a fresh EXPRESSION, so a face — which only a declared variable
+carries — was invisible to it: 1369 programs, and not one of them could see
+this. Rebuilt through a variable (`S source = expr; T target = source;`) it
+found the family at once, and now agrees on all 1369 verdicts. The cast and
+`instanceof` cross-products went exact at the same time: their whole residue
+(12 and 9 programs, plus 23 diagnostics naming `Set<String>` where javac says
+`HashSet<String>`) was this one modelling limit.
+
+**Diagnostics.** The same sweep compared 1256 rejection MESSAGES, where 463
+differed. A diagnostic must name the type the program WROTE, and `describe` was
+naming caturra's model of it:
+
+- a nested class by its BINARY name (`Outer$Inner`), which had been fixed at
+  individual sites before — it is fixed in `describe` now, where the other two
+  hundred diagnostics get it too;
+- a RAW collection as `List<Object>`, a parameterization javac reserves for the
+  one that really is `Object`;
+- a wildcard as its BOUND — `List<Number>` for a `List<? extends Number>`,
+  which reads as a different type entirely, and one the refused assignment
+  would have allowed.
+
+Two neighbours the sweep turned up: `byte b = aDouble;` was reported as
+"possible lossy conversion from double to byte" (the narrowing rule is about a
+primitive the program HAS, and a wrapper is not one — javac says "Double cannot
+be converted to byte"), and comparing a primitive with `null` was caturra's own
+sentence rather than javac's headline plus `first type:`/`second type:` lines.
+
+100 of the 1256 still differ, all one wording: javac spells a captured wildcard
+`List<CAP#1>` (with a footnote naming the capture), where caturra prints the
+wildcard the program wrote, `List<? extends Number>`. Both name the type; only
+javac's names the capture.
+
+Pinned by `diff_a_collection_wears_two_faces` and the twelve face, diagnostic
+and operand rejections in `stage6_compile_errors_match_javac_wording`.
 
 ## Divergences from javac
 
@@ -7858,19 +7939,6 @@ entries after it was written down.
   actually uses work (`Map.Entry.comparingByKey()`, and the lambda
   `e -> e.getKey()`), as does the same reference in a STREAM, where the element
   type is known. (`stricter_entry_method_ref_in_a_comparator`)
-- The HASH collections have ONE compile-time face: `Set` and `HashSet` are one
-  type here, `Map` and `HashMap` another, so the INTERFACES offer `clone`,
-  which only the classes declare. The sorted side no longer does this — its
-  three faces are distinct — and the fix is the same role applied to a second
-  pair of types. (`looser_a_hash_face_offers_clone`)
-- A cast from a CONCRETE collection to an unrelated class —
-  `(Parent) anArrayList` — compiles and throws at run time. `List` and
-  `ArrayList` are one type here, and where the two would answer differently the
-  cast rule answers for the INTERFACE, which is the choice that never turns
-  away a legal program: a `List` variable really can hold a class that is also
-  a `Parent`, and `(List<Object>) aParent` has to keep compiling. javac, which
-  knows the expression's type is the final-ish class, refuses it.
-  (`looser_a_concrete_collection_answers_for_its_interface`)
 - A factory that ADOPTS its context (`Collections.emptyList()`,
   `Optional.empty()`, `List.of()`) used as an argument where the OVERLOADS
   disagree about it: `two(Collections.emptyList())`, against

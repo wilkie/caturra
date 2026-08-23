@@ -29388,6 +29388,45 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// The FACE a collection wears, on the side that must keep working: a class
+// stands in for its interface everywhere (assignment, argument, widening to
+// `Collection`), `clone` is still the class's own member, two different
+// collections still join at the interface they share, and a cast back down to
+// the class still works. The half that now refuses is the assignment the other
+// way, which `stage6_compile_errors_match_javac_wording` pins.
+differential_test!(
+    diff_a_collection_wears_two_faces,
+    "FaceOk",
+    r#"
+import java.util.*;
+
+public class FaceOk {
+    static String show(List<String> l) { return "list " + l; }
+
+    public static void main(String[] args) {
+        ArrayList<String> made = new ArrayList<>();
+        made.add("a");
+        List<String> face = made;
+        System.out.println(show(made) + " / " + show(face));
+        System.out.println(made.clone() + " " + new HashSet<>(made).clone()
+            + " " + new HashMap<String, Integer>().clone());
+        Collection<String> wider = face;
+        System.out.println(wider.size() + " " + face.equals(made));
+        List<String> joined = args.length > 0 ? new ArrayList<>() : new LinkedList<>();
+        joined.add("j");
+        System.out.println(joined);
+        Map<String, Integer> counts = new HashMap<>();
+        counts.put("k", 1);
+        Set<String> keys = counts.keySet();
+        System.out.println(keys + " " + counts);
+        Object erased = made;
+        ArrayList<String> back = (ArrayList<String>) erased;
+        System.out.println(back.get(0));
+    }
+}
+"#
+);
+
 differential_test!(
     diff_cast_conversions_that_exist,
     "CastLegal",
@@ -34866,52 +34905,6 @@ public class SortedFaces {
     }
 }
 "#
-);
-
-// The HASH collections still have one compile-time face: `Set`/`HashSet` are
-// one type here and `Map`/`HashMap` another, so the interfaces offer `clone`,
-// which only the classes declare. The sorted side no longer does this — its
-// three faces are distinct — and the fix here is the same role, applied to a
-// second pair of types.
-looser_than_javac!(
-    looser_a_hash_face_offers_clone,
-    "HashFaceClone",
-    r"
-import java.util.*;
-
-public class HashFaceClone {
-    public static void main(String[] args) {
-        Set<Integer> narrow = new HashSet<>(Arrays.asList(1, 3));
-        System.out.println(narrow.clone());
-    }
-}
-"
-);
-
-// A concrete collection and its interface are ONE type here (`List` and
-// `ArrayList` are both `JType::List`), and where the two would answer
-// differently the cast rule answers for the INTERFACE — the choice that never
-// turns away a legal program. So a cast from a concrete collection to an
-// unrelated class compiles and throws at run time, where javac refuses it: no
-// class is both an `ArrayList` and a `Parent`, but a `List` variable could
-// hold one that is. The reverse (`(List<Object>) aParent`) is legal Java and
-// must keep compiling, which is why the permissive face is the right one.
-looser_than_javac!(
-    looser_a_concrete_collection_answers_for_its_interface,
-    "ConcreteFace",
-    r"
-import java.util.*;
-
-public class ConcreteFace {
-    static class Parent { }
-
-    public static void main(String[] args) {
-        ArrayList<String> items = new ArrayList<>();
-        Parent held = (Parent) items;
-        System.out.println(held);
-    }
-}
-"
 );
 
 // `Iface.super.method()` — the way a class that inherits several defaults picks
