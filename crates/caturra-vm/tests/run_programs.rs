@@ -283,6 +283,33 @@ fn string_literals_are_interned_within_a_run() {
 // ----- stage 1: locals, operators, string concatenation -----
 
 /// Compile, run, and return stdout, asserting a clean completion.
+/// `run_stdout` with the VM options a test needs — the heap budget, so far.
+fn run_stdout_with_options(source: &str, main: &str, options: VmOptions) -> String {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: format!("{main}.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        compilation.success(),
+        "compile failed: {:?}",
+        compilation.diagnostics
+    );
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(options, &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file)
+            .expect("compiled class should load");
+    }
+    let result = vm.run_main(main, &[]);
+    assert!(
+        matches!(result, Ok(ExitStatus::Completed)),
+        "{result:?}; stderr: {}",
+        console.stderr_text()
+    );
+    console.stdout_text()
+}
+
 fn run_stdout(source: &str, main: &str) -> String {
     let (result, console) = compile_and_run(source, main);
     assert!(
@@ -13215,4 +13242,44 @@ fn the_collector_reclaims_garbage_and_keeps_the_live_set() {
         "Collecting",
     );
     assert_eq!(out, "1225 50 1,100001,\n0 1\n");
+}
+
+/// A program that really does hold more than the budget gets Java's own
+/// answer: a catchable `OutOfMemoryError`, raised at a safepoint after a
+/// collection has already run — so only what is still REACHABLE counts
+/// against it. Before the budget, the same program grew until the host
+/// refused, which in a browser is a dead tab rather than an error a student
+/// can read.
+#[test]
+fn a_full_heap_is_a_catchable_java_error() {
+    let out = run_stdout_with_options(
+        r"
+        import java.util.ArrayList;
+        import java.util.List;
+
+        public class Full {
+            public static void main(String[] args) {
+                List<int[]> keep = new ArrayList<>();
+                try {
+                    for (int i = 0; i < 100000; i++) {
+                        keep.add(new int[10000]);
+                    }
+                    System.out.println('n' + keep.size());
+                } catch (OutOfMemoryError thrown) {
+                    System.out.println(thrown.getMessage());
+                }
+                // The catch left the list reachable, so a smaller allocation
+                // still fails; dropping it makes room again.
+                keep = null;
+                System.out.println(new int[1000].length);
+            }
+        }
+        ",
+        "Full",
+        VmOptions {
+            max_heap_bytes: 64 << 20,
+            ..VmOptions::default()
+        },
+    );
+    assert_eq!(out, "Java heap space\n1000\n");
 }

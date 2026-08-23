@@ -60,6 +60,13 @@ pub struct VmOptions {
     /// stack (see `specs/RUNTIME.md`), so this is purely a Java
     /// semantics knob — the host stack stays O(1) at any depth.
     pub max_call_depth: u32,
+    /// How many bytes of live objects the program may hold before an
+    /// allocation raises `OutOfMemoryError`. The production VM is a browser
+    /// WASM instance: a program that outgrows it does not get a slow answer,
+    /// it gets a dead tab, and a budget turns that into the catchable Java
+    /// error a JDK would raise. Checked after a collection, so only what is
+    /// still REACHABLE counts against it.
+    pub max_heap_bytes: usize,
     /// Seed for `Math.random()` (Java's LCG). `None` uses a fixed
     /// default — deterministic, which tests rely on; hosts that want
     /// real randomness pass entropy here (the WASM boundary does).
@@ -80,6 +87,10 @@ impl Default for VmOptions {
             // headroom to spare.
             max_instructions: 4_000_000_000,
             max_call_depth: 4096,
+            // A gigabyte of LIVE objects. The browser instance tops out
+            // between two and four, so a program past this is one that would
+            // have taken the tab with it; below it, nothing changes.
+            max_heap_bytes: 1 << 30,
             random_seed: None,
         }
     }
@@ -196,6 +207,7 @@ impl<'host> Vm<'host> {
             self.options.max_call_depth,
             self.options.random_seed,
         );
+        interpreter.set_heap_budget(self.options.max_heap_bytes);
         if let Some((breakpoints, host)) = debug {
             interpreter.attach_debugger(host, breakpoints, &watch_arena);
         }

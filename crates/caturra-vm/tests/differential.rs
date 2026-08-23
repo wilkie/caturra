@@ -35090,3 +35090,25 @@ public class ScanPattern {
 "#,
     "1 2 x yes zzz\n"
 );
+
+// `System.gc()` is a REQUEST in Java and one here too — the collector runs at
+// the next safepoint. A program cannot observe whether it collected, which is
+// exactly why the JDK is free to ignore it and why this can honour it.
+differential_test!(
+    a_program_may_ask_for_a_collection,
+    "AskGc",
+    r"
+public class AskGc {
+    public static void main(String[] args) {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < 1000; i++) {
+            text.append(i % 10);
+        }
+        System.gc();
+        System.out.println(text.length());
+        System.gc();
+        System.out.println(text.charAt(999));
+    }
+}
+"
+);

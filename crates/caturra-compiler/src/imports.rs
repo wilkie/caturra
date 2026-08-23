@@ -231,6 +231,11 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // unknown. Modelling them properly means a distinct kind, if only so
     // `getClass()` stays honest.
     ("java.util", &["EnumMap", "EnumSet"]),
+    // `Runtime` reports free/total/max memory and runs external processes.
+    // caturra collects on its own schedule inside one WASM instance, so every
+    // number it could answer would be fiction about a heap the program cannot
+    // influence — and `exec` has nothing to exec.
+    ("java.lang", &["Runtime", "Process", "ProcessBuilder"]),
     ("java.util.regex", &["Pattern", "Matcher", "MatchResult"]),
     (
         "java.io",

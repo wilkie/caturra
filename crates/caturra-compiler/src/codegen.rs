@@ -10750,6 +10750,10 @@ const LONG_METHODS: &[BuiltinMethod] = &[
 
 const SYSTEM_METHODS: &[BuiltinMethod] = &[
     bm("currentTimeMillis", &[], BRet::Long, "()J"),
+    // `System.gc()` is a REQUEST in Java ("the Java Virtual Machine expends
+    // effort"), and it is one here too: the collector runs at the next
+    // safepoint, which is the next instruction.
+    bm("gc", &[], BRet::Void, "()V"),
     bm("nanoTime", &[], BRet::Long, "()J"),
     // `arraycopy(Object src, int srcPos, Object dest, int destPos, int len)`,
     // typed as javac types it: any reference. caturra used to demand arrays

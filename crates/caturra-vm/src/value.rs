@@ -938,9 +938,50 @@ impl HeapObject {
     }
 }
 
+impl HeapObject {
+    /// Roughly how much memory this object costs the HOST — which is what the
+    /// heap budget is about. The production VM is a browser WASM instance, and
+    /// a program that outgrows it does not get a slow answer, it gets a dead
+    /// tab; a budget it can be told about turns that into a catchable
+    /// `OutOfMemoryError`. An estimate is enough for that: the exact byte
+    /// count of a Rust `Vec` is not what a Java program reasons about anyway.
+    #[must_use]
+    pub fn approximate_bytes(&self) -> usize {
+        const BASE: usize = size_of::<HeapObject>();
+        let value = size_of::<JValue>();
+        BASE + match self {
+            HeapObject::JavaString(units) | HeapObject::StringBuilder(units) => units.len() * 2,
+            HeapObject::IntArray(_, items) => items.len() * 4,
+            HeapObject::DoubleArray(items) => items.len() * 8,
+            HeapObject::LongArray(items) => items.len() * 8,
+            HeapObject::FloatArray(items) => items.len() * 4,
+            HeapObject::ShortArray(items) => items.len() * 2,
+            HeapObject::ByteArray(items) => items.len(),
+            HeapObject::RefArray(_, items)
+            | HeapObject::ArrayList(items)
+            | HeapObject::LinkedList(items)
+            | HeapObject::ArrayDeque(items)
+            | HeapObject::Stack(items)
+            | HeapObject::PriorityQueue { heap: items, .. }
+            | HeapObject::TreeSet { values: items, .. } => items.len() * value,
+            HeapObject::Instance { fields, .. } => fields.len() * value,
+            HeapObject::TreeMap { entries, .. } => entries.len() * value * 2,
+            HeapObject::HashMap(map) | HeapObject::HashSet(map) => map.len() * value * 3,
+            HeapObject::Stream { source, .. } => size_of_val(source.fixed()),
+            HeapObject::Scanner { buffer, .. } | HeapObject::Reader { buffer, .. } => buffer.len(),
+            _ => 0,
+        }
+    }
+}
+
 /// A heap smaller than this never collects: the walk costs more than the slots
 /// are worth, and a short program should not pay for one at all.
 const HEAP_FLOOR: usize = 1 << 16;
+
+/// Allocating this many bytes since the last collection is reason enough for
+/// another one, however few OBJECTS they were. A single `new int[10_000_000]`
+/// is one slot and forty megabytes.
+const BYTES_PER_COLLECTION: usize = 64 << 20;
 
 /// The per-run object heap.
 /// `new StringBuilder()` starts here, and a `String` seed adds its length.
@@ -954,6 +995,12 @@ pub struct Heap {
     /// nothing moves, and every reference the program holds keeps pointing at
     /// the object it named.
     free: Vec<HeapRef>,
+    /// Bytes allocated since the last collection, so a program that allocates
+    /// FEW but HUGE objects still reaches a safepoint's collection — the slot
+    /// count alone would never notice one array of ten million.
+    allocated_bytes: usize,
+    /// What the last sweep found live, for the budget check.
+    live_bytes: usize,
     /// How large the live set may grow before the next safepoint collects.
     /// Set after each collection to twice what survived (never below the
     /// floor), so a program that really does hold a large live set stops
@@ -999,6 +1046,8 @@ impl Default for Heap {
         Self {
             objects: Vec::new(),
             free: Vec::new(),
+            allocated_bytes: 0,
+            live_bytes: 0,
             threshold: HEAP_FLOOR,
             wrapper_cache: std::collections::HashMap::new(),
             builder_capacity: std::collections::HashMap::new(),
@@ -1014,6 +1063,7 @@ impl Heap {
 
     /// Allocate an object, returning its reference.
     pub fn alloc(&mut self, object: HeapObject) -> HeapRef {
+        self.allocated_bytes += object.approximate_bytes();
         if let Some(slot) = self.free.pop() {
             self.objects[slot as usize] = object;
             return slot;
@@ -1034,6 +1084,14 @@ impl Heap {
     #[must_use]
     pub fn wants_collection(&self) -> bool {
         self.objects.len().saturating_sub(self.free.len()) >= self.threshold
+            || self.allocated_bytes >= BYTES_PER_COLLECTION
+    }
+
+    /// What the last sweep found live. Zero before the first collection, so a
+    /// budget check has to run one first.
+    #[must_use]
+    pub fn live_bytes(&self) -> usize {
+        self.live_bytes
     }
 
     /// The wrapper cache's boxes: a ROOT, because `Integer.valueOf(1)` must
@@ -1054,8 +1112,10 @@ impl Heap {
     /// simply available again.
     pub fn sweep(&mut self, marked: &[bool]) -> usize {
         let mut freed = 0;
+        let mut live_bytes = 0;
         for index in 0..self.objects.len() {
             if marked.get(index).copied().unwrap_or(true) {
+                live_bytes += self.objects[index].approximate_bytes();
                 continue;
             }
             if matches!(self.objects[index], HeapObject::Free) {
@@ -1069,6 +1129,8 @@ impl Heap {
         }
         let live = self.objects.len() - self.free.len();
         self.threshold = std::cmp::max(HEAP_FLOOR, live.saturating_mul(2));
+        self.live_bytes = live_bytes;
+        self.allocated_bytes = 0;
         freed
     }
 

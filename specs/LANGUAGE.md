@@ -7516,6 +7516,29 @@ keeps pointing at the object it named.
 
 Pinned by `the_collector_reclaims_garbage_and_keeps_the_live_set`.
 
+A collector makes two more things possible, and they arrived with it.
+
+**A full heap is now a catchable Java error.** A program that really does hold
+more than the budget — a gigabyte of LIVE objects by default — gets
+`OutOfMemoryError: Java heap space` at a safepoint, raised after a collection
+has already run, so only what is still reachable counts against it. The same
+program used to grow until the host refused, which in a browser is a dead tab
+rather than an error a student can read (and can catch: the pinned test catches
+it, drops the list, and allocates again).
+
+**`System.gc()` exists.** It is a REQUEST in Java — "the Java Virtual Machine
+expends effort" — and one here too: the collector runs at the next safepoint.
+A program cannot observe whether it collected, which is exactly why the JDK is
+free to ignore the call and why this one can honour it.
+
+`java.lang.Runtime` is refused by name rather than reading as a typo: every
+number it could answer (`freeMemory`, `totalMemory`, `maxMemory`) would be
+fiction about a heap the program cannot influence, and `exec` has nothing to
+execute.
+
+Pinned by `a_full_heap_is_a_catchable_java_error` and
+`a_program_may_ask_for_a_collection`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

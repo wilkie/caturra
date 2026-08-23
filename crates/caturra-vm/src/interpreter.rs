@@ -103,6 +103,13 @@ pub(crate) struct Interpreter<'run> {
     /// Every later active use throws `NoClassDefFoundError`.
     init_failed: std::collections::HashSet<String>,
     remaining_instructions: u64,
+    /// How many bytes of LIVE objects the program may hold. Checked after a
+    /// collection: what a program has dropped does not count against it.
+    heap_budget: usize,
+    /// `System.gc()` asked for one. A JDK treats the call as a hint and this
+    /// treats it as a request honoured at the next safepoint, which is as
+    /// close to "collect now" as a safepoint-based collector gets.
+    gc_requested: bool,
     /// Values held by the interpreter itself across a run of the dispatch
     /// loop — which is to say, across a safepoint. `main`'s argument array is
     /// the one that matters: it is built before the entry class's `<clinit>`
@@ -271,6 +278,8 @@ impl<'run> Interpreter<'run> {
             field_templates: HashMap::new(),
             init_started: std::collections::HashSet::new(),
             init_failed: std::collections::HashSet::new(),
+            heap_budget: usize::MAX,
+            gc_requested: false,
             temp_roots: Vec::new(),
             collect_always: std::env::var_os("CATURRA_GC_STRESS").is_some(),
             remaining_instructions: max_instructions,
@@ -1046,6 +1055,16 @@ impl<'run> Interpreter<'run> {
         })
     }
 
+    /// The live-byte budget, from [`crate::VmOptions`].
+    pub fn set_heap_budget(&mut self, bytes: usize) {
+        self.heap_budget = bytes;
+    }
+
+    /// `System.gc()`: collect at the next safepoint.
+    pub fn request_gc(&mut self) {
+        self.gc_requested = true;
+    }
+
     /// Mark and sweep, at an instruction boundary. Everything the program can
     /// still reach is reachable from the frames, the statics, the interned
     /// pools and the side tables; a slot nothing reaches is handed back.
@@ -1190,10 +1209,22 @@ impl<'run> Interpreter<'run> {
                 // while a container renders) leaves the outer intrinsic's
                 // references in Rust locals, which nothing can mark.
                 if self.suspended_runs.is_empty()
-                    && (self.heap.wants_collection() || self.collect_always)
+                    && (self.heap.wants_collection() || self.gc_requested || self.collect_always)
                 {
                     frame.pc = pc;
+                    self.gc_requested = false;
                     self.collect(&frame);
+                    // What survived a collection is what the program is really
+                    // holding, so the budget is judged here and nowhere else.
+                    if self.heap.live_bytes() > self.heap_budget {
+                        let error = VmError::UncaughtException(self.attach_stack_trace(
+                            String::from("java.lang.OutOfMemoryError: Java heap space"),
+                        ));
+                        if self.unwind_to_handler(&mut frame, pc, &error)? {
+                            continue 'frames;
+                        }
+                        return Err(error);
+                    }
                 }
 
                 let addr = pc;
@@ -11937,6 +11968,15 @@ impl<'run> Interpreter<'run> {
                 value_fits_element(classes, heap, element, value)
             };
             intrinsics::system_arraycopy(&mut self.heap, args, &fits)?;
+            return Ok(None);
+        }
+        // `System.gc()`: a REQUEST, both in Java ("the Java Virtual Machine
+        // expends effort") and here — the collector runs at the next
+        // safepoint, which is the next instruction. Answered here rather than
+        // in the heap-only intrinsics because it is the INTERPRETER that
+        // collects.
+        if class_name == "java/lang/System" && method_name == "gc" {
+            self.request_gc();
             return Ok(None);
         }
         // `System.identityHashCode(x)`: stable per OBJECT — the heap
