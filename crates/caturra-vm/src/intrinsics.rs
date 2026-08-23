@@ -24,6 +24,12 @@ pub struct IntrinsicStatics {
 }
 
 impl IntrinsicStatics {
+    /// The singletons behind `System.out`/`err`/`in`, which live as long as
+    /// the run does — roots for the collector.
+    pub fn roots(&self) -> impl Iterator<Item = HeapRef> + '_ {
+        [self.stdout, self.stderr, self.stdin].into_iter().flatten()
+    }
+
     /// Resolve an intrinsic static field like `java/lang/System.out`,
     /// allocating its singleton on first use.
     pub fn static_field(&mut self, heap: &mut Heap, class: &str, field: &str) -> Option<JValue> {

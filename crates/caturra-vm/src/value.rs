@@ -619,6 +619,10 @@ pub enum HeapObject {
         key: JValue,
         read_only: bool,
     },
+    /// A slot the collector reclaimed. Nothing points at it — if anything did,
+    /// the mark phase would have kept the object — so it answers no method and
+    /// simply waits to be handed out again.
+    Free,
     /// The marker object behind `System.in`.
     InputStream,
     /// A `java.io.File`: a path into the virtual filesystem.
@@ -719,13 +723,242 @@ impl HeapObject {
     }
 }
 
+/// Every heap reference a value holds — nothing for a primitive, one for a
+/// non-null reference.
+pub fn visit_value(value: JValue, visit: &mut impl FnMut(HeapRef)) {
+    if let JValue::Ref(Some(reference)) = value {
+        visit(reference);
+    }
+}
+
+impl StreamOp {
+    /// The lambda a pipeline stage holds.
+    fn visit_refs(&self, visit: &mut impl FnMut(HeapRef)) {
+        match self {
+            StreamOp::Filter(f)
+            | StreamOp::Map(f)
+            | StreamOp::Peek(f)
+            | StreamOp::TakeWhile(f)
+            | StreamOp::DropWhile(f) => visit(*f),
+            StreamOp::Limit(_)
+            | StreamOp::Skip(_)
+            | StreamOp::Distinct
+            | StreamOp::Box
+            | StreamOp::WidenToLong
+            | StreamOp::WidenToDouble => {}
+        }
+    }
+}
+
+impl CollectorKind {
+    fn visit_refs(&self, visit: &mut impl FnMut(HeapRef)) {
+        match self {
+            CollectorKind::ToList
+            | CollectorKind::ToSet
+            | CollectorKind::Joining { .. }
+            | CollectorKind::Counting => {}
+            CollectorKind::Unmodifiable(inner) => inner.visit_refs(visit),
+            CollectorKind::GroupingBy {
+                classifier,
+                downstream,
+            } => {
+                visit(*classifier);
+                if let Some(downstream) = downstream {
+                    visit(*downstream);
+                }
+            }
+            CollectorKind::PartitioningBy(f) | CollectorKind::Summing { mapper: f, .. } => {
+                visit(*f);
+            }
+            CollectorKind::ToMap { key, value, merge } => {
+                visit(*key);
+                visit(*value);
+                if let Some(merge) = merge {
+                    visit(*merge);
+                }
+            }
+        }
+    }
+}
+
+impl ComparatorSpec {
+    fn visit_refs(&self, visit: &mut impl FnMut(HeapRef)) {
+        match self {
+            ComparatorSpec::Natural
+            | ComparatorSpec::CaseInsensitive
+            | ComparatorSpec::Entry { .. } => {}
+            ComparatorSpec::ByKey(f) | ComparatorSpec::Reversed(f) => visit(*f),
+            ComparatorSpec::Then(a, b) | ComparatorSpec::ByKeyWith(a, b) => {
+                visit(*a);
+                visit(*b);
+            }
+            ComparatorSpec::Nulls { inner, .. } => {
+                if let Some(inner) = inner {
+                    visit(*inner);
+                }
+            }
+        }
+    }
+}
+
+impl StreamSource {
+    fn visit_refs(&self, visit: &mut impl FnMut(HeapRef)) {
+        match self {
+            StreamSource::Fixed(values) => {
+                for value in values {
+                    visit_value(*value, visit);
+                }
+            }
+            StreamSource::Iterate { seed, next } => {
+                visit_value(*seed, visit);
+                visit(*next);
+            }
+            StreamSource::Generate { supplier } => visit(*supplier),
+        }
+    }
+}
+
+impl HeapObject {
+    /// Every heap reference this object holds. The collector's mark phase
+    /// walks it, so a reference MISSED here is an object freed while something
+    /// still points at it — the one bug a collector must not have. The match
+    /// has no wildcard arm for exactly that reason: a new variant that holds a
+    /// reference cannot compile until it is listed.
+    #[allow(clippy::too_many_lines)] // one arm per heap kind, and no wildcard
+    pub fn visit_refs(&self, visit: &mut impl FnMut(HeapRef)) {
+        let values = |values: &Vec<JValue>, visit: &mut dyn FnMut(HeapRef)| {
+            for value in values {
+                if let JValue::Ref(Some(reference)) = value {
+                    visit(*reference);
+                }
+            }
+        };
+        match self {
+            // No references at all: the text, the primitive arrays, the
+            // handles that hold only names, the stream/file endpoints.
+            HeapObject::JavaString(_)
+            | HeapObject::StringBuilder(_)
+            | HeapObject::PrintStream(_)
+            | HeapObject::IntArray(_, _)
+            | HeapObject::DoubleArray(_)
+            | HeapObject::LongArray(_)
+            | HeapObject::FloatArray(_)
+            | HeapObject::ShortArray(_)
+            | HeapObject::ByteArray(_)
+            | HeapObject::Scanner { .. }
+            | HeapObject::Reader { .. }
+            | HeapObject::SummaryStats { .. }
+            | HeapObject::InputStream
+            | HeapObject::File(_)
+            | HeapObject::Path(_)
+            | HeapObject::Writer { .. }
+            | HeapObject::Class { .. }
+            | HeapObject::Field { .. }
+            | HeapObject::ReflectType { .. }
+            | HeapObject::StackFrame { .. }
+            | HeapObject::Constructor { .. }
+            | HeapObject::Free
+            | HeapObject::Method { .. } => {}
+            HeapObject::Boxed { value, .. } => visit_value(*value, visit),
+            HeapObject::RefArray(_, items)
+            | HeapObject::ArrayList(items)
+            | HeapObject::LinkedList(items)
+            | HeapObject::ArrayDeque(items)
+            | HeapObject::Stack(items) => values(items, visit),
+            HeapObject::Instance { fields, .. } => values(fields, visit),
+            HeapObject::UnmodifiableList(inner)
+            | HeapObject::ArrayBackedList(inner)
+            | HeapObject::UnmodifiableSet(inner)
+            | HeapObject::UnmodifiableMap(inner)
+            | HeapObject::SubList { backing: inner, .. }
+            | HeapObject::Iterator { source: inner, .. }
+            | HeapObject::MapView { map: inner, .. } => visit(*inner),
+            // A view's BOUNDS are values, and a value is a reference when the
+            // tree is keyed by objects: `set.headSet(new Point(4))` holds the
+            // only pointer to that Point. Visiting the backing alone freed it.
+            HeapObject::SortedView {
+                backing, lo, hi, ..
+            } => {
+                visit(*backing);
+                for bound in [lo, hi].into_iter().flatten() {
+                    visit_value(bound.value, visit);
+                }
+            }
+            HeapObject::HashMap(map) | HeapObject::HashSet(map) => map.visit_refs(visit),
+            HeapObject::TreeMap {
+                entries,
+                comparator,
+            } => {
+                for (key, value) in entries {
+                    visit_value(*key, visit);
+                    visit_value(*value, visit);
+                }
+                if let Some(comparator) = comparator {
+                    visit(*comparator);
+                }
+            }
+            HeapObject::Stream { source, ops } => {
+                source.visit_refs(visit);
+                for op in ops {
+                    op.visit_refs(visit);
+                }
+            }
+            HeapObject::Collector(kind) => kind.visit_refs(visit),
+            HeapObject::Comparator(spec) => spec.visit_refs(visit),
+            HeapObject::Optional { value, .. } => {
+                if let Some(value) = value {
+                    visit_value(*value, visit);
+                }
+            }
+            HeapObject::PriorityQueue { heap, comparator }
+            | HeapObject::TreeSet {
+                values: heap,
+                comparator,
+            } => {
+                values(heap, visit);
+                if let Some(comparator) = comparator {
+                    visit(*comparator);
+                }
+            }
+            HeapObject::MapEntry { map, key, .. } => {
+                visit(*map);
+                visit_value(*key, visit);
+            }
+            HeapObject::Exception {
+                cause, suppressed, ..
+            } => {
+                if let Some(cause) = cause {
+                    visit(*cause);
+                }
+                for one in suppressed {
+                    visit(*one);
+                }
+            }
+        }
+    }
+}
+
+/// A heap smaller than this never collects: the walk costs more than the slots
+/// are worth, and a short program should not pay for one at all.
+const HEAP_FLOOR: usize = 1 << 16;
+
 /// The per-run object heap.
 /// `new StringBuilder()` starts here, and a `String` seed adds its length.
 pub const DEFAULT_BUILDER_CAPACITY: usize = 16;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Heap {
     objects: Vec<HeapObject>,
+    /// Slots the collector reclaimed, ready to be handed out again. A
+    /// reference is an INDEX, so a swept slot can be reused as it stands —
+    /// nothing moves, and every reference the program holds keeps pointing at
+    /// the object it named.
+    free: Vec<HeapRef>,
+    /// How large the live set may grow before the next safepoint collects.
+    /// Set after each collection to twice what survived (never below the
+    /// floor), so a program that really does hold a large live set stops
+    /// paying for collections that free nothing.
+    threshold: usize,
     /// The autoboxing cache (JLS §5.1.7): `Wrapper.valueOf` returns a SHARED
     /// reference for a value in the cached range, so `Integer a = 100, b = 100;
     /// a == b` is true while `200 == 200` (out of range) is false. Keyed by
@@ -758,6 +991,21 @@ fn wrapper_cache_key(class: &str, value: JValue) -> Option<(u8, i64)> {
     (-128..=127).contains(&v).then_some((tag, v))
 }
 
+impl Default for Heap {
+    /// A fresh heap collects only once it passes the floor — deriving this
+    /// would have started the threshold at ZERO, so the first allocation of
+    /// every program would have triggered a collection.
+    fn default() -> Self {
+        Self {
+            objects: Vec::new(),
+            free: Vec::new(),
+            threshold: HEAP_FLOOR,
+            wrapper_cache: std::collections::HashMap::new(),
+            builder_capacity: std::collections::HashMap::new(),
+        }
+    }
+}
+
 impl Heap {
     #[must_use]
     pub fn new() -> Self {
@@ -766,9 +1014,62 @@ impl Heap {
 
     /// Allocate an object, returning its reference.
     pub fn alloc(&mut self, object: HeapObject) -> HeapRef {
+        if let Some(slot) = self.free.pop() {
+            self.objects[slot as usize] = object;
+            return slot;
+        }
         let index = u32::try_from(self.objects.len()).expect("heap exhausted");
         self.objects.push(object);
         index
+    }
+
+    /// How many slots exist, live and free alike.
+    #[must_use]
+    pub fn slots(&self) -> usize {
+        self.objects.len()
+    }
+
+    /// Whether the live set has grown past the point where collecting is worth
+    /// the walk.
+    #[must_use]
+    pub fn wants_collection(&self) -> bool {
+        self.objects.len().saturating_sub(self.free.len()) >= self.threshold
+    }
+
+    /// The wrapper cache's boxes: a ROOT, because `Integer.valueOf(1)` must
+    /// answer the same reference for the life of the program.
+    pub fn cached_boxes(&self) -> impl Iterator<Item = HeapRef> + '_ {
+        self.wrapper_cache.values().copied()
+    }
+
+    /// The object at a slot, for the collector's walk — which must see even a
+    /// slot the program can no longer reach.
+    #[must_use]
+    pub fn object_at(&self, index: usize) -> Option<&HeapObject> {
+        self.objects.get(index)
+    }
+
+    /// Free every slot the mark phase did not reach, and set the threshold for
+    /// the next collection from what survived. Nothing moves: a swept slot is
+    /// simply available again.
+    pub fn sweep(&mut self, marked: &[bool]) -> usize {
+        let mut freed = 0;
+        for index in 0..self.objects.len() {
+            if marked.get(index).copied().unwrap_or(true) {
+                continue;
+            }
+            if matches!(self.objects[index], HeapObject::Free) {
+                continue;
+            }
+            self.objects[index] = HeapObject::Free;
+            let reference = u32::try_from(index).expect("index came from this vector");
+            self.builder_capacity.remove(&reference);
+            self.free.push(reference);
+            freed += 1;
+        }
+        let live = self.objects.len() - self.free.len();
+        self.threshold = std::cmp::max(HEAP_FLOOR, live.saturating_mul(2));
+        freed
     }
 
     /// Allocate a Java string from Rust UTF-8 text.

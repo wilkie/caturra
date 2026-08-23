@@ -54,6 +54,17 @@ jobs:
         env:
           CATURRA_REQUIRE_JDK: '1'
 
+      # The collector's reference walk is only as good as its exhaustiveness,
+      # and a reference it forgets frees a live object. Running the VM suite
+      # with a collection at EVERY safepoint turns that from a silent
+      # corruption into a failing test — it is how the missed one (a sorted
+      # view's bounds) was found in the first place.
+      - name: Test (collect at every safepoint)
+        run: cargo test -p caturra-vm --release
+        env:
+          CATURRA_REQUIRE_JDK: '1'
+          CATURRA_GC_STRESS: '1'
+
   web:
     name: Web (lint, types, unit, e2e)
     runs-on: ubuntu-latest

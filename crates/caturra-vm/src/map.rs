@@ -311,6 +311,16 @@ impl JavaHashMap {
             .collect()
     }
 
+    /// Every reference this map holds, for the collector's mark phase. Reads
+    /// the raw entries rather than `entries_in_order`, because a map being
+    /// TRACED must not depend on its bucket order being computable.
+    pub fn visit_refs(&self, visit: &mut impl FnMut(crate::value::HeapRef)) {
+        for entry in &self.entries {
+            crate::value::visit_value(entry.key, visit);
+            crate::value::visit_value(entry.value, visit);
+        }
+    }
+
     /// Every entry in iteration order.
     #[must_use]
     pub fn entries_in_order(&self) -> Vec<(JValue, JValue)> {

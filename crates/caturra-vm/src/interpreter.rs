@@ -103,6 +103,17 @@ pub(crate) struct Interpreter<'run> {
     /// Every later active use throws `NoClassDefFoundError`.
     init_failed: std::collections::HashSet<String>,
     remaining_instructions: u64,
+    /// Values held by the interpreter itself across a run of the dispatch
+    /// loop — which is to say, across a safepoint. `main`'s argument array is
+    /// the one that matters: it is built before the entry class's `<clinit>`
+    /// runs, and until the frame holding it exists, nothing else points at it.
+    temp_roots: Vec<JValue>,
+    /// Collect at EVERY safepoint. The whole test suite runs with this on
+    /// (`CATURRA_GC_STRESS=1`), which is what makes the reference walk
+    /// trustworthy: a reference the walk forgets frees a live object, and a
+    /// live object freed shows up as garbage within a few instructions rather
+    /// than never.
+    collect_always: bool,
     max_call_depth: u32,
     /// Frames suspended beneath a nested run (see
     /// [`Interpreter::run_nested`]), innermost run last: the caller's
@@ -260,6 +271,8 @@ impl<'run> Interpreter<'run> {
             field_templates: HashMap::new(),
             init_started: std::collections::HashSet::new(),
             init_failed: std::collections::HashSet::new(),
+            temp_roots: Vec::new(),
+            collect_always: std::env::var_os("CATURRA_GC_STRESS").is_some(),
             remaining_instructions: max_instructions,
             max_call_depth,
             suspended_runs: Vec::new(),
@@ -359,9 +372,19 @@ impl<'run> Interpreter<'run> {
         if let Some(name) = class.class_name() {
             let name = name.to_owned();
             if let Some(chain) = self.begin_initialization(&name)? {
-                for frame in chain {
-                    self.run_loop(frame)?;
-                }
+                // The locals are not in any frame yet, so the collector cannot
+                // see them: `main`'s argument array would be swept by the first
+                // safepoint inside a static initializer, and `args.length`
+                // would then read a reclaimed slot.
+                self.temp_roots.extend(locals.iter().copied());
+                let result = (|| {
+                    for frame in chain {
+                        self.run_loop(frame)?;
+                    }
+                    Ok(())
+                })();
+                self.temp_roots.clear();
+                result?;
             }
         }
         let frame = self.make_frame(class, method, locals)?;
@@ -1023,6 +1046,116 @@ impl<'run> Interpreter<'run> {
         })
     }
 
+    /// Mark and sweep, at an instruction boundary. Everything the program can
+    /// still reach is reachable from the frames, the statics, the interned
+    /// pools and the side tables; a slot nothing reaches is handed back.
+    ///
+    /// The safety of this rests on WHERE it runs. Native code allocates
+    /// freely — an intrinsic may build a holder map, an entry and three
+    /// strings before it returns — and those intermediate references live in
+    /// Rust locals the collector cannot see. Between two bytecode
+    /// instructions, at the base nesting level, no such local exists: every
+    /// reference the program holds is in a frame, a static or a table. So this
+    /// runs there and nowhere else, which is what a real VM calls a safepoint.
+    fn collect(&mut self, frame: &Frame<'run>) {
+        let mut marked = vec![false; self.heap.slots()];
+        let mut work: Vec<HeapRef> = Vec::new();
+        for f in std::iter::once(frame)
+            .chain(self.frames.iter())
+            .chain(self.suspended_runs.iter().flat_map(|(_, frames)| frames))
+        {
+            for value in f.locals.iter().chain(f.stack.iter()) {
+                if let JValue::Ref(Some(reference)) = value {
+                    mark_ref(&mut marked, &mut work, *reference);
+                }
+            }
+        }
+        for value in &self.temp_roots {
+            if let JValue::Ref(Some(reference)) = value {
+                mark_ref(&mut marked, &mut work, *reference);
+            }
+        }
+        for fields in self.statics.values() {
+            for value in fields.values() {
+                if let JValue::Ref(Some(reference)) = value {
+                    mark_ref(&mut marked, &mut work, *reference);
+                }
+            }
+        }
+        // The singletons, the INTERNED pools (a string literal and a class
+        // literal answer the same reference every time they are evaluated) and
+        // the boxing cache, all of which outlive any particular expression.
+        let permanent: Vec<HeapRef> = self
+            .intrinsic_statics
+            .roots()
+            .chain(self.string_pool.values().copied())
+            .chain(self.class_pool.values().copied())
+            .chain(self.heap.cached_boxes())
+            .chain(self.stdin_scanner)
+            .chain(self.last_thrown)
+            .collect();
+        for reference in permanent {
+            mark_ref(&mut marked, &mut work, reference);
+        }
+        // Drain, then let the side tables have their say, until neither adds
+        // anything: an entry whose KEY survived keeps what it points at alive
+        // (a live stream needs its origin, a live map its cached views), and
+        // an entry whose key did not is pruned after the sweep.
+        loop {
+            while let Some(reference) = work.pop() {
+                if let Some(object) = self.heap.object_at(reference as usize) {
+                    object.visit_refs(&mut |held| mark_ref(&mut marked, &mut work, held));
+                }
+            }
+            let before = marked.iter().filter(|seen| **seen).count();
+            for (stream, (origin, _)) in &self.stream_origins {
+                if marked.get(*stream as usize).copied().unwrap_or(false) {
+                    mark_ref(&mut marked, &mut work, *origin);
+                }
+            }
+            for ((map, _), view) in &self.map_views {
+                if marked.get(*map as usize).copied().unwrap_or(false) {
+                    mark_ref(&mut marked, &mut work, *view);
+                }
+            }
+            for (cursor, (pending, last)) in &self.cursor_pending {
+                if !marked.get(*cursor as usize).copied().unwrap_or(false) {
+                    continue;
+                }
+                for value in pending.iter().chain(last.iter()) {
+                    if let JValue::Ref(Some(reference)) = value {
+                        mark_ref(&mut marked, &mut work, *reference);
+                    }
+                }
+            }
+            if work.is_empty() && marked.iter().filter(|seen| **seen).count() == before {
+                break;
+            }
+        }
+        self.heap.sweep(&marked);
+        self.prune_tables(&marked);
+    }
+
+    /// Drop every side-table entry whose subject the sweep reclaimed. The
+    /// tables are keyed by reference, and a swept slot is handed out again —
+    /// so an entry left behind would attach an old object's state to a new
+    /// object at the same index.
+    fn prune_tables(&mut self, marked: &[bool]) {
+        let alive = |reference: &HeapRef| marked.get(*reference as usize).copied().unwrap_or(true);
+        self.exception_traces
+            .retain(|reference, _| alive(reference));
+        self.map_views
+            .retain(|(map, _), view| alive(map) && alive(view));
+        self.checked_cursor_views.retain(alive);
+        self.view_index_style
+            .retain(|reference, _| alive(reference));
+        self.view_class.retain(|reference, _| alive(reference));
+        self.cursor_pending.retain(|reference, _| alive(reference));
+        self.spent_streams.retain(alive);
+        self.stream_origins
+            .retain(|stream, (origin, _)| alive(stream) && alive(origin));
+    }
+
     /// The dispatch loop is one long match by design; splitting it per
     /// opcode family would only scatter the instruction set. The outer
     /// `'frames` loop re-establishes per-frame context after every
@@ -1051,6 +1184,17 @@ impl<'run> Interpreter<'run> {
                     return Err(VmError::InstructionBudgetExceeded);
                 }
                 self.remaining_instructions -= 1;
+
+                // THE SAFEPOINT. Only here, and only at the base nesting
+                // level: a nested run (a `toString` called from native code
+                // while a container renders) leaves the outer intrinsic's
+                // references in Rust locals, which nothing can mark.
+                if self.suspended_runs.is_empty()
+                    && (self.heap.wants_collection() || self.collect_always)
+                {
+                    frame.pc = pc;
+                    self.collect(&frame);
+                }
 
                 let addr = pc;
 
@@ -17491,6 +17635,16 @@ fn descriptor_class_name(descriptor: &str) -> String {
 
 /// A `StackTraceElement`'s own text: `Cls.method(File.java:12)`, or
 /// `(Unknown Source)` when no file was recorded — the JDK's wording.
+/// Mark one reference and queue it, if it was not marked already.
+fn mark_ref(marked: &mut [bool], work: &mut Vec<HeapRef>, reference: HeapRef) {
+    if let Some(seen) = marked.get_mut(reference as usize)
+        && !*seen
+    {
+        *seen = true;
+        work.push(reference);
+    }
+}
+
 /// Whether a frame belongs to a BUNDLED library unit rather than the program.
 /// Those units are injected under pseudo paths (`<util>`, `<swing>`), and a
 /// frame naming one leaks an implementation detail into a place a student

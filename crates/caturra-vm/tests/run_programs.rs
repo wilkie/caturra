@@ -13162,3 +13162,57 @@ fn a_line_shaped_stream_treats_every_line_as_terminated() {
     assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
     assert_eq!(console.stdout_text(), "7\ntrue\n[]\n");
 }
+
+/// The collector: garbage is reclaimed, and everything still reachable is not.
+/// The loop allocates a few hundred thousand objects it drops immediately
+/// while holding a live list, a live builder and a live map — the heap must
+/// stay small AND the live set must be intact at the end.
+///
+/// Before this, the heap only grew: the same loop cost gigabytes, which in a
+/// browser is not a slow program but a dead tab.
+#[test]
+fn the_collector_reclaims_garbage_and_keeps_the_live_set() {
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+
+        public class Collecting {
+            static class Node {
+                int value;
+                Node next;
+                Node(int value) { this.value = value; }
+            }
+
+            static Map<String, Node> registry = new HashMap<>();
+
+            public static void main(String[] args) {
+                List<Node> keep = new ArrayList<>();
+                for (int i = 0; i < 50; i++) {
+                    keep.add(new Node(i));
+                }
+                registry.put("first", keep.get(0));
+                StringBuilder log = new StringBuilder();
+                for (int i = 0; i < 200000; i++) {
+                    Node garbage = new Node(i);
+                    garbage.next = new Node(i + 1);
+                    Map<String, Integer> scratch = new HashMap<>();
+                    scratch.put("k" + (i % 5), i);
+                    List<String> more = new ArrayList<>();
+                    more.add("s" + i);
+                    if (i % 100000 == 0) {
+                        log.append(garbage.next.value).append(",");
+                    }
+                }
+                int sum = 0;
+                for (Node node : keep) {
+                    sum += node.value;
+                }
+                System.out.println(sum + " " + keep.size() + " " + log);
+                System.out.println(registry.get("first").value + " " + registry.size());
+            }
+        }
+        "#,
+        "Collecting",
+    );
+    assert_eq!(out, "1225 50 1,100001,\n0 1\n");
+}

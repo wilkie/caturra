@@ -7474,6 +7474,48 @@ Fixing it means teaching both hosts to report the terminator.
 Pinned by `a_scanner_reads_by_pattern` and
 `a_line_shaped_stream_treats_every_line_as_terminated`.
 
+### The collector (2026-08-22)
+
+The heap only ever grew. Every object a program allocated stayed allocated, so
+a loop that builds a list and drops it — the shape of every animation frame,
+every simulation step, every `+=` on a string — cost memory forever. Three
+million iterations of a small loop took **2.37 GB**; the same loop takes **18
+MB** now, and runs slightly faster for the reduced allocation pressure. In a
+browser the difference is not a slow program but a dead tab.
+
+It is mark-and-sweep, and the three decisions worth recording are all about
+safety rather than speed.
+
+**Where it runs.** Native code allocates freely — an intrinsic may build a
+holder map, an entry and three strings before it returns — and those
+intermediate references live in Rust locals no collector can see. Between two
+bytecode instructions, at the base nesting level, no such local exists: every
+reference the program holds is in a frame, a static, an interned pool or a side
+table. So the collection point is there and nowhere else, and a nested run (a
+`toString` called from native code while a container renders) suppresses it.
+One case escaped that rule and had to be given a root of its own: `main`'s
+argument array is built BEFORE the entry class's `<clinit>` runs, so until
+main's frame exists nothing points at it.
+
+**What it walks.** One `visit_refs` per heap kind, with NO wildcard arm — a
+variant that holds a reference cannot compile until it is listed. The side
+tables (a stream's origin, a map's cached views, a cursor's pending elements)
+are traced when their subject survives and pruned when it does not: a swept
+slot is handed out again, so an entry left behind would attach an old object's
+state to a new object at the same index.
+
+**How it is trusted.** `CATURRA_GC_STRESS=1` collects at every safepoint, and
+CI runs the whole VM suite that way. That is what turns a forgotten reference
+from a silent corruption into a failing test — and it is how the one that WAS
+forgotten got found: a sorted view's bounds are values, and
+`set.headSet(new Point(4))` holds the only pointer to that Point.
+
+Nothing moves and nothing is compacted: a reference is a slot index, so a
+swept slot is simply available again and every reference the program holds
+keeps pointing at the object it named.
+
+Pinned by `the_collector_reclaims_garbage_and_keeps_the_live_set`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
