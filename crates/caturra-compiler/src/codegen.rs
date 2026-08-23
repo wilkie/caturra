@@ -4867,9 +4867,19 @@ fn widens_to_iterable(from: JType, to: JType, table: &MethodTable) -> bool {
         _ => return false,
     };
     // A type variable or a wildcard accepts any element; a written one has to
-    // match, since `Iterable`'s own erasure cannot carry it.
+    // match, since `Iterable`'s own erasure cannot carry it — except from a
+    // RAW source, where the unchecked conversion applies as it does for every
+    // other face (`Iterable<String> it = new ArrayList();`).
     argument.is_none_or(|arg| {
-        matches!(arg, ElemType::TypeVar(_) | ElemType::Wildcard { .. }) || arg == element
+        matches!(arg, ElemType::TypeVar(_) | ElemType::Wildcard { .. })
+            || arg == element
+            || matches!(
+                element,
+                ElemType::Wildcard {
+                    bound: WildcardBound::Raw,
+                    ..
+                }
+            )
     })
 }
 
@@ -5031,33 +5041,47 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (
                 JType::LinkedList { elem: a, role: r },
                 JType::LinkedList { elem: b, role: to_role },
-            ) if a == b && r.widens_to(to_role)
+            ) if elem_matches(a, b, table) && r.widens_to(to_role)
         )
         // The concrete LinkedList is a List; any of them is a Collection.
         || matches!(
             (from, to),
-            (JType::LinkedList { elem: a, role: SeqRole::Full }, JType::List(b)) if a == b
+            (JType::LinkedList { elem: a, role: SeqRole::Full }, JType::List(b))
+                if elem_matches(a, b, table)
         )
         || matches!(
             (from, to),
-            (JType::LinkedList { elem: a, .. }, JType::Collection(b)) if a == b
+            (JType::LinkedList { elem: a, .. }, JType::Collection(b)) if elem_matches(a, b, table)
         )
         // A List or a Set is a Collection of its element type:
         // `Collection<E> c = list`.
         || matches!(
             (from, to),
-            (JType::List(a) | JType::Set(a), JType::Collection(b)) if a == b
+            (JType::List(a) | JType::Set(a), JType::Collection(b))
+                if elem_matches(a, b, table)
+        )
+        // A DIAMOND whose element the program never wrote, assigned to a
+        // variable of the entry-set kind: `Set<Map.Entry<K, V>> s = new
+        // HashSet<>()`. The two are the same shape and the element is exactly
+        // what the target says it is — which is what a diamond means.
+        || matches!(
+            (from, to),
+            (
+                JType::Set(ElemType::Wildcard { bound: WildcardBound::Raw, .. }),
+                JType::EntrySet { .. }
+            )
         )
         // A Stack is a List (it extends Vector), and so a Collection, of its
         // element type: `List<E> l = new Stack<>()`.
         || matches!(
             (from, to),
-            (JType::Stack(a), JType::List(b) | JType::Collection(b)) if a == b
+            (JType::Stack(a), JType::List(b) | JType::Collection(b)) if elem_matches(a, b, table)
         )
         // A TreeSet is a Set (and a Collection) of its element type.
         || matches!(
             (from, to),
-            (JType::TreeSet(a, _), JType::Set(b) | JType::Collection(b)) if a == b
+            (JType::TreeSet(a, _), JType::Set(b) | JType::Collection(b))
+                if elem_matches(a, b, table)
         )
         // A TreeMap is a Map of its key/value types.
         || matches!(
@@ -17394,14 +17418,17 @@ impl BodyGen<'_> {
             "PrintWriter" => JType::Writer,
             "BufferedReader" | "FileReader" | "InputStreamReader" => JType::Reader,
             "ArrayList" => match type_args {
-                // A diamond `new ArrayList<>(...)` gets its element from the
-                // context — `Null` (assignable to any List), matching what
-                // `new_array_list` returns, so a nested `new C(new ArrayList<>(x))`
-                // does not read as an `Error` argument.
-                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::List),
-                _ => self
-                    .copy_source_element(args)
-                    .map_or(JType::Null, JType::List),
+                // A diamond `new ArrayList<>(...)` leaves its element
+                // UNWRITTEN, which is the raw marker — matching what
+                // `new_array_list` returns. It used to be `Null`, assignable
+                // to any reference at all.
+                [arg] => JType::List(
+                    elem_from_type_arg(arg, self.table).unwrap_or_else(|| self.diamond_elem()),
+                ),
+                _ => JType::List(
+                    self.copy_source_element(args)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                ),
             },
             "Stack" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Stack),
@@ -17411,96 +17438,96 @@ impl BodyGen<'_> {
             // ones — only the object's iteration order differs — and the
             // emission path remaps them. This table did not, so `new
             // LinkedHashMap<>()` typed as an error while it emitted a map.
-            "HashMap" | "Map" | "LinkedHashMap" => match type_args {
-                [key, value] => match (
-                    elem_from_type_arg(key, self.table),
-                    elem_from_type_arg(value, self.table),
-                ) {
-                    (Some(key), Some(value)) => JType::Map { key, value },
-                    _ => JType::Null,
-                },
-                _ => self
-                    .copy_source_entry(args)
-                    .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
-            },
+            "HashMap" | "Map" | "LinkedHashMap" => {
+                let (key, value) = if let [key, value] = type_args {
+                    (
+                        elem_from_type_arg(key, self.table),
+                        elem_from_type_arg(value, self.table),
+                    )
+                } else {
+                    let pair = self.copy_source_entry(args);
+                    (pair.map(|(key, _)| key), pair.map(|(_, value)| value))
+                };
+                JType::Map {
+                    key: key.unwrap_or_else(|| self.diamond_elem()),
+                    value: value.unwrap_or_else(|| self.diamond_elem()),
+                }
+            }
             "HashSet" | "Set" | "LinkedHashSet" => match type_args {
-                // A diamond `new HashSet<>(...)` gets its element from context —
-                // `Null` (assignable to any Set), matching `new_hash_set`.
-                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Set),
-                _ => self
-                    .copy_source_element(args)
-                    .map_or(JType::Null, JType::Set),
+                [arg] => JType::Set(
+                    elem_from_type_arg(arg, self.table).unwrap_or_else(|| self.diamond_elem()),
+                ),
+                _ => JType::Set(
+                    self.copy_source_element(args)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                ),
             },
             "LinkedList" => match type_args {
-                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
-                    JType::LinkedList {
-                        elem,
-                        role: SeqRole::Full,
-                    }
-                }),
-                _ => self
-                    .copy_source_element(args)
-                    .map_or(JType::Null, |elem| JType::LinkedList {
-                        elem,
-                        role: SeqRole::Full,
-                    }),
+                [arg] => JType::LinkedList {
+                    elem: elem_from_type_arg(arg, self.table)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                    role: SeqRole::Full,
+                },
+                _ => JType::LinkedList {
+                    elem: self
+                        .copy_source_element(args)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                    role: SeqRole::Full,
+                },
             },
             "PriorityQueue" => match type_args {
-                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
-                    JType::LinkedList {
-                        elem,
-                        role: SeqRole::Queue,
-                    }
-                }),
-                _ => self
-                    .copy_source_element(args)
-                    .map_or(JType::Null, |elem| JType::LinkedList {
-                        elem,
-                        role: SeqRole::Queue,
-                    }),
+                [arg] => JType::LinkedList {
+                    elem: elem_from_type_arg(arg, self.table)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                    role: SeqRole::Queue,
+                },
+                _ => JType::LinkedList {
+                    elem: self
+                        .copy_source_element(args)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                    role: SeqRole::Queue,
+                },
             },
             "ArrayDeque" => match type_args {
-                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
-                    JType::LinkedList {
-                        elem,
-                        role: SeqRole::ArrayDeque,
-                    }
-                }),
-                _ => self
-                    .copy_source_element(args)
-                    .map_or(JType::Null, |elem| JType::LinkedList {
-                        elem,
-                        role: SeqRole::ArrayDeque,
-                    }),
+                [arg] => JType::LinkedList {
+                    elem: elem_from_type_arg(arg, self.table)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                    role: SeqRole::ArrayDeque,
+                },
+                _ => JType::LinkedList {
+                    elem: self
+                        .copy_source_element(args)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                    role: SeqRole::ArrayDeque,
+                },
             },
             "TreeSet" => match type_args {
-                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
-                    JType::TreeSet(elem, SortedRole::Concrete)
-                }),
-                _ => self.copy_source_element(args).map_or(JType::Null, |elem| {
-                    JType::TreeSet(elem, SortedRole::Concrete)
-                }),
+                [arg] => JType::TreeSet(
+                    elem_from_type_arg(arg, self.table).unwrap_or_else(|| self.diamond_elem()),
+                    SortedRole::Concrete,
+                ),
+                _ => JType::TreeSet(
+                    self.copy_source_element(args)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                    SortedRole::Concrete,
+                ),
             },
-            "TreeMap" => match type_args {
-                [key, value] => match (
-                    elem_from_type_arg(key, self.table),
-                    elem_from_type_arg(value, self.table),
-                ) {
-                    (Some(key), Some(value)) => JType::TreeMap {
-                        key,
-                        value,
-                        role: SortedRole::Concrete,
-                    },
-                    _ => JType::Null,
-                },
-                _ => self
-                    .copy_source_entry(args)
-                    .map_or(JType::Null, |(key, value)| JType::TreeMap {
-                        key,
-                        value,
-                        role: SortedRole::Concrete,
-                    }),
-            },
+            "TreeMap" => {
+                let (key, value) = if let [key, value] = type_args {
+                    (
+                        elem_from_type_arg(key, self.table),
+                        elem_from_type_arg(value, self.table),
+                    )
+                } else {
+                    let pair = self.copy_source_entry(args);
+                    (pair.map(|(key, _)| key), pair.map(|(_, value)| value))
+                };
+                JType::TreeMap {
+                    key: key.unwrap_or_else(|| self.diamond_elem()),
+                    value: value.unwrap_or_else(|| self.diamond_elem()),
+                    role: SortedRole::Concrete,
+                }
+            }
             _ => JType::Error,
         }
     }
@@ -18339,6 +18366,19 @@ impl BodyGen<'_> {
 
     /// `new ArrayList<E>()` (diamond allowed when the declaration names
     /// the element type — students write both).
+    /// The element a DIAMOND leaves unwritten. It is the RAW marker: unknown,
+    /// and unchecked in either direction, so `List<String> l = new
+    /// ArrayList<>()` converts and `List<Object> l = aStringList` still does
+    /// not. It used to be `JType::Null`, which assigns to ANY reference — so
+    /// `Integer x = new ArrayList<>();` compiled, and a typo that javac
+    /// catches ran here instead.
+    fn diamond_elem(&self) -> ElemType {
+        ElemType::Wildcard {
+            read: self.table.object_id,
+            bound: WildcardBound::Raw,
+        }
+    }
+
     fn new_array_list(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
         if args.len() > 1 {
             self.error(span, "ArrayList takes at most one constructor argument");
@@ -18400,13 +18440,7 @@ impl BodyGen<'_> {
             }
             _ => unreachable!("arg count checked above"),
         }
-        match elem {
-            Some(elem) => JType::List(elem),
-            // Diamond: callers in declaration position convert with
-            // the declared type; `Null` behaves as assignable-to-any
-            // reference, which matches the diamond's intent.
-            None => JType::Null,
-        }
+        JType::List(elem.unwrap_or_else(|| self.diamond_elem()))
     }
 
     /// `new Stack<E>()` — the only constructor `java.util.Stack` declares. (It
@@ -18443,7 +18477,7 @@ impl BodyGen<'_> {
         self.code.drop_stack(1);
         match elem {
             Some(elem) => JType::Stack(elem),
-            None => JType::Null,
+            None => JType::Stack(self.diamond_elem()),
         }
     }
 
@@ -18613,7 +18647,10 @@ impl BodyGen<'_> {
         }
         match entry {
             Some((key, value)) => JType::Map { key, value },
-            None => JType::Null,
+            None => JType::Map {
+                key: self.diamond_elem(),
+                value: self.diamond_elem(),
+            },
         }
     }
 
@@ -18678,7 +18715,10 @@ impl BodyGen<'_> {
                 elem,
                 role: SeqRole::Full,
             },
-            None => JType::Null,
+            None => JType::LinkedList {
+                elem: self.diamond_elem(),
+                role: SeqRole::Full,
+            },
         }
     }
 
@@ -18750,7 +18790,10 @@ impl BodyGen<'_> {
                 elem,
                 role: SeqRole::ArrayDeque,
             },
-            None => JType::Null,
+            None => JType::LinkedList {
+                elem: self.diamond_elem(),
+                role: SeqRole::ArrayDeque,
+            },
         }
     }
 
@@ -18955,7 +18998,10 @@ impl BodyGen<'_> {
                 elem,
                 role: SeqRole::Queue,
             },
-            None => JType::Null,
+            None => JType::LinkedList {
+                elem: self.diamond_elem(),
+                role: SeqRole::Queue,
+            },
         }
     }
 
@@ -19030,7 +19076,7 @@ impl BodyGen<'_> {
         }
         match elem {
             Some(elem) => JType::Set(elem),
-            None => JType::Null,
+            None => JType::Set(self.diamond_elem()),
         }
     }
 
@@ -19098,7 +19144,7 @@ impl BodyGen<'_> {
         }
         match elem {
             Some(elem) => JType::TreeSet(elem, SortedRole::Concrete),
-            None => JType::Null,
+            None => JType::TreeSet(self.diamond_elem(), SortedRole::Concrete),
         }
     }
 
@@ -19173,7 +19219,11 @@ impl BodyGen<'_> {
                 value,
                 role: SortedRole::Concrete,
             },
-            None => JType::Null,
+            None => JType::TreeMap {
+                key: self.diamond_elem(),
+                value: self.diamond_elem(),
+                role: SortedRole::Concrete,
+            },
         }
     }
 
@@ -28933,7 +28983,11 @@ impl BodyGen<'_> {
         // this the assignment read as int -> Byte and was rejected. The value
         // already fits, so the int on the stack needs no narrowing opcode
         // (the verifier treats a byte/short/char parameter as int).
-        if from == JType::Int
+        // The constant may be a byte/short/char as well as an int — JLS §5.2
+        // says "a constant expression of type byte, short, char, or int", and
+        // only `int` was listed here, so `Character c = (short) 1;` was
+        // refused while `Character c = 1;` was allowed.
+        if matches!(from, JType::Int | JType::Char | JType::Short | JType::Byte)
             && let JType::Boxed(elem) = to
             && let Some(value) = constant
             && matches!(elem.base_type(), JType::Byte | JType::Short | JType::Char)

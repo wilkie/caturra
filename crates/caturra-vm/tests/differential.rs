@@ -35183,3 +35183,83 @@ public class FoldedConstants {
 }
 "#
 );
+
+// A DIAMOND is a collection whose element the program did not write — not a
+// null. It used to type as one, and a null assigns to any reference at all, so
+// `Integer x = new ArrayList<>();` compiled and ran. Every one of these was
+// swept against javac as part of a 1369-assignment cross-product; the ones
+// that must be REFUSED are in `differential_reject!`s beside this.
+differential_test!(
+    a_diamond_is_a_collection_with_an_unwritten_element,
+    "Diamonds",
+    r#"
+import java.util.*;
+
+public class Diamonds {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>();
+        list.add("a");
+        Set<Integer> set = new HashSet<>();
+        set.add(1);
+        Map<String, Integer> map = new HashMap<>();
+        map.put("k", 2);
+        Deque<Integer> deque = new ArrayDeque<>();
+        deque.add(3);
+        Queue<Integer> queue = new LinkedList<>();
+        queue.add(4);
+        SortedSet<String> sorted = new TreeSet<>();
+        sorted.add("s");
+        NavigableMap<String, Integer> nav = new TreeMap<>();
+        nav.put("n", 5);
+        Collection<String> collection = new ArrayList<>();
+        collection.add("c");
+        Iterable<String> iterable = new ArrayList<>();
+        Set<Map.Entry<String, Integer>> entries = new HashSet<>();
+        entries.add(new AbstractMap.SimpleEntry<>("e", 6));
+        System.out.println(list + " " + set + " " + map);
+        System.out.println(deque + " " + queue + " " + sorted + " " + nav);
+        System.out.println(collection + " " + iterable + " " + entries);
+        // A copy constructor's diamond takes the source's element.
+        List<String> copy = new ArrayList<>(list);
+        System.out.println(copy);
+        // And the constant-narrowing rule reaches the WRAPPER targets, from a
+        // constant of any of the four integral types.
+        Character fromInt = 65;
+        Character fromShort = (short) 66;
+        Byte fromByte = (byte) 7;
+        Short small = 8;
+        System.out.println(fromInt + " " + fromShort + " " + fromByte + " " + small);
+    }
+}
+"#
+);
+
+differential_reject!(
+    a_diamond_is_not_assignable_to_anything,
+    "DiamondToInteger",
+    r"
+import java.util.ArrayList;
+
+public class DiamondToInteger {
+    public static void main(String[] args) {
+        Integer value = new ArrayList<>();
+        System.out.println(value);
+    }
+}
+"
+);
+
+differential_reject!(
+    a_raw_collection_is_not_assignable_to_anything,
+    "RawToString",
+    r"
+import java.util.ArrayList;
+
+public class RawToString {
+    public static void main(String[] args) {
+        String value = new ArrayList();
+        System.out.println(value);
+    }
+}
+"
+);

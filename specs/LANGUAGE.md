@@ -7586,6 +7586,49 @@ included.
 
 Pinned by `the_folded_wrapper_constants_are_the_jdks`.
 
+### The assignment cross-product (2026-08-23)
+
+Every assignment between thirty-seven types — the primitives, the wrappers,
+`String`/`Object`/`CharSequence`/`Comparable`, three array shapes, seven
+parameterizations of `List`, a raw one, `Set`/`Map`/`Collection`/`Iterable`, a
+user class hierarchy — as its own program. 1369 of them, compiled by javac in
+one invocation and by caturra one at a time, comparing only the VERDICT.
+
+Nineteen were accepted here and refused by javac, and they were all one thing:
+**a diamond typed as `null`**. `new ArrayList<>()` had no element to name, and
+the type that means "no element" was `JType::Null` — which assigns to any
+reference at all. So `Integer x = new ArrayList<>();` compiled, and `String s =
+new ArrayList();` with it. A typo javac catches, run instead.
+
+A diamond is not a null: it is a collection whose element the program did not
+write, which is exactly what the RAW marker means — unknown, and unchecked in
+either direction. Typed that way, `List<String> l = new ArrayList<>()` still
+converts and `Integer x = new ArrayList<>()` is the error javac calls it.
+
+Making the two agree took the emitter and the mirror TOGETHER, and the
+compiler's own `CATURRA_VERIFY_TYPES` check is what insisted: it compares what
+`type_of` says against what the emitter returns, and it failed on
+`new HashSet<>()` the moment the two disagreed. Half a fix would have been
+silent otherwise.
+
+Four assignments went the other way — refused here, accepted by javac — and
+they were two rules:
+
+* **The constant-narrowing rule reaches the WRAPPER targets** (JLS §5.2), and
+  from a constant of any integral type: `Character c = (short) 1;` is a
+  narrowing followed by a boxing. Only `int` sources were listed, so
+  `Character c = 1;` worked and `Character c = (short) 1;` did not.
+* **The unchecked conversion applies to the wider FACES too.** A raw
+  `ArrayList` converts to `Collection<String>` and to `Iterable<String>`, not
+  only to `List<String>`; those arms compared elements with `==` where the rest
+  of the family had moved to the element rule.
+
+Both directions are now zero across all 1369.
+
+Pinned by `a_diamond_is_a_collection_with_an_unwritten_element`,
+`a_diamond_is_not_assignable_to_anything` and
+`a_raw_collection_is_not_assignable_to_anything`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
