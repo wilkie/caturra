@@ -13322,3 +13322,54 @@ fn recursion_goes_as_deep_as_a_jvms() {
     );
     assert_eq!(out, "50005000\ntrue\n");
 }
+
+/// ELEVEN keys in one bucket: a JDK stops walking a chain there and walks a
+/// red-black TREE, which iterates in an order the chain never had. caturra
+/// keeps the chain — insertion order — however long the bucket gets.
+///
+/// The trigger is a bucket reaching eight entries, which makes a JDK resize
+/// while the table is smaller than 64 and TREEIFY once it is not; with an
+/// empty map and nothing but collisions that lands on the eleventh insertion.
+/// Getting there needs crafted collisions or a constant `hashCode`, and for a
+/// key class that is not `Comparable` the JDK's own order then depends on
+/// identity hashes — addresses, which no other implementation can reproduce.
+/// So this is documented rather than matched, and the ten-key case (which is
+/// the one a program actually meets) is asserted against the JDK itself in
+/// `a_collided_bucket_iterates_alike`.
+#[test]
+fn a_deeply_collided_bucket_keeps_insertion_order() {
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+
+        public class Deep {
+            public static void main(String[] args) {
+                String[] parts = { "Aa", "BB" };
+                List<String> keys = new ArrayList<>();
+                for (String one : parts) {
+                    for (String two : parts) {
+                        for (String three : parts) {
+                            for (String four : parts) {
+                                keys.add(one + two + three + four);
+                            }
+                        }
+                    }
+                }
+                Map<String, Integer> map = new HashMap<>();
+                for (int i = 0; i < 12; i++) {
+                    map.put(keys.get(i), i);
+                }
+                System.out.println(map.keySet());
+            }
+        }
+        "#,
+        "Deep",
+    );
+    // Insertion order throughout. A JDK answers
+    // `[AaAaBBBB, AaAaAaAa, AaAaAaBB, ...]` from here on: the tree's order.
+    assert_eq!(
+        out,
+        "[AaAaAaAa, AaAaAaBB, AaAaBBAa, AaAaBBBB, AaBBAaAa, AaBBAaBB, \
+         AaBBBBAa, AaBBBBBB, BBAaAaAa, BBAaAaBB, BBAaBBAa, BBAaBBBB]\n"
+    );
+}

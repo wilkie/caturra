@@ -35112,3 +35112,40 @@ public class AskGc {
 }
 "
 );
+
+// Ten keys in ONE bucket still iterate alike. Every combination of "Aa" and
+// "BB" of the same length has the same `hashCode`, so these all collide, and
+// the chain order — insertion order, with the compute family linking at the
+// head — is what both engines walk. The ELEVENTH is where a JDK stops walking
+// a chain at all; see `a_deeply_collided_bucket_keeps_insertion_order`.
+differential_test!(
+    a_collided_bucket_iterates_alike,
+    "Collided",
+    r#"
+import java.util.*;
+
+public class Collided {
+    public static void main(String[] args) {
+        String[] parts = { "Aa", "BB" };
+        List<String> keys = new ArrayList<>();
+        for (String one : parts) {
+            for (String two : parts) {
+                for (String three : parts) {
+                    keys.add(one + two + three);
+                }
+            }
+        }
+        System.out.println(keys.get(0).hashCode() == keys.get(7).hashCode());
+        Map<String, Integer> map = new HashMap<>();
+        for (int i = 0; i < 10; i++) {
+            map.put(keys.get(i % keys.size()) + (i / keys.size()), i);
+            System.out.println(map.keySet());
+        }
+        map.remove(keys.get(3));
+        System.out.println(map.keySet() + " " + map.size());
+        Set<String> set = new HashSet<>(keys);
+        System.out.println(set);
+    }
+}
+"#
+);

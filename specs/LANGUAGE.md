@@ -1237,10 +1237,27 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     JDK randomizes the ITERATION ORDER of `Set.of`/`Map.of` per JVM run (they
     are salted — two runs of the same program disagree), so caturra iterates
     in the order written and no engine can match a JDK there.
-  - Deferred: `HashMap` iteration order once a bucket holds ≥8 colliding keys
-    (a JDK treeifies the bin, ordering by hash then `compareTo`), and a live
-    `Map.Entry` whose hash changed while it sat in a `HashSet` — the same
-    hazard for a USER class already matches the JDK exactly.
+  - Deferred: `HashMap` iteration order once a bucket is deeply collided, and
+    a live `Map.Entry` whose hash changed while it sat in a `HashSet` — the
+    same hazard for a USER class already matches the JDK exactly.
+
+    Measured 2026-08-23, because the description above used to be wrong in
+    both of its details. The divergence begins at the ELEVENTH key in one
+    bucket, not the eighth: a bin reaching eight makes a JDK RESIZE while the
+    table is smaller than 64 and treeify only once it is not, which with an
+    empty map and nothing but collisions lands on the eleventh insertion. And
+    the order is not "by hash then `compareTo`" — it is the red-black tree's
+    own linked order, which depends on the insertion sequence that built it.
+    caturra keeps the chain (insertion order) however deep the bucket gets.
+
+    Reaching that needs crafted collisions or a constant `hashCode`. For a key
+    class that is not `Comparable` the JDK's order there depends on identity
+    hashes — addresses, which no other implementation can reproduce — so the
+    part that COULD be matched is the `Comparable` case, and matching it means
+    porting `HashMap$TreeNode` whole. The ten-key case, which is the one a
+    program actually meets, is asserted against the JDK itself.
+    (`a_collided_bucket_iterates_alike`,
+    `a_deeply_collided_bucket_keeps_insertion_order`)
   - Pinned by `diff_lookup_takes_object`,
     `diff_tree_set_equals_uses_its_comparator` and
     `diff_immutable_factories`.
