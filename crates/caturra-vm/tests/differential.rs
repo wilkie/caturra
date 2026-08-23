@@ -34965,3 +34965,97 @@ public class RandomStreams {
 }
 "#
 );
+
+// `Collections.sort(null)` — javac infers the type variable from the null and
+// the `T extends Comparable<? super T>` bound is satisfied vacuously, so it
+// compiles and throws at run time. caturra reads a null argument as an empty
+// `List<Object>` (which is what a DIAMOND argument means here, and javac
+// refuses that: "no suitable method found for sort(ArrayList<Object>)"), so
+// the bound really is unsatisfied and the call is refused. The stricter,
+// safe direction, and only for the bare literal.
+stricter_than_javac!(
+    stricter_a_null_literal_to_a_bounded_collections_method,
+    "SortNull",
+    r"
+import java.util.Collections;
+
+public class SortNull {
+    public static void main(String[] args) {
+        Collections.sort(null);
+    }
+}
+"
+);
+
+// The runtime failures a program actually hits: the exception CLASS and its
+// MESSAGE, byte for byte. The JDK's own wording is inconsistent between call
+// sites — `Index 2 out of bounds for length 1` from a list read, `Index: 3,
+// Size: 0` from a list insert, `begin 2, end 9, length 3` from a substring and
+// `String index out of range: 5` from a charAt — and matching it means
+// matching each one where it is thrown, not picking a house style.
+differential_test!(
+    the_runtime_failures_read_like_the_jdks,
+    "Failures",
+    r#"
+import java.util.*;
+
+public class Failures {
+    static void show(Runnable body) {
+        try {
+            body.run();
+            System.out.println("(no throw)");
+        } catch (Throwable thrown) {
+            System.out.println(thrown);
+        }
+    }
+
+    public static void main(String[] args) {
+        show(() -> { String s = null; s.length(); });
+        show(() -> { int[] a = new int[2]; System.out.println(a[5]); });
+        show(() -> { int[] a = new int[2]; a[-1] = 0; });
+        show(() -> { int n = -1; int[] a = new int[n]; System.out.println(a.length); });
+        show(() -> { Object[] o = new String[1]; o[0] = Integer.valueOf(1); });
+        show(() -> { Object o = "s"; Integer n = (Integer) o; System.out.println(n); });
+        show(() -> { int n = 0; System.out.println(1 / n); });
+        show(() -> { int n = 0; System.out.println(1 % n); });
+        show(() -> System.out.println(Integer.parseInt("")));
+        show(() -> System.out.println(Integer.parseInt("12a")));
+        show(() -> System.out.println(Integer.parseInt(null)));
+        show(() -> System.out.println(Double.parseDouble("x")));
+        show(() -> System.out.println("abc".charAt(5)));
+        show(() -> System.out.println("abc".substring(2, 9)));
+        show(() -> System.out.println("abc".substring(-1)));
+        show(() -> System.out.println(new ArrayList<Integer>().get(0)));
+        show(() -> new ArrayList<Integer>().add(3, 1));
+        show(() -> new ArrayList<>(List.of(1)).set(2, 5));
+        show(() -> System.out.println(new ArrayList<>(List.of(1)).subList(0, 4)));
+        show(() -> List.of(1).add(2));
+        show(() -> Arrays.asList(1, 2).add(3));
+        show(() -> Collections.unmodifiableList(new ArrayList<>(List.of(1))).clear());
+        show(() -> new HashMap<String, Integer>().keySet().add("x"));
+        show(() -> {
+            List<Integer> l = new ArrayList<>(List.of(1, 2, 3));
+            for (int x : l) {
+                l.add(x);
+            }
+        });
+        show(() -> System.out.println(new ArrayList<Integer>().iterator().next()));
+        show(() -> System.out.println(Optional.empty().get()));
+        show(() -> System.out.println(new TreeSet<Integer>().first()));
+        show(() -> System.out.println(new Stack<Integer>().pop()));
+        show(() -> System.out.println(new Random(1).nextInt(0)));
+        show(() -> System.out.println(new TreeMap<String, Integer>().subMap("z", "a")));
+        show(() -> {
+            List<Integer> l = new ArrayList<>(List.of(1, 2));
+            Iterator<Integer> it = l.iterator();
+            it.next();
+            it.remove();
+            it.remove();
+        });
+        show(() -> Objects.requireNonNull(null, "must not be null"));
+        show(() -> { Map<String, Integer> m = new HashMap<>(); int n = m.get("x"); System.out.println(n); });
+        show(() -> { int[][] g = new int[1][]; g[0][0] = 1; });
+    }
+}
+"#
+);

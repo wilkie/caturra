@@ -397,7 +397,9 @@ impl<'run> Interpreter<'run> {
             None => format!("{class}.{method}({file})"),
         };
         let mut lines = Vec::new();
-        if let Some(current) = &self.current_location {
+        if let Some(current) = &self.current_location
+            && !is_injected_library(&current.code.source_file)
+        {
             lines.push(format_line(
                 current.class_name,
                 current.method_name,
@@ -407,6 +409,9 @@ impl<'run> Interpreter<'run> {
         }
         let trace_frames = |frames: &[Frame<'run>], lines: &mut Vec<String>| {
             for suspended in frames.iter().rev() {
+                if is_injected_library(&suspended.code.source_file) {
+                    continue;
+                }
                 let class_name = suspended.class.class_name().unwrap_or("<unknown>");
                 lines.push(format_line(
                     class_name,
@@ -420,7 +425,9 @@ impl<'run> Interpreter<'run> {
         // Then the callers below each nested run (a `toString()` invoked while
         // rendering a container), innermost run first.
         for (caller, frames) in self.suspended_runs.iter().rev() {
-            if let Some(caller) = caller {
+            if let Some(caller) = caller
+                && !is_injected_library(&caller.code.source_file)
+            {
                 lines.push(format_line(
                     caller.class_name,
                     caller.method_name,
@@ -17484,6 +17491,17 @@ fn descriptor_class_name(descriptor: &str) -> String {
 
 /// A `StackTraceElement`'s own text: `Cls.method(File.java:12)`, or
 /// `(Unknown Source)` when no file was recorded — the JDK's wording.
+/// Whether a frame belongs to a BUNDLED library unit rather than the program.
+/// Those units are injected under pseudo paths (`<util>`, `<swing>`), and a
+/// frame naming one leaks an implementation detail into a place a student
+/// reads closely: `at Random.nextInt(<util>:31)` says nothing they can act on,
+/// and no such file exists to look at. Every library caturra models NATIVELY
+/// contributes no frame at all, so hiding these is what makes one rule of the
+/// two — a trace names the program's own calls.
+fn is_injected_library(source_file: &str) -> bool {
+    source_file.starts_with('<')
+}
+
 pub(crate) fn stack_frame_text(
     declaring: &str,
     method: &str,

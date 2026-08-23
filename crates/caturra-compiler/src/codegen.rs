@@ -13536,6 +13536,19 @@ fn bparam_java_name(param: BParam) -> Option<&'static str> {
     })
 }
 
+/// javac's wording for an ambiguous call. It names exactly TWO candidates —
+/// the word is "both", and a list of nine after it is not a sentence — so this
+/// takes the first two of the maximally specific set.
+fn ambiguous_message(method: &str, candidates: &[String]) -> String {
+    match candidates {
+        [first, second, ..] => format!(
+            "reference to {method} is ambiguous: both method {first} and method {second} match"
+        ),
+        [only] => format!("reference to {method} is ambiguous: method {only} matches"),
+        [] => format!("reference to {method} is ambiguous"),
+    }
+}
+
 /// javac's wording for a call that matched no method, given every candidate's
 /// parameter list. The rule is the one javac's default (`-Xdiags:compact`)
 /// diagnostics use, and it is worth matching because it names the actual
@@ -20862,13 +20875,7 @@ impl BodyGen<'_> {
                 return None;
             }
             Resolution::Ambiguous(candidates) => {
-                self.error(
-                    span,
-                    format!(
-                        "reference to {method} is ambiguous: both method {} match",
-                        candidates.join(" and method ")
-                    ),
-                );
+                self.error(span, ambiguous_message(method, &candidates));
                 return None;
             }
         };
@@ -22233,13 +22240,7 @@ impl BodyGen<'_> {
                 return None;
             }
             Resolution::Ambiguous(candidates) => {
-                self.error(
-                    span,
-                    format!(
-                        "reference to {method} is ambiguous: both method {} match",
-                        candidates.join(" and method ")
-                    ),
-                );
+                self.error(span, ambiguous_message(method, &candidates));
                 return None;
             }
         };

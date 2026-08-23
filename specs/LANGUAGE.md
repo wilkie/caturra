@@ -7411,6 +7411,39 @@ not.
 
 Pinned by `a_raw_element_array_takes_a_parameterized_value`.
 
+### What a trace names (2026-08-22)
+
+Fifty programs that FAIL at run time — every null dereference, bad index, bad
+cast, bad parse, unmodifiable write, comodification and empty-collection read a
+student meets — compared with a real JDK.
+
+**Every exception class and message is byte-identical**, including the places
+the JDK is inconsistent with itself: `Index 2 out of bounds for length 1` from
+a list read but `Index: 3, Size: 0` from a list insert, `begin 2, end 9,
+length 3` from a substring but `String index out of range: 5` from a charAt.
+Matching that means matching each site where it throws rather than picking a
+house style, and it already did. The frames match too, name for name and line
+for line, `Outer$Inner.<init>` included.
+
+Two things did differ.
+
+**A trace named caturra's own library.** Most of the class library is native
+and contributes no frame at all; the few classes that are bundled JAVA
+contributed one — `at Random.nextInt(<util>:31)`, naming a file that does not
+exist and a line in caturra's source. A JDK shows a library frame here too, but
+as `java.base/java.util.Random.nextInt(Random.java:388)`, and inventing that is
+worse than saying nothing. Saying nothing is what every natively-modelled call
+already did, so a frame from an injected unit is now hidden and a trace names
+the program's own calls only.
+
+**An ambiguous call listed every candidate.** javac names exactly TWO — the
+word is "both", and `Arrays.sort(null, 0, 1)` listing nine of them after it is
+not a sentence.
+
+Pinned by `the_runtime_failures_read_like_the_jdks`,
+`a_trace_names_the_programs_calls_not_the_bundled_librarys` and
+`stricter_a_null_literal_to_a_bounded_collections_method`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -7508,6 +7541,13 @@ entries after it was written down.
   one `var` gets) was tried and is worse — the element is then CHECKED, and
   `list.addAll(Collections.emptyList())` becomes a type error. The lenient
   typing stays. (`stricter_a_context_free_factory_in_an_overload_set`)
+- `Collections.sort(null)` — javac infers the type variable from the null, so
+  `T extends Comparable<? super T>` is satisfied vacuously and the program
+  compiles and throws at run time. A null argument reads here as the empty
+  `List<Object>` a DIAMOND argument means, and javac refuses THAT ("no suitable
+  method found for sort(ArrayList<Object>)"), so the bound really is
+  unsatisfied. Only the bare literal differs.
+  (`stricter_a_null_literal_to_a_bounded_collections_method`)
 - A local class declared inside a SWITCH arm
   (`case 0: class Helper { … }`). The switch block is one scope and its arms
   hold block statements like any other block, but the arm parser reads

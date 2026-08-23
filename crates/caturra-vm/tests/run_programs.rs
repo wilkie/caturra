@@ -7221,6 +7221,54 @@ fn uncaught_exceptions_carry_a_stack_trace() {
     assert!(explode_at < middle_at && middle_at < main_at, "{stderr}");
 }
 
+/// A trace names the PROGRAM's calls and not caturra's own library. Most of
+/// the class library is native and contributes no frame at all; a few classes
+/// (`Random`, the functional interfaces, Swing) are bundled Java and used to
+/// contribute one — `at Random.nextInt(<util>:31)`, naming a file that does
+/// not exist and a line in caturra's source. A JDK shows its own library frame
+/// here too, but as `java.base/java.util.Random.nextInt(Random.java:388)`;
+/// inventing that is worse than saying nothing, and saying nothing is what
+/// every natively-modelled call already does.
+#[test]
+fn a_trace_names_the_programs_calls_not_the_bundled_librarys() {
+    let (result, console) = compile_and_run(
+        r"
+        import java.util.Random;
+
+        public class LibFrame {
+            static int draw() {
+                return new Random(1).nextInt(0);
+            }
+
+            public static void main(String[] args) {
+                System.out.println(draw());
+            }
+        }
+        ",
+        "LibFrame",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    let stderr = console.stderr_text();
+    assert!(
+        stderr.contains("java.lang.IllegalArgumentException: bound must be positive"),
+        "{stderr}"
+    );
+    // The program's own frames, both of them, and nothing else.
+    assert!(
+        stderr.contains("\tat LibFrame.draw(LibFrame.java:6)"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("\tat LibFrame.main(LibFrame.java:10)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("<util>"), "{stderr}");
+    assert!(!stderr.contains("Random.nextInt"), "{stderr}");
+}
+
 #[test]
 fn clinit_chain_runs_ancestors_first_via_frames() {
     // Touching C's statics initializes A, then B, then C — with each
