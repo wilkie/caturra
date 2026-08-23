@@ -23376,27 +23376,47 @@ public class BucketArrays {
 );
 
 // Storing a PARAMETERIZED collection into a RAW-element array slot
-// (`Map[] raw; raw[0] = new HashMap<String, Integer>()`) is still refused: the
-// raw element resolves to `Map<Object, Object>`, and this pass cannot tell
-// that shape from a written one — allowing it would allow
-// `Map<Object, Object> m = new HashMap<String, Integer>()`, which javac
-// rejects. Before the array-of-collections work the whole program was refused,
-// so this is a narrower limit than it replaces, and the safe direction.
-stricter_than_javac!(
-    stricter_raw_element_array_store,
+// (`Map[] raw; raw[0] = new HashMap<String, Integer>()`) — the unchecked
+// conversion, in the one place it used to be refused. This was a documented
+// STRICTNESS: the raw element resolved to `Map<Object, Object>` and the pass
+// could not tell that shape from a written one, so allowing it would have
+// allowed `Map<Object, Object> m = new HashMap<String, Integer>()` too. A raw
+// type carries its own marker now, so the two are different types and only
+// the unchecked one is let through.
+differential_test!(
+    a_raw_element_array_takes_a_parameterized_value,
     "RawElementStore",
-    r"
+    r#"
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 
 public class RawElementStore {
     public static void main(String[] args) {
         Map[] raw = new Map[1];
         raw[0] = new HashMap<String, Integer>();
         System.out.println(raw[0]);
+        // And the plain conversions, both ways: javac warns about the first
+        // (unchecked) and says nothing at all about the second.
+        List rawList = new ArrayList();
+        rawList.add("a");
+        List<String> typed = rawList;
+        System.out.println(typed + " " + typed.size());
+        List<String> strings = new ArrayList<>();
+        strings.add("z");
+        List backToRaw = strings;
+        backToRaw.add("also");
+        System.out.println(backToRaw + " " + strings);
+        Map rawMap = new HashMap();
+        rawMap.put("k", 1);
+        Map<String, Integer> typedMap = rawMap;
+        System.out.println(typedMap.get("k"));
+        java.util.Iterator cursor = rawList.iterator();
+        System.out.println(cursor.next());
     }
 }
-"
+"#
 );
 
 // The unchecked conversion is between arrays of the SAME container kind. An

@@ -7372,6 +7372,45 @@ word agreement, which is what those pins are for.
 Pinned by `WordOneCandidateArg`, `WordOneCandidateArity`, `WordTwoCandidates`
 and `WordAddElement` in `reject_wording_tracks_javac`.
 
+### A raw type is not `<Object>` (2026-08-22)
+
+A second batch of fifty wrong-in-one-way programs agreed with javac on every
+verdict but one, and that one was not a diagnostic at all:
+
+```java
+List raw = new ArrayList();
+List<String> typed = raw;      // javac: unchecked warning. caturra: error.
+List back = typed;             // javac: nothing at all. caturra: error.
+```
+
+Raw types were modelled as their erasure with `Object` arguments — right about
+what the members read and write, wrong about CONVERSION. `List` and
+`List<Object>` are different types in the JLS: the unchecked conversion (§5.1.9)
+runs between a raw type and any parameterization of it in both directions,
+while `List<Object> l = aStringList;` is the error javac calls it. With one
+shape for both, caturra had to refuse all three, and refused the two that are
+legal.
+
+A raw argument is now its own `WildcardBound::Raw` — the marker says "unknown,
+and unchecked". It reads out as `Object` exactly as before, and unlike `?` it
+may still be written to, which is what keeps `raw.add("a")` working. Three
+places had to learn it: the element rule (a raw element matches anything, in
+either direction), the widening rule (`List`/`Set`/`Collection`/`Iterator` were
+missing from the family that compares elements at all — so a raw list could
+convert to a raw map's cousin but not to a `List<String>`), and the conversion
+MATRIX, which gates separately and had an arm for a wildcard TARGET and none
+for a wildcard SOURCE. That last one is the trap this file already warns about
+twice: both gates need the arm, and with only one of them the message is the
+nonsense "Iterator<Object> cannot be converted to Iterator<Object>".
+
+The marker also retired a documented strictness: `Map[] raw; raw[0] = new
+HashMap<String, Integer>();` was refused because the pass could not tell a raw
+element from a written `<Object>` one. It can now, so the unchecked store is
+allowed and `Map<Object, Object> m = new HashMap<String, Integer>();` still is
+not.
+
+Pinned by `a_raw_element_array_takes_a_parameterized_value`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -7474,15 +7513,6 @@ entries after it was written down.
   hold block statements like any other block, but the arm parser reads
   STATEMENTS only, and a class declaration is not one. Every other block
   position takes it. (`stricter_local_class_in_a_switch_arm`)
-- `Map[] raw; raw[0] = new HashMap<String, Integer>();` — storing a
-  PARAMETERIZED collection into a RAW-element array slot. The raw element
-  resolves to `Map<Object, Object>` and this pass cannot tell that shape from a
-  written one; allowing it would allow `Map<Object, Object> m = new
-  HashMap<String, Integer>()`, which javac rejects. (`stricter_raw_element_array_store`)
-
-**More permissive than javac** (caturra accepts; javac rejects). **Three
-known cases**, each asserted by `looser_than_javac!` so it cannot be forgotten:
-
 - `Map.Entry.comparingByValue().reversed()` with no type witness. javac
   infers `Comparator<Entry<Object, V>>` for the bare factory call, and
   `.reversed()` freezes that before the target type can correct it, so javac

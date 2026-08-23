@@ -2713,6 +2713,37 @@ impl MethodTable {
         }
     }
 
+    /// Re-argument a resolved collection type with the RAW marker. The type is
+    /// otherwise the erasure it already resolved to, so every member reads and
+    /// writes `Object` exactly as before.
+    fn mark_raw(&self, ty: JType) -> JType {
+        let raw = ElemType::Wildcard {
+            read: self.object_id,
+            bound: WildcardBound::Raw,
+        };
+        match ty {
+            JType::List(_) => JType::List(raw),
+            JType::Set(_) => JType::Set(raw),
+            JType::Collection(_) => JType::Collection(raw),
+            JType::Stack(_) => JType::Stack(raw),
+            JType::TreeSet(_, role) => JType::TreeSet(raw, role),
+            JType::LinkedList { role, .. } => JType::LinkedList { elem: raw, role },
+            JType::Map { .. } => JType::Map {
+                key: raw,
+                value: raw,
+            },
+            JType::TreeMap { role, .. } => JType::TreeMap {
+                key: raw,
+                value: raw,
+                role,
+            },
+            JType::Optional(_) => JType::Optional(raw),
+            JType::Iterator(_) => JType::Iterator(raw),
+            JType::ListIterator(_) => JType::ListIterator(raw),
+            other => other,
+        }
+    }
+
     fn class_id(&self, name: &str) -> Option<ClassId> {
         self.info(name).map(|c| c.id)
     }
@@ -2878,10 +2909,15 @@ impl MethodTable {
                     && !self.has_class(simple)
                 {
                     let args = vec![TypeRef::Named(String::from("Object")); arity];
-                    return self.resolve_type(&TypeRef::Generic {
+                    let erased = self.resolve_type(&TypeRef::Generic {
                         base: String::from(simple),
                         args,
                     });
+                    // ...but MARKED raw, which `<Object>` is not: the marker is
+                    // what lets the unchecked conversion through in both
+                    // directions while `List<Object> l = aStringList;` stays
+                    // the error javac calls it.
+                    return erased.map(|ty| self.mark_raw(ty));
                 }
                 match simple {
                     "Scanner" => Some(JType::Scanner),
@@ -4326,6 +4362,11 @@ fn has_wildcard_element(ty: JType) -> bool {
         | JType::TreeSet(elem, _)
         | JType::Collection(elem)
         | JType::Stack(elem)
+        // A CURSOR carries an element too, and a raw one is what
+        // `Iterator it = raw.iterator();` declares.
+        | JType::Iterator(elem)
+        | JType::ListIterator(elem)
+        | JType::Optional(elem)
         | JType::LinkedList { elem, .. } => wildcard(elem),
         JType::Map { key, value } | JType::TreeMap { key, value, .. } => {
             wildcard(key) || wildcard(value)
@@ -4341,6 +4382,18 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
     if arg == param {
         return true;
     }
+    // The UNCHECKED conversion runs both ways: a raw collection is assignable
+    // to any parameterization of it, and any parameterization to the raw type.
+    // javac warns about the first and says nothing about the second.
+    if matches!(
+        arg,
+        ElemType::Wildcard {
+            bound: WildcardBound::Raw,
+            ..
+        }
+    ) {
+        return true;
+    }
     matches!(param, ElemType::Wildcard { bound, .. } if wildcard_accepts(arg, bound, table))
 }
 
@@ -4348,7 +4401,7 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
 /// so `List<argElem>` may be passed for a `List<? …>` parameter.
 fn wildcard_accepts(arg: ElemType, bound: WildcardBound, table: &MethodTable) -> bool {
     match bound {
-        WildcardBound::Unbounded | WildcardBound::TypeVar => true,
+        WildcardBound::Unbounded | WildcardBound::TypeVar | WildcardBound::Raw => true,
         WildcardBound::Upper(class) => elem_widens_to_class(arg, class, table),
         // `? super C`: the argument element is a supertype of `C` (only a user
         // class arg is checkable; a wrapper/String supertype of a class is
@@ -5063,6 +5116,20 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 // converted to Optional<Object>" — the two spellings of an
                 // erased element printing alike and comparing unequal.
                 | (JType::Optional(a), JType::Optional(b))
+                // The three commonest families were missing from this list
+                // entirely, which is where a RAW `List` stopped: `List<String>
+                // l = raw;` is the unchecked conversion javac warns about, and
+                // it was "incompatible types" here. A wildcard TARGET
+                // (`List<?> l = strings`) goes through the same rule; a
+                // concrete one (`List<Object> l = strings`) still does not,
+                // `Object` being an element and not a wildcard.
+                | (JType::List(a), JType::List(b))
+                | (JType::Set(a), JType::Set(b))
+                | (JType::Collection(a), JType::Collection(b))
+                // A cursor over a raw collection is raw too, and `Iterator it
+                // = raw.iterator();` then assigns to an `Iterator<String>`.
+                | (JType::Iterator(a), JType::Iterator(b))
+                | (JType::ListIterator(a), JType::ListIterator(b))
                 if elem_matches(a, b, table)
         )
         // A sorted FACE widens only OUTWARD — a `TreeSet` is a `NavigableSet`
@@ -5360,6 +5427,14 @@ enum WildcardBound {
     /// Carries the PRIMITIVE, not the element type — an `ElemType` holds a
     /// wildcard, so nesting one here makes the two types recursive.
     LowerWrapper(Prim),
+    /// A RAW type's missing argument (`List l = new ArrayList();`). JLS §4.8:
+    /// legal Java, and its members read and write the ERASURE — so unlike `?`
+    /// a raw collection may be written to, and unlike `<Object>` it converts
+    /// to and from any parameterization (JLS §5.1.9, the unchecked
+    /// conversion javac only warns about). Modelling raw as `<Object>` made
+    /// both directions "incompatible types", which is the one thing javac
+    /// never says about a raw type.
+    Raw,
     /// A TYPE VARIABLE argument (`List<T>` in `<T> void dump(List<T>)`), after
     /// erasure. Like `Unbounded` for applicability — a `List<anything>` may be
     /// passed — but a real type, not a capture, so the collection may still be
@@ -29020,6 +29095,13 @@ impl BodyGen<'_> {
             // BOTH positions are type-variable wildcards. `widens` is the real
             // check; this arm only says the conversion needs no code.
             (_, to) if has_wildcard_element(to) && widens(from, to, self.table) => {}
+            // And the MIRROR: a source whose element is a wildcard, which is
+            // what a RAW collection is. Only the target side was written, so
+            // `Iterator it = raw.iterator();` was "Iterator<Object> cannot be
+            // converted to Iterator<Object>" — the two spellings of an erased
+            // element printing alike, the same trap as every other pair of
+            // gates here.
+            (from, _) if has_wildcard_element(from) && widens(from, to, self.table) => {}
             // Array covariance: `Card[]` assigns to `Comparable[]`.
             (
                 JType::Array {
