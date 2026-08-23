@@ -59,6 +59,11 @@ pub struct VmOptions {
     /// `StackOverflowError`. Frames live on an explicit heap-allocated
     /// stack (see `specs/RUNTIME.md`), so this is purely a Java
     /// semantics knob — the host stack stays O(1) at any depth.
+    ///
+    /// It should therefore be a JVM's number, not a cautious one: a real one
+    /// reaches about twenty-two thousand frames for a plain recursive method,
+    /// and a student whose recursion walks ten thousand list nodes runs it in
+    /// an IDE before running it here.
     pub max_call_depth: u32,
     /// How many bytes of live objects the program may hold before an
     /// allocation raises `OutOfMemoryError`. The production VM is a browser
@@ -86,7 +91,11 @@ impl Default for VmOptions {
             // level failed here and worked on Code.org; 4B clears it with
             // headroom to spare.
             max_instructions: 4_000_000_000,
-            max_call_depth: 4096,
+            // What a real JVM reaches for a trivial recursive method (~22k,
+            // and it varies run to run). The old 4096 was a host-stack
+            // precaution from before frames moved to the heap, and it made a
+            // recursion a JDK completes into a StackOverflowError here.
+            max_call_depth: 20000,
             // A gigabyte of LIVE objects. The browser instance tops out
             // between two and four, so a program past this is one that would
             // have taken the tab with it; below it, nothing changes.

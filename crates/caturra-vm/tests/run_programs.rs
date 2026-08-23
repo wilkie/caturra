@@ -13283,3 +13283,42 @@ fn a_full_heap_is_a_catchable_java_error() {
     );
     assert_eq!(out, "Java heap space\n1000\n");
 }
+
+/// Recursion as deep as a JVM's. A real one reaches about twenty-two thousand
+/// frames for a plain recursive method (the number varies run to run with the
+/// stack it was given); caturra used to stop at 4096, which turned a recursion
+/// a JDK completes — walking ten thousand list nodes, say — into a
+/// `StackOverflowError`. Frames are heap-allocated here, so the limit is a Java
+/// semantics knob and nothing else.
+#[test]
+fn recursion_goes_as_deep_as_a_jvms() {
+    let out = run_stdout(
+        r"
+        public class Deep {
+            static int reached = 0;
+
+            static void down() {
+                reached++;
+                down();
+            }
+
+            static int sum(int n) {
+                return n == 0 ? 0 : n + sum(n - 1);
+            }
+
+            public static void main(String[] args) {
+                // The shape a student actually writes: a recursion over a
+                // ten-thousand-element structure.
+                System.out.println(sum(10000));
+                try {
+                    down();
+                } catch (StackOverflowError thrown) {
+                    System.out.println(reached >= 10000);
+                }
+            }
+        }
+        ",
+        "Deep",
+    );
+    assert_eq!(out, "50005000\ntrue\n");
+}

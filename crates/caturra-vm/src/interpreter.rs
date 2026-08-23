@@ -4093,6 +4093,18 @@ impl<'run> Interpreter<'run> {
     /// back. An exception that escapes the nested call surfaces as an `Err`,
     /// which the outer frames' handlers then see as usual.
     fn run_nested(&mut self, frame: Frame<'run>) -> Result<Option<JValue>, VmError> {
+        // A nested run is the ONE call shape that recurses on the HOST stack:
+        // native code (rendering a container, comparing two elements) re-enters
+        // the dispatch loop, and the Rust frame of the outer loop stays. The
+        // Java call depth is heap-allocated and can be as deep as a JVM's; this
+        // one is bounded by the smallest host, a browser's ~1MB WASM stack. So
+        // it keeps its own limit — the same exposure the single depth limit
+        // used to give — and overflowing it is Java's own error.
+        if self.suspended_runs.len() >= MAX_NESTED_RUNS {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.StackOverflowError",
+            )));
+        }
         let location = self.current_location.take();
         let suspended = std::mem::take(&mut self.frames);
         // The suspended frames plus the caller that is running natively right
@@ -17675,6 +17687,11 @@ fn descriptor_class_name(descriptor: &str) -> String {
 
 /// A `StackTraceElement`'s own text: `Cls.method(File.java:12)`, or
 /// `(Unknown Source)` when no file was recorded — the JDK's wording.
+/// How deep native code may re-enter the dispatch loop. Each level costs a
+/// host stack frame (see [`Interpreter::run_nested`]), and the production host
+/// is a browser WASM instance with about a megabyte of it.
+const MAX_NESTED_RUNS: usize = 4096;
+
 /// Mark one reference and queue it, if it was not marked already.
 fn mark_ref(marked: &mut [bool], work: &mut Vec<HeapRef>, reference: HeapRef) {
     if let Some(seen) = marked.get_mut(reference as usize)

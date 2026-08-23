@@ -113,10 +113,20 @@ initialization (JVMS §5.5 ordering, superclass first).
 
 Consequences and intent:
 
-- `VmOptions::max_call_depth` (default 4096, roughly Java-like) is a pure
-  semantics knob raising `StackOverflowError`; the host (Rust/WASM) stack
-  stays O(1) at any Java depth, so debug-build frame sizes and the ~1MB
-  WASM stack no longer constrain the limit.
+- `VmOptions::max_call_depth` (default 20000) is a pure semantics knob
+  raising `StackOverflowError`; the host (Rust/WASM) stack stays O(1) at any
+  Java depth, so debug-build frame sizes and the ~1MB WASM stack do not
+  constrain it. The number should therefore be a JVM's, and a real one reaches
+  about twenty-two thousand frames for a plain recursive method. It was 4096
+  for a long time — a precaution left over from before frames moved to the
+  heap — which turned a recursion a JDK completes, walking ten thousand list
+  nodes, into a `StackOverflowError` a student sees only here.
+- The ONE call shape that does recurse on the host stack is native code
+  re-entering the dispatch loop (`run_nested`: a user `toString` called while
+  a container renders, a `compareTo` called from a sort). That has its own
+  limit, `MAX_NESTED_RUNS`, and it is the small one. Ordinary calls — even the
+  chain of `toString` calls a deeply nested structure makes, which the compiler
+  emits as plain virtual calls — cost only heap frames.
 - Parsed `Code` attributes are cached per method (`Rc`), so hot recursive
   calls no longer re-parse bytecode on every invocation.
 - Uncaught exceptions print `java`-style `\tat Class.method(Class.java)`
