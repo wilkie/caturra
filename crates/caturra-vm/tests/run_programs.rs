@@ -5645,7 +5645,7 @@ fn stage3_compile_errors_match_javac_wording() {
         ("static int f() { return; }", "missing return value"),
         (
             "static void f() { h(1); }",
-            "cannot find symbol: method h(int)",
+            "cannot find symbol\n  symbol:   method h(int)\n  location: class T",
         ),
         (
             "static void f(int a, double b) { } static void f(double a, int b) { } \
@@ -6397,6 +6397,125 @@ fn inherited_fields_and_super_chaining() {
     assert_eq!(out, "Bb5D\n30\n10 20\n");
 }
 
+/// javac's `cannot find symbol` — the commonest compile error there is — in
+/// javac's own SHAPE: the headline, the `symbol:` it looked for, and the
+/// `location:` it looked in. The location is what needed the work: a receiver
+/// that NAMES a variable (a local, a parameter, a field) is "variable p of
+/// type Pet", a class name or any other expression is "class Pet", a bare name
+/// is the enclosing class, and `this` gets no location line at all — javac's
+/// own quirk, down to the single space after `symbol:` when it is omitted.
+/// Every one of these said it on one line, in caturra's words.
+#[test]
+#[allow(clippy::too_many_lines)] // one entry per shape of receiver
+fn a_missing_symbol_reads_like_javac() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "p.nope();",
+            "cannot find symbol\n  symbol:   method nope()\n  location: variable p of type Pet",
+        ),
+        (
+            "Pet.nope();",
+            "cannot find symbol\n  symbol:   method nope()\n  location: class Pet",
+        ),
+        (
+            "Pet.make().nope();",
+            "cannot find symbol\n  symbol:   method nope()\n  location: class Pet",
+        ),
+        (
+            "this.nope();",
+            "cannot find symbol\n  symbol: method nope()",
+        ),
+        (
+            "\"lit\".nope();",
+            "cannot find symbol\n  symbol:   method nope()\n  location: class String",
+        ),
+        (
+            "arr.nope();",
+            "cannot find symbol\n  symbol:   method nope()\n  location: variable arr of type Pet[]",
+        ),
+        (
+            "list.get(0).nope();",
+            "cannot find symbol\n  symbol:   method nope()\n  location: class Pet",
+        ),
+        (
+            "map.nope();",
+            "cannot find symbol\n  symbol:   method nope()\n  location: variable map of type Map<String,Pet>",
+        ),
+        (
+            "nope();",
+            "cannot find symbol\n  symbol:   method nope()\n  location: class Missing",
+        ),
+        (
+            "int a = nope2;",
+            "cannot find symbol\n  symbol:   variable nope2\n  location: class Missing",
+        ),
+        (
+            "Pet.kept2 = 1;",
+            "cannot find symbol\n  symbol:   variable kept2\n  location: class Pet",
+        ),
+        (
+            "p.age2 = 1;",
+            "cannot find symbol\n  symbol:   variable age2\n  location: variable p of type Pet",
+        ),
+        (
+            "Nope n = null;",
+            "cannot find symbol\n  symbol:   class Nope\n  location: class Missing",
+        ),
+        (
+            "new Nope3();",
+            "cannot find symbol\n  symbol:   class Nope3\n  location: class Missing",
+        ),
+        (
+            "Color.BLUE.hi();",
+            "cannot find symbol\n  symbol:   variable BLUE\n  location: class Color",
+        ),
+        (
+            "s.length(1);",
+            "method length in class String cannot be applied to given types;\n  required: no arguments\n  found: int\n  reason: actual and formal argument lists differ in length",
+        ),
+        (
+            "p.speak(1, 2);",
+            "method speak in class Pet cannot be applied to given types;\n  required: no arguments\n  found: int,int\n  reason: actual and formal argument lists differ in length",
+        ),
+        (
+            "new Pet(1);",
+            "constructor Pet in class Pet cannot be applied to given types;\n  required: no arguments\n  found: int\n  reason: actual and formal argument lists differ in length",
+        ),
+        (
+            "Integer.valueOf();",
+            "no suitable method found for valueOf(no arguments)\n    \
+             method Integer.valueOf(int) is not applicable\n      \
+             (actual and formal argument lists differ in length)\n    \
+             method Integer.valueOf(String) is not applicable\n      \
+             (actual and formal argument lists differ in length)\n    \
+             method Integer.valueOf(String,int) is not applicable\n      \
+             (actual and formal argument lists differ in length)",
+        ),
+    ];
+    for (body, want) in cases {
+        let source = format!(
+            "import java.util.*;\n\
+             public class Missing {{\n\
+             static class Pet {{ int age; static int kept; void speak() {{ }} \
+             static Pet make() {{ return null; }} }}\n\
+             interface Greet {{ void hi(); }}\n\
+             enum Color {{ RED }}\n\
+             static Pet stat;\n\
+             void inst(Pet p, String s, Greet g, Color c, Pet[] arr, List<Pet> list, \
+             Map<String,Pet> map) {{ {body} }}\n\
+             public static void main(String[] a) {{ }}\n\
+             }}"
+        );
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("Missing.java"),
+            text: source,
+        }]);
+        assert!(!compilation.success(), "should not compile: {body}");
+        let message = &compilation.diagnostics[0].message;
+        assert_eq!(message, want, "for {body}");
+    }
+}
+
 #[test]
 #[allow(clippy::too_many_lines)] // one entry per pinned diagnostic
 fn stage6_compile_errors_match_javac_wording() {
@@ -6427,7 +6546,7 @@ fn stage6_compile_errors_match_javac_wording() {
         ),
         (
             r#"class M { static void f() { System.out.prinn("hello"); } }"#,
-            "cannot find symbol: method prinn(String) in class PrintStream",
+            "cannot find symbol\n  symbol:   method prinn(String)\n  location: variable out of type PrintStream",
         ),
         (
             "class M { static void f() { Scanner in = new Scanner(System.in); } }",
@@ -6585,11 +6704,11 @@ fn stage6_compile_errors_match_javac_wording() {
         // `Map`, `Set`, `List`, `Queue` and `Deque` have no such member.
         (
             "import java.util.*; class M { static void f(Map<String,Integer> m) { Object o = m.clone(); } }",
-            "cannot find symbol: method clone() in class Map<String,Integer>",
+            "cannot find symbol\n  symbol:   method clone()\n  location: variable m of type Map<String,Integer>",
         ),
         (
             "import java.util.*; class M { static void f(Queue<String> q) { Object o = q.clone(); } }",
-            "cannot find symbol: method clone() in class Queue<String>",
+            "cannot find symbol\n  symbol:   method clone()\n  location: variable q of type Queue<String>",
         ),
         // ...and the same face decides a CAST: no subclass of `ArrayList` is
         // also a `Parent`, where a `List` variable could hold one that is (so
@@ -7987,7 +8106,10 @@ public class WatchMe {
     assert_eq!(round[3].as_deref(), Ok("20")); // scale(2)
     // The bad watch reports the compiler's javac-style message.
     let error = round[4].as_ref().unwrap_err();
-    assert!(error.contains("cannot find variable 'totall'"), "{error}");
+    assert!(
+        error.contains("cannot find symbol\n  symbol:   variable totall"),
+        "{error}"
+    );
 
     // Values advance between pauses: iteration 3 sees updated state.
     assert_eq!(host.observations[2][1].as_deref(), Ok("[1, 2]"));
@@ -8237,7 +8359,7 @@ fn try_catch_compile_errors_match_javac() {
         ),
         (
             "class M { static void f() { try { int x = 1/0; } catch (NotReal e) { } } }",
-            "cannot find symbol: class NotReal",
+            "cannot find symbol\n  symbol:   class NotReal",
         ),
         (
             "class M { static void f() { throw new M(); } }",
@@ -11238,7 +11360,7 @@ fn system_arraycopy_and_line_separator() {
 fn system_arraycopy_rejects_a_wrong_arity_call() {
     {
         let source = "int[] d = new int[2]; System.arraycopy(d, 0, d, 0);";
-        let want = "no suitable method found for arraycopy(int[],int,int[],int) in class System";
+        let want = "method arraycopy in class System cannot be applied to given types;\n  required: Object,int,Object,int,int";
         let text = format!("class M {{ static void r() {{ {source} }} }}");
         let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
             path: String::from("M.java"),
@@ -11315,11 +11437,11 @@ fn math_and_random_additions_reject_like_javac() {
     for (source, want) in [
         (
             "long x = Math.multiplyFull(1L, 2L);",
-            "no suitable method found for multiplyFull(long,long) in class Math",
+            "incompatible types: possible lossy conversion from long to int",
         ),
         (
             "double x = Math.scalb(1.5, 3.0);",
-            "no suitable method found for scalb(double,double) in class Math",
+            "no suitable method found for scalb(double,double)\n    method Math.scalb(float,int) is not applicable",
         ),
         (
             "int[] b = new int[2]; new java.util.Random(1).nextBytes(b);",
@@ -11488,16 +11610,16 @@ fn the_honest_reason_does_not_hide_a_typo_or_shadow_a_user_class() {
     for (source, want) in [
         (
             "class M { static void r() { Frobnicator f; } }",
-            "unknown type 'Frobnicator'",
+            "cannot find symbol\n  symbol:   class Frobnicator",
         ),
         (
             "class M { static void r() { Frobnicator<Integer> f; } }",
-            "unknown type 'Frobnicator'",
+            "cannot find symbol\n  symbol:   class Frobnicator",
         ),
         // The base is modeled; the argument is the typo.
         (
             "class M { static void r() { ArrayList<Frobnicator> l; } }",
-            "unknown type 'Frobnicator'",
+            "cannot find symbol\n  symbol:   class Frobnicator",
         ),
         (
             "class D extends Nope {} class M {}",
@@ -11806,11 +11928,11 @@ fn super_field_rejects_like_javac() {
         ),
         (
             "class B { int n = 1; int f() { return super.n; } }",
-            "cannot find symbol: field 'n' in class Object",
+            "cannot find symbol\n  symbol:   variable n\n  location: class Object",
         ),
         (
             "class A { int q = 1; } class B extends A { int f() { return super.zz; } }",
-            "cannot find symbol: field 'zz' in class A",
+            "cannot find symbol\n  symbol:   variable zz\n  location: class A",
         ),
     ] {
         let text = format!("{source} class M {{ static void r() {{}} }}");

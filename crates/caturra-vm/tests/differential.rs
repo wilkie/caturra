@@ -9529,8 +9529,11 @@ public class DiffLLAsList {
 enum Wording {
     /// Word for word.
     Same,
-    /// javac's headline, plus the detail javac prints on its `symbol:` and
-    /// `location:` continuation lines.
+    /// javac's headline, plus the detail javac prints on its own continuation
+    /// lines (`symbol:`/`location:`, or `required:`/`found:`/`reason:`).
+    /// Only the HEADLINE is recorded here, so a `Prefix` entry whose
+    /// continuation lines are javac's too reads the same as one whose are
+    /// caturra's own — the cross-product sweeps are what check those.
     Prefix,
     /// Deliberately different, and why. Promoting one of these to `Prefix`
     /// when caturra starts agreeing is the point of asserting it.
@@ -9559,8 +9562,7 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         "public class WordOneCandidateArity { static int f(int a) { return a; } \
          static void r() { f(1, 2); } }",
         "method f in class WordOneCandidateArity cannot be applied to given types;",
-        "method f in class WordOneCandidateArity cannot be applied to given types; \
-         actual and formal argument lists differ in length",
+        "method f in class WordOneCandidateArity cannot be applied to given types;\n  required: int\n  found: int,int\n  reason: actual and formal argument lists differ in length",
         Wording::Prefix,
     ),
     // Several candidates of that arity: no single culprit, so both report the
@@ -9570,7 +9572,7 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         "public class WordTwoCandidates { static int f(int a) { return a; } \
          static int f(char a) { return a; } static void r() { f(\"s\"); } }",
         "no suitable method found for f(String)",
-        "no suitable method found for f(String) in class WordTwoCandidates",
+        "no suitable method found for f(String)\n    method WordTwoCandidates.f(int) is not applicable\n      (argument mismatch; String cannot be converted to int)\n    method WordTwoCandidates.f(char) is not applicable\n      (argument mismatch; String cannot be converted to char)",
         Wording::Prefix,
     ),
     // A generic collection's element, through the same rule on the BUILTIN
@@ -9588,21 +9590,21 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         "WordAbsExact",
         "public class WordAbsExact { static int r() { return Math.absExact(-5); } }",
         "cannot find symbol",
-        "cannot find symbol: method absExact(int) in class Math",
+        "cannot find symbol\n  symbol:   method absExact(int)\n  location: class Math",
         Wording::Prefix,
     ),
     (
         "WordNextIntRange",
         "import java.util.Random;\npublic class WordNextIntRange { static int r() { return new Random(1).nextInt(2, 5); } }",
         "no suitable method found for nextInt(int,int)",
-        "no suitable method found for nextInt(int,int) in class Random",
+        "no suitable method found for nextInt(int,int)\n    method Random.nextInt() is not applicable\n      (actual and formal argument lists differ in length)\n    method Random.nextInt(int) is not applicable\n      (actual and formal argument lists differ in length)",
         Wording::Prefix,
     ),
     (
         "WordScalb",
         "public class WordScalb { static double r() { return Math.scalb(1.5, 3.0); } }",
         "no suitable method found for scalb(double,double)",
-        "no suitable method found for scalb(double,double) in class Math",
+        "no suitable method found for scalb(double,double)\n    method Math.scalb(float,int) is not applicable\n      (argument mismatch; possible lossy conversion from double to float)\n    method Math.scalb(double,int) is not applicable\n      (argument mismatch; possible lossy conversion from double to int)",
         Wording::Prefix,
     ),
     (
@@ -9658,21 +9660,23 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         "WordMultiplyFull",
         "public class WordMultiplyFull { static long r() { return Math.multiplyFull(1L, 2L); } }",
         "incompatible types: possible lossy conversion from long to int",
-        "no suitable method found for multiplyFull(long,long) in class Math",
-        Wording::Differs(
-            "javac has a single multiplyFull(int,int), so it reports converting \
-             the argument rather than resolving the overload",
-        ),
+        "incompatible types: possible lossy conversion from long to int",
+        // Was recorded as Differs: caturra reported overload resolution where
+        // javac blames the argument. It follows javac's one-candidate rule
+        // now, which is what promoted this.
+        Wording::Same,
     ),
     (
         "WordArrayCopyArity",
         "public class WordArrayCopyArity { static void r() { int[] c = new int[2]; System.arraycopy(c, 0, c, 0); } }",
         "method arraycopy in class System cannot be applied to given types;",
-        "no suitable method found for arraycopy(int[],int,int[],int) in class System",
-        Wording::Differs(
-            "javac has a single arraycopy, and words a lone mismatched candidate \
-             as `cannot be applied to given types`",
-        ),
+        "method arraycopy in class System cannot be applied to given types;\n  required: Object,int,Object,int,int\n  found: int[],int,int[],int\n  reason: actual and formal argument lists differ in length",
+        // Was recorded as Differs: caturra reported overload resolution where
+        // javac words a lone mismatched candidate as `cannot be applied to
+        // given types`. Word for word now, javac's own continuation lines
+        // included — which is why this is `Prefix` and not `Same`: only the
+        // headline is recorded here to compare against.
+        Wording::Prefix,
     ),
     (
         "WordUnmodifiable",
@@ -9767,7 +9771,7 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         "WordSuperNoSuperclass",
         "class WSNb { int n = 1; int f() { return super.n; } }\npublic class WordSuperNoSuperclass { static void r() {} }",
         "cannot find symbol",
-        "cannot find symbol: field 'n' in class Object",
+        "cannot find symbol\n  symbol:   variable n\n  location: class Object",
         Wording::Prefix,
     ),
     (

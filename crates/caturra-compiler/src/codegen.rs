@@ -147,7 +147,7 @@ fn emit_class(
         if ty == JType::Unsupported {
             diagnostics.push(Diagnostic::error(
                 path,
-                unresolved_type_message(&field.ty, table),
+                unresolved_type_message(&field.ty, table, &decl.name),
                 field.span,
             ));
         } else if let Some(message) = type_arity_error(&field.ty, table) {
@@ -257,6 +257,7 @@ fn emit_clinit(
         .class_id(decl.binary_name.as_deref().unwrap_or(&decl.name))
         .expect("class registered");
     let mut body = BodyGen {
+        receiver_location: None,
         path,
         diagnostics,
         pool,
@@ -4065,7 +4066,9 @@ fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
     }
 }
 
-fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
+fn unresolved_type_message(ty: &TypeRef, table: &MethodTable, in_class: &str) -> String {
+    let location = format!("class {}", source_type_name(in_class));
+    let location = Some(location.as_str());
     // A library container written with the WRONG NUMBER of type arguments
     // (`Map<String>`): the base is perfectly well known, so blaming the type
     // ("unknown type 'Map'") says the opposite of what is wrong. javac counts
@@ -4135,11 +4138,11 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
         {
             return reason;
         }
-        return format!("unknown type '{name}'");
+        return cannot_find_symbol("class", &name, location);
     }
     match ty {
         TypeRef::Named(name) | TypeRef::Generic { base: name, .. } => {
-            format!("unknown type '{name}'")
+            cannot_find_symbol("class", name, location)
         }
         TypeRef::Array(_) => String::from("arrays are not yet supported by caturra"),
         _ => String::from("this type cannot be used for a variable"),
@@ -6122,6 +6125,25 @@ impl SeqRole {
     }
 }
 
+/// javac's `cannot find symbol` — the most common compile error there is.
+/// THREE lines: the headline, the SYMBOL (a method carries its argument
+/// types), and the LOCATION it was looked for in. caturra said all of it on
+/// one line and in its own words ("cannot find symbol: method `bark()` in class
+/// Outer$Pet"), which is neither javac's shape nor, for a nested class, a name
+/// the program wrote.
+///
+/// `location` is `None` for a member reached through `this`, which javac
+/// leaves out — and it drops the padding after `symbol:` when it does.
+fn cannot_find_symbol(kind: &str, symbol: &str, location: Option<&str>) -> String {
+    let symbol = source_type_name(symbol);
+    match location {
+        Some(location) => {
+            format!("cannot find symbol\n  symbol:   {kind} {symbol}\n  location: {location}")
+        }
+        None => format!("cannot find symbol\n  symbol: {kind} {symbol}"),
+    }
+}
+
 /// javac's diagnostic for two operands an operator has no meaning for: a
 /// headline naming the OPERATOR, and the two types on continuation lines. It
 /// used to be caturra's own sentence ("operator '==' cannot be applied to
@@ -7398,6 +7420,7 @@ fn emit_method(
         other => Some(table.resolve_type(other).unwrap_or(JType::Unsupported)),
     };
     let mut body = BodyGen {
+        receiver_location: None,
         path,
         diagnostics,
         pool,
@@ -14075,6 +14098,9 @@ fn inapplicable_message(
     args: &[JType],
     table: &MethodTable,
 ) -> String {
+    // A nested class's BINARY name is implementation detail here as everywhere
+    // else: javac names the class the source wrote.
+    let class_description = &source_type_name(class_description);
     let same_arity: Vec<&Vec<JType>> = candidates
         .iter()
         .filter(|params| params.len() == args.len())
@@ -14100,18 +14126,135 @@ fn inapplicable_message(
         );
     }
     if same_arity.is_empty() && candidates.len() == 1 {
-        // javac's headline ends at the semicolon and prints its `reason:` on a
-        // continuation line; joining the two keeps the headline word for word
-        // and still says which of the reasons it was.
+        // javac's four lines: the headline, what the one candidate REQUIRES,
+        // what was FOUND, and the reason. They were joined onto one line here,
+        // which keeps the words and loses the shape — and the two argument
+        // lists, which are the whole content of the complaint.
         return format!(
-            "method {method} in {class_description} cannot be applied to given types; \
-             actual and formal argument lists differ in length"
+            "method {method} in {class_description} cannot be applied to given types;\n  \
+             required: {}\n  found: {}\n  reason: actual and formal argument lists differ \
+             in length",
+            argument_list(&candidates[0], table),
+            argument_list(args, table)
         );
     }
-    format!(
-        "no suitable method found for {method}({}) in {class_description}",
-        describe_types(args, table)
-    )
+    // Every candidate, each with its own reason, indented as javac indents
+    // them — where this named none of them and said only "in class Integer".
+    let owner = class_description
+        .rsplit(' ')
+        .next()
+        .unwrap_or(class_description);
+    let mut message = format!(
+        "no suitable method found for {method}({})",
+        argument_list(args, table)
+    );
+    for params in candidates {
+        message.push_str(&format!(
+            "\n    method {owner}.{method}({}) is not applicable\n      ({})",
+            describe_types(params, table),
+            inapplicable_reason(params, args, table)
+        ));
+    }
+    message
+}
+
+/// javac's diagnostic for a constructor no `new` can reach: the same shapes a
+/// method gets, with `constructor` for `method` and the class's own name where
+/// a method would carry its own. One candidate gets the required/found/reason
+/// lines; several get one line each.
+fn constructor_inapplicable(
+    class_name: &str,
+    candidates: &[Vec<JType>],
+    args: &[JType],
+    table: &MethodTable,
+) -> String {
+    let class_name = source_type_name(class_name);
+    if let [only] = candidates
+        && only.len() != args.len()
+    {
+        return format!(
+            "constructor {class_name} in class {class_name} cannot be applied to given \
+             types;\n  required: {}\n  found: {}\n  reason: actual and formal argument \
+             lists differ in length",
+            argument_list(only, table),
+            argument_list(args, table)
+        );
+    }
+    let mut message = format!(
+        "no suitable constructor found for {class_name}({})",
+        argument_list(args, table)
+    );
+    for params in candidates {
+        message.push_str(&format!(
+            "\n    constructor {class_name}.{class_name}({}) is not applicable\n      ({})",
+            describe_types(params, table),
+            inapplicable_reason(params, args, table)
+        ));
+    }
+    message
+}
+
+/// Every overload of `method` in a builtin table, as parameter-type lists —
+/// the candidates javac lists under a `no suitable method found`.
+fn builtin_overloads(
+    methods: &[BuiltinMethod],
+    method: &str,
+    table: &MethodTable,
+) -> Vec<Vec<JType>> {
+    methods
+        .iter()
+        .filter(|m| m.name == method)
+        .map(|m| {
+            m.params
+                .iter()
+                .map(|p| bparam_type(*p, TypeArgs::default(), table))
+                .collect()
+        })
+        .collect()
+}
+
+/// Why ONE candidate does not apply, as javac words it inside the parentheses
+/// under a `no suitable method found`.
+fn inapplicable_reason(params: &[JType], args: &[JType], table: &MethodTable) -> String {
+    if params.len() != args.len() {
+        return String::from("actual and formal argument lists differ in length");
+    }
+    params
+        .iter()
+        .zip(args)
+        .find(|(want, actual)| want != actual)
+        .map_or_else(
+            || String::from("argument mismatch"),
+            |(want, actual)| {
+                // The same narrowing/unrelated split the one-candidate rule
+                // makes above: `scalb(1.0, 2.0)` is javac's "possible lossy
+                // conversion from double to int", not "cannot be converted".
+                if actual.is_numeric()
+                    && want.is_numeric()
+                    && !widens_strictly(*actual, *want, table)
+                {
+                    return format!(
+                        "argument mismatch; possible lossy conversion from {} to {}",
+                        actual.describe(table),
+                        want.describe(table)
+                    );
+                }
+                format!(
+                    "argument mismatch; {} cannot be converted to {}",
+                    actual.describe(table),
+                    want.describe(table)
+                )
+            },
+        )
+}
+
+/// An argument or parameter list as javac spells one: the types, or the words
+/// `no arguments` when there are none.
+fn argument_list(types: &[JType], table: &MethodTable) -> String {
+    if types.is_empty() {
+        return String::from("no arguments");
+    }
+    describe_types(types, table)
 }
 
 fn describe_types(types: &[JType], table: &MethodTable) -> String {
@@ -14197,6 +14340,16 @@ struct BodyGen<'a> {
     /// this class — for the JLS §8.3.3 forward-reference check. A simple-name
     /// READ of a field declared at or after the current one is illegal.
     forward_ref: Option<(usize, std::rc::Rc<std::collections::HashMap<String, usize>>)>,
+    /// How javac's `location:` line should name the receiver of the member
+    /// access being compiled — `variable p of type Pet` when the receiver is a
+    /// named variable, `class Pet` when it is a type, and `None` for `this`,
+    /// which javac leaves off entirely.
+    ///
+    /// Kept on the compiler rather than threaded through: a missing member is
+    /// reported from twenty places reached by a dozen different helpers, none
+    /// of which is given the receiver EXPRESSION — only its type, which cannot
+    /// say whether a variable was named.
+    receiver_location: Option<String>,
 }
 
 /// An enclosing `finally` an abrupt exit has to run on its way out.
@@ -14562,7 +14715,14 @@ impl BodyGen<'_> {
     /// inside the class itself is just `this`.
     fn qualified_this(&mut self, class_name: &str, span: SourceSpan) -> JType {
         let Some(target) = self.table.class_id(class_name) else {
-            self.error(span, format!("cannot find symbol: class {class_name}"));
+            self.error(
+                span,
+                cannot_find_symbol(
+                    "class",
+                    class_name,
+                    Some(&format!("class {}", source_type_name(self.current_class))),
+                ),
+            );
             return JType::Error;
         };
         // A STATIC context has no enclosing instance at all — checked first,
@@ -15626,7 +15786,14 @@ impl BodyGen<'_> {
             );
             return None;
         }
-        self.error(clause, format!("cannot find symbol: class {name}"));
+        self.error(
+            clause,
+            cannot_find_symbol(
+                "class",
+                name,
+                Some(&format!("class {}", source_type_name(self.current_class))),
+            ),
+        );
         None
     }
 
@@ -16078,7 +16245,10 @@ impl BodyGen<'_> {
             return;
         }
         let Some(base_ty) = self.table.resolve_type(ty) else {
-            self.error(span, unresolved_type_message(ty, self.table));
+            self.error(
+                span,
+                unresolved_type_message(ty, self.table, self.current_class),
+            );
             return;
         };
         if let Some(message) = type_arity_error(ty, self.table) {
@@ -16335,7 +16505,11 @@ impl BodyGen<'_> {
         let Some(var) = self.lookup(name) else {
             self.error(
                 span,
-                format!("cannot find variable '{name}' — declare it first"),
+                cannot_find_symbol(
+                    "variable",
+                    name,
+                    Some(&format!("class {}", source_type_name(self.current_class))),
+                ),
             );
             // Still emit the value expression for its own diagnostics.
             self.expr(value);
@@ -16589,6 +16763,8 @@ impl BodyGen<'_> {
         span: SourceSpan,
         keep: bool,
     ) {
+        // A field ASSIGNMENT names its receiver the way a read does.
+        self.enter_member_access(Some(object));
         // `Math.PI = 3.0` and every other intrinsic constant: these are
         // `static final` in the JDK, so the assignment is a compile error. They
         // are folded at their READ sites, so caturra had nothing to assign to
@@ -16656,10 +16832,7 @@ impl BodyGen<'_> {
             } else if object_ty != JType::Error {
                 self.error(
                     span,
-                    format!(
-                        "cannot find symbol: field '{name}' on {}",
-                        object_ty.describe(self.table)
-                    ),
+                    cannot_find_symbol("variable", name, self.receiver_location.as_deref()),
                 );
             }
             return;
@@ -17110,18 +17283,22 @@ impl BodyGen<'_> {
             return;
         }
         let table = self.table;
-        let sig = if let Resolution::Found(sig) = table.resolve(class_name, "<init>", &arg_types) {
-            sig.clone()
-        } else {
-            self.error(
-                span,
-                format!(
-                    "constructor {class_name} in class {class_name} cannot be applied to \
-                     given types ({})",
-                    describe_types(&arg_types, self.table)
-                ),
-            );
-            return;
+        let sig = match table.resolve(class_name, "<init>", &arg_types) {
+            Resolution::Found(sig) => sig.clone(),
+            Resolution::NoneApplicable(candidates) => {
+                self.error(
+                    span,
+                    constructor_inapplicable(class_name, &candidates, &arg_types, self.table),
+                );
+                return;
+            }
+            _ => {
+                self.error(
+                    span,
+                    constructor_inapplicable(class_name, &[], &arg_types, self.table),
+                );
+                return;
+            }
         };
         let args_width = self.emit_call_args(args, &sig, span);
         let descriptor = sig.descriptor(self.table);
@@ -17483,6 +17660,10 @@ impl BodyGen<'_> {
             }
             FieldTarget::Path(path) => {
                 let (base, name) = (&path[0], &path[1]);
+                self.enter_member_access(Some(&Expr::Name {
+                    path: vec![base.clone()],
+                    span,
+                }));
                 // `node.size++` (a local's field) or `Counter.total++` (a class's).
                 let owner_id = match self.lookup(base).map(|var| var.ty) {
                     Some(JType::Object(id)) => Some(id),
@@ -17490,7 +17671,14 @@ impl BodyGen<'_> {
                     None => self.table.class_id(base),
                 };
                 let Some(owner_id) = owner_id else {
-                    self.error(span, format!("cannot find variable '{base}'"));
+                    self.error(
+                        span,
+                        cannot_find_symbol(
+                            "variable",
+                            base,
+                            Some(&format!("class {}", source_type_name(self.current_class))),
+                        ),
+                    );
                     return JType::Error;
                 };
                 let Some((owner, field)) = self.resolve_field(owner_id, name, span) else {
@@ -17563,14 +17751,26 @@ impl BodyGen<'_> {
             }
             FieldTarget::Implicit(_) => self.code.push_op(op::ALOAD_0, 1),
             FieldTarget::Qualified(object, _) => {
+                self.enter_member_access(Some(object));
                 if self.expr(object) == JType::Error {
                     self.error_bail(span, "assignment target");
                     return JType::Error;
                 }
             }
             FieldTarget::Path(path) => {
+                self.enter_member_access(Some(&Expr::Name {
+                    path: vec![path[0].clone()],
+                    span,
+                }));
                 let Some(var) = self.lookup(&path[0]) else {
-                    self.error(span, format!("cannot find variable '{}'", path[0]));
+                    self.error(
+                        span,
+                        cannot_find_symbol(
+                            "variable",
+                            &path[0],
+                            Some(&format!("class {}", source_type_name(self.current_class))),
+                        ),
+                    );
                     return JType::Error;
                 };
                 let (slot, var_ty) = (var.slot, var.ty);
@@ -17689,10 +17889,11 @@ impl BodyGen<'_> {
             // `describe`, not the raw name: the top type is stored under its
             // internal `java/lang/Object`, which must not reach a diagnostic.
             let described = JType::Object(class_id).describe(self.table);
-            self.error(
-                span,
-                format!("cannot find symbol: field '{name}' in class {described}"),
-            );
+            let location = self
+                .receiver_location
+                .clone()
+                .unwrap_or_else(|| format!("class {described}"));
+            self.error(span, cannot_find_symbol("variable", name, Some(&location)));
             return None;
         };
         let field = field.clone();
@@ -18327,7 +18528,14 @@ impl BodyGen<'_> {
                     ),
                 );
             } else {
-                self.error(span, format!("cannot find symbol: class {class_name}"));
+                self.error(
+                    span,
+                    cannot_find_symbol(
+                        "class",
+                        class_name,
+                        Some(&format!("class {}", source_type_name(self.current_class))),
+                    ),
+                );
             }
             return JType::Error;
         };
@@ -18362,14 +18570,21 @@ impl BodyGen<'_> {
         let table = self.table;
         let sig = match table.resolve(class_name, "<init>", &arg_types) {
             Resolution::Found(sig) => sig.clone(),
-            Resolution::UnknownName | Resolution::NoneApplicable(_) => {
+            Resolution::UnknownName => {
                 self.error(
                     span,
-                    format!(
-                        "constructor {class_name} in class {class_name} cannot be applied to \
-                         given types ({})",
-                        describe_types(&arg_types, self.table)
+                    cannot_find_symbol(
+                        "class",
+                        class_name,
+                        Some(&format!("class {}", source_type_name(self.current_class))),
                     ),
+                );
+                return JType::Error;
+            }
+            Resolution::NoneApplicable(candidates) => {
+                self.error(
+                    span,
+                    constructor_inapplicable(class_name, &candidates, &arg_types, self.table),
                 );
                 return JType::Error;
             }
@@ -19840,10 +20055,9 @@ impl BodyGen<'_> {
                         Some(primitive) => {
                             format!("{} cannot be dereferenced", primitive.describe(self.table))
                         }
-                        None => format!(
-                            "cannot find symbol: method {other} in class {}",
-                            wrapper_name(elem, self.table)
-                        ),
+                        None => {
+                            cannot_find_symbol("method", other, self.receiver_location.as_deref())
+                        }
                     },
                 );
                 None
@@ -19898,7 +20112,13 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        // Emitting the receiver may compile a NESTED call, which establishes
+        // the location for its own diagnostics — `list.get(0).nope()` reported
+        // "variable list of type List<Pet>" for a method looked for on the
+        // ELEMENT. Ours is the one the dispatcher set, so it is put back.
+        let location = self.receiver_location.take();
         let receiver_ty = self.expr(receiver);
+        self.receiver_location = location;
         // The try-with-resources desugaring marks ONE of its two `close()`
         // calls, so the resource's type can be checked here where types are
         // known — the statement itself is long gone by now. JLS §14.20.3
@@ -20195,7 +20415,17 @@ impl BodyGen<'_> {
             // `int[]`), via `Object.clone()`'s `Object` descriptor.
             ("clone", 0) => (receiver_ty, "()Ljava/lang/Object;"),
             _ => {
-                self.error(span, format!("cannot call {method}(...) on an array"));
+                // An array has the `Object` methods and nothing else, and
+                // javac reports a call for anything else exactly as it does
+                // for any other missing member.
+                self.error(
+                    span,
+                    cannot_find_symbol(
+                        "method",
+                        &format!("{method}()"),
+                        self.receiver_location.as_deref(),
+                    ),
+                );
                 return None;
             }
         };
@@ -20288,9 +20518,10 @@ impl BodyGen<'_> {
             }
             self.error(
                 span,
-                format!(
-                    "cannot find symbol: method {method}() in class {}",
-                    receiver_ty.describe(self.table)
+                cannot_find_symbol(
+                    "method",
+                    &format!("{method}()"),
+                    self.receiver_location.as_deref(),
                 ),
             );
             return None;
@@ -20557,10 +20788,10 @@ impl BodyGen<'_> {
             } else {
                 self.error(
                     span,
-                    format!(
-                        "cannot find symbol: method {method}({}) in class {}",
-                        describe_types(&arg_types, self.table),
-                        receiver_ty.describe(self.table)
+                    cannot_find_symbol(
+                        "method",
+                        &format!("{method}({})", describe_types(&arg_types, self.table)),
+                        self.receiver_location.as_deref(),
                     ),
                 );
             }
@@ -21257,21 +21488,26 @@ impl BodyGen<'_> {
                 );
             } else if methods.iter().any(|m| m.name == method) {
                 // The name exists, so the symbol is found; no overload takes
-                // these arguments. javac says the same, and the instance-call
-                // path already did.
+                // these arguments — and javac lists every overload with the
+                // reason it does not apply, which for a library call is the
+                // only place the reader learns what it DOES take.
                 self.error(
                     span,
-                    format!(
-                        "no suitable method found for {method}({}) in class {class}",
-                        describe_types(&arg_types, self.table)
+                    inapplicable_message(
+                        method,
+                        &format!("class {class}"),
+                        &builtin_overloads(methods, method, self.table),
+                        &arg_types,
+                        self.table,
                     ),
                 );
             } else {
                 self.error(
                     span,
-                    format!(
-                        "cannot find symbol: method {method}({}) in class {class}",
-                        describe_types(&arg_types, self.table)
+                    cannot_find_symbol(
+                        "method",
+                        &format!("{method}({})", describe_types(&arg_types, self.table)),
+                        self.receiver_location.as_deref(),
                     ),
                 );
             }
@@ -21420,9 +21656,10 @@ impl BodyGen<'_> {
                 }
                 self.error(
                     span,
-                    format!(
-                        "cannot find symbol: method {method}({}) in class {class_name}",
-                        describe_types(&arg_types, self.table)
+                    cannot_find_symbol(
+                        "method",
+                        &format!("{method}({})", describe_types(&arg_types, self.table)),
+                        self.receiver_location.as_deref(),
                     ),
                 );
                 return None;
@@ -22229,18 +22466,27 @@ impl BodyGen<'_> {
                 args,
                 span,
                 ..
-            } => match self.call_target(receiver.as_deref(), *span) {
-                None => None,
-                Some(CallTarget::Stream(stream)) => {
-                    self.print_call(stream, method, args, *span);
-                    None
+            } => {
+                // The SECOND dispatcher: a call written as a statement never
+                // reaches the expression one, so a missing method reported
+                // from here had no `location:` line at all.
+                self.enter_member_access(receiver.as_deref());
+                let target = self.call_target(receiver.as_deref(), *span);
+                match target {
+                    None => None,
+                    Some(CallTarget::Stream(stream)) => {
+                        self.print_call(stream, method, args, *span);
+                        None
+                    }
+                    Some(CallTarget::Static(class)) => {
+                        self.static_call(&class, method, args, *span)
+                    }
+                    Some(CallTarget::Own) => self.own_call(method, args, *span),
+                    Some(CallTarget::Instance(object)) => {
+                        self.instance_call(object, method, args, *span)
+                    }
                 }
-                Some(CallTarget::Static(class)) => self.static_call(&class, method, args, *span),
-                Some(CallTarget::Own) => self.own_call(method, args, *span),
-                Some(CallTarget::Instance(object)) => {
-                    self.instance_call(object, method, args, *span)
-                }
-            },
+            }
             // `super.method(...);` as a statement.
             Expr::SuperMethodCall {
                 owner,
@@ -22270,6 +22516,69 @@ impl BodyGen<'_> {
 
     /// Classify what a call's receiver refers to, reporting an error
     /// for unsupported shapes.
+    /// javac's `location:` for a member access. A receiver that NAMES a
+    /// variable is `variable p of type Pet`; a class name, a literal, an array
+    /// element or any other expression is `class Pet`; `this` has no location
+    /// line at all, and neither does a bare name, which is looked up in the
+    /// enclosing class.
+    /// Record how a diagnostic should name the receiver of the member access
+    /// about to be compiled (see [`Self::receiver_location`]).
+    fn enter_member_access(&mut self, receiver: Option<&Expr>) {
+        self.receiver_location = self.member_location(receiver);
+    }
+
+    fn member_location(&mut self, receiver: Option<&Expr>) -> Option<String> {
+        let Some(receiver) = receiver else {
+            // A bare `nope()` is looked for in the enclosing class — which
+            // javac names, though `this.nope()` (the same lookup, written out)
+            // gets no location line at all.
+            return Some(format!("class {}", source_type_name(self.current_class)));
+        };
+        if matches!(receiver, Expr::This { .. }) {
+            return None;
+        }
+        // `System.out` is a FIELD, and javac names a field as a variable —
+        // "variable out of type PrintStream". It has no `JType` here (the
+        // print calls are compiled as statements), so it is named directly.
+        if let Expr::Name { path, .. } = receiver
+            && let [system, stream @ ("out" | "err")] =
+                path.iter().map(String::as_str).collect::<Vec<_>>()[..]
+            && system == "System"
+        {
+            return Some(format!("variable {stream} of type PrintStream"));
+        }
+        if let Expr::Name { path, .. } = receiver {
+            let parts = self.strip_package_prefix(path);
+            let parts = parts.as_deref().unwrap_or(path);
+            if let [single] = parts {
+                // A receiver that NAMES a variable — a local, a parameter or a
+                // FIELD — is javac's `variable p of type Pet`; one that names a
+                // CLASS is `class Pet`, and a class has no `JType` of its own
+                // to describe.
+                if self.lookup(single).is_none()
+                    && self
+                        .resolve_field_quietly(self.current_class_id, single)
+                        .is_none()
+                {
+                    return Some(format!("class {}", source_type_name(single)));
+                }
+            } else if let Some(last) = parts.last() {
+                return Some(format!("class {}", source_type_name(last)));
+            }
+        }
+        let ty = self.type_of(receiver);
+        if ty == JType::Error {
+            return None;
+        }
+        let described = source_type_name(&ty.describe(self.table));
+        if let Expr::Name { path, .. } = receiver
+            && let [single] = path.as_slice()
+        {
+            return Some(format!("variable {single} of type {described}"));
+        }
+        Some(format!("class {described}"))
+    }
+
     fn call_target<'e>(
         &mut self,
         receiver: Option<&'e Expr>,
@@ -22785,9 +23094,10 @@ impl BodyGen<'_> {
             Resolution::UnknownName => {
                 self.error(
                     span,
-                    format!(
-                        "cannot find symbol: method {method}({}) in class {class}",
-                        describe_types(&arg_types, self.table)
+                    cannot_find_symbol(
+                        "method",
+                        &format!("{method}({})", describe_types(&arg_types, self.table)),
+                        self.receiver_location.as_deref(),
                     ),
                 );
                 return None;
@@ -23815,9 +24125,10 @@ impl BodyGen<'_> {
                 }
                 self.error(
                     span,
-                    format!(
-                        "cannot find symbol: method {method}({}) in class Objects",
-                        describe_types(&arg_types, self.table)
+                    cannot_find_symbol(
+                        "method",
+                        &format!("{method}({})", describe_types(&arg_types, self.table)),
+                        self.receiver_location.as_deref(),
                     ),
                 );
                 None
@@ -24347,10 +24658,30 @@ impl BodyGen<'_> {
         if arg_types.contains(&JType::Error) {
             return;
         }
-        let described = describe_types(&arg_types, self.table);
+        // Every overload of that name, each with its own reason, the way javac
+        // lists them. Naming only the class ("in class Integer") left the
+        // reader to guess what the method DOES take, which for a library call
+        // is the whole question.
+        let candidates = builtin_static_table(class).map_or_else(Vec::new, |(_, methods)| {
+            builtin_overloads(methods, method, self.table)
+        });
+        if candidates.is_empty() {
+            let described = describe_types(&arg_types, self.table);
+            self.error(
+                span,
+                format!("no suitable method found for {method}({described}) in class {class}"),
+            );
+            return;
+        }
         self.error(
             span,
-            format!("no suitable method found for {method}({described}) in class {class}"),
+            inapplicable_message(
+                method,
+                &format!("class {class}"),
+                &candidates,
+                &arg_types,
+                self.table,
+            ),
         );
     }
 
@@ -24568,14 +24899,14 @@ impl BodyGen<'_> {
         }
         if method != "println" && method != "print" {
             // javac: "cannot find symbol — symbol: method prinn(String),
-            // location: variable out of type PrintStream", flattened to
-            // our single-line diagnostic form.
+            // location: variable out of type PrintStream".
             let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
             self.error(
                 span,
-                format!(
-                    "cannot find symbol: method {method}({}) in class PrintStream",
-                    describe_types(&arg_types, self.table)
+                cannot_find_symbol(
+                    "method",
+                    &format!("{method}({})", describe_types(&arg_types, self.table)),
+                    self.receiver_location.as_deref(),
                 ),
             );
             return;
@@ -25989,6 +26320,7 @@ impl BodyGen<'_> {
                 span,
                 ..
             } => {
+                self.enter_member_access(receiver.as_deref());
                 let outcome = match self.call_target(receiver.as_deref(), *span) {
                     None => None,
                     Some(CallTarget::Stream(_)) => {
@@ -26314,9 +26646,10 @@ impl BodyGen<'_> {
             let Resolution::Found(sig) = self.table.resolve(owner, method, &arg_types) else {
                 self.error(
                     span,
-                    format!(
-                        "cannot find symbol: method {method}({}) in interface {owner}",
-                        describe_types(&arg_types, self.table)
+                    cannot_find_symbol(
+                        "method",
+                        &format!("{method}({})", describe_types(&arg_types, self.table)),
+                        self.receiver_location.as_deref(),
                     ),
                 );
                 return None;
@@ -26385,9 +26718,10 @@ impl BodyGen<'_> {
         } else {
             self.error(
                 span,
-                format!(
-                    "cannot find symbol: method {method}({}) in class {super_name}",
-                    describe_types(&arg_types, self.table)
+                cannot_find_symbol(
+                    "method",
+                    &format!("{method}({})", describe_types(&arg_types, self.table)),
+                    self.receiver_location.as_deref(),
                 ),
             );
             return None;
@@ -26501,6 +26835,8 @@ impl BodyGen<'_> {
     }
 
     fn field(&mut self, object: &Expr, name: &str, span: SourceSpan) -> JType {
+        // A field access names its receiver the same way a call does.
+        self.enter_member_access(Some(object));
         // `Type.class` class literal — the object is a type name, not a value,
         // so intercept before evaluating it.
         if name == "class"
@@ -27232,7 +27568,14 @@ impl BodyGen<'_> {
                 );
                 return JType::Error;
             }
-            self.error(span, format!("cannot find variable '{name}'"));
+            self.error(
+                span,
+                cannot_find_symbol(
+                    "variable",
+                    name,
+                    Some(&format!("class {}", source_type_name(self.current_class))),
+                ),
+            );
             return JType::Error;
         };
         let (slot, ty, assigned) = (var.slot, var.ty, var.assigned);
@@ -30483,7 +30826,10 @@ mod tests {
                 "boolean b = true; int c = b + 1;",
                 "bad operand types for binary operator '+'",
             ),
-            ("int z = q;", "cannot find variable"),
+            (
+                "int z = q;",
+                "cannot find symbol\n  symbol:   variable q\n  location: class T",
+            ),
             (
                 "int a = 1; boolean c = a && true;",
                 "bad operand types for binary operator '&&'\n  first type:  int\n  second type: boolean",

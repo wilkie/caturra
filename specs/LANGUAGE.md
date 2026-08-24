@@ -7909,6 +7909,64 @@ one, which is what makes every other run reproducible.
 Pinned by `diff_a_shift_with_a_wrapper_operand` and the four operator
 rejections in `stage6_compile_errors_match_javac_wording`.
 
+### Cannot find symbol (2026-08-24)
+
+The commonest compile error in student Java, and caturra said it in its own
+words on one line. javac says it in three:
+
+```
+cannot find symbol
+  symbol:   method bark()
+  location: variable p of type Pet
+```
+
+Twenty-five shapes of it — every kind of receiver against every kind of missing
+member — and **24 of the 25 differed**. They agree now.
+
+**The `location:` line is the work.** A receiver that NAMES a variable (a local,
+a parameter, or a field) is `variable p of type Pet`; a class name, a literal,
+an array element, or any other expression is `class Pet`; a bare `nope()` is
+looked for in the enclosing class, which javac names — while `this.nope()`, the
+same lookup written out, gets no location line at all, and javac drops the
+padding after `symbol:` when it does. Only the two call dispatchers and the
+field paths have the receiver EXPRESSION, and a missing member is reported from
+twenty places reached by a dozen helpers, none of which is given more than a
+type — which cannot say whether a variable was named. So the description is
+computed where the expression is and read where the message is, with the
+dispatchers restoring the outer one on the way out: `list.get(0).nope()` first
+reported `variable list of type List<Pet>` for a method looked for on the
+ELEMENT, because the nested call had established its own.
+
+**The applicability messages** got javac's shape too: one candidate gets
+
+```
+method speak in class Pet cannot be applied to given types;
+  required: no arguments
+  found: int,int
+  reason: actual and formal argument lists differ in length
+```
+
+and several get one line each, with the reason javac gives — including the
+lossy/unrelated split it makes for a numeric argument, which the one-candidate
+rule above already had. `Integer.valueOf()` used to say "no suitable method
+found for valueOf() in class Integer", naming none of the three overloads it
+does take, which for a library call is the only place the reader learns what it
+DOES take.
+
+Two divergences recorded in `REJECT_WORDING` closed as a result — a lone
+mismatched candidate (`System.arraycopy` with four arguments) and the
+one-candidate rule on `Math.multiplyFull` — and that table is what caught them,
+by failing when caturra started agreeing with javac.
+
+One thing still differs: the ORDER of the candidate list. javac lists overloads
+in declaration order, and caturra's builtin tables are ordered for overload
+SELECTION (`Math.scalb(float,int)` before `(double,int)`, so an `int` argument
+picks the more specific one) — so the same set can come out in a different
+order.
+
+Pinned by `a_missing_symbol_reads_like_javac` (nineteen shapes) and
+`reject_wording_tracks_javac`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
