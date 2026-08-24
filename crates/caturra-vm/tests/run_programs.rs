@@ -6533,6 +6533,33 @@ fn stage6_compile_errors_match_javac_wording() {
             "class M { static void f() { String s = (String) new StringBuilder(); } }",
             "incompatible types: StringBuilder cannot be converted to String",
         ),
+        // JLS §15.21.3: `==` between two references is legal exactly when a
+        // CASTING CONVERSION exists between their types — the same rule a cast
+        // and an `instanceof` ask. It was answered here by a table of seven
+        // "scalar families" that had never heard of an array, so this compiled
+        // and answered a plain `false`.
+        (
+            "class M { static void f(String s, int[] a) { boolean q = s == a; } }",
+            "incomparable types: String and int[]",
+        ),
+        // javac has TWO shapes for an operator with impossible operands, and
+        // picks between them by whether the operands are VALUES: two of kinds
+        // with no common one are "incomparable", while a reference that does
+        // not unbox, against a primitive, gets the operator's own complaint.
+        (
+            "class M { static void f(int a, Boolean b) { boolean q = a == b; } }",
+            "incomparable types: int and Boolean",
+        ),
+        (
+            "class M { static void f(Object o, int a) { boolean q = o == a; } }",
+            "bad operand types for binary operator '=='\n  first type:  Object\n  second type: int",
+        ),
+        // ...and a COMPOUND assignment names the BINARY operator, `*` and not
+        // `*=`, with the operands as the program wrote them.
+        (
+            "class M { static void f(int x, Object o) { x *= o; } }",
+            "bad operand types for binary operator '*'\n  first type:  int\n  second type: Object",
+        ),
         // A collection's FACE: `List` and `ArrayList` are one type here (as
         // are `Set`/`HashSet` and `Map`/`HashMap`), and the class widens to
         // the interface, never back. Each of these compiled here, and the

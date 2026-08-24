@@ -29388,6 +29388,36 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// A SHIFT whose operand is a wrapper. Each side of a shift is promoted on its
+// own (JLS §15.19) and a wrapper promotes by UNBOXING first — which neither
+// side did: the left because a `long` shift needs no conversion and so asked
+// for none, the right because a `Long` count is not a `long`. Every shift with
+// a `Long` operand, either side, died with
+// `VerifyError: expected a long on the stack, found Ref` — the VM refusing the
+// method outright, from an ordinary expression. Found by a cross-product of
+// nineteen operators over seventeen types, which is also why the `Integer`
+// count and the compound form are here: they take different paths.
+differential_test!(
+    diff_a_shift_with_a_wrapper_operand,
+    "Shifty",
+    r#"
+public class Shifty {
+    public static void main(String[] args) {
+        Long big = Long.valueOf(9);
+        Integer count = Integer.valueOf(2);
+        System.out.println((big >> 1) + " " + (big << count) + " " + (big >>> 1));
+        System.out.println((1 << Long.valueOf(2)) + " " + (7 >> count) + " " + ('a' << Long.valueOf(3)));
+        long widened = big << 2;
+        int narrow = count << count;
+        System.out.println(widened + " " + narrow);
+        Long acc = Long.valueOf(3);
+        acc <<= count;
+        System.out.println(acc);
+    }
+}
+"#
+);
+
 // The FACE a collection wears, on the side that must keep working: a class
 // stands in for its interface everywhere (assignment, argument, widening to
 // `Collection`), `clone` is still the class's own member, two different

@@ -7858,6 +7858,57 @@ javac's names the capture.
 Pinned by `diff_a_collection_wears_two_faces` and the twelve face, diagnostic
 and operand rejections in `stage6_compile_errors_match_javac_wording`.
 
+### Every operator against every type (2026-08-23)
+
+Nineteen binary operators over seventeen types on each side — **5491 cells**,
+each printing the value it produced *and the class it boxed to*, so the promoted
+type is checked and not only the number. javac rejects 3671 of them; the other
+1820 run.
+
+**45 cells were a VerifyError.** Every shift with a `Long` operand, on either
+side, killed the VM: `aLong >> 1`, `1 << Long.valueOf(2)`, `aLong <<= 2`. Each
+side of a shift is promoted on its OWN (JLS §15.19) and a wrapper promotes by
+UNBOXING first — which neither side did here: the left because a `long` shift
+needs no conversion and so asked for none, the right because a `Long` count is
+not a `long` and fell through the `L2I` case. The VM refused the whole method
+(`expected a long on the stack, found Ref`) for an ordinary expression.
+
+**4 cells compiled that javac refuses**: `"s" == anIntArray`. JLS §15.21.3 says
+`==` between two references is legal exactly when a CASTING CONVERSION exists
+between their types — the rule "Which casts exist" already answers for `(T) x`
+and for `instanceof`. It was answered here twice more by hand, once as a table
+of seven "scalar families" and once as a wrapper rule, and neither had heard of
+an array. Both are deleted; the shared rule stands in their place, and the
+enum-specific one stays beside it (an enum is implicitly final, which the class
+table does not record).
+
+**2787 of the 3671 rejections were worded differently.** javac has one shape for
+operands an operator has no meaning for — the operator in the headline, the two
+types on continuation lines — and caturra had invented three of its own
+("operator '+' cannot be applied to int and boolean", "operator '&&' needs
+boolean operands, got int", and the bare headline). Now one helper, used by all
+eleven sites, and three details that the cross-product is what pins:
+
+- a COMPOUND assignment names the BINARY operator: `x *= o` is "bad operand
+  types for binary operator `*`", never `*=`;
+- both operands are named, and named as the program WROTE them — `Boolean`, not
+  the `boolean` it would have unboxed to (which meant reaching for the type
+  before the promotion, and, in `&&`, for the right operand's type before it
+  had been emitted);
+- `==` has a SECOND shape, and javac picks between them by whether the operands
+  are values: `int == boolean` and `Boolean == int` are "incomparable types: A
+  and B" (two values of kinds with no common one), while `String == int` — a
+  reference that does not unbox, against a primitive — is the operator's own
+  complaint. A relational operator never has the first shape.
+
+**All 5491 cells now agree**, verdict and wording, with four exceptions that are
+the same deliberate difference: `"" + new Object()` prints caturra's
+deterministic identity hash (`java.lang.Object@2`) where a JVM prints a random
+one, which is what makes every other run reproducible.
+
+Pinned by `diff_a_shift_with_a_wrapper_operand` and the four operator
+rejections in `stage6_compile_errors_match_javac_wording`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

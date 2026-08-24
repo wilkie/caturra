@@ -16463,11 +16463,11 @@ impl BodyGen<'_> {
                         if value_ty != JType::Error {
                             self.error(
                                 span,
-                                format!(
-                                    "operator '{}' cannot be applied to {} and {}",
-                                    compound_symbol(op),
-                                    var_ty.describe(self.table),
-                                    value_ty.describe(self.table)
+                                bad_operand_types(
+                                    arithmetic_symbol(op),
+                                    var_ty,
+                                    value_ty,
+                                    self.table,
                                 ),
                             );
                         }
@@ -16529,12 +16529,7 @@ impl BodyGen<'_> {
                     } else if value_ty != JType::Error {
                         self.error(
                             value.span(),
-                            format!(
-                                "operator '{}' cannot be applied to {} and {}",
-                                compound_symbol(op),
-                                var_ty.describe(self.table),
-                                value_ty.describe(self.table)
-                            ),
+                            bad_operand_types(arithmetic_symbol(op), var_ty, value_ty, self.table),
                         );
                     }
                     return;
@@ -16888,11 +16883,11 @@ impl BodyGen<'_> {
                         if value_ty != JType::Error {
                             self.error(
                                 span,
-                                format!(
-                                    "operator '{}' cannot be applied to {} and {}",
-                                    compound_symbol(op_kind),
-                                    field.ty.describe(self.table),
-                                    value_ty.describe(self.table)
+                                bad_operand_types(
+                                    arithmetic_symbol(op_kind),
+                                    field.ty,
+                                    value_ty,
+                                    self.table,
                                 ),
                             );
                         }
@@ -16944,11 +16939,11 @@ impl BodyGen<'_> {
                     if value_ty != JType::Error {
                         self.error(
                             span,
-                            format!(
-                                "operator '{}' cannot be applied to {} and {}",
-                                compound_symbol(op_kind),
-                                field.ty.describe(self.table),
-                                value_ty.describe(self.table)
+                            bad_operand_types(
+                                arithmetic_symbol(op_kind),
+                                field.ty,
+                                value_ty,
+                                self.table,
                             ),
                         );
                     }
@@ -21740,11 +21735,11 @@ impl BodyGen<'_> {
                         if value_ty != JType::Error {
                             self.error(
                                 span,
-                                format!(
-                                    "operator '{}' cannot be applied to {} and {}",
-                                    compound_symbol(op_kind),
-                                    element.describe(self.table),
-                                    value_ty.describe(self.table)
+                                bad_operand_types(
+                                    arithmetic_symbol(op_kind),
+                                    element,
+                                    value_ty,
+                                    self.table,
                                 ),
                             );
                         }
@@ -21786,11 +21781,11 @@ impl BodyGen<'_> {
                     if value_ty != JType::Error {
                         self.error(
                             span,
-                            format!(
-                                "operator '{}' cannot be applied to {} and {}",
-                                compound_symbol(op_kind),
-                                element.describe(self.table),
-                                value_ty.describe(self.table)
+                            bad_operand_types(
+                                arithmetic_symbol(op_kind),
+                                element,
+                                value_ty,
+                                self.table,
                             ),
                         );
                     }
@@ -28684,10 +28679,8 @@ impl BodyGen<'_> {
                 self.bitwise(op, lhs, rhs, span)
             }
             BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr => {
-                let (lt, rt) = (
-                    numeric_view(self.type_of(lhs)),
-                    numeric_view(self.type_of(rhs)),
-                );
+                let (written_l, written_r) = (self.type_of(lhs), self.type_of(rhs));
+                let (lt, rt) = (numeric_view(written_l), numeric_view(written_r));
                 let integral = |t: JType| {
                     matches!(
                         t,
@@ -28697,22 +28690,27 @@ impl BodyGen<'_> {
                 if lt != JType::Error && rt != JType::Error && (!integral(lt) || !integral(rt)) {
                     self.error(
                         span,
-                        format!(
-                            "operator '{}' cannot be applied to {} and {}",
-                            arithmetic_symbol(op),
-                            lt.describe(self.table),
-                            rt.describe(self.table)
-                        ),
+                        bad_operand_types(arithmetic_symbol(op), written_l, written_r, self.table),
                     );
                 }
                 // The left operand's type decides the result; the
                 // count is always int (JLS §15.19).
+                //
+                // Each side is promoted on its OWN, and a WRAPPER promotes by
+                // UNBOXING first. Neither side unboxed here — the left because
+                // a `long` shift needs no conversion and so asked for none,
+                // the right because a `Long` count is not `JType::Long` — so
+                // `aLong >> 1` left a reference where the shift wanted a
+                // number and the VM refused the method outright:
+                // `VerifyError: expected a long on the stack, found Ref`, from
+                // an ordinary expression. Every shift with a `Long` operand,
+                // either side, was dead.
                 let long_shift = lt == JType::Long;
                 let actual = self.expr(lhs);
-                if !long_shift {
-                    self.numeric_conversion(actual, JType::Int);
-                }
+                let actual = self.unbox_wrapper(actual);
+                self.numeric_conversion(actual, if long_shift { lt } else { JType::Int });
                 let actual = self.expr(rhs);
+                let actual = self.unbox_wrapper(actual);
                 if actual == JType::Long {
                     self.code.push_op(op::L2I, 0);
                     self.code.drop_stack(1);
@@ -28742,10 +28740,12 @@ impl BodyGen<'_> {
                 self.concat(lhs, rhs)
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-                let (lt, rt) = (
-                    numeric_view(self.type_of(lhs)),
-                    numeric_view(self.type_of(rhs)),
-                );
+                // javac names the operands as the program WROTE them —
+                // `Boolean`, not the `boolean` it would have unboxed to — so
+                // the diagnostic keeps the written pair beside the promoted
+                // one it reasons with.
+                let (written_l, written_r) = (self.type_of(lhs), self.type_of(rhs));
+                let (lt, rt) = (numeric_view(written_l), numeric_view(written_r));
                 if lt == JType::Error || rt == JType::Error {
                     // Emit for nested diagnostics, then bail. If emitting the
                     // operands reported NOTHING, the error would be invisible:
@@ -28777,12 +28777,7 @@ impl BodyGen<'_> {
                     self.expr(rhs);
                     self.error(
                         span,
-                        format!(
-                            "operator '{}' cannot be applied to {} and {}",
-                            arithmetic_symbol(op),
-                            lt.describe(self.table),
-                            rt.describe(self.table)
-                        ),
+                        bad_operand_types(arithmetic_symbol(op), written_l, written_r, self.table),
                     );
                     return JType::Error;
                 }
@@ -28800,10 +28795,8 @@ impl BodyGen<'_> {
     /// `& | ^`: bitwise on ints, non-short-circuit logical on
     /// booleans (both operands always evaluate — the JLS semantics).
     fn bitwise(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
-        let (lt, rt) = (
-            numeric_view(self.type_of(lhs)),
-            numeric_view(self.type_of(rhs)),
-        );
+        let (written_l, written_r) = (self.type_of(lhs), self.type_of(rhs));
+        let (lt, rt) = (numeric_view(written_l), numeric_view(written_r));
         let boolean = lt == JType::Boolean && rt == JType::Boolean;
         let is_integral = |t: JType| {
             matches!(
@@ -28815,12 +28808,7 @@ impl BodyGen<'_> {
         if lt != JType::Error && rt != JType::Error && !boolean && !integral {
             self.error(
                 span,
-                format!(
-                    "operator '{}' cannot be applied to {} and {}",
-                    arithmetic_symbol(op),
-                    lt.describe(self.table),
-                    rt.describe(self.table)
-                ),
+                bad_operand_types(arithmetic_symbol(op), written_l, written_r, self.table),
             );
         }
         let target = if boolean {
@@ -28857,17 +28845,19 @@ impl BodyGen<'_> {
     }
 
     fn logical(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
+        let symbol = if op == BinaryOp::And { "&&" } else { "||" };
+        // javac names BOTH operands, and names them as WRITTEN — `Boolean`,
+        // not the `boolean` it unboxes to. The right one has not been emitted
+        // yet when the left is judged, so its type comes from the non-emitting
+        // mirror.
+        let (written_l, written_r) = (self.type_of(lhs), self.type_of(rhs));
         let lt = self.expr(lhs);
         // A `Boolean` operand auto-unboxes (JLS §5.1.8) — `Boolean.TRUE && x`.
         let lt = self.unbox_wrapper(lt);
         if lt != JType::Boolean && lt != JType::Error {
             self.error(
                 span,
-                format!(
-                    "operator '{}' needs boolean operands, got {}",
-                    if op == BinaryOp::And { "&&" } else { "||" },
-                    lt.describe(self.table)
-                ),
+                bad_operand_types(symbol, written_l, written_r, self.table),
             );
         }
         let short = self.code.new_label();
@@ -28886,14 +28876,10 @@ impl BodyGen<'_> {
         let rt = self.expr(rhs);
         let rt = self.unbox_wrapper(rt);
         self.restore_assigned(&before_rhs);
-        if rt != JType::Boolean && rt != JType::Error {
+        if rt != JType::Boolean && rt != JType::Error && lt == JType::Boolean {
             self.error(
                 span,
-                format!(
-                    "operator '{}' needs boolean operands, got {}",
-                    if op == BinaryOp::And { "&&" } else { "||" },
-                    rt.describe(self.table)
-                ),
+                bad_operand_types(symbol, written_l, written_r, self.table),
             );
         }
         self.code.branch(op::GOTO, end, 0);
@@ -28904,49 +28890,6 @@ impl BodyGen<'_> {
     }
 
     #[allow(clippy::too_many_lines)] // one arm per operand-type family
-    /// Whether two reference types, at least one a wrapper, may be compared
-    /// with `==`/`!=` (JLS §15.21.3 / §5.5). Two wrappers must be the same
-    /// kind; a wrapper also compares with `null`, `Object`, and `Comparable`
-    /// (its supertypes). Anything else — `Integer == Long`, `Integer == String`
-    /// — is incomparable, exactly as javac rules.
-    fn wrapper_refs_comparable(&self, a: JType, b: JType) -> bool {
-        let comparable_id = self.table.class_id("Comparable");
-        let wrapper_ok = |other: JType| {
-            other == JType::Null
-                || matches!(other, JType::Object(id)
-                    if id == self.table.object_id || Some(id) == comparable_id)
-        };
-        match (a, b) {
-            (JType::Boxed(e1), JType::Boxed(e2)) => e1 == e2,
-            (JType::Boxed(_), other) | (other, JType::Boxed(_)) => wrapper_ok(other),
-            _ => true,
-        }
-    }
-
-    /// Whether two operand types are distinct SCALAR library types with no
-    /// relationship, which `==` cannot compare (JLS §15.21.3). Only the scalar
-    /// intrinsics are listed — each is a `final`-ish concrete type unrelated to the
-    /// others, so a comparison between two different ones is always a compile
-    /// error, exactly as javac reports "incomparable types".
-    fn incomparable_scalars(a: JType, b: JType) -> bool {
-        fn scalar_family(t: JType) -> Option<u8> {
-            match t {
-                JType::Str => Some(0),
-                JType::StringBuilder => Some(1),
-                JType::Scanner => Some(2),
-                JType::File => Some(3),
-                JType::Writer => Some(4),
-                JType::Reader => Some(5),
-                JType::Path => Some(6),
-                _ => None,
-            }
-        }
-        match (scalar_family(a), scalar_family(b)) {
-            (Some(x), Some(y)) => x != y,
-            _ => false,
-        }
-    }
-
     /// JLS §15.21.3: `==` between two references needs a casting conversion
     /// between their types. An `enum` is implicitly `final` and extends only
     /// `java.lang.Enum`, so the only references one can be compared with are
@@ -29022,10 +28965,30 @@ impl BodyGen<'_> {
         if !(both_numeric || (is_equality && (both_boolean || both_refs))) {
             self.expr(lhs);
             self.expr(rhs);
-            self.error(
-                span,
-                bad_operand_types(comparison_symbol(op), lt, rt, self.table),
-            );
+            // Two shapes, and javac picks between them by whether the operands
+            // are VALUES: `int == boolean` and `Boolean == int` are
+            // "incomparable types" (both sides are a value, of kinds that have
+            // no common one), while `String == int` — a reference that does
+            // not unbox, against a primitive — is the operator's own "bad
+            // operand types". A relational operator never has the first shape.
+            // Both name the operands as WRITTEN, `Boolean` and not the
+            // `boolean` it would unbox to.
+            let value_like = |ty: JType| !ty.is_reference() || matches!(ty, JType::Boxed(_));
+            if is_equality && value_like(raw_l) && value_like(raw_r) {
+                self.error(
+                    span,
+                    format!(
+                        "incomparable types: {} and {}",
+                        source_type_name(&raw_l.describe(self.table)),
+                        source_type_name(&raw_r.describe(self.table))
+                    ),
+                );
+            } else {
+                self.error(
+                    span,
+                    bad_operand_types(comparison_symbol(op), raw_l, raw_r, self.table),
+                );
+            }
             return JType::Error;
         }
 
@@ -29039,8 +29002,21 @@ impl BodyGen<'_> {
         // identity (always false). Restricted to the scalar library types,
         // which have no subtype relationships among them — collections are left
         // to the existing paths, where List/Collection etc. do relate.
+        // JLS §15.21.3: `==` between two references is legal exactly when a
+        // CASTING CONVERSION exists between their types — the rule
+        // `cast_conversion_exists` already answers for `(T) x` and, since the
+        // JLS says so in as many words, for `instanceof`. It was answered here
+        // twice more by hand: a table of "scalar families" that listed seven
+        // types by name, and a wrapper rule beside it. Neither knew about an
+        // ARRAY, so `"s" == anIntArray` compiled and answered a plain `false`
+        // where javac calls the two incomparable.
+        //
+        // The enum rule stays alongside: an enum is implicitly final, which
+        // the class table does not record, so the general rule would let a
+        // comparison with an unimplemented interface through.
         if reference_equality
-            && (Self::incomparable_scalars(lt, rt) || self.enum_incomparable(lt, rt))
+            && (self.enum_incomparable(lt, rt)
+                || !(self.cast_conversion_exists(lt, rt) || self.cast_conversion_exists(rt, lt)))
         {
             self.expr(lhs);
             self.expr(rhs);
@@ -29048,24 +29024,8 @@ impl BodyGen<'_> {
                 span,
                 format!(
                     "incomparable types: {} and {}",
-                    lt.describe(self.table),
-                    rt.describe(self.table)
-                ),
-            );
-            return JType::Error;
-        }
-        if reference_equality
-            && (matches!(lt, JType::Boxed(_)) || matches!(rt, JType::Boxed(_)))
-            && !self.wrapper_refs_comparable(lt, rt)
-        {
-            self.expr(lhs);
-            self.expr(rhs);
-            self.error(
-                span,
-                format!(
-                    "incomparable types: {} and {}",
-                    lt.describe(self.table),
-                    rt.describe(self.table)
+                    source_type_name(&lt.describe(self.table)),
+                    source_type_name(&rt.describe(self.table))
                 ),
             );
             return JType::Error;
@@ -30120,23 +30080,6 @@ impl BodyGen<'_> {
     }
 }
 
-fn compound_symbol(op: BinaryOp) -> &'static str {
-    match op {
-        BinaryOp::Add => "+=",
-        BinaryOp::Sub => "-=",
-        BinaryOp::Mul => "*=",
-        BinaryOp::Div => "/=",
-        BinaryOp::Rem => "%=",
-        BinaryOp::BitAnd => "&=",
-        BinaryOp::BitOr => "|=",
-        BinaryOp::BitXor => "^=",
-        BinaryOp::Shl => "<<=",
-        BinaryOp::Shr => ">>=",
-        BinaryOp::Ushr => ">>>=",
-        _ => "?=",
-    }
-}
-
 fn arithmetic_symbol(op: BinaryOp) -> &'static str {
     match op {
         BinaryOp::Add => "+",
@@ -30529,12 +30472,32 @@ mod tests {
             ("int x = 2.5;", "possible lossy conversion"),
             ("int x = true;", "incompatible types"),
             ("boolean b = 1;", "incompatible types"),
-            (r#"int y = 1; String s = "a" - y;"#, "cannot be applied"),
-            ("boolean b = true; int c = b + 1;", "cannot be applied"),
+            // javac's shape for operands an operator has no meaning for: the
+            // operator in the headline, the two types on continuation lines,
+            // and each named as the program WROTE it.
+            (
+                r#"int y = 1; String s = "a" - y;"#,
+                "bad operand types for binary operator '-'\n  first type:  String\n  second type: int",
+            ),
+            (
+                "boolean b = true; int c = b + 1;",
+                "bad operand types for binary operator '+'",
+            ),
             ("int z = q;", "cannot find variable"),
             (
                 "int a = 1; boolean c = a && true;",
-                "needs boolean operands",
+                "bad operand types for binary operator '&&'\n  first type:  int\n  second type: boolean",
+            ),
+            // `==` between two VALUES of kinds with no common one is
+            // "incomparable", where a reference against a primitive is the
+            // operator's own complaint.
+            (
+                "int a = 1; boolean c = a == true;",
+                "incomparable types: int and boolean",
+            ),
+            (
+                r#"String a = "s"; boolean c = a == 1;"#,
+                "bad operand types for binary operator '=='",
             ),
         ];
         for (body, expected) in cases {
