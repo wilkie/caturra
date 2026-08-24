@@ -18,6 +18,7 @@ use crate::debug::{
     Breakpoint, DebugCommand, DebugFrameSnapshot, DebugHost, DebugSnapshot, PauseReason,
     WatchEvaluator,
 };
+use crate::format::ArgNeed;
 use crate::intrinsics::{self, IntrinsicStatics, check_comodification, iterated_len_of};
 use crate::io::ConsoleIo;
 use crate::value::{Heap, HeapRef, IteratorWrites, JValue, MapViewKind};
@@ -4172,6 +4173,15 @@ impl<'run> Interpreter<'run> {
         descriptor: &str,
         args: &mut [JValue],
     ) -> Result<(), VmError> {
+        // ...and only the arguments the TEMPLATE will ask about: `%d` of a
+        // user object is an error naming the object's class, and the JDK never
+        // calls `toString` on it, so rendering it here both hid the class and
+        // ran a method the program never asked to run.
+        let template = match args.first() {
+            Some(JValue::Ref(Some(reference))) => self.heap.string_text(*reference),
+            _ => None,
+        };
+        let needs = crate::format::argument_needs(template.as_deref().unwrap_or_default());
         let inner = descriptor
             .strip_prefix("(Ljava/lang/String;")
             .and_then(|rest| rest.split_once(')'))
@@ -4198,9 +4208,10 @@ impl<'run> Interpreter<'run> {
             let Some(value) = args.get(index + 1).copied() else {
                 break;
             };
+            let need = needs.get(index).copied().unwrap_or(ArgNeed::Nothing);
             match tag {
                 'L' => {
-                    if let Some(rendered) = self.rendered_format_value(value)? {
+                    if let Some(rendered) = self.rendered_format_value(value, need)? {
                         args[index + 1] = rendered;
                     }
                 }
@@ -4217,9 +4228,18 @@ impl<'run> Interpreter<'run> {
                         continue;
                     };
                     let (name, elements) = (name.clone(), elements.clone());
+                    // A forwarded array's ELEMENTS are the arguments, so
+                    // each has its own need, counted from this tag's position.
                     let mut out = Vec::with_capacity(elements.len());
-                    for element in elements {
-                        out.push(self.rendered_format_value(element)?.unwrap_or(element));
+                    for (offset, element) in elements.into_iter().enumerate() {
+                        let need = needs
+                            .get(index + offset)
+                            .copied()
+                            .unwrap_or(ArgNeed::Nothing);
+                        out.push(
+                            self.rendered_format_value(element, need)?
+                                .unwrap_or(element),
+                        );
                     }
                     let fresh = self
                         .heap
@@ -4232,9 +4252,18 @@ impl<'run> Interpreter<'run> {
         Ok(())
     }
 
-    /// The string a format argument should become, or `None` when it is
-    /// already something the formatter renders itself.
-    fn rendered_format_value(&mut self, value: JValue) -> Result<Option<JValue>, VmError> {
+    /// What a format argument should become before the formatter sees it, or
+    /// `None` when the formatter can render it as it stands.
+    ///
+    /// Only what the conversion will ASK for: its text for `%s`, its hash for
+    /// `%h` — both of which may be a user method, which the formatter cannot
+    /// call. Every other conversion gets the object untouched, so it can name
+    /// the object's class when it refuses it.
+    fn rendered_format_value(
+        &mut self,
+        value: JValue,
+        need: ArgNeed,
+    ) -> Result<Option<JValue>, VmError> {
         let JValue::Ref(Some(reference)) = value else {
             return Ok(None);
         };
@@ -4244,9 +4273,28 @@ impl<'run> Interpreter<'run> {
         ) {
             return Ok(None);
         }
-        let text = self.string_value_of(value, 0)?;
-        let rendered = self.heap.alloc_string(&text);
-        Ok(Some(JValue::Ref(Some(rendered))))
+        match need {
+            ArgNeed::Nothing => Ok(None),
+            ArgNeed::Text => {
+                let text = self.string_value_of(value, 0)?;
+                let rendered = self.heap.alloc_string(&text);
+                Ok(Some(JValue::Ref(Some(rendered))))
+            }
+            // `%h` is `Integer.toHexString(arg.hashCode())`, and a user
+            // `hashCode` is a user method: answered here, where one can run,
+            // as the `Integer` whose own hash IS that value.
+            // ...as a BOXED Integer: the descriptor says this argument is a
+            // reference, and an `Integer`'s own hash IS its value, so `%h`
+            // renders exactly what the object's `hashCode` gave.
+            ArgNeed::Hash => {
+                let hash = self.java_hash_code(value)?;
+                let boxed = self.heap.alloc(crate::value::HeapObject::Boxed {
+                    class_name: Rc::from("java/lang/Integer"),
+                    value: JValue::Int(hash),
+                });
+                Ok(Some(JValue::Ref(Some(boxed))))
+            }
+        }
     }
 
     /// `String.valueOf(value)`: the text Java would produce. Unlike the
@@ -17587,12 +17635,15 @@ impl Frame<'_> {
 }
 
 /// `[a, b, c]` capped at 20 elements for the locals view.
-/// Whether a class name is one the compiler synthesized for an ANONYMOUS class
-/// (`new Runnable() { ... }`, and an enum constant with a body). Such a class
-/// has no simple name in Java; the reserved `Anon$` prefix is not writable in
-/// source, so this cannot mistake a user class for one.
+/// Whether a class name is an ANONYMOUS class's (`new Runnable() { ... }`, and
+/// an enum constant with a body). Such a class has no simple name in Java, and
+/// its binary name is the enclosing class's with `$1`, `$2`… appended — which
+/// is javac's own way of telling one apart, since no source name can start
+/// with a digit.
 fn is_synthesized_anonymous(name: &str) -> bool {
-    simple_class_name(name).starts_with("Anon$")
+    name.rsplit_once('$').is_some_and(|(outer, suffix)| {
+        !outer.is_empty() && !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+    })
 }
 
 /// A LOCAL class, hoisted under `Name$LocalN`. Like an anonymous one, it has

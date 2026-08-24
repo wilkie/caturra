@@ -29392,6 +29392,47 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// What a format conversion ASKS of its argument, and what it is called when it
+// refuses one. Every heap object was rendered to its `toString()` before the
+// formatter saw it — because the formatter sees only the heap and cannot call
+// a user method — so `%d` of an object ran a `toString` the JDK never calls
+// (visible here because it throws), and then reported the mismatch against
+// `java.lang.String` instead of against the object's own class. `%h` hashed
+// that text rather than the object. The template is asked which arguments it
+// wants the text of, and only those are rendered; `%h` gets the object's
+// `hashCode`, user override included.
+//
+// The anonymous class beside them is the other half: Java names one
+// `Enclosing$1`, numbered per enclosing class, and caturra called them all
+// `Anon$N` — the name `getClass().getName()`, `getSimpleName()`,
+// `getCanonicalName()`, a default `toString()` and this very message report.
+differential_test!(
+    diff_a_format_conversion_asks_for_what_it_needs,
+    "FmtObj",
+    r#"
+public class FmtObj {
+    static class Pet {
+        public String toString() { throw new IllegalStateException("toString ran"); }
+        public int hashCode() { return 255; }
+    }
+    static class Named { public String toString() { return "N"; } }
+
+    public static void main(String[] args) {
+        try { System.out.println(String.format("%d", new Pet())); }
+        catch (RuntimeException e) { System.out.println(e.getClass().getSimpleName() + ": " + e.getMessage()); }
+        System.out.println(String.format("%h %H %s", new Pet(), new Pet(), new Named()));
+        try { System.out.println(String.format("%X", "text")); }
+        catch (RuntimeException e) { System.out.println(e.getMessage()); }
+        Object anon = new Object() { public String toString() { return "A"; } };
+        System.out.println(anon.getClass().getName() + " " + anon.getClass().getSimpleName()
+            + " " + anon.getClass().getCanonicalName() + " " + anon);
+        try { System.out.println(String.format("%d", anon)); }
+        catch (RuntimeException e) { System.out.println(e.getMessage()); }
+    }
+}
+"#
+);
+
 // A SHIFT whose operand is a wrapper. Each side of a shift is promoted on its
 // own (JLS §15.19) and a wrapper promotes by UNBOXING first — which neither
 // side did: the left because a `long` shift needs no conversion and so asked

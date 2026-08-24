@@ -7967,6 +7967,54 @@ order.
 Pinned by `a_missing_symbol_reads_like_javac` (nineteen shapes) and
 `reject_wording_tracks_javac`.
 
+### What a conversion asks of its argument (2026-08-24)
+
+Thirty format specifiers against sixteen argument types — 480 cells, each
+printing the text or the exception. **29 differed**, in three ways that share
+one cause and one that does not.
+
+The formatter sees only the heap, so it cannot call a user `toString()`. Every
+heap object among a format call's arguments was therefore rendered to text
+BEFORE it ran. That is invisible while the conversion wants text, and wrong the
+moment it does not:
+
+- `String.format("%d", pet)` ran `Pet.toString()` — a method the JDK never
+  calls for `%d`, visible the moment it throws or has a side effect — and then
+  reported the mismatch against `java.lang.String`, a class the program never
+  mentioned, instead of against `Pet`;
+- `%h` hashed that TEXT rather than the object, so an overridden `hashCode()`
+  was ignored and two distinct objects with equal text hashed alike.
+
+The template is asked what it will want now (`argument_needs`), and only those
+arguments are prepared: the text for `%s`, the `hashCode` for `%h` — each run
+where a user method CAN run — and everything else is passed untouched, so the
+formatter can name the object's class when it refuses it. The index rules that
+answer "which argument does this conversion consume" (`%2$s`, `%<d`, and plain
+order) are one piece of code shared with the render loop, because asking them a
+second way is how the two would come to disagree.
+
+The fourth: `%X` reported itself as `X`. The JDK's exception carries the
+CONVERSION, and an uppercase specifier is the lowercase conversion with a flag
+— `x != java.lang.String`, never `X`.
+
+**And the class an anonymous class calls itself.** Java names one
+`Enclosing$1`, numbered from one per enclosing class in source order —
+`A1$1`, and `A1$Inner$1` for one written inside `Inner`. caturra named them all
+`Anon$N` from a single counter, which is what `getClass().getName()`,
+`getSimpleName()` (empty), `getCanonicalName()` (null), a default `toString()`,
+a `ClassCastException` and a stack-trace frame all reported: a name no Java
+program can show. The binary name is assigned where the enclosing class is
+already known (the capture pass), and the VM tells an anonymous class apart the
+way javac's own naming does — the last `$`-segment is digits, which no source
+name can be. A LAMBDA is excluded: a JDK calls its class `Outer$$Lambda$1`, and
+it is not an anonymous class.
+
+479 of the 480 cells agree now; the last is `%h` of an object with no
+`hashCode` override, where caturra's identity hash is deterministic and a JVM's
+is not.
+
+Pinned by `diff_a_format_conversion_asks_for_what_it_needs`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

@@ -155,10 +155,44 @@ pub fn resolve_captures(
     // meant the ENCLOSING class's static field no longer resolves. Record the
     // enclosing class; codegen falls back to its statics when a name is
     // neither a local, a parameter, nor a member of the class itself.
+    //
+    // The same owner gives the class its BINARY name. Java calls an anonymous
+    // class `Enclosing$1`, numbered from one PER ENCLOSING class in source
+    // order — so `A1$1`, and `A1$Inner$1` for one written inside `Inner`.
+    // caturra called them all `Anon$N` from a single counter, which is the
+    // name `getClass().getName()`, a default `toString()`, a stack-trace frame
+    // and a ClassCastException all reported: a name no Java program can show.
+    let binary_names: HashMap<String, String> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .map(|class| {
+            (
+                class.name.clone(),
+                class
+                    .binary_name
+                    .clone()
+                    .unwrap_or_else(|| class.name.clone()),
+            )
+        })
+        .collect();
+    let mut per_owner: HashMap<String, usize> = HashMap::new();
     for (_, unit) in units.iter_mut() {
         for class in &mut unit.classes {
             if let Some(owner) = owners.get(&class.name) {
                 class.enclosing = Some(owner.clone());
+                // ...but not a LAMBDA, which is anonymous in the same sense
+                // and yet is not one: a JDK names its class
+                // `Outer$$Lambda$1`, never `Outer$1`, and the passes that
+                // recognise one go by that prefix.
+                if class.is_anonymous
+                    && class.binary_name.is_none()
+                    && !crate::is_lambda_class(&class.name)
+                {
+                    let outer = binary_names.get(owner).unwrap_or(owner);
+                    let next = per_owner.entry(outer.clone()).or_insert(0);
+                    *next += 1;
+                    class.binary_name = Some(format!("{outer}${next}"));
+                }
             }
         }
     }

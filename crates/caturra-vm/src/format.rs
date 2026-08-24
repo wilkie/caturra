@@ -31,17 +31,24 @@ pub enum FormatArg {
 
 impl FormatArg {
     /// Java class name for `IllegalFormatConversionException`.
-    fn java_class(self) -> &'static str {
+    /// The class a diagnostic names this argument by. A reference is asked
+    /// what it IS: naming every one of them `java.lang.String` told a program
+    /// that `%d` had been given a String when it had been given a `Pet`.
+    fn java_class(self, heap: &Heap) -> String {
         match self {
-            FormatArg::Int(_) => "java.lang.Integer",
-            FormatArg::Short(_) => "java.lang.Short",
-            FormatArg::Byte(_) => "java.lang.Byte",
-            FormatArg::Long(_) => "java.lang.Long",
-            FormatArg::Float(_) => "java.lang.Float",
-            FormatArg::Double(_) => "java.lang.Double",
-            FormatArg::Char(_) => "java.lang.Character",
-            FormatArg::Boolean(_) => "java.lang.Boolean",
-            FormatArg::Str(_) => "java.lang.String",
+            FormatArg::Int(_) => String::from("java.lang.Integer"),
+            FormatArg::Short(_) => String::from("java.lang.Short"),
+            FormatArg::Byte(_) => String::from("java.lang.Byte"),
+            FormatArg::Long(_) => String::from("java.lang.Long"),
+            FormatArg::Float(_) => String::from("java.lang.Float"),
+            FormatArg::Double(_) => String::from("java.lang.Double"),
+            FormatArg::Char(_) => String::from("java.lang.Character"),
+            FormatArg::Boolean(_) => String::from("java.lang.Boolean"),
+            FormatArg::Str(None) => String::from("java.lang.String"),
+            FormatArg::Str(Some(reference)) => heap.get(reference).map_or_else(
+                || String::from("java.lang.String"),
+                crate::interpreter::heap_object_binary_name,
+            ),
         }
     }
 }
@@ -136,12 +143,7 @@ fn java_format_inner(
     let chars: Vec<char> = template.chars().collect();
     let mut out = String::new();
     let mut at = 0;
-    let mut next_arg = 0usize;
-    // The index the previous conversion consumed, for the `<` relative index.
-    let mut last_index = 0usize;
-    // Whether any conversion has consumed an argument yet — a leading `%<`
-    // has nothing to reuse.
-    let mut consumed_an_argument = false;
+    let mut cursor = ArgCursor::default();
 
     while at < chars.len() {
         if chars[at] != '%' {
@@ -163,26 +165,7 @@ fn java_format_inner(
                 produced.push('\n');
             }
             _ => {
-                // `%<s` with nothing before it: there is no previous argument
-                // to reuse. The JDK reports the specifier as a missing
-                // argument, so a leading relative index is an error.
-                if spec.relative && !consumed_an_argument {
-                    return Err(throw(
-                        "java.util.MissingFormatArgumentException",
-                        &format!("Format specifier '{}'", spec.text),
-                    ));
-                }
-                let index = if spec.relative {
-                    last_index
-                } else if let Some(explicit) = spec.arg_index {
-                    explicit
-                } else {
-                    let index = next_arg;
-                    next_arg += 1;
-                    index
-                };
-                last_index = index;
-                consumed_an_argument = true;
+                let index = cursor.index(&spec)?;
                 // A null argument ARRAY answers null for every index, however
                 // many specifiers the template has.
                 let arg = if args.all_null {
@@ -202,6 +185,111 @@ fn java_format_inner(
         }
     }
     Ok(out)
+}
+
+/// Which argument a conversion consumes: the next one, the one an explicit
+/// `2$` names, or — for `%<` — the one the previous conversion took.
+///
+/// Written out inside the render loop, it could not be asked ahead of the
+/// render; the interpreter needs exactly this to know which arguments a
+/// template will want the TEXT of (see [`argument_needs`]), and asking it a
+/// second way is how the two would come to disagree about `%<d`.
+#[derive(Default)]
+struct ArgCursor {
+    next: usize,
+    /// The index the previous conversion consumed, for the `<` relative index.
+    last: usize,
+    /// Whether any conversion has consumed an argument yet — a leading `%<`
+    /// has nothing to reuse.
+    consumed: bool,
+}
+
+impl ArgCursor {
+    fn index(&mut self, spec: &Spec) -> Result<usize, VmError> {
+        // `%<s` with nothing before it: there is no previous argument to
+        // reuse. The JDK reports the specifier as a missing argument, so a
+        // leading relative index is an error.
+        if spec.relative && !self.consumed {
+            return Err(throw(
+                "java.util.MissingFormatArgumentException",
+                &format!("Format specifier '{}'", spec.text),
+            ));
+        }
+        let index = if spec.relative {
+            self.last
+        } else if let Some(explicit) = spec.arg_index {
+            explicit
+        } else {
+            let index = self.next;
+            self.next += 1;
+            index
+        };
+        self.last = index;
+        self.consumed = true;
+        Ok(index)
+    }
+}
+
+/// What a template will ASK of each argument — the question the interpreter
+/// has to answer before the formatter runs, because the formatter sees only
+/// the heap and cannot call a user `toString()` or `hashCode()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgNeed {
+    /// Nothing: the conversion either rejects a reference outright (`%d` of an
+    /// object is an error naming the object's CLASS — the JDK never asks it
+    /// for text) or answers without asking (`%b` is "true" for any non-null).
+    Nothing,
+    /// Its `toString()` — `%s` and `%S`.
+    Text,
+    /// Its `hashCode()` — `%h` and `%H`.
+    Hash,
+}
+
+/// What the arguments will be asked for by `template`, in order.
+///
+/// Sized by what the TEMPLATE asks for, not by how many values were passed: a
+/// forwarded varargs array arrives as ONE value whose elements are all the
+/// arguments, so a length taken from the call would have covered only the
+/// first of them.
+///
+/// Rendering every heap object to text up front was invisible until the
+/// conversion was one that never wanted text: `String.format("%d", pet)` ran
+/// `Pet.toString()` (observable when it throws, or has a side effect) and then
+/// reported the mismatch against `java.lang.String` rather than against `Pet`,
+/// and `%h` hashed the TEXT instead of the object.
+#[must_use]
+pub fn argument_needs(template: &str) -> Vec<ArgNeed> {
+    let chars: Vec<char> = template.chars().collect();
+    let mut needs: Vec<ArgNeed> = Vec::new();
+    let mut at = 0;
+    let mut cursor = ArgCursor::default();
+    while at < chars.len() {
+        if chars[at] != '%' {
+            at += 1;
+            continue;
+        }
+        let Ok(spec) = parse_spec(&chars, &mut at) else {
+            break;
+        };
+        if matches!(spec.conversion, '%' | 'n') {
+            continue;
+        }
+        let Ok(index) = cursor.index(&spec) else {
+            break;
+        };
+        let need = match spec.conversion {
+            's' | 'S' => ArgNeed::Text,
+            'h' | 'H' => ArgNeed::Hash,
+            _ => ArgNeed::Nothing,
+        };
+        if needs.len() <= index {
+            needs.resize(index + 1, ArgNeed::Nothing);
+        }
+        if needs[index] == ArgNeed::Nothing {
+            needs[index] = need;
+        }
+    }
+    needs
 }
 
 fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
@@ -520,10 +608,16 @@ fn unwrap_boxed(heap: &Heap, arg: FormatArg) -> FormatArg {
     }
 }
 
-fn conversion_mismatch(conversion: char, arg: FormatArg) -> VmError {
+/// The JDK's `IllegalFormatConversionException` names the conversion in
+/// LOWER case — `%X` is `%x` with the upper flag, and the exception carries the
+/// conversion, not the spelling — and names the ARGUMENT's own class, which for
+/// a user object is that class and not the `String` the formatter would have
+/// made of it.
+fn conversion_mismatch(heap: &Heap, conversion: char, arg: FormatArg) -> VmError {
+    let conversion = conversion.to_ascii_lowercase();
     throw(
         "java.util.IllegalFormatConversionException",
-        &format!("{conversion} != {}", arg.java_class()),
+        &format!("{conversion} != {}", arg.java_class(heap)),
     )
 }
 
@@ -649,7 +743,7 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                     u32::try_from(v).map_err(|_| bad_code_point(i32::from(v)))?
                 }
                 FormatArg::Int(v) => u32::try_from(v).map_err(|_| bad_code_point(v))?,
-                other => return Err(conversion_mismatch(conversion, other)),
+                other => return Err(conversion_mismatch(heap, conversion, other)),
             };
             // JLS: a value past U+10FFFF is not a code point at all — the
             // JDK throws rather than substituting (a lone surrogate is a
@@ -669,7 +763,7 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 FormatArg::Short(v) => i64::from(v),
                 FormatArg::Byte(v) => i64::from(v),
                 FormatArg::Long(v) => v,
-                other => return Err(conversion_mismatch(conversion, other)),
+                other => return Err(conversion_mismatch(heap, conversion, other)),
             };
             let negative = value < 0;
             let mut magnitude = value.unsigned_abs().to_string();
@@ -704,7 +798,7 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 FormatArg::Short(v) => u64::from(v.cast_unsigned()),
                 FormatArg::Byte(v) => u64::from(v.cast_unsigned()),
                 FormatArg::Long(v) => v.cast_unsigned(),
-                other => return Err(conversion_mismatch(conversion, other)),
+                other => return Err(conversion_mismatch(heap, conversion, other)),
             };
             let mut text = match conversion.to_ascii_lowercase() {
                 'o' => format!("{value:o}"),
@@ -731,7 +825,7 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 FormatArg::Double(v) => v,
                 // Java's Formatter widens Float via doubleValue().
                 FormatArg::Float(v) => f64::from(v),
-                other => return Err(conversion_mismatch(conversion, other)),
+                other => return Err(conversion_mismatch(heap, conversion, other)),
             };
             let text = format_float(spec, value);
             Ok(if conversion.is_ascii_uppercase() {
@@ -748,7 +842,7 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
             let value = match arg {
                 FormatArg::Double(v) => v,
                 FormatArg::Float(v) => f64::from(v),
-                other => return Err(conversion_mismatch(conversion, other)),
+                other => return Err(conversion_mismatch(heap, conversion, other)),
             };
             let body = crate::intrinsics::java_double_to_hex(value);
             let body = if conversion == 'A' {
