@@ -8015,6 +8015,42 @@ is not.
 
 Pinned by `diff_a_format_conversion_asks_for_what_it_needs`.
 
+### Math at its edges (2026-08-24)
+
+Sixty-four programs over every `Math` method and every edge value it has —
+**2131 cells**: NaN through each function, both zeros (told apart by dividing
+into them, the only way a program can), both infinities, `MIN_VALUE` and
+`MAX_VALUE`, the overflow of every `*Exact`, the sign rules of
+`floorDiv`/`floorMod`, and what `round`/`rint`/`ceil`/`floor` do at a half and
+below zero. Plus 1500 random doubles (bit patterns, not decimals) through
+`Double.toString`, and 3200 in-range transcendental calls.
+
+**The semantics are exact**, and are now pinned. Two families are not, and
+neither is a bug to fix:
+
+- **A NaN's raw bit pattern.** `Math.acos(2.5)`, `Math.log10(-1)` and
+  `IEEEremainder(x, 0)` all answer NaN, and the JDK's is the negative quiet NaN
+  (`0xFFF8…`) where caturra's is the canonical `0x7FF8…`. Only
+  `doubleToRawLongBits` can see it — `doubleToLongBits` collapses every NaN to
+  the canonical one, arithmetic and printing treat them alike, and the JDK's own
+  answer depends on the hardware it runs on. 238 of the 2131 cells; unspecified,
+  not wrong.
+- **The last ulp of a transcendental.** 7 of 3200 in-range calls differ by
+  exactly one ulp — `log10` 5 of 200, `cos` and `tan` 1 each, everything else
+  (`sin`, `exp`, `log`, `atan`, `asin`, `acos`, `sqrt`, `cbrt`, `sinh`, `cosh`,
+  `tanh`, `expm1`, `log1p`) 0 of 200. `Math` is specified to be within 1 ulp and
+  semi-monotonic, so both answers are conformant Java; a JDK's happen to come
+  from fdlibm, and caturra's from the platform's libm. Matching bit for bit means
+  porting fdlibm — `log`/`log10` are self-contained, but the trigonometric ones
+  need its argument reduction and its 396-entry table, so it is a project of its
+  own rather than a fix.
+
+`Double.toString` is exact over all 1500, subnormals and `1e23` included — the
+JDK 11 algorithm, which prints more digits than the shortest round-trip, is what
+`floatdec.rs` reproduces.
+
+Pinned by `diff_math_at_its_edges`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

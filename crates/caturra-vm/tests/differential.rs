@@ -29392,6 +29392,69 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// `Math` at its EDGES: NaN through every function, both zeros (told apart by
+// dividing into them, which is the only way a program can), both infinities,
+// MIN_VALUE and MAX_VALUE, the overflow of every `*Exact`, the sign rules of
+// `floorDiv`/`floorMod`, and what `round`/`rint`/`ceil`/`floor` do at a half
+// and below zero. A cross-product of 64 programs and 2131 cells found these
+// exact already; this is the part of it a test can hold — the residue is two
+// families that no program can pin, written up in the spec: a NaN's raw BIT
+// PATTERN (unspecified, and platform-dependent in the JDK itself) and a
+// transcendental's last ulp.
+differential_test!(
+    diff_math_at_its_edges,
+    "MathEdges",
+    r#"
+public class MathEdges {
+    static String z(double v) { return v + (v == 0.0 ? (1 / v > 0 ? "(+0)" : "(-0)") : ""); }
+    static void ex(String what, java.util.function.Supplier<Object> body) {
+        try { System.out.println(what + " = " + body.get()); }
+        catch (RuntimeException e) { System.out.println(what + " ! " + e.getClass().getSimpleName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        double[] ds = { 0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 2.5, -2.5, -3.7,
+                        Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY,
+                        Double.MIN_VALUE, Double.MAX_VALUE };
+        for (double d : ds) {
+            System.out.println("abs=" + z(Math.abs(d)) + " floor=" + z(Math.floor(d))
+                + " ceil=" + z(Math.ceil(d)) + " rint=" + z(Math.rint(d))
+                + " round=" + Math.round(d) + " signum=" + z(Math.signum(d))
+                + " sqrt=" + Math.sqrt(d) + " ulp=" + Math.ulp(d)
+                + " nextUp=" + Math.nextUp(d) + " nextDown=" + Math.nextDown(d));
+        }
+        for (double a : new double[] { 0.0, -0.0, 1.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY }) {
+            for (double b : new double[] { 0.0, -0.0, 1.0, -1.0, Double.NaN, Double.NEGATIVE_INFINITY }) {
+                System.out.println("max=" + z(Math.max(a, b)) + " min=" + z(Math.min(a, b))
+                    + " pow=" + Math.pow(a, b) + " copySign=" + z(Math.copySign(a, b))
+                    + " hypot=" + Math.hypot(a, b) + " atan2=" + Math.atan2(a, b));
+            }
+        }
+        int[] is = { 0, 1, -1, 7, -7, Integer.MIN_VALUE, Integer.MAX_VALUE };
+        for (int a : is) {
+            System.out.println("iabs=" + Math.abs(a) + " ineg=" + (-a));
+            for (int b : is) {
+                System.out.print("fd=" + safeDiv(a, b) + " fm=" + safeMod(a, b) + " ");
+            }
+            System.out.println();
+        }
+        ex("addExact", () -> Math.addExact(Integer.MAX_VALUE, 1));
+        ex("subExact", () -> Math.subtractExact(Integer.MIN_VALUE, 1));
+        ex("mulExact", () -> Math.multiplyExact(Integer.MAX_VALUE, 2));
+        ex("negExact", () -> Math.negateExact(Integer.MIN_VALUE));
+        ex("incExact", () -> Math.incrementExact(Integer.MAX_VALUE));
+        ex("toIntExact", () -> Math.toIntExact(Long.MAX_VALUE));
+        ex("absLongMin", () -> Math.abs(Long.MIN_VALUE));
+        ex("floorDivZero", () -> Math.floorDiv(1, 0));
+        System.out.println(Math.sqrt(4.0) + " " + Math.log(1.0) + " " + Math.exp(0.0)
+            + " " + Math.pow(2.0, 10.0) + " " + Math.cbrt(27.0) + " " + Math.log10(1000.0)
+            + " " + Math.sin(0.0) + " " + Math.cos(0.0) + " " + Math.toDegrees(Math.PI));
+    }
+    static String safeDiv(int a, int b) { try { return String.valueOf(Math.floorDiv(a, b)); } catch (ArithmeticException e) { return "!"; } }
+    static String safeMod(int a, int b) { try { return String.valueOf(Math.floorMod(a, b)); } catch (ArithmeticException e) { return "!"; } }
+}
+"#
+);
+
 // What a format conversion ASKS of its argument, and what it is called when it
 // refuses one. Every heap object was rendered to its `toString()` before the
 // formatter saw it — because the formatter sees only the heap and cannot call
