@@ -8088,6 +8088,42 @@ through a text-mode file, silently loses the carriage return that
 
 Pinned by `diff_string_at_its_edges`.
 
+### Programs nobody wrote (2026-08-24)
+
+Every sweep above asks about a surface someone thought of. This one does not: a
+generator composes arithmetic, control flow, mutation, exceptions and calls at
+random, and a real JDK decides what the answer is.
+
+**3200 random programs, 0 divergences** — 2000 from a first generator and 1200
+from the one that now lives in the test suite. Every program javac accepted
+(the generator only emits well-typed, definitely-assigned code), and every
+program printed the same bytes on both engines.
+
+What it composes: arithmetic with every promotion; compound assignment,
+including the implicit narrowing cast `x += aDouble` hides; `++`/`--` in prefix
+and postfix on each of the three storage kinds (a local, an array element, a
+static field), since each compiles its own read-modify-write; `for`, `while`,
+`do`/`while` and for-each; labelled `break` and `continue` out of nested loops;
+`if`/`else`; `switch` on `int` and on `String`, with and without fallthrough;
+`try`/`catch` over four kinds of thrower; calls into a recursion with a budget,
+a `finally` that overrides a `return`, and a throw two frames down; `Integer`
+identity either side of the cache boundary; narrowing casts to `byte`, `short`,
+`char` and `float`; arrays, `ArrayList`, `StringBuilder` and `String`.
+
+Everything it emits is DETERMINISTIC — bounded loops, a recursion budget, no
+hashing order, no transcendentals, no identity hashes — because a difference has
+to mean a difference rather than a coin landing differently in two engines. The
+awkward part was not the grammar but the SCOPING: a generator that forgets a
+block's declarations die with it writes a use of a name Java says is gone, and
+one that lets a loop body assign its own counter writes a program that never
+ends. Both were found by javac refusing the output, which is the generator's
+own check.
+
+`cargo test` fuzzes 40 programs; `CATURRA_FUZZ=2000` is the longer hunt. A
+failure prints the seed and the program, so anything CI finds is one case here.
+
+Pinned by `fuzz::random_programs_run_the_same_as_the_jdk`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

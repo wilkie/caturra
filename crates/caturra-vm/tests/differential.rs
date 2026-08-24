@@ -33396,6 +33396,653 @@ public class WrapperOk {
 "#
 );
 
+/// A generator of random, well-typed Java programs, and the check that both
+/// engines print the same thing for every one of them.
+///
+/// Every sweep in this file asks about a surface someone thought of. This one
+/// does not: it composes arithmetic, control flow, mutation, exceptions and
+/// calls at random, and the JDK decides what the answer is. Two thousand
+/// programs were run while it was written; `FUZZ_PROGRAMS` is what runs on
+/// every `cargo test`, and `CATURRA_FUZZ` raises it for a longer hunt.
+///
+/// Everything it emits is DETERMINISTIC — bounded loops, a recursion budget, no
+/// hashing order, no transcendentals, no identity hashes — because a difference
+/// has to mean a difference, not a coin landing differently in two engines.
+mod fuzz {
+    /// How many programs a plain `cargo test` fuzzes. Enough to be worth the
+    /// javac runs it costs; `CATURRA_FUZZ=2000 cargo test fuzz` for a real one.
+    const FUZZ_PROGRAMS: u32 = 40;
+
+    /// xorshift64*, so a failing program is reproducible from its seed alone.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: u32) -> u32 {
+            u32::try_from(self.next() % u64::from(n)).expect("in range")
+        }
+        /// A value in `0.0..1.0`, for weighing the choices below.
+        fn chance(&mut self) -> f64 {
+            #[allow(clippy::cast_precision_loss)] // 24 bits into an f64
+            let scaled = f64::from(u32::try_from(self.next() >> 40).expect("24 bits"));
+            scaled / f64::from(1u32 << 24)
+        }
+        fn pick<'a>(&mut self, from: &'a [&'a str]) -> &'a str {
+            from[self.below(u32::try_from(from.len()).expect("small")) as usize]
+        }
+        fn int(&mut self, lo: i32, hi: i32) -> i32 {
+            lo + i32::try_from(self.below(u32::try_from(hi - lo + 1).expect("small")))
+                .expect("in range")
+        }
+
+        /// A count in `lo..=hi`, both non-negative — how many statements a
+        /// block gets, which is never a signed quantity.
+        fn count(&mut self, lo: u32, hi: u32) -> u32 {
+            lo + self.below(hi - lo + 1)
+        }
+    }
+
+    /// The variables in scope, by type, and which of them may not be assigned.
+    #[derive(Clone, Default)]
+    struct Scope {
+        ints: Vec<String>,
+        strings: Vec<String>,
+        bools: Vec<String>,
+        doubles: Vec<String>,
+        arrays: Vec<String>,
+        lists: Vec<String>,
+        builders: Vec<String>,
+        /// Loop control variables: readable, never assignable. A body that
+        /// assigns its own counter is an infinite loop, and this generator's
+        /// job is to compare two engines rather than to hang them both.
+        frozen: Vec<String>,
+    }
+
+    struct Gen {
+        rng: Rng,
+        scope: Scope,
+        names: u32,
+        loops: u32,
+    }
+
+    impl Gen {
+        fn new(seed: u64) -> Self {
+            Self {
+                rng: Rng(seed | 1),
+                scope: Scope::default(),
+                names: 0,
+                loops: 0,
+            }
+        }
+
+        fn name(&mut self) -> String {
+            self.names += 1;
+            format!("v{}", self.names)
+        }
+
+        fn any(&mut self, pool: &[String]) -> Option<String> {
+            if pool.is_empty() {
+                return None;
+            }
+            let index = self.rng.below(u32::try_from(pool.len()).expect("small")) as usize;
+            Some(pool[index].clone())
+        }
+
+        // ---- expressions ------------------------------------------------
+        fn int_expr(&mut self, depth: u32) -> String {
+            let roll = self.rng.chance();
+            let held = self.any(&self.scope.ints.clone());
+            let Some(held) = held else {
+                return self.rng.int(-20, 20).to_string();
+            };
+            if depth > 2 || roll < 0.25 {
+                return self.rng.int(-20, 20).to_string();
+            }
+            if roll < 0.42 {
+                return held;
+            }
+            if roll < 0.52 {
+                if let Some(array) = self.any(&self.scope.arrays.clone()) {
+                    let index = self.int_expr(depth + 1);
+                    return format!("{array}[Math.floorMod({index}, {array}.length)]");
+                }
+                return held;
+            }
+            if roll < 0.60 {
+                if let Some(text) = self.any(&self.scope.strings.clone()) {
+                    return format!("{text}.length()");
+                }
+                return held;
+            }
+            if roll < 0.70 {
+                if let Some(list) = self.any(&self.scope.lists.clone()) {
+                    let index = self.int_expr(depth + 1);
+                    return format!(
+                        "({list}.isEmpty() ? 0 : {list}.get(Math.floorMod({index}, {list}.size())))"
+                    );
+                }
+                return held;
+            }
+            let op = self.rng.pick(&["+", "-", "*", "%", "/"]).to_owned();
+            let left = self.int_expr(depth + 1);
+            let right = self.int_expr(depth + 1);
+            if op == "%" || op == "/" {
+                // A zero divisor is a legitimate ArithmeticException, and this
+                // generator keeps one where it MEANS one (the try/catch arm) —
+                // an ordinary expression must not be a coin flip.
+                return format!("({left} {op} ({right} == 0 ? 1 : {right}))");
+            }
+            format!("({left} {op} {right})")
+        }
+
+        fn double_expr(&mut self, depth: u32) -> String {
+            let held = self.any(&self.scope.doubles.clone());
+            let literal = format!("{}.{:03}", self.rng.int(-50, 50), self.rng.below(1000));
+            match held {
+                Some(held) if depth <= 1 && self.rng.chance() > 0.4 => {
+                    let op = self.rng.pick(&["+", "-", "*"]).to_owned();
+                    format!("({held} {op} {literal})")
+                }
+                _ => literal,
+            }
+        }
+
+        fn bool_expr(&mut self, depth: u32) -> String {
+            let roll = self.rng.chance();
+            let held = self.any(&self.scope.bools.clone());
+            if let Some(held) = held.clone()
+                && roll < 0.2
+            {
+                return held;
+            }
+            if roll < 0.6 {
+                let op = self
+                    .rng
+                    .pick(&["<", "<=", ">", ">=", "==", "!="])
+                    .to_owned();
+                let left = self.int_expr(depth + 1);
+                let right = self.int_expr(depth + 1);
+                return format!("({left} {op} {right})");
+            }
+            if roll < 0.7
+                && let Some(text) = self.any(&self.scope.strings.clone())
+            {
+                let other = self.string_expr(depth + 1);
+                return format!("{text}.equals({other})");
+            }
+            if roll < 0.85
+                && let Some(held) = held
+            {
+                let op = self.rng.pick(&["&&", "||", "^"]).to_owned();
+                let right = self.bool_expr(depth + 1);
+                return format!("({held} {op} {right})");
+            }
+            self.rng.pick(&["true", "false"]).to_owned()
+        }
+
+        fn string_expr(&mut self, depth: u32) -> String {
+            let roll = self.rng.chance();
+            let held = self.any(&self.scope.strings.clone());
+            let Some(held) = held else {
+                return format!("\"{}\"", self.rng.pick(&["a", "bc", "", "x y", "Z"]));
+            };
+            if depth > 2 || roll < 0.3 {
+                return format!("\"{}\"", self.rng.pick(&["a", "bc", "", "x y", "Z"]));
+            }
+            if roll < 0.5 {
+                return held;
+            }
+            if roll < 0.65 {
+                let n = self.int_expr(depth + 1);
+                return format!("({held} + {n})");
+            }
+            if roll < 0.8 {
+                let n = self.int_expr(depth + 1);
+                return format!("{held}.substring(Math.floorMod({n}, {held}.length() + 1))");
+            }
+            let other = self.string_expr(depth + 1);
+            format!("({held} + \"-\" + {other})")
+        }
+    }
+
+    impl Gen {
+        // ---- statements -------------------------------------------------
+        /// Statements in a nested SCOPE: what they declare dies with them, or
+        /// the generator writes a use of a name Java says is out of scope.
+        fn block(&mut self, count: u32, indent: usize) -> String {
+            let saved = self.scope.clone();
+            let out = self.stmts(count, indent);
+            self.scope = saved;
+            out
+        }
+
+        fn stmts(&mut self, count: u32, indent: usize) -> String {
+            (0..count).map(|_| self.stmt(indent)).collect()
+        }
+
+        #[allow(clippy::too_many_lines)] // one arm per statement shape
+        fn stmt(&mut self, indent: usize) -> String {
+            let pad = "    ".repeat(indent);
+            let roll = self.rng.chance();
+            if roll < 0.16 {
+                // Declare. The initializer is generated BEFORE the name is in
+                // scope, or it reads the variable it is initializing.
+                let name = self.name();
+                let kind = self.rng.below(5);
+                let (ty, init) = match kind {
+                    0 => ("int", self.int_expr(0)),
+                    1 => ("double", self.double_expr(0)),
+                    2 => ("boolean", self.bool_expr(0)),
+                    3 => ("String", self.string_expr(0)),
+                    _ => ("long", format!("{}L", self.rng.int(-1000, 1000))),
+                };
+                match kind {
+                    0 => self.scope.ints.push(name.clone()),
+                    1 => self.scope.doubles.push(name.clone()),
+                    2 => self.scope.bools.push(name.clone()),
+                    3 => self.scope.strings.push(name.clone()),
+                    _ => {}
+                }
+                return format!("{pad}{ty} {name} = {init};\n");
+            }
+            if roll < 0.28 {
+                let frozen = self.scope.frozen.clone();
+                let free: Vec<String> = self
+                    .scope
+                    .ints
+                    .iter()
+                    .filter(|name| !frozen.contains(name))
+                    .cloned()
+                    .collect();
+                if let Some(target) = self.any(&free) {
+                    let value = self.int_expr(0);
+                    return format!("{pad}{target} = {value};\n");
+                }
+                return self.print_stmt(indent);
+            }
+            if roll < 0.40 {
+                let condition = self.bool_expr(0);
+                let count = self.rng.count(1, 2);
+                let then = self.block(count, indent + 1);
+                let mut out = format!("{pad}if ({condition}) {{\n{then}{pad}}}");
+                if self.rng.chance() < 0.5 {
+                    let count = self.rng.count(1, 2);
+                    let other = self.block(count, indent + 1);
+                    out.push_str(&format!(" else {{\n{other}{pad}}}"));
+                }
+                out.push('\n');
+                return out;
+            }
+            if roll < 0.53 && self.loops < 3 {
+                return self.loop_stmt(indent);
+            }
+            if roll < 0.60 {
+                let name = self.name();
+                let size = self.rng.int(1, 4);
+                let elements: Vec<String> = (0..size).map(|_| self.int_expr(0)).collect();
+                self.scope.arrays.push(name.clone());
+                return format!(
+                    "{pad}int[] {name} = new int[] {{ {} }};\n",
+                    elements.join(", ")
+                );
+            }
+            if roll < 0.66 {
+                let name = self.name();
+                self.scope.lists.push(name.clone());
+                return format!("{pad}List<Integer> {name} = new ArrayList<>();\n");
+            }
+            if roll < 0.72 {
+                if let Some(list) = self.any(&self.scope.lists.clone()) {
+                    let roll = self.rng.chance();
+                    if roll < 0.5 {
+                        let value = self.int_expr(0);
+                        return format!("{pad}{list}.add({value});\n");
+                    }
+                    if roll < 0.7 {
+                        let index = self.int_expr(0);
+                        return format!(
+                            "{pad}if (!{list}.isEmpty()) {{ {list}.remove(Math.floorMod({index}, {list}.size())); }}\n"
+                        );
+                    }
+                    return format!("{pad}{list}.sort(null);\n");
+                }
+                return self.print_stmt(indent);
+            }
+            if roll < 0.78 {
+                if let Some(builder) = self.any(&self.scope.builders.clone()) {
+                    let value = match self.rng.below(3) {
+                        0 => self.int_expr(0),
+                        1 => self.string_expr(0),
+                        _ => self.double_expr(0),
+                    };
+                    return format!("{pad}{builder}.append({value});\n");
+                }
+                let name = self.name();
+                self.scope.builders.push(name.clone());
+                return format!("{pad}StringBuilder {name} = new StringBuilder();\n");
+            }
+            if roll < 0.86 {
+                return self.try_stmt(indent);
+            }
+            if roll < 0.90 {
+                return self.switch_stmt(indent);
+            }
+            if roll < 0.94 {
+                return self.call_stmt(indent);
+            }
+            if roll < 0.955 {
+                let value = self
+                    .rng
+                    .pick(&["-129", "-128", "-1", "0", "1", "126", "127", "128", "1000"]);
+                return format!(
+                    "{pad}{{ Integer a = {value}, b = {value}; System.out.println(\"box \" + (a == b) \
+                     + (a.equals(b)) + (a.intValue() == b.intValue())); }}\n"
+                );
+            }
+            if roll < 0.97 {
+                let ty = self
+                    .rng
+                    .pick(&["byte", "short", "char", "int", "float"])
+                    .to_owned();
+                let source = match self.rng.below(3) {
+                    0 => self.int_expr(0),
+                    1 => format!("{}L", self.rng.int(-100_000, 100_000)),
+                    _ => self.double_expr(0),
+                };
+                return format!(
+                    "{pad}{{ {ty} c = ({ty}) ({source}); System.out.println(\"nar \" + (int) c + \" \" + c); }}\n"
+                );
+            }
+            if roll < 0.99 {
+                return self.mutate(indent);
+            }
+            self.print_stmt(indent)
+        }
+    }
+
+    impl Gen {
+        fn loop_stmt(&mut self, indent: usize) -> String {
+            let pad = "    ".repeat(indent);
+            self.loops += 1;
+            // The control variable lives in the LOOP's scope, not after it.
+            let outer = self.scope.clone();
+            let i = self.name();
+            self.scope.ints.push(i.clone());
+            self.scope.frozen.push(i.clone());
+            let bound = self.rng.int(0, 4);
+            let count = self.rng.count(1, 3);
+            let body = self.block(count, indent + 1);
+            let roll = self.rng.chance();
+            let out = if roll < 0.45 {
+                format!("{pad}for (int {i} = 0; {i} < {bound}; {i}++) {{\n{body}{pad}}}\n")
+            } else if roll < 0.6 {
+                format!(
+                    "{pad}int {i} = 0;\n{pad}while ({i} < {bound}) {{\n{body}{pad}    {i}++;\n{pad}}}\n"
+                )
+            } else if roll < 0.75 {
+                format!(
+                    "{pad}int {i} = 0;\n{pad}do {{\n{body}{pad}    {i}++;\n{pad}}} while ({i} < {bound});\n"
+                )
+            } else if roll < 0.9 {
+                match self.any(&outer.arrays.clone()) {
+                    Some(array) => format!("{pad}for (int {i} : {array}) {{\n{body}{pad}}}\n"),
+                    None => {
+                        format!("{pad}for (int {i} = {bound}; {i} > 0; {i}--) {{\n{body}{pad}}}\n")
+                    }
+                }
+            } else {
+                self.labelled(indent, &i, &body)
+            };
+            self.loops -= 1;
+            self.scope = outer;
+            out
+        }
+
+        /// A labelled break or continue out of NESTED loops — the jump the
+        /// bytecode has to reach across two enclosing frames of loop state.
+        fn labelled(&mut self, indent: usize, i: &str, body: &str) -> String {
+            let pad = "    ".repeat(indent);
+            self.names += 1;
+            let label = format!("L{}", self.names);
+            let j = self.name();
+            let jump = self
+                .rng
+                .pick(&["break L;", "continue L;", "break;", "continue;"])
+                .replace('L', &label);
+            format!(
+                "{pad}{label}:\n{pad}for (int {i} = 0; {i} < 3; {i}++) {{\n\
+                 {pad}    for (int {j} = 0; {j} < 3; {j}++) {{\n{body}\
+                 {pad}        if ({i} > {j}) {{ {jump} }}\n\
+                 {pad}        System.out.println(\"lp\" + {i} + {j});\n\
+                 {pad}    }}\n{pad}}}\n"
+            )
+        }
+
+        /// Read-modify-write, on each of the three storage kinds — a local, an
+        /// array element, and a static field — since each compiles its own way.
+        fn mutate(&mut self, indent: usize) -> String {
+            let pad = "    ".repeat(indent);
+            let frozen = self.scope.frozen.clone();
+            let free: Vec<String> = self
+                .scope
+                .ints
+                .iter()
+                .filter(|name| !frozen.contains(name))
+                .cloned()
+                .collect();
+            let choice = self.rng.chance();
+            let target = if choice < 0.45 {
+                self.any(&free)
+            } else if choice < 0.8 {
+                self.any(&self.scope.arrays.clone()).map(|array| {
+                    let index = self.int_expr(0);
+                    format!("{array}[Math.floorMod({index}, {array}.length)]")
+                })
+            } else {
+                Some(String::from("counter"))
+            };
+            let Some(target) = target else {
+                return self.print_stmt(indent);
+            };
+            let roll = self.rng.chance();
+            if roll < 0.3 {
+                let step = self.rng.pick(&["++", "--"]);
+                return format!("{pad}{target}{step};\n");
+            }
+            if roll < 0.45 {
+                let step = self.rng.pick(&["++", "--"]);
+                return format!("{pad}System.out.println({step}{target});\n");
+            }
+            if roll < 0.6 {
+                let step = self.rng.pick(&["++", "--"]);
+                return format!("{pad}System.out.println({target}{step});\n");
+            }
+            let op = self
+                .rng
+                .pick(&["+=", "-=", "*=", "|=", "&=", "^=", "<<=", ">>=", ">>>="])
+                .to_owned();
+            // A DOUBLE right-hand side compound-assigned into an int is the
+            // implicit narrowing cast JLS §15.26.2 hides inside the operator.
+            let wide = self.rng.chance() < 0.25 && matches!(op.as_str(), "+=" | "-=" | "*=");
+            let value = if wide {
+                self.double_expr(0)
+            } else {
+                self.int_expr(0)
+            };
+            format!("{pad}{target} {op} {value};\n")
+        }
+
+        fn try_stmt(&mut self, indent: usize) -> String {
+            let pad = "    ".repeat(indent);
+            let count = self.rng.count(1, 2);
+            let body = self.block(count, indent + 1);
+            let index = self.int_expr(0);
+            let divisor = self.int_expr(0);
+            let text = self.string_expr(0);
+            let thrower = match self.rng.below(4) {
+                0 => format!("int[] z = new int[1]; System.out.println(z[{index}]);"),
+                1 => String::from("String q = null; System.out.println(q.length());"),
+                2 => format!("System.out.println({index} / ({divisor}));"),
+                _ => format!("System.out.println(\"t\" + Integer.parseInt({text}));"),
+            };
+            format!(
+                "{pad}try {{\n{body}{pad}    {thrower}\n{pad}}} catch (RuntimeException e) {{\n\
+                 {pad}    System.out.println(\"caught \" + e.getClass().getSimpleName());\n{pad}}}\n"
+            )
+        }
+
+        fn switch_stmt(&mut self, indent: usize) -> String {
+            let pad = "    ".repeat(indent);
+            if self.rng.chance() < 0.5 {
+                let selector = self.int_expr(0);
+                let mut arms = String::new();
+                for k in 0..self.rng.int(1, 3) {
+                    let brk = if self.rng.chance() < 0.6 {
+                        " break;"
+                    } else {
+                        ""
+                    };
+                    arms.push_str(&format!(
+                        "{pad}    case {k}: System.out.println(\"c{k}\");{brk}\n"
+                    ));
+                }
+                return format!(
+                    "{pad}switch (Math.floorMod({selector}, 4)) {{\n{arms}{pad}    default: System.out.println(\"d\");\n{pad}}}\n"
+                );
+            }
+            let selector = self.string_expr(0);
+            let mut arms = String::new();
+            for k in ["a", "bc", "x y"] {
+                let brk = if self.rng.chance() < 0.6 {
+                    " break;"
+                } else {
+                    ""
+                };
+                arms.push_str(&format!(
+                    "{pad}    case \"{k}\": System.out.println(\"s{k}\");{brk}\n"
+                ));
+            }
+            format!(
+                "{pad}switch ({selector}) {{\n{arms}{pad}    default: System.out.println(\"sd\");\n{pad}}}\n"
+            )
+        }
+
+        /// A call into one of the fixed helpers: a recursion with a budget, a
+        /// `finally` that overrides a `return`, and a throw two frames down so
+        /// the unwinding has to cross them.
+        fn call_stmt(&mut self, indent: usize) -> String {
+            let pad = "    ".repeat(indent);
+            let n = self.int_expr(0);
+            match self.rng.below(3) {
+                0 => format!("{pad}System.out.println(rec(Math.floorMod({n}, 6), 0));\n"),
+                1 => format!("{pad}System.out.println(fin({n}));\n"),
+                _ => format!(
+                    "{pad}try {{ System.out.println(deep(Math.floorMod({n}, 4))); }}\n\
+                     {pad}catch (RuntimeException e) {{ System.out.println(\"deep \" + e.getMessage()); }}\n"
+                ),
+            }
+        }
+
+        fn print_stmt(&mut self, indent: usize) -> String {
+            let pad = "    ".repeat(indent);
+            match self.rng.below(7) {
+                0 => {
+                    let value = self.int_expr(0);
+                    format!("{pad}System.out.println({value});\n")
+                }
+                1 => {
+                    let value = self.string_expr(0);
+                    format!("{pad}System.out.println({value});\n")
+                }
+                2 => {
+                    let value = self.bool_expr(0);
+                    format!("{pad}System.out.println({value});\n")
+                }
+                3 => {
+                    let value = self.double_expr(0);
+                    format!("{pad}System.out.println({value});\n")
+                }
+                4 => match self.any(&self.scope.arrays.clone()) {
+                    Some(array) => format!("{pad}System.out.println(Arrays.toString({array}));\n"),
+                    None => format!("{pad}System.out.println(\"-\");\n"),
+                },
+                5 => match self.any(&self.scope.lists.clone()) {
+                    Some(list) => format!("{pad}System.out.println({list});\n"),
+                    None => format!("{pad}System.out.println(\"-\");\n"),
+                },
+                _ => match self.any(&self.scope.builders.clone()) {
+                    Some(builder) => format!("{pad}System.out.println({builder});\n"),
+                    None => format!("{pad}System.out.println(\"-\");\n"),
+                },
+            }
+        }
+    }
+
+    /// One random program, and the fixed helpers every one of them may call.
+    fn program(seed: u64, class_name: &str) -> String {
+        let mut generator = Gen::new(seed);
+        let count = generator.rng.count(8, 18);
+        let body = generator.stmts(count, 2);
+        format!(
+            "import java.util.*;\n\n\
+             public class {class_name} {{\n\
+             \x20   static int counter = 3;\n\n\
+             \x20   static int rec(int n, int depth) {{\n\
+             \x20       if (n <= 0 || depth > 5) {{ return depth; }}\n\
+             \x20       return n + rec(n - 1, depth + 1);\n\
+             \x20   }}\n\n\
+             \x20   @SuppressWarnings(\"finally\")\n\
+             \x20   static int fin(int n) {{\n\
+             \x20       try {{ if (n > 0) {{ return n; }} throw new IllegalStateException(\"neg\"); }}\n\
+             \x20       catch (RuntimeException e) {{ return -1; }}\n\
+             \x20       finally {{ counter++; if (n == 7) {{ return 99; }} }}\n\
+             \x20   }}\n\n\
+             \x20   static int deep(int n) {{ return mid(n) * 2; }}\n\n\
+             \x20   static int mid(int n) {{\n\
+             \x20       if (n == 0) {{ throw new IllegalArgumentException(\"zero\"); }}\n\
+             \x20       return 10 / n;\n\
+             \x20   }}\n\n\
+             \x20   public static void main(String[] args) {{\n{body}\
+             \x20       System.out.println(\"counter=\" + counter);\n\
+             \x20   }}\n\
+             }}\n"
+        )
+    }
+
+    /// Random programs, compared against a real JDK.
+    ///
+    /// A failure prints the SEED and the whole program: every one of these is
+    /// reproducible from its seed, so a divergence found in CI can be re-run
+    /// here as a single case.
+    #[test]
+    fn random_programs_run_the_same_as_the_jdk() {
+        if !super::jdk_available() {
+            eprintln!("skipping: no JDK on PATH");
+            return;
+        }
+        let count: u32 = std::env::var("CATURRA_FUZZ")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(FUZZ_PROGRAMS);
+        for index in 0..count {
+            let seed = 0x5eed_0000 + u64::from(index);
+            let class_name = format!("Fuzz{index}");
+            let source = program(seed, &class_name);
+            let expected = super::run_with_jdk_files(&class_name, &source, "", &[]);
+            let actual = super::run_with_caturra_files(&class_name, &source, "", &[]);
+            assert_eq!(
+                actual, expected,
+                "program {index} (seed {seed:#x}) diverges from the JDK:\n{source}"
+            );
+        }
+    }
+}
+
 /// Every enumerated divergence is pinned, and every pin is enumerated.
 ///
 /// `specs/LANGUAGE.md` claims its two divergence lists are EXHAUSTIVE, and the
