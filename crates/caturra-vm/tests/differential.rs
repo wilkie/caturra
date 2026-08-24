@@ -29392,6 +29392,74 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// `String` at ITS edges: every method a course uses, against every argument
+// that makes it awkward — a negative index, one past the end, a reversed
+// substring range, an empty pattern, an invalid regex, a group reference with
+// no group, a `fromIndex` outside the string — over text that is itself
+// awkward: a surrogate pair, the Turkish dotted and dotless i, a sharp s, a
+// non-breaking space, and a CRLF. Each prints the value or the exception CLASS
+// and MESSAGE, so the failures are compared as closely as the successes.
+//
+// A cross-product of 12 programs and 1049 cells found this exact, Java 11's
+// own additions included (`isBlank`, `lines`, `repeat`, `strip*`); this is the
+// slice of it a test can hold.
+differential_test!(
+    diff_string_at_its_edges,
+    "StrEdges",
+    r##"
+import java.util.*;
+import java.util.stream.*;
+
+public class StrEdges {
+    static String show(Object v) {
+        if (v == null) return "null";
+        if (v instanceof String[]) return Arrays.toString((String[]) v) + "#" + ((String[]) v).length;
+        if (v instanceof char[]) return Arrays.toString((char[]) v);
+        return String.valueOf(v);
+    }
+    static void go(String label, java.util.function.Supplier<Object> f) {
+        try { System.out.println(label + " = [" + show(f.get()) + "]"); }
+        catch (RuntimeException e) { System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        for (String s : new String[] { "", "abc", "  pad  ", "a\u00e9b", "\u00df",
+                                       "I\u0130i\u0131", "\ud83d\ude00x",
+                                       "a\nb\r\nc", "aXbXc", "\u2000nb\u00a0" }) {
+            System.out.println("--- " + s.length() + " " + s.hashCode());
+            go("charAt(-1)", () -> s.charAt(-1));
+            go("charAt(len)", () -> s.charAt(s.length()));
+            go("codePointAt(0)", () -> s.codePointAt(0));
+            go("substring(len+1)", () -> s.substring(s.length() + 1));
+            go("substring(1,0)", () -> s.substring(1, 0));
+            go("substring(0,len)", () -> s.substring(0, s.length()));
+            go("indexOf(a,-5)", () -> s.indexOf("a", -5));
+            go("indexOf(empty,2)", () -> s.indexOf("", 2));
+            go("lastIndexOf(empty,99)", () -> s.lastIndexOf("", 99));
+            go("split(X,-1)", () -> s.split("X", -1));
+            go("split(empty)", () -> s.split(""));
+            go("split(lookahead)", () -> s.split("(?=b)"));
+            go("split(bad)", () -> s.split("[", 0));
+            go("replace(empty)", () -> s.replace("", "-"));
+            go("replaceAll(group)", () -> s.replaceAll("(a)", "$1$1"));
+            go("replaceAll(badgroup)", () -> s.replaceAll("a", "$9"));
+            go("matches(bad)", () -> s.matches("["));
+            go("startsWith(a,99)", () -> s.startsWith("a", 99));
+            go("repeat(-1)", () -> s.repeat(-1));
+            go("repeat(2)", () -> s.repeat(2));
+            go("trim/strip", () -> s.trim() + "|" + s.strip() + "|" + s.stripLeading() + "|" + s.stripTrailing());
+            go("blank/empty", () -> s.isBlank() + "/" + s.isEmpty());
+            go("case", () -> s.toUpperCase() + "|" + s.toLowerCase());
+            go("compare", () -> s.compareTo("abc") + "/" + s.compareToIgnoreCase("ABC"));
+            go("chars", () -> s.chars().boxed().collect(Collectors.toList()));
+            go("lines", () -> s.lines().collect(Collectors.toList()));
+            go("toCharArray", () -> s.toCharArray());
+            go("regionMatches", () -> s.regionMatches(true, 0, "ABC", 0, 3));
+        }
+    }
+}
+"##
+);
+
 // `Math` at its EDGES: NaN through every function, both zeros (told apart by
 // dividing into them, which is the only way a program can), both infinities,
 // MIN_VALUE and MAX_VALUE, the overflow of every `*Exact`, the sign rules of

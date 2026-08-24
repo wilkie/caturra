@@ -8064,6 +8064,30 @@ JDK 11 algorithm, which prints more digits than the shortest round-trip, is what
 
 Pinned by `diff_math_at_its_edges`.
 
+### String at its edges (2026-08-24)
+
+Twelve programs, **1049 cells**: every `String` method a course uses, against
+every argument that makes it awkward — a negative index, one past the end, a
+reversed `substring` range, an empty pattern, an invalid regex, a group
+reference with no group, a `fromIndex` outside the string — over text that is
+itself awkward: a surrogate pair, the Turkish dotted and dotless i, a sharp s, a
+non-breaking space, an en quad, and a CRLF. Each cell prints the value or the
+exception's CLASS and MESSAGE, so the failures are compared as closely as the
+successes.
+
+**All 1049 agree**, Java 11's own additions included (`isBlank`, `lines`,
+`repeat`, `strip`/`stripLeading`/`stripTrailing`). `String.indent` is Java 12
+and javac 11 refuses it, as caturra does.
+
+Nothing to fix, which is the result. The sweep is worth recording for what it
+took to run: two of its three "findings" were the harness translating newlines,
+not the engine. Python's text mode rewrites `\r\n` to `\n` on read AND on
+write, so a JDK captured with `text=True`, or a caturra output round-tripped
+through a text-mode file, silently loses the carriage return that
+`"a\nb\r\nc"` is there to test. Compare bytes.
+
+Pinned by `diff_string_at_its_edges`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
