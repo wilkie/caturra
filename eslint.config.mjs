@@ -30,5 +30,12 @@ export default tseslint.config(
     files: ['**/*.mjs', '**/*.js', '**/*.config.ts', 'playwright.config.ts'],
     extends: [tseslint.configs.disableTypeChecked],
   },
+  {
+    // Repository scripts run under Node, not in a browser.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: { console: 'readonly', process: 'readonly' },
+    },
+  },
   prettier,
 );

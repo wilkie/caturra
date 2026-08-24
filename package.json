@@ -13,16 +13,17 @@
     "assets:fetch": "python3 apps/playground/scripts/fetch-assets.py",
     "testjars:fetch": "python3 scripts/fetch-test-jars.py",
     "build": "pnpm build:wasm && pnpm -r build",
-    "dev": "pnpm --filter @caturra/playground dev",
-    "dev:sandbox": "pnpm --filter @caturra/sandbox dev",
-    "dev:isolated": "pnpm --parallel --filter @caturra/playground --filter @caturra/sandbox dev",
+    "dev": "pnpm check:wasm && pnpm --filter @caturra/playground dev",
+    "dev:sandbox": "pnpm check:wasm && pnpm --filter @caturra/sandbox dev",
+    "dev:isolated": "pnpm check:wasm && pnpm --parallel --filter @caturra/playground --filter @caturra/sandbox dev",
     "test": "pnpm -r test",
     "test:rust": "cargo test --workspace",
     "test:e2e": "playwright test",
     "lint": "eslint . && prettier --check .",
     "lint:fix": "eslint --fix . && prettier --write .",
     "lint:rust": "cargo clippy --workspace --all-targets && cargo fmt --check",
-    "deploy:pages": "bash scripts/deploy-pages.sh"
+    "deploy:pages": "bash scripts/deploy-pages.sh",
+    "check:wasm": "node scripts/check-wasm-fresh.mjs"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
