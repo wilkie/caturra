@@ -8039,11 +8039,24 @@ neither is a bug to fix:
   exactly one ulp — `log10` 5 of 200, `cos` and `tan` 1 each, everything else
   (`sin`, `exp`, `log`, `atan`, `asin`, `acos`, `sqrt`, `cbrt`, `sinh`, `cosh`,
   `tanh`, `expm1`, `log1p`) 0 of 200. `Math` is specified to be within 1 ulp and
-  semi-monotonic, so both answers are conformant Java; a JDK's happen to come
-  from fdlibm, and caturra's from the platform's libm. Matching bit for bit means
-  porting fdlibm — `log`/`log10` are self-contained, but the trigonometric ones
-  need its argument reduction and its 396-entry table, so it is a project of its
-  own rather than a fix.
+  semi-monotonic, so both answers are conformant Java.
+
+  This one was scoped as a fix and **measured as a non-goal**. `Math.log` on
+  JDK 11 is a HotSpot INTRINSIC, not fdlibm: on the same JDK, `Math` and
+  `StrictMath` disagree on **45 of the same 3200 calls** — six times as often as
+  caturra disagrees with `Math`. So the exact bits of `Math` are not a portable
+  target at all (they are the host's hand-written stub, and differ between a
+  JDK's own platforms), and porting fdlibm — the obvious way to become
+  bit-exact — would make caturra reproduce `StrictMath` and therefore diverge
+  from `Math` on those 45. A hand port of `__ieee754_log` was written and
+  verified against the JDK to confirm exactly that: it matches `StrictMath` on
+  both inputs where it "failed" against `Math`.
+
+  The one thing worth having is not accuracy but AGREEMENT: caturra's own two
+  builds differ on 56 of 3200 (up to 2 ulp), because each takes the transcendentals
+  from its target's libm — so the browser differs from a JDK on 53 where the
+  native build differs on 7. Closing that means one vendored implementation used
+  by both, and the measurement above says fdlibm is the wrong one to vendor.
 
 `Double.toString` is exact over all 1500, subnormals and `1e23` included — the
 JDK 11 algorithm, which prints more digits than the shortest round-trip, is what
