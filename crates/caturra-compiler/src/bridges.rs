@@ -82,11 +82,17 @@ fn bridges_for(class: &ClassDecl, classes: &HashMap<String, ClassDecl>) -> Vec<M
     bridges
 }
 
-/// The nearest inherited method of this name and arity, walking the extends
-/// chain. Interfaces are not walked: their methods erase to the same
-/// descriptor as the implementing class's unless the interface is generic,
-/// and an interface's own generic method is reached through the class chain
-/// that implements it.
+/// The nearest inherited method of this name and arity: up the extends chain,
+/// then through the INTERFACES those classes implement.
+///
+/// The interfaces were left out on the theory that their methods erase to the
+/// same descriptor as the implementing class's — which is true only while the
+/// interface is not generic. `class Named implements Sink<String>` declaring
+/// `twice(String)` overrides `twice(T)`, whose erasure takes an `Object`, so
+/// without a bridge the call through `Sink<String>` found no `twice(Object)`
+/// on the class and ran the interface's DEFAULT instead: the override silently
+/// did not happen. (The abstract methods of the same interface were reached
+/// anyway, which is why only a defaulted one showed it.)
 #[allow(clippy::assigning_clones)] // `current` is moved by the `while let`
 fn inherited_signature(
     class: &ClassDecl,
@@ -94,6 +100,10 @@ fn inherited_signature(
     arity: usize,
     classes: &HashMap<String, ClassDecl>,
 ) -> Option<MethodDecl> {
+    let matches = |m: &&MethodDecl| {
+        m.name == name && m.params.len() == arity && !m.is_static && !m.is_constructor
+    };
+    let mut interfaces: Vec<String> = class.interfaces.clone();
     let mut current = class.superclass.clone();
     let mut steps = 0usize;
     while let Some(super_name) = current {
@@ -101,13 +111,29 @@ fn inherited_signature(
         if steps > classes.len() + 1 {
             return None; // a cycle would be a compiler bug; do not hang
         }
-        let parent = classes.get(&super_name)?;
-        if let Some(found) = parent.methods.iter().find(|m| {
-            m.name == name && m.params.len() == arity && !m.is_static && !m.is_constructor
-        }) {
+        let Some(parent) = classes.get(&super_name) else {
+            break;
+        };
+        if let Some(found) = parent.methods.iter().find(matches) {
             return Some(found.clone());
         }
+        interfaces.extend(parent.interfaces.iter().cloned());
         current = parent.superclass.clone();
+    }
+    // The interfaces, and the interfaces they extend.
+    let mut steps = 0usize;
+    while let Some(name) = interfaces.pop() {
+        steps += 1;
+        if steps > classes.len() * 2 + 2 {
+            break;
+        }
+        let Some(iface) = classes.get(&name) else {
+            continue;
+        };
+        if let Some(found) = iface.methods.iter().find(matches) {
+            return Some(found.clone());
+        }
+        interfaces.extend(iface.interfaces.iter().cloned());
     }
     None
 }

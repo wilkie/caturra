@@ -17912,6 +17912,25 @@ impl BodyGen<'_> {
 
     /// Emit a read of a field of the current class through the implicit
     /// or explicit receiver already handled by the caller.
+    /// The type a field READ answers when the receiver's class pins the
+    /// declaring class's type variable: `class Pin extends Box<Integer>` reads
+    /// an inherited `T value` as an `Integer`.
+    ///
+    /// The declared type is the ERASURE, which is what a read answered — so
+    /// `Integer get() { return value; }`, the ordinary way to write such a
+    /// subclass, was refused with "Object cannot be converted to Integer".
+    /// Only the answered TYPE is substituted: the field reference still has to
+    /// be interned with the declared descriptor, or it names no field at all.
+    fn substituted_field_type(&self, receiver: ClassId, owner: ClassId, ty: JType) -> JType {
+        if receiver == owner || !matches!(ty, JType::TypeVar(_)) {
+            return ty;
+        }
+        match self.table.generic_supertype_arg(receiver, owner) {
+            Some(arg) => arg.base_type(),
+            None => ty,
+        }
+    }
+
     fn emit_getfield(&mut self, class_id: ClassId, field: &FieldSig) -> JType {
         // A read of a compile-time constant is INLINED as its value (JLS
         // §13.1/§13.4.9) — no `getstatic`/`getfield`, so the value is right
@@ -25134,7 +25153,14 @@ impl BodyGen<'_> {
                 // an expression typed `Error` is silently dropped.
                 self.table
                     .field(self.current_class, &path[0])
-                    .map(|(_, f)| f.ty)
+                    // ...substituted, as the emitter substitutes it: a `T
+                    // value` inherited from `Box<T>` reads as an `Integer` in
+                    // a `Pin extends Box<Integer>`. Typed as the erasure here,
+                    // `value + 1` was "bad operand types: Object and int" for
+                    // a field the emitter had already agreed was an Integer.
+                    .map(|(owner, f)| {
+                        self.substituted_field_type(self.current_class_id, owner, f.ty)
+                    })
                     .or_else(|| self.enclosing_static_field(&path[0]).map(|(_, f)| f.ty))
                     .or_else(|| {
                         self.enclosing_instance_field(&path[0])
@@ -25195,7 +25221,9 @@ impl BodyGen<'_> {
                         return self
                             .table
                             .field(&owner, &path[1])
-                            .map_or(JType::Error, |(_, f)| f.ty);
+                            .map_or(JType::Error, |(field_owner, f)| {
+                                self.substituted_field_type(id, field_owner, f.ty)
+                            });
                     }
                     return JType::Error;
                 }
@@ -26886,7 +26914,9 @@ impl BodyGen<'_> {
                 let field_ty = self.substitute_type_var(field_ty, arg, rest);
                 return substitute_member_type(field_ty, arg, rest, self.table);
             }
-            return field_ty;
+            // ...and the same substitution when the receiver's own class is
+            // what pins the argument (`class Pin extends Box<Integer>`).
+            return self.substituted_field_type(class_id, owner, field_ty);
         }
         if object_ty == JType::Str && name == "length" {
             self.error(
@@ -27440,7 +27470,8 @@ impl BodyGen<'_> {
                         self.code.drop_stack(1);
                         return self.emit_getfield(owner, &field);
                     }
-                    return self.emit_getfield(owner, &field);
+                    let ty = self.emit_getfield(owner, &field);
+                    return self.substituted_field_type(id, owner, ty);
                 }
             } else if let Some(class_id) = self.table.class_id(&path[0]) {
                 let Some((owner, field)) = self.resolve_field(class_id, &path[1], span) else {
@@ -27522,7 +27553,8 @@ impl BodyGen<'_> {
                     return JType::Error;
                 }
                 self.code.push_op(op::ALOAD_0, 1);
-                return self.emit_getfield(owner, &field);
+                let ty = self.emit_getfield(owner, &field);
+                return self.substituted_field_type(self.current_class_id, owner, ty);
             }
             // A static field of the class this lambda/anonymous class came
             // from: hoisting lost the bare name, Java still resolves it.

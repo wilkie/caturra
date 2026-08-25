@@ -8139,9 +8139,37 @@ Java — it takes all three at once (a default, a chain that does not override i
 and a subclass calling `super`), which is exactly the shape a written test
 misses and a random hierarchy does not. 820 hierarchies agree now.
 
+**A third generator writes GENERIC hierarchies**: an interface parameterized on
+`T` with an optional default, a `Box<T>` with a field and methods of that type,
+a subclass that PINS the argument (`Pin extends Box<Integer>`) and overrides
+some of them, a class implementing the interface at a fixed argument, an enum
+implementing it too (with or without constant bodies, which are anonymous
+subclasses), and a lambda and an anonymous class beside them.
+
+**Its first hundred found two more bugs, both of them ordinary Java:**
+
+- A subclass that pins the argument inherits `T value` as an `Integer`, and the
+  DECLARED type is the erasure — which is what a read answered. So `Integer
+  get() { return value; }` was refused ("Object cannot be converted to
+  Integer"), and `value + 1` was "bad operand types: Object and int". The
+  emitter and `type_of` each needed telling, which is the mirror this codebase
+  keeps rediscovering: fixing the first left the second to reject an expression
+  the first had already accepted.
+- An override of a generic interface's DEFAULT needs a bridge like any other.
+  `Named implements Sink<String>` declaring `twice(String)` overrides
+  `twice(T)`, whose erasure takes an `Object`; the bridge pass walked the
+  extends chain only, on the theory that an interface's methods erase like the
+  class's — true only while the interface is not generic. The call through
+  `Sink<String>` found no `twice(Object)` on the class and ran the interface's
+  DEFAULT instead: a silent wrong answer, where the override simply did not
+  happen. Only a defaulted method could show it; an abstract one had nowhere
+  else to go.
+
 Pinned by `fuzz::random_programs_run_the_same_as_the_jdk`,
-`fuzz::random_hierarchies_dispatch_like_the_jdk` and
-`diff_super_reaches_an_inherited_default`.
+`fuzz::random_hierarchies_dispatch_like_the_jdk`,
+`fuzz::random_generics_erase_like_the_jdk`,
+`diff_super_reaches_an_inherited_default` and
+`diff_a_parameterized_supertype_substitutes`.
 
 ## Divergences from javac
 

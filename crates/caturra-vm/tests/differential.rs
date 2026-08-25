@@ -29392,6 +29392,68 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// Two things a PARAMETERIZED supertype hides, both found by fuzzing generic
+// hierarchies:
+//
+// A class that pins the argument (`Pin extends Box<Integer>`) inherits `T
+// value` as an `Integer` — the declared type is the erasure, which is what a
+// read answered, so `Integer get() { return value; }` and `value + 1`, the two
+// ordinary ways to write such a subclass, were refused as `Object`. The
+// emitter and `type_of` each needed telling, which is the mirror this codebase
+// keeps rediscovering.
+//
+// And an override of a generic interface's DEFAULT needs a bridge like any
+// other: `Named implements Sink<String>` declaring `twice(String)` overrides
+// `twice(T)`, whose erasure takes an `Object`. The bridge pass walked the
+// extends chain only, so the call through `Sink<String>` found no
+// `twice(Object)` on the class and ran the interface's default instead — the
+// override silently did not happen. Only a DEFAULTED method showed it: an
+// abstract one had nowhere else to go.
+differential_test!(
+    diff_a_parameterized_supertype_substitutes,
+    "GenericPins",
+    r#"
+import java.util.*;
+
+public class GenericPins {
+    interface Sink<T> {
+        String accept(T t);
+        default String twice(T t) { return "default:" + accept(t) + "/" + accept(t); }
+    }
+    static class Named implements Sink<String> {
+        @Override public String accept(String t) { return "Named:" + t; }
+        @Override public String twice(String t) { return "Named.twice:" + accept(t); }
+    }
+    static class Box<T> {
+        T value;
+        Box(T v) { value = v; }
+        T get() { return value; }
+        String show(T t) { return "Box.show:" + t + ":" + value; }
+    }
+    static class Pin extends Box<Integer> {
+        Pin(Integer v) { super(v); }
+        @Override Integer get() { return value + 1; }
+        @Override String show(Integer t) { return "Pin.show:" + (t * 2) + ":" + value; }
+        int raw() { return value; }
+    }
+    public static void main(String[] args) {
+        Sink<String> named = new Named();
+        System.out.println(named.accept("a") + " " + named.twice("b"));
+        Sink<String> lambda = t -> "lam:" + t;
+        System.out.println(lambda.accept("c") + " " + lambda.twice("d"));
+        Box<Integer> asBox = new Pin(5);
+        System.out.println(asBox.get() + " " + asBox.show(3));
+        Pin pin = new Pin(7);
+        System.out.println(pin.get() + " " + pin.show(2) + " " + pin.raw() + " " + pin.value);
+        List<Box<Integer>> boxes = new ArrayList<>();
+        boxes.add(new Pin(1));
+        boxes.add(new Box<>(2));
+        for (Box<Integer> each : boxes) { System.out.println(each.get() + "/" + each.show(9)); }
+    }
+}
+"#
+);
+
 // `super.m()` reaching an INHERITED INTERFACE DEFAULT. `C extends B extends A
 // implements Face`, none of the classes overrides `greet`, and `C` calls
 // `super.greet()`: the JVM searches the superclasses and then their
@@ -34239,6 +34301,170 @@ mod fuzz {
             assert_eq!(
                 actual, expected,
                 "hierarchy {index} (seed {seed:#x}) diverges from the JDK:\n{source}"
+            );
+        }
+    }
+
+    /// A random GENERIC hierarchy, with an enum and a lambda in it.
+    ///
+    /// A parameterized supertype erases: a subclass that pins the argument
+    /// inherits fields and methods at the pinned type, and its overrides need
+    /// bridges or the call through the supertype reaches the wrong body. An
+    /// enum constant with a body is an anonymous subclass. A lambda, a method
+    /// reference, an anonymous class and a named class all implement the same
+    /// interface. The first hundred of these found two bugs.
+    #[allow(clippy::too_many_lines)] // one block per declaration
+    fn generics(seed: u64, class_name: &str) -> String {
+        let mut rng = Rng(seed | 1);
+        let s = class_name.trim_start_matches(|c: char| c.is_alphabetic());
+        let elem = if rng.chance() < 0.5 {
+            "Integer"
+        } else {
+            "String"
+        };
+        let lit: [&str; 3] = if elem == "Integer" {
+            ["1", "7", "-3"]
+        } else {
+            ["\"a\"", "\"bc\"", "\"\""]
+        };
+        let (sink, boxed, pin, named, hue) = (
+            format!("Sink{s}"),
+            format!("Box{s}"),
+            format!("Pin{s}"),
+            format!("Named{s}"),
+            format!("Hue{s}"),
+        );
+        let mut out = String::from("import java.util.*;\n\n");
+
+        let has_twice = rng.chance() < 0.7;
+        out.push_str(&format!(
+            "interface {sink}<T> {{\n    String accept(T t);\n"
+        ));
+        if has_twice {
+            out.push_str(
+                "    default String twice(T t) { return accept(t) + \"/\" + accept(t); }\n",
+            );
+        }
+        out.push_str("}\n\n");
+
+        out.push_str(&format!(
+            "class {boxed}<T> {{\n    T value;\n    {boxed}(T v) {{ value = v; }}\n\
+             \x20   T get() {{ return value; }}\n\
+             \x20   String show(T t) {{ return \"Box.show:\" + t; }}\n\
+             \x20   <U> String pass(U u) {{ return \"Box.pass:\" + u + \":\" + get(); }}\n\
+             \x20   public String toString() {{ return \"Box(\" + value + \")\"; }}\n}}\n\n"
+        ));
+
+        // A subclass that PINS the argument: every override needs a bridge, and
+        // every inherited member reads at the pinned type.
+        out.push_str(&format!(
+            "class {pin} extends {boxed}<{elem}> {{\n    {pin}({elem} v) {{ super(v); }}\n"
+        ));
+        if rng.chance() < 0.8 {
+            out.push_str(&format!("    @Override {elem} get() {{ return value; }}\n"));
+        }
+        if rng.chance() < 0.8 {
+            out.push_str(&format!(
+                "    @Override String show({elem} t) {{ return \"Pin.show:\" + t + \":\" + get(); }}\n"
+            ));
+        }
+        if rng.chance() < 0.5 {
+            out.push_str("    @Override <U> String pass(U u) { return \"Pin.pass:\" + u; }\n");
+        }
+        out.push_str("}\n\n");
+
+        out.push_str(&format!(
+            "class {named} implements {sink}<{elem}> {{\n\
+             \x20   public String accept({elem} t) {{ return \"Named:\" + t; }}\n"
+        ));
+        if has_twice && rng.chance() < 0.5 {
+            out.push_str(&format!(
+                "    public String twice({elem} t) {{ return \"Named.twice:\" + accept(t); }}\n"
+            ));
+        }
+        out.push_str("}\n\n");
+
+        // An enum implementing the same interface, sometimes with constant
+        // bodies — each of which is an anonymous subclass of the enum.
+        out.push_str(&format!("enum {hue} implements {sink}<{elem}> {{\n"));
+        if rng.chance() < 0.6 {
+            out.push_str(&format!(
+                "    RED {{ public String accept({elem} t) {{ return \"RED:\" + t; }} }},\n\
+                 \x20   BLUE {{ public String accept({elem} t) {{ return \"BLUE:\" + t; }} }};\n"
+            ));
+        } else {
+            out.push_str(&format!(
+                "    RED, BLUE;\n    public String accept({elem} t) {{ return name() + \":\" + t; }}\n"
+            ));
+        }
+        out.push_str("    public String label() { return \"hue-\" + name() + ordinal(); }\n}\n\n");
+
+        let twice_call = |target: &str, arg: &str| {
+            if has_twice {
+                format!(" + \" \" + {target}.twice({arg})")
+            } else {
+                String::new()
+            }
+        };
+        out.push_str(&format!(
+            "public class {class_name} {{\n    public static void main(String[] args) {{\n\
+             \x20       {boxed}<{elem}> b = new {pin}({});\n\
+             \x20       System.out.println(b.get() + \" | \" + b.show({}) + \" | \" + b.pass(\"u\") + \" | \" + b);\n\
+             \x20       {pin} p = new {pin}({});\n\
+             \x20       System.out.println(p.get() + \" | \" + p.show({}) + \" | \" + p.value);\n\
+             \x20       {sink}<{elem}> k1 = t -> \"lam:\" + t;\n\
+             \x20       {sink}<{elem}> k2 = new {named}();\n\
+             \x20       {sink}<{elem}> k3 = new {sink}<{elem}>() {{ public String accept({elem} t) {{ return \"anon:\" + t; }} }};\n\
+             \x20       System.out.println(k1.accept({}){});\n\
+             \x20       System.out.println(k2.accept({}){});\n\
+             \x20       System.out.println(k3.accept({}){});\n\
+             \x20       for ({hue} h : {hue}.values()) {{\n\
+             \x20           System.out.println(h + \" \" + h.ordinal() + \" \" + h.accept({}) + \" \" + h.label(){});\n\
+             \x20       }}\n\
+             \x20       System.out.println({hue}.valueOf(\"BLUE\").getClass().getSimpleName());\n\
+             \x20       List<{boxed}<{elem}>> boxes = new ArrayList<>();\n\
+             \x20       boxes.add(new {pin}({})); boxes.add(new {boxed}<>({}));\n\
+             \x20       for ({boxed}<{elem}> each : boxes) {{ System.out.println(each.get() + \"/\" + each.show({})); }}\n\
+             \x20       System.out.println(boxes);\n    }}\n}}\n",
+            lit[0],
+            lit[1],
+            lit[2],
+            lit[0],
+            lit[0],
+            twice_call("k1", lit[1]),
+            lit[0],
+            twice_call("k2", lit[1]),
+            lit[0],
+            twice_call("k3", lit[1]),
+            lit[0],
+            twice_call("h", lit[1]),
+            lit[0],
+            lit[1],
+            lit[2],
+        ));
+        out
+    }
+
+    /// Random generic hierarchies, compared against a real JDK.
+    #[test]
+    fn random_generics_erase_like_the_jdk() {
+        if !super::jdk_available() {
+            eprintln!("skipping: no JDK on PATH");
+            return;
+        }
+        let count: u32 = std::env::var("CATURRA_FUZZ")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(FUZZ_PROGRAMS);
+        for index in 0..count {
+            let seed = 0x00ce_0000 + u64::from(index);
+            let class_name = format!("Gen{index}");
+            let source = generics(seed, &class_name);
+            let expected = super::run_with_jdk_files(&class_name, &source, "", &[]);
+            let actual = super::run_with_caturra_files(&class_name, &source, "", &[]);
+            assert_eq!(
+                actual, expected,
+                "generics {index} (seed {seed:#x}) diverges from the JDK:\n{source}"
             );
         }
     }
