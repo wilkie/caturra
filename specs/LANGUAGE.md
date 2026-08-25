@@ -8122,7 +8122,26 @@ own check.
 `cargo test` fuzzes 40 programs; `CATURRA_FUZZ=2000` is the longer hunt. A
 failure prints the seed and the program, so anything CI finds is one case here.
 
-Pinned by `fuzz::random_programs_run_the_same_as_the_jdk`.
+**A second generator writes class HIERARCHIES**, where the first wrote method
+bodies — three classes and an interface, with a field the subclass may hide, a
+`tag()` every class overrides, a `describe()` some do, an overload only the
+subclass declares, initializer blocks, constructors that may or may not write
+`super()`, and an interface default that may or may not be there. `main` then
+holds each instance at each of its static types and prints what a method call,
+a field read and an overload choice each answer.
+
+**The first hundred of those found a real bug**, and a bad one: `super.greet()`
+in a class whose chain implements an interface that DEFAULTS `greet` aborted the
+whole program with "malformed class C: no method greet()". The JVM resolves an
+`invokespecial` by searching the superclasses and then their SUPERINTERFACES
+(JVMS §5.4.3.3); caturra's walked classes only. Every ingredient is ordinary
+Java — it takes all three at once (a default, a chain that does not override it,
+and a subclass calling `super`), which is exactly the shape a written test
+misses and a random hierarchy does not. 820 hierarchies agree now.
+
+Pinned by `fuzz::random_programs_run_the_same_as_the_jdk`,
+`fuzz::random_hierarchies_dispatch_like_the_jdk` and
+`diff_super_reaches_an_inherited_default`.
 
 ## Divergences from javac
 

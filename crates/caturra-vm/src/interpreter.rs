@@ -3520,9 +3520,22 @@ impl<'run> Interpreter<'run> {
                     .get_class_name(candidate.super_class)
                     .and_then(|super_name| classes.get(super_name));
             }
+            // Nothing on the superclass chain: the method may be an
+            // INTERFACE DEFAULT inherited through one of those classes.
+            // `super.greet()` in a class whose chain implements a `Face` that
+            // defaults `greet` resolves to that default (JVMS §5.4.3.3 searches
+            // the superinterfaces after the superclasses) — and this walked
+            // classes only, so the call aborted the whole program with
+            // "malformed class". Every ingredient is ordinary; it takes all
+            // three at once — a default, a chain that does not override, and a
+            // subclass that calls `super` — which is why a random hierarchy
+            // found it and a written test did not.
+            let found =
+                found.or_else(|| resolve_virtual(classes, target_class, method_name, descriptor));
             let (target, ctor) = found.ok_or_else(|| {
                 malformed(format!(
-                    "no method {method_name}{descriptor} in {target_class} or its superclasses"
+                    "no method {method_name}{descriptor} in {target_class}, its superclasses \
+                     or its interfaces"
                 ))
             })?;
             let mut locals = self.take_vec(1 + args.len());

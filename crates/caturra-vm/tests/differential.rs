@@ -29392,6 +29392,50 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// `super.m()` reaching an INHERITED INTERFACE DEFAULT. `C extends B extends A
+// implements Face`, none of the classes overrides `greet`, and `C` calls
+// `super.greet()`: the JVM searches the superclasses and then their
+// SUPERINTERFACES (JVMS §5.4.3.3), and finds the default. caturra's
+// `invokespecial` walked classes only, so the call aborted the program —
+// "malformed class C: no method greet()" — where every ingredient is ordinary
+// Java. It takes all three at once (a default, a chain that does not override,
+// and a subclass calling `super`), which is why a fuzzed hierarchy found it
+// and no written test had.
+differential_test!(
+    diff_super_reaches_an_inherited_default,
+    "SuperDefault",
+    r#"
+public class SuperDefault {
+    interface Face {
+        String tag();
+        default String greet() { return "Face.greet/" + tag(); }
+    }
+    interface Louder extends Face {
+        @Override default String greet() { return "Louder.greet/" + Face.super.greet(); }
+    }
+    static class A implements Face {
+        public String tag() { return "A.tag"; }
+    }
+    static class B extends A { }
+    static class C extends B {
+        @Override public String greet() { return "C.greet/" + super.greet(); }
+        @Override public String tag() { return "C.tag"; }
+    }
+    static class D implements Louder {
+        public String tag() { return "D.tag"; }
+        public String viaSuper() { return "D/" + Louder.super.greet(); }
+    }
+    public static void main(String[] args) {
+        System.out.println(new C().greet());
+        System.out.println(((Face) new C()).greet());
+        System.out.println(new A().greet());
+        System.out.println(new D().greet());
+        System.out.println(new D().viaSuper());
+    }
+}
+"#
+);
+
 // `String` at ITS edges: every method a course uses, against every argument
 // that makes it awkward — a negative index, one past the end, a reversed
 // substring range, an empty pattern, an invalid regex, a group reference with
@@ -34038,6 +34082,163 @@ mod fuzz {
             assert_eq!(
                 actual, expected,
                 "program {index} (seed {seed:#x}) diverges from the JDK:\n{source}"
+            );
+        }
+    }
+
+    /// A random class HIERARCHY, and what a program can see of it.
+    ///
+    /// A method call is dynamic and a field read is static; a constructor runs
+    /// after its super's, with the field initializers between them; an
+    /// interface default is found only when no class supplies one; an overload
+    /// is chosen at compile time from the STATIC type. Each is a rule a program
+    /// can see, and the combinations of them are more than anyone enumerates by
+    /// hand — the first hundred of these found a `super.m()` that resolved to an
+    /// inherited interface default aborting the VM.
+    #[allow(clippy::too_many_lines)] // one block per member kind
+    fn hierarchy(seed: u64, class_name: &str) -> String {
+        let mut rng = Rng(seed | 1);
+        let sfx = class_name.trim_start_matches(|c: char| c.is_alphabetic());
+        let (a, b, c) = (format!("A{sfx}"), format!("B{sfx}"), format!("C{sfx}"));
+        let face = format!("Face{sfx}");
+        let mut out = String::new();
+
+        let iface_default = rng.chance() < 0.6;
+        out.push_str(&format!("interface {face} {{\n    String tag();\n"));
+        if iface_default {
+            out.push_str("    default String greet() { return \"Face.greet/\" + tag(); }\n");
+        } else {
+            out.push_str("    String greet();\n");
+        }
+        out.push_str("}\n\n");
+
+        for (depth, name) in [&a, &b, &c].into_iter().enumerate() {
+            let extends = if depth == 0 {
+                format!(" implements {face}")
+            } else {
+                format!(" extends {}", if depth == 1 { &a } else { &b })
+            };
+            out.push_str(&format!("class {name}{extends} {{\n"));
+            // A field the subclass may HIDE: same name, read by the STATIC type.
+            if depth == 0 || rng.chance() < 0.7 {
+                out.push_str(&format!("    String label = \"{name}.label\";\n"));
+            }
+            out.push_str("    static int made;\n");
+            if rng.chance() < 0.5 {
+                out.push_str(&format!(
+                    "    {{ System.out.println(\"{name} init-block, label=\" + label); }}\n"
+                ));
+            }
+            out.push_str(&format!("    {name}() {{\n"));
+            if depth > 0 && rng.chance() < 0.5 {
+                out.push_str("        super();\n");
+            }
+            out.push_str(&format!(
+                "        System.out.println(\"{name} ctor, label=\" + label + \" tag=\" + tag());\n\
+                 \x20       made++;\n    }}\n"
+            ));
+            out.push_str(&format!(
+                "    public String tag() {{ return \"{name}.tag\"; }}\n"
+            ));
+            if depth == 0 && !iface_default {
+                out.push_str(&format!(
+                    "    public String greet() {{ return \"{name}.greet\"; }}\n"
+                ));
+            } else if rng.chance() < 0.4 {
+                if depth > 0 {
+                    out.push_str(&format!(
+                        "    public String greet() {{ return \"{name}.greet/\" + super.greet(); }}\n"
+                    ));
+                } else if iface_default {
+                    // The interface's own default, which only `Face.super` reaches.
+                    out.push_str(&format!(
+                        "    public String greet() {{ return \"{name}.greet/\" + {face}.super.greet(); }}\n"
+                    ));
+                }
+            }
+            if depth == 0 {
+                out.push_str(
+                    "    String describe() { return \"A.describe:\" + label + \":\" + tag(); }\n\
+                     \x20   String pick(Object o) { return \"A.pick(Object)\"; }\n\
+                     \x20   static String stat() { return \"A.stat\"; }\n",
+                );
+            } else {
+                if rng.chance() < 0.7 {
+                    out.push_str(&format!(
+                        "    @Override String describe() {{ return \"{name}.describe/\" + super.describe(); }}\n"
+                    ));
+                }
+                if rng.chance() < 0.5 {
+                    out.push_str(&format!(
+                        "    String pick(String s) {{ return \"{name}.pick(String)\"; }}\n"
+                    ));
+                }
+                if rng.chance() < 0.4 {
+                    out.push_str(&format!(
+                        "    static String stat() {{ return \"{name}.stat\"; }}\n"
+                    ));
+                }
+            }
+            out.push_str("}\n\n");
+        }
+
+        out.push_str(&format!(
+            "public class {class_name} {{\n    public static void main(String[] args) {{\n\
+             \x20       System.out.println(\"--- construct\");\n\
+             \x20       {a} a = new {a}();\n        {b} b = new {b}();\n        {c} c = new {c}();\n\
+             \x20       System.out.println(\"--- dispatch\");\n"
+        ));
+        for (holder, value) in [
+            (&a, "a"),
+            (&a, "b"),
+            (&a, "c"),
+            (&b, "b"),
+            (&b, "c"),
+            (&c, "c"),
+        ] {
+            out.push_str(&format!(
+                "        {holder} h{value}{holder} = {value};\n\
+                 \x20       System.out.println(h{value}{holder}.describe() + \" | \" \
+                 + h{value}{holder}.label + \" | \" + h{value}{holder}.tag());\n\
+                 \x20       System.out.println(h{value}{holder}.pick(\"s\") + \" \" \
+                 + h{value}{holder}.pick((Object) \"s\"));\n"
+            ));
+        }
+        out.push_str(&format!(
+            "        System.out.println(\"--- interface\");\n\
+             \x20       {face} f = c;\n\
+             \x20       System.out.println(f.greet() + \" \" + f.tag());\n\
+             \x20       System.out.println(\"--- statics\");\n\
+             \x20       System.out.println({a}.stat() + \" \" + {a}.made + \"/\" + {b}.made + \"/\" + {c}.made);\n\
+             \x20       System.out.println(\"--- arrays\");\n\
+             \x20       {a}[] all = {{ a, b, c }};\n\
+             \x20       for ({a} each : all) {{ System.out.println(each.describe() + \"@\" + each.label); }}\n\
+             \x20       System.out.println((({a}) c).label + \" \" + (({b}) c).label + \" \" + c.label);\n\
+             \x20   }}\n}}\n"
+        ));
+        out
+    }
+
+    /// Random class hierarchies, compared against a real JDK.
+    #[test]
+    fn random_hierarchies_dispatch_like_the_jdk() {
+        if !super::jdk_available() {
+            eprintln!("skipping: no JDK on PATH");
+            return;
+        }
+        let count: u32 = std::env::var("CATURRA_FUZZ")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(FUZZ_PROGRAMS);
+        for index in 0..count {
+            let seed = 0x00e5_0000 + u64::from(index);
+            let class_name = format!("Hier{index}");
+            let source = hierarchy(seed, &class_name);
+            let expected = super::run_with_jdk_files(&class_name, &source, "", &[]);
+            let actual = super::run_with_caturra_files(&class_name, &source, "", &[]);
+            assert_eq!(
+                actual, expected,
+                "hierarchy {index} (seed {seed:#x}) diverges from the JDK:\n{source}"
             );
         }
     }
