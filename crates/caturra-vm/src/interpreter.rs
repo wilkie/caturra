@@ -3845,6 +3845,14 @@ impl<'run> Interpreter<'run> {
             defaults.push(JValue::NULL);
             layout.push(Rc::from("__cause"));
             defaults.push(JValue::NULL);
+            // ...and the exceptions a try-with-resources SUPPRESSED into it.
+            // A library throwable carries these on its own heap object; a user
+            // one had nowhere to put them, so `addSuppressed` — which the
+            // desugaring calls whenever a resource's `close()` throws while the
+            // body is already throwing — died as an unknown native member and
+            // took the program with it.
+            layout.push(Rc::from("__suppressed"));
+            defaults.push(JValue::NULL);
         }
         for class in chain.into_iter().rev() {
             for field in &class.fields {
@@ -11860,16 +11868,27 @@ impl<'run> Interpreter<'run> {
                 let array = self.stack_trace_array(receiver);
                 return Ok(UserDispatch::Value(Some(array)));
             }
-            // `getSuppressed()` — an empty `Throwable[]` (none are modelled).
+            // `getSuppressed()` answered an EMPTY array on the theory that a
+            // user exception carries no suppressed list — which stopped being
+            // true when it got one (the `__suppressed` slot), and until then
+            // hid every exception a failing `close()` attached: the
+            // try-with-resources reported the body's exception with nothing
+            // under it, where a JDK lists what closing threw.
             if self.instance_is_throwable(instance_class)
                 && method_name == "getSuppressed"
                 && descriptor == "()[Ljava/lang/Throwable;"
             {
-                let array = self.heap.alloc(crate::value::HeapObject::RefArray(
-                    String::from("[Ljava/lang/Throwable;"),
-                    Vec::new(),
-                ));
-                return Ok(UserDispatch::Value(Some(JValue::Ref(Some(array)))));
+                let value = intrinsics::invoke_virtual(
+                    &mut self.heap,
+                    self.console,
+                    self.vfs,
+                    receiver,
+                    instance_class,
+                    method_name,
+                    descriptor,
+                    args,
+                )?;
+                return Ok(UserDispatch::Value(value));
             }
             // Object.toString() default: getName() + "@" +
             // Integer.toHexString(hashCode()) — the binary name is DOTTED, and
@@ -11921,6 +11940,32 @@ impl<'run> Interpreter<'run> {
                 return Ok(UserDispatch::Value(Some(JValue::Int(i32::from_ne_bytes(
                     receiver.to_ne_bytes(),
                 )))));
+            }
+            // A throwable's own members that no user class declares —
+            // `addSuppressed`/`getSuppressed` above all, which the
+            // try-with-resources desugaring CALLS whenever a resource's
+            // `close()` throws while the body is already throwing. The
+            // intrinsic layer answers them from the `__suppressed` slot; not
+            // reaching it made an ordinary `class AppException extends
+            // RuntimeException` unusable as the primary exception of a
+            // try-with-resources, aborting the program.
+            match intrinsics::invoke_virtual(
+                &mut self.heap,
+                self.console,
+                self.vfs,
+                receiver,
+                instance_class,
+                method_name,
+                descriptor,
+                args,
+            ) {
+                Ok(value) => return Ok(UserDispatch::Value(value)),
+                // Only a MISSING intrinsic falls through to the error below.
+                // One that THREW is answering the call — `addSuppressed(this)`
+                // is the JDK's IllegalArgumentException, and treating it as
+                // "not implemented" would report the wrong failure entirely.
+                Err(VmError::UnknownIntrinsic(_)) => {}
+                Err(other) => return Err(other),
             }
             return Err(VmError::UnknownIntrinsic(format!(
                 "{instance_class}.{method_name}{descriptor}"

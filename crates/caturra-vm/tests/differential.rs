@@ -29392,6 +29392,62 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// SUPPRESSION on a USER exception class. A library throwable carries its
+// suppressed list on its own heap object; a user one — `class AppEx extends
+// RuntimeException`, as ordinary as a course exercise gets — had nowhere to put
+// it, so `addSuppressed`, which the try-with-resources desugaring CALLS
+// whenever a resource's `close()` throws while the body is already throwing,
+// aborted the program as an unknown native member. And `getSuppressed()`
+// answered an empty array by design, which hid the same thing when the abort
+// was fixed.
+//
+// The self-suppression case is here because fixing the first two hid it: an
+// intrinsic that THREW was being read as one that did not exist, so the JDK's
+// IllegalArgumentException came back as "not implemented".
+differential_test!(
+    diff_a_user_exception_can_be_suppressed_into,
+    "SuppressUser",
+    r#"
+class AppEx extends RuntimeException {
+    AppEx(String m) { super(m); }
+    AppEx(String m, Throwable c) { super(m, c); }
+}
+class Res implements AutoCloseable {
+    final String name; final boolean bad;
+    Res(String n, boolean b) { name = n; bad = b; System.out.println("open " + n); }
+    public void close() { System.out.println("close " + name); if (bad) { throw new AppEx("close-" + name); } }
+}
+public class SuppressUser {
+    static void show(Throwable e) {
+        System.out.println("caught " + e.getClass().getSimpleName() + ":" + e.getMessage()
+            + " cause=" + (e.getCause() == null ? "-" : e.getCause().getMessage()));
+        for (Throwable s : e.getSuppressed()) {
+            System.out.println("  suppressed " + s.getClass().getSimpleName() + ":" + s.getMessage());
+        }
+    }
+    public static void main(String[] args) {
+        try (Res a = new Res("a", true); Res b = new Res("b", true)) {
+            throw new AppEx("body");
+        } catch (RuntimeException e) { show(e); }
+
+        try (Res a = new Res("c", true)) {
+            System.out.println("body ok");
+        } catch (RuntimeException e) { show(e); }
+
+        AppEx primary = new AppEx("manual");
+        primary.addSuppressed(new IllegalStateException("extra"));
+        System.out.println(primary.getSuppressed().length);
+        show(primary);
+        try { primary.addSuppressed(primary); }
+        catch (RuntimeException e) { System.out.println(e.getClass().getSimpleName() + ": " + e.getMessage()); }
+
+        try { throw new AppEx("outer", new AppEx("inner")); }
+        catch (RuntimeException e) { show(e); }
+    }
+}
+"#
+);
+
 // Which overload runs, where the PHASES decide it (JLS §15.12.2). Two bugs,
 // both found by fuzzing random overload sets against random arguments:
 //

@@ -8194,6 +8194,44 @@ Pinned by `fuzz::random_programs_run_the_same_as_the_jdk`,
 `diff_a_parameterized_supertype_substitutes` and
 `diff_overload_phases_and_specificity`.
 
+### A user exception is a throwable too (2026-08-25)
+
+Random USER exception hierarchies — a `RuntimeException` subclass and a subclass
+of that, a checked one, catch clauses ordered so a subclass never follows its
+superclass, multi-catch, causes, rethrows, and a resource whose `close()` may
+throw — found that **suppression stopped at the library's own throwables**.
+
+A library throwable carries its suppressed list on its own heap object. A user
+one — `class AppException extends RuntimeException`, as ordinary as a course
+exercise gets — had nowhere to put it, so `addSuppressed`, which the
+try-with-resources desugaring CALLS whenever a resource's `close()` throws while
+the body is already throwing, aborted the program: "unknown native member". The
+instance layout reserves a `__suppressed` slot now, beside the `__message` and
+`__cause` it already reserved.
+
+Fixing that uncovered the next two, each hidden by the one before it:
+
+- `getSuppressed()` answered an EMPTY array by design ("none are modelled"),
+  which was true until the slot existed. So the try-with-resources reported the
+  body's exception with nothing under it, where a JDK lists what closing threw.
+- And the fallback that reaches the intrinsic layer treated an intrinsic that
+  THREW as one that did not exist: `addSuppressed(this)` is the JDK's
+  `IllegalArgumentException: Self-suppression not permitted`, and it came back
+  as "not implemented". Only a MISSING intrinsic may fall through — one that
+  threw is answering the call.
+
+500 exception programs agree now, as do the 96 of the try-with-resources sweep.
+
+Two neighbouring generators found nothing to fix, which is worth recording:
+**class INITIALIZATION order** (static blocks, field initializers, constructors,
+and what triggers them — a constant read does not, a `new` does, an inherited
+static read initializes only the DECLARING class, a failing `<clinit>` gives
+`ExceptionInInitializerError` and then `NoClassDefFoundError`, two classes whose
+initializers read each other see defaults) over 120 programs, and **nested,
+inner, local and anonymous classes** over 500.
+
+Pinned by `diff_a_user_exception_can_be_suppressed_into`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

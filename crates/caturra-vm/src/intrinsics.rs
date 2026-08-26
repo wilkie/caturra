@@ -972,6 +972,63 @@ pub fn invoke_virtual(
             }
             Ok(None)
         }
+        // The same two on a USER exception class, whose suppressed list lives
+        // in the `__suppressed` slot its layout reserves (a library throwable
+        // carries one on its own heap object). Without these, an ordinary
+        // `class AppException extends RuntimeException` could not be the
+        // primary exception of a try-with-resources whose `close()` also
+        // threw: `addSuppressed` was an unknown native member.
+        (HeapObject::Instance { .. }, "getSuppressed") => {
+            let elements = match heap.get(receiver).and_then(|o| o.field("__suppressed")) {
+                Some(JValue::Ref(Some(array))) => match heap.get(array) {
+                    Some(HeapObject::RefArray(_, values)) => values.clone(),
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+            let reference = heap.alloc(HeapObject::RefArray(
+                String::from("[Ljava/lang/Throwable;"),
+                elements,
+            ));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        (HeapObject::Instance { .. }, "addSuppressed") => {
+            match args.first().copied() {
+                Some(JValue::Ref(Some(extra))) if extra == receiver => {
+                    return Err(throw(
+                        "java.lang.IllegalArgumentException: Self-suppression not permitted",
+                    ));
+                }
+                Some(JValue::Ref(Some(extra))) => {
+                    let mut values = match heap.get(receiver).and_then(|o| o.field("__suppressed"))
+                    {
+                        Some(JValue::Ref(Some(array))) => match heap.get(array) {
+                            Some(HeapObject::RefArray(_, values)) => values.clone(),
+                            _ => Vec::new(),
+                        },
+                        _ => Vec::new(),
+                    };
+                    values.push(JValue::Ref(Some(extra)));
+                    let array = heap.alloc(HeapObject::RefArray(
+                        String::from("[Ljava/lang/Throwable;"),
+                        values,
+                    ));
+                    if let Some(field) = heap
+                        .get_mut(receiver)
+                        .and_then(|object| object.field_mut("__suppressed"))
+                    {
+                        *field = JValue::Ref(Some(array));
+                    }
+                }
+                Some(JValue::Ref(None)) => {
+                    return Err(throw(
+                        "java.lang.NullPointerException: Cannot suppress a null exception.",
+                    ));
+                }
+                _ => {}
+            }
+            Ok(None)
+        }
         (HeapObject::Writer { .. }, _) => {
             writer_method(heap, vfs, receiver, method, descriptor, args)
         }
