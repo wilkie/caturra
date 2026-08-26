@@ -8165,11 +8165,34 @@ subclasses), and a lambda and an anonymous class beside them.
   happen. Only a defaulted method could show it; an abstract one had nowhere
   else to go.
 
+**Random OVERLOAD SETS against random arguments** — two to four overloads drawn
+from thirteen parameter shapes, called with one of twelve arguments, one program
+per pair so the verdict is per-cell — found two more, both about the PHASES
+(JLS §15.12.2):
+
+- A primitive reaching ANY reference is a boxing conversion, so none of them
+  belongs in phase one. Only the wrapper itself was excluded, so `int` to
+  `Number` stayed phase-ONE applicable while `int` to `Integer` was phase two:
+  the WIDER overload won an earlier phase, and `f(1)` against `f(Integer)` and
+  `f(Number)` chose `f(Number)`.
+- An `Integer` is a `Comparable<Integer>`, never a `Comparable<String>`.
+  Applicability ignored the type argument, so `g(Comparable<String>)` was
+  selected for an `Integer` and the call then REFUSED — where javac passes over
+  that candidate and picks another. "Which casts exist" already knew this;
+  applicability did not, and one fact in two places is how they disagreed.
+
+Nested, inner, local and anonymous classes were fuzzed too — two levels of
+enclosing instance, `Outer.this` against `Inner.this`, a local class shadowing
+an outer field, an anonymous subclass of a user class with a constructor
+argument — and 500 of those agree without a fix, which is the sorted-out state
+"Nested-class scoping" left them in.
+
 Pinned by `fuzz::random_programs_run_the_same_as_the_jdk`,
 `fuzz::random_hierarchies_dispatch_like_the_jdk`,
 `fuzz::random_generics_erase_like_the_jdk`,
-`diff_super_reaches_an_inherited_default` and
-`diff_a_parameterized_supertype_substitutes`.
+`diff_super_reaches_an_inherited_default`,
+`diff_a_parameterized_supertype_substitutes` and
+`diff_overload_phases_and_specificity`.
 
 ## Divergences from javac
 

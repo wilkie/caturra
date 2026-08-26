@@ -4941,6 +4941,15 @@ fn widens_strictly(from: JType, to: JType, table: &MethodTable) -> bool {
     {
         return from == to;
     }
+    // A primitive reaching ANY reference is a boxing conversion — boxing, then
+    // a widening reference conversion — so none of them belongs in phase one.
+    // Only the wrapper itself was excluded, so `int` to `Number` (or `Object`,
+    // or `Comparable`) stayed phase-ONE applicable while `int` to `Integer` was
+    // phase two: the wider overload won an earlier phase, and `f(1)` against
+    // `f(Integer)` and `f(Number)` chose `f(Number)`.
+    if !from.is_reference() && from != JType::Null && to.is_reference() {
+        return false;
+    }
     widens(from, to, table)
 }
 
@@ -5127,12 +5136,26 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // a `Comparable<T>` variable — the erased interface caturra registers
         // for a user class to implement. The VM dispatches `compareTo` on the
         // value's own kind, so nothing else is needed.
+        //
+        // ...but of THEMSELVES: an `Integer` is a `Comparable<Integer>` and not
+        // a `Comparable<String>`. Ignoring the argument made the wrong overload
+        // applicable — `f(Comparable<String>)` was selected for an `Integer`
+        // and the call then REFUSED, where javac simply passes over that
+        // candidate and picks another. The cast rule already knew this
+        // (`provably_distinct`); applicability did not, which is one fact in
+        // two places disagreeing.
         || matches!(
             (from, to),
-            (
-                JType::Str | JType::Boxed(_),
-                JType::Object(id) | JType::Generic { class: id, .. },
-            ) if table.class_id("Comparable") == Some(id)
+            (JType::Str | JType::Boxed(_), JType::Object(id))
+                if table.class_id("Comparable") == Some(id)
+        )
+        || matches!(
+            (from, to),
+            (JType::Str | JType::Boxed(_), JType::Generic { class: id, arg, .. })
+                if table.class_id("Comparable") == Some(id)
+                    && elem_type_of(from).is_some_and(|own| {
+                        elem_matches(own, arg, table) || elem_matches(arg, own, table)
+                    })
         )
         // A user class that implements `Iterator` IS one: it assigns to an
         // `Iterator<E>` variable, and a for-each drives it through the same

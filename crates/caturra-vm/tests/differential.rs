@@ -29392,6 +29392,49 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// Which overload runs, where the PHASES decide it (JLS §15.12.2). Two bugs,
+// both found by fuzzing random overload sets against random arguments:
+//
+// A primitive reaching ANY reference is a boxing conversion, so none of them
+// belongs in phase one. Only the wrapper itself was excluded, so `int` to
+// `Number` stayed phase-ONE applicable while `int` to `Integer` was phase two —
+// the wider overload won an earlier phase, and `f(1)` chose `f(Number)`.
+//
+// And an `Integer` is a `Comparable<Integer>`, never a `Comparable<String>`.
+// Applicability ignored the type argument, so `g(Comparable<String>)` was
+// selected for an `Integer` and the call then REFUSED — where javac passes over
+// that candidate and picks another. The cast rule already knew; applicability
+// did not, which is one fact in two places disagreeing.
+differential_test!(
+    diff_overload_phases_and_specificity,
+    "OverloadPhases",
+    r#"
+public class OverloadPhases {
+    static String f(Integer x) { return "f(Integer)"; }
+    static String f(Number x) { return "f(Number)"; }
+    static String f(Object x) { return "f(Object)"; }
+
+    static String g(Comparable<String> x) { return "g(Comparable<String>)"; }
+    static String g(double x) { return "g(double)"; }
+
+    static String h(Integer x) { return "h(Integer)"; }
+    static String h(long x) { return "h(long)"; }
+
+    static String k(Object x) { return "k(Object)"; }
+    static String k(int... x) { return "k(int...)"; }
+
+    public static void main(String[] args) {
+        System.out.println(f(1) + " " + f(1L) + " " + f("s") + " " + f(Integer.valueOf(2)));
+        System.out.println(g(Integer.valueOf(2)) + " " + g("s") + " " + g(1.5));
+        System.out.println(h(1) + " " + h(Integer.valueOf(1)) + " " + h(1L));
+        System.out.println(k(1) + " " + k(1, 2) + " " + k("s"));
+        Comparable<Integer> ok = Integer.valueOf(3);
+        System.out.println(ok.compareTo(4));
+    }
+}
+"#
+);
+
 // Two things a PARAMETERIZED supertype hides, both found by fuzzing generic
 // hierarchies:
 //
