@@ -29838,6 +29838,217 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// A `return` inside a `try` is PARKED while the enclosing finallys run — and
+// where it is parked is the whole point. On the operand stack it was lost the
+// moment anything inside a finally was caught (a handler clears the stack to
+// its exception), and the `ireturn` that followed underflowed: malformed
+// bytecode from a program javac compiles. Every width, and the shapes around
+// it: nested finallys, one that returns instead, one that throws, and abrupt
+// exits through a catching finally.
+differential_test!(
+    diff_a_return_waits_for_a_catching_finally,
+    "Parked",
+    r#"
+public class Parked {
+    static class R implements AutoCloseable {
+        public void close() { throw new IllegalStateException("close"); }
+    }
+
+    static int narrow(int a) {
+        try { return a + 1; }
+        finally { try { throw new IllegalStateException("s"); } catch (RuntimeException e) { } }
+    }
+
+    static long wide(long a) {
+        try { return a + 1; }
+        finally { try { throw new IllegalStateException("s"); } catch (RuntimeException e) { } }
+    }
+
+    static double fractional(double a) {
+        try { return a / 2; }
+        finally { try { throw new IllegalStateException("s"); } catch (RuntimeException e) { } }
+    }
+
+    static String text(String a) {
+        try { return a + "!"; }
+        finally { try { throw new IllegalStateException("s"); } catch (RuntimeException e) { } }
+    }
+
+    static int nested(int a) {
+        try {
+            try { return a; }
+            finally { try { throw new IllegalStateException("i"); } catch (RuntimeException e) { System.out.println("inner"); } }
+        } finally {
+            try { throw new IllegalStateException("o"); } catch (RuntimeException e) { System.out.println("outer"); }
+        }
+    }
+
+    static int overridden(int a) {
+        try { return a; } finally { if (a > 0) { return -a; } }
+    }
+
+    static int replaced(int a) {
+        try { return a; } finally { if (a > 0) { throw new IllegalStateException("replaced"); } }
+    }
+
+    static int broken(int a) {
+        for (int i = 0; i < 3; i++) {
+            try { if (i == 1) { break; } a += i; }
+            finally { try { throw new IllegalStateException("f" + i); } catch (RuntimeException e) { System.out.println("caught " + e.getMessage()); } }
+        }
+        return a;
+    }
+
+    static int closed(int a) {
+        try (R r = new R()) { return a; }
+        finally { try { throw new IllegalStateException("f"); } catch (RuntimeException e) { } }
+    }
+
+    static void nothing(int a) {
+        try { System.out.println("body" + a); return; }
+        finally { try { throw new IllegalStateException("v"); } catch (RuntimeException e) { System.out.println("fin"); } }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(narrow(41) + " " + wide(41L) + " " + fractional(5.0) + " " + text("x"));
+        System.out.println(nested(7) + " " + overridden(3) + " " + broken(0));
+        try { System.out.println(closed(1)); }
+        catch (RuntimeException e) { System.out.println("close! " + e.getMessage()); }
+        try { System.out.println(replaced(3)); }
+        catch (RuntimeException e) { System.out.println("! " + e.getMessage()); }
+        nothing(1);
+    }
+}
+"#
+);
+
+// Where a `break`/`continue` inside a `finally` GOES. The copy of the finally
+// that a `return` drags along is emitted inside whatever loops surround that
+// return, and it used to bind there: a `continue` re-entered the innermost
+// loop around the RETURN instead of the one around the try, so the method ran
+// on from the middle of a loop it had already left. The same shape also has to
+// COMPILE — a `do` whose body only ever returns or continues still completes
+// normally, since a reachable `continue` makes its condition reachable
+// (JLS 14.21), and caturra called what followed unreachable.
+differential_test!(
+    diff_a_finally_continues_the_right_loop,
+    "Abrupt",
+    r#"
+public class Abrupt {
+    static int outer(int a) {
+        int d = 0;
+        do {
+            d++;
+            System.out.println("iter " + d);
+            try {
+                return a;
+            } finally {
+                if (d < 2) {
+                    continue;
+                }
+                System.out.println("fin done");
+            }
+        } while (d < 3);
+        return -1;
+    }
+
+    static int inner(int a, int b) {
+        int d = 0;
+        do {
+            d++;
+            try {
+                int w = 0;
+                while (w < 3) {
+                    w++;
+                    for (int i = 0; i < 1; i++) {
+                        System.out.println("deep:" + a + "," + b);
+                        return a + b;
+                    }
+                    System.out.println("not reached this pass:" + a);
+                }
+            } finally {
+                switch (d) {
+                    case 1:
+                        System.out.println("finally continues");
+                        continue;
+                    default:
+                        System.out.println("finally falls out");
+                }
+            }
+        } while (d < 3);
+        return -2;
+    }
+
+    static int labelled(int a) {
+        int outer = 0;
+        L: do {
+            outer++;
+            for (int i = 0; i < 2; i++) {
+                try {
+                    return a + outer;
+                } finally {
+                    if (outer < 2) {
+                        continue L;
+                    }
+                }
+            }
+        } while (outer < 4);
+        return -3;
+    }
+
+    static int broken(int a) {
+        for (int i = 0; i < 3; i++) {
+            try {
+                return a + i;
+            } finally {
+                if (i == 0) { break; }
+            }
+        }
+        return -4;
+    }
+
+    public static void main(String[] args) {
+        System.out.println("outer=" + outer(7));
+        System.out.println("inner=" + inner(1, 2));
+        System.out.println("labelled=" + labelled(5));
+        System.out.println("broken=" + broken(5));
+    }
+}
+"#
+);
+
+// A method whose bytecode outgrows what a class file can SAY: a branch is a
+// signed 16-bit offset. javac compiles anything up to the 64K a code array
+// allows, and caturra's own expansion (a `StringBuilder` chain where javac
+// emits one `invokedynamic`) reaches the branch limit first. It used to PANIC
+// the compiler; it is javac's own diagnostic now. The source is generated
+// rather than written out: the whole point is that it is enormous.
+#[test]
+fn strict_a_method_that_outgrows_a_class_file() {
+    use std::fmt::Write as _;
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    let mut source = String::from("public class Huge {\n    static int m(int a) {\n");
+    for i in 0..1500 {
+        let _ = writeln!(
+            source,
+            "        if (a > {i}) {{ System.out.println(\"line {i}: \" + a + \",\" + (a * {i})); }}"
+        );
+    }
+    source.push_str("        return a;\n    }\n\n    public static void main(String[] args) {\n        System.out.println(m(1));\n    }\n}\n");
+    assert!(
+        javac_first_error("Huge", &source).is_none(),
+        "javac rejects the generated program, so this says nothing about size"
+    );
+    let refused = caturra_first_error("Huge", &source).expect("caturra refuses the method");
+    assert!(
+        refused.contains("code too large"),
+        "expected javac's own wording, got {refused}"
+    );
+}
+
 // `sorted` is a BARRIER, but it is still lazy: nothing upstream of it runs
 // until a terminal asks, and a `count()` over a sized pipeline never asks at
 // all (`Stream.count`'s javadoc says so outright), so the `peek` and the

@@ -310,7 +310,15 @@ pub(crate) fn completes_normally(statement: &Stmt) -> bool {
                 return has_escaping_break(body, None);
             }
             // The body runs first, so an abrupt body still ends the loop.
-            block_or_stmt_completes(body) || has_escaping_break(body, None)
+            // A `continue` counts too: JLS §14.21 makes a do's CONDITION
+            // reachable when the loop contains a reachable continue, so a body
+            // that only ever returns or continues still lets the loop finish.
+            // Without this, `do { try { return a; } finally { continue; } }
+            // while (c);` — javac accepts it — was refused as "unreachable
+            // statement" at whatever followed the loop.
+            block_or_stmt_completes(body)
+                || has_escaping_break(body, None)
+                || has_escaping_continue(body, None)
         }
         Stmt::For { cond, body, .. } => match cond {
             Some(cond) if constant_bool(cond) != Some(true) => true,
@@ -319,8 +327,13 @@ pub(crate) fn completes_normally(statement: &Stmt) -> bool {
         },
         Stmt::Labeled { label, body, .. } => {
             // A labeled statement also completes normally if some
-            // `break label;` inside it targets this label.
-            completes_normally(body) || has_escaping_break(body, Some(label))
+            // `break label;` inside it targets this label — or, when it labels
+            // a `do`, a `continue label;` that makes the loop's condition
+            // reachable.
+            completes_normally(body)
+                || has_escaping_break(body, Some(label))
+                || matches!(body.as_ref(), Stmt::DoWhile { cond, .. } if constant_bool(cond) != Some(true))
+                    && has_escaping_continue(body, Some(label))
         }
         Stmt::Switch { arms, .. } => switch_completes_normally(arms),
         Stmt::Try {
@@ -377,6 +390,54 @@ fn switch_completes_normally(arms: &[crate::ast::SwitchArm]) -> bool {
 /// descend into a nested loop or switch (that one would capture it).
 /// `Some(name)` asks about `break name;`, which escapes any nesting, so the
 /// search descends everywhere.
+/// Whether `statement` contains a `continue` that reaches the loop being
+/// asked about — the mirror of [`has_escaping_break`], with one difference
+/// that matters: a nested SWITCH captures an unlabeled `break` but not an
+/// unlabeled `continue`, which passes straight through it to the loop.
+fn has_escaping_continue(statement: &Stmt, label: Option<&str>) -> bool {
+    match statement {
+        Stmt::Continue {
+            label: continue_label,
+            ..
+        } => match label {
+            Some(wanted) => continue_label.as_deref() == Some(wanted),
+            None => continue_label.is_none(),
+        },
+        Stmt::Block(body) => body.iter().any(|s| has_escaping_continue(s, label)),
+        Stmt::If { then, els, .. } => {
+            has_escaping_continue(then, label)
+                || els
+                    .as_deref()
+                    .is_some_and(|e| has_escaping_continue(e, label))
+        }
+        Stmt::Labeled { body, .. } => has_escaping_continue(body, label),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            body.iter().any(|s| has_escaping_continue(s, label))
+                || catches
+                    .iter()
+                    .any(|c| c.body.iter().any(|s| has_escaping_continue(s, label)))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|f| f.iter().any(|s| has_escaping_continue(s, label)))
+        }
+        // A nested loop captures an unlabeled continue; a labeled one passes
+        // straight through it.
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::ForEach { body, .. } => label.is_some() && has_escaping_continue(body, label),
+        Stmt::Switch { arms, .. } => arms
+            .iter()
+            .any(|arm| arm.body.iter().any(|s| has_escaping_continue(s, label))),
+        _ => false,
+    }
+}
+
 fn has_escaping_break(statement: &Stmt, label: Option<&str>) -> bool {
     match statement {
         Stmt::Break {

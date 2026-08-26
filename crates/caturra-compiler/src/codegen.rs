@@ -288,7 +288,11 @@ fn emit_clinit(
     body.code.push_op(op::RETURN, 0);
     let max_locals = body.max_slot;
     let local_var_debug = std::mem::take(&mut body.local_var_debug);
-    let (bytecode, max_stack, line_numbers, exception_table) = body.code.finish();
+    let code = std::mem::replace(&mut body.code, CodeBuilder::new());
+    let (bytecode, max_stack, line_numbers, exception_table, too_large) = code.finish();
+    if too_large {
+        body.error(decl.span, "code too large");
+    }
     finish_method_info(
         pool,
         "<clinit>",
@@ -7571,7 +7575,11 @@ fn emit_method(
 
     let max_locals = body.max_slot;
     let local_var_debug = std::mem::take(&mut body.local_var_debug);
-    let (bytecode, max_stack, line_numbers, exception_table) = body.code.finish();
+    let code = std::mem::replace(&mut body.code, CodeBuilder::new());
+    let (bytecode, max_stack, line_numbers, exception_table, too_large) = code.finish();
+    if too_large {
+        body.error(decl.span, "code too large");
+    }
 
     let descriptor = method_descriptor(path, diagnostics, table, decl);
     verify_descriptor_agreement(path, table, decl, &descriptor);
@@ -15683,7 +15691,16 @@ impl BodyGen<'_> {
             // Each copy has its own exclusion set, so the split is per guard,
             // not once around the lot.
             self.suspend_protected(entry.region);
+            // A `break`/`continue` inside the finally binds to the loops
+            // enclosing the TRY it belongs to — not to the ones enclosing the
+            // `return` that dragged this copy here. Hiding the loops opened
+            // since the guard was pushed is what makes that true: a `continue`
+            // in a finally used to re-enter the innermost loop AROUND THE
+            // RETURN instead of the one around the try, so a pending return
+            // was discarded into the wrong loop and the method ran on.
+            let hidden = self.loop_stack.split_off(entry.loop_len);
             self.emit_block(&entry.stmts);
+            self.loop_stack.extend(hidden);
             self.resume_protected(entry.region);
             popped.push(entry);
         }
@@ -15867,9 +15884,22 @@ impl BodyGen<'_> {
                 let actual = self.expr(value);
                 let value_const = self.const_int(value);
                 self.convert_for_assignment_const(actual, expected, value.span(), value_const);
-                // Enclosing finally blocks run with the return value
-                // parked on the stack (they balance to empty).
-                self.emit_pending_finallys(None);
+                // Enclosing finally blocks run before the method exits, and
+                // the value being returned is PARKED IN A LOCAL while they do
+                // — not left on the operand stack. A handler entered anywhere
+                // inside a finally copy clears the stack to just its exception,
+                // so a `finally` that caught anything at all (its own throw,
+                // even one it handles itself) took the parked value with it and
+                // the `ireturn` that followed underflowed: malformed bytecode
+                // out of ordinary Java. javac parks it the same way.
+                if self.finally_stack.is_empty() {
+                    self.emit_pending_finallys(None);
+                } else {
+                    let slot = self.take_slots(expected.width());
+                    self.emit_store(slot, expected);
+                    self.emit_pending_finallys(None);
+                    self.emit_load(slot, expected);
+                }
                 let opcode = match expected {
                     JType::Double => op::DRETURN,
                     JType::Long => op::LRETURN,
@@ -30692,7 +30722,13 @@ impl CodeBuilder {
         self.drop_stack(1);
     }
 
-    /// Resolve all label patches and return the final bytecode.
+    /// Resolve all label patches and return the final bytecode, and whether
+    /// the method OUTGREW what a class file can say: a branch is a signed
+    /// 16-bit offset, and the code array is a `u16` of bytes. A method that
+    /// big used to PANIC the compiler here — the one failure worse than a
+    /// wrong answer, since it takes the whole worker with it. The caller
+    /// reports it as javac does, "code too large", and the bytes handed back
+    /// are only good enough to keep compiling the rest of the program.
     #[allow(clippy::type_complexity)] // one assembly hand-off
     fn finish(
         mut self,
@@ -30701,12 +30737,17 @@ impl CodeBuilder {
         u16,
         Vec<(u16, u16)>,
         Vec<caturra_classfile::ExceptionTableEntry>,
+        bool,
     ) {
+        let mut too_large = self.bytes.len() > usize::from(u16::MAX);
         for (patch_at, opcode_at, label) in &self.patches {
             let target = self.labels[label.0].expect("branch to unbound label");
-            let offset = i32::try_from(target).expect("code too large")
-                - i32::try_from(*opcode_at).expect("code too large");
-            let offset = i16::try_from(offset).expect("branch offset exceeds 16 bits");
+            let offset = i64::from(u32::try_from(target).unwrap_or(u32::MAX))
+                - i64::from(u32::try_from(*opcode_at).unwrap_or(u32::MAX));
+            let offset = i16::try_from(offset).unwrap_or_else(|_| {
+                too_large = true;
+                0
+            });
             self.bytes[*patch_at..*patch_at + 2].copy_from_slice(&offset.to_be_bytes());
         }
         (
@@ -30714,6 +30755,7 @@ impl CodeBuilder {
             self.max_stack,
             self.line_numbers,
             self.exception_entries,
+            too_large,
         )
     }
 }

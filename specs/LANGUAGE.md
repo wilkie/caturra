@@ -8372,6 +8372,74 @@ refusal, not a wrong answer.
 
 Pinned by `diff_a_stream_element_survives_its_source`.
 
+### Where an abrupt exit really goes (2026-08-25)
+
+Fuzzing random CONTROL FLOW — loops, labels, switches, try/catch/finally and
+try-with-resources nested into each other, with a `return`, `break`, `continue`
+or `throw` allowed wherever one is legal — found three defects in the same
+seam: what happens to a `return` while the finallys between it and the method
+exit run.
+
+**The return value was parked on the operand stack.** A handler entered
+anywhere inside a finally copy clears the stack to just its exception, so a
+`finally` that caught anything at all — even its own throw, handled entirely
+within itself — took the parked value with it, and the `ireturn` that followed
+underflowed:
+
+```java
+static int m(int a) {
+    try {
+        return a + 1;
+    } finally {
+        try { throw new IllegalArgumentException("x"); } catch (RuntimeException e) { }
+    }
+}
+```
+
+That is `operand stack underflow (malformed bytecode)` out of ordinary Java —
+an abort, the failure mode worse than a wrong answer. The value goes in a local
+now, which is where javac has always put it.
+
+**A `continue` inside a finally continued the wrong loop.** The copy of a
+finally that a `return` drags along is emitted where the return is, inside
+whatever loops surround THAT — but a `break` or `continue` written in a finally
+belongs to the loops around its own `try`. The loops opened since are hidden
+while the copy is emitted, so:
+
+```java
+do {
+    try {
+        while (w < 3) {
+            for (int i = 0; i < 1; i++) { return a; }
+            ...
+        }
+    } finally {
+        if (first) { continue; }   // the DO, not the while
+    }
+} while (...);
+```
+
+discards the pending return and starts the next `do` iteration, where caturra
+had resumed in the middle of the `while` it had already left.
+
+**And the same program has to compile.** A `do` whose body only ever returns or
+continues still completes normally: JLS §14.21 makes a do's CONDITION reachable
+when the loop contains a reachable `continue`, so what follows the loop is
+reachable too. caturra called it "unreachable statement" and refused a program
+javac accepts. The rule needed the mirror of `has_escaping_break` — with the
+difference that a nested switch captures an unlabeled `break` but not an
+unlabeled `continue`, which passes straight through it.
+
+420 generated programs, three shapes of nesting, agree with a real JDK
+exactly — apart from the ones caturra now says are too big, below. Pinned by
+`diff_a_return_waits_for_a_catching_finally` and
+`diff_a_finally_continues_the_right_loop`.
+
+**A fourth defect the same fuzz found: the compiler PANICKED** on a method
+whose bytecode outgrew a 16-bit branch offset (`branch offset exceeds 16 bits`).
+It reports javac's own `code too large` now — see the divergence list below,
+since caturra's limit is reached sooner than javac's.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -8476,6 +8544,14 @@ entries after it was written down.
   hold block statements like any other block, but the arm parser reads
   STATEMENTS only, and a class declaration is not one. Every other block
   position takes it. (`stricter_local_class_in_a_switch_arm`)
+- A method whose bytecode outgrows a 16-bit branch offset — `code too large`,
+  javac's own wording, at about half the size javac allows. A class file's
+  branches are signed 16-bit, and caturra reaches that before the 64K limit on
+  the code array itself, because a string concatenation compiles to a
+  `StringBuilder` chain where javac emits one `invokedynamic`. Around 1,400
+  printing statements in a single method; javac takes about 3,000 of them.
+  Until this was written it was a compiler PANIC.
+  (`strict_a_method_that_outgrows_a_class_file`)
 - `Map.Entry.comparingByValue().reversed()` with no type witness. javac
   infers `Comparator<Entry<Object, V>>` for the bare factory call, and
   `.reversed()` freezes that before the target type can correct it, so javac
