@@ -189,6 +189,11 @@ pub(crate) struct Interpreter<'run> {
     /// view at construction, like the index style beside it, because the
     /// wrapper itself cannot tell them apart.
     view_class: HashMap<HeapRef, &'static str>,
+    /// How a stack-trace frame in a SYNTHESIZED class is written, from the
+    /// class file's `CaturraTraceName`: a lambda's javac-style synthetic
+    /// method on its enclosing class, or the empty string for a method
+    /// reference, whose frame a JDK does not have at all.
+    trace_names: HashMap<String, String>,
     /// A PRIORITY QUEUE cursor's `forgetMeNot` queue, and the element it last
     /// yielded from it. Removing through a heap cursor can move an element
     /// UP past the cursor, into territory already walked; the JDK's iterator
@@ -298,6 +303,21 @@ impl<'run> Interpreter<'run> {
             checked_cursor_views: std::collections::HashSet::new(),
             view_index_style: HashMap::new(),
             view_class: HashMap::new(),
+            trace_names: classes
+                .iter()
+                .filter_map(|(name, class)| {
+                    let value = class
+                        .attributes
+                        .iter()
+                        .find(|a| {
+                            class.constant_pool.get_utf8(a.name_index)
+                                == Some(caturra_classfile::debug::TRACE_NAME_ATTRIBUTE)
+                        })
+                        .and_then(|a| caturra_classfile::debug::decode_source_file(&a.info))
+                        .and_then(|index| class.constant_pool.get_utf8(index))?;
+                    Some((name.clone(), value.to_owned()))
+                })
+                .collect(),
             cursor_pending: HashMap::new(),
             spent_streams: std::collections::HashSet::new(),
             stream_origins: HashMap::new(),
@@ -425,20 +445,34 @@ impl<'run> Interpreter<'run> {
     /// CONSTRUCTION, as `Throwable.fillInStackTrace` does — which is why a
     /// caught-and-rethrown exception keeps its original frames.
     fn stack_frame_lines(&self) -> Vec<String> {
-        let format_line = |class: &str, method: &str, file: &str, line: Option<u16>| match line {
-            Some(line) => format!("{class}.{method}({file}:{line})"),
-            None => format!("{class}.{method}({file})"),
+        // A synthesized class writes its frame the way javac writes it: a
+        // lambda's is a synthetic METHOD on the enclosing class
+        // (`T.lambda$main$0`), and a method reference has no frame at all —
+        // javac's `invokedynamic` calls the target directly. Without this a
+        // trace named caturra's own machinery, `Lambda$1.run`, in every
+        // program that throws inside a lambda.
+        let format_line = |class: &str, method: &str, file: &str, line: Option<u16>| {
+            let head = match self.trace_names.get(class) {
+                Some(name) if name.is_empty() => return None,
+                Some(name) => name.clone(),
+                None => format!("{class}.{method}"),
+            };
+            Some(match line {
+                Some(line) => format!("{head}({file}:{line})"),
+                None => format!("{head}({file})"),
+            })
         };
         let mut lines = Vec::new();
         if let Some(current) = &self.current_location
             && !is_injected_library(&current.code.source_file)
-        {
-            lines.push(format_line(
+            && let Some(line) = format_line(
                 current.class_name,
                 current.method_name,
                 &current.code.source_file,
                 current.line,
-            ));
+            )
+        {
+            lines.push(line);
         }
         let trace_frames = |frames: &[Frame<'run>], lines: &mut Vec<String>| {
             for suspended in frames.iter().rev() {
@@ -446,12 +480,14 @@ impl<'run> Interpreter<'run> {
                     continue;
                 }
                 let class_name = suspended.class.class_name().unwrap_or("<unknown>");
-                lines.push(format_line(
+                if let Some(line) = format_line(
                     class_name,
                     suspended.method_name,
                     &suspended.code.source_file,
                     suspended.current_line,
-                ));
+                ) {
+                    lines.push(line);
+                }
             }
         };
         trace_frames(&self.frames, &mut lines);
@@ -460,13 +496,14 @@ impl<'run> Interpreter<'run> {
         for (caller, frames) in self.suspended_runs.iter().rev() {
             if let Some(caller) = caller
                 && !is_injected_library(&caller.code.source_file)
-            {
-                lines.push(format_line(
+                && let Some(line) = format_line(
                     caller.class_name,
                     caller.method_name,
                     &caller.code.source_file,
                     caller.line,
-                ));
+                )
+            {
+                lines.push(line);
             }
             trace_frames(frames, &mut lines);
         }
@@ -2815,8 +2852,17 @@ impl<'run> Interpreter<'run> {
             }
             let Some(caller) = self.frames.pop() else {
                 if let Some(wrapper) = rewrapped {
+                    self.last_thrown = Some(wrapper);
                     return Err(VmError::UncaughtException(self.render_throwable(wrapper)));
                 }
+                // Nothing here handles it, so the thrown OBJECT goes back on
+                // the register for whoever catches it further out. This run may
+                // be a nested one — native code driving a stream, a comparator,
+                // a `forEach` — and taking the object off the register there
+                // left the real catch, one level out, to re-materialize a copy
+                // from the error text: same class and message, but no cause,
+                // no suppressed list and none of a user subclass's fields.
+                self.last_thrown = thrown_object;
                 return Ok(false);
             };
             // A caller's saved pc normally points just past its invoke

@@ -1039,6 +1039,7 @@ impl Parser<'_> {
             is_public,
             is_nested: false,
             enclosing: None,
+            trace_name: None,
             binary_name: None,
             superclass,
             interfaces,
@@ -4080,6 +4081,7 @@ impl Parser<'_> {
             is_public: false,
             is_nested: false,
             enclosing: None,
+            trace_name: None,
             binary_name: None,
             // The supertype is resolved to extends/implements by the
             // compiler (it knows which names are interfaces).
@@ -5013,6 +5015,7 @@ fn desugar_enum(
         is_public: false,
         is_nested: false,
         enclosing: None,
+        trace_name: None,
         binary_name: None,
         is_anonymous: false,
         is_local: false,
@@ -5479,6 +5482,7 @@ fn erasure_target(tp: &TypeParam, span: SourceSpan, synthesized: &mut Vec<ClassD
         synthesized.push(ClassDecl {
             name: name.clone(),
             enclosing: None,
+            trace_name: None,
             binary_name: None,
             superclass: None,
             interfaces: bounds,

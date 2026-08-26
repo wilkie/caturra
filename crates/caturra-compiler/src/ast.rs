@@ -37,6 +37,12 @@ pub struct ClassDecl {
     /// file-name rule applies to top-level types only, so a `public static
     /// class Inner` is exempt.
     pub is_nested: bool,
+    /// How a stack-trace FRAME in this class should be written, when it is
+    /// not the class's own name. A lambda's frame is javac's synthetic method
+    /// on the ENCLOSING class (`T.lambda$main$0`), and a method reference has
+    /// no frame at all — javac compiles it to an `invokedynamic` that calls
+    /// the target directly, so an empty string here means "hide this frame".
+    pub trace_name: Option<String>,
     /// For a synthesized anonymous/lambda class: the class whose method
     /// created it. Hoisting to the top level loses sight of that class's
     /// static fields, so name resolution falls back to them.

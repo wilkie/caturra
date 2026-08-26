@@ -8487,6 +8487,58 @@ accepts — a `long` of milliseconds — is refused honestly instead: caturra ha
 no `Date`, `Calendar` or `java.time`, and a calendar reading would need the
 default time zone, which in a browser is the reader's.
 
+### The frames a trace really has (2026-08-26)
+
+Generated call graphs that end in a throw — through lambdas, method
+references, anonymous classes, constructors, nested classes, recursion,
+`finally`, a wrapped cause and a stream — compared frame by frame with a real
+JDK. Two defects, both in what a student sees the moment a program crashes.
+
+**A lambda's frame named caturra's own machinery.** javac compiles a lambda to
+a synthetic METHOD on the enclosing class, so its frame is
+`Frames.lambda$main$0`; caturra printed `Lambda$1.run`. Reproducing the name
+means reproducing javac's numbering, which is per class, in SOURCE order of the
+members — a lambda in a static field initializer is `lambda$static$0`, one in a
+constructor or an instance initializer is `lambda$new$…` — and, where one
+lambda contains another, INNERMOST FIRST, because javac numbers as each
+translation finishes. The synthesized class carries that name in a class-file
+attribute now, so the VM can write the frame without knowing anything about
+lambdas.
+
+**And a method reference had a frame that does not exist.** javac's
+`invokedynamic` calls the target directly, so a trace goes straight from the
+target to whoever ran the functional interface; caturra's synthesized forwarder
+sat in between. The same attribute hides it.
+
+**The other defect was not about names at all.** An exception thrown inside
+native-driven user code — a stream op, a comparator, a `forEach`, a map's
+compute function — is caught one level out, past the native frame. The handler
+search takes the thrown OBJECT off its register while looking, and when nothing
+in the nested run handled it, it never put it back: the real catch, one level
+out, re-materialized a copy from the error TEXT. Same class, same message, and
+nothing else — no cause, no suppressed list, none of a user subclass's fields,
+and a different identity:
+
+```java
+try {
+    Stream.of(1).forEach(x -> { throw new IllegalStateException("s", new IOException("c")); });
+} catch (RuntimeException e) {
+    e.getCause();   // the JDK's IOException; caturra's null
+}
+```
+
+120 generated programs agree with a real JDK exactly, comparing the frames a
+program can see. **What is left is deliberate:** a JDK's trace also contains
+frames INSIDE the JDK (`java.base/java.util.Spliterators$ArraySpliterator.forEachRemaining`,
+`jdk.internal.util.Preconditions.outOfBounds`), and caturra's library is native
+— it has no Java frames to show, and inventing them would be inventing line
+numbers in a source file that does not exist here. Those frames also differ
+between JDK versions, which is why the comparison filters them rather than
+chasing them.
+
+Pinned by `diff_a_trace_names_a_lambda_as_javac_does` and
+`diff_a_thrown_object_survives_a_native_frame`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

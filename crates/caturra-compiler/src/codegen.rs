@@ -116,6 +116,18 @@ fn emit_class(
         name_index: source_file_name,
         info: caturra_classfile::debug::encode_source_file(file_index),
     });
+    // How a stack-trace frame in this class is written, when it is not the
+    // class's own name (a synthesized lambda or method reference).
+    if let Some(trace_name) = &decl.trace_name {
+        let value_index = class.constant_pool.intern_utf8(trace_name);
+        let attribute_name = class
+            .constant_pool
+            .intern_utf8(caturra_classfile::debug::TRACE_NAME_ATTRIBUTE);
+        class.attributes.push(AttributeInfo {
+            name_index: attribute_name,
+            info: caturra_classfile::debug::encode_source_file(value_index),
+        });
+    }
     for interface in decl.interfaces.iter().chain(anon_interfaces.iter()) {
         // The ALIASED name, as the method table records it: a source
         // `Comparator` is caturra's bundled `__Comparator`. The class file used

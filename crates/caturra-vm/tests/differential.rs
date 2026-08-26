@@ -29838,6 +29838,135 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// What a stack trace calls a LAMBDA. javac compiles one to a synthetic method
+// on the ENCLOSING class — `T.lambda$main$0` — numbered per class in source
+// order of the members, innermost first where one contains another, and named
+// after the member it sits in (`new` for a constructor or instance
+// initializer, `static` for a static one). caturra named its own machinery,
+// `Lambda$1.run`, in every program that throws inside a lambda. A method
+// REFERENCE has no frame at all: javac's `invokedynamic` calls the target
+// directly.
+differential_test!(
+    diff_a_trace_names_a_lambda_as_javac_does,
+    "Frames",
+    r#"
+import java.util.function.*;
+
+public class Frames {
+    static Runnable first = () -> { throw new RuntimeException("static field"); };
+    Runnable second = () -> { throw new RuntimeException("instance field"); };
+
+    Frames() {
+        Runnable r = () -> { throw new RuntimeException("constructor"); };
+        r.run();
+    }
+
+    static void nested() {
+        Runnable outer = () -> {
+            Runnable inner = () -> { throw new RuntimeException("inner"); };
+            inner.run();
+        };
+        outer.run();
+    }
+
+    static void twice() {
+        Runnable a = () -> { throw new RuntimeException("a"); };
+        Runnable b = () -> { throw new RuntimeException("b"); };
+        try { a.run(); } catch (RuntimeException e) { print(e); }
+        b.run();
+    }
+
+    static void target() { throw new IllegalStateException("target"); }
+
+    static void viaReference() {
+        Runnable r = Frames::target;
+        r.run();
+    }
+
+    static class Inner {
+        static void go() {
+            Runnable r = () -> { throw new RuntimeException("inner class"); };
+            r.run();
+        }
+    }
+
+    static void print(Throwable e) {
+        System.out.println("=== " + e);
+        for (StackTraceElement el : e.getStackTrace()) {
+            System.out.println("   at " + el);
+        }
+    }
+
+    public static void main(String[] args) {
+        try { first.run(); } catch (RuntimeException e) { print(e); }
+        try { new Frames(); } catch (RuntimeException e) { print(e); }
+        try { new Frames().second.run(); } catch (RuntimeException e) { print(e); }
+        try { nested(); } catch (RuntimeException e) { print(e); }
+        try { twice(); } catch (RuntimeException e) { print(e); }
+        try { viaReference(); } catch (RuntimeException e) { print(e); }
+        try { Inner.go(); } catch (RuntimeException e) { print(e); }
+    }
+}
+"#
+);
+
+// An exception thrown inside NATIVE-driven user code — a stream op, a
+// comparator, a `forEach`, a map's compute function — is caught one level out,
+// past the native frame. The thrown OBJECT has to survive that: taking it off
+// the register when no handler was found in the nested run left the real catch
+// to re-materialize a copy from the error text, which has the same class and
+// message and NOTHING else — no cause, no suppressed list, none of a user
+// subclass's fields, and a different identity.
+differential_test!(
+    diff_a_thrown_object_survives_a_native_frame,
+    "Crossing",
+    r#"
+import java.util.*;
+
+public class Crossing {
+    static class Detailed extends RuntimeException {
+        final int code;
+        Detailed(String message, int code) { super(message); this.code = code; }
+        int code() { return code; }
+    }
+
+    public static void main(String[] args) {
+        Detailed original = new Detailed("boom", 42);
+        try {
+            List.of(1, 2).forEach(x -> { throw original; });
+        } catch (Detailed e) {
+            System.out.println(e.getMessage() + " code=" + e.code() + " same=" + (e == original));
+        }
+        try {
+            new ArrayList<>(List.of(3, 1, 2)).sort((a, b) -> { throw new Detailed("cmp", 7); });
+        } catch (Detailed e) {
+            System.out.println(e.getMessage() + " code=" + e.code());
+        }
+        try {
+            Map<String, Integer> counts = new HashMap<>();
+            counts.computeIfAbsent("z", k -> {
+                throw new IllegalStateException("compute", new java.io.IOException("under"));
+            });
+        } catch (RuntimeException e) {
+            System.out.println(e + " cause=" + e.getCause());
+        }
+        try {
+            java.util.stream.Stream.of("a", "bb")
+                .map(s -> {
+                    Detailed d = new Detailed("mapped", 9);
+                    d.addSuppressed(new IllegalArgumentException("sup"));
+                    throw d;
+                })
+                .collect(java.util.stream.Collectors.toList());
+        } catch (Detailed e) {
+            System.out.println(e.getMessage() + " suppressed=" + e.getSuppressed().length
+                + " " + e.getSuppressed()[0]);
+        }
+    }
+}
+"#
+);
+
 // `%a` — hexadecimal floating point. Its PRECISION rounds the significand in
 // BINARY (`%.2a` of 1e23 is `0x1.53p76`, which no truncation of the digits
 // gives), its `+`/` ` flags sign it, and a zero-pad goes between the `0x` and

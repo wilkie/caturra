@@ -78,6 +78,13 @@ pub fn desugar_lambdas(
         let mut new_classes: Vec<ClassDecl> = Vec::new();
         for class in &mut unit.classes {
             let class_name = class.name.clone();
+            // The name a FRAME in this class carries: the binary one, so a
+            // lambda in a nested class is `Outer$Inner.lambda$go$0`.
+            let owner = class
+                .binary_name
+                .clone()
+                .unwrap_or_else(|| class_name.clone());
+            let mut lambda_order: Vec<(usize, usize, String, String)> = Vec::new();
             let mut bridges: Vec<MethodDecl> = Vec::new();
             let return_types: Vec<Option<TypeRef>> = class
                 .methods
@@ -115,6 +122,9 @@ pub fn desugar_lambdas(
                     scope: vec![fields.clone(), params],
                     fields: &field_types,
                     current_class: Some(class_name.as_str()),
+                    frame_owner: (owner.as_str(), &frame_method_name(method)),
+                    lambda_order: &mut lambda_order,
+                    member_start: source_position(method.span),
                     bridges: &mut bridges,
                     shapes: &shapes,
                     supers: &supers,
@@ -148,6 +158,12 @@ pub fn desugar_lambdas(
                     scope: vec![fields.clone()],
                     fields: &field_types,
                     current_class: Some(class_name.as_str()),
+                    frame_owner: (
+                        owner.as_str(),
+                        if block.is_static { "static" } else { "new" },
+                    ),
+                    lambda_order: &mut lambda_order,
+                    member_start: source_position(block.span),
                     bridges: &mut bridges,
                     shapes: &shapes,
                     supers: &supers,
@@ -176,6 +192,12 @@ pub fn desugar_lambdas(
                         scope: vec![HashMap::new()],
                         fields: &field_types,
                         current_class: Some(class_name.as_str()),
+                        frame_owner: (
+                            owner.as_str(),
+                            if field.is_static { "static" } else { "new" },
+                        ),
+                        lambda_order: &mut lambda_order,
+                        member_start: source_position(field.span),
                         bridges: &mut bridges,
                         shapes: &shapes,
                         supers: &supers,
@@ -188,6 +210,15 @@ pub fn desugar_lambdas(
                 }
             }
             class.methods.append(&mut bridges);
+            // Hand out javac's numbers now that the whole class is walked:
+            // members in SOURCE order, and within one, the order each
+            // translation finished (innermost lambda first).
+            lambda_order.sort_by_key(|(member, seq, _, _)| (*member, *seq));
+            for (index, (_, _, synthesized, method)) in lambda_order.iter().enumerate() {
+                if let Some(decl) = new_classes.iter_mut().find(|c| &c.name == synthesized) {
+                    decl.trace_name = Some(format!("{owner}.lambda${method}${index}"));
+                }
+            }
         }
         // The class iteration's borrow of `unit.classes` is released here, so
         // this unit's synthesized lambda classes can be appended to it.
@@ -225,6 +256,18 @@ struct Ctx<'a> {
     fields: &'a HashMap<(String, String), TypeRef>,
     /// The class whose body is being walked, for `this.field` targets.
     current_class: Option<&'a str>,
+    /// How a stack-trace frame in the member being walked is written by javac:
+    /// the enclosing class's BINARY name and the synthetic method's middle
+    /// part — a method's own name, `new` for a constructor or instance
+    /// initializer, `static` for a static one.
+    frame_owner: (&'a str, &'a str),
+    /// Where that member starts in the source, and a counter of the lambdas
+    /// synthesized so far in this class. javac numbers a class's lambdas in
+    /// SOURCE order of the members, and within one, innermost FIRST (it
+    /// numbers as each translation finishes) — so the pair is recorded here
+    /// and the numbers handed out once the class is walked.
+    lambda_order: &'a mut Vec<(usize, usize, String, String)>,
+    member_start: usize,
     /// Declared methods per class, for method-reference validation.
     shapes: &'a HashMap<String, Vec<MethodShape>>,
     /// Each class's DIRECT supertypes, for joining two element types.
@@ -498,6 +541,24 @@ const LIBRARY_CONTAINERS: [&str; 15] = [
     "Deque",
     "Optional",
 ];
+
+/// A member's start, as one sortable number — javac numbers a class's lambdas
+/// in the order the members are WRITTEN, and this pass walks methods, then
+/// initializer blocks, then field initializers.
+fn source_position(span: crate::diagnostics::SourceSpan) -> usize {
+    span.start.line as usize * 100_000 + span.start.column as usize
+}
+
+/// The middle part of javac's synthetic lambda name for a method: its own
+/// name, `new` for a constructor (and an instance initializer), `static` for a
+/// static one.
+fn frame_method_name(method: &MethodDecl) -> String {
+    if method.is_constructor {
+        String::from("new")
+    } else {
+        method.name.clone()
+    }
+}
 
 fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::HashSet<String> {
     let mut set: std::collections::HashSet<String> = units
@@ -4988,6 +5049,7 @@ fn build_erased_lambda(
         is_public: false,
         is_nested: false,
         enclosing: None,
+        trace_name: None,
         binary_name: None,
         superclass: None,
         supertype_args: Vec::new(),
@@ -5054,6 +5116,20 @@ fn build_erased_lambda(
             order: 0,
             span,
         });
+    }
+    // Recorded for the numbering pass at the end of the class: this is where
+    // the translation FINISHES, so an inner lambda is recorded before the one
+    // that contains it, which is the order javac numbers them in.
+    if prefix == crate::LAMBDA_CLASS_PREFIX {
+        let seq = ctx.lambda_order.len();
+        let (_, method) = ctx.frame_owner;
+        ctx.lambda_order
+            .push((ctx.member_start, seq, name.clone(), method.to_owned()));
+    } else {
+        // A method REFERENCE has no frame of its own: javac compiles it to an
+        // `invokedynamic` that calls the target directly, so a trace goes
+        // straight from the target to whoever ran the functional interface.
+        decl.trace_name = Some(String::new());
     }
     ctx.new_classes.push(decl);
 
@@ -5322,11 +5398,23 @@ fn build_lambda_class(
     // `is_interface` flag already being set, which fails when the interface
     // lives in a later compilation unit (e.g. the injected `ActionListener`)
     // than the synthesized lambda class.
+    // Recorded for the numbering pass, exactly as the erased builder does:
+    // the two shapes of lambda class share javac's one sequence.
+    let trace_name = if prefix == crate::LAMBDA_CLASS_PREFIX {
+        let seq = ctx.lambda_order.len();
+        let (_, method_part) = ctx.frame_owner;
+        ctx.lambda_order
+            .push((ctx.member_start, seq, name.clone(), method_part.to_owned()));
+        None
+    } else {
+        Some(String::new())
+    };
     ctx.new_classes.push(ClassDecl {
         name: name.clone(),
         is_public: false,
         is_nested: false,
         enclosing: None,
+        trace_name,
         binary_name: None,
         superclass: None,
         supertype_args: Vec::new(),

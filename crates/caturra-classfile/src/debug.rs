@@ -6,6 +6,12 @@
 //! back to source lines and slot indices back to variable names.
 
 pub const SOURCE_FILE_ATTRIBUTE: &str = "SourceFile";
+/// caturra's own: how a stack-trace frame in this class is written, when it is
+/// not the class's own name. A lambda class carries javac's synthetic method
+/// on the enclosing class (`T.lambda$main$0`); an EMPTY name means the frame is
+/// not shown at all, which is what a method reference gets — javac compiles one
+/// to an `invokedynamic` that calls the target directly, so no frame exists.
+pub const TRACE_NAME_ATTRIBUTE: &str = "CaturraTraceName";
 pub const LINE_NUMBER_TABLE_ATTRIBUTE: &str = "LineNumberTable";
 pub const LOCAL_VARIABLE_TABLE_ATTRIBUTE: &str = "LocalVariableTable";
 /// Generic signatures for locals whose erased descriptor loses type
