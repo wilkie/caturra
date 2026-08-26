@@ -3523,17 +3523,17 @@ pub(crate) fn system_arraycopy(
         return Err(throw("java.lang.ArrayStoreException: arraycopy"));
     };
     // Not an array at all (the parameters are declared `Object`).
-    let not_array = |which: &str, object: &HeapObject| {
+    let not_array = |which: &str, reference: HeapRef| {
         throw(format!(
             "java.lang.ArrayStoreException: arraycopy: {which} type {} is not an array",
-            crate::interpreter::heap_object_binary_name(object)
+            crate::interpreter::heap_binary_name(heap, reference)
         ))
     };
     let Some(source_kind) = arraycopy_type_name(source_object) else {
-        return Err(not_array("source", source_object));
+        return Err(not_array("source", source));
     };
     let Some(destination_kind) = arraycopy_type_name(destination_object) else {
-        return Err(not_array("destination", destination_object));
+        return Err(not_array("destination", destination));
     };
     // Kinds must match exactly: a `boolean[]` never copies into an `int[]`,
     // even though both hold their elements as 32-bit words.

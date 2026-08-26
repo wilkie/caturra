@@ -29838,6 +29838,86 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// `%a` — hexadecimal floating point. Its PRECISION rounds the significand in
+// BINARY (`%.2a` of 1e23 is `0x1.53p76`, which no truncation of the digits
+// gives), its `+`/` ` flags sign it, and a zero-pad goes between the `0x` and
+// the digits. Two JDK quirks are pinned deliberately: neither the sign nor the
+// fraction's own trailing zeros count toward the width, so `%012.3a` of a
+// negative answers THIRTEEN characters and `%012.3a` of zero answers fourteen.
+differential_test!(
+    diff_a_hexadecimal_float_rounds_and_pads,
+    "HexFloat",
+    r#"
+public class HexFloat {
+    static void show(String spec, double value) {
+        try { System.out.println(spec + " |" + String.format(spec, value) + "|"); }
+        catch (RuntimeException e) { System.out.println(spec + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+
+    public static void main(String[] args) {
+        double[] values = {0.0, -0.0, 1.0, 3.14159, -3.14159, 1.0 / 3, 1e23,
+                           Double.MIN_VALUE, Double.MAX_VALUE,
+                           Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY};
+        String[] specs = {"%a", "%A", "%.0a", "%.1a", "%.2a", "%.5a", "%.13a", "%.14a", "%.20a",
+                          "%+a", "% a", "%(a", "%,a", "%0a", "%20a", "%-20a", "%020a",
+                          "%012.3a", "%+012.3a", "%-12.3a", "%.3A"};
+        for (double value : values) {
+            for (String spec : specs) { show(spec, value); }
+        }
+        System.out.println(String.format("%a %.2a", 1.5f, 1.5f));
+    }
+}
+"#
+);
+
+// What a format DIAGNOSTIC says, which is three separate facts. A JDK parses
+// the WHOLE template before rendering any of it, so a flag error in a later
+// specifier precedes an earlier one's argument error. It reports a specifier
+// the way `FormatSpecifier.toString` rebuilds it — flags first, in their own
+// order, and only then the argument index, so `%3$,.2f` comes back as
+// `%,3$.2f`. And it names the argument's runtime CLASS, which caturra lost by
+// rendering an object to text at the call site.
+differential_test!(
+    diff_a_format_diagnostic_names_what_it_saw,
+    "Diagnosed",
+    r#"
+import java.util.*;
+
+public class Diagnosed {
+    static void show(String template, Object... args) {
+        try { System.out.println(template + " [" + String.format(template, args) + "]"); }
+        catch (RuntimeException e) { System.out.println(template + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+
+    public static void main(String[] args) {
+        List<Integer> list = new ArrayList<>();
+        Map<String, Integer> map = new HashMap<>();
+        show("%d", list);
+        show("%f", map);
+        show("%s %<d", list);
+        show("%h-%<s-%1$d-", list, Integer.valueOf(3), -7);
+        show("%s%2$s", "a");
+        show("%c %-o", -1, 7);
+        show("%s %0.8e", "x", 1.5);
+        show("%3$,.2f", 1.0);
+        show("%2$012.4f");
+        show("%+-10d");
+        show("% (,d");
+        show("%<,d", 1);
+        show("%2$S");
+        show("%,x", 1);
+        show("%.3d", 1);
+        show("%tY", "text");
+        show("%TY", true);
+        show("%tw", "text");
+        show("%,tY", "x");
+        show("%tY", (Object) null);
+        System.out.printf("%s|%d%n", list, 3);
+    }
+}
+"#
+);
+
 // A `return` inside a `try` is PARKED while the enclosing finallys run — and
 // where it is parked is the whole point. On the operand stack it was lost the
 // moment anything inside a finally was caught (a handler clears the stack to

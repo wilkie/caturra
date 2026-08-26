@@ -1022,6 +1022,13 @@ pub struct Heap {
     /// a == b` is true while `200 == 200` (out of range) is false. Keyed by
     /// (wrapper tag, value) — see [`Heap::box_wrapper`].
     wrapper_cache: std::collections::HashMap<(u8, i64), HeapRef>,
+    /// What an object RENDERS TO in a format call. Only the interpreter can
+    /// run a user `toString`, so `String.format`'s arguments are rendered
+    /// ahead of the formatter — but the formatter still has to name the
+    /// argument's CLASS when a conversion rejects it (`%d` of a list), so the
+    /// text is recorded BESIDE the object rather than in place of it. Pruned
+    /// by the collector like every other side map.
+    format_text: std::collections::HashMap<HeapRef, (Option<std::rc::Rc<str>>, Option<i32>)>,
     /// A builder's `capacity()`, which is HISTORY-dependent and so cannot be
     /// derived from its contents: appending ten characters one at a time
     /// leaves the initial 16, while appending forty at once jumps straight to
@@ -1061,6 +1068,7 @@ impl Default for Heap {
             live_bytes: 0,
             threshold: HEAP_FLOOR,
             wrapper_cache: std::collections::HashMap::new(),
+            format_text: std::collections::HashMap::new(),
             builder_capacity: std::collections::HashMap::new(),
         }
     }
@@ -1264,6 +1272,35 @@ impl Heap {
 
     /// Read a Java string back as Rust text (lossy on unpaired
     /// surrogates, which is what console output wants).
+    /// Record what `reference` renders to for a format call.
+    pub fn set_format_text(&mut self, reference: HeapRef, text: &str) {
+        self.format_text.entry(reference).or_default().0 = Some(std::rc::Rc::from(text));
+    }
+
+    /// Record what `reference`'s `hashCode()` answered, for `%h`.
+    pub fn set_format_hash(&mut self, reference: HeapRef, hash: i32) {
+        self.format_text.entry(reference).or_default().1 = Some(hash);
+    }
+
+    /// What `reference` renders to, if a format call asked for it.
+    #[must_use]
+    pub fn rendered_format_text(&self, reference: HeapRef) -> Option<&str> {
+        self.format_text
+            .get(&reference)
+            .and_then(|(text, _)| text.as_deref())
+    }
+
+    /// The hash a format call took of `reference`.
+    #[must_use]
+    pub fn rendered_format_hash(&self, reference: HeapRef) -> Option<i32> {
+        self.format_text.get(&reference).and_then(|(_, hash)| *hash)
+    }
+
+    /// Drop the rendered text of objects the collector reclaimed.
+    pub fn retain_format_text(&mut self, alive: impl Fn(&HeapRef) -> bool) {
+        self.format_text.retain(|reference, _| alive(reference));
+    }
+
     #[must_use]
     pub fn string_text(&self, reference: HeapRef) -> Option<String> {
         match self.get(reference)? {

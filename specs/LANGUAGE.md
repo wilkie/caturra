@@ -8440,6 +8440,53 @@ whose bytecode outgrew a 16-bit branch offset (`branch offset exceeds 16 bits`).
 It reports javac's own `code too large` now — see the divergence list below,
 since caturra's limit is reached sooner than javac's.
 
+### What a format string really says (2026-08-26)
+
+Random format strings — every conversion against every argument type, with
+random flags, widths and precisions, and the mismatches in `try`/`catch` so the
+EXCEPTION is compared too — agreed with a real JDK on 150 programs except for
+one conversion, and then a second batch with argument indices, `%<`, `printf`
+and deliberate arity errors found three more facts.
+
+**`%a` ignored its precision.** A hexadecimal float rounds in BINARY:
+`%.2a` of `1e23` is `0x1.53p76`, which no truncation of
+`0x1.52d02c7e14af6p76` produces. The JDK rounds the significand half-even to
+`1 + 4 × precision` bits (scaling a subnormal up by 2^54 so it HAS that many,
+and answering `0x1.0p1024` when `MAX_VALUE` rounds out of range), lets
+`Double.toHexString` render the result, and pads the fraction out with zeros.
+`%+a` and `% a` did not sign it either, and a zero-pad went in front of the
+`0x` rather than between it and the digits. Two JDK quirks are now reproduced
+deliberately, both visible in the width: **the sign does not count** toward it
+(so `%012.3a` of a negative is thirteen characters), and neither do the
+trailing zeros the precision adds (so `%012.3a` of `0.0` is fourteen).
+
+**A JDK parses the whole template before it renders any of it.** Every
+`FormatSpecifier` validates its own flags as it is constructed, so
+`printf("%c %-o", -1, 7)` reports the `%-o` that has no width — not the illegal
+code point in the specifier BEFORE it, which is what caturra said, and nothing
+is written to the stream first.
+
+**And it reports a specifier as it REBUILDS it**, not as the program wrote it:
+flags first, in their own canonical order, and only then the argument index. So
+`%3$,.2f` comes back as `%,3$.2f` and `%2$012.4f` as `%02$12.4f`.
+
+**The argument's class was lost twice over.** `String.format("%d", aList)` said
+its argument was a `java.lang.String`: the compiler coerced a statically-typed
+collection to text at the call site (the arm beside the one that had already
+been fixed for `Object`), and the VM's pre-render — which exists because only
+the interpreter can run a user `toString` — replaced the argument with its text.
+The text is recorded BESIDE the object now, so `%s` still prints it and `%d`
+still names `java.util.ArrayList`. The class itself comes from the same namer
+`getClass()` uses, which is the third place that fact lives and the one that
+had been answering `java.lang.Object` for every collection.
+
+**`%t` is a known conversion again.** Its suffix is parsed (`%tw` is
+`Conversion = 'tw'`, `%,tY` is a flags mismatch naming `Y`), and every argument
+type a JDK rejects is rejected with a JDK's own message. The one type it
+accepts — a `long` of milliseconds — is refused honestly instead: caturra has
+no `Date`, `Calendar` or `java.time`, and a calendar reading would need the
+default time zone, which in a browser is the reader's.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

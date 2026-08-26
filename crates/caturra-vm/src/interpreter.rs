@@ -1170,6 +1170,7 @@ impl<'run> Interpreter<'run> {
         self.view_index_style
             .retain(|reference, _| alive(reference));
         self.view_class.retain(|reference, _| alive(reference));
+        self.heap.retain_format_text(alive);
         self.cursor_pending.retain(|reference, _| alive(reference));
         self.spent_streams.retain(alive);
         self.stream_origins
@@ -4217,10 +4218,20 @@ impl<'run> Interpreter<'run> {
         }
         match need {
             ArgNeed::Nothing => Ok(None),
+            // Rendered BESIDE the object, not in place of it: replacing it
+            // told a `%d` in the same template that its argument was a
+            // `java.lang.String`, where a JDK names the real class.
             ArgNeed::Text => {
                 let text = self.string_value_of(value, 0)?;
-                let rendered = self.heap.alloc_string(&text);
-                Ok(Some(JValue::Ref(Some(rendered))))
+                self.heap.set_format_text(reference, &text);
+                Ok(None)
+            }
+            ArgNeed::Both => {
+                let text = self.string_value_of(value, 0)?;
+                self.heap.set_format_text(reference, &text);
+                let hash = self.java_hash_code(value)?;
+                self.heap.set_format_hash(reference, hash);
+                Ok(None)
             }
             // `%h` is `Integer.toHexString(arg.hashCode())`, and a user
             // `hashCode` is a user method: answered here, where one can run,
@@ -4230,11 +4241,8 @@ impl<'run> Interpreter<'run> {
             // renders exactly what the object's `hashCode` gave.
             ArgNeed::Hash => {
                 let hash = self.java_hash_code(value)?;
-                let boxed = self.heap.alloc(crate::value::HeapObject::Boxed {
-                    class_name: Rc::from("java/lang/Integer"),
-                    value: JValue::Int(hash),
-                });
-                Ok(Some(JValue::Ref(Some(boxed))))
+                self.heap.set_format_hash(reference, hash);
+                Ok(None)
             }
         }
     }
@@ -14265,250 +14273,12 @@ impl<'run> Interpreter<'run> {
         Ok(None)
     }
 
-    /// `java.lang.Class` / `java.lang.reflect.Field` methods — the
-    /// structural, read-only reflection the curriculum uses. Reads the
-    /// loaded [`ClassFile`] metadata; performs no invocation.
-    /// The binary class name behind any heap object, for `getClass()`.
-    /// The class a cursor reports from `getClass()`.
-    ///
-    /// A JDK has a separate iterator class per collection, and the names are
-    /// observable — every one below was recorded from `OpenJDK` 11 rather than
-    /// guessed. Known gap: a cursor built AT a read-only wrapper
-    /// (`unmodifiableList`, `singletonList`, `emptyList`, `nCopies`) keeps only
-    /// the backing collection, so which wrapper made it — and thus which of the
-    /// four `Collections`/`AbstractList` cursor classes it is — cannot be told
-    /// apart here; those still answer with the backing collection's cursor.
-    fn cursor_class_name(
-        &self,
-        source: HeapRef,
-        writes: IteratorWrites,
-        list: bool,
-    ) -> &'static str {
-        use crate::value::{HeapObject as H, IteratorWrites as W, MapViewKind as K};
-        match writes {
-            // `Arrays.asList(a)`: JDK 9 gave it its own cursor with no `remove`,
-            // while its `listIterator()` is still `AbstractList`'s.
-            W::ArrayCursor => return "java/util/Arrays$ArrayItr",
-            W::FixedSize => return "java/util/AbstractList$ListItr",
-            _ => {}
-        }
-        match self.heap.get(source) {
-            Some(H::ArrayList(_) | H::ArrayBackedList(_) | H::UnmodifiableList(_)) => {
-                if list {
-                    "java/util/ArrayList$ListItr"
-                } else {
-                    "java/util/ArrayList$Itr"
-                }
-            }
-            // A LinkedList has ONE cursor class: `iterator()` returns its
-            // `ListItr` too.
-            Some(H::LinkedList(_)) => "java/util/LinkedList$ListItr",
-            Some(H::Stack(_)) => "java/util/Vector$Itr",
-            Some(H::ArrayDeque(_)) => "java/util/ArrayDeque$DeqIterator",
-            Some(H::PriorityQueue { .. }) => "java/util/PriorityQueue$Itr",
-            // A HashSet IS a HashMap's key set, and a TreeSet a TreeMap's, so
-            // both report the MAP's cursor.
-            Some(H::HashSet(_) | H::UnmodifiableSet(_)) => "java/util/HashMap$KeyIterator",
-            Some(H::TreeSet { .. }) => "java/util/TreeMap$KeyIterator",
-            Some(H::MapView { map, kind, .. }) => {
-                let sorted = matches!(self.heap.get(*map), Some(H::TreeMap { .. }));
-                match (kind, sorted) {
-                    (K::Keys, false) => "java/util/HashMap$KeyIterator",
-                    (K::Keys, true) => "java/util/TreeMap$KeyIterator",
-                    (K::Values, false) => "java/util/HashMap$ValueIterator",
-                    (K::Values, true) => "java/util/TreeMap$ValueIterator",
-                    (K::Entries, false) => "java/util/HashMap$EntryIterator",
-                    (K::Entries, true) => "java/util/TreeMap$EntryIterator",
-                }
-            }
-            _ => "java/util/Iterator",
-        }
-    }
-
-    /// The class of a map's `keySet`/`values`/`entrySet` view, or of one of
-    /// its entries — all INNER classes of the map that made them, so a
-    /// `LinkedHashMap`'s keySet is `LinkedHashMap$LinkedKeySet` and not the
-    /// `HashMap$KeySet` a plain map answers. `None` for `kind` asks for the
-    /// ENTRY class instead of a view's.
-    fn map_member_class(&self, map: HeapRef, kind: Option<MapViewKind>) -> String {
-        use crate::value::{HeapObject, MapViewKind};
-        // A view over an UNMODIFIABLE map is the wrapper's own inner class.
-        if let Some(HeapObject::UnmodifiableMap(_)) = self.heap.get(map) {
-            return String::from(match kind {
-                Some(MapViewKind::Values) => "java/util/Collections$UnmodifiableCollection",
-                Some(MapViewKind::Keys) => "java/util/Collections$UnmodifiableSet",
-                Some(_) => "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet",
-                None => {
-                    "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet$UnmodifiableEntry"
-                }
-            });
-        }
-        let (owner, linked) = match self.heap.get(map) {
-            Some(HeapObject::TreeMap { .. }) => ("TreeMap", false),
-            Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) => {
-                ("HashMap", entries.is_linked())
-            }
-            _ => ("HashMap", false),
-        };
-        let owner = if linked { "LinkedHashMap" } else { owner };
-        let member = match (kind, linked) {
-            // A LinkedHashMap names its three views with a `Linked` prefix and
-            // its entry plainly `Entry`; a TreeMap's entry is `Entry` too, and
-            // only a plain HashMap calls it `Node`.
-            (Some(MapViewKind::Keys), true) => "LinkedKeySet",
-            (Some(MapViewKind::Values), true) => "LinkedValues",
-            (Some(_), true) => "LinkedEntrySet",
-            (Some(MapViewKind::Keys), false) => "KeySet",
-            (Some(MapViewKind::Values), false) => "Values",
-            (Some(_), false) => "EntrySet",
-            (None, _) => {
-                if owner == "HashMap" {
-                    "Node"
-                } else {
-                    "Entry"
-                }
-            }
-        };
-        format!("java/util/{owner}${member}")
-    }
-
+    /// The class `getClass()` answers for any heap object, with the
+    /// interpreter's own record of which JDK class a wrapped collection stands
+    /// for. [`object_class_name_of`] is the same fact without that record, for
+    /// the diagnostics that reach it with a heap and nothing else.
     fn object_class_name(&self, receiver: HeapRef) -> String {
-        use crate::value::HeapObject;
-        match self.heap.get(receiver) {
-            Some(
-                HeapObject::Instance { class_name, .. } | HeapObject::Boxed { class_name, .. },
-            ) => class_name.to_string(),
-            Some(HeapObject::JavaString(_)) => String::from("java/lang/String"),
-            Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
-            Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
-            // `Arrays.asList` answers its OWN fixed-size list class, not
-            // `java.util.ArrayList` — the two share a name and nothing else,
-            // and which one a program holds decides whether `add` throws.
-            Some(HeapObject::ArrayBackedList(_)) => String::from("java/util/Arrays$ArrayList"),
-            Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
-            Some(HeapObject::ArrayDeque(_)) => String::from("java/util/ArrayDeque"),
-            Some(HeapObject::Stack(_)) => String::from("java/util/Stack"),
-            // A LinkedHashSet/LinkedHashMap is the same object with insertion
-            // ordering, so the class it reports is the only way a program can
-            // tell them apart besides that order.
-            Some(HeapObject::HashSet(set)) => String::from(if set.is_linked() {
-                "java/util/LinkedHashSet"
-            } else {
-                "java/util/HashSet"
-            }),
-            // HashMap was the one collection missing here, so `map.getClass()`
-            // answered `java.lang.Object` — the TreeMap beside it was fine.
-            Some(HeapObject::HashMap(map)) => String::from(if map.is_linked() {
-                "java/util/LinkedHashMap"
-            } else {
-                "java/util/HashMap"
-            }),
-            Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
-            Some(HeapObject::TreeMap { .. }) => String::from("java/util/TreeMap"),
-            Some(HeapObject::PriorityQueue { .. }) => String::from("java/util/PriorityQueue"),
-            Some(HeapObject::Optional { kind, .. }) => {
-                format!("java/util/{}", kind.prefix())
-            }
-            // A library throwable stores its class DOTTED; everything else here
-            // is internal, and callers compare against internal names.
-            Some(HeapObject::Exception { class_name, .. }) => class_name.replace('.', "/"),
-            Some(HeapObject::Iterator {
-                source,
-                writes,
-                list,
-                ..
-            }) => String::from(self.cursor_class_name(*source, *writes, *list)),
-            // The I/O and reflection kinds. Reachable since `getClass` became
-            // an `Object` method every receiver answers rather than one each
-            // table had to remember — before that a File's `getClass()` could
-            // not be written, and once it could it said `java.lang.Object`.
-            // All five names recorded from a real JDK.
-            Some(HeapObject::File(_)) => String::from("java/io/File"),
-            Some(HeapObject::Scanner { .. }) => String::from("java/util/Scanner"),
-            Some(HeapObject::Reader { .. }) => String::from("java/io/BufferedReader"),
-            Some(HeapObject::Writer { .. }) => String::from("java/io/PrintWriter"),
-            Some(HeapObject::StackFrame { .. }) => String::from("java/lang/StackTraceElement"),
-            Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),
-            _ if is_array_object(self.heap.get(receiver)) => {
-                intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
-            }
-            // A WRAPPED collection: which JDK class it is was recorded when it
-            // was built, since one wrapper stands for `emptyList`,
-            // `singletonList`, `List.of` and `unmodifiableList` alike.
-            Some(
-                HeapObject::UnmodifiableList(_)
-                | HeapObject::UnmodifiableSet(_)
-                | HeapObject::UnmodifiableMap(_),
-            ) => String::from(
-                self.view_class
-                    .get(&receiver)
-                    .copied()
-                    .unwrap_or("java/util/Collections$UnmodifiableCollection"),
-            ),
-            // A map's three views and its entries are INNER classes of the map
-            // that made them, so the map's own kind decides the name — a
-            // LinkedHashMap's keySet is not a HashMap's.
-            Some(HeapObject::MapView { map, kind, .. }) => {
-                let (map, kind) = (*map, *kind);
-                self.map_member_class(map, Some(kind))
-            }
-            Some(HeapObject::MapEntry { map, .. }) => {
-                let map = *map;
-                self.view_class.get(&receiver).map_or_else(
-                    || self.map_member_class(map, None),
-                    |name| (*name).to_string(),
-                )
-            }
-            // A sub-list is an inner class of the list it views, and WHICH one
-            // says whether the view is random-access: an `ArrayList`'s has its
-            // own class, every other random-access list shares
-            // `AbstractList`'s, and a `LinkedList`'s is the plain one.
-            Some(HeapObject::SubList { backing, .. }) => {
-                let backing = *backing;
-                match self.object_class_name(backing).as_str() {
-                    // A sub-list OF a sub-list is that same class again.
-                    "java/util/ArrayList" | "java/util/ArrayList$SubList" => {
-                        String::from("java/util/ArrayList$SubList")
-                    }
-                    "java/util/LinkedList" | "java/util/AbstractList$SubList" => {
-                        String::from("java/util/AbstractList$SubList")
-                    }
-                    _ => String::from("java/util/AbstractList$RandomAccessSubList"),
-                }
-            }
-            // A `TreeSet`'s range views are `TreeSet`s themselves (each wraps a
-            // sub-map); a `TreeMap`'s say which DIRECTION they run in, and its
-            // key views are one class whichever way they go.
-            Some(HeapObject::SortedView {
-                face, descending, ..
-            }) => String::from(match (face, descending) {
-                (crate::value::SortedFace::Set, _) => "java/util/TreeSet",
-                (crate::value::SortedFace::Keys, _) => "java/util/TreeMap$KeySet",
-                (crate::value::SortedFace::Map, false) => "java/util/TreeMap$AscendingSubMap",
-                (crate::value::SortedFace::Map, true) => "java/util/TreeMap$DescendingSubMap",
-            }),
-            // A stream is deliberately absent: a JDK names a pipeline after
-            // its LAST operation AND its element family
-            // (`ReferencePipeline$3` for a mapped object stream,
-            // `IntPipeline$9` for a filtered int one), and caturra's single
-            // `Stream` object does not record which family it is. Guessing one
-            // would be a new wrong answer in place of a known one.
-            Some(HeapObject::Comparator(spec)) => String::from(match spec {
-                crate::value::ComparatorSpec::Natural => {
-                    "java/util/Comparators$NaturalOrderComparator"
-                }
-                crate::value::ComparatorSpec::Reversed(_) => {
-                    "java/util/Collections$ReverseComparator"
-                }
-                // Everything else is built from a lambda, and a JDK names a
-                // lambda's class after its address — unstable between runs.
-                _ => "java/lang/Object",
-            }),
-            Some(HeapObject::Collector(_)) => {
-                String::from("java/util/stream/Collectors$CollectorImpl")
-            }
-            _ => String::from("java/lang/Object"),
-        }
+        object_class_name_of(&self.heap, Some(&self.view_class), receiver)
     }
 
     /// The `Class` names inside a `Class[]` argument (for `getConstructor`).
@@ -18683,6 +18453,259 @@ fn is_comparable(target: &str) -> bool {
 /// The binary (dotted) name of a heap object's class, for diagnostics that
 /// name a value's type. Arrays render as their descriptor with dots
 /// (`[Ljava.lang.Integer;`), as `Class.getName` does.
+pub(crate) fn object_class_name_of(
+    heap: &Heap,
+    view_class: Option<&HashMap<HeapRef, &'static str>>,
+    receiver: HeapRef,
+) -> String {
+    use crate::value::HeapObject;
+    match heap.get(receiver) {
+        Some(HeapObject::Instance { class_name, .. } | HeapObject::Boxed { class_name, .. }) => {
+            class_name.to_string()
+        }
+        Some(HeapObject::JavaString(_)) => String::from("java/lang/String"),
+        Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
+        Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
+        // `Arrays.asList` answers its OWN fixed-size list class, not
+        // `java.util.ArrayList` — the two share a name and nothing else,
+        // and which one a program holds decides whether `add` throws.
+        Some(HeapObject::ArrayBackedList(_)) => String::from("java/util/Arrays$ArrayList"),
+        Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
+        Some(HeapObject::ArrayDeque(_)) => String::from("java/util/ArrayDeque"),
+        Some(HeapObject::Stack(_)) => String::from("java/util/Stack"),
+        // A LinkedHashSet/LinkedHashMap is the same object with insertion
+        // ordering, so the class it reports is the only way a program can
+        // tell them apart besides that order.
+        Some(HeapObject::HashSet(set)) => String::from(if set.is_linked() {
+            "java/util/LinkedHashSet"
+        } else {
+            "java/util/HashSet"
+        }),
+        // HashMap was the one collection missing here, so `map.getClass()`
+        // answered `java.lang.Object` — the TreeMap beside it was fine.
+        Some(HeapObject::HashMap(map)) => String::from(if map.is_linked() {
+            "java/util/LinkedHashMap"
+        } else {
+            "java/util/HashMap"
+        }),
+        Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
+        Some(HeapObject::TreeMap { .. }) => String::from("java/util/TreeMap"),
+        Some(HeapObject::PriorityQueue { .. }) => String::from("java/util/PriorityQueue"),
+        Some(HeapObject::Optional { kind, .. }) => {
+            format!("java/util/{}", kind.prefix())
+        }
+        // A library throwable stores its class DOTTED; everything else here
+        // is internal, and callers compare against internal names.
+        Some(HeapObject::Exception { class_name, .. }) => class_name.replace('.', "/"),
+        Some(HeapObject::Iterator {
+            source,
+            writes,
+            list,
+            ..
+        }) => String::from(cursor_class_name_of(heap, *source, *writes, *list)),
+        // The I/O and reflection kinds. Reachable since `getClass` became
+        // an `Object` method every receiver answers rather than one each
+        // table had to remember — before that a File's `getClass()` could
+        // not be written, and once it could it said `java.lang.Object`.
+        // All five names recorded from a real JDK.
+        Some(HeapObject::File(_)) => String::from("java/io/File"),
+        Some(HeapObject::Scanner { .. }) => String::from("java/util/Scanner"),
+        Some(HeapObject::Reader { .. }) => String::from("java/io/BufferedReader"),
+        Some(HeapObject::Writer { .. }) => String::from("java/io/PrintWriter"),
+        Some(HeapObject::StackFrame { .. }) => String::from("java/lang/StackTraceElement"),
+        Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),
+        _ if is_array_object(heap.get(receiver)) => {
+            intrinsics::array_class_name(heap, receiver).unwrap_or_default()
+        }
+        // A WRAPPED collection: which JDK class it is was recorded when it
+        // was built, since one wrapper stands for `emptyList`,
+        // `singletonList`, `List.of` and `unmodifiableList` alike.
+        Some(
+            HeapObject::UnmodifiableList(_)
+            | HeapObject::UnmodifiableSet(_)
+            | HeapObject::UnmodifiableMap(_),
+        ) => String::from(
+            view_class
+                .and_then(|classes| classes.get(&receiver))
+                .copied()
+                .unwrap_or("java/util/Collections$UnmodifiableCollection"),
+        ),
+        // A map's three views and its entries are INNER classes of the map
+        // that made them, so the map's own kind decides the name — a
+        // LinkedHashMap's keySet is not a HashMap's.
+        Some(HeapObject::MapView { map, kind, .. }) => {
+            let (map, kind) = (*map, *kind);
+            map_member_class_of(heap, map, Some(kind))
+        }
+        Some(HeapObject::MapEntry { map, .. }) => {
+            let map = *map;
+            view_class
+                .and_then(|classes| classes.get(&receiver))
+                .map_or_else(
+                    || map_member_class_of(heap, map, None),
+                    |name| (*name).to_string(),
+                )
+        }
+        // A sub-list is an inner class of the list it views, and WHICH one
+        // says whether the view is random-access: an `ArrayList`'s has its
+        // own class, every other random-access list shares
+        // `AbstractList`'s, and a `LinkedList`'s is the plain one.
+        Some(HeapObject::SubList { backing, .. }) => {
+            let backing = *backing;
+            match object_class_name_of(heap, view_class, backing).as_str() {
+                // A sub-list OF a sub-list is that same class again.
+                "java/util/ArrayList" | "java/util/ArrayList$SubList" => {
+                    String::from("java/util/ArrayList$SubList")
+                }
+                "java/util/LinkedList" | "java/util/AbstractList$SubList" => {
+                    String::from("java/util/AbstractList$SubList")
+                }
+                _ => String::from("java/util/AbstractList$RandomAccessSubList"),
+            }
+        }
+        // A `TreeSet`'s range views are `TreeSet`s themselves (each wraps a
+        // sub-map); a `TreeMap`'s say which DIRECTION they run in, and its
+        // key views are one class whichever way they go.
+        Some(HeapObject::SortedView {
+            face, descending, ..
+        }) => String::from(match (face, descending) {
+            (crate::value::SortedFace::Set, _) => "java/util/TreeSet",
+            (crate::value::SortedFace::Keys, _) => "java/util/TreeMap$KeySet",
+            (crate::value::SortedFace::Map, false) => "java/util/TreeMap$AscendingSubMap",
+            (crate::value::SortedFace::Map, true) => "java/util/TreeMap$DescendingSubMap",
+        }),
+        // A stream is deliberately absent: a JDK names a pipeline after
+        // its LAST operation AND its element family
+        // (`ReferencePipeline$3` for a mapped object stream,
+        // `IntPipeline$9` for a filtered int one), and caturra's single
+        // `Stream` object does not record which family it is. Guessing one
+        // would be a new wrong answer in place of a known one.
+        Some(HeapObject::Comparator(spec)) => String::from(match spec {
+            crate::value::ComparatorSpec::Natural => "java/util/Comparators$NaturalOrderComparator",
+            crate::value::ComparatorSpec::Reversed(_) => "java/util/Collections$ReverseComparator",
+            // Everything else is built from a lambda, and a JDK names a
+            // lambda's class after its address — unstable between runs.
+            _ => "java/lang/Object",
+        }),
+        Some(HeapObject::Collector(_)) => String::from("java/util/stream/Collectors$CollectorImpl"),
+        _ => String::from("java/lang/Object"),
+    }
+}
+
+/// The class of a map's `keySet`/`values`/`entrySet` view, or of one of its
+/// entries — all INNER classes of the map that made them, so a
+/// `LinkedHashMap`'s keySet is `LinkedHashMap$LinkedKeySet` and not the
+/// `HashMap$KeySet` a plain map answers. `None` for `kind` asks for the ENTRY
+/// class instead of a view's.
+fn map_member_class_of(heap: &Heap, map: HeapRef, kind: Option<MapViewKind>) -> String {
+    use crate::value::{HeapObject, MapViewKind};
+    // A view over an UNMODIFIABLE map is the wrapper's own inner class.
+    if let Some(HeapObject::UnmodifiableMap(_)) = heap.get(map) {
+        return String::from(match kind {
+            Some(MapViewKind::Values) => "java/util/Collections$UnmodifiableCollection",
+            Some(MapViewKind::Keys) => "java/util/Collections$UnmodifiableSet",
+            Some(_) => "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet",
+            None => "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet$UnmodifiableEntry",
+        });
+    }
+    let (owner, linked) = match heap.get(map) {
+        Some(HeapObject::TreeMap { .. }) => ("TreeMap", false),
+        Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) => {
+            ("HashMap", entries.is_linked())
+        }
+        _ => ("HashMap", false),
+    };
+    let owner = if linked { "LinkedHashMap" } else { owner };
+    let member = match (kind, linked) {
+        // A LinkedHashMap names its three views with a `Linked` prefix and
+        // its entry plainly `Entry`; a TreeMap's entry is `Entry` too, and
+        // only a plain HashMap calls it `Node`.
+        (Some(MapViewKind::Keys), true) => "LinkedKeySet",
+        (Some(MapViewKind::Values), true) => "LinkedValues",
+        (Some(_), true) => "LinkedEntrySet",
+        (Some(MapViewKind::Keys), false) => "KeySet",
+        (Some(MapViewKind::Values), false) => "Values",
+        (Some(_), false) => "EntrySet",
+        (None, _) => {
+            if owner == "HashMap" {
+                "Node"
+            } else {
+                "Entry"
+            }
+        }
+    };
+    format!("java/util/{owner}${member}")
+}
+
+/// The class a cursor reports from `getClass()`.
+///
+/// A JDK has a separate iterator class per collection, and the names are
+/// observable — every one below was recorded from `OpenJDK` 11 rather than
+/// guessed. Known gap: a cursor built AT a read-only wrapper
+/// (`unmodifiableList`, `singletonList`, `emptyList`, `nCopies`) keeps only the
+/// backing collection, so which wrapper made it — and thus which of the four
+/// `Collections`/`AbstractList` cursor classes it is — cannot be told apart
+/// here; those still answer with the backing collection's cursor.
+fn cursor_class_name_of(
+    heap: &Heap,
+    source: HeapRef,
+    writes: IteratorWrites,
+    list: bool,
+) -> &'static str {
+    use crate::value::{HeapObject as H, IteratorWrites as W, MapViewKind as K};
+    match writes {
+        // `Arrays.asList(a)`: JDK 9 gave it its own cursor with no `remove`,
+        // while its `listIterator()` is still `AbstractList`'s.
+        W::ArrayCursor => return "java/util/Arrays$ArrayItr",
+        W::FixedSize => return "java/util/AbstractList$ListItr",
+        _ => {}
+    }
+    match heap.get(source) {
+        Some(H::ArrayList(_) | H::ArrayBackedList(_) | H::UnmodifiableList(_)) => {
+            if list {
+                "java/util/ArrayList$ListItr"
+            } else {
+                "java/util/ArrayList$Itr"
+            }
+        }
+        // A LinkedList has ONE cursor class: `iterator()` returns its
+        // `ListItr` too.
+        Some(H::LinkedList(_)) => "java/util/LinkedList$ListItr",
+        Some(H::Stack(_)) => "java/util/Vector$Itr",
+        Some(H::ArrayDeque(_)) => "java/util/ArrayDeque$DeqIterator",
+        Some(H::PriorityQueue { .. }) => "java/util/PriorityQueue$Itr",
+        // A HashSet IS a HashMap's key set, and a TreeSet a TreeMap's, so
+        // both report the MAP's cursor.
+        Some(H::HashSet(_) | H::UnmodifiableSet(_)) => "java/util/HashMap$KeyIterator",
+        Some(H::TreeSet { .. }) => "java/util/TreeMap$KeyIterator",
+        Some(H::MapView { map, kind, .. }) => {
+            let sorted = matches!(heap.get(*map), Some(H::TreeMap { .. }));
+            match (kind, sorted) {
+                (K::Keys, false) => "java/util/HashMap$KeyIterator",
+                (K::Keys, true) => "java/util/TreeMap$KeyIterator",
+                (K::Values, false) => "java/util/HashMap$ValueIterator",
+                (K::Values, true) => "java/util/TreeMap$ValueIterator",
+                (K::Entries, false) => "java/util/HashMap$EntryIterator",
+                (K::Entries, true) => "java/util/TreeMap$EntryIterator",
+            }
+        }
+        _ => "java/util/Iterator",
+    }
+}
+
+/// The binary name of what a heap REFERENCE holds — the same class
+/// `getClass()` prints, in dotted form, for the diagnostics that name an
+/// argument's type. Taking the object alone could not see past
+/// `java.lang.Object` for a collection, so `String.format("%d", aList)` said
+/// its argument was an `Object` where a JDK says `java.util.ArrayList`.
+///
+/// Without the interpreter's `view_class` side map an unmodifiable wrapper
+/// answers the generic `Collections$UnmodifiableCollection` rather than the
+/// exact subclass it was built as; nothing but that one family is affected.
+pub(crate) fn heap_binary_name(heap: &Heap, reference: HeapRef) -> String {
+    object_class_name_of(heap, None, reference).replace('/', ".")
+}
+
 pub(crate) fn heap_object_binary_name(object: &crate::value::HeapObject) -> String {
     use crate::value::HeapObject;
     match object {

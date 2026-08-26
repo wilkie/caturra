@@ -45,10 +45,9 @@ impl FormatArg {
             FormatArg::Char(_) => String::from("java.lang.Character"),
             FormatArg::Boolean(_) => String::from("java.lang.Boolean"),
             FormatArg::Str(None) => String::from("java.lang.String"),
-            FormatArg::Str(Some(reference)) => heap.get(reference).map_or_else(
-                || String::from("java.lang.String"),
-                crate::interpreter::heap_object_binary_name,
-            ),
+            FormatArg::Str(Some(reference)) => {
+                crate::interpreter::heap_binary_name(heap, reference)
+            }
         }
     }
 }
@@ -56,6 +55,9 @@ impl FormatArg {
 fn throw(class: &str, message: &str) -> VmError {
     VmError::UncaughtException(format!("{class}: {message}"))
 }
+
+/// Every suffix `java.util.Formatter.DateTime` accepts.
+const DATE_TIME_SUFFIXES: &str = "HIklMSLNpzZsQBbhAaCYyjmdeRTrDFc";
 
 fn unknown_conversion(conversion: char) -> VmError {
     throw(
@@ -83,9 +85,56 @@ struct Spec {
     width: Option<usize>,
     precision: Option<usize>,
     conversion: char,
+    /// The SUFFIX of a `%t`/`%T` date-time conversion (`%tY` carries `Y`).
+    /// The conversion itself stays `t`/`T`, which is how a JDK stores it and
+    /// why its diagnostics name the suffix as "the conversion".
+    date_time: Option<char>,
 }
 
 impl Spec {
+    /// The specifier as a JDK REPORTS it — which is not the text the program
+    /// wrote. `FormatSpecifier.toString` rebuilds it from the parsed parts:
+    /// the flags first, in their own canonical order (`-#+ 0,(<`), and only
+    /// then the argument index. So `%3$,.2f` comes back as `%,3$.2f` and
+    /// `%2$012.4f` as `%02$12.4f`. Echoing the source text was right for every
+    /// specifier without an index and wrong for every one with one.
+    fn java_text(&self) -> String {
+        use std::fmt::Write as _;
+
+        let mut text = String::from("%");
+        for (present, flag) in [
+            (self.left_justify, '-'),
+            (self.alternate, '#'),
+            (self.plus, '+'),
+            (self.space, ' '),
+            (self.zero_pad, '0'),
+            (self.grouping, ','),
+            (self.parentheses, '('),
+            (self.relative, '<'),
+        ] {
+            if present {
+                text.push(flag);
+            }
+        }
+        if let Some(index) = self.arg_index {
+            // Stored zero-based, written the way it was read.
+            let _ = write!(text, "{}$", index + 1);
+        }
+        if let Some(width) = self.width {
+            text.push_str(&width.to_string());
+        }
+        if let Some(precision) = self.precision {
+            let _ = write!(text, ".{precision}");
+        }
+        if let Some(suffix) = self.date_time {
+            text.push(self.conversion);
+            text.push(suffix);
+        } else {
+            text.push(self.conversion);
+        }
+        text
+    }
+
     /// The first flag written, in the order the JDK reports them for the
     /// conversions that accept none at all (`%n`, `%%`).
     fn first_flag(&self) -> Option<char> {
@@ -141,6 +190,22 @@ fn java_format_inner(
     produced: &mut String,
 ) -> Result<String, VmError> {
     let chars: Vec<char> = template.chars().collect();
+    // A JDK parses the WHOLE template before it renders any of it — every
+    // `FormatSpecifier` validates its own flags as it is constructed — so a
+    // flag error in a LATER specifier is reported before an earlier one has
+    // even looked at its argument, and before `printf` writes anything at all.
+    // Validating as we went reported the first RENDER error instead:
+    // `printf("%c %-o", -1, 7)` said the code point was illegal where a JDK
+    // says the `%-o` has no width.
+    let mut scan = 0;
+    while scan < chars.len() {
+        if chars[scan] != '%' {
+            scan += 1;
+            continue;
+        }
+        let spec = parse_spec(&chars, &mut scan)?;
+        validate_spec(&spec)?;
+    }
     let mut out = String::new();
     let mut at = 0;
     let mut cursor = ArgCursor::default();
@@ -153,7 +218,6 @@ fn java_format_inner(
             continue;
         }
         let spec = parse_spec(&chars, &mut at)?;
-        validate_spec(&spec)?;
         match spec.conversion {
             '%' => {
                 let text = pad(&spec, "%");
@@ -174,7 +238,7 @@ fn java_format_inner(
                     *args.values.get(index).ok_or_else(|| {
                         throw(
                             "java.util.MissingFormatArgumentException",
-                            &format!("Format specifier '{}'", spec.text),
+                            &format!("Format specifier '{}'", spec.java_text()),
                         )
                     })?
                 };
@@ -212,7 +276,7 @@ impl ArgCursor {
         if spec.relative && !self.consumed {
             return Err(throw(
                 "java.util.MissingFormatArgumentException",
-                &format!("Format specifier '{}'", spec.text),
+                &format!("Format specifier '{}'", spec.java_text()),
             ));
         }
         let index = if spec.relative {
@@ -243,6 +307,8 @@ pub enum ArgNeed {
     Text,
     /// Its `hashCode()` — `%h` and `%H`.
     Hash,
+    /// Both, when one argument is consumed by a `%s` and a `%h` alike.
+    Both,
 }
 
 /// What the arguments will be asked for by `template`, in order.
@@ -285,13 +351,18 @@ pub fn argument_needs(template: &str) -> Vec<ArgNeed> {
         if needs.len() <= index {
             needs.resize(index + 1, ArgNeed::Nothing);
         }
-        if needs[index] == ArgNeed::Nothing {
-            needs[index] = need;
-        }
+        needs[index] = match (needs[index], need) {
+            (ArgNeed::Nothing, other) | (other, ArgNeed::Nothing) => other,
+            (a, b) if a == b => a,
+            // A `%s` and a `%h` over the same argument want different things
+            // of it, and both have to be taken before the formatter runs.
+            _ => ArgNeed::Both,
+        };
     }
     needs
 }
 
+#[allow(clippy::too_many_lines)] // one part of the specifier grammar per block
 fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
     let start = *at;
     *at += 1; // '%'
@@ -309,6 +380,7 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
         width: None,
         precision: None,
         conversion: ' ',
+        date_time: None,
     };
 
     // Argument index: digits followed by '$'.
@@ -409,6 +481,23 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
     }
     *at += 1;
     spec.conversion = conversion;
+    // `%tY` / `%TY` — a date-time conversion is TWO characters, and the second
+    // is what a JDK's diagnostics call the conversion. An unknown suffix names
+    // both (`Conversion = 'tw'`); a `%t` at the end of the template names just
+    // the `t`.
+    if matches!(conversion, 't' | 'T') {
+        let suffix = *chars
+            .get(*at)
+            .ok_or_else(|| unknown_conversion(conversion))?;
+        *at += 1;
+        if !DATE_TIME_SUFFIXES.contains(suffix) {
+            return Err(throw(
+                "java.util.UnknownFormatConversionException",
+                &format!("Conversion = '{conversion}{suffix}'"),
+            ));
+        }
+        spec.date_time = Some(suffix);
+    }
     spec.text = chars[start..*at].iter().collect();
     Ok(spec)
 }
@@ -418,6 +507,7 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
 /// messages. caturra used to render these silently — the accept-invalid
 /// direction. Only the widely-hit rules are enforced; an omission renders as
 /// before, never a spurious throw.
+#[allow(clippy::too_many_lines)] // one flag rule per conversion family
 fn validate_spec(spec: &Spec) -> Result<(), VmError> {
     let c = spec.conversion;
     // `%n` and `%%` take no width or precision.
@@ -450,7 +540,7 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
     // missing-argument one.
     if !matches!(
         lower,
-        's' | 'b' | 'h' | 'c' | 'd' | 'o' | 'x' | 'e' | 'f' | 'g' | 'a'
+        's' | 'b' | 'h' | 'c' | 'd' | 'o' | 'x' | 'e' | 'f' | 'g' | 'a' | 't'
     ) {
         return Err(throw(
             "java.util.UnknownFormatConversionException",
@@ -462,7 +552,10 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
     // `MissingFormatWidthException` naming the whole specifier. `,`/`+`/` `/`(`
     // do not require one.
     if spec.width.is_none() && (spec.left_justify || spec.zero_pad) {
-        return Err(throw("java.util.MissingFormatWidthException", &spec.text));
+        return Err(throw(
+            "java.util.MissingFormatWidthException",
+            &spec.java_text(),
+        ));
     }
 
     // Mutually exclusive flag pairs (checked on the flags alone).
@@ -520,6 +613,45 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
     // Scientific notation has no grouping to do, so ',' is a mismatch there.
     if lower == 'e' && spec.grouping {
         return Err(mismatch(','));
+    }
+    // A date-time conversion takes only '-' (which the width rule above
+    // covers). Its diagnostics name the SUFFIX as the conversion, since that
+    // is the character that chose the format.
+    if lower == 't' {
+        let suffix = spec.date_time.unwrap_or(spec.conversion);
+        let mismatch = |flag: char| -> VmError {
+            throw(
+                "java.util.FormatFlagsConversionMismatchException",
+                &format!("Conversion = {suffix}, Flags = {flag}"),
+            )
+        };
+        for (present, flag) in [
+            (spec.grouping, ','),
+            (spec.plus, '+'),
+            (spec.space, ' '),
+            (spec.parentheses, '('),
+            (spec.zero_pad, '0'),
+            (spec.alternate, '#'),
+        ] {
+            if present {
+                return Err(mismatch(flag));
+            }
+        }
+        if let Some(precision) = spec.precision {
+            return Err(throw(
+                "java.util.IllegalFormatPrecisionException",
+                &precision.to_string(),
+            ));
+        }
+    }
+    // A hexadecimal float has no grouping and no parenthesized negative: its
+    // digits are not decimal ones. It DOES take '+', ' ' and '0'.
+    if lower == 'a' {
+        for (present, flag) in [(spec.grouping, ','), (spec.parentheses, '(')] {
+            if present {
+                return Err(mismatch(flag));
+            }
+        }
     }
 
     // Precision is meaningless for the integer and character conversions.
@@ -646,7 +778,14 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
     match conversion.to_ascii_lowercase() {
         's' => {
             let mut text = match arg {
-                FormatArg::Str(Some(reference)) => heap.string_text(reference).unwrap_or_default(),
+                // A reference that is not a String was rendered ahead of the
+                // formatter, since only the interpreter can run a user
+                // `toString` — but it is still the OBJECT here, so `%d` in the
+                // same template can name its class.
+                FormatArg::Str(Some(reference)) => heap
+                    .string_text(reference)
+                    .or_else(|| heap.rendered_format_text(reference).map(str::to_owned))
+                    .unwrap_or_default(),
                 FormatArg::Str(None) => String::from("null"),
                 FormatArg::Int(v) => v.to_string(),
                 FormatArg::Short(v) => v.to_string(),
@@ -697,7 +836,11 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                         }
                         hash
                     }
-                    _ => reference.cast_signed(),
+                    // A user `hashCode` is user code, so the interpreter took
+                    // it ahead of the formatter and recorded it here.
+                    _ => heap
+                        .rendered_format_hash(reference)
+                        .unwrap_or_else(|| reference.cast_signed()),
                 },
                 FormatArg::Int(v) => v,
                 FormatArg::Short(v) => i32::from(v),
@@ -836,28 +979,202 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 pad_sign_aware(spec, value.is_sign_negative() && !value.is_nan(), &text)
             })
         }
-        // `%a`/`%A` — hexadecimal floating-point, the text `Double.toHexString`
-        // produces (which already carries any sign). `%A` uppercases it.
+        // `%t`/`%T` — a date-time conversion. The only argument types a JDK
+        // accepts are `long`/`Long`, `Date`, `Calendar` and `TemporalAccessor`,
+        // and caturra models none of the three classes — so every WRONG type
+        // is reported exactly as a JDK reports it, and the one right type is
+        // an honest refusal rather than a wrong date. (A calendar reading also
+        // depends on the default time zone, which is the browser's.)
+        't' | 'T' => {
+            let suffix = spec.date_time.unwrap_or(conversion);
+            match arg {
+                FormatArg::Long(_) => Err(VmError::UnknownIntrinsic(format!(
+                    "a date-time conversion (%{conversion}{suffix}) over a long —                      caturra has no Date, Calendar or java.time"
+                ))),
+                other => Err(throw(
+                    "java.util.IllegalFormatConversionException",
+                    &format!("{suffix} != {}", other.java_class(heap)),
+                )),
+            }
+        }
+        // `%a`/`%A` — hexadecimal floating-point. The MAGNITUDE is rendered
+        // (rounded to the precision, if any), and the sign is put back here,
+        // which is what makes `%+a` and `% a` work and what puts a zero-pad
+        // between the `0x` and the digits rather than in front of them.
         'a' => {
             let value = match arg {
                 FormatArg::Double(v) => v,
                 FormatArg::Float(v) => f64::from(v),
                 other => return Err(conversion_mismatch(heap, conversion, other)),
             };
-            let body = crate::intrinsics::java_double_to_hex(value);
-            let body = if conversion == 'A' {
-                body.to_uppercase()
+            // `-0.0` is negative here, as `Double.compare(v, 0.0) == -1` says.
+            let negative = value.is_sign_negative() && !value.is_nan();
+            let magnitude = if negative { -value } else { value };
+            if !magnitude.is_finite() {
+                let body = java_non_finite(magnitude);
+                let body = if conversion == 'A' {
+                    body.to_uppercase()
+                } else {
+                    body.to_owned()
+                };
+                // NaN is neither positive nor negative, so `%+a` leaves it
+                // alone where it signs an Infinity — and a negative infinity
+                // keeps its own sign, which the magnitude no longer carries.
+                let sign = if magnitude.is_nan() {
+                    ""
+                } else if negative {
+                    "-"
+                } else if spec.plus {
+                    "+"
+                } else if spec.space {
+                    " "
+                } else {
+                    ""
+                };
+                return Ok(pad(spec, &format!("{sign}{body}")));
+            }
+            let (digits, padded) = hex_significand(magnitude, spec.precision);
+            let upper = conversion == 'A';
+            let prefix = if upper { "0X" } else { "0x" };
+            let (digits, padded) = if upper {
+                (digits.to_uppercase(), padded.to_uppercase())
             } else {
-                body
+                (digits, padded)
             };
-            Ok(pad_sign_aware(
-                spec,
-                value.is_sign_negative() && !value.is_nan(),
-                &body,
-            ))
+            Ok(pad_hex_float(spec, negative, prefix, &digits, &padded))
         }
         _ => Err(unknown_conversion(conversion)),
     }
+}
+
+/// `NaN` / `Infinity`, the text a JDK's `Formatter` writes for one.
+fn java_non_finite(value: f64) -> &'static str {
+    if value.is_nan() { "NaN" } else { "Infinity" }
+}
+
+/// The digits of `%a` for a non-negative finite `value`: everything after the
+/// `0x`, rounded to `precision` hexadecimal fraction digits.
+///
+/// This is `Formatter.hexDouble`, and it rounds in BINARY rather than on the
+/// text — `%.2a` of `1e23` is `0x1.53p76`, which no truncation of
+/// `0x1.52d02c7e14af6p76` gives. Without a precision (and with one of 13 or
+/// more) the shortest form `Double.toHexString` answers is what a JDK prints,
+/// padded out with trailing zeros; with one of 1..=12 the significand is
+/// rounded half-even to `1 + 4 * precision` bits first, and a subnormal is
+/// scaled up by 2^54 so it can be, then written with the exponent it had.
+fn hex_significand(value: f64, precision: Option<usize>) -> (String, String) {
+    // A JDK maps "no precision" and an explicit `.0` to the same two cases:
+    // the shortest form, and one digit.
+    let precision = match precision {
+        None => 0,
+        Some(0) => 1,
+        Some(other) => other,
+    };
+    let text = if value == 0.0 || precision == 0 || precision >= 13 {
+        strip_hex_prefix(&crate::intrinsics::java_double_to_hex(value))
+    } else {
+        rounded_hex(value, precision)
+    };
+    // Both forms: a JDK measures the width against the UNPADDED text and then
+    // pads the fraction, so `%012.3a` of `0.0` answers FOURTEEN characters —
+    // the five zeros a five-character `0.0p0` needed, plus the two the
+    // precision then added. Measuring the padded text would have been tidier
+    // and is not what a JDK prints.
+    let padded = pad_hex_fraction(&text, precision);
+    (text, padded)
+}
+
+/// Round `value`'s significand to `1 + 4 * precision` bits, half-even, and
+/// render what comes out. `precision` is 1..=12 here.
+fn rounded_hex(value: f64, precision: usize) -> String {
+    // Scale a subnormal into the normal range so it HAS that many significand
+    // bits to round; its exponent comes back at the end.
+    let subnormal = value < f64::MIN_POSITIVE;
+    let scaled = if subnormal {
+        value * 2f64.powi(54)
+    } else {
+        value
+    };
+    let shift = 53 - (1 + 4 * precision);
+    let bits = scaled.to_bits();
+    let mut significand = (bits & 0x7fff_ffff_ffff_ffff) >> shift;
+    let dropped = bits & !(!0u64 << shift);
+    let least_zero = significand & 1 == 0;
+    let round = (1u64 << (shift - 1)) & dropped != 0;
+    let sticky = shift > 1 && !(1u64 << (shift - 1)) & dropped != 0;
+    // Half-even: round up on a set round bit unless the result would be
+    // exactly halfway with an even last digit. (Written as the JDK writes it;
+    // clippy would rather see `round && (!least_zero || sticky)`.)
+    if round && (!least_zero || sticky) {
+        significand += 1;
+    }
+    let rounded = f64::from_bits(significand << shift);
+    if rounded.is_infinite() {
+        // Rounding `Double.MAX_VALUE` up leaves the range: a JDK writes the
+        // exponent that would follow rather than `Infinity`.
+        return String::from("1.0p1024");
+    }
+    let text = strip_hex_prefix(&crate::intrinsics::java_double_to_hex(rounded));
+    if !subnormal {
+        return text;
+    }
+    // The scaling has to come back out of the exponent, not the digits.
+    match text.split_once('p') {
+        Some((digits, exponent)) => {
+            let exponent: i32 = exponent.parse().unwrap_or(0);
+            format!("{digits}p{}", exponent - 54)
+        }
+        None => text,
+    }
+}
+
+fn strip_hex_prefix(text: &str) -> String {
+    text.strip_prefix("0x").unwrap_or(text).to_owned()
+}
+
+/// Trailing zeros out to `precision` fraction digits — the shortest form a
+/// `Double.toHexString` gives is often shorter than what was asked for.
+fn pad_hex_fraction(text: &str, precision: usize) -> String {
+    if precision == 0 {
+        return text.to_owned();
+    }
+    let Some((significand, exponent)) = text.split_once('p') else {
+        return text.to_owned();
+    };
+    let fraction = significand.split_once('.').map_or(0, |(_, f)| f.len());
+    if fraction >= precision {
+        return text.to_owned();
+    }
+    let zeros = "0".repeat(precision - fraction);
+    format!("{significand}{zeros}p{exponent}")
+}
+
+/// Width for `%a`: the sign (or `+`/` `) leads, then `0x`, and a zero-pad goes
+/// BETWEEN that prefix and the digits — `%012a` of `0.0` is `0x000000.0p0`,
+/// where padding the whole body would have written `000000x0.0p0`.
+fn pad_hex_float(spec: &Spec, negative: bool, prefix: &str, digits: &str, padded: &str) -> String {
+    let sign = if negative {
+        "-"
+    } else if spec.plus {
+        "+"
+    } else if spec.space {
+        " "
+    } else {
+        ""
+    };
+    if spec.zero_pad && !spec.left_justify {
+        // Neither the SIGN nor the fraction's own trailing zeros count toward
+        // the width: a JDK subtracts the `0x` and the UNPADDED digits and
+        // nothing else, so `%012.3a` of a negative answers thirteen
+        // characters rather than twelve.
+        let width = spec.width.unwrap_or(0);
+        let measured = digits.chars().count() + prefix.len();
+        if measured < width {
+            let zeros = "0".repeat(width - measured);
+            return format!("{sign}{prefix}{zeros}{padded}");
+        }
+    }
+    pad(spec, &format!("{sign}{prefix}{padded}"))
 }
 
 /// Width handling for floats: the body already contains its sign, so

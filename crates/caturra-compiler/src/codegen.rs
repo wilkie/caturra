@@ -21141,29 +21141,31 @@ impl BodyGen<'_> {
                 width += 1;
                 continue;
             }
-            let ty = match ty {
+            // A COLLECTION (and the other library references) rides through
+            // as a reference too, for the same reason an `Object` does: the
+            // formatter decides by the runtime class, and `%s` of one is
+            // rendered in the VM, which can run a user `toString`. Coercing
+            // here made `String.format("%d", aList)` report its argument as a
+            // `java.lang.String` where a JDK names `java.util.ArrayList` — the
+            // very bug the `Object` arm above was written to fix, left behind
+            // in the arm beside it.
+            if matches!(
+                ty,
                 JType::List { .. }
-                | JType::Stack(_)
-                | JType::Map { .. }
-                | JType::Set { .. }
-                | JType::Collection(_)
-                | JType::EntrySet { .. }
-                | JType::MapEntry { .. }
-                | JType::File
-                | JType::StringBuilder
-                | JType::Exception(_) => {
-                    let null_case = self.code.new_label();
-                    let done = self.code.new_label();
-                    self.code.push_op(op::DUP, 1);
-                    self.code.branch(op::IFNULL, null_case, 1);
-                    let _ = self.coerce_to_string_for_output(ty);
-                    self.code.branch(op::GOTO, done, 0);
-                    self.code.bind(null_case);
-                    self.code.bind(done);
-                    JType::Str
-                }
-                other => other,
-            };
+                    | JType::Stack(_)
+                    | JType::Map { .. }
+                    | JType::Set { .. }
+                    | JType::Collection(_)
+                    | JType::EntrySet { .. }
+                    | JType::MapEntry { .. }
+                    | JType::File
+                    | JType::StringBuilder
+                    | JType::Exception(_)
+            ) {
+                tags.push_str("Ljava/lang/Object;");
+                width += 1;
+                continue;
+            }
             match ty {
                 JType::Int => {
                     tags.push('I');
