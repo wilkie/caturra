@@ -524,7 +524,7 @@ fn static_method_names(
 /// gets `String`: the functional interface supplies the element type with its
 /// type arguments intact, and the bare name would be the raw type, whose every
 /// method answers `Object`.
-const LIBRARY_CONTAINERS: [&str; 15] = [
+const LIBRARY_CONTAINERS: [&str; 16] = [
     "ArrayList",
     "LinkedList",
     "List",
@@ -540,6 +540,11 @@ const LIBRARY_CONTAINERS: [&str; 15] = [
     "Queue",
     "Deque",
     "Optional",
+    // `Enum::name` / `Enum::ordinal` — the supertype every enum constant has.
+    // A method reference through it is the ordinary way to stream an enum's
+    // names, and without the name here it was not a class at all: "cannot find
+    // symbol: 'Enum'".
+    "Enum",
 ];
 
 /// A member's start, as one sortable number — javac numbers a class's lambdas
@@ -1082,6 +1087,23 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             base: class.clone(),
             args: type_args.clone(),
         }),
+        // An enum's two synthetic statics: `values()` answers an ARRAY of the
+        // enum, `valueOf(String)` one constant. Without them a stream, a list
+        // or a `Stream.of` over `Kind.values()` had an `Object` element and
+        // every lambda after it lost the constant's own methods.
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } => {
+            let name = enum_owner_name(owner, ctx)?;
+            match (method.as_str(), args.len()) {
+                ("values", 0) => Some(TypeRef::Array(Box::new(TypeRef::Named(name)))),
+                ("valueOf", 1) => Some(TypeRef::Named(name)),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -3900,6 +3922,15 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
                 return Some(shape.return_type.clone());
             }
             let receiver = receiver.as_deref()?;
+            // An ENUM's own statics, which have no receiver VALUE to type:
+            // `Kind.values()` is a `Kind[]` and `Kind.valueOf(s)` a `Kind`.
+            if let Some(name) = enum_owner_name(receiver, ctx) {
+                return match (method.as_str(), args.len()) {
+                    ("values", 0) => Some(TypeRef::Array(Box::new(TypeRef::Named(name)))),
+                    ("valueOf", 1) => Some(TypeRef::Named(name)),
+                    _ => None,
+                };
+            }
             let on = body_type(receiver, bound, ctx)?;
             library_return(&on, method, args.len())
         }
@@ -4283,6 +4314,27 @@ fn join_element_types(
 fn literal_element_type(args: &[Expr], ctx: &Ctx) -> TypeRef {
     let supers = ctx.supers;
     let object = TypeRef::Named(String::from("Object"));
+    // A LONE reference array is the varargs array itself, so the element is
+    // the array's — `Stream.of(Kind.values())` is a stream of constants, not a
+    // stream holding one array. (A primitive array is one element, which is
+    // the varargs gotcha the emit side already models; there is no element
+    // type to give it here either way.)
+    if let [single] = args
+        && let Some(TypeRef::Array(elem)) = body_type(single, &HashMap::new(), ctx)
+        && !matches!(
+            *elem,
+            TypeRef::Int
+                | TypeRef::Long
+                | TypeRef::Double
+                | TypeRef::Float
+                | TypeRef::Short
+                | TypeRef::Byte
+                | TypeRef::Char
+                | TypeRef::Boolean
+        )
+    {
+        return *elem;
+    }
     let mut kind: Option<TypeRef> = None;
     for arg in args {
         // A `new Point(…)` argument says its type outright, and reading only
@@ -4332,11 +4384,33 @@ fn literal_element_type(args: &[Expr], ctx: &Ctx) -> TypeRef {
 
 /// The element type of a receiver declared as an array (`int[]` → `int`,
 /// `String[]` → `String`) — for typing the generator of `Arrays.setAll`.
+/// The ENUM an expression names, when it names one: `Kind.values()`'s owner.
+fn enum_owner_name(owner: &Expr, ctx: &Ctx) -> Option<String> {
+    let Expr::Name { path, .. } = owner else {
+        return None;
+    };
+    let name = path.last()?;
+    ctx.enums.contains(name).then(|| name.clone())
+}
+
 fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     let ty = match receiver {
         Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
         Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
             ctx.lookup(name)?
+        }
+        // `Kind.values()` — an ENUM's own array of its constants. It has no
+        // declaration to look up, so a stream over it had no element type and
+        // the lambda after it was refused as if the position were not a
+        // functional-interface one, though the same array in a VARIABLE worked.
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } if method == "values" && args.is_empty() => {
+            let name = enum_owner_name(owner, ctx)?;
+            return Some(TypeRef::Named(name));
         }
         // An array written INLINE — `Arrays.stream(new int[]{1, 2, 3})` — is
         // its own declaration. Only a variable was looked up, so the identical

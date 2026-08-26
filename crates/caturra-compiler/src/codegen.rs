@@ -24353,13 +24353,37 @@ impl BodyGen<'_> {
         } else {
             object_elem
         };
-        // Every element as an Object[]: a map's keys and values alternate in
-        // it, which is the shape `Map.of` is written in anyway.
-        let array_ty = JType::Array {
-            elem: object_elem,
-            dims: 1,
+        // A LONE reference array IS the varargs array — `List.of(Kind.values())`
+        // is a list of the constants, not a list holding one array. (The same
+        // rule the stream factories and `Arrays.asList` already follow; a
+        // PRIMITIVE array stays one element, which is the varargs gotcha.)
+        let spread = match args {
+            [single] if class != "Map" => match self.type_of(single) {
+                JType::Array { dims, .. } if dims > 1 => true,
+                JType::Array { elem, .. } => elem.base_type().is_reference(),
+                _ => false,
+            },
+            _ => false,
         };
-        self.emit_array_literal(args, array_ty, span);
+        let elem = if spread
+            && let [single] = args
+            && let JType::Array { elem, dims: 1 } = self.type_of(single)
+        {
+            elem
+        } else {
+            elem
+        };
+        if spread {
+            self.expr(&args[0]);
+        } else {
+            // Every element as an Object[]: a map's keys and values alternate
+            // in it, which is the shape `Map.of` is written in anyway.
+            let array_ty = JType::Array {
+                elem: object_elem,
+                dims: 1,
+            };
+            self.emit_array_literal(args, array_ty, span);
+        }
         let (name, ret) = match class {
             "List" => ("__listOf", JType::library_list(elem)),
             "Set" => ("__setOf", JType::library_set(elem)),

@@ -29838,6 +29838,48 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// An enum's own statics have no receiver VALUE to read a type from, so
+// `Kind.values()` had none: a stream over it refused the lambda after it
+// outright (no functional-interface position), and every other source — a
+// list, a `Stream.of`, a copy — gave the lambda an `Object`. The same probe
+// found the other half: a LONE reference array IS the varargs array, so
+// `List.of(Kind.values())` is a list of constants, and caturra built a list
+// holding ONE array, which threw `ClassCastException` on the first use.
+differential_test!(
+    diff_an_enums_constants_keep_their_type,
+    "Constants",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class Constants {
+    enum Kind { BETA, ALPHA, GAMMA }
+
+    public static void main(String[] args) {
+        System.out.println(Arrays.stream(Kind.values()).map(k -> k.name()).collect(Collectors.toList()));
+        System.out.println(Arrays.stream(Kind.values()).map(Enum::name).collect(Collectors.joining("|")));
+        System.out.println(Arrays.stream(Kind.values()).map(Kind::name).collect(Collectors.toList()));
+        System.out.println(Arrays.stream(Kind.values()).map(Enum::ordinal).collect(Collectors.toList()));
+        System.out.println(Arrays.asList(Kind.values()).stream().map(k -> k.ordinal()).collect(Collectors.toList()));
+        System.out.println(Stream.of(Kind.values()).map(k -> k.name().charAt(0)).collect(Collectors.toList()));
+        System.out.println(new ArrayList<>(Arrays.asList(Kind.values())).stream()
+            .sorted(Comparator.comparing(Kind::name)).collect(Collectors.toList()));
+        System.out.println(List.of(Kind.values()));
+        System.out.println(List.of(Kind.values()).size() + " " + Set.of(Kind.values()).size());
+        System.out.println(Kind.valueOf("ALPHA").ordinal());
+
+        String[] names = {"a", "b"};
+        System.out.println(List.of(names) + " " + List.of(names).size());
+        int[] numbers = {1, 2};
+        System.out.println(List.of(numbers).size());
+        Object[][] grid = {{1}, {2}};
+        System.out.println(List.of(grid).size());
+        System.out.println(List.of("x").size() + " " + List.of(1, 2).size());
+    }
+}
+"#
+);
+
 // `Arrays.compare` (Java 9) — LEXICOGRAPHIC order over two arrays. The first
 // index where they differ decides, and when one is a prefix of the other the
 // shorter is smaller by the LENGTH DIFFERENCE (not merely by sign). Each pair

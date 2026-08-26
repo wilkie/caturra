@@ -8580,6 +8580,44 @@ stream's origin as a whole array with no room for a range.
 Pinned by `diff_arrays_compare_and_fill_by_index` and
 `reject_set_all_takes_no_char_array`.
 
+### What an enum's constants are (2026-08-26)
+
+Generated enum programs — plain constants, constants with fields, constants
+with BODIES, an enum implementing an interface — put through `values`,
+`valueOf`, `ordinal`, `name`, `toString`, `compareTo`, a `switch`, a set, a
+map, a sort, a stream and an array write. Two defects, and the second is not
+about enums at all.
+
+**`Kind.values()` had no type.** An enum's two synthetic statics have no
+receiver VALUE to read a type from, and the pass that types a stream's element
+reads types off expressions — so a stream over `Kind.values()` refused the
+lambda after it OUTRIGHT ("a lambda or method reference is only allowed where a
+functional-interface type is expected"), while the same array in a VARIABLE one
+line up worked. Every other source — `Arrays.asList`, `Stream.of`, a copy
+constructor — gave the lambda an `Object` instead. `values()` is a `Kind[]` and
+`valueOf(String)` a `Kind` now, wherever an expression's type is read.
+
+**And a lone reference array is the varargs array.** `List.of(Kind.values())`
+is a list of the constants; caturra built a list holding ONE array, which threw
+`ClassCastException` at the first use of an element. The rule was already
+written down twice — the stream factories spread a lone reference array, and
+`Arrays.asList` does — and the immutable factories did not, on either side:
+neither the element TYPING nor the EMIT. `List.of(someStringArray)` had a size
+of one.
+
+`Enum::name` and `Enum::ordinal` work in a `map` now (the functional interface
+supplies the element), and 180 generated programs agree with a real JDK.
+
+**Two things are knowingly left.** `Comparator.comparing(Enum::name)` is still
+refused — a key extractor's parameter is typed as the qualifier CLASS, and
+`Enum` is not a class caturra models, so the reference has nowhere to get its
+element; the lambda spelling (`k -> k.name()`) and a reference through the
+enum's own name both work. And `EnumSet`/`EnumMap` remain refused by name, as
+the divergence list says — a `TreeSet`/`TreeMap` keyed by the enum iterates in
+the very same order, since an enum's natural ordering is its ordinal.
+
+Pinned by `diff_an_enums_constants_keep_their_type`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
