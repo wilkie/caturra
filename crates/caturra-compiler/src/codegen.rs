@@ -4665,6 +4665,12 @@ fn collection_element_type(ty: JType, table: &MethodTable) -> Option<ElemType> {
 /// says `Comparator`, caturra models `__Comparator`, and a message naming the
 /// internal one reads as caturra's bug rather than the program's.
 fn source_interface_name(name: &str) -> &str {
+    // A SYNTHESIZED lambda class has no source name at all, and splitting its
+    // binary name the way a nested class's is split leaves the counter:
+    // `setAll(char[],1)` for an argument the program wrote as `i -> 'a'`.
+    if crate::is_lambda_class(name) {
+        return "lambda expression";
+    }
     // A bundled erased interface (`__Comparator`) and a nested class's BINARY
     // name (`Outer$Inner`) are both implementation detail: javac names the
     // interface the source wrote, and a message showing either reads as
@@ -24790,8 +24796,20 @@ impl BodyGen<'_> {
             return None;
         };
         let array_ty = self.expr(array_arg);
-        if !matches!(array_ty, JType::Array { .. }) {
-            self.error(array_arg.span(), "Arrays.setAll takes an array");
+        // The JDK has FOUR overloads: `int[]`, `long[]`, `double[]` and a
+        // generic `T[]`. A `char[]` or a `short[]` matches none of them —
+        // javac says so, and accepting one here filled nothing in and said
+        // nothing either.
+        let supported = match array_ty {
+            JType::Array { dims, .. } if dims > 1 => true,
+            JType::Array { elem, .. } => {
+                matches!(elem.base_type(), JType::Int | JType::Long | JType::Double)
+                    || elem.base_type().is_reference()
+            }
+            _ => false,
+        };
+        if !supported {
+            self.no_suitable_library_method("Arrays", "setAll", args, span);
             self.code.discard();
             return None;
         }

@@ -8539,6 +8539,47 @@ chasing them.
 Pinned by `diff_a_trace_names_a_lambda_as_javac_does` and
 `diff_a_thrown_object_survives_a_native_frame`.
 
+### Two ways an array API was half there (2026-08-26)
+
+Random array programs — every element type, one and two dimensions, built by
+`new` and by initializer, then printed, sorted, filled, copied, searched,
+cloned, hashed, streamed and indexed out of bounds — found two gaps and one
+misleading message.
+
+**`Arrays.compare` was missing entirely.** It is Java 9's, so a Java 11 program
+may write it, and every element type needs its own overload. The order is
+lexicographic, with two details worth stating: when one array is a PREFIX of
+the other the shorter is smaller by the LENGTH DIFFERENCE (the JDK returns
+`a.length - b.length`, so the magnitude is that difference and not just a
+sign), and each pair is compared the way the wrapper's own `compare` does — so
+`NaN` is greater than everything and `-0.0` is less than `0.0`, the same total
+order `sort` imposes. A null ARRAY sorts before a non-null one, and so does a
+null ELEMENT, where the `compareTo` chain a naive implementation would write
+throws instead.
+
+**`Arrays.setAll` had two of its four overloads.** `int[]` and `T[]` worked;
+`long[]` threw `NullPointerException` for want of an arm in the VM, and
+`char[]`, `short[]`, `byte[]`, `float[]` and `boolean[]` — which javac REJECTS,
+since the JDK's four overloads are `int[]`, `long[]`, `double[]` and a generic
+`T[]` — were accepted here and filled nothing in. Both directions are fixed:
+the `long[]` fills, the rest are rejected the way javac rejects them.
+
+**And the message that rejects them had to name the lambda.** A synthesized
+lambda class has no source name, and splitting its binary name the way a
+nested class's is split left the counter: `setAll(char[],1)` for an argument
+the program wrote as `i -> 'a'`. It reads `lambda expression` now — javac
+prints the lambda's own text, which is gone by the time this pass runs.
+
+210 generated programs agree with a real JDK. Two things stay out of the
+comparison, both deliberately: the identity hash in a default `toString`
+(`[I@3764951d`), which is unspecified and differs between runs of the same
+JDK, and `Arrays.stream(array, from, to)`, whose refusal is enumerated in the
+divergence list — a stream over an array is late-binding, and caturra records a
+stream's origin as a whole array with no room for a range.
+
+Pinned by `diff_arrays_compare_and_fill_by_index` and
+`reject_set_all_takes_no_char_array`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

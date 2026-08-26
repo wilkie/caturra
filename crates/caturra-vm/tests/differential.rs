@@ -29838,6 +29838,84 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// `Arrays.compare` (Java 9) — LEXICOGRAPHIC order over two arrays. The first
+// index where they differ decides, and when one is a prefix of the other the
+// shorter is smaller by the LENGTH DIFFERENCE (not merely by sign). Each pair
+// is compared the way the wrapper's own `compare` does, so `NaN` is greater
+// than everything and `-0.0` is less than `0.0`; a null ARRAY sorts first, and
+// so does a null ELEMENT, where a bare `compareTo` chain would throw.
+// `setAll` is here too: the JDK has exactly four overloads (`int[]`, `long[]`,
+// `double[]`, `T[]`), and caturra filled only two of them — a `long[]` threw
+// `NullPointerException` for want of an arm.
+differential_test!(
+    diff_arrays_compare_and_fill_by_index,
+    "ArrayOrder",
+    r#"
+import java.util.*;
+
+public class ArrayOrder {
+    public static void main(String[] args) {
+        System.out.println(Arrays.compare(new int[] {1, 2}, new int[] {1, 3}));
+        System.out.println(Arrays.compare(new int[] {1}, new int[] {1, 2, 3}));
+        System.out.println(Arrays.compare(new int[] {1, 2}, new int[] {1, 2}));
+        System.out.println(Arrays.compare(new long[] {5L}, new long[] {4L}));
+        System.out.println(Arrays.compare(new double[] {Double.NaN}, new double[] {1.0}));
+        System.out.println(Arrays.compare(new double[] {-0.0}, new double[] {0.0}));
+        System.out.println(Arrays.compare(new char[] {'a', 'z'}, new char[] {'a', 'b', 'c'}));
+        System.out.println(Arrays.compare(new boolean[] {false}, new boolean[] {true}));
+        System.out.println(Arrays.compare(new byte[] {1}, new byte[] {-1}));
+        System.out.println(Arrays.compare(new short[] {3}, new short[] {3, 0}));
+        System.out.println(Arrays.compare(new float[] {1.5f}, new float[] {1.5f, 0f}));
+        System.out.println(Arrays.compare(new String[] {"a", null}, new String[] {"a", "b"}));
+        System.out.println(Arrays.compare(new String[] {"b"}, new String[] {"a"}));
+        System.out.println(Arrays.compare(new Integer[] {1, 5}, new Integer[] {1, 2}));
+        int[] same = {1};
+        System.out.println(Arrays.compare(same, same));
+        System.out.println(Arrays.compare((int[]) null, new int[] {1})
+            + " " + Arrays.compare(new int[] {1}, (int[]) null)
+            + " " + Arrays.compare((int[]) null, (int[]) null));
+
+        int[] counted = new int[4];
+        Arrays.setAll(counted, i -> i * i);
+        long[] wide = new long[3];
+        Arrays.setAll(wide, i -> i * 100L);
+        double[] fractions = new double[3];
+        Arrays.setAll(fractions, i -> i / 4.0);
+        String[] names = new String[3];
+        Arrays.setAll(names, i -> "v" + i);
+        Integer[] boxes = new Integer[2];
+        Arrays.setAll(boxes, i -> i + 1);
+        System.out.println(Arrays.toString(counted) + " " + Arrays.toString(wide)
+            + " " + Arrays.toString(fractions) + " " + Arrays.toString(names)
+            + " " + Arrays.toString(boxes) + " " + (boxes[0] == 1));
+        int[] empty = new int[0];
+        Arrays.setAll(empty, i -> i);
+        System.out.println(Arrays.toString(empty));
+    }
+}
+"#
+);
+
+// `Arrays.setAll` of a `char[]`: javac has no such overload (its four are
+// `int[]`, `long[]`, `double[]` and the generic `T[]`, and `char` is neither a
+// reference nor one of the three), so BOTH compilers reject it. caturra used
+// to accept it and fill nothing in.
+differential_reject!(
+    reject_set_all_takes_no_char_array,
+    "SetAllChar",
+    r"
+import java.util.*;
+
+public class SetAllChar {
+    public static void main(String[] args) {
+        char[] letters = new char[3];
+        Arrays.setAll(letters, i -> 'a');
+        System.out.println(Arrays.toString(letters));
+    }
+}
+"
+);
+
 // What a stack trace calls a LAMBDA. javac compiles one to a synthetic method
 // on the ENCLOSING class — `T.lambda$main$0` — numbered per class in source
 // order of the members, innermost first where one contains another, and named

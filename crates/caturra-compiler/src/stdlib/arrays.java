@@ -395,4 +395,121 @@ class Arrays {
       a[j + 1] = key;
     }
   }
+
+  // `compare` (Java 9): LEXICOGRAPHIC order over two arrays — the first index
+  // where they differ decides, and when one is a prefix of the other the
+  // SHORTER one is smaller (the JDK returns the length difference, so the
+  // magnitude is that difference and not just its sign). A null array sorts
+  // before a non-null one, and each element pair is compared the way the
+  // wrapper's own `compare` does, so `Double.NaN` is greater than everything
+  // and `-0.0` is less than `0.0` — the same total order `sort` imposes.
+  public static int compare(int[] a, int[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return Integer.compare(a[i], b[i]);
+    }
+    return a.length - b.length;
+  }
+  public static int compare(long[] a, long[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return Long.compare(a[i], b[i]);
+    }
+    return a.length - b.length;
+  }
+  public static int compare(double[] a, double[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      int c = Double.compare(a[i], b[i]);
+      if (c != 0) return c;
+    }
+    return a.length - b.length;
+  }
+  public static int compare(float[] a, float[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      int c = Float.compare(a[i], b[i]);
+      if (c != 0) return c;
+    }
+    return a.length - b.length;
+  }
+  public static int compare(char[] a, char[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return Character.compare(a[i], b[i]);
+    }
+    return a.length - b.length;
+  }
+  public static int compare(short[] a, short[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return Short.compare(a[i], b[i]);
+    }
+    return a.length - b.length;
+  }
+  public static int compare(byte[] a, byte[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return Byte.compare(a[i], b[i]);
+    }
+    return a.length - b.length;
+  }
+  public static int compare(boolean[] a, boolean[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return Boolean.compare(a[i], b[i]);
+    }
+    return a.length - b.length;
+  }
+  public static int compare(String[] a, String[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      String x = a[i];
+      String y = b[i];
+      // A null ELEMENT is smaller than any value, and two nulls are equal —
+      // this is where `compare` differs from a plain `compareTo` chain, which
+      // would throw.
+      if (x == null || y == null) {
+        if (x != y) return x == null ? -1 : 1;
+      } else {
+        int c = x.compareTo(y);
+        if (c != 0) return c;
+      }
+    }
+    return a.length - b.length;
+  }
+  public static int compare(Comparable[] a, Comparable[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      Comparable x = a[i];
+      Comparable y = b[i];
+      if (x == null || y == null) {
+        if (x != y) return x == null ? -1 : 1;
+      } else {
+        int c = x.compareTo(y);
+        if (c != 0) return c;
+      }
+    }
+    return a.length - b.length;
+  }
 }

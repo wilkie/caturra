@@ -5455,6 +5455,7 @@ impl<'run> Interpreter<'run> {
             let len = match self.heap.get(array) {
                 Some(HeapObject::IntArray(_, v)) => v.len(),
                 Some(HeapObject::DoubleArray(v)) => v.len(),
+                Some(HeapObject::LongArray(v)) => v.len(),
                 Some(HeapObject::RefArray(_, v)) => v.len(),
                 _ => {
                     return Err(VmError::UncaughtException(String::from(
@@ -5477,6 +5478,19 @@ impl<'run> Interpreter<'run> {
                             JValue::Int(n) => f64::from(n),
                             JValue::Float(f) => f64::from(f),
                             _ => 0.0,
+                        };
+                    }
+                    // `setAll(long[], IntToLongFunction)`. The generator's
+                    // result widens the way the overload's return type does,
+                    // so `i -> i` fills a `long[]` with 0, 1, 2 rather than
+                    // leaving it untouched — which is what happened when this
+                    // array kind had no arm at all: the length lookup above
+                    // fell through to a `NullPointerException`.
+                    Some(HeapObject::LongArray(v)) => {
+                        v[i] = match value {
+                            JValue::Long(n) => n,
+                            JValue::Int(n) => i64::from(n),
+                            _ => 0,
                         };
                     }
                     Some(HeapObject::RefArray(_, _)) => {
