@@ -2059,106 +2059,6 @@ impl<'run> Interpreter<'run> {
                                             || target == "java/lang/CharSequence"
                                             || is_comparable(&target)
                                     }
-                                    Some(crate::value::HeapObject::ArrayList(_)) => matches!(
-                                        target.as_str(),
-                                        "java/util/ArrayList"
-                                            | "java/util/List"
-                                            | "java/util/Collection"
-                                    ),
-                                    // The rest of the collections. They answered
-                                    // FALSE to everything — there was no arm at all
-                                    // — so `o instanceof Map` was silently wrong.
-                                    // A LinkedHashMap IS a HashMap (it extends
-                                    // one), so it answers to both; a plain
-                                    // HashMap is no LinkedHashMap.
-                                    Some(crate::value::HeapObject::HashMap(map)) => {
-                                        matches!(
-                                            target.as_str(),
-                                            "java/util/HashMap" | "java/util/Map"
-                                        ) || (map.is_linked()
-                                            && target == "java/util/LinkedHashMap")
-                                    }
-                                    Some(crate::value::HeapObject::TreeMap { .. }) => matches!(
-                                        target.as_str(),
-                                        "java/util/TreeMap"
-                                            | "java/util/Map"
-                                            | "java/util/SortedMap"
-                                            | "java/util/NavigableMap"
-                                    ),
-                                    Some(crate::value::HeapObject::UnmodifiableList(_)) => {
-                                        matches!(
-                                            target.as_str(),
-                                            "java/util/List" | "java/util/Collection"
-                                        )
-                                    }
-                                    Some(crate::value::HeapObject::UnmodifiableSet(_)) => matches!(
-                                        target.as_str(),
-                                        "java/util/Set" | "java/util/Collection"
-                                    ),
-                                    Some(crate::value::HeapObject::UnmodifiableMap(_)) => {
-                                        target == "java/util/Map"
-                                    }
-                                    Some(crate::value::HeapObject::HashSet(set)) => {
-                                        matches!(
-                                            target.as_str(),
-                                            "java/util/HashSet"
-                                                | "java/util/Set"
-                                                | "java/util/Collection"
-                                        ) || (set.is_linked()
-                                            && target == "java/util/LinkedHashSet")
-                                    }
-                                    Some(crate::value::HeapObject::TreeSet { .. }) => matches!(
-                                        target.as_str(),
-                                        "java/util/TreeSet"
-                                            | "java/util/Set"
-                                            | "java/util/SortedSet"
-                                            | "java/util/NavigableSet"
-                                            | "java/util/Collection"
-                                    ),
-                                    Some(crate::value::HeapObject::PriorityQueue { .. }) => {
-                                        matches!(
-                                            target.as_str(),
-                                            "java/util/PriorityQueue"
-                                                | "java/util/Queue"
-                                                | "java/util/Collection"
-                                        )
-                                    }
-                                    Some(crate::value::HeapObject::Optional { .. }) => {
-                                        target == "java/util/Optional"
-                                    }
-                                    // A `Map.Entry` — the erased parameter of an
-                                    // `entrySet().removeIf(e -> ...)` lambda
-                                    // casts back down to one.
-                                    Some(crate::value::HeapObject::MapEntry { .. }) => matches!(
-                                        target.as_str(),
-                                        "java/util/Map$Entry" | "java/util/Map.Entry"
-                                    ),
-                                    Some(crate::value::HeapObject::StringBuilder(_)) => matches!(
-                                        target.as_str(),
-                                        "java/lang/StringBuilder" | "java/lang/CharSequence"
-                                    ),
-                                    Some(crate::value::HeapObject::Stack(_)) => matches!(
-                                        target.as_str(),
-                                        "java/util/Stack"
-                                            | "java/util/Vector"
-                                            | "java/util/List"
-                                            | "java/util/Collection"
-                                    ),
-                                    Some(crate::value::HeapObject::LinkedList(_)) => matches!(
-                                        target.as_str(),
-                                        "java/util/LinkedList"
-                                            | "java/util/List"
-                                            | "java/util/Queue"
-                                            | "java/util/Deque"
-                                            | "java/util/Collection"
-                                    ),
-                                    Some(crate::value::HeapObject::ArrayDeque(_)) => matches!(
-                                        target.as_str(),
-                                        "java/util/ArrayDeque"
-                                            | "java/util/Queue"
-                                            | "java/util/Deque"
-                                            | "java/util/Collection"
-                                    ),
                                     // Boxed wrapper: `x instanceof Integer` — and
                                     // an Integer IS a Number and a Comparable.
                                     Some(crate::value::HeapObject::Boxed {
@@ -2186,7 +2086,20 @@ impl<'run> Interpreter<'run> {
                                         &class_name.replace('.', "/"),
                                         &target,
                                     ),
-                                    _ => false,
+                                    // Every OTHER library object: its class
+                                    // (the one `getClass` prints) and that
+                                    // class's supertypes, from ONE table. A
+                                    // dozen hand-written lists lived here, and
+                                    // what was missing from them — an
+                                    // `Arrays.asList`, a sub-list, a map view —
+                                    // answered false to `instanceof List` and
+                                    // threw on the cast that followed.
+                                    _ => {
+                                        let actual = self.object_class_name(reference);
+                                        actual == target
+                                            || library_faces(&actual)
+                                                .contains(&qualified_face(&target))
+                                    }
                                 },
                             };
                             // `Iterable` and `Iterator` cut across every arm
@@ -4047,22 +3960,30 @@ impl<'run> Interpreter<'run> {
             "java/util/Iterator" | "Iterator" | "java/util/ListIterator" | "ListIterator" => {
                 matches!(object, Some(H::Iterator { .. }))
             }
-            "java/lang/Iterable" | "Iterable" => matches!(
-                object,
-                Some(
-                    H::ArrayList(_)
-                        | H::ArrayBackedList(_)
-                        | H::UnmodifiableList(_)
-                        | H::UnmodifiableSet(_)
-                        | H::HashSet(_)
-                        | H::TreeSet { .. }
-                        | H::LinkedList(_)
-                        | H::ArrayDeque(_)
-                        | H::Stack(_)
-                        | H::PriorityQueue { .. }
-                        | H::MapView { .. }
+            "java/lang/Iterable" | "Iterable" => {
+                matches!(
+                    object,
+                    Some(
+                        H::ArrayList(_)
+                            | H::ArrayBackedList(_)
+                            | H::UnmodifiableList(_)
+                            | H::UnmodifiableSet(_)
+                            | H::HashSet(_)
+                            | H::TreeSet { .. }
+                            | H::LinkedList(_)
+                            | H::ArrayDeque(_)
+                            | H::Stack(_)
+                            | H::PriorityQueue { .. }
+                            | H::MapView { .. }
+                            | H::SubList { .. }
+                    )
+                ) || matches!(
+                    object,
+                    // A sorted view of a SET (or of a map's keys) iterates; a view
+                    // of the map itself is a Map, and no Map is an Iterable.
+                    Some(H::SortedView { face, .. }) if *face != crate::value::SortedFace::Map
                 )
-            ),
+            }
             _ => false,
         }
     }
@@ -9794,13 +9715,32 @@ impl<'run> Interpreter<'run> {
                 // `dropWhile` latches: once an element fails the predicate,
                 // every later one passes even if it would have matched.
                 crate::value::StreamOp::DropWhile(_) => StreamOpState::Counter(0),
+                crate::value::StreamOp::Sorted(_) => StreamOpState::Buffer(Vec::new()),
                 _ => StreamOpState::None,
             })
             .collect();
+        // Everything a barrier buffers is rooted while it waits; drop those
+        // roots on the way out however this returns.
+        let root_base = self.temp_roots.len();
+        let driven = self.stream_run_source(origin, source, ops, &mut states, sink);
+        self.temp_roots.truncate(root_base);
+        driven
+    }
+
+    /// Pull `source` through `ops` and, once it runs dry, flush what any
+    /// barrier held back.
+    fn stream_run_source(
+        &mut self,
+        origin: Option<(HeapRef, usize)>,
+        source: &crate::value::StreamSource,
+        ops: &[crate::value::StreamOp],
+        states: &mut Vec<StreamOpState>,
+        sink: &mut StreamSink,
+    ) -> Result<(), VmError> {
         match source {
             crate::value::StreamSource::Fixed(elements) => {
                 for element in elements {
-                    if !self.stream_feed(ops, &mut states, sink, 0, *element)? {
+                    if !self.stream_feed(ops, states, sink, 0, *element)? {
                         break;
                     }
                 }
@@ -9813,7 +9753,7 @@ impl<'run> Interpreter<'run> {
             crate::value::StreamSource::Iterate { seed, next } => {
                 let mut element = *seed;
                 loop {
-                    if !self.stream_feed(ops, &mut states, sink, 0, element)? {
+                    if !self.stream_feed(ops, states, sink, 0, element)? {
                         break;
                     }
                     let stepped = self.call_functional(
@@ -9827,10 +9767,34 @@ impl<'run> Interpreter<'run> {
             }
             crate::value::StreamSource::Generate { supplier } => loop {
                 let element = self.call_apply_supplier(*supplier)?;
-                if !self.stream_feed(ops, &mut states, sink, 0, element)? {
+                if !self.stream_feed(ops, states, sink, 0, element)? {
                     break;
                 }
             },
+        }
+        // A barrier held its elements back until now: the source is dry, so
+        // each one is sorted and pushed through the ops BELOW the barrier —
+        // which may itself be a second barrier, flushed when the walk reaches
+        // it.
+        let mut stopped = false;
+        for i in 0..ops.len() {
+            let crate::value::StreamOp::Sorted(comparator) = ops[i] else {
+                continue;
+            };
+            if stopped {
+                break;
+            }
+            let StreamOpState::Buffer(buffered) =
+                std::mem::replace(&mut states[i], StreamOpState::None)
+            else {
+                unreachable!("sorted buffer");
+            };
+            for element in self.sort_like_jdk(buffered, comparator)? {
+                if !self.stream_feed(ops, states, sink, i + 1, element)? {
+                    stopped = true;
+                    break;
+                }
+            }
         }
         // FAIL FAST — but AFTER the traversal, exactly where
         // `ArrayList$ArrayListSpliterator.forEachRemaining` checks its
@@ -9944,6 +9908,19 @@ impl<'run> Interpreter<'run> {
                 } else {
                     self.stream_feed(ops, states, sink, i + 1, value)
                 }
+            }
+            // A BARRIER takes the element in and emits NOTHING: the flush
+            // after the source runs dry is what pushes them downstream, in
+            // order. Buffered values are rooted, since the only thing holding
+            // them until then is this Rust vector and a lambda downstream of
+            // the source can reach a safepoint.
+            StreamOp::Sorted(_) => {
+                let StreamOpState::Buffer(buffered) = &mut states[i] else {
+                    unreachable!("sorted buffer");
+                };
+                buffered.push(value);
+                self.temp_roots.push(value);
+                Ok(true)
             }
             StreamOp::Box => {
                 let boxed = match value {
@@ -10595,18 +10572,21 @@ impl<'run> Interpreter<'run> {
                 let kind = optional_kind_of(descriptor);
                 return Ok(Answered::Value(self.alloc_optional(folded, kind)));
             }
-            // `sorted` is a stateful BARRIER: it consumes the whole upstream
-            // (running its side effects in order) before emitting anything, so
-            // materialize now and start a fresh pipeline over the sorted result.
+            // `sorted` is a stateful BARRIER — it emits nothing until the
+            // upstream is exhausted — but it is still LAZY: running it here
+            // would make a `peek` above it print before any terminal asked for
+            // an element, and would run at all in a pipeline the JDK never
+            // traverses.
             ("sorted", []) => {
-                let elements = self.stream_materialize(receiver)?;
-                let sorted = self.sort_like_jdk(elements, None)?;
-                return Ok(Answered::Value(self.alloc_stream(sorted)));
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::Sorted(None)),
+                ));
             }
             ("sorted", [JValue::Ref(Some(comparator))]) => {
-                let elements = self.stream_materialize(receiver)?;
-                let sorted = self.sort_like_jdk(elements, Some(*comparator))?;
-                return Ok(Answered::Value(self.alloc_stream(sorted)));
+                let comparator = *comparator;
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::Sorted(Some(comparator))),
+                ));
             }
             _ => {}
         }
@@ -10692,6 +10672,10 @@ impl<'run> Interpreter<'run> {
                     op,
                     StreamOp::Map(_)
                         | StreamOp::Peek(_)
+                        // Sorting cannot change how MANY elements there are,
+                        // so a `count()` over one still answers without
+                        // traversing — and the comparator never runs.
+                        | StreamOp::Sorted(_)
                         | StreamOp::Box
                         | StreamOp::WidenToLong
                         | StreamOp::WidenToDouble
@@ -14475,6 +14459,34 @@ impl<'run> Interpreter<'run> {
                     |name| (*name).to_string(),
                 )
             }
+            // A sub-list is an inner class of the list it views, and WHICH one
+            // says whether the view is random-access: an `ArrayList`'s has its
+            // own class, every other random-access list shares
+            // `AbstractList`'s, and a `LinkedList`'s is the plain one.
+            Some(HeapObject::SubList { backing, .. }) => {
+                let backing = *backing;
+                match self.object_class_name(backing).as_str() {
+                    // A sub-list OF a sub-list is that same class again.
+                    "java/util/ArrayList" | "java/util/ArrayList$SubList" => {
+                        String::from("java/util/ArrayList$SubList")
+                    }
+                    "java/util/LinkedList" | "java/util/AbstractList$SubList" => {
+                        String::from("java/util/AbstractList$SubList")
+                    }
+                    _ => String::from("java/util/AbstractList$RandomAccessSubList"),
+                }
+            }
+            // A `TreeSet`'s range views are `TreeSet`s themselves (each wraps a
+            // sub-map); a `TreeMap`'s say which DIRECTION they run in, and its
+            // key views are one class whichever way they go.
+            Some(HeapObject::SortedView {
+                face, descending, ..
+            }) => String::from(match (face, descending) {
+                (crate::value::SortedFace::Set, _) => "java/util/TreeSet",
+                (crate::value::SortedFace::Keys, _) => "java/util/TreeMap$KeySet",
+                (crate::value::SortedFace::Map, false) => "java/util/TreeMap$AscendingSubMap",
+                (crate::value::SortedFace::Map, true) => "java/util/TreeMap$DescendingSubMap",
+            }),
             // A stream is deliberately absent: a JDK names a pipeline after
             // its LAST operation AND its element family
             // (`ReferencePipeline$3` for a mapped object stream,
@@ -16719,6 +16731,9 @@ enum StreamOpState {
     None,
     Counter(usize),
     Seen(Vec<JValue>),
+    /// What a `sorted` barrier has taken in so far, emitted only once the
+    /// source runs dry.
+    Buffer(Vec<JValue>),
 }
 
 /// Where a stream terminal collects its result. The variants that carry a
@@ -18486,6 +18501,152 @@ fn primitive_wrapper(value: JValue) -> Option<&'static str> {
         JValue::Float(_) => "java/lang/Float",
         JValue::Ref(_) => return None,
     })
+}
+
+/// What a library object IS, besides its own class: the supertypes
+/// `instanceof` and `checkcast` accept for it, keyed by the internal name
+/// `object_class_name` answers. One table, so the class a program can PRINT
+/// and the classes it can TEST against are the same fact — they were a dozen
+/// separate hand-written lists, and every object missing from them (an
+/// `Arrays.asList` view, a sub-list, a map's key set) said it was not a
+/// `List`, then threw `ClassCastException` on the cast that followed.
+///
+/// `Iterable` and `Iterator` are deliberately absent: they cut across object
+/// KINDS rather than classes, and `builtin_iteration_face` answers them.
+/// The name the VM sees for a BUNDLED interface: caturra compiles
+/// `Comparable`, `Cloneable` and the two closeables as synthesized classes
+/// under their SIMPLE name, so that is the spelling an `instanceof` against
+/// one carries. The table below is written in JDK internal names, so a bare
+/// one is qualified on the way in — an `ArrayList` said it was not
+/// `Cloneable`, which the JDK's is.
+fn qualified_face(target: &str) -> &str {
+    match target {
+        "Comparable" => "java/lang/Comparable",
+        "Cloneable" => "java/lang/Cloneable",
+        "AutoCloseable" => "java/lang/AutoCloseable",
+        "Closeable" => "java/io/Closeable",
+        other => other,
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one row per library class
+fn library_faces(class: &str) -> &'static [&'static str] {
+    const LIST: &[&str] = &["java/util/List", "java/util/Collection"];
+    const CLONEABLE_LIST: &[&str] = &[
+        "java/util/List",
+        "java/util/Collection",
+        "java/lang/Cloneable",
+    ];
+    const SET: &[&str] = &["java/util/Set", "java/util/Collection"];
+    const CLONEABLE_SET: &[&str] = &[
+        "java/util/Set",
+        "java/util/Collection",
+        "java/lang/Cloneable",
+    ];
+    const SORTED_SET: &[&str] = &[
+        "java/util/NavigableSet",
+        "java/util/SortedSet",
+        "java/util/Set",
+        "java/util/Collection",
+    ];
+    const MAP: &[&str] = &["java/util/Map"];
+    const SORTED_MAP: &[&str] = &[
+        "java/util/NavigableMap",
+        "java/util/SortedMap",
+        "java/util/Map",
+    ];
+    const ENTRY: &[&str] = &["java/util/Map$Entry", "java/util/Map.Entry"];
+    match class {
+        // A `Stack` IS a `Vector`, which is where its `List` face comes from.
+        "java/util/ArrayList" | "java/util/Stack" => CLONEABLE_LIST,
+        // `Arrays.asList`'s list, a sub-list and a wrapper are views: none of
+        // them is `Cloneable`, though the list each views may be.
+        "java/util/Arrays$ArrayList"
+        | "java/util/ArrayList$SubList"
+        | "java/util/AbstractList$SubList"
+        | "java/util/AbstractList$RandomAccessSubList"
+        | "java/util/Collections$UnmodifiableList"
+        | "java/util/Collections$UnmodifiableRandomAccessList"
+        | "java/util/Collections$SingletonList"
+        | "java/util/Collections$EmptyList"
+        | "java/util/ImmutableCollections$List12"
+        | "java/util/ImmutableCollections$ListN" => LIST,
+        "java/util/LinkedList" => &[
+            "java/util/List",
+            "java/util/Deque",
+            "java/util/Queue",
+            "java/util/Collection",
+            "java/lang/Cloneable",
+        ],
+        "java/util/ArrayDeque" => &[
+            "java/util/Deque",
+            "java/util/Queue",
+            "java/util/Collection",
+            "java/lang/Cloneable",
+        ],
+        "java/util/PriorityQueue" => &["java/util/Queue", "java/util/Collection"],
+        "java/util/HashSet" => CLONEABLE_SET,
+        // A LinkedHashSet EXTENDS HashSet; a plain HashSet is no LinkedHashSet.
+        "java/util/LinkedHashSet" => &[
+            "java/util/HashSet",
+            "java/util/Set",
+            "java/util/Collection",
+            "java/lang/Cloneable",
+        ],
+        "java/util/HashMap$KeySet"
+        | "java/util/HashMap$EntrySet"
+        | "java/util/LinkedHashMap$LinkedKeySet"
+        | "java/util/LinkedHashMap$LinkedEntrySet"
+        | "java/util/TreeMap$EntrySet"
+        | "java/util/Collections$UnmodifiableSet"
+        | "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet"
+        | "java/util/Collections$SingletonSet"
+        | "java/util/Collections$EmptySet"
+        | "java/util/ImmutableCollections$Set12"
+        | "java/util/ImmutableCollections$SetN" => SET,
+        // A `TreeSet` — including a range view of one, which IS a `TreeSet`.
+        // Its key-set cousin and the unmodifiable wrapper are not `Cloneable`.
+        "java/util/TreeSet" => &[
+            "java/util/NavigableSet",
+            "java/util/SortedSet",
+            "java/util/Set",
+            "java/util/Collection",
+            "java/lang/Cloneable",
+        ],
+        "java/util/TreeMap$KeySet" | "java/util/Collections$UnmodifiableSortedSet" => SORTED_SET,
+        "java/util/HashMap$Values"
+        | "java/util/LinkedHashMap$LinkedValues"
+        | "java/util/TreeMap$Values"
+        | "java/util/AbstractMap$2" => &["java/util/Collection"],
+        "java/util/HashMap" => &["java/util/Map", "java/lang/Cloneable"],
+        "java/util/LinkedHashMap" => &["java/util/HashMap", "java/util/Map", "java/lang/Cloneable"],
+        "java/util/Collections$UnmodifiableMap"
+        | "java/util/Collections$SingletonMap"
+        | "java/util/Collections$EmptyMap"
+        | "java/util/ImmutableCollections$Map1"
+        | "java/util/ImmutableCollections$MapN" => MAP,
+        "java/util/TreeMap" => &[
+            "java/util/NavigableMap",
+            "java/util/SortedMap",
+            "java/util/Map",
+            "java/lang/Cloneable",
+        ],
+        "java/util/TreeMap$AscendingSubMap"
+        | "java/util/TreeMap$DescendingSubMap"
+        | "java/util/Collections$UnmodifiableSortedMap" => SORTED_MAP,
+        "java/util/HashMap$Node"
+        | "java/util/LinkedHashMap$Entry"
+        | "java/util/TreeMap$Entry"
+        | "java/util/AbstractMap$SimpleEntry"
+        | "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet$UnmodifiableEntry" => ENTRY,
+        // A `StringBuilder` became `Comparable` in Java 11 — the release
+        // caturra targets, so it is `Comparable` here.
+        "java/lang/StringBuilder" => &["java/lang/CharSequence", "java/lang/Comparable"],
+        // Every array is `Cloneable` (and `Serializable`), whatever it holds.
+        _ if class.starts_with('[') => &["java/lang/Cloneable"],
+        "java/io/File" => &["java/lang/Comparable"],
+        _ => &[],
+    }
 }
 
 /// Whether a wrapper class is (or inherits/implements) `target` — the subtype

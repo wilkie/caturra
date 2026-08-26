@@ -8263,6 +8263,115 @@ structural change in aid of an unspecified answer.
 
 Pinned by `diff_every_traversal_is_one_order`.
 
+### A barrier that still waits (2026-08-25)
+
+Fuzzing random stream pipelines — sources, intermediate ops, terminals and
+comparator combinators composed at random — found `sorted` running EAGERLY, at
+the call that appends it. Everything else in the pipeline was lazy, so this one
+op was enough to make a `peek` above it print before any terminal existed:
+
+```java
+Stream<String> s = Stream.of("b", "a").peek(x -> System.out.println(x)).sorted();
+```
+
+A JDK prints nothing there — no terminal has asked for an element. caturra
+printed both.
+
+`sorted` is a stateful BARRIER: it emits nothing until the upstream runs dry.
+That is not the same as being eager, and modelling it as a `StreamOp` that
+BUFFERS — flushed, sorted, into the ops below it once the source is exhausted —
+is what separates the two. A second barrier downstream is flushed by the same
+walk, since the first one's flush fills it.
+
+The larger half is what a lazy barrier makes possible: `count()` may answer
+without traversing at all. The JDK's does whenever the source size is known and
+no operation can change it, and `Stream.count`'s javadoc says so outright — so
+the side effects of a `map`, a `peek` or a comparator in such a pipeline never
+happen. Sorting cannot change how MANY elements there are, so `sorted` belongs
+in that set:
+
+```java
+Stream.of("c", "a", "b").peek(x -> System.out.println(x)).sorted().count();  // prints nothing, answers 3
+Stream.of("c", "a").sorted((x, y) -> { throw new IllegalStateException(); }).count();  // answers 2
+```
+
+A `filter` or a `distinct` anywhere in the chain makes it traverse as usual.
+
+Twenty programs — no terminal at all, short-circuit terminals below the
+barrier, a `limit` above it, two barriers, a throwing comparator, comodification
+through the barrier, a primitive pipeline, an infinite source bounded above it —
+agree with a real JDK exactly. Pinned by `diff_a_sorted_barrier_stays_lazy`.
+
+### What a library object says it is (2026-08-25)
+
+The same sweep asked, of every library object caturra can make, what
+`getClass()` prints and what `instanceof` accepts. The two answers came from
+different places: one namer, and a dozen hand-written lists in the
+`instanceof`/`checkcast` arm. Whatever was missing from the lists answered
+FALSE — and a false `instanceof` is followed by a `ClassCastException` on the
+cast:
+
+```java
+Object o = Arrays.asList("p");
+System.out.println(o instanceof List);   // JDK: true.  caturra: false
+List<String> back = (List<String>) o;    // and then this threw
+```
+
+`Arrays.asList`'s list, a `subList`, a map's `keySet`/`values`/`entrySet`, a
+`TreeSet` range view and a `TreeMap` sub-map were all in that gap — ordinary
+collections a program holds through an `Object` for a moment.
+
+Both answers now come from ONE fact: the class `object_class_name` gives, and a
+table of that class's supertypes keyed by it. Two things fell out of writing it
+down that way. A view had no class name of its own, so naming one was the first
+half of the fix — a sub-list is `ArrayList$SubList`, `AbstractList$SubList` or
+`AbstractList$RandomAccessSubList` depending on which list it views, and a
+`TreeSet`'s range view IS a `TreeSet`, which is why it answers `Cloneable` too.
+And the bundled interfaces (`Comparable`, `Cloneable`, the closeables) reach the
+VM under their SIMPLE name, since that is how caturra synthesizes them, so a
+bare spelling is qualified on the way into the table — without that an
+`ArrayList` said it was not `Cloneable`.
+
+`Iterable` and `Iterator` stay out of the table on purpose: they cut across
+object KINDS rather than classes, and a separate cross-cut answers them (a
+sorted view of a map is not one, though a view of its keys is).
+
+Forty-four objects × twelve faces, against a real JDK. Pinned by
+`diff_a_library_object_wears_its_own_class`.
+
+### The element and its source (2026-08-25)
+
+A stream lambda's parameter type is read SYNTACTICALLY from the receiver, so
+each new way of writing a source needs the recogniser to learn it — and until
+it does, the element is `Object` and the next lambda in the chain is refused
+with "cannot find symbol". The pipeline fuzz found four shapes at once:
+
+- `Stream.concat(a, b)` — the element is either half's.
+- `flatMap(s -> Stream.of(s, s.substring(0, 1)))` — the element is that of the
+  stream the lambda ANSWERS, one step further in. The lambda's parameter is not
+  in scope for the ordinary walk (it exists only inside the synthesized class),
+  so the two shapes that mention it — a `Stream.of` over it, and a
+  `stream()`/`Arrays.stream` of it — are read against the lambda's own bindings.
+- `flatMap(List::stream)` — an unbound method reference whose qualifier is a
+  library CONTAINER. Those names were not class names to the reference
+  desugarer, so it compiled the bound form, `List.stream(p0)`: a static call on
+  an interface. They are deliberately left untyped as a receiver, since the
+  functional interface supplies the element type WITH its type arguments where
+  the bare name would be the raw type.
+- `Stream.of(first, second)` over declared variables — the literal reader saw
+  literals and `new`, so two `String` locals made a stream of `Object`. Each
+  argument is now typed the way a lambda body is.
+
+`String.split` and `toCharArray` joined the small table of library returns while
+this was written: `Arrays.stream(s.split(","))` needs an element too.
+
+One shape is knowingly left: a `Stream.of` whose arguments are library FACTORY
+calls (`Stream.of(Arrays.asList(1, 2), ...)`) still has an `Object` element, so
+a `List::stream` after it is refused. It fails in the safe direction — a
+refusal, not a wrong answer.
+
+Pinned by `diff_a_stream_element_survives_its_source`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

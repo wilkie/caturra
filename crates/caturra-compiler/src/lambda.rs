@@ -475,6 +475,30 @@ fn static_method_names(
 
 /// Every class/interface name, plus the library types that can qualify
 /// a method reference.
+/// The library CONTAINER types a method reference may name as its qualifier —
+/// `List::stream`, `Map::size`, `Optional::get`. Each is generic, so the
+/// receiver parameter is deliberately left UNTYPED where a `String::length`
+/// gets `String`: the functional interface supplies the element type with its
+/// type arguments intact, and the bare name would be the raw type, whose every
+/// method answers `Object`.
+const LIBRARY_CONTAINERS: [&str; 15] = [
+    "ArrayList",
+    "LinkedList",
+    "List",
+    "Collection",
+    "Set",
+    "HashSet",
+    "LinkedHashSet",
+    "TreeSet",
+    "Map",
+    "HashMap",
+    "LinkedHashMap",
+    "TreeMap",
+    "Queue",
+    "Deque",
+    "Optional",
+];
+
 fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::HashSet<String> {
     let mut set: std::collections::HashSet<String> = units
         .iter()
@@ -493,8 +517,11 @@ fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::Hash
         "Math",
         "System",
         "Object",
-        "ArrayList",
-    ] {
+        "StringBuilder",
+    ]
+    .into_iter()
+    .chain(LIBRARY_CONTAINERS)
+    {
         set.insert(String::from(lib));
     }
     set
@@ -2566,7 +2593,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
             // gives the receiver the stream's element, which carries its type
             // arguments, where the bare qualifier would be the raw type and
             // `getKey()` would answer `Object`.
-            if !class.contains('.') {
+            if !class.contains('.') && !LIBRARY_CONTAINERS.contains(&class.as_str()) {
                 receiver_param_type = Some(TypeRef::Named(class));
             }
             Expr::Call {
@@ -2927,8 +2954,8 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
                 let keys: Vec<Expr> = args.iter().step_by(2).cloned().collect();
                 let values: Vec<Expr> = args.iter().skip(1).step_by(2).cloned().collect();
                 return Some((
-                    literal_element_type(&keys, ctx.supers),
-                    literal_element_type(&values, ctx.supers),
+                    literal_element_type(&keys, ctx),
+                    literal_element_type(&values, ctx),
                 ));
             }
             // The same receiver shapes a LIST's element is read from: a cast, a
@@ -3643,6 +3670,15 @@ fn mapped_element_type(args: &[Expr], ctx: &Ctx) -> Option<TypeRef> {
 /// body opens by unwrapping each erased argument into the parameter's declared
 /// type, and ends in the expression whose type is the answer.
 fn produced_type(decl: &ClassDecl, ctx: &Ctx) -> Option<TypeRef> {
+    let (answer, bound) = lambda_answer(decl)?;
+    body_type(answer, &bound, ctx)
+}
+
+/// The expression a synthesized lambda class ANSWERS, with the declared type
+/// of each parameter it unwrapped on the way in. `produced_type` reads the
+/// type of that expression; `flat_element_type` reads the ELEMENT of the
+/// stream it denotes — the same answer, asked two different questions.
+fn lambda_answer(decl: &ClassDecl) -> Option<(&Expr, HashMap<String, TypeRef>)> {
     let body = decl.methods.iter().find(|method| !method.is_constructor)?;
     let mut bound: HashMap<String, TypeRef> = HashMap::new();
     let mut answer = None;
@@ -3672,7 +3708,60 @@ fn produced_type(decl: &ClassDecl, ctx: &Ctx) -> Option<TypeRef> {
             _ => {}
         }
     }
-    body_type(answer?, &bound, ctx)
+    Some((answer?, bound))
+}
+
+/// The element of the stream a `flatMap` lambda answers. Its parameter is not
+/// in `ctx` — it exists only inside the synthesized class — so the ordinary
+/// receiver walk cannot type `s -> Stream.of(s, s.substring(0, 1))`; the two
+/// shapes that mention the parameter are read here against `bound`, and
+/// everything else (a field, a local, `Files.lines(p)`) is left to the walk,
+/// which already knows those.
+fn flat_element_type(args: &[Expr], ctx: &Ctx) -> Option<TypeRef> {
+    let [Expr::NewObject { class, .. }] = args else {
+        return None;
+    };
+    let decl = ctx.new_classes.iter().find(|decl| decl.name == *class)?;
+    let (answer, bound) = lambda_answer(decl)?;
+    let Expr::Call {
+        receiver: Some(prev),
+        method,
+        args,
+        ..
+    } = answer
+    else {
+        return stream_elem_type(answer, ctx);
+    };
+    // `Stream.of(a, b)` over the parameter: the element joins the arguments,
+    // exactly as a literal stream's does, but typed against `bound`.
+    if method == "of" && names_library_class(prev.as_ref(), "Stream") && !args.is_empty() {
+        let mut kind: Option<TypeRef> = None;
+        for arg in args {
+            let this = boxed_element(body_type(arg, &bound, ctx)?);
+            kind = Some(match &kind {
+                Some(seen) => join_element_types(seen, &this, ctx.supers),
+                None => this,
+            });
+        }
+        return kind;
+    }
+    // `x.stream()` / `Arrays.stream(x)` over a parameter whose declared type
+    // carries the element.
+    if method == "stream" {
+        let source = if args.is_empty() {
+            body_type(prev, &bound, ctx)?
+        } else if names_library_class(prev.as_ref(), "Arrays") && args.len() == 1 {
+            body_type(&args[0], &bound, ctx)?
+        } else {
+            return stream_elem_type(answer, ctx);
+        };
+        return match source {
+            TypeRef::Array(elem) => Some(boxed_element(*elem)),
+            TypeRef::Generic { args, .. } if args.len() == 1 => Some(args[0].clone()),
+            _ => None,
+        };
+    }
+    stream_elem_type(answer, ctx)
 }
 
 /// The reference form of a primitive. An OBJECT stream's element is always a
@@ -3810,6 +3899,11 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         (_, "isEmpty" | "contains" | "containsKey" | "containsValue", _) if collection => {
             Some(TypeRef::Boolean)
         }
+        // The two String methods that answer an ARRAY. Without them
+        // `Arrays.stream(s.split(","))` had no element type, so a lambda over
+        // that stream took an `Object` and could not call a `String` method.
+        ("String", "split", _) => Some(TypeRef::Array(Box::new(string()))),
+        ("String", "toCharArray", 0) => Some(TypeRef::Array(Box::new(TypeRef::Char))),
         ("List" | "ArrayList" | "LinkedList", "get", 1) => element_of_declared(receiver),
         ("Map" | "HashMap" | "TreeMap", "get", 1) => match receiver {
             TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[1].clone()),
@@ -3936,7 +4030,19 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // all this syntactic pass can see; a mixed or computed list erases to
     // `Object`, as it does after `map`.
     if method == "of" && names_library_class(prev.as_ref(), "Stream") {
-        return Some(literal_element_type(args, ctx.supers));
+        return Some(literal_element_type(args, ctx));
+    }
+    // `Stream.concat(a, b)` — both halves have the same element, so the first
+    // one that answers is it. Missing here, a lambda applied INLINE to a
+    // concatenation had no target type at all ("a lambda is only allowed where
+    // a functional-interface type is expected"), while the very same chain
+    // through a `Stream<String>` variable compiled: the tell that a stream
+    // source is absent from this pass.
+    if method == "concat" && args.len() == 2 && names_library_class(prev.as_ref(), "Stream") {
+        return args
+            .iter()
+            .find_map(|half| stream_elem_type(half, ctx))
+            .or_else(|| Some(TypeRef::Named(String::from("Object"))));
     }
     // `Arrays.stream(array)` — the array's element type.
     if method == "stream" && args.len() == 1 && names_library_class(prev.as_ref(), "Arrays") {
@@ -3965,12 +4071,14 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         }),
         // `mapToObj` leaves the primitive pipeline for an object one, and
         // what the lambda answers is that stream's element — the same reading
-        // `map` gets. `flatMap`'s lambda answers a STREAM, whose own element
-        // this does not chase, so it stays erased.
+        // `map` gets. `flatMap`'s lambda answers a STREAM, so its element is
+        // that stream's element, one step further in.
         "mapToObj" => Some(
             mapped_element_type(args, ctx).unwrap_or_else(|| TypeRef::Named(String::from("Object"))),
         ),
-        "flatMap" => Some(TypeRef::Named(String::from("Object"))),
+        "flatMap" => Some(
+            flat_element_type(args, ctx).unwrap_or_else(|| TypeRef::Named(String::from("Object"))),
+        ),
         _ => None,
     }
 }
@@ -4111,7 +4219,8 @@ fn join_element_types(
         .map_or_else(object, TypeRef::Named)
 }
 
-fn literal_element_type(args: &[Expr], supers: &HashMap<String, Vec<String>>) -> TypeRef {
+fn literal_element_type(args: &[Expr], ctx: &Ctx) -> TypeRef {
+    let supers = ctx.supers;
     let object = TypeRef::Named(String::from("Object"));
     let mut kind: Option<TypeRef> = None;
     for arg in args {
@@ -4121,6 +4230,19 @@ fn literal_element_type(args: &[Expr], supers: &HashMap<String, Vec<String>>) ->
         // `List<Point>` had the element all along.
         if let Expr::NewObject { class, .. } = arg {
             let this = TypeRef::Named(class.clone());
+            kind = Some(match &kind {
+                Some(seen) => join_element_types(seen, &this, supers),
+                None => this,
+            });
+            continue;
+        }
+        // Anything else a lambda body could be typed by: a local, a field, a
+        // call whose return is known. Reading only LITERALS left
+        // `Stream.of(first, second)` over two declared `String`s with an
+        // `Object` element, though the same two spelled out inline were
+        // `String`s.
+        if let Some(known) = body_type(arg, &HashMap::new(), ctx) {
+            let this = boxed_element(known);
             kind = Some(match &kind {
                 Some(seen) => join_element_types(seen, &this, supers),
                 None => this,
@@ -4208,7 +4330,7 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             && args.len() == 1
             && names_library_class(prev, "Optional")
         {
-            return Some(literal_element_type(args, ctx.supers));
+            return Some(literal_element_type(args, ctx));
         }
         return match method.as_str() {
             // Optional.filter: same element. (A STREAM's filter resolves to
@@ -4391,10 +4513,10 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         match (method.as_str(), &args[..]) {
             // One element, written as the argument.
             ("singletonList" | "singleton", [only]) if from_collections => {
-                return Some(literal_element_type(std::slice::from_ref(only), ctx.supers));
+                return Some(literal_element_type(std::slice::from_ref(only), ctx));
             }
             ("nCopies", [_, only]) if from_collections => {
-                return Some(literal_element_type(std::slice::from_ref(only), ctx.supers));
+                return Some(literal_element_type(std::slice::from_ref(only), ctx));
             }
             // A WRAPPER or a copy: the element is the source's.
             (
@@ -4448,7 +4570,7 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             || names_library_class(owner.as_ref(), "Set")
             || names_library_class(owner.as_ref(), "Arrays"))
     {
-        return Some(literal_element_type(args, ctx.supers));
+        return Some(literal_element_type(args, ctx));
     }
     if let Expr::Call {
         receiver: Some(inner),

@@ -13,6 +13,8 @@
 //! stack. `JType::Error` marks a subtree that already produced a
 //! diagnostic, and silences follow-on errors.
 
+use std::fmt::Write as _;
+
 use caturra_classfile::opcodes as op;
 use caturra_classfile::{
     AttributeInfo, CODE_ATTRIBUTE, ClassFile, CodeAttribute, Constant, ConstantPool, CpIndex,
@@ -14172,11 +14174,12 @@ fn inapplicable_message(
         argument_list(args, table)
     );
     for params in candidates {
-        message.push_str(&format!(
+        let _ = write!(
+            message,
             "\n    method {owner}.{method}({}) is not applicable\n      ({})",
             describe_types(params, table),
             inapplicable_reason(params, args, table)
-        ));
+        );
     }
     message
 }
@@ -14208,11 +14211,12 @@ fn constructor_inapplicable(
         argument_list(args, table)
     );
     for params in candidates {
-        message.push_str(&format!(
+        let _ = write!(
+            message,
             "\n    constructor {class_name}.{class_name}({}) is not applicable\n      ({})",
             describe_types(params, table),
             inapplicable_reason(params, args, table)
-        ));
+        );
     }
     message
 }

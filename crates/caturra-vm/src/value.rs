@@ -93,6 +93,12 @@ pub enum StreamOp {
     /// `dropWhile(pred)` — drop elements while the predicate holds, then pass
     /// every one that follows, including later elements that would match.
     DropWhile(HeapRef),
+    /// `sorted()` / `sorted(cmp)` — a stateful BARRIER: it buffers the whole
+    /// upstream and emits nothing until the source is exhausted, then emits in
+    /// order. Lazy like every other op, which is what makes the side effects
+    /// upstream of it wait for a terminal — and vanish entirely when the
+    /// terminal is a `count()` that never traverses.
+    Sorted(Option<HeapRef>),
     /// `boxed()` — the primitive pipeline becomes an OBJECT one, so each
     /// element becomes its wrapper. Not a retyping: a collection stores boxed
     /// references at rest, so a raw `int` reaching one is a `VerifyError` at the
@@ -740,6 +746,11 @@ impl StreamOp {
             | StreamOp::Peek(f)
             | StreamOp::TakeWhile(f)
             | StreamOp::DropWhile(f) => visit(*f),
+            StreamOp::Sorted(comparator) => {
+                if let Some(comparator) = comparator {
+                    visit(*comparator);
+                }
+            }
             StreamOp::Limit(_)
             | StreamOp::Skip(_)
             | StreamOp::Distinct

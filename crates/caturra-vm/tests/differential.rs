@@ -29838,6 +29838,139 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// `sorted` is a BARRIER, but it is still lazy: nothing upstream of it runs
+// until a terminal asks, and a `count()` over a sized pipeline never asks at
+// all (`Stream.count`'s javadoc says so outright), so the `peek` and the
+// comparator that a traversal would have run simply do not run. caturra sorted
+// EAGERLY, at the call — which printed a pipeline's side effects before any
+// terminal existed, and ran them again in the one pipeline the JDK skips.
+differential_test!(
+    diff_a_sorted_barrier_stays_lazy,
+    "Barrier",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class Barrier {
+    public static void main(String[] args) {
+        Stream<String> never = Stream.of("b", "a").peek(x -> System.out.println("never:" + x)).sorted();
+        System.out.println("no terminal yet");
+        System.out.println(Stream.of("c", "a", "b").peek(x -> System.out.println("p:" + x)).sorted().findFirst().get());
+        System.out.println(Stream.of("e", "d", "c", "b", "a").peek(x -> System.out.println("u:" + x)).limit(3).sorted().collect(Collectors.toList()));
+        System.out.println(Stream.of("bb", "a", "ccc").sorted().peek(x -> System.out.println("m:" + x))
+            .map(x -> x + "!").sorted(Comparator.comparing(String::length).reversed()).collect(Collectors.toList()));
+        System.out.println(Stream.of("c", "a", "b").peek(x -> System.out.println("counted:" + x)).sorted().count());
+        System.out.println(Stream.of("c", "a").sorted((x, y) -> { throw new IllegalStateException("boom"); }).count());
+        System.out.println(Stream.of("c", "a", "b").peek(x -> System.out.println("filtered:" + x)).filter(x -> true).sorted().count());
+        System.out.println(IntStream.of(3, 1, 2).peek(x -> System.out.println("i:" + x)).sorted().boxed().collect(Collectors.toList()));
+        List<String> late = new ArrayList<>(Arrays.asList("b", "a"));
+        Stream<String> bound = late.stream().sorted();
+        late.add("c");
+        System.out.println(bound.collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// What a library object IS, on both sides of the same fact: the class
+// `getClass` prints and the classes `instanceof` accepts for it. A dozen
+// hand-written lists answered the second question, and everything missing from
+// them — an `Arrays.asList` view, a sub-list, a map's key set, a `TreeSet`
+// range — said it was not a `List`/`Set`, then threw `ClassCastException` on
+// the cast that followed.
+differential_test!(
+    diff_a_library_object_wears_its_own_class,
+    "Faces",
+    r#"
+import java.util.*;
+
+public class Faces {
+    static void show(Object o) {
+        System.out.println(o.getClass().getName()
+            + " list=" + (o instanceof List) + " set=" + (o instanceof Set)
+            + " map=" + (o instanceof Map) + " coll=" + (o instanceof Collection)
+            + " queue=" + (o instanceof Queue) + " deque=" + (o instanceof Deque)
+            + " sortedSet=" + (o instanceof SortedSet) + " navSet=" + (o instanceof NavigableSet)
+            + " sortedMap=" + (o instanceof SortedMap) + " navMap=" + (o instanceof NavigableMap)
+            + " iterable=" + (o instanceof Iterable) + " cloneable=" + (o instanceof Cloneable));
+    }
+
+    public static void main(String[] args) {
+        List<String> base = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        show(base);
+        show(Arrays.asList("a", "b"));
+        show(base.subList(0, 2));
+        show(Arrays.asList("a", "b").subList(0, 1));
+        show(new LinkedList<>(base).subList(0, 1));
+        show(new LinkedList<String>());
+        show(new ArrayDeque<String>());
+        show(new Stack<String>());
+        show(new PriorityQueue<String>());
+        show(new HashSet<String>());
+        show(new LinkedHashSet<String>());
+        show(new TreeSet<String>());
+        show(new HashMap<String, String>());
+        show(new TreeMap<String, String>());
+        show(Collections.unmodifiableList(base));
+        show(Collections.singletonList("a"));
+        show(List.of("a", "b"));
+        show(Set.of("a"));
+        show(Map.of("a", "b"));
+        show(new HashMap<String, String>().keySet());
+        show(new HashMap<String, String>().values());
+        show(new HashMap<String, String>().entrySet());
+        show(new TreeMap<String, String>().keySet());
+        show(new TreeSet<>(Arrays.asList("a", "b")).headSet("b"));
+        show(new TreeMap<String, String>().headMap("z"));
+        show(new TreeMap<String, String>().descendingMap());
+        show(new StringBuilder("x"));
+        show(new AbstractMap.SimpleEntry<>("k", "v"));
+        show(new int[2]);
+        Object erased = Arrays.asList("p");
+        List<String> back = (List<String>) erased;
+        System.out.println(back.get(0));
+    }
+}
+"#
+);
+
+// A stream's element has to survive the sources and the shapes a pipeline is
+// really written in: `concat`, a `flatMap` whose lambda answers a stream over
+// its own parameter, an unbound method reference to a LIBRARY container
+// (`List::stream`), and a `Stream.of` over variables rather than literals.
+// Each of these left the element as `Object`, and the next lambda in the chain
+// was then refused — "cannot find symbol", on ordinary Java.
+differential_test!(
+    diff_a_stream_element_survives_its_source,
+    "Elements",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class Elements {
+    public static void main(String[] args) {
+        System.out.println(Stream.concat(Stream.of("x", "yy"), Stream.of("zzz"))
+            .map(s -> s + s.length()).collect(Collectors.toList()));
+        System.out.println(Stream.concat(Stream.of("a"), Stream.of("bb"))
+            .filter(s -> s.length() > 1).findFirst().orElse("-"));
+        System.out.println(Stream.of("x", "yy").flatMap(s -> Stream.of(s, s.substring(0, 1)))
+            .mapToInt(String::length).sum());
+        List<List<String>> rows = new ArrayList<>();
+        rows.add(Arrays.asList("a", "bb"));
+        rows.add(Arrays.asList("ccc"));
+        System.out.println(rows.stream().flatMap(r -> r.stream()).map(s -> s.toUpperCase()).collect(Collectors.toList()));
+        System.out.println(rows.stream().flatMap(List::stream).map(s -> s.length()).collect(Collectors.toList()));
+        System.out.println(Stream.of("a b", "c").flatMap(s -> Arrays.stream(s.split(" ")))
+            .map(w -> w + w.length()).collect(Collectors.joining(",")));
+        String first = "aa";
+        String second = "b";
+        System.out.println(Stream.of(first, second).map(s -> s.length()).collect(Collectors.toList()));
+        System.out.println("text".chars().count() + " " + Stream.of(first).flatMap(s -> Stream.of(s)).count());
+    }
+}
+"#
+);
+
 differential_test!(
     diff_a_shift_with_a_wrapper_operand,
     "Shifty",
@@ -33674,6 +33807,8 @@ public class WrapperOk {
 /// hashing order, no transcendentals, no identity hashes — because a difference
 /// has to mean a difference, not a coin landing differently in two engines.
 mod fuzz {
+    use std::fmt::Write as _;
+
     /// How many programs a plain `cargo test` fuzzes. Enough to be worth the
     /// javac runs it costs; `CATURRA_FUZZ=2000 cargo test fuzz` for a real one.
     const FUZZ_PROGRAMS: u32 = 40;
@@ -33938,7 +34073,7 @@ mod fuzz {
                 if self.rng.chance() < 0.5 {
                     let count = self.rng.count(1, 2);
                     let other = self.block(count, indent + 1);
-                    out.push_str(&format!(" else {{\n{other}{pad}}}"));
+                    let _ = write!(out, " else {{\n{other}{pad}}}");
                 }
                 out.push('\n');
                 return out;
@@ -34172,9 +34307,10 @@ mod fuzz {
                     } else {
                         ""
                     };
-                    arms.push_str(&format!(
-                        "{pad}    case {k}: System.out.println(\"c{k}\");{brk}\n"
-                    ));
+                    let _ = writeln!(
+                        arms,
+                        "{pad}    case {k}: System.out.println(\"c{k}\");{brk}"
+                    );
                 }
                 return format!(
                     "{pad}switch (Math.floorMod({selector}, 4)) {{\n{arms}{pad}    default: System.out.println(\"d\");\n{pad}}}\n"
@@ -34188,9 +34324,10 @@ mod fuzz {
                 } else {
                     ""
                 };
-                arms.push_str(&format!(
-                    "{pad}    case \"{k}\": System.out.println(\"s{k}\");{brk}\n"
-                ));
+                let _ = writeln!(
+                    arms,
+                    "{pad}    case \"{k}\": System.out.println(\"s{k}\");{brk}"
+                );
             }
             format!(
                 "{pad}switch ({selector}) {{\n{arms}{pad}    default: System.out.println(\"sd\");\n{pad}}}\n"
@@ -34325,7 +34462,7 @@ mod fuzz {
         let mut out = String::new();
 
         let iface_default = rng.chance() < 0.6;
-        out.push_str(&format!("interface {face} {{\n    String tag();\n"));
+        let _ = writeln!(out, "interface {face} {{\n    String tag();");
         if iface_default {
             out.push_str("    default String greet() { return \"Face.greet/\" + tag(); }\n");
         } else {
@@ -34339,42 +34476,45 @@ mod fuzz {
             } else {
                 format!(" extends {}", if depth == 1 { &a } else { &b })
             };
-            out.push_str(&format!("class {name}{extends} {{\n"));
+            let _ = writeln!(out, "class {name}{extends} {{");
             // A field the subclass may HIDE: same name, read by the STATIC type.
             if depth == 0 || rng.chance() < 0.7 {
-                out.push_str(&format!("    String label = \"{name}.label\";\n"));
+                let _ = writeln!(out, "    String label = \"{name}.label\";");
             }
             out.push_str("    static int made;\n");
             if rng.chance() < 0.5 {
-                out.push_str(&format!(
-                    "    {{ System.out.println(\"{name} init-block, label=\" + label); }}\n"
-                ));
+                let _ = writeln!(
+                    out,
+                    "    {{ System.out.println(\"{name} init-block, label=\" + label); }}"
+                );
             }
-            out.push_str(&format!("    {name}() {{\n"));
+            let _ = writeln!(out, "    {name}() {{");
             if depth > 0 && rng.chance() < 0.5 {
                 out.push_str("        super();\n");
             }
-            out.push_str(&format!(
+            let _ = writeln!(
+                out,
                 "        System.out.println(\"{name} ctor, label=\" + label + \" tag=\" + tag());\n\
-                 \x20       made++;\n    }}\n"
-            ));
-            out.push_str(&format!(
-                "    public String tag() {{ return \"{name}.tag\"; }}\n"
-            ));
+                 \x20       made++;\n    }}"
+            );
+            let _ = writeln!(out, "    public String tag() {{ return \"{name}.tag\"; }}");
             if depth == 0 && !iface_default {
-                out.push_str(&format!(
-                    "    public String greet() {{ return \"{name}.greet\"; }}\n"
-                ));
+                let _ = writeln!(
+                    out,
+                    "    public String greet() {{ return \"{name}.greet\"; }}"
+                );
             } else if rng.chance() < 0.4 {
                 if depth > 0 {
-                    out.push_str(&format!(
-                        "    public String greet() {{ return \"{name}.greet/\" + super.greet(); }}\n"
-                    ));
+                    let _ = writeln!(
+                        out,
+                        "    public String greet() {{ return \"{name}.greet/\" + super.greet(); }}"
+                    );
                 } else if iface_default {
                     // The interface's own default, which only `Face.super` reaches.
-                    out.push_str(&format!(
-                        "    public String greet() {{ return \"{name}.greet/\" + {face}.super.greet(); }}\n"
-                    ));
+                    let _ = writeln!(
+                        out,
+                        "    public String greet() {{ return \"{name}.greet/\" + {face}.super.greet(); }}"
+                    );
                 }
             }
             if depth == 0 {
@@ -34385,30 +34525,34 @@ mod fuzz {
                 );
             } else {
                 if rng.chance() < 0.7 {
-                    out.push_str(&format!(
-                        "    @Override String describe() {{ return \"{name}.describe/\" + super.describe(); }}\n"
-                    ));
+                    let _ = writeln!(
+                        out,
+                        "    @Override String describe() {{ return \"{name}.describe/\" + super.describe(); }}"
+                    );
                 }
                 if rng.chance() < 0.5 {
-                    out.push_str(&format!(
-                        "    String pick(String s) {{ return \"{name}.pick(String)\"; }}\n"
-                    ));
+                    let _ = writeln!(
+                        out,
+                        "    String pick(String s) {{ return \"{name}.pick(String)\"; }}"
+                    );
                 }
                 if rng.chance() < 0.4 {
-                    out.push_str(&format!(
-                        "    static String stat() {{ return \"{name}.stat\"; }}\n"
-                    ));
+                    let _ = writeln!(
+                        out,
+                        "    static String stat() {{ return \"{name}.stat\"; }}"
+                    );
                 }
             }
             out.push_str("}\n\n");
         }
 
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "public class {class_name} {{\n    public static void main(String[] args) {{\n\
              \x20       System.out.println(\"--- construct\");\n\
              \x20       {a} a = new {a}();\n        {b} b = new {b}();\n        {c} c = new {c}();\n\
-             \x20       System.out.println(\"--- dispatch\");\n"
-        ));
+             \x20       System.out.println(\"--- dispatch\");"
+        );
         for (holder, value) in [
             (&a, "a"),
             (&a, "b"),
@@ -34417,15 +34561,17 @@ mod fuzz {
             (&b, "c"),
             (&c, "c"),
         ] {
-            out.push_str(&format!(
+            let _ = writeln!(
+                out,
                 "        {holder} h{value}{holder} = {value};\n\
                  \x20       System.out.println(h{value}{holder}.describe() + \" | \" \
                  + h{value}{holder}.label + \" | \" + h{value}{holder}.tag());\n\
                  \x20       System.out.println(h{value}{holder}.pick(\"s\") + \" \" \
-                 + h{value}{holder}.pick((Object) \"s\"));\n"
-            ));
+                 + h{value}{holder}.pick((Object) \"s\"));"
+            );
         }
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "        System.out.println(\"--- interface\");\n\
              \x20       {face} f = c;\n\
              \x20       System.out.println(f.greet() + \" \" + f.tag());\n\
@@ -34435,8 +34581,8 @@ mod fuzz {
              \x20       {a}[] all = {{ a, b, c }};\n\
              \x20       for ({a} each : all) {{ System.out.println(each.describe() + \"@\" + each.label); }}\n\
              \x20       System.out.println((({a}) c).label + \" \" + (({b}) c).label + \" \" + c.label);\n\
-             \x20   }}\n}}\n"
-        ));
+             \x20   }}\n}}"
+        );
         out
     }
 
@@ -34496,9 +34642,7 @@ mod fuzz {
         let mut out = String::from("import java.util.*;\n\n");
 
         let has_twice = rng.chance() < 0.7;
-        out.push_str(&format!(
-            "interface {sink}<T> {{\n    String accept(T t);\n"
-        ));
+        let _ = writeln!(out, "interface {sink}<T> {{\n    String accept(T t);");
         if has_twice {
             out.push_str(
                 "    default String twice(T t) { return accept(t) + \"/\" + accept(t); }\n",
@@ -34506,55 +34650,62 @@ mod fuzz {
         }
         out.push_str("}\n\n");
 
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "class {boxed}<T> {{\n    T value;\n    {boxed}(T v) {{ value = v; }}\n\
              \x20   T get() {{ return value; }}\n\
              \x20   String show(T t) {{ return \"Box.show:\" + t; }}\n\
              \x20   <U> String pass(U u) {{ return \"Box.pass:\" + u + \":\" + get(); }}\n\
              \x20   public String toString() {{ return \"Box(\" + value + \")\"; }}\n}}\n\n"
-        ));
+        );
 
         // A subclass that PINS the argument: every override needs a bridge, and
         // every inherited member reads at the pinned type.
-        out.push_str(&format!(
-            "class {pin} extends {boxed}<{elem}> {{\n    {pin}({elem} v) {{ super(v); }}\n"
-        ));
+        let _ = writeln!(
+            out,
+            "class {pin} extends {boxed}<{elem}> {{\n    {pin}({elem} v) {{ super(v); }}"
+        );
         if rng.chance() < 0.8 {
-            out.push_str(&format!("    @Override {elem} get() {{ return value; }}\n"));
+            let _ = writeln!(out, "    @Override {elem} get() {{ return value; }}");
         }
         if rng.chance() < 0.8 {
-            out.push_str(&format!(
-                "    @Override String show({elem} t) {{ return \"Pin.show:\" + t + \":\" + get(); }}\n"
-            ));
+            let _ = writeln!(
+                out,
+                "    @Override String show({elem} t) {{ return \"Pin.show:\" + t + \":\" + get(); }}"
+            );
         }
         if rng.chance() < 0.5 {
             out.push_str("    @Override <U> String pass(U u) { return \"Pin.pass:\" + u; }\n");
         }
         out.push_str("}\n\n");
 
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "class {named} implements {sink}<{elem}> {{\n\
-             \x20   public String accept({elem} t) {{ return \"Named:\" + t; }}\n"
-        ));
+             \x20   public String accept({elem} t) {{ return \"Named:\" + t; }}"
+        );
         if has_twice && rng.chance() < 0.5 {
-            out.push_str(&format!(
-                "    public String twice({elem} t) {{ return \"Named.twice:\" + accept(t); }}\n"
-            ));
+            let _ = writeln!(
+                out,
+                "    public String twice({elem} t) {{ return \"Named.twice:\" + accept(t); }}"
+            );
         }
         out.push_str("}\n\n");
 
         // An enum implementing the same interface, sometimes with constant
         // bodies — each of which is an anonymous subclass of the enum.
-        out.push_str(&format!("enum {hue} implements {sink}<{elem}> {{\n"));
+        let _ = writeln!(out, "enum {hue} implements {sink}<{elem}> {{");
         if rng.chance() < 0.6 {
-            out.push_str(&format!(
+            let _ = writeln!(
+                out,
                 "    RED {{ public String accept({elem} t) {{ return \"RED:\" + t; }} }},\n\
-                 \x20   BLUE {{ public String accept({elem} t) {{ return \"BLUE:\" + t; }} }};\n"
-            ));
+                 \x20   BLUE {{ public String accept({elem} t) {{ return \"BLUE:\" + t; }} }};"
+            );
         } else {
-            out.push_str(&format!(
-                "    RED, BLUE;\n    public String accept({elem} t) {{ return name() + \":\" + t; }}\n"
-            ));
+            let _ = writeln!(
+                out,
+                "    RED, BLUE;\n    public String accept({elem} t) {{ return name() + \":\" + t; }}"
+            );
         }
         out.push_str("    public String label() { return \"hue-\" + name() + ordinal(); }\n}\n\n");
 
@@ -34565,7 +34716,8 @@ mod fuzz {
                 String::new()
             }
         };
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "public class {class_name} {{\n    public static void main(String[] args) {{\n\
              \x20       {boxed}<{elem}> b = new {pin}({});\n\
              \x20       System.out.println(b.get() + \" | \" + b.show({}) + \" | \" + b.pass(\"u\") + \" | \" + b);\n\
@@ -34584,7 +34736,7 @@ mod fuzz {
              \x20       List<{boxed}<{elem}>> boxes = new ArrayList<>();\n\
              \x20       boxes.add(new {pin}({})); boxes.add(new {boxed}<>({}));\n\
              \x20       for ({boxed}<{elem}> each : boxes) {{ System.out.println(each.get() + \"/\" + each.show({})); }}\n\
-             \x20       System.out.println(boxes);\n    }}\n}}\n",
+             \x20       System.out.println(boxes);\n    }}\n}}",
             lit[0],
             lit[1],
             lit[2],
@@ -34600,7 +34752,7 @@ mod fuzz {
             lit[0],
             lit[1],
             lit[2],
-        ));
+        );
         out
     }
 
