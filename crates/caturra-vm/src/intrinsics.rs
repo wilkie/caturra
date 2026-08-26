@@ -4032,8 +4032,15 @@ fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
             });
     }
     match heap.get(source) {
-        // A HashSet stores its elements as the KEYS of its backing map.
-        Some(HeapObject::HashSet(entries)) => entries.key_at(index),
+        // A HashSet stores its elements as the KEYS of its backing map — in
+        // ITERATION order, which is the JDK's bucket order and not the order
+        // they were stored in. Indexing the storage directly made an explicit
+        // `iterator()` walk a different order from the for-each, the stream and
+        // `toString` over the very same set, all three of which ask for the
+        // ordered position.
+        Some(HeapObject::HashSet(entries)) => {
+            entries.entry_at(index).map_or(JValue::NULL, |(key, _)| key)
+        }
         Some(HeapObject::TreeSet { values, .. }) => {
             values.get(index).copied().unwrap_or(JValue::NULL)
         }
@@ -4046,7 +4053,9 @@ fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
 
 fn map_key_at(heap: &Heap, map: HeapRef, index: usize) -> JValue {
     match heap.get(map) {
-        Some(HeapObject::HashMap(entries)) => entries.key_at(index),
+        Some(HeapObject::HashMap(entries)) => {
+            entries.entry_at(index).map_or(JValue::NULL, |(key, _)| key)
+        }
         Some(HeapObject::TreeMap { entries, .. }) => {
             entries.get(index).map_or(JValue::NULL, |(key, _)| *key)
         }
@@ -4060,7 +4069,9 @@ fn map_key_at(heap: &Heap, map: HeapRef, index: usize) -> JValue {
 
 fn map_value_at(heap: &Heap, map: HeapRef, index: usize) -> JValue {
     match heap.get(map) {
-        Some(HeapObject::HashMap(entries)) => entries.value_at(index),
+        Some(HeapObject::HashMap(entries)) => entries
+            .entry_at(index)
+            .map_or(JValue::NULL, |(_, value)| value),
         Some(HeapObject::TreeMap { entries, .. }) => {
             entries.get(index).map_or(JValue::NULL, |(_, value)| *value)
         }

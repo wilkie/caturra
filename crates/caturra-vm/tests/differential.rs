@@ -29392,6 +29392,66 @@ public class ClassNaming {
 // half is here too, because the message names `java.lang.Number` and
 // `java.lang.Comparable` — classes caturra models under a bare name, which put
 // them in the application module in every message about one.
+// A hash collection's four traversals, which must be ONE order. `toString`,
+// a for-each and a stream all asked for the ORDERED position — the JDK's bucket
+// order, which caturra reproduces exactly — while an explicit `iterator()`
+// indexed the STORAGE directly and walked insertion order instead. So the same
+// set printed `[0, 7, 8]` and iterated `7 0 8`, and a `while (it.hasNext())`
+// loop disagreed with the for-each beside it over the very same collection.
+//
+// Only a history that separates the two orders shows it: a `removeIf` and an
+// `addAll` leave the storage in an order the buckets do not agree with, which
+// is why a fuzzer that composes operation SEQUENCES found it and a test that
+// builds a set and walks it did not.
+differential_test!(
+    diff_every_traversal_is_one_order,
+    "CursorOrder",
+    r#"
+import java.util.*;
+
+public class CursorOrder {
+    static String walk(Iterable<?> c) {
+        StringBuilder out = new StringBuilder();
+        for (Iterator<?> it = c.iterator(); it.hasNext(); ) out.append(it.next()).append(' ');
+        return out.toString().trim();
+    }
+    static String forEach(Iterable<?> c) {
+        StringBuilder out = new StringBuilder();
+        for (Object x : c) out.append(x).append(' ');
+        return out.toString().trim();
+    }
+    static void show(String label, Collection<?> c) {
+        System.out.println(label + " | toString=" + c + " | for=" + forEach(c)
+            + " | iterator=" + walk(c) + " | stream=" + Arrays.toString(c.stream().toArray()));
+    }
+    public static void main(String[] args) {
+        Set<Integer> s = new HashSet<>(Arrays.asList(7, 8, 7));
+        s.removeIf(x -> x % 2 == 0);
+        s.addAll(Arrays.asList(0, 8));
+        show("set", s);
+        s.remove(7);
+        s.add(7);
+        show("set re-added", s);
+
+        Map<String, Integer> m = new HashMap<>();
+        for (String k : new String[] { "d", "a", "c", "b" }) m.put(k, k.length());
+        m.remove("c");
+        m.put("e", 1);
+        m.put("c", 9);
+        show("keys", m.keySet());
+        show("values", m.values());
+        System.out.println("map=" + m + " | entries=" + walk(m.entrySet()));
+        StringBuilder viaEntries = new StringBuilder();
+        for (Iterator<Map.Entry<String, Integer>> it = m.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, Integer> e = it.next();
+            viaEntries.append(e.getKey()).append('=').append(e.getValue()).append(' ');
+        }
+        System.out.println("entry cursor=" + viaEntries.toString().trim());
+    }
+}
+"#
+);
+
 // SUPPRESSION on a USER exception class. A library throwable carries its
 // suppressed list on its own heap object; a user one — `class AppEx extends
 // RuntimeException`, as ordinary as a course exercise gets — had nowhere to put

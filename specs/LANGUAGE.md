@@ -8232,6 +8232,37 @@ inner, local and anonymous classes** over 500.
 
 Pinned by `diff_a_user_exception_can_be_suppressed_into`.
 
+### Every traversal is one order (2026-08-25)
+
+Random operation SEQUENCES over the collections — a list, a deque, a queue, a
+hash set, a sorted set and two maps, mutated eight to sixteen times each and
+then walked, viewed, sorted, streamed and iterated — found the four ways to
+traverse a hash collection disagreeing with each other.
+
+`toString`, a for-each and a stream all ask for the ORDERED position: the JDK's
+bucket order, which caturra reproduces exactly. An explicit `iterator()` indexed
+the STORAGE directly and walked insertion order instead. So one set printed
+`[0, 7, 8]` and iterated `7 0 8`, and a `while (it.hasNext())` loop disagreed
+with the for-each beside it over the very same collection. The same seam ran
+through `keySet()`, `values()` and `entrySet()` cursors.
+
+Only a history that separates the two orders shows it — a `removeIf` and an
+`addAll` leave the storage in an order the buckets do not agree with — which is
+why composing operation sequences found it where building a set and walking it
+would not.
+
+**One corner is left, and is deliberate.** An `ArrayDeque`'s iterator is
+fail-fast *on a best-effort basis*, and the JDK's check depends on where `head`
+and `tail` sit in its circular array: `addFirst` during an iteration does not
+disturb them, so a JDK returns the element the cursor was already on, while
+caturra — whose deque is a vector — reports the modification. caturra is the
+STRICTER of the two here (it never misses one the JDK catches), and the JDK's
+own documentation says this detection "cannot be guaranteed" and exists only to
+find bugs. Modelling head/tail positions to reproduce the gap would be a
+structural change in aid of an unspecified answer.
+
+Pinned by `diff_every_traversal_is_one_order`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
