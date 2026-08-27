@@ -4486,6 +4486,16 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 // array can hold one: `List<StringBuilder>` used to be refused
                 // with the false message "unknown type 'List'".
                 "StringBuilder" => Some(ElemType::Builder),
+                // `CharSequence` is a TYPE caturra models but not an element
+                // KIND, so it rides interned, the way a nested collection does
+                // — `List<CharSequence>` was refused outright with "works as a
+                // variable, but caturra does not model it as a collection
+                // element", about the interface `String` and `StringBuilder`
+                // share.
+                "CharSequence" => Some(ElemType::Nested {
+                    inner: table.intern_nested(JType::CharSequence),
+                    read: table.object_id,
+                }),
                 "Object" => Some(ElemType::Object(table.object_id)),
                 // A LIBRARY throwable as an element (`List<RuntimeException>`)
                 // — the same element kind `getSuppressed()`'s array uses.
@@ -4587,18 +4597,15 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
                 read: id,
                 bound: WildcardBound::Upper(id),
             },
-            // A FINAL bound has no subtypes, so `? extends Integer` IS
-            // `Integer` and `? extends String` IS `String` — the invariant
-            // element is not an approximation here, it is the same type. The
-            // `Object` fallback below made a `List<? extends Integer>` read
-            // its elements as Object, so `xs.get(0) + 1` was refused.
-            None => match canonical {
-                "String" => ElemType::Str,
-                _ => match wrapper_prim(canonical) {
-                    Some(prim) => ElemType::Wrapper(prim),
-                    None => ElemType::Object(object),
-                },
-            },
+            // A bound that names no CLASS still names a TYPE: `? extends
+            // Integer` IS `Integer` (a final class has no subtypes), and
+            // `? extends CharSequence` reads as a CharSequence, whose two
+            // implementors the element rule accepts. The `Object` fallback made
+            // a `List<? extends Integer>` read its elements as Object, so
+            // `xs.get(0) + 1` was refused, and a `List<? extends CharSequence>`
+            // parameter could not be walked at all.
+            None => elem_from_type_arg(&TypeRef::Named(canonical.to_owned()), table)
+                .unwrap_or(ElemType::Object(object)),
         },
         // `? super Bound` — reads out as Object; `List<Super>` is accepted.
         '-' => match table.class_id(canonical) {
@@ -4692,6 +4699,20 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
     // Source<T> { List<T> all(); }` — could not be implemented at all.
     if matches!(param, ElemType::TypeVar(_)) || matches!(arg, ElemType::TypeVar(_)) {
         return true;
+    }
+    // A `String` or a `StringBuilder` element where a `CharSequence` one is
+    // wanted: the interface they share is not an element KIND, so it rides
+    // interned, and the widening has to be spelled out here as it is for every
+    // other element.
+    if let ElemType::Nested { inner, .. } = param
+        && matches!(table.nested_type(inner), JType::CharSequence)
+        && matches!(
+            arg,
+            ElemType::Str | ElemType::Builder | ElemType::Nested { .. }
+        )
+    {
+        return !matches!(arg, ElemType::Nested { inner: other, .. }
+            if !matches!(table.nested_type(other), JType::CharSequence | JType::Str | JType::StringBuilder));
     }
     // A RAW element and a PARAMETERIZED one of the same class erase alike, and
     // the conversion between them is the unchecked one javac warns about
@@ -29649,6 +29670,19 @@ impl BodyGen<'_> {
     }
 
     fn join_reference_elems(&self, left: ElemType, right: ElemType) -> Option<ElemType> {
+        // A `String` and a `StringBuilder` share `CharSequence`, which is the
+        // element javac gives `Arrays.asList("a", new StringBuilder())` —
+        // joining them at `Object` made the list unassignable to the
+        // `List<CharSequence>` the program declared for it.
+        if matches!(
+            (left, right),
+            (ElemType::Str | ElemType::Builder, ElemType::Str | ElemType::Builder)
+        ) {
+            return Some(ElemType::Nested {
+                inner: self.table.intern_nested(JType::CharSequence),
+                read: self.table.object_id,
+            });
+        }
         let (ElemType::Object(left), ElemType::Object(right)) = (left, right) else {
             return None;
         };
@@ -31377,6 +31411,14 @@ impl BodyGen<'_> {
                 // for-each usually walks: they widen wherever a list does.
                 | JType::Collection(_)
                 | JType::EntrySet { .. }
+                // A CURSOR and an `Optional` carry an element the same way, and
+                // widen by the same rule — left out, an `Iterator<String>`
+                // could not be held by an `Iterator<? extends CharSequence>`
+                // whose element is no longer a wildcard.
+                | JType::Iterator(_)
+                | JType::ListIterator(_)
+                | JType::Optional(_)
+                | JType::Stream(_)
                 | JType::Exception(_),
                 _,
             ) if widens(from, to, self.table) => {}

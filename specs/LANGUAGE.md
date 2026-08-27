@@ -9575,3 +9575,31 @@ The narrower generators — the receiver × operation matrix, "one behaviour
 written five ways", the Scanner input matrix, one ordinary MISTAKE per program
 against javac's wording — stay written-fresh: they are a few dozen lines each,
 and the entries above record what each found.
+
+### A CharSequence element (2026-08-27)
+
+`List<CharSequence>` — the interface `String` and `StringBuilder` share — was
+refused outright: "CharSequence works as a variable, but caturra does not model
+it as a collection element". It was the last refusal of that shape a sweep
+could still reach, and the model already had the mechanism: a type that is not
+an element KIND rides INTERNED, exactly as a nested collection does. The two
+implementors are accepted where one is wanted, which is the whole of what
+`CharSequence` means here.
+
+The wildcard half reads the same way. A bound that names no CLASS still names a
+type: `? extends CharSequence` reads as a CharSequence — so the
+`total(List<? extends CharSequence>)` every library-ish API declares can be
+walked — and `? extends Integer` IS `Integer`, since a final class has no
+subtypes, where before its elements read as `Object` and `xs.get(0) + 1` was an
+error.
+
+Three smaller things fell out of it. A `String` and a `StringBuilder` JOIN at
+`CharSequence` now (javac's answer for `Arrays.asList("a", new
+StringBuilder())`), where joining them at `Object` left the list unassignable
+to the `List<CharSequence>` the program declared. A cursor and an `Optional`
+widen by the same rule the collections do — left out of the assignment matrix,
+an `Iterator<String>` could not be held by an `Iterator<? extends
+CharSequence>` once its element stopped being a wildcard. And `CharSequence`
+names a class for a method REFERENCE, so `CharSequence::length` resolves.
+
+Pinned by `a_char_sequence_element`.

@@ -39020,3 +39020,68 @@ public class TypeVarBound {
 }
 "
 );
+
+// `CharSequence` as a collection ELEMENT — the interface `String` and
+// `StringBuilder` share, and the last "caturra does not model it" refusal a
+// sweep could still reach. It is a TYPE caturra models and not an element KIND,
+// so it rides interned, the way a nested collection does; the two implementors
+// are accepted where one is wanted, which is what makes `List<CharSequence>`
+// and `List<? extends CharSequence>` behave.
+//
+// The wildcard half needed the same reading: a bound that names no CLASS still
+// names a type, so `? extends CharSequence` reads as one — and `? extends
+// Integer` IS `Integer`, since a final class has no subtypes.
+differential_test!(
+    a_char_sequence_element,
+    "CharSequences",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class CharSequences {
+    static int total(List<? extends CharSequence> xs) {
+        int sum = 0;
+        for (CharSequence c : xs) {
+            sum += c.length();
+        }
+        return sum;
+    }
+
+    static int firstLength(Iterator<? extends CharSequence> it) {
+        return it.next().length();
+    }
+
+    public static void main(String[] args) {
+        List<CharSequence> mixed = new ArrayList<>();
+        mixed.add("abc");
+        mixed.add(new StringBuilder("de"));
+        System.out.println(mixed.size() + " " + mixed.get(0).length() + " " + mixed);
+
+        // ...and built from a literal, whose two elements join at the
+        // interface they share.
+        List<CharSequence> built = new ArrayList<>(Arrays.asList("abc", new StringBuilder("de")));
+        System.out.println(built + " " + total(built) + " " + total(Arrays.asList("xy", "z")));
+        System.out.println(firstLength(built.iterator()));
+
+        Map<CharSequence, Integer> keyed = new LinkedHashMap<>();
+        keyed.put("k", 1);
+        keyed.put(new StringBuilder("j"), 2);
+        System.out.println(keyed.size() + " " + keyed.get("k"));
+
+        System.out.println(mixed.stream().map(CharSequence::length).collect(Collectors.toList()));
+        List<CharSequence> sorted = new ArrayList<>(Arrays.asList("bb", "a"));
+        sorted.sort(Comparator.comparingInt(CharSequence::length));
+        System.out.println(sorted);
+
+        CharSequence one = mixed.get(1);
+        System.out.println(one.charAt(0) + "" + one.subSequence(0, 1) + one.toString().length());
+
+        // A wildcard bounded by a FINAL class is that class.
+        List<? extends Integer> ints = Arrays.asList(1, 2);
+        List<? extends String> strings = Arrays.asList("ab");
+        System.out.println(ints.get(0) + 1);
+        System.out.println(strings.get(0).length());
+    }
+}
+"#
+);

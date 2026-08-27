@@ -658,6 +658,11 @@ fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::Hash
         "System",
         "Object",
         "StringBuilder",
+        // The interface `String` and `StringBuilder` share: a program writes
+        // `CharSequence::length` in a stream over a `List<CharSequence>`, and
+        // a qualifier that names no class here fell to the BOUND form, where
+        // the name itself does not resolve.
+        "CharSequence",
     ]
     .into_iter()
     .chain(LIBRARY_CONTAINERS)
