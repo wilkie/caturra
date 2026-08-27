@@ -5422,15 +5422,15 @@ fn variable_sources(method: &MethodDecl, var: &str) -> Vec<crate::ast::InferSour
 fn infer_return_plan(
     method: &MethodDecl,
     erasures: &std::collections::HashMap<String, TypeRef>,
-) -> Option<Vec<crate::ast::InferSource>> {
+) -> Option<crate::ast::ReturnPlan> {
     use crate::ast::InferSource;
     // Either `T` itself, or a container OF it: `<T> List<T> listOf(T value)`.
     // For the container form the inference lands on the ELEMENT, which codegen
     // reads back off the declared return's own shape.
-    let ret_var = match &method.return_type {
-        TypeRef::Named(name) => name,
+    let (ret_var, container) = match &method.return_type {
+        TypeRef::Named(name) => (name, false),
         TypeRef::Generic { args, .. } => match args.as_slice() {
-            [TypeRef::Named(name)] => name,
+            [TypeRef::Named(name)] => (name, true),
             _ => return None,
         },
         _ => return None,
@@ -5454,7 +5454,7 @@ fn infer_return_plan(
             _ => None,
         })
         .collect();
-    (!sources.is_empty()).then_some(sources)
+    (!sources.is_empty()).then_some(crate::ast::ReturnPlan { container, sources })
 }
 
 /// The simple name of a wildcard's bound (`? extends Number` → `"Number"`),

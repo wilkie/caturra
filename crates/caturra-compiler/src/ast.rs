@@ -137,6 +137,19 @@ pub enum InferSource {
     Element(usize),
 }
 
+/// How a generic method's return type mentions the variable its parameters
+/// pin (see [`MethodDecl::infer_return`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnPlan {
+    /// The return type is a CONTAINER of the variable (`<T> Box<T> of(T v)`)
+    /// rather than the variable itself (`<T> T first(List<T> xs)`). What the
+    /// arguments pin is then the container's ARGUMENT, and handing it back as
+    /// the whole return type says the call produces something of an entirely
+    /// different shape — `Box.of("hi")` was typed `String`.
+    pub container: bool,
+    pub sources: Vec<InferSource>,
+}
+
 /// `is_constructor` set, `name` equal to the class name, and a `Void`
 /// return type.
 #[allow(clippy::struct_excessive_bools)] // mirrors Java modifiers
@@ -163,7 +176,7 @@ pub struct MethodDecl {
     /// actual return type is the join of what those arguments pin —
     /// recovering the type argument erasure would otherwise drop. `None` when
     /// the return is not an inferable type variable.
-    pub infer_return: Option<Vec<InferSource>>,
+    pub infer_return: Option<ReturnPlan>,
     /// The parameter types AS WRITTEN, before type variables erase. A lambda
     /// argument's target type is its declared parameter, and for a generic
     /// method that parameter mentions a type VARIABLE — `<T> int pick(T v,

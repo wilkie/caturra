@@ -9156,3 +9156,61 @@ is pinned as a rejection.
 
 Pinned by `a_map_entry_as_a_type_of_its_own` and
 `an_entry_set_view_is_not_a_hash_set`.
+
+### A generic class as a program uses one (2026-08-27)
+
+Probing the shape above from the outside — a generic class used the way
+ordinary code uses one, rather than declared and admired — found five refusals
+in a row, and one accepts-invalid underneath them.
+
+**A static factory dropped its own class.** `static <T> Box<T> of(T v)` called
+as `Box.of("hi")` was typed `String`: the return-inference plan says which
+arguments pin the variable, and its answer was handed back as the WHOLE return
+type. That is right only when the declared return IS the variable
+(`<T> T first(List<T>)`); for a container return the pinned type is the
+container's ARGUMENT. Only the library containers were re-argumented, so a user
+generic class fell through to the plan's own answer and the call was typed as
+its own element — "String cannot be converted to Box<String>", about a factory
+whose declared return says otherwise.
+
+**A `new` answered the RAW class.** `new Node<Integer>(5)` and `new Node<>(5)`
+both typed as a bare `Node`, so `Arrays.asList(new Node<>(3))` could not be
+assigned to the `List<Node<Integer>>` on the same line. The written arguments
+resolve now, and a DIAMOND infers its argument from the constructor's own
+arguments the way javac does — the same plan the return inference uses, built
+for constructors too. Both the emit path and `type_of` answer it, which is the
+divergence this file keeps meeting: through a variable the mismatch was caught,
+inline it was not.
+
+**A literal collection of parameterized things lost them.** The join reads each
+argument's ELEMENT form, and a parameterized user class has none of its own, so
+it fell back to the top `Object` — `Arrays.asList(aNodeOfInt)` was a
+`List<Object>` that would not assign to the `List<Node<Integer>>` beside it,
+with a message that said `List<Object>` twice. Such a value INTERNS now,
+exactly as it does when a collection holds one.
+
+**`? super T` refused every write.** A `Collection<? super T> sink` — the drain
+method every generic container has — reported "a '? extends' collection cannot
+be written to", the exact opposite of what `? super` means. A type variable's
+erasure leaves the wildcard's bound EMPTY, and an empty bound fell into the
+unbounded arm; a LOWER wildcard keeps its variance, which is the writable one.
+
+**A nested element did not satisfy a bound.** `biggest(listOfNodes)` for a
+`<T extends Comparable<T>> T biggest(List<T>)`: the erased parameter carries
+the bound, and an interned element was not asked about the class hierarchy at
+all.
+
+**The accepts-invalid underneath.** While every `new` answered the raw class,
+`list.add(new Node<Integer>(6))` on a `List<Node<String>>` COMPILED — the
+unchecked conversion a genuinely RAW type gets, applied to a type the program
+had parameterized right there. It is refused now, and pinned. (A raw element
+and a parameterized one still convert both ways: that IS unchecked Java, and
+it is what a diamond whose argument cannot be pinned still leans on.)
+
+The messages improved with the types: a nested element used to DESCRIBE as
+`Object`, so a mismatch between two lists of parameterized things read as
+"List<Object> cannot be converted to List<Object>" — a type that cannot convert
+to itself. It describes as what it is, which is javac's wording exactly.
+
+Pinned by `a_generic_class_as_a_program_uses_one` and
+`a_parameterized_new_is_not_another_parameterization`.

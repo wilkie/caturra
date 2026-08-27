@@ -436,7 +436,7 @@ struct MethodSig {
     /// argument types join to the actual (un-erased) return type. `None`
     /// for a method whose return is not an inferable type variable, and for
     /// every synthesized or library signature.
-    ret_infer: Option<Vec<crate::ast::InferSource>>,
+    ret_infer: Option<crate::ast::ReturnPlan>,
 }
 
 impl MethodSig {
@@ -1270,7 +1270,16 @@ impl MethodTable {
                         is_final: method.is_final,
                         is_abstract: method.is_abstract,
                         is_varargs: method.params.last().is_some_and(|p| p.is_varargs),
-                        ret_infer: method.infer_return.clone(),
+                        // A CONSTRUCTOR has no return type to infer, but a
+                        // DIAMOND has the same question: `new Node<>(5)` is a
+                        // `Node<Integer>` because the constructor's parameter
+                        // is the class's own variable. The plan is built the
+                        // same way and read at the `new`.
+                        ret_infer: if method.is_constructor {
+                            constructor_infer_plan(class, method)
+                        } else {
+                            method.infer_return.clone()
+                        },
                     };
                     if methods
                         .iter()
@@ -3952,6 +3961,39 @@ fn boxable_primitive(ty: JType) -> Option<ElemType> {
 /// [`elem_type_of`], but a primitive becomes its `Wrapper` — collections
 /// store references (boxed at rest), unlike arrays, where `new int[]{1}` is
 /// genuinely primitive storage.
+/// The element form of a VALUE's type, for a container built out of values —
+/// a literal collection's join, a varargs pack, a generic factory's inferred
+/// argument. A type with no element kind of its own (a collection, a
+/// parameterized user class, an array) INTERNS, exactly as it does when a
+/// collection holds one; without that it fell back to the top `Object` and the
+/// program lost the type it had plainly written — `Arrays.asList(aNodeOfInt)`
+/// would not assign to the `List<Node<Integer>>` beside it, with a message
+/// that said `List<Object>` twice.
+fn value_elem_of(ty: JType, table: &MethodTable) -> Option<ElemType> {
+    collection_elem_of(ty).or_else(|| {
+        matches!(
+            ty,
+            JType::List { .. }
+                | JType::Set { .. }
+                | JType::Map { .. }
+                | JType::TreeMap { .. }
+                | JType::TreeSet(_, _)
+                | JType::LinkedList { .. }
+                | JType::Stack(_)
+                | JType::Collection(_)
+                | JType::Optional(_)
+                | JType::MapEntry { .. }
+                | JType::EntrySet { .. }
+                | JType::Generic { .. }
+                | JType::Array { .. }
+        )
+        .then(|| ElemType::Nested {
+            inner: table.intern_nested(ty),
+            read: table.object_id,
+        })
+    })
+}
+
 fn collection_elem_of(ty: JType) -> Option<ElemType> {
     let elem = elem_type_of(ty)?;
     Some(match Prim::of(elem) {
@@ -4471,6 +4513,18 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
             bound: WildcardBound::TypeVar,
         };
     }
+    // `? super T` for a type VARIABLE, whose erasure is `Object`: it stays a
+    // LOWER wildcard, which is the writable one. Falling into the unbounded
+    // arm below made `Collection<? super T> sink` refuse `sink.addAll(items)`
+    // as "a '? extends' collection cannot be written to" — the exact opposite
+    // of what `? super` means, and the drain method every generic container
+    // has is written that way.
+    if variance == '-' && (bound.is_empty() || matches!(bound, "Object" | "java.lang.Object")) {
+        return ElemType::Wildcard {
+            read: object,
+            bound: WildcardBound::Lower(object),
+        };
+    }
     // `?`, `? extends Object`, or a bound with no nameable base: any element.
     if variance == '?' || bound.is_empty() || matches!(bound, "Object" | "java.lang.Object") {
         return ElemType::Wildcard {
@@ -4585,6 +4639,20 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
     if matches!(param, ElemType::TypeVar(_)) || matches!(arg, ElemType::TypeVar(_)) {
         return true;
     }
+    // A RAW element and a PARAMETERIZED one of the same class erase alike, and
+    // the conversion between them is the unchecked one javac warns about
+    // rather than refuses. This is the shape a diamond leaves behind:
+    // `Arrays.asList(new Node<>(5))` builds a list of `Node`, and assigning it
+    // to the `List<Node<Integer>>` the program declared was rejected outright.
+    let erases_alike = |raw: ElemType, nested: ElemType| match (raw, nested) {
+        (ElemType::Object(id), ElemType::Nested { inner, .. }) => {
+            matches!(table.nested_type(inner), JType::Generic { class, .. } if class == id)
+        }
+        _ => false,
+    };
+    if erases_alike(arg, param) || erases_alike(param, arg) {
+        return true;
+    }
     // The UNCHECKED conversion runs both ways: a raw collection is assignable
     // to any parameterization of it, and any parameterization to the raw type.
     // javac warns about the first and says nothing about the second.
@@ -4644,6 +4712,17 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
         | ElemType::Boolean => wrapper_face(Some(arg), class, table),
         // A boxed element has exactly its wrapper's faces.
         ElemType::Wrapper(prim) => wrapper_face(Some(prim.elem()), class, table),
+        // A NESTED element that is a user class — `List<Node<Integer>>` for a
+        // `<T extends Comparable<T>> T biggest(List<T>)`. The element is
+        // interned rather than named, so asking about it needs the inner type;
+        // without this the ordinary "biggest of a list of my own objects" call
+        // was refused, since the bound is what the erased parameter carries.
+        ElemType::Nested { inner, .. } => match table.nested_type(inner) {
+            JType::Generic { class: inner, .. } | JType::Object(inner) => {
+                table.is_subtype(inner, class)
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -4994,6 +5073,38 @@ pub(crate) fn functional_erased(name: &str) -> Option<&'static str> {
     })
 }
 
+/// Which of a CONSTRUCTOR's parameters pin the class's single type variable,
+/// so a diamond can infer its argument the way javac does: `new Node<>(5)` on
+/// a `class Node<T> { Node(T v) }` is a `Node<Integer>`, not a raw `Node`.
+///
+/// Only single-parameter classes are tracked, and only a parameter written as
+/// the variable itself or as a container OF it counts — the same two shapes a
+/// generic method's return inference reads.
+fn constructor_infer_plan(class: &ClassDecl, method: &MethodDecl) -> Option<crate::ast::ReturnPlan> {
+    use crate::ast::InferSource;
+    let [param] = class.type_params.as_slice() else {
+        return None;
+    };
+    let var = &param.name;
+    let sources: Vec<InferSource> = method
+        .declared_params
+        .iter()
+        .enumerate()
+        .filter_map(|(index, ty)| match ty {
+            TypeRef::Named(name) if name == var => Some(InferSource::Direct(index)),
+            TypeRef::Generic { args, .. } => match args.as_slice() {
+                [TypeRef::Named(name)] if name == var => Some(InferSource::Element(index)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    (!sources.is_empty()).then_some(crate::ast::ReturnPlan {
+        container: false,
+        sources,
+    })
+}
+
 /// Method-invocation / assignment widening (JLS §5.3 without boxing),
 /// including reference widening up the class hierarchy.
 #[allow(clippy::too_many_lines)] // one big disjunction of widening rules
@@ -5007,11 +5118,12 @@ pub(crate) fn functional_erased(name: &str) -> Option<&'static str> {
 /// `Object`/the bound, as before). The emitted bytecode is unchanged: only the
 /// STATIC type reported differs, exactly as an erased read of a type variable
 /// stays cast-free.
-fn inferred_return(sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
+fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) -> Option<JType> {
     use crate::ast::InferSource;
-    let Some(sources) = &sig.ret_infer else {
+    let Some(plan) = &sig.ret_infer else {
         return sig.ret;
     };
+    let sources = &plan.sources;
     let mut joined: Option<JType> = None;
     for &source in sources {
         let (InferSource::Direct(index) | InferSource::Element(index)) = source;
@@ -5062,7 +5174,12 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
                 }
         )
     };
-    let element = collection_elem_of(joined);
+    // A NESTED container argument (`Box.of(Arrays.asList(1, 2, 3))`) is not an
+    // element kind of its own; it interns, exactly as it does when a
+    // collection holds one. Without this the factory's argument had no element
+    // form and the call fell back to answering the ARGUMENT — so
+    // `Box.of(list).get()` was a `List` with no `get()` of its own arity.
+    let element = value_elem_of(joined, table);
     let wrapped = match (sig.ret, element) {
         (Some(JType::List { elem, face }), Some(inferred)) if erased_element(elem) => {
             Some(JType::List {
@@ -5082,9 +5199,42 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
         (Some(JType::Optional(elem)), Some(inferred)) if erased_element(elem) => {
             Some(JType::Optional(inferred))
         }
+        // A USER generic class returned by a static factory —
+        // `static <T> Box<T> of(T v)`, which is how half the generic classes
+        // in a program are built. Only the library containers were listed
+        // here, so `Box.of("hi")` fell through to the plan's own answer and
+        // the call was typed `String`: "String cannot be converted to
+        // Box<String>", about a factory whose return type says otherwise.
+        //
+        // Its erased return is a bare `Object(class)` — the class with its
+        // argument dropped — which is the same shape a return of the TOP type
+        // has, so only the plan can say which this is.
+        (Some(JType::Generic { class, arg, rest }), Some(inferred)) if erased_element(arg) => {
+            Some(JType::Generic {
+                class,
+                arg: inferred,
+                rest,
+            })
+        }
+        (Some(JType::Object(class)), Some(inferred)) if plan.container => Some(JType::Generic {
+            class,
+            arg: inferred,
+            rest: NO_TYPE_ARGS,
+        }),
         _ => None,
     };
-    wrapped.map_or(Some(joined), Some)
+    // The plan's own answer is the return only when the declared return IS the
+    // variable (`<T> T first(List<T>)`). A STRUCTURED return that could not be
+    // re-argumented keeps its erased self: replacing it with the element would
+    // claim the call returns something of an entirely different shape.
+    // What the arguments pin is the whole return only when the declared return
+    // IS the variable. For a CONTAINER return that could not be
+    // re-argumented, the erased return stands: handing back the argument would
+    // claim the call produces something of an entirely different shape.
+    wrapped.map_or_else(
+        || if plan.container { sig.ret } else { Some(joined) },
+        Some,
+    )
 }
 
 #[allow(clippy::too_many_lines)] // one widening-conversion matrix (JLS §5.1.5/§5.2)
@@ -5952,6 +6102,13 @@ impl ElemType {
     /// `List<? extends Number>` — which reads as a different type entirely,
     /// and one the assignment being complained about would have allowed.
     fn describe_arg(self, table: &MethodTable) -> String {
+        // A NESTED element describes as the type it really is. Its `base_type`
+        // is the erased `Object`, which is what made a mismatch between two
+        // lists of parameterized things read as "List<Object> cannot be
+        // converted to List<Object>" — a type that cannot convert to itself.
+        if let ElemType::Nested { inner, .. } = self {
+            return table.nested_type(inner).describe(table);
+        }
         let ElemType::Wildcard { bound, read } = self else {
             return self.base_type().describe(table);
         };
@@ -18423,7 +18580,20 @@ impl BodyGen<'_> {
         let simple = crate::imports::canonical_library_class(class).unwrap_or(class);
         let class = if class.contains('.') { simple } else { class };
         if let Some(id) = self.table.class_id(class) {
-            return JType::Object(id);
+            // …with its type ARGUMENT, exactly as the emit path answers it.
+            // Answering the raw class here left an inline `new Node<Integer>(5)`
+            // indistinguishable from a raw one, so a list of them accepted a
+            // `List<Node<String>>` — while the same `new` through a variable
+            // was refused.
+            let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+            return match self.new_object_argument(class, type_args, &arg_types) {
+                Some(arg) => JType::Generic {
+                    class: id,
+                    arg,
+                    rest: NO_TYPE_ARGS,
+                },
+                None => JType::Object(id),
+            };
         }
         // `new Host.Point()` — the emit path resolves this too.
         if let Some(id) = self.table.qualified_nested_class(class) {
@@ -18981,6 +19151,15 @@ impl BodyGen<'_> {
             return JType::Error;
         }
 
+        // The type ARGUMENT this `new` produces, when the class tracks one:
+        // written out (`new Node<Integer>(5)`), or inferred from the
+        // constructor's own arguments for a DIAMOND, which is what javac does.
+        // Without it every `new` of a generic class answered the RAW type, and
+        // an inline one could not be told from a mismatched parameterization —
+        // `Arrays.asList(new Node<Integer>(5))` would not assign to the
+        // `List<Node<Integer>>` beside it, and did assign to a
+        // `List<Node<String>>`.
+        let argument = self.new_object_argument(class_name, type_args, &arg_types);
         // Emit the name the CLASS FILE carries — a nested class's is
         // `Outer$Inner`, while the source (and every diagnostic above) says
         // the simple one.
@@ -18993,7 +19172,70 @@ impl BodyGen<'_> {
         let init_ref = intern_method_ref(self.pool, &emitted, "<init>", &descriptor);
         self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
         self.code.drop_stack(1 + args_width);
-        JType::Object(class_id)
+        match argument {
+            Some(arg) => JType::Generic {
+                class: class_id,
+                arg,
+                rest: NO_TYPE_ARGS,
+            },
+            None => JType::Object(class_id),
+        }
+    }
+
+    /// The type ARGUMENT a `new` of a user generic class produces: written out
+    /// (`new Node<Integer>(5)`), or inferred from the constructor's arguments
+    /// for a diamond. Shared by the emit path and `type_of`, which have to
+    /// agree — a `new` typed one way while emitted the other is the divergence
+    /// this file keeps meeting.
+    fn new_object_argument(
+        &mut self,
+        class_name: &str,
+        type_args: &[TypeRef],
+        arg_types: &[JType],
+    ) -> Option<ElemType> {
+        if !type_args.is_empty() {
+            return match self.table.resolve_type(&TypeRef::Generic {
+                base: String::from(class_name),
+                args: type_args.to_vec(),
+            }) {
+                Some(JType::Generic { arg, .. }) => Some(arg),
+                _ => None,
+            };
+        }
+        let Resolution::Found(sig) = self.table.resolve(class_name, "<init>", arg_types) else {
+            return None;
+        };
+        let sig = sig.clone();
+        self.diamond_argument(&sig, arg_types)
+    }
+
+    /// The type argument a DIAMOND (`new Node<>(5)`) infers from the
+    /// constructor's arguments, using the plan built at registration. `None`
+    /// when the class tracks no argument, when no parameter mentions the
+    /// variable, or when the arguments pin two different types — the raw type
+    /// then stands, as it did for every `new` before.
+    fn diamond_argument(&mut self, sig: &MethodSig, arg_types: &[JType]) -> Option<ElemType> {
+        use crate::ast::InferSource;
+        let plan = sig.ret_infer.as_ref()?;
+        let mut joined: Option<JType> = None;
+        for &source in &plan.sources {
+            let (InferSource::Direct(index) | InferSource::Element(index)) = source;
+            let &arg = arg_types.get(index)?;
+            let arg = match source {
+                InferSource::Direct(_) => arg,
+                InferSource::Element(_) => TypeArgs::of(arg).first?.base_type(),
+            };
+            let reference = match boxable_primitive(arg) {
+                Some(elem) => JType::Boxed(elem),
+                None => arg,
+            };
+            match joined {
+                None => joined = Some(reference),
+                Some(prev) if prev == reference => {}
+                Some(_) => return None,
+            }
+        }
+        value_elem_of(joined?, self.table)
     }
 
     /// Whether an argument's type is assignable to `Throwable` (a library
@@ -22089,7 +22331,7 @@ impl BodyGen<'_> {
             self.code
                 .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
             self.code.drop_stack(args_width);
-            return Some(inferred_return(&sig, &arg_types));
+            return Some(inferred_return(&sig, &arg_types, self.table));
         }
 
         let args_width = self.emit_call_args(args, &sig, span);
@@ -22108,7 +22350,7 @@ impl BodyGen<'_> {
         };
         self.code.push_op_u16(opcode, method_ref, ret_width);
         self.code.drop_stack(1 + args_width);
-        Some(inferred_return(&sig, &arg_types))
+        Some(inferred_return(&sig, &arg_types, self.table))
     }
 
     /// Coerce a value on the stack into a `String` for printing or
@@ -23560,7 +23802,7 @@ impl BodyGen<'_> {
         self.code.drop_stack(args_width);
         // A generic method's erased return recovers its type argument from the
         // arguments (`<T> T max(T, T)`); a non-generic one is unchanged.
-        Some(inferred_return(&sig, &arg_types))
+        Some(inferred_return(&sig, &arg_types, self.table))
     }
 
     /// `Optional.of(x)` / `Optional.ofNullable(x)` / `Optional.empty()`. The VM
@@ -24580,7 +24822,7 @@ impl BodyGen<'_> {
                     read: self.table.object_id,
                 }
             } else {
-                let scalar = collection_elem_of(self.type_of(single)).unwrap_or(object_elem);
+                let scalar = value_elem_of(self.type_of(single), self.table).unwrap_or(object_elem);
                 self.emit_array_literal(
                     args,
                     JType::Array {
@@ -26443,7 +26685,7 @@ impl BodyGen<'_> {
                         if let Resolution::Found(sig) =
                             self.table.resolve(&enc_name, method, &arg_types)
                         {
-                            return inferred_return(sig, &arg_types).unwrap_or(JType::Error);
+                            return inferred_return(sig, &arg_types, self.table).unwrap_or(JType::Error);
                         }
                     }
                     // ...and the lexical chain, which is the only route to an
@@ -26454,7 +26696,7 @@ impl BodyGen<'_> {
                         if let Resolution::Found(sig) =
                             self.table.resolve(&enc_name, method, &arg_types)
                         {
-                            return inferred_return(sig, &arg_types).unwrap_or(JType::Error);
+                            return inferred_return(sig, &arg_types, self.table).unwrap_or(JType::Error);
                         }
                     }
                 }
@@ -26465,7 +26707,7 @@ impl BodyGen<'_> {
                     // enclosing overload resolution saw `Object` and silently
                     // picked `p(Object)` where javac picks `p(Integer)`.
                     Resolution::Found(sig) => {
-                        let ret = inferred_return(sig, &arg_types).unwrap_or(JType::Error);
+                        let ret = inferred_return(sig, &arg_types, self.table).unwrap_or(JType::Error);
                         // The same substitution the emit path makes: a
                         // subclass that FIXED a generic supertype's argument
                         // (`class IntBox extends Box<Integer>`) reads an
@@ -27131,7 +27373,7 @@ impl BodyGen<'_> {
             self.code
                 .push_op_u16(op::INVOKESPECIAL, method_ref, ret_width);
             self.code.drop_stack(1 + args_width);
-            return Some(inferred_return(&sig, &arg_types));
+            return Some(inferred_return(&sig, &arg_types, self.table));
         }
         let current = self.table.class_name(self.current_class_id).to_owned();
         let Some(superclass) = self.table.info(&current).and_then(|c| c.superclass) else {
@@ -27216,7 +27458,7 @@ impl BodyGen<'_> {
         self.code
             .push_op_u16(op::INVOKESPECIAL, method_ref, ret_width);
         self.code.drop_stack(1 + args_width);
-        Some(inferred_return(&sig, &arg_types))
+        Some(inferred_return(&sig, &arg_types, self.table))
     }
 
     /// Field access on a value: only `.length` on arrays exists so far.
@@ -29037,7 +29279,7 @@ impl BodyGen<'_> {
         let mut scalar = None;
         let mut mixed = false;
         for arg in args {
-            let each = collection_elem_of(self.type_of(arg));
+            let each = value_elem_of(self.type_of(arg), self.table);
             match (scalar, each) {
                 (None, found) => scalar = found,
                 (Some(seen), Some(found)) if seen != found => {

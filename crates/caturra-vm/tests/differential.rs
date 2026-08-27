@@ -38298,3 +38298,113 @@ public class EntryViewFace {
 }
 "
 );
+
+// A generic class used the way ordinary code uses one: a static factory, a
+// diamond whose argument the CONSTRUCTOR pins, a bounded variable, a
+// `? super T` drain, and lists of parameterized things.
+//
+// Every one of these was refused. A static factory's return dropped its own
+// class (`Box.of("hi")` typed as `String`, "String cannot be converted to
+// Box<String>"); a `new` answered the RAW class, so a literal list of them
+// would not assign to the list the program declared; a `Collection<? super T>`
+// refused every write as "a '? extends' collection cannot be written to",
+// which is the opposite of what `? super` means; and a `List<Node<Integer>>`
+// handed to a `<T extends Comparable<T>>` method did not satisfy the bound.
+differential_test!(
+    a_generic_class_as_a_program_uses_one,
+    "GenericUse",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class GenericUse {
+    static class Box<T> {
+        private final T value;
+        Box(T value) { this.value = value; }
+        T get() { return value; }
+        static <T> Box<T> of(T value) { return new Box<>(value); }
+        static <A, B> Box<B> second(A first, B second) { return new Box<>(second); }
+        public String toString() { return "Box(" + value + ")"; }
+    }
+
+    static class Node<T extends Comparable<T>> implements Comparable<Node<T>> {
+        final T value;
+        Node(T value) { this.value = value; }
+        public int compareTo(Node<T> other) { return value.compareTo(other.value); }
+        public String toString() { return "<" + value + ">"; }
+    }
+
+    static class Bag<T> {
+        private final List<T> items = new ArrayList<>();
+        void add(T item) { items.add(item); }
+        void addAll(Collection<? extends T> src) { for (T t : src) items.add(t); }
+        void drainTo(Collection<? super T> sink) { sink.addAll(items); items.clear(); }
+        int size() { return items.size(); }
+    }
+
+    static <T extends Comparable<T>> T biggest(List<T> xs) {
+        T best = xs.get(0);
+        for (T x : xs) {
+            if (x.compareTo(best) > 0) {
+                best = x;
+            }
+        }
+        return best;
+    }
+
+    public static void main(String[] args) {
+        Box<String> box = Box.of("hi");
+        System.out.println(box.get().length());
+        System.out.println(Box.<String>of("qq").get().toUpperCase());
+        System.out.println(Box.second(1, "two").get().charAt(0));
+        System.out.println(Box.of(Arrays.asList(1, 2, 3)).get().size());
+
+        // The `new`s carry their argument, written or inferred, so a literal
+        // list of them is a list of the parameterized type.
+        List<Node<Integer>> written = Arrays.asList(new Node<Integer>(3));
+        List<Node<Integer>> inferred = new ArrayList<>(Arrays.asList(new Node<>(3), new Node<>(1)));
+        Collections.sort(inferred);
+        System.out.println(written + " " + inferred);
+        System.out.println(biggest(inferred) + " " + biggest(Arrays.asList("x", "zz", "y")));
+
+        Bag<Integer> bag = new Bag<>();
+        bag.add(1);
+        bag.addAll(Arrays.asList(2, 3));
+        List<Object> sink = new ArrayList<>();
+        bag.drainTo(sink);
+        System.out.println(sink + " " + bag.size());
+
+        List<Box<Integer>> boxes = new ArrayList<>();
+        boxes.add(Box.of(4));
+        boxes.add(new Box<>(5));
+        System.out.println(boxes);
+    }
+}
+"#
+);
+
+// ...and the direction that must NOT compile: a `new` whose argument is
+// written or inferred is no longer interchangeable with any other
+// parameterization. While every `new` answered the raw class, this was
+// accepted — the unchecked conversion a RAW type gets, applied to a type the
+// program had parameterized in front of it.
+differential_reject!(
+    a_parameterized_new_is_not_another_parameterization,
+    "NewArgumentChecked",
+    r#"
+import java.util.*;
+
+public class NewArgumentChecked {
+    static class Node<T> {
+        final T value;
+        Node(T value) { this.value = value; }
+    }
+
+    public static void main(String[] args) {
+        List<Node<String>> list = new ArrayList<>();
+        list.add(new Node<Integer>(6));
+        System.out.println(list.size());
+    }
+}
+"#
+);
