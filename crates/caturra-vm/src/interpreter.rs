@@ -4705,6 +4705,32 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
+        // A `subList` VIEW has no vector of its own, so every WRITING
+        // algorithm here found nothing to write and did nothing at all —
+        // `Collections.fill(l.subList(0, 2), 9)` left the list untouched, a
+        // silent wrong answer. Run the algorithm over a scratch copy of the
+        // range and splice the result back, which is what the view's OWN
+        // `sort`/`removeIf` already do.
+        if matches!(
+            method_name,
+            "sort" | "fill" | "rotate" | "copy" | "replaceAll" | "shuffle"
+        ) && let Some((backing, from, len)) = self.sublist_range(list)?
+        {
+            let scratch = self
+                .heap
+                .alloc(HeapObject::ArrayList(self.list_items(list)));
+            let mut spliced = args.to_vec();
+            spliced[0] = JValue::Ref(Some(scratch));
+            let answered =
+                self.collections_static_intrinsic(frame, class_name, method_name, &spliced)?;
+            if answered {
+                let replacement = self.list_items(scratch);
+                if let Some(values) = self.heap.list_values_mut(backing) {
+                    values.splice(from..from + len, replacement);
+                }
+            }
+            return Ok(answered);
+        }
         // Everything below reads, or writes, the list itself.
         let unmodifiable = self.is_unmodifiable_list(list);
         let reference = self.backing_list(list);
@@ -4716,6 +4742,17 @@ impl<'run> Interpreter<'run> {
             .heap
             .list_values(reference)
             .map(|items| (reference, items.clone()))
+            // A `subList` has no vector of its own, and every arm below reads
+            // this first: an algorithm handed the read-only RANGE of a
+            // read-only list answered "no items" and returned quietly, ahead
+            // of the refusal it owed. Reading the range restores the order.
+            .or_else(|| {
+                matches!(
+                    self.heap.get(reference),
+                    Some(HeapObject::SubList { .. })
+                )
+                .then(|| (reference, self.list_items(reference)))
+            })
             .or_else(|| {
                 matches!(
                     method_name,
@@ -6908,15 +6945,33 @@ impl<'run> Interpreter<'run> {
     }
 
     /// `list.subList(from, to)` on a list that is not itself a view.
+    ///
+    /// A range of an UNMODIFIABLE list is unmodifiable too — the JDK's wrapper
+    /// answers `unmodifiableList(subList)`, so every mutator refuses. Without
+    /// the wrapper the range wrote through a backing that has no vector of its
+    /// own: `set` silently did nothing, and the algorithms after it walked a
+    /// list they had already been told was empty.
     fn make_sublist(&mut self, list: HeapRef, from: i32, to: i32) -> Result<JValue, VmError> {
         let size = self.list_items(list).len();
         Self::check_sublist_bounds(from, to, size)?;
+        let inner = self.backing_list(list);
         let view = self.heap.alloc(crate::value::HeapObject::SubList {
-            backing: list,
+            backing: inner,
             from: usize::try_from(from).unwrap_or(0),
             len: usize::try_from(to - from).unwrap_or(0),
-            seen: size,
+            seen: self.list_items(inner).len(),
         });
+        if self.is_unmodifiable_list(list) {
+            let wrapper = self
+                .heap
+                .alloc(crate::value::HeapObject::UnmodifiableList(view));
+            // The JDK's `UnmodifiableList.subList` keeps the wrapper's own
+            // class, random-access or not.
+            if let Some(name) = self.view_class.get(&list).copied() {
+                self.view_class.insert(wrapper, name);
+            }
+            return Ok(JValue::Ref(Some(wrapper)));
+        }
         Ok(JValue::Ref(Some(view)))
     }
 
@@ -13754,6 +13809,27 @@ impl<'run> Interpreter<'run> {
                         "java.lang.IndexOutOfBoundsException: {detail}"
                     )));
                 }
+            }
+            // A RANGE of a read-only list is read-only too, and has to be
+            // built here for the same reason: forwarding built a plain
+            // `subList` of the backing, whose `set` then wrote straight
+            // through the wrapper that exists to forbid it.
+            if method_name == "subList"
+                && let [JValue::Int(from), JValue::Int(to)] = args[..]
+            {
+                let backing = self.backing_list(receiver);
+                let JValue::Ref(Some(view)) = self.make_sublist(backing, from, to)? else {
+                    return Ok(None);
+                };
+                let wrapper = self
+                    .heap
+                    .alloc(crate::value::HeapObject::UnmodifiableList(view));
+                if let Some(name) = self.view_class.get(&receiver).copied() {
+                    self.view_class.insert(wrapper, name);
+                }
+                frame.stack.push(JValue::Ref(Some(wrapper)));
+                self.vec_pool.push(args);
+                return Ok(None);
             }
             // The cursor is read-only too, and has to be built HERE: forwarding
             // would build it over the backing list, which knows nothing of this

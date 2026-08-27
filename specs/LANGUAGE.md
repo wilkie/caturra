@@ -9284,3 +9284,29 @@ entry's key or value the same way.
 
 Pinned by `sorting_a_maps_entries`; the strictness bullet is gone from the list
 below.
+
+### The algorithms reach through a subList (2026-08-27)
+
+A second mixed fuzz — 80 programs composed from 24 fresh snippets (abstract
+classes, private interface methods, inner classes, a custom `Iterable`,
+exception chaining, enum bodies, bit work, `Objects`, labelled loops) — came
+back with 14 failures that were again ONE cause, and it was a silent wrong
+answer.
+
+**`Collections.fill(list.subList(0, 2), 9)` did nothing.** A `subList` view has
+no vector of its own, and every writing algorithm looked for one: it found
+nothing to write and wrote nothing, with no error. The same for `sort`,
+`rotate`, `copy` and `replaceAll` — five of the family, silently. (`reverse`
+and `swap` go through the view's own methods and always worked, which is why
+this hid.) They run over a scratch copy of the range and splice it back now,
+the way the view's own `sort`/`removeIf` already did.
+
+Pulling on that found the read-only half. **A range of an UNMODIFIABLE list was
+freely writable.** `subList` is not a mutator, so the wrapper forwarded it to
+the list inside, and the plain view that came back wrote straight through the
+wrapper that exists to forbid it: `unmodifiableList(l).subList(0, 2).set(0, 9)`
+succeeded, and the algorithms handed the same range read it as EMPTY and
+returned quietly, ahead of the `UnsupportedOperationException` they owed. A
+range of a read-only list is read-only, as the JDK's is.
+
+Pinned by `the_algorithms_reach_through_a_sublist`.

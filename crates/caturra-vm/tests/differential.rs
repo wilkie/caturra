@@ -38466,3 +38466,104 @@ public class NewArgumentChecked {
 }
 "
 );
+
+// The `Collections` algorithms through a `subList` VIEW, and a read-only range.
+//
+// A view has no vector of its own, and every writing algorithm here looked for
+// one: `Collections.fill(list.subList(0, 2), 9)` found nothing to write and
+// wrote nothing — a silent wrong answer, and the same for `sort`, `rotate`,
+// `copy` and `replaceAll`. They run over a scratch copy of the range and splice
+// it back now, which is what the view's own `sort`/`removeIf` already did.
+//
+// A range of an UNMODIFIABLE list is unmodifiable too. Forwarding built a plain
+// `subList` of the backing, so `set` wrote straight through the wrapper that
+// exists to forbid it — and the algorithms, reading a view they thought empty,
+// returned quietly ahead of the refusal they owed.
+differential_test!(
+    the_algorithms_reach_through_a_sublist,
+    "SubListAlgorithms",
+    r#"
+import java.util.*;
+
+public class SubListAlgorithms {
+    static List<Integer> fresh() {
+        return new ArrayList<>(Arrays.asList(1, 2, 3, 4, 5));
+    }
+
+    public static void main(String[] args) {
+        List<Integer> a = fresh();
+        Collections.fill(a.subList(0, 2), 9);
+        System.out.println(a);
+
+        List<Integer> b = fresh();
+        Collections.sort(b.subList(2, 5), Comparator.reverseOrder());
+        System.out.println(b);
+
+        List<Integer> c = fresh();
+        Collections.rotate(c.subList(0, 3), 1);
+        System.out.println(c);
+
+        List<Integer> d = fresh();
+        Collections.replaceAll(d.subList(0, 3), 2, 8);
+        System.out.println(d);
+
+        List<Integer> e = fresh();
+        Collections.copy(e.subList(0, 2), Arrays.asList(7, 7));
+        System.out.println(e);
+
+        List<Integer> f = fresh();
+        Collections.reverse(f.subList(0, 3));
+        Collections.swap(f.subList(0, 3), 0, 2);
+        System.out.println(f);
+
+        // A range of a range, and a fixed-size `Arrays.asList` that writes
+        // through to the array behind it.
+        List<Integer> deep = new ArrayList<>(Arrays.asList(1, 2, 3, 4, 5, 6));
+        Collections.fill(deep.subList(1, 5).subList(1, 3), 0);
+        System.out.println(deep);
+
+        Integer[] backing = {1, 2, 3, 4};
+        List<Integer> fixed = Arrays.asList(backing);
+        Collections.fill(fixed.subList(0, 2), 8);
+        System.out.println(fixed + " " + Arrays.toString(backing));
+
+        // A read-only range: every mutator refuses, and so does every writing
+        // algorithm handed one.
+        List<Integer> readOnly = Collections.unmodifiableList(fresh());
+        List<Integer> part = readOnly.subList(0, 2);
+        System.out.println(part);
+        try {
+            part.set(0, 9);
+        } catch (UnsupportedOperationException ex) {
+            System.out.println("set uoe");
+        }
+        try {
+            part.sort(null);
+        } catch (UnsupportedOperationException ex) {
+            System.out.println("sort uoe");
+        }
+        try {
+            Collections.fill(part, 5);
+        } catch (UnsupportedOperationException ex) {
+            System.out.println("fill uoe");
+        }
+        try {
+            Collections.reverse(part);
+        } catch (UnsupportedOperationException ex) {
+            System.out.println("reverse uoe");
+        }
+        System.out.println(readOnly);
+
+        // ...and the view still notices a structural change AROUND it.
+        List<Integer> watched = fresh();
+        List<Integer> window = watched.subList(0, 2);
+        watched.add(6);
+        try {
+            Collections.fill(window, 0);
+        } catch (ConcurrentModificationException ex) {
+            System.out.println("cme");
+        }
+    }
+}
+"#
+);
