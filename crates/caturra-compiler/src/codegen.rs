@@ -3997,23 +3997,30 @@ fn boxable_primitive(ty: JType) -> Option<ElemType> {
 /// would not assign to the `List<Node<Integer>>` beside it, with a message
 /// that said `List<Object>` twice.
 fn value_elem_of(ty: JType, table: &MethodTable) -> Option<ElemType> {
+    // The kinds that HAVE an element form of their own take it: a type
+    // VARIABLE is an element position, not a nested type, and interning one
+    // made `new Node<>(item)` inside a `GStack<E>` a `Node<nested T>` that
+    // could not be assigned to the `Node<E>` beside it — a type that cannot
+    // convert to itself, the tell of one fact in two shapes.
+    match ty {
+        JType::TypeVar(index) => return Some(ElemType::TypeVar(index)),
+        JType::Field => return Some(ElemType::Field),
+        JType::Method => return Some(ElemType::Method),
+        JType::Constructor => return Some(ElemType::Constructor),
+        _ => {}
+    }
     collection_elem_of(ty).or_else(|| {
-        matches!(
-            ty,
-            JType::List { .. }
-                | JType::Set { .. }
-                | JType::Map { .. }
-                | JType::TreeMap { .. }
-                | JType::TreeSet(_, _)
-                | JType::LinkedList { .. }
-                | JType::Stack(_)
-                | JType::Collection(_)
-                | JType::Optional(_)
-                | JType::MapEntry { .. }
-                | JType::EntrySet { .. }
-                | JType::Generic { .. }
-                | JType::Array { .. }
-        )
+        // Any REFERENCE with no element kind of its own — a collection, a
+        // parameterized user class, an array, and the library types beside
+        // them (`File`, `Path`, `Scanner`, `CharSequence`, a writer). Each
+        // interns, which is what lets a literal of them keep its type:
+        // `Arrays.asList(Paths.get("x"), Paths.get("y"))` was a list of
+        // `Object` and would not assign to the `List<Path>` beside it.
+        (ty.is_reference()
+            && !matches!(
+                ty,
+                JType::Object(_) | JType::Error | JType::Unsupported | JType::Null
+            ))
         .then(|| ElemType::Nested {
             inner: table.intern_nested(ty),
             read: table.object_id,
@@ -4486,24 +4493,36 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 // array can hold one: `List<StringBuilder>` used to be refused
                 // with the false message "unknown type 'List'".
                 "StringBuilder" => Some(ElemType::Builder),
-                // `CharSequence` is a TYPE caturra models but not an element
-                // KIND, so it rides interned, the way a nested collection does
-                // — `List<CharSequence>` was refused outright with "works as a
-                // variable, but caturra does not model it as a collection
-                // element", about the interface `String` and `StringBuilder`
-                // share.
-                "CharSequence" => Some(ElemType::Nested {
-                    inner: table.intern_nested(JType::CharSequence),
-                    read: table.object_id,
-                }),
                 "Object" => Some(ElemType::Object(table.object_id)),
                 // A LIBRARY throwable as an element (`List<RuntimeException>`)
                 // — the same element kind `getSuppressed()`'s array uses.
-                other => table.class_id(other).map(ElemType::Object).or_else(|| {
-                    caturra_classfile::exceptions::internal_name_of(other)
-                        .and_then(exception_id)
-                        .map(ElemType::Throwable)
-                }),
+                other => table
+                    .class_id(other)
+                    .map(ElemType::Object)
+                    .or_else(|| {
+                        caturra_classfile::exceptions::internal_name_of(other)
+                            .and_then(exception_id)
+                            .map(ElemType::Throwable)
+                    })
+                    // ...and any other TYPE caturra models but has no element
+                    // KIND for — `CharSequence`, `Scanner`, `File`, `Path`, a
+                    // writer, a stack frame. Each rides INTERNED, the way a
+                    // nested collection does, so a read gets the type back and
+                    // its own methods resolve. Without this every one of them
+                    // was refused with "works as a variable, but caturra does
+                    // not model it as a collection element" — an honest reason
+                    // for a limit that the nested mechanism had already lifted.
+                    .or_else(|| {
+                        let inner = table.resolve_type(&TypeRef::Named(other.to_owned()))?;
+                        (!matches!(
+                            inner,
+                            JType::Object(_) | JType::Error | JType::Unsupported | JType::Null
+                        ) && inner.is_reference())
+                        .then(|| ElemType::Nested {
+                            inner: table.intern_nested(inner),
+                            read: table.object_id,
+                        })
+                    }),
             }
         }
         // A nested parameterized type argument (`List<List<Integer>>`): resolve

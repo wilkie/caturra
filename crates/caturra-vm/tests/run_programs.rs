@@ -6629,17 +6629,13 @@ fn stage6_compile_errors_match_javac_wording() {
             "class M { static void f() { Thread t = new Thread(); } }",
             "java.lang.Thread is not supported by caturra",
         ),
-        // A type argument caturra models as a VARIABLE but not as an element.
-        // The two messages this replaces were both false: one blamed the base
-        // ("unknown type 'List'"), the other called a working class
-        // unsupported outright.
+        // A type argument caturra models as a variable AND as an element: a
+        // `List<Scanner>` and a `Set<File>` are ordinary programs now (each
+        // rides interned, as a nested collection does), so what is left to
+        // pin here is the message for a type caturra models NOWHERE.
         (
-            "import java.util.*; class M { static void f() { List<Scanner> l; } }",
-            "Scanner works as a variable, but caturra does not model it as a collection element",
-        ),
-        (
-            "class M { static void f() { java.util.Set<java.io.File> s; } }",
-            "File works as a variable, but caturra does not model it as a collection element",
+            "import java.util.*; class M { static void f() { List<Thread> l; } }",
+            "java.lang.Thread is not supported by caturra",
         ),
         // JLS §5.5: a reference cast needs one type to be a subtype of the
         // other, and `String` is final — so only a supertype casts down to it.

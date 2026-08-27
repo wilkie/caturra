@@ -39085,3 +39085,56 @@ public class CharSequences {
 }
 "#
 );
+
+// Any modelled type as a collection ELEMENT. caturra stored elements in a
+// closed set of kinds, so a `List<Scanner>`, a `Set<File>`, a `List<Path>` and
+// the rest were refused with an honest reason for a limit the NESTED mechanism
+// had already lifted: a type with no element kind of its own rides interned,
+// exactly as `List<List<Integer>>` does, and reads back as itself.
+//
+// This was the last entry on the compatibility page's unsupported list that a
+// student could reach by writing an ordinary declaration.
+differential_test!(
+    any_modelled_type_as_an_element,
+    "ElementKinds",
+    r#"
+import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
+
+public class ElementKinds {
+    public static void main(String[] args) {
+        List<Scanner> scanners = new ArrayList<>();
+        scanners.add(new Scanner("7 8"));
+        System.out.println(scanners.get(0).nextInt() + " " + scanners.size());
+
+        List<File> files = new ArrayList<>(Arrays.asList(new File("a.txt"), new File("b.txt")));
+        for (File f : files) {
+            System.out.println(f.getName() + " " + f.exists());
+        }
+        System.out.println(files.get(1).getName().length());
+
+        // ...and built from a literal, whose element is what the values are.
+        List<Path> paths = new ArrayList<>(Arrays.asList(Paths.get("x"), Paths.get("y")));
+        System.out.println(paths.get(1) + "" + paths.size());
+
+        Map<String, File> byName = new LinkedHashMap<>();
+        byName.put("first", new File("c.txt"));
+        System.out.println(byName.get("first").getName());
+
+        Set<StringBuilder> builders = new LinkedHashSet<>();
+        builders.add(new StringBuilder("ab"));
+        System.out.println(builders.iterator().next().reverse());
+
+        List<StackTraceElement> frames = new ArrayList<>();
+        try {
+            throw new IllegalStateException("x");
+        } catch (IllegalStateException e) {
+            frames.addAll(Arrays.asList(e.getStackTrace()));
+        }
+        System.out.println(frames.isEmpty() ? "none" : frames.get(0).getMethodName());
+    }
+}
+"#
+);

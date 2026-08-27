@@ -9603,3 +9603,27 @@ CharSequence>` once its element stopped being a wildcard. And `CharSequence`
 names a class for a method REFERENCE, so `CharSequence::length` resolves.
 
 Pinned by `a_char_sequence_element`.
+
+### Any modelled type as an element (2026-08-27)
+
+`List<Scanner>`, `Set<File>`, `List<Path>`, a list of writers, a list of stack
+frames — every one was refused with "works as a variable, but caturra does not
+model it as a collection element". The reason was honest and the limit was
+already lifted: a type with no element KIND of its own rides INTERNED, exactly
+as `List<List<Integer>>` does, and reads back as itself. The rule replaces the
+type-by-type list with "any modelled reference".
+
+Two shapes had to follow it. A LITERAL of such values keeps its type —
+`Arrays.asList(Paths.get("x"), Paths.get("y"))` was a list of `Object` and
+would not assign to the `List<Path>` beside it — and a type VARIABLE is an
+element POSITION rather than a nested type, which the general rule got wrong
+first: `new Node<>(item)` inside a `GStack<E>` became a `Node<nested T>` that
+could not be assigned to the `Node<E>` beside it, a type that cannot convert to
+itself.
+
+The compatibility page's "Any object as a collection element" moves from
+unsupported to supported, recorded against a real JDK like every other claim
+there. What is left in that list is a type caturra models NOWHERE (`Thread`),
+which is a different message and a deliberate boundary.
+
+Pinned by `any_modelled_type_as_an_element`.

@@ -10,6 +10,36 @@ it is compared byte for byte.
 """
 
 FEATURES = [
+    dict(
+        id="element-types",
+        category="Collections",
+        title="Any object as a collection element",
+        summary="A collection holds any modelled type — a Scanner, a File, a CharSequence — and reads it back as itself.",
+        main="Elements",
+        source="""
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+
+public class Elements {
+    public static void main(String[] args) {
+        List<Scanner> scanners = new ArrayList<>();
+        scanners.add(new Scanner("7"));
+        System.out.println(scanners.get(0).nextInt());
+
+        List<File> files = new ArrayList<>();
+        files.add(new File("notes.txt"));
+        System.out.println(files.get(0).getName() + " " + files.size());
+
+        List<CharSequence> texts = new ArrayList<>();
+        texts.add("abc");
+        texts.add(new StringBuilder("de"));
+        System.out.println(texts.get(0).length() + texts.get(1).length());
+    }
+}
+""",
+    ),
     # ----- the language -----
     dict(
         id="classes",
@@ -1482,26 +1512,6 @@ import java.lang.reflect.Modifier;
 public class Modifiers {
     public static void main(String[] args) {
         System.out.println(Modifier.toString(String.class.getModifiers()));
-    }
-}
-""",
-    ),
-    dict(
-        id="element-types",
-        category="Collections",
-        title="Any object as a collection element",
-        summary="caturra stores elements in a closed set of kinds; a Scanner is not one of them.",
-        main="Elements",
-        source="""
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Scanner;
-
-public class Elements {
-    public static void main(String[] args) {
-        List<Scanner> scanners = new ArrayList<>();
-        scanners.add(new Scanner("7"));
-        System.out.println(scanners.get(0).nextInt());
     }
 }
 """,
