@@ -9439,3 +9439,22 @@ the fold were both "array required, but Object found". An array is not an
 element KIND of its own: it interns, as it does anywhere a container holds one.
 
 Pinned by `a_stream_of_arrays`.
+
+### The numerics that were known-hard (2026-08-27)
+
+An audit round left two items as "known-hard, likely document rather than fix":
+`Double.toString(1e23)`, where JDK 11's legacy `FloatingDecimal` is NOT
+shortest-round-trip and prints `9.999999999999999E22`, and `Math.cosh(1.0)`,
+off by one ULP as a transcendental may be.
+
+Re-measured: a 765-value random sweep — doubles and floats from random BITS,
+through `toString`, `String.valueOf`, concatenation, `%f`/`%e`/`%g` and
+`parseDouble` round-trips — found **zero** divergences, and the transcendentals
+agree to the last digit. Both were closed by later work and the note had gone
+stale.
+
+They are pinned now rather than documented, which is the point: a deferral that
+says "likely document not fix" reads as "do not check again", and this one hid
+work that was already done.
+
+Pinned by `the_numerics_that_were_known_hard`.

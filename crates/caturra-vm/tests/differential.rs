@@ -38832,3 +38832,38 @@ public class ArrayStreams {
 }
 "#
 );
+
+// The two numeric shapes an audit round left as "known-hard, likely document
+// rather than fix": `Double.toString(1e23)`, where JDK 11's legacy
+// FloatingDecimal is NOT shortest-round-trip and prints `9.999999999999999E22`,
+// and `Math.cosh`, which is a transcendental a library may round its own way.
+// Both agree byte for byte now — a 765-value random sweep of doubles, floats,
+// `%f`/`%e`/`%g` and parse round-trips found no divergence at all — so they are
+// pinned rather than documented.
+differential_test!(
+    the_numerics_that_were_known_hard,
+    "HardNumerics",
+    r#"
+public class HardNumerics {
+    public static void main(String[] args) {
+        // The shortest-round-trip corners: a JDK does NOT print the shortest
+        // decimal here, and the printed text is what a program shows.
+        System.out.println(Double.toString(1e23) + " " + 1e23 + " " + 9.999999999999999E22);
+        System.out.println(1.0e7 + " " + 1.0e-3 + " " + 0.001 + " " + 1234567.0 + " " + 12345678.0);
+        System.out.println(Double.MIN_VALUE + " " + Double.MAX_VALUE + " " + Float.MIN_VALUE);
+        System.out.println(4.9e-324 + " " + 1e-300 + " " + 0.1 + " " + (0.1 + 0.2));
+        System.out.println((float) 1e23 + " " + (float) 0.1 + " " + Float.MAX_VALUE);
+        System.out.println(Double.parseDouble(Double.toString(1e23)) == 1e23);
+
+        // The transcendentals, to the last digit.
+        System.out.println(Math.cosh(1.0) + " " + Math.sinh(1.0) + " " + Math.tanh(0.5));
+        System.out.println(Math.expm1(1e-5) + " " + Math.log1p(1e-5) + " " + Math.hypot(3, 4));
+        System.out.println(Math.pow(2, 0.5) + " " + Math.exp(1) + " " + Math.log(10) + " " + Math.cbrt(27));
+        System.out.println(Math.sin(1) + " " + Math.cos(1) + " " + Math.tan(1) + " " + Math.atan2(1, 2));
+
+        System.out.println(String.format("%.3f|%e|%g", 1e23, 1e23, 1e23));
+        System.out.println(String.format("%.3f|%e|%g", 0.1 + 0.2, 4.9e-324, 1234567.0));
+    }
+}
+"#
+);
