@@ -7757,7 +7757,10 @@ impl<'run> Interpreter<'run> {
                 let merged = if existing == JValue::NULL {
                     *value
                 } else {
-                    self.call_apply_two(*remap, existing, *value)?
+                    let before = self.map_len(receiver);
+                    let merged = self.call_apply_two(*remap, existing, *value)?;
+                    self.check_compute_comodification(receiver, before)?;
+                    merged
                 };
                 self.map_store_or_remove(receiver, *key, merged)?
             }
@@ -7766,14 +7769,18 @@ impl<'run> Interpreter<'run> {
                     Some(at) => self.map_value_at(receiver, at),
                     None => JValue::NULL,
                 };
+                let before = self.map_len(receiver);
                 let computed = self.call_apply_two(*remap, *key, existing)?;
+                self.check_compute_comodification(receiver, before)?;
                 self.map_store_or_remove(receiver, *key, computed)?
             }
             ("computeIfPresent", [key, JValue::Ref(Some(remap))]) => {
                 match self.map_find(receiver, *key)? {
                     Some(at) if self.map_value_at(receiver, at) != JValue::NULL => {
                         let existing = self.map_value_at(receiver, at);
+                        let before = self.map_len(receiver);
                         let computed = self.call_apply_two(*remap, *key, existing)?;
+                        self.check_compute_comodification(receiver, before)?;
                         self.map_store_or_remove(receiver, *key, computed)?
                     }
                     _ => JValue::NULL,
@@ -7788,7 +7795,9 @@ impl<'run> Interpreter<'run> {
                     // A mapping that returns null leaves the map alone (JDK) —
                     // it does not store a null.
                     _ => {
+                        let before = self.map_len(receiver);
                         let computed = self.call_apply(*mapping, *key)?;
+                        self.check_compute_comodification(receiver, before)?;
                         if computed != JValue::NULL {
                             self.map_put_compute(receiver, *key, computed)?;
                         }
@@ -10350,6 +10359,25 @@ impl<'run> Interpreter<'run> {
     /// HEAD of its bucket chain, as the JDK's compute paths do
     /// (`tab[i] = newNode(hash, key, v, first)`), so it iterates before older
     /// same-bucket entries. An existing key is updated in place either way.
+    /// The JDK 9+ check the whole `compute` family makes: the mapping function
+    /// must not modify the map. `HashMap` records its `modCount` before the
+    /// call and throws `ConcurrentModificationException` if it changed — which
+    /// is what makes the memoized-fibonacci idiom
+    /// (`memo.computeIfAbsent(n, k -> fib(k - 1) + fib(k - 2))`) throw rather
+    /// than answer, a trap this engine used to walk straight past.
+    fn check_compute_comodification(
+        &self,
+        receiver: HeapRef,
+        before: usize,
+    ) -> Result<(), VmError> {
+        if self.map_len(receiver) == before {
+            return Ok(());
+        }
+        Err(VmError::UncaughtException(String::from(
+            "java.util.ConcurrentModificationException",
+        )))
+    }
+
     fn map_put_compute(
         &mut self,
         map: HeapRef,

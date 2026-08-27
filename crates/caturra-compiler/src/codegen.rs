@@ -2198,7 +2198,15 @@ impl MethodTable {
     /// superclass chain so an inherited method's clause is found — empty when
     /// none is declared anywhere.
     pub(crate) fn declared_throws(&self, class: &str, method: &str, arity: usize) -> &[String] {
-        let mut current = Some(class.to_owned());
+        // The table is keyed by the BINARY name, and a caller has the name the
+        // SOURCE wrote — which for a nested class is the simple one. Looking
+        // that up found nothing, so every `throws` on a nested class's method
+        // was invisible: a `catch` of one was "never thrown in body", and a
+        // caller that failed to declare it compiled.
+        let mut current = Some(
+            self.class_id(class)
+                .map_or_else(|| class.to_owned(), |id| self.class_name(id).to_owned()),
+        );
         let mut steps = 0usize;
         while let Some(name) = current {
             steps += 1;
@@ -4486,6 +4494,42 @@ fn has_wildcard_element(ty: JType) -> bool {
 /// Whether an argument element type may stand in for a parameter's element
 /// type: the same element, or one a wildcard parameter's bound accepts.
 /// Element types are otherwise INVARIANT, as Java's are.
+/// The ELEMENT a lone array argument spreads into, when it spreads at all.
+///
+/// A lone REFERENCE array IS the varargs array, so `Arrays.asList(words)` is a
+/// `List<String>` — and a `int[][]` is a reference array too, its elements
+/// being `int[]` rows, so that one spreads into a `List<int[]>`. Only a
+/// one-dimensional PRIMITIVE array does not spread (`T` cannot be `int`), which
+/// is the famous gotcha. Reading only the one-dimensional case left a 2-D array
+/// as a single element, so `Arrays.asList(grid).iterator()` could not be
+/// assigned to an `Iterator<int[]>` — and said so in a message that named the
+/// same type on both sides.
+fn lone_varargs_elem(ty: JType, table: &MethodTable) -> Option<ElemType> {
+    match ty {
+        JType::Array { elem, dims: 1 } if !elem.base_type().is_reference() => None,
+        array => array_spread_elem(array, table),
+    }
+}
+
+/// The element an array spreads into when it IS the varargs array — one
+/// dimension less. `Arrays.stream(int[])` and `IntStream.of(int[])` take a
+/// primitive array that way (the array is the parameter, not an element), so
+/// this asks nothing about the element's kind; the varargs GOTCHA is the
+/// caller's rule, above.
+fn array_spread_elem(ty: JType, table: &MethodTable) -> Option<ElemType> {
+    match ty {
+        JType::Array { elem, dims: 1 } => Some(elem),
+        JType::Array { elem, dims } if dims >= 2 => Some(ElemType::Nested {
+            inner: table.intern_nested(JType::Array {
+                elem,
+                dims: dims - 1,
+            }),
+            read: table.object_id,
+        }),
+        _ => None,
+    }
+}
+
 fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
     if arg == param {
         return true;
@@ -24330,10 +24374,7 @@ impl BodyGen<'_> {
             // infers as `int[]` and the call is a ONE-element `List<int[]>` —
             // the most famous varargs gotcha, and caturra used to spread it and
             // answer 3 where a JDK answers 1.
-            let lone_array = match self.type_of(single) {
-                JType::Array { elem, dims: 1 } if elem.base_type().is_reference() => Some(elem),
-                _ => None,
-            };
+            let lone_array = lone_varargs_elem(self.type_of(single), self.table);
             if let Some(elem) = lone_array {
                 self.expr(single);
                 elem
@@ -24426,22 +24467,12 @@ impl BodyGen<'_> {
         // is a list of the constants, not a list holding one array. (The same
         // rule the stream factories and `Arrays.asList` already follow; a
         // PRIMITIVE array stays one element, which is the varargs gotcha.)
-        let spread = match args {
-            [single] if class != "Map" => match self.type_of(single) {
-                JType::Array { dims, .. } if dims > 1 => true,
-                JType::Array { elem, .. } => elem.base_type().is_reference(),
-                _ => false,
-            },
-            _ => false,
+        let spread_elem = match args {
+            [single] if class != "Map" => lone_varargs_elem(self.type_of(single), self.table),
+            _ => None,
         };
-        let elem = if spread
-            && let [single] = args
-            && let JType::Array { elem, dims: 1 } = self.type_of(single)
-        {
-            elem
-        } else {
-            elem
-        };
+        let spread = spread_elem.is_some();
+        let elem = spread_elem.unwrap_or(elem);
         if spread {
             self.expr(&args[0]);
         } else {
@@ -24733,7 +24764,7 @@ impl BodyGen<'_> {
         };
         let elem = if spreads_a_lone_array
             && let [single] = args
-            && let JType::Array { elem, dims: 1 } = self.type_of(single)
+            && let Some(elem) = array_spread_elem(self.type_of(single), self.table)
         {
             self.expr(single);
             elem

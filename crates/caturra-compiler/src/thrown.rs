@@ -766,6 +766,12 @@ fn library_kind_of_class(name: &str) -> Option<&'static str> {
     let simple = name.rsplit('.').next().unwrap_or(name);
     match simple {
         "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader" => Some("Reader"),
+        // A `Writer`'s `write`/`close`/`flush` all declare `IOException` —
+        // which is what makes `try (FileWriter w = …) … catch (IOException e)`
+        // legal, the shape every program that writes a file is written in.
+        // `PrintWriter` is the exception: it swallows, and none of its methods
+        // declares one.
+        "FileWriter" | "Writer" | "BufferedWriter" | "OutputStreamWriter" => Some("Writer"),
         "File" => Some("File"),
         "Class" => Some("Class"),
         "Method" => Some("Method"),
@@ -787,10 +793,11 @@ fn library_kind_throws(
     ctx: &mut Ctx,
 ) -> ThrownSet {
     let thrown: &[&'static str] = match (kind, method) {
-        (Some("Reader"), "read" | "readLine" | "ready" | "close" | "lines") => {
-            &["java/io/IOException"]
-        }
-        (Some("File"), "createNewFile") => &["java/io/IOException"],
+        // Every I/O method that declares the same one exception, in one arm:
+        // a reader's reads, a writer's writes, and `File.createNewFile`.
+        (Some("Reader"), "read" | "readLine" | "ready" | "close" | "lines")
+        | (Some("Writer"), "write" | "append" | "close" | "flush" | "newLine")
+        | (Some("File"), "createNewFile") => &["java/io/IOException"],
         (
             Some("Class"),
             "getMethod" | "getDeclaredMethod" | "getConstructor" | "getDeclaredConstructor",
@@ -873,6 +880,11 @@ fn ctor_throws(
     match simple {
         // `new FileReader(...)` / `new PrintWriter(file-or-name)`.
         "FileReader" | "PrintWriter" => out.push(Exc::Lib("java/io/FileNotFoundException")),
+        // `new FileWriter(...)` declares the broader `IOException` — the
+        // directory may be missing, not just the file.
+        "FileWriter" | "BufferedWriter" | "OutputStreamWriter" => {
+            out.push(Exc::Lib("java/io/IOException"));
+        }
         // `new Scanner(file)` throws; `new Scanner("text")` does not. The
         // argument's kind decides, and only a File-typed argument is certain.
         "Scanner" => match args.first() {

@@ -8784,6 +8784,47 @@ this codebase now recognises on sight.
 
 Pinned by `diff_a_mixed_pipeline_keeps_its_types`.
 
+### What a lab program crosses (2026-08-26)
+
+A second mixed fuzz, shaped like the programs the corpus is full of: a custom
+exception, an `Iterable` over the rows of a 2-D array, an inner class, a
+memoized recursion, a try-with-resources. Four defects, none of which a
+single-feature sweep could have reached.
+
+**A 2-D array handed to a varargs factory spreads into its ROWS.** A `int[][]`
+IS a reference array — its elements are `int[]` — so `Arrays.asList(grid)` is a
+`List<int[]>`. caturra read only the one-dimensional case, so the whole array
+became a single element, and the assignment that followed failed with a message
+naming the SAME type on both sides ("`List<Object>` cannot be converted to
+`List<Object>`") — the tell that two elements differ in something the printer
+does not show. The rule is one function now, shared by `asList`, the immutable
+factories and the stream sources; the varargs GOTCHA (a lone one-dimensional
+PRIMITIVE array is one element) is the caller's rule, spelled out where it
+applies.
+
+**A `throws` on a NESTED class's method was invisible.** The table is keyed by
+the BINARY name and the lookup had the name the source wrote, so
+`static class Store { void save() throws IOException }` declared nothing as far
+as the analysis could see: a legal `catch (IOException e)` was "never thrown in
+body of corresponding try statement", and a caller that failed to declare it
+compiled — both directions of the same missing lookup.
+
+**A `Writer`'s methods declare `IOException`.** `write`, `close`, `flush` and
+`append` all do, which is what makes `try (FileWriter w = …) … catch
+(IOException e)` — the shape of every program that writes a file — legal at
+all. `PrintWriter` stays out: it swallows, and none of its methods declares
+one.
+
+**And the compute family checks for co-modification.** A JDK's `HashMap`
+records its `modCount` before calling the mapping function and throws
+`ConcurrentModificationException` if the function changed the map — so the
+memoized-fibonacci idiom, `memo.computeIfAbsent(n, k -> fib(k - 1) + fib(k -
+2))`, THROWS on a real JDK. caturra walked straight past it and printed 55.
+The check is on all four (`compute`, `computeIfAbsent`, `computeIfPresent`,
+`merge`), against the same length-as-`modCount` every fail-fast cursor uses.
+
+Pinned by `diff_a_lab_program_crosses_its_features`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

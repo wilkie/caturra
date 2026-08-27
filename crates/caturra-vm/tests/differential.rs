@@ -29838,6 +29838,87 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// Four more pairings, from a mixed fuzz shaped like a LAB program: a custom
+// exception, an `Iterable` over rows of a 2-D array, an inner class, a
+// memoized recursion, a try-with-resources. A 2-D array handed to a varargs
+// factory spreads into its ROWS (`Arrays.asList(grid)` is a `List<int[]>`) —
+// reading only the one-dimensional case made it a single element, and the
+// message said one type could not be converted to itself. A `throws` on a
+// NESTED class's method was invisible, because the table is keyed by the
+// binary name and the caller has the written one — so a legal `catch` was
+// "never thrown in body", and a caller that failed to declare it compiled. A
+// `Writer`'s methods declare `IOException`, which is what makes
+// `try (FileWriter …) … catch (IOException e)` legal at all. And the compute
+// family checks for co-modification the way a JDK does: the memoized-fibonacci
+// idiom throws rather than answering.
+differential_test!(
+    diff_a_lab_program_crosses_its_features,
+    "Lab",
+    r#"
+import java.io.*;
+import java.util.*;
+
+public class Lab {
+    static class BadInput extends RuntimeException {
+        final int at;
+        BadInput(String message, int at) { super(message); this.at = at; }
+    }
+
+    static class Grid implements Iterable<int[]> {
+        private final int[][] rows;
+        Grid(int n, int m) {
+            rows = new int[n][m];
+            for (int i = 0; i < n; i++) {
+                for (int j = 0; j < m; j++) {
+                    rows[i][j] = i * 10 + j;
+                }
+            }
+        }
+        int at(int i, int j) {
+            if (i < 0 || i >= rows.length) { throw new BadInput("row " + i, i); }
+            return rows[i][j];
+        }
+        public Iterator<int[]> iterator() { return Arrays.asList(rows).iterator(); }
+        @Override public String toString() { return Arrays.deepToString(rows); }
+    }
+
+    static class Store {
+        void save(String text) throws IOException {
+            if (text.isEmpty()) { throw new IOException("empty"); }
+        }
+    }
+
+    static final Map<Integer, Long> MEMO = new HashMap<>();
+
+    static long fib(int n) {
+        if (n < 2) { return n; }
+        return MEMO.computeIfAbsent(n, k -> fib(k - 1) + fib(k - 2));
+    }
+
+    public static void main(String[] args) {
+        Grid grid = new Grid(2, 3);
+        System.out.println(grid);
+        for (int[] row : grid) { System.out.print(Arrays.toString(row)); }
+        System.out.println();
+        Iterator<int[]> cursor = grid.iterator();
+        System.out.println(Arrays.toString(cursor.next()) + " " + cursor.hasNext());
+        List<int[]> rows = Arrays.asList(new int[2][2]);
+        System.out.println(rows.size() + " " + Arrays.toString(rows.get(0)));
+
+        try { grid.at(9, 0); }
+        catch (BadInput e) { System.out.println("! " + e.getMessage() + " at=" + e.at); }
+
+        try { new Store().save(""); }
+        catch (IOException e) { System.out.println("io " + e.getMessage()); }
+
+        try { System.out.println(fib(10)); }
+        catch (RuntimeException e) { System.out.println("!! " + e.getClass().getName()); }
+        System.out.println(MEMO.size());
+    }
+}
+"#
+);
+
 // Three pairings a MIXED fuzz found, each invisible to a single-feature test.
 // A method reference converted to a lambda by a STREAM op was not marked as
 // one, so it took a number in javac's per-class lambda sequence and every

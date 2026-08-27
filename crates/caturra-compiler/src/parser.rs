@@ -661,9 +661,20 @@ impl Parser<'_> {
         // `a.b.C name`, `a.b.C<T> name`, or `a.b.C[] name` — the ARRAY form
         // reads exactly like an index expression up to the `]`, so it is the
         // pair `[]` followed by an identifier that tells them apart.
-        matches!(self.peek_at(i), Some(TokenKind::Identifier(_)))
+        // A type ARGUMENT may be an identifier, a wildcard, or a PRIMITIVE
+        // array (`java.util.Iterator<int[]>` — an array is a reference type,
+        // so `List<int[]>` is ordinary Java). Reading only the identifier form
+        // meant such a declaration was parsed as an EXPRESSION, and the
+        // `int[]` inside it was reported as a malformed class literal.
+        let opens_type_args = matches!(self.peek_at(i), Some(TokenKind::Symbol("<")))
+            && matches!(
+                self.peek_at(i + 1),
+                Some(TokenKind::Identifier(_) | TokenKind::Symbol("?"))
+            )
             || (matches!(self.peek_at(i), Some(TokenKind::Symbol("<")))
-                && matches!(self.peek_at(i + 1), Some(TokenKind::Identifier(_))))
+                && matches!(self.peek_at(i + 1), Some(TokenKind::Keyword(kw)) if primitive_type_name(*kw).is_some()));
+        matches!(self.peek_at(i), Some(TokenKind::Identifier(_)))
+            || opens_type_args
             || (matches!(self.peek_at(i), Some(TokenKind::Symbol("[")))
                 && matches!(self.peek_at(i + 1), Some(TokenKind::Symbol("]"))))
     }
