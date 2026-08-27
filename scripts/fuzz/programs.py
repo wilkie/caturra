@@ -41,6 +41,8 @@ public class %s {
         public String toString() { return "Box[" + value + "]"; }
     }
     static int twice(int n) { return n * 2; }
+    static long fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }
+    static long fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }
     static String tag(String s) { return "<" + s + ">"; }
     static <T extends Comparable<T>> T biggest(List<T> xs) {
         T best = xs.get(0);
@@ -159,7 +161,8 @@ class Gen:
     def stmt(self, depth=0):
         r = self.rng
         kinds = ["decl", "print", "print", "if", "for", "foreach", "while", "assign", "try",
-                 "stream", "sort", "generic", "map", "methodref", "arrays", "nested", "sublist"]
+                 "stream", "sort", "generic", "map", "methodref", "arrays", "nested", "sublist",
+                 "switch", "dowhile", "labeled", "format", "builder", "cast", "anon", "recurse"]
         kind = r.choice(kinds)
         if kind == "decl": return self.decl()
         if kind == "print":
@@ -223,6 +226,96 @@ class Gen:
                 f'{s}.stream().collect(Collectors.groupingBy(String::length)).size()',
             ])
             self.lines.append(f"        System.out.println({what});")
+            return
+        if kind == "switch":
+            n = self.name("s")
+            self.lines.append(f"        int {n} = {self.expr('int', 1)};")
+            self.lines.append(f"        switch (Math.floorMod({n}, 4)) {{")
+            self.lines.append("            case 0:")
+            self.lines.append(f"                System.out.println(\"zero\" + {n});")
+            self.lines.append("                break;")
+            self.lines.append("            case 1:")
+            self.lines.append("            case 2:")
+            self.lines.append(f"                System.out.println(\"low\" + {n});")
+            self.lines.append("                break;")
+            self.lines.append("            default:")
+            self.lines.append(f"                System.out.println(\"other\" + {n});")
+            self.lines.append("        }")
+            src = self.of_type("String")
+            if src:
+                v = r.choice(src)
+                self.lines.append(f"        switch ({v}) {{")
+                self.lines.append('            case "alpha": System.out.println("A"); break;')
+                self.lines.append('            case "": System.out.println("empty"); break;')
+                self.lines.append('            default: System.out.println("d" + ' + v + '.length());')
+                self.lines.append("        }")
+            return
+        if kind == "dowhile":
+            c = self.name("d")
+            self.lines.append(f"        int {c} = {r.randint(0, 2)};")
+            self.lines.append("        do {")
+            self.lines.append(f"            System.out.println(\"do\" + {c});")
+            self.lines.append(f"            {c}++;")
+            self.lines.append(f"        }} while ({c} < {r.randint(1, 3)});")
+            return
+        if kind == "labeled":
+            self.lines.append("        outer" + str(self.counter) + ":")
+            label = "outer" + str(self.counter)
+            self.counter += 1
+            i, j = self.name("i"), self.name("j")
+            self.lines.append(f"        for (int {i} = 0; {i} < 3; {i}++) {{")
+            self.lines.append(f"            for (int {j} = 0; {j} < 3; {j}++) {{")
+            self.lines.append(f"                if ({i} * {j} > 2) break {label};")
+            self.lines.append(f"                if ({j} > {i}) continue {label};")
+            self.lines.append(f"                System.out.println({i} + \"x\" + {j});")
+            self.lines.append("            }")
+            self.lines.append("        }")
+            return
+        if kind == "format":
+            self.lines.append(
+                f'        System.out.println(String.format("%d|%s|%.2f|%b|%c",'
+                f' {self.expr("int", 1)}, {self.expr("String", 1)}, {self.expr("double", 1)},'
+                f' {self.expr("boolean", 1)}, {self.expr("char", 1)}));'
+            )
+            return
+        if kind == "builder":
+            b = self.name("sb")
+            self.lines.append(f"        StringBuilder {b} = new StringBuilder({self.expr('String', 1)});")
+            self.lines.append(f"        {b}.append({self.expr('int', 1)}).append('|').append({self.expr('boolean', 1)});")
+            if r.random() < 0.5:
+                self.lines.append(f"        {b}.reverse();")
+            self.lines.append(f"        System.out.println({b} + \":\" + {b}.length());")
+            return
+        if kind == "cast":
+            what = r.choice([
+                f"(int) {self.expr('double', 1)}",
+                f"(double) {self.expr('int', 1)}",
+                f"(char) ({self.expr('char', 1)} + 1)",
+                f"(long) {self.expr('int', 1)} * 100000L",
+                f"(int) {self.expr('char', 1)}",
+            ])
+            self.lines.append(f"        System.out.println({what});")
+            src = self.of_type("Animal")
+            if src:
+                a = r.choice(src)
+                self.lines.append(f"        System.out.println({a} instanceof Cat ? \"cat\" : \"animal\");")
+                self.lines.append(f"        System.out.println({a}.describe() + ((Animal) {a}).size);")
+            return
+        if kind == "anon":
+            n = self.name("anon")
+            self.lines.append(f"        Comparator<String> {n} = new Comparator<String>() {{")
+            self.lines.append("            public int compare(String a, String b) { return b.length() - a.length(); }")
+            self.lines.append("        };")
+            src = self.of_type("List<String>")
+            if src:
+                s2 = r.choice(src)
+                self.lines.append(f"        {s2}.sort({n});")
+                self.lines.append(f"        System.out.println({s2});")
+            else:
+                self.lines.append(f'        System.out.println({n}.compare("aa", "b"));')
+            return
+        if kind == "recurse":
+            self.lines.append(f"        System.out.println(fact({r.randint(0, 8)}) + \"/\" + fib({r.randint(0, 12)}));")
             return
         if kind == "generic":
             src = self.of_type("Box<String>")
