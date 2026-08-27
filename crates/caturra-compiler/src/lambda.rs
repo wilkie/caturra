@@ -5306,6 +5306,20 @@ fn is_negated_predicate(expr: &Expr) -> bool {
                 if path.last().is_some_and(|n| n == "Predicate")))
 }
 
+/// The type a lambda's PARAMETER takes for an element that may be a wildcard:
+/// `? extends Number` reads as `Number`, `?` and an erased type variable as
+/// `Object`. A wildcard is an encoded NAME, and no type of its own.
+fn readable_elem(ty: TypeRef) -> TypeRef {
+    let TypeRef::Named(name) = &ty else {
+        return ty;
+    };
+    match crate::ast::wildcard_parts(name) {
+        Some((_, bound)) if !bound.is_empty() => TypeRef::Named(bound.to_owned()),
+        Some(_) => TypeRef::Named(String::from("Object")),
+        None => ty,
+    }
+}
+
 #[allow(clippy::too_many_lines)] // the erasure, plus one arm per lambda shape
 fn build_erased_lambda(
     lambda: &mut Expr,
@@ -5375,6 +5389,13 @@ fn build_erased_lambda(
     let Expr::Lambda { params, body, span } = lambda else {
         unreachable!("guarded by caller");
     };
+    // A WILDCARD element reads out as its bound, or as `Object` — which is
+    // what a JDK gives the lambda too. Left as the wildcard, the synthesized
+    // `(E) __caturraArg0` declared a local of a type nothing resolves, and
+    // `iteratorOfWildcard.forEachRemaining(v -> …)` was refused as "a
+    // functional interface parameterized on a method's own type variable".
+    let readable: Vec<TypeRef> = elem_types.iter().cloned().map(readable_elem).collect();
+    let elem_types = &readable[..];
     let span = *span;
     *ctx.counter += 1;
     // One-shot: the prefix applies to the class being built now, and reverts

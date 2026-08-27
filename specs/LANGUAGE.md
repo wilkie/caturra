@@ -9310,3 +9310,39 @@ returned quietly, ahead of the `UnsupportedOperationException` they owed. A
 range of a read-only list is read-only, as the JDK's is.
 
 Pinned by `the_algorithms_reach_through_a_sublist`.
+
+### Cursors and wildcards over every collection (2026-08-27)
+
+Two cross-product sweeps — eleven collection shapes against a dozen cursor
+sequences (walk-and-set, remove-before-next, double-remove, add-during,
+backwards, exhausted, `forEachRemaining`, a change under the cursor), 182
+programs — found four gaps and agreed on everything else, including the
+exception CLASS and message of every misuse.
+
+**`subList.listIterator(index)`** — how a program walks a range backwards —
+was "unknown native member". The view had the no-argument cursor only, so the
+call fell through to the plain list path.
+
+**A map view and a `PriorityQueue` had no `toArray()`.** Every collection has
+one, and both were "unknown native member" for it. It is answered once for
+every kind now, beside `descendingIterator`, which was already shared for the
+same reason. The elements are MATERIALIZED, so an `entrySet().toArray()`
+answers real entries rather than the keys its cheap walk yields — the typed
+`toArray(T[])` beside it had the same reading and needed the same fix.
+
+**A lambda handed to a WILDCARD-typed receiver was refused.**
+`Iterator<?> it = list.iterator(); it.forEachRemaining(v -> …)` — the element
+reached the synthesized class as the wildcard's own encoded name, which is no
+type, and the refusal said "a functional interface parameterized on a method's
+own type variable". A wildcard READS OUT as its bound (or `Object`), which is
+what a JDK gives the lambda too.
+
+**A wildcard bounded by a FINAL type read as `Object`.** `? extends Integer`
+IS `Integer` — nothing else can be one — and the same for `? extends String`,
+so the invariant element is not an approximation but the same type. The
+`Object` fallback made `ints.get(0) + 1` an error on a `List<? extends
+Integer>`. (A bound caturra models as no CLASS at all — `CharSequence` — still
+falls back, and a `List<CharSequence>` is refused outright with its own honest
+message.)
+
+Pinned by `cursors_and_wildcards_over_every_collection`.

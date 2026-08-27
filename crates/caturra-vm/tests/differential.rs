@@ -38567,3 +38567,79 @@ public class SubListAlgorithms {
 }
 "#
 );
+
+// A cursor and a collection walked every way a program walks one — a
+// cross-product sweep of eleven collection shapes against a dozen cursor
+// sequences, which found four gaps and nothing else.
+//
+// `subList.listIterator(index)` — how a program walks a range BACKWARDS — was
+// "unknown native member"; a map view and a `PriorityQueue` had no `toArray()`
+// of their own, though every collection has one; a lambda handed to a
+// WILDCARD-typed cursor was refused, because the wildcard reached the
+// synthesized class as a type nothing resolves; and a wildcard bounded by a
+// FINAL type read its elements as `Object`, though `? extends Integer` IS
+// `Integer` — nothing else can be one.
+differential_test!(
+    cursors_and_wildcards_over_every_collection,
+    "CursorMatrix",
+    r#"
+import java.util.*;
+
+public class CursorMatrix {
+    public static void main(String[] args) {
+        List<String> whole = new ArrayList<>(Arrays.asList("x", "a", "b", "c", "d", "y"));
+        List<String> range = whole.subList(1, 5);
+
+        ListIterator<String> back = range.listIterator(range.size());
+        StringBuilder sb = new StringBuilder();
+        while (back.hasPrevious()) {
+            sb.append(back.previousIndex()).append(back.previous());
+        }
+        System.out.println(sb);
+
+        ListIterator<String> at = range.listIterator(2);
+        at.previous();
+        at.remove();
+        System.out.println(whole + " " + range + " " + at.nextIndex());
+
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("a", 1);
+        m.put("b", 2);
+        System.out.println(Arrays.toString(m.keySet().toArray())
+            + Arrays.toString(m.values().toArray())
+            + Arrays.toString(m.entrySet().toArray()));
+        String[] keys = m.keySet().toArray(new String[0]);
+        System.out.println(keys.length + keys[0]);
+
+        Queue<String> queue = new PriorityQueue<>(Arrays.asList("b", "a", "c"));
+        System.out.println(Arrays.toString(queue.toArray())
+            + Arrays.toString(queue.toArray(new String[0])));
+
+        // A cursor whose element is a WILDCARD, and a collection of one.
+        Iterator<?> any = whole.iterator();
+        any.next();
+        any.forEachRemaining(v -> System.out.print(v + "."));
+        System.out.println();
+        List<?> anyList = whole;
+        anyList.forEach(v -> System.out.print(v + ","));
+        System.out.println(" " + anyList.size());
+
+        // A FINAL bound: `? extends Integer` is `Integer`, so its elements
+        // read out as one.
+        List<? extends Integer> ints = Arrays.asList(1, 2);
+        System.out.println(ints.get(0) + 1);
+        List<? extends String> strings = Arrays.asList("ab");
+        System.out.println(strings.get(0).length());
+
+        // ...and the bound that is a real class still varies over its
+        // subtypes, which is the case that always worked.
+        List<? extends Number> numbers = Arrays.asList(1, 2.5);
+        double total = 0;
+        for (Number n : numbers) {
+            total += n.doubleValue();
+        }
+        System.out.println(total);
+    }
+}
+"#
+);

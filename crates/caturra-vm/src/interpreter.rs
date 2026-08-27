@@ -6861,10 +6861,25 @@ impl<'run> Interpreter<'run> {
             // A cursor over a view walks the RANGE: its source is the view
             // itself, which every step of the iterator machinery now resolves
             // (read, remove, set and add alike).
-            ("iterator" | "listIterator", []) => {
+            ("iterator" | "listIterator", [] | [JValue::Int(_)]) => {
+                // `listIterator(index)` starts THERE, which is how a program
+                // walks a range backwards. The view had only the no-argument
+                // arm, so the call fell through to the plain list path and was
+                // "unknown native member ArrayList.listIterator(I)".
+                let start = match args {
+                    [JValue::Int(at)] => usize::try_from(*at)
+                        .ok()
+                        .filter(|at| *at <= len)
+                        .ok_or_else(|| {
+                            VmError::UncaughtException(format!(
+                                "java.lang.IndexOutOfBoundsException: Index: {at}, Size: {len}"
+                            ))
+                        })?,
+                    _ => 0,
+                };
                 let iterator = self.heap.alloc(crate::value::HeapObject::Iterator {
                     source: receiver,
-                    index: 0,
+                    index: start,
                     last: None,
                     expected_len: len,
                     writes: IteratorWrites::All,
@@ -14299,6 +14314,34 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(JValue::Ref(Some(cursor)));
             return Ok(None);
         }
+        // `toArray()` — answered once for every collection kind, for the same
+        // reason `descendingIterator` is: the receiver kind decides nothing
+        // but which elements come back. A map VIEW and a `PriorityQueue` had
+        // no arm of their own, so `m.keySet().toArray()` was "unknown native
+        // member" for a method every collection has. The elements are
+        // MATERIALIZED, so an `entrySet()` answers real entries rather than
+        // the keys its cheap walk yields.
+        if method_name == "toArray"
+            && args.is_empty()
+            && descriptor.ends_with(")[Ljava/lang/Object;")
+            && self.try_collection_elements(receiver).is_some()
+        {
+            let values: Vec<JValue> = self
+                .materialized_elements(receiver)
+                .into_iter()
+                .map(|element| match element {
+                    JValue::Ref(_) => element,
+                    primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+                })
+                .collect();
+            let array = self.heap.alloc(crate::value::HeapObject::RefArray(
+                String::from("java/lang/Object"),
+                values,
+            ));
+            frame.stack.push(JValue::Ref(Some(array)));
+            self.vec_pool.push(args);
+            return Ok(None);
+        }
         // `toArray(T[] model)` — the idiom since 1.2, and what Java 11's
         // `toArray(String[]::new)` reduces to. The MODEL carries the runtime
         // element type: it is filled and RETURNED when it is long enough (with
@@ -14308,8 +14351,9 @@ impl<'run> Interpreter<'run> {
         // reader, so a list, a set, a deque and a map view all answer here.
         if method_name == "toArray"
             && let [JValue::Ref(model)] = args[..]
-            && let Some(elements) = self.try_collection_elements(receiver)
+            && self.try_collection_elements(receiver).is_some()
         {
+            let elements = self.materialized_elements(receiver);
             let Some(model) = model else {
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.NullPointerException",

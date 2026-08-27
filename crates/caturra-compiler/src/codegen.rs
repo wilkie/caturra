@@ -4544,7 +4544,18 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
                 read: id,
                 bound: WildcardBound::Upper(id),
             },
-            None => ElemType::Object(object),
+            // A FINAL bound has no subtypes, so `? extends Integer` IS
+            // `Integer` and `? extends String` IS `String` — the invariant
+            // element is not an approximation here, it is the same type. The
+            // `Object` fallback below made a `List<? extends Integer>` read
+            // its elements as Object, so `xs.get(0) + 1` was refused.
+            None => match canonical {
+                "String" => ElemType::Str,
+                _ => match wrapper_prim(canonical) {
+                    Some(prim) => ElemType::Wrapper(prim),
+                    None => ElemType::Object(object),
+                },
+            },
         },
         // `? super Bound` — reads out as Object; `List<Super>` is accepted.
         '-' => match table.class_id(canonical) {
