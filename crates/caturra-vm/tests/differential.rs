@@ -38206,3 +38206,95 @@ public class InheritedTypeVarLambda {
 }
 "#
 );
+
+// A `Map.Entry` as a type of its own: the loop variable of a for-each over a
+// GENERIC class's own map, the raw spelling, and a real set of entries copied
+// out of a view.
+//
+// Inside a `class Store<K, V>`, `for (Map.Entry<K, V> e : map.entrySet())` —
+// the ordinary way to walk the map a generic class holds — was refused with a
+// type that could not be converted to ITSELF: the entry set's erased element
+// and the loop variable's written `K`/`V` describe alike and differ only in an
+// interned element, and only identity was accepted between two entry types.
+differential_test!(
+    a_map_entry_as_a_type_of_its_own,
+    "EntryTypes",
+    r#"
+import java.util.*;
+
+public class EntryTypes {
+    static class Store<K, V> {
+        final Map<K, V> map = new LinkedHashMap<>();
+
+        void put(K k, V v) { map.put(k, v); }
+
+        void dump() {
+            for (Map.Entry<K, V> e : map.entrySet()) {
+                System.out.println(e.getKey() + "=" + e.getValue());
+            }
+        }
+
+        // The RAW spelling, which resolved to no type at all.
+        void dumpRaw() {
+            for (Map.Entry e : map.entrySet()) {
+                System.out.println(e.getKey());
+            }
+        }
+
+        Set<Map.Entry<K, V>> entries() { return map.entrySet(); }
+    }
+
+    public static void main(String[] args) {
+        Store<String, Integer> store = new Store<>();
+        store.put("b", 2);
+        store.put("a", 1);
+        store.dump();
+        store.dumpRaw();
+        for (Map.Entry<String, Integer> e : store.entries()) {
+            System.out.println(e.getValue() + 1);
+        }
+
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("x", 10);
+        m.put("y", 20);
+
+        // A REAL set of entries, not the view: the copy a program makes to
+        // keep the entries past the map's next change.
+        Set<Map.Entry<String, Integer>> copied = new LinkedHashSet<>(m.entrySet());
+        System.out.println(copied.size());
+        Set<Map.Entry<String, Integer>> built = new LinkedHashSet<>();
+        built.addAll(m.entrySet());
+        System.out.println(built.size() + " " + built.containsAll(m.entrySet()));
+        built.removeAll(m.entrySet());
+        System.out.println(built.isEmpty());
+
+        Set<Map.Entry> raw = new HashSet<>();
+        raw.addAll(m.entrySet());
+        System.out.println(raw.size());
+
+        List<Map.Entry<String, Integer>> list = new ArrayList<>(m.entrySet());
+        list.sort(Map.Entry.comparingByValue());
+        System.out.println(list);
+    }
+}
+"#
+);
+
+// ...and the direction javac refuses: an `entrySet()` is a `Set`, not a
+// `HashSet`. `HashSet<Map.Entry<K, V>>` normalizes to the same name the view
+// type is spelled with, so resolving it as the view accepted this.
+differential_reject!(
+    an_entry_set_view_is_not_a_hash_set,
+    "EntryViewFace",
+    r"
+import java.util.*;
+
+public class EntryViewFace {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        HashSet<Map.Entry<String, Integer>> h = m.entrySet();
+        System.out.println(h);
+    }
+}
+"
+);

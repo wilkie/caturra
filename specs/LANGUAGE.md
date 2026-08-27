@@ -9115,3 +9115,44 @@ given types` or reports converting the argument; caturra says
    **Done (2026-07-02).** The SCOPE.md surface is fully covered.
 
 The staging order optimizes for what CSA course units need earliest.
+
+### A Map.Entry is a type of its own (2026-08-27)
+
+Chasing the shape above through a generic class found a whole cluster around
+one type. `Map.Entry` was modelled as the thing an `entrySet()` yields and
+little else; a program that names it does more than iterate.
+
+**A for-each over a generic class's own map.** Inside a `class Store<K, V>`,
+`for (Map.Entry<K, V> e : map.entrySet())` — the ordinary way to walk the map
+such a class holds — was refused with a type that could not be converted to
+ITSELF: "Map.Entry<Object,Object> cannot be converted to Map.Entry<Object,
+Object>". The entry set's erased element and the loop variable's written
+`K`/`V` describe alike and differ only in an interned element, and only
+IDENTITY was accepted between two entry types. They join by the same element
+rule every collection uses, where a type variable on either side accepts.
+
+**The raw spelling.** `for (Map.Entry e : m.entrySet())` — how a program that
+predates generics walks a map, and how plenty of ordinary code still does —
+resolved to no type at all ("unknown type for the for-each variable"), and
+`Set<Map.Entry>` was "Entry works as a variable, but caturra does not model it
+as a collection element". Only the parameterized form had an arm.
+
+**A real set of entries.** `new LinkedHashSet<>(m.entrySet())` — the copy a
+program makes to keep the entries past the map's next change — could not be
+assigned to the `Set<Map.Entry<K, V>>` that names it, because that written type
+IS the view type here. Both are a `java/util/Set` holding entries at run time,
+so the widening is a no-op; what was missing was saying so, in both gates. The
+bulk surface (`addAll`/`removeAll`/`retainAll`/`containsAll`) had to learn the
+entry element too: `SelfCollection` reads the receiver's FIRST type argument as
+its element, and an entry set's first argument is its KEY, so it was asking for
+a collection of keys.
+
+**...and one thing that should NOT compile did.** `HashSet<Map.Entry<K, V>> h =
+m.entrySet();` — javac refuses it, because an `entrySet()` is a `Set` and not a
+`HashSet`. `HashSet<E>` normalizes to the interface name a line before the
+entry carve-out reads it, so the concrete spelling resolved as the view too.
+The carve-out is gated on the interface spelling now, and the accepts-invalid
+is pinned as a rejection.
+
+Pinned by `a_map_entry_as_a_type_of_its_own` and
+`an_entry_set_view_is_not_a_hash_set`.

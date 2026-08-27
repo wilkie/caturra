@@ -2842,6 +2842,10 @@ impl MethodTable {
                 role,
             },
             JType::Optional(_) => JType::Optional(raw),
+            JType::MapEntry { .. } => JType::MapEntry {
+                key: raw,
+                value: raw,
+            },
             JType::Iterator(_) => JType::Iterator(raw),
             JType::ListIterator(_) => JType::ListIterator(raw),
             other => other,
@@ -3131,10 +3135,18 @@ impl MethodTable {
                     // `Set<Map.Entry<K, V>>` is what `entrySet()` returns —
                     // resolve it AS that view type, so the assignment is exact;
                     // any other argument is a plain element set.
-                    if let TypeRef::Generic {
-                        base,
-                        args: entry_args,
-                    } = &args[0]
+                    //
+                    // Only for the INTERFACE spelling. A `HashSet<Map.Entry<K,
+                    // V>>` normalizes to the same name a line above, and
+                    // resolving it as the view accepted
+                    // `HashSet<Map.Entry<K, V>> h = m.entrySet();` — which
+                    // javac refuses, because an `entrySet()` is a `Set` and not
+                    // a `HashSet`.
+                    if face == CollFace::Iface
+                        && let TypeRef::Generic {
+                            base,
+                            args: entry_args,
+                        } = &args[0]
                         && matches!(base.as_str(), "Map.Entry" | "Entry" | "java.util.Map.Entry")
                         && entry_args.len() == 2
                     {
@@ -4356,6 +4368,21 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
             {
                 return Some(ElemType::Object(id));
             }
+            // A RAW nested library type as an element — `Set<Map.Entry>`, the
+            // pre-generics spelling. The parameterized form goes through the
+            // `Generic` arm below and interns the same nested type; this one
+            // had no arm at all, so it read as "Entry works as a variable, but
+            // caturra does not model it as a collection element".
+            if matches!(name.as_str(), "Map.Entry" | "Entry" | "java.util.Map.Entry")
+                && !table.has_class(name)
+                && let Some(inner @ JType::MapEntry { .. }) =
+                    table.resolve_type(&TypeRef::Named(name.clone()))
+            {
+                return Some(ElemType::Nested {
+                    inner: table.intern_nested(inner),
+                    read: table.object_id,
+                });
+            }
             match crate::imports::canonical_library_class(name).unwrap_or(name.as_str()) {
                 // A wrapper type argument is a BOXED element — `List<Integer>`
                 // stores references to `Integer` objects, exactly as maps and
@@ -4632,7 +4659,13 @@ fn raw_generic_arity(simple: &str) -> Option<usize> {
         "List" | "ArrayList" | "Set" | "HashSet" | "TreeSet" | "SortedSet" | "NavigableSet"
         | "Collection" | "LinkedList" | "Queue" | "Deque" | "ArrayDeque" | "PriorityQueue"
         | "Stack" | "Iterator" | "Optional" => Some(1),
-        "Map" | "HashMap" | "TreeMap" | "SortedMap" | "NavigableMap" => Some(2),
+        // `Map.Entry` is here for the RAW spelling —
+        // `for (Map.Entry e : m.entrySet())`, how a program that predates
+        // generics walks a map, and how plenty of ordinary code still does.
+        // Only the parameterized form resolved, so the raw one was "unknown
+        // type for the for-each variable".
+        "Map" | "HashMap" | "TreeMap" | "SortedMap" | "NavigableMap" | "Map.Entry" | "Entry"
+        | "java.util.Map.Entry" => Some(2),
         _ => None,
     }
 }
@@ -4763,6 +4796,18 @@ fn collection_element_type(ty: JType, table: &MethodTable) -> Option<ElemType> {
             inner: table.intern_nested(JType::MapEntry { key, value }),
             read: table.object_id,
         }),
+        _ => None,
+    }
+}
+
+/// The key and value of a `Map.Entry` element — `List<Map.Entry<K, V>>`, the
+/// shape a program builds by copying an `entrySet()`.
+fn nested_map_entry(elem: ElemType, table: &MethodTable) -> Option<(ElemType, ElemType)> {
+    match elem {
+        ElemType::Nested { inner, .. } => match table.nested_type(inner) {
+            JType::MapEntry { key, value } => Some((key, value)),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -5356,6 +5401,45 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 },
                 JType::EntrySet { .. }
             )
+        )
+        // Two `Map.Entry` types whose key and value agree by the element
+        // rule — which is what makes a TYPE VARIABLE one work. Inside a
+        // `class Store<K, V>`, `for (Map.Entry<K, V> e : map.entrySet())` had
+        // the entry-set's erased element on one side and the loop variable's
+        // written `K`/`V` on the other, and only identity was allowed here:
+        // the ordinary way to walk a generic class's own map was rejected,
+        // with the nonsense message "Map.Entry<Object,Object> cannot be
+        // converted to Map.Entry<Object,Object>" (the two describe alike and
+        // differ only in an interned element).
+        || matches!(
+            (from, to),
+            (
+                JType::MapEntry { key: a, value: b },
+                JType::MapEntry { key: c, value: d },
+            ) if (elem_matches(a, c, table) || elem_matches(c, a, table))
+                && (elem_matches(b, d, table) || elem_matches(d, b, table))
+        )
+        // A REAL set of entries assigned to a `Set<Map.Entry<K, V>>` variable —
+        // `new HashSet<>(m.entrySet())`, the copy a program makes to sort or
+        // keep the entries past the map's next change. That written type
+        // resolves to the entry-set VIEW (so `Set<Map.Entry<K, V>> s =
+        // m.entrySet()` is exact), and nothing let an ordinary set reach it,
+        // though both are a `java/util/Set` holding entries. The other
+        // direction stays refused, as javac refuses it: an `entrySet()` is not
+        // a `HashSet`.
+        || matches!(
+            (from, to),
+            (JType::Set { elem, .. }, JType::EntrySet { key, value })
+                if match nested_map_entry(elem, table) {
+                    Some((from_key, from_value)) => elem_matches(from_key, key, table)
+                        && elem_matches(from_value, value, table),
+                    // A diamond whose element the program never wrote, and a
+                    // raw one: the target says what the elements are.
+                    None => matches!(
+                        elem,
+                        ElemType::Wildcard { .. } | ElemType::TypeVar(_)
+                    ) || elem == ElemType::Object(table.object_id),
+                }
         )
         // A Stack is a List (it extends Vector), and so a Collection, of its
         // element type: `List<E> l = new Stack<>()`.
@@ -8144,6 +8228,11 @@ enum BParam {
     /// Any collection whose element type is assignable to the receiver's
     /// (`set.addAll(aList)`, `set.retainAll(anotherSet)`).
     SelfCollection,
+    /// A collection of the receiver's ENTRIES — `entries.addAll(m.entrySet())`
+    /// on a `Set<Map.Entry<K, V>>`. `SelfCollection` reads the receiver's FIRST
+    /// type argument as the element, which for an entry set is the KEY, so it
+    /// would have asked for a collection of keys.
+    SelfEntries,
     /// The list's element type (autoboxed at the boundary).
     Elem,
     /// `java.lang.Class` (`Class.isAssignableFrom(Class)`).
@@ -12934,6 +13023,35 @@ const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
+    // The BULK forms, for the real set an `entrySet()` gets copied into:
+    // `entries.addAll(m.entrySet())`. They take a collection of ENTRIES, which
+    // `BParam::SelfCollection` cannot say — it reads the receiver's first type
+    // argument as the element, and an entry set's first argument is its KEY.
+    bm(
+        "addAll",
+        &[BParam::SelfEntries],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "removeAll",
+        &[BParam::SelfEntries],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "retainAll",
+        &[BParam::SelfEntries],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "containsAll",
+        &[BParam::SelfEntries],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     // `removeIf` and `forEach` over the ENTRIES: the only way to decide by key
     // and value together, so the lambda sees a live `Map.Entry`.
     bm(
@@ -13709,6 +13827,13 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         },
         BParam::SelfList => args.first.map_or(JType::Error, JType::library_list),
         BParam::SelfCollection => args.first.map_or(JType::Error, JType::Collection),
+        BParam::SelfEntries => match (args.first, args.second) {
+            (Some(key), Some(value)) => JType::Collection(ElemType::Nested {
+                inner: table.intern_nested(JType::MapEntry { key, value }),
+                read: table.object_id,
+            }),
+            _ => JType::Error,
+        },
         // `add(E)`/`set(i, E)`/`contains(E)`: a nested element takes its true
         // inner type, so `grid.add("x")` on a `List<List<Integer>>` is refused.
         BParam::Elem => args
@@ -13798,8 +13923,41 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         // A collection whose elements are assignable to the receiver's — a
         // `List`, `Set` or `Collection` of a widening element type. `null`
         // is a Collection too.
+        // An entry-set view IS a collection of entries; so is any collection
+        // whose element is a `Map.Entry` of the same key and value.
+        BParam::SelfEntries => match arg {
+            JType::Null => true,
+            JType::EntrySet { key, value } => match (args.first, args.second) {
+                (Some(k), Some(v)) => elem_matches(key, k, table) && elem_matches(value, v, table),
+                _ => false,
+            },
+            JType::List { elem, .. }
+            | JType::Set { elem, .. }
+            | JType::TreeSet(elem, _)
+            | JType::Collection(elem)
+            | JType::LinkedList { elem, .. } => match (nested_map_entry(elem, table), args.first, args.second) {
+                (Some((key, value)), Some(k), Some(v)) => {
+                    elem_matches(key, k, table) && elem_matches(value, v, table)
+                }
+                _ => false,
+            },
+            _ => false,
+        },
         BParam::SelfCollection => match (arg, args.first) {
             (JType::Null, _) => true,
+            // An `entrySet()` handed to a collection OF ENTRIES:
+            // `entries.addAll(m.entrySet())` where `entries` is a real
+            // `List`/`Set` of `Map.Entry`. The view is a collection like any
+            // other; its element is the whole entry, which is not what
+            // `TypeArgs` answers for it (that is the KEY).
+            (JType::EntrySet { key, value }, Some(want)) => {
+                match nested_map_entry(want, table) {
+                    Some((want_key, want_value)) => {
+                        elem_matches(key, want_key, table) && elem_matches(value, want_value, table)
+                    }
+                    None => matches!(want, ElemType::Wildcard { .. } | ElemType::TypeVar(_)),
+                }
+            }
             (
                 JType::List { elem, .. }
                 | JType::Set { elem, .. }
@@ -30582,6 +30740,16 @@ impl BodyGen<'_> {
                             },
                         ) if from_arg != to_arg || from_rest != to_rest
                     ) => {}
+            // Two `Map.Entry` types the element rule accepts (a type-variable
+            // key or value). The reference is unchanged — the two erase to the
+            // same `Map$Entry`. `widens` allowing it is not enough; this
+            // matrix gates separately, the same trap noted throughout.
+            (JType::MapEntry { .. }, JType::MapEntry { .. }) if widens(from, to, self.table) => {}
+            // A real set of entries assigned to a `Set<Map.Entry<K, V>>`,
+            // which is the entry-set view type. Both are a `java/util/Set` at
+            // run time, so the reference is unchanged — and this matrix gates
+            // separately from `widens`, the trap noted throughout.
+            (JType::Set { .. }, JType::EntrySet { .. }) if widens(from, to, self.table) => {}
             // A USER exception subclass (typed `Object(id)`) widening to its
             // bundled throwable superclass: `Exception e = new MyException()`.
             // `widens` allows it (via `library_throwable_ancestor`); this
