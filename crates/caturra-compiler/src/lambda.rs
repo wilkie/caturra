@@ -1827,13 +1827,41 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
         return;
     }
     // A lambda in a target-typed position: rewrite it.
-    if matches!(expr, Expr::Lambda { .. }) {
+    if let Expr::Lambda { params, span, .. } = expr {
+        let (arity, span) = (params.len(), *span);
         if let Some(target) = expected
             && let Some((name, sam)) = sam_target(target, ctx)
         {
+            // ...unless the lambda's shape does not FIT the target, which is a
+            // mistake with a name: javac says which of the two it is, where
+            // the fallback ("only allowed where a functional-interface type is
+            // expected") blames the position for the program's arity.
+            if sam.params.len() != arity {
+                ctx.diags.push(crate::diagnostics::Diagnostic::error(
+                    ctx.path,
+                    String::from(
+                        "incompatible types: incompatible parameter types in lambda expression",
+                    ),
+                    span,
+                ));
+                return;
+            }
             let specialized = specialize_sam(&sam, target);
             let replacement = build_lambda_class(expr, &name, &sam, specialized.as_ref(), ctx);
             *expr = replacement;
+            return;
+        }
+        // A target that is a real TYPE and not a functional interface at all —
+        // `String s = () -> "x";`. javac names it; the fallback below does not.
+        if let Some(target) = expected
+            && let TypeRef::Named(name) = target
+            && ctx.class_names.contains(name)
+        {
+            ctx.diags.push(crate::diagnostics::Diagnostic::error(
+                ctx.path,
+                format!("incompatible types: {name} is not a functional interface"),
+                span,
+            ));
         }
         return;
     }
@@ -1974,9 +2002,30 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             if matches!(
                 method.as_str(),
                 "forEach" | "forEachRemaining" | "removeIf" | "replaceAll"
-            ) && (one_argument_function
-                || (method == "removeIf" && args.len() == 1 && is_negated_predicate(&args[0])))
+            ) && args.len() == 1
                 && let Some(elem) = receiver.as_deref().and_then(|r| list_elem_type(r, ctx))
+                && let Some(()) = {
+                    // A lambda of the WRONG arity for the one-argument callback
+                    // these take is a mistake with a name — javac's
+                    // "incompatible parameter types in lambda expression" —
+                    // where falling through blamed the position instead.
+                    if let Expr::Lambda { params, span, .. } = &args[0]
+                        && params.len() != 1
+                    {
+                        ctx.diags.push(crate::diagnostics::Diagnostic::error(
+                            ctx.path,
+                            String::from(
+                                "incompatible types: incompatible parameter types in lambda \
+                                 expression",
+                            ),
+                            *span,
+                        ));
+                        return;
+                    }
+                    (one_argument_function
+                        || (method == "removeIf" && is_negated_predicate(&args[0])))
+                    .then_some(())
+                }
             {
                 let object = TypeRef::Named(String::from("Object"));
                 let (iface, sam, ret) = match method.as_str() {

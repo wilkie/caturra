@@ -411,6 +411,11 @@ pub(crate) const LAMBDA_CLASS_PREFIX: &str = "Lambda$";
 pub(crate) const METHOD_REF_CLASS_PREFIX: &str = "MethodRef$";
 
 /// Whether a class name is one of the synthesized function classes.
+/// A synthesized METHOD-REFERENCE class — the body of a `Type::method`.
+pub(crate) fn is_method_ref_class(name: &str) -> bool {
+    name.starts_with(METHOD_REF_CLASS_PREFIX)
+}
+
 pub(crate) fn is_lambda_class(name: &str) -> bool {
     name.starts_with(LAMBDA_CLASS_PREFIX) || name.starts_with(METHOD_REF_CLASS_PREFIX)
 }

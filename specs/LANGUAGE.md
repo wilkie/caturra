@@ -9500,3 +9500,47 @@ writes to refuse removal was "does not override or implement a method from a
 supertype".
 
 Pinned by `a_hierarchy_walked_every_way` and `a_type_variable_is_only_its_bound`.
+
+### What the messages say (2026-08-27)
+
+A second diagnostic sweep — 36 programs, each wrong in ONE ordinary way, in the
+areas this week's work touched: generics, collections, lambdas and streams,
+inheritance, and the everyday mistakes beside them. Every first line was put
+beside javac's. **Seventeen matched; twenty-nine do now.**
+
+**A LOCAL class was named as it is hoisted.** `class A` written inside a method
+becomes `A$Local1`, which is the reverse of a nested class's `Outer$Inner` —
+the source name is BEFORE the `$`, not after — so splitting alike printed
+`Local1`, a class the program never wrote. Five messages said it.
+
+**A lambda that does not FIT its target was blamed on the position.** javac
+names the mistake: "incompatible parameter types in lambda expression" when the
+arity is wrong, "String is not a functional interface" when the target is not
+one at all. caturra said "a lambda or method reference is only allowed where a
+functional-interface type is expected" for both — true, and about the wrong
+thing.
+
+**A method reference to a missing member read as if the program had written the
+desugaring's call**: "cannot find symbol … location: variable __p0 of type
+String", about a parameter the compiler invented. javac's headline is "invalid
+method reference", and its location is the qualifier CLASS.
+
+**`String<Integer>` was "cannot find symbol"** — about `String`, which is
+perfectly well known. javac: "type String does not take parameters". The arity
+message beside it dropped its "in class Map" tail, which javac puts on the
+caret line rather than in the text.
+
+**A single constructor with one wrong argument** listed candidates where javac
+names the argument: "incompatible types: String cannot be converted to int" —
+the shape the METHOD path already used.
+
+**A type variable printed as `Object`.** javac says "T cannot be converted to
+String"; `Object` there names a type the program never wrote.
+
+Two differences are left and both are deliberate: caturra says which class a
+`no suitable method` belongs to (javac puts it on the candidate lines), and
+`incompatible types: inference variable T has incompatible bounds` is reported
+as the concrete mismatch instead, which is what the program can act on.
+
+Pinned by `the_diagnostics_say_what_javac_says` and
+`a_type_variable_is_named_in_a_diagnostic`.

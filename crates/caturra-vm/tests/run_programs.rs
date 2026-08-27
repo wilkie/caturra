@@ -13647,3 +13647,112 @@ fn a_deeply_collided_bucket_keeps_insertion_order() {
          AaBBBBAa, AaBBBBBB, BBAaAaAa, BBAaAaBB, BBAaBBAa, BBAaBBBB]\n"
     );
 }
+
+/// The wording of the messages a second diagnostic sweep put beside javac's.
+/// Each pair here was DIFFERENT before: a local class named by its hoisted
+/// `A$Local1`, a lambda mistake blamed on the position rather than named, a
+/// parameterized `String<Integer>` reported as an unknown class, a method
+/// reference whose failure read as if the program had written the call the
+/// desugaring invented, and a type variable printed as `Object`.
+///
+/// Compared against a live javac by the sweep that found them (36 ordinary
+/// mistakes, 29 of which now match word for word); pinned here so the wording
+/// cannot drift back.
+#[test]
+fn the_diagnostics_say_what_javac_says() {
+    for (source, want) in [
+        // A LOCAL class is named as the program wrote it, not as it is hoisted.
+        (
+            "abstract class A { abstract void go(); } class B extends A { } new B();",
+            "B is not abstract and does not override abstract method go() in A",
+        ),
+        (
+            "class A { final void go() {} } class B extends A { void go() {} } new B();",
+            "go() in B cannot override go() in A",
+        ),
+        (
+            "abstract class A { } A instance = new A();",
+            "A is abstract; cannot be instantiated",
+        ),
+        // A lambda that does not FIT its target is a mistake with a name.
+        (
+            "java.util.List<String> l = new java.util.ArrayList<>(); l.forEach((a, b) -> {});",
+            "incompatible types: incompatible parameter types in lambda expression",
+        ),
+        (
+            "String s = () -> \"x\";",
+            "incompatible types: String is not a functional interface",
+        ),
+        // A type that takes no parameters, written with one.
+        (
+            "String<Integer> s = null;",
+            "type String does not take parameters",
+        ),
+        (
+            "java.util.Map<String> m = null;",
+            "wrong number of type arguments; required 2",
+        ),
+        // A method reference to a member that does not exist.
+        (
+            "java.util.List<String> l = new java.util.ArrayList<>(); l.forEach(String::nosuch);",
+            "invalid method reference",
+        ),
+        (
+            "java.util.List<String> l = new java.util.ArrayList<>(); l.forEach(String::nosuch);",
+            "location: class String",
+        ),
+        // A single constructor, one argument of the wrong type.
+        (
+            "class A { A(int n) {} } A a = new A(\"x\");",
+            "incompatible types: String cannot be converted to int",
+        ),
+        // ...and a definite-assignment message, quoted as javac quotes it
+        // (which is to say, not at all).
+        (
+            "int n; System.out.println(n);",
+            "variable n might not have been initialized",
+        ),
+    ] {
+        let text =
+            format!("public class M {{ public static void main(String[] args) {{ {source} }} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let joined: String = compilation
+            .diagnostics
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains(want), "expected {want:?}, got: {joined}");
+    }
+}
+
+/// A type variable is NAMED in a diagnostic, as javac names it — `Object` there
+/// is a type the program never wrote.
+#[test]
+fn a_type_variable_is_named_in_a_diagnostic() {
+    let text = String::from(
+        "public class M { \
+           static class Animal { int size = 1; } \
+           static class Box<T extends Animal> { \
+             final T held; Box(T held) { this.held = held; } \
+             int take(String text) { return text.length(); } \
+             int wrong() { return take(held); } \
+           } \
+           public static void main(String[] a) { System.out.println(new Box<>(new Animal()).wrong()); } \
+         }",
+    );
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("M.java"),
+        text,
+    }]);
+    assert!(!compilation.success());
+    let message = &compilation.diagnostics[0].message;
+    assert!(
+        message.contains("incompatible types: T cannot be converted to String"),
+        "got: {message}"
+    );
+}

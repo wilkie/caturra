@@ -1832,7 +1832,7 @@ impl MethodTable {
                                     format!(
                                         "{}() in {} cannot override {}() in {}{detail}",
                                         method.name,
-                                        class.name,
+                                        source_interface_name(&class.name),
                                         method.name,
                                         source_interface_name(&parent_name),
                                     ),
@@ -2042,7 +2042,7 @@ impl MethodTable {
                             format!(
                                 "{} is not abstract and does not override abstract method \
                                  {method_name}({written}) in {}",
-                                class.name,
+                                source_interface_name(&class.name),
                                 source_interface_name(&owner)
                             ),
                             class.span,
@@ -4199,7 +4199,7 @@ fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
             let declared = info.type_param_count;
             if declared != args.len() {
                 return Some(format!(
-                    "wrong number of type arguments; required {declared} in class {base}"
+                    "wrong number of type arguments; required {declared}"
                 ));
             }
             // Each written argument must satisfy its parameter's BOUND
@@ -4252,7 +4252,7 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable, in_class: &str) ->
             && declared != args.len()
         {
             return format!(
-                "wrong number of type arguments; required {declared} in class {simple}"
+                "wrong number of type arguments; required {declared}"
             );
         }
     }
@@ -4289,6 +4289,22 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable, in_class: &str) ->
                 );
             }
         }
+    }
+    // A type that resolves perfectly WITHOUT arguments, written WITH them:
+    // `String<Integer>`. javac names the mistake exactly — "type String does
+    // not take parameters" — where a plain "cannot find symbol" reads as if
+    // the class itself were unknown.
+    if let TypeRef::Generic { base, .. } = ty
+        && table.resolve_type(&TypeRef::Named(base.clone())).is_some()
+        && table
+            .info(base.rsplit('.').next().unwrap_or(base))
+            .is_none_or(|info| info.type_param_count == 0)
+        && raw_generic_arity(base.rsplit('.').next().unwrap_or(base)).is_none()
+    {
+        return format!(
+            "type {} does not take parameters",
+            source_type_name(base.rsplit('.').next().unwrap_or(base))
+        );
     }
     if let Some(reason) = unsupported_name_in(ty) {
         return reason;
@@ -4953,6 +4969,11 @@ fn source_interface_name(name: &str) -> &str {
     // name (`Outer$Inner`) are both implementation detail: javac names the
     // interface the source wrote, and a message showing either reads as
     // caturra's bug rather than the program's.
+    //
+    // A LOCAL class is hoisted the other way round — `Greeter$Local1` for a
+    // `class Greeter` written inside a method — so splitting alike named it
+    // `Local1`, a class the program never wrote.
+    let name = strip_local_suffix(name);
     let simple = name.rsplit('$').next().unwrap_or(name);
     simple.strip_prefix("__").unwrap_or(simple)
 }
@@ -4994,6 +5015,11 @@ fn written_type_name(ty: &TypeRef) -> String {
 /// both implementation detail, and both can sit inside a type argument
 /// (`List<Outer$Inner>`) as easily as at the top.
 fn source_type_name(described: &str) -> String {
+    // A LOCAL class is hoisted under `{name}$Local{n}`, which is the reverse of
+    // a nested class's `Outer$Inner`: the SOURCE name is the part BEFORE the
+    // `$`, not after it. Splitting alike printed a local `A` as `Local1` — and
+    // a message about a class the program never named is worse than no message.
+    let described = strip_local_suffix(described);
     let mut out = String::with_capacity(described.len());
     let mut token = String::new();
     for ch in described.chars() {
@@ -5010,6 +5036,24 @@ fn source_type_name(described: &str) -> String {
     }
     out.push_str(source_interface_name(&token));
     out
+}
+
+/// `A$Local1` — and `A$Local1$Local2` for one nested inside another — is the
+/// hoisted name of a LOCAL class `A`. Trims every such suffix.
+fn strip_local_suffix(name: &str) -> &str {
+    let mut current = name;
+    loop {
+        let Some((head, tail)) = current.rsplit_once('$') else {
+            return current;
+        };
+        let is_local = tail
+            .strip_prefix("Local")
+            .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()));
+        if !is_local || head.is_empty() {
+            return current;
+        }
+        current = head;
+    }
 }
 
 fn comparator_alias(name: &str, declared: bool) -> &str {
@@ -6782,12 +6826,19 @@ impl JType {
                 key.describe_arg(table),
                 value.describe_arg(table)
             ),
+            // javac names the nested type by its SIMPLE name in a diagnostic
+            // ("Entry<String,Integer> cannot be converted to ..."), whatever
+            // the program wrote to reach it.
             JType::MapEntry { key, value } => format!(
-                "Map.Entry<{},{}>",
+                "Entry<{},{}>",
                 key.describe_arg(table),
                 value.describe_arg(table)
             ),
-            JType::TypeVar(_) => String::from("Object"),
+            // A type VARIABLE is named, not erased, in a diagnostic: javac
+            // says "T cannot be converted to String", and `Object` there names
+            // a type the program never wrote. The conventional letter for the
+            // position is what the declaration almost always uses.
+            JType::TypeVar(index) => type_param_letter(usize::from(index)),
             JType::Int => String::from("int"),
             JType::Double => String::from("double"),
             JType::Boolean => String::from("boolean"),
@@ -14771,6 +14822,29 @@ fn constructor_inapplicable(
     table: &MethodTable,
 ) -> String {
     let class_name = source_type_name(class_name);
+    // One constructor, right arity, one argument of the wrong type: javac
+    // names THAT, exactly as it does for a method — "incompatible types: String
+    // cannot be converted to int" — where the candidate list below buries it.
+    if let [only] = candidates
+        && only.len() == args.len()
+        && let Some((want, actual)) = only
+            .iter()
+            .zip(args)
+            .find(|(want, actual)| **want != **actual)
+    {
+        if actual.is_numeric() && want.is_numeric() && !widens_strictly(*actual, *want, table) {
+            return format!(
+                "incompatible types: possible lossy conversion from {} to {}",
+                actual.describe(table),
+                want.describe(table)
+            );
+        }
+        return format!(
+            "incompatible types: {} cannot be converted to {}",
+            actual.describe(table),
+            want.describe(table)
+        );
+    }
     if let [only] = candidates
         && only.len() != args.len()
     {
@@ -15101,6 +15175,26 @@ fn expression_kind(expr: &Expr) -> &'static str {
 
 impl BodyGen<'_> {
     fn error(&mut self, span: SourceSpan, message: impl Into<String>) {
+        let mut message: String = message.into();
+        // A failure inside a synthesized METHOD-REFERENCE class is a failure of
+        // the reference the program wrote — its body holds nothing else. javac
+        // says so first ("invalid method reference"), then the symbol block;
+        // without the headline the message read as if the program had written
+        // the call the desugaring invented.
+        if crate::is_method_ref_class(self.current_class) && message.starts_with("cannot find symbol")
+        {
+            // ...and the receiver is the parameter the desugaring invented, so
+            // the location has to name the qualifier CLASS, as javac's does —
+            // a message about `variable __p0` names something the program
+            // cannot see.
+            if let Some(at) = message.find("location: variable __p")
+                && let Some(of_type) = message[at..].find(" of type ")
+            {
+                let class = message[at + of_type + " of type ".len()..].trim_end();
+                message = format!("{}location: class {class}", &message[..at]);
+            }
+            message = format!("invalid method reference\n  {message}");
+        }
         self.diagnostics
             .push(Diagnostic::error(self.path, message, span));
     }
@@ -17190,7 +17284,7 @@ impl BodyGen<'_> {
                 if !assigned {
                     self.error(
                         span,
-                        format!("variable '{name}' might not have been initialized"),
+                        format!("variable {name} might not have been initialized"),
                     );
                 }
                 // `o += "x"` where `o` is declared `Object`, `CharSequence` or
@@ -19239,7 +19333,10 @@ impl BodyGen<'_> {
         {
             self.error(
                 span,
-                format!("{class_name} is abstract; cannot be instantiated"),
+                format!(
+                    "{} is abstract; cannot be instantiated",
+                    source_type_name(class_name)
+                ),
             );
             return JType::Error;
         }
@@ -28529,7 +28626,7 @@ impl BodyGen<'_> {
         if !assigned {
             self.error(
                 span,
-                format!("variable '{name}' might not have been initialized"),
+                format!("variable {name} might not have been initialized"),
             );
             return JType::Error;
         }
