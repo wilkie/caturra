@@ -649,6 +649,10 @@ pub enum HeapObject {
     /// A `java.nio.file.Path`: a filesystem path (from `Path.of`/`Paths.get`),
     /// read and written through `Files`.
     Path(String),
+    /// A `java.nio.charset.Charset` — `StandardCharsets.UTF_8` and the names
+    /// beside it. It carries its canonical NAME and nothing else, which is all
+    /// `getBytes`, `new String(bytes, …)` and its own `toString` need.
+    Charset(String),
     /// A `java.io.PrintWriter` into the virtual filesystem
     /// (write-through: output is durable without `close()`).
     Writer { path: String },
@@ -879,6 +883,7 @@ impl HeapObject {
             | HeapObject::InputStream
             | HeapObject::File(_)
             | HeapObject::Path(_)
+            | HeapObject::Charset(_)
             | HeapObject::Writer { .. }
             | HeapObject::Class { .. }
             | HeapObject::Field { .. }

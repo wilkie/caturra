@@ -201,6 +201,17 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
     ("java/io/IOException", "java/lang/Exception"),
     ("java/io/FileNotFoundException", "java/io/IOException"),
     ("java/io/UncheckedIOException", "java/lang/RuntimeException"),
+    // `getBytes("nope")` throws the CHECKED one; `Charset.forName("nope")`
+    // throws the unchecked one — a program catches whichever it wrote.
+    ("java/io/UnsupportedEncodingException", "java/io/IOException"),
+    (
+        "java/nio/charset/UnsupportedCharsetException",
+        "java/lang/IllegalArgumentException",
+    ),
+    (
+        "java/nio/charset/IllegalCharsetNameException",
+        "java/lang/IllegalArgumentException",
+    ),
     // The `java.nio.file` failures a program can catch. They are IOExceptions,
     // and were not in this table at all: `Files.readAllLines` on a missing file
     // threw a `NoSuchFileException` that `catch (IOException e)` did not catch,

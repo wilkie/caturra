@@ -9627,3 +9627,38 @@ there. What is left in that list is a type caturra models NOWHERE (`Thread`),
 which is a different message and a deliberate boundary.
 
 Pinned by `any_modelled_type_as_an_element`.
+
+### Text to bytes and back (2026-08-27)
+
+A unicode sweep — accents, Greek, CJK, an emoji's surrogate pair, `codePointAt`,
+`toUpperCase` on non-ASCII, `chars()` versus `codePoints()`, regex over wide
+characters, sorting, `String.format` widths, `"ß".toUpperCase()` — agreed with a
+JDK **byte for byte, everywhere**. The gap was next door: the byte round trip.
+
+`getBytes()` was the whole of what caturra had. `java.nio.charset` did not
+exist, `new String(byte[])` was "no String constructor takes byte[]", and the
+`Files` readers took no charset — so the round trip every file-handling program
+writes stopped halfway.
+
+A `Charset` is a type now, carrying its canonical NAME and nothing else, which
+is all `getBytes`, `new String(bytes, …)` and its own `toString` need. The six
+standard charsets encode exactly as a JDK's do, down to the `?` an unmappable
+character becomes in the byte charsets and the BOM that `UTF-16` writes and the
+other two spellings do not. Decoding never throws: a malformed byte is U+FFFD,
+which is what a program reading a file relies on.
+
+The failures are the JDK's own, and they differ by how the program NAMED the
+charset: as text it is the checked `UnsupportedEncodingException` — which
+`String.getBytes(String)` and `new String(bytes, String)` now declare, so a
+program that ignores it is refused exactly as javac refuses it — and through
+`Charset.forName` it is the unchecked `UnsupportedCharsetException`.
+
+`Files.readString`/`readAllLines`/`lines`/`write`/`writeString` take a trailing
+charset. The virtual filesystem stores TEXT, so the charset picks no bytes
+there; it is evaluated (an unknown name still fails) and dropped. A file
+written in one charset and read back in another is the one shape this does not
+model, and no program that uses a single charset can tell. `deleteIfExists`
+joined them, since a program that writes a file tidies up after itself.
+
+Pinned by `text_to_bytes_and_back`, `the_file_readers_take_a_charset` and
+`naming_a_charset_as_text_is_checked`.

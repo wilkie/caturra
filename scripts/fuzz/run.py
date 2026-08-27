@@ -56,11 +56,15 @@ def main():
             first = javac.stderr.splitlines()[0] if javac.stderr else "?"
             rejected.append((name, first))
             continue
-        jdk = subprocess.run(["java", "-cp", out, name], input=stdin,
-                             capture_output=True, text=True, timeout=120)
-        expected = normalize(jdk.stdout)
+        # BYTES, not text: Python's universal-newline translation turns a `\r`
+        # the program printed into a `\n`, so a program whose output really
+        # does contain one (`"a\r\nb".split("\n")`) reads as a divergence that
+        # is entirely the harness.
+        jdk = subprocess.run(["java", "-cp", out, name], input=stdin.encode(),
+                             capture_output=True, timeout=120)
+        expected = normalize(jdk.stdout.decode("utf-8", "replace"))
         if jdk.returncode:
-            expected += "!! " + jdk_failure(jdk.stderr) + "\n"
+            expected += "!! " + jdk_failure(jdk.stderr.decode("utf-8", "replace")) + "\n"
         command = ["cargo", "run", "-q", "--example", "compatrun", "--", os.path.abspath(source), name]
         if stdin:
             command.append("--stdin")

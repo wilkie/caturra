@@ -703,13 +703,26 @@ fn call_throws(
             let last = path[path.len() - 1].clone();
             library_static_throws(&last, method, span, handlers, ctx)
         }
+        // A literal receiver — `"x".getBytes("UTF-8")`, which is how the one
+        // checked exception on a String is usually reached.
+        Some(Expr::Literal {
+            value: crate::ast::Literal::Str(_),
+            ..
+        }) => library_kind_throws(Some("String"), method, arity, span, handlers, ctx),
         // A directly-constructed receiver: `new Foo().m()`.
         Some(Expr::NewObject { class, .. }) => {
             let class = class.clone();
             if ctx.table.has_class(&class) {
                 callee_throws_named(&class, method, arity, span, handlers, ctx)
             } else {
-                library_kind_throws(library_kind_of_class(&class), method, span, handlers, ctx)
+                library_kind_throws(
+                    library_kind_of_class(&class),
+                    method,
+                    arity,
+                    span,
+                    handlers,
+                    ctx,
+                )
             }
         }
         _ => ThrownSet {
@@ -757,7 +770,14 @@ fn receiver_type_throws(
     if ctx.table.has_class(&name) {
         return callee_throws_named(&name, method, arity, span, handlers, ctx);
     }
-    library_kind_throws(library_kind_of_class(&name), method, span, handlers, ctx)
+    library_kind_throws(
+        library_kind_of_class(&name),
+        method,
+        arity,
+        span,
+        handlers,
+        ctx,
+    )
 }
 
 /// The library "kind" a declared type name maps to, for the closed-world
@@ -773,6 +793,10 @@ fn library_kind_of_class(name: &str) -> Option<&'static str> {
         // declares one.
         "FileWriter" | "Writer" | "BufferedWriter" | "OutputStreamWriter" => Some("Writer"),
         "File" => Some("File"),
+        // A String's `getBytes(name)` — the one method of a type nobody thinks
+        // of as I/O that declares a CHECKED exception, because the name may be
+        // one no charset answers to.
+        "String" => Some("String"),
         "Class" => Some("Class"),
         "Method" => Some("Method"),
         "Field" => Some("Field"),
@@ -788,11 +812,16 @@ fn library_kind_of_class(name: &str) -> Option<&'static str> {
 fn library_kind_throws(
     kind: Option<&'static str>,
     method: &str,
+    arity: usize,
     span: SourceSpan,
     handlers: &[Vec<Exc>],
     ctx: &mut Ctx,
 ) -> ThrownSet {
     let thrown: &[&'static str] = match (kind, method) {
+        // `getBytes(String)` declares it; `getBytes()` and `getBytes(Charset)`
+        // do not — the arity is what tells them apart here, and a `Charset`
+        // argument cannot name an unknown charset by construction.
+        (Some("String"), "getBytes") if arity == 1 => &["java/io/UnsupportedEncodingException"],
         // Every I/O method that declares the same one exception, in one arm:
         // a reader's reads, a writer's writes, and `File.createNewFile`.
         (Some("Reader"), "read" | "readLine" | "ready" | "close" | "lines")
@@ -880,6 +909,20 @@ fn ctor_throws(
     match simple {
         // `new FileReader(...)` / `new PrintWriter(file-or-name)`.
         "FileReader" | "PrintWriter" => out.push(Exc::Lib("java/io/FileNotFoundException")),
+        // `new String(bytes, "UTF-8")` — the charset NAMED as text may name no
+        // charset, so this constructor declares the checked exception where
+        // the `Charset` form (and every other String constructor) does not.
+        "String"
+            if matches!(
+                args.last(),
+                Some(Expr::Literal {
+                    value: crate::ast::Literal::Str(_),
+                    ..
+                })
+            ) && args.len() >= 2 =>
+        {
+            out.push(Exc::Lib("java/io/UnsupportedEncodingException"));
+        }
         // `new FileWriter(...)` declares the broader `IOException` — the
         // directory may be missing, not just the file.
         "FileWriter" | "BufferedWriter" | "OutputStreamWriter" => {

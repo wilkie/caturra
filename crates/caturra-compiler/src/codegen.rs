@@ -3079,6 +3079,7 @@ impl MethodTable {
                         Some(JType::Reader)
                     }
                     "Path" => Some(JType::Path),
+                    "Charset" if !self.has_class(simple) => Some(JType::Charset),
                     // The primitive-specialized pipeline names a type too, so
                     // one can be held in a variable rather than only chained.
                     "IntStream" if !self.has_class(simple) => Some(JType::IntStream),
@@ -5096,6 +5097,27 @@ fn strip_local_suffix(name: &str) -> &str {
     }
 }
 
+/// The charset a `StandardCharsets.X` path names, in the JDK's canonical
+/// spelling. `None` for anything else — including a program's own class of that
+/// name, which shadows the library one as every other name does.
+fn standard_charset(path: &[String], table: &MethodTable) -> Option<&'static str> {
+    let [owner, constant] = path else {
+        return None;
+    };
+    if owner != "StandardCharsets" || table.has_class(owner) {
+        return None;
+    }
+    Some(match constant.as_str() {
+        "UTF_8" => "UTF-8",
+        "US_ASCII" => "US-ASCII",
+        "ISO_8859_1" => "ISO-8859-1",
+        "UTF_16" => "UTF-16",
+        "UTF_16BE" => "UTF-16BE",
+        "UTF_16LE" => "UTF-16LE",
+        _ => return None,
+    })
+}
+
 fn comparator_alias(name: &str, declared: bool) -> &str {
     if declared {
         return name;
@@ -6436,6 +6458,11 @@ enum JType {
     /// `java.nio.file.Path` (intrinsic) — a filesystem path, from `Path.of` /
     /// `Paths.get`, read and written through `Files`.
     Path,
+    /// `java.nio.charset.Charset` (intrinsic) — `StandardCharsets.UTF_8` and
+    /// the names beside it, which a program passes to `getBytes`, to
+    /// `new String(bytes, …)` and to the `Files` readers. The object carries
+    /// only its NAME, which is all any of those need and all `toString` shows.
+    Charset,
     /// `java.util.ArrayList<E>` and its `List<E>` interface face (intrinsic;
     /// E tracked at compile time, erased at runtime). The `face` records which
     /// of the two the program wrote — see [`CollFace`].
@@ -6914,6 +6941,7 @@ impl JType {
             JType::Writer => String::from("PrintWriter"),
             JType::Reader => String::from("BufferedReader"),
             JType::Path => String::from("Path"),
+            JType::Charset => String::from("Charset"),
             // The FACE the program wrote, not whichever of the two names
             // caturra models the pair under: a diagnostic about a `List<String>`
             // parameter named `ArrayList<String>`, a class the program never
@@ -6953,6 +6981,7 @@ impl JType {
                 | JType::Writer
                 | JType::Reader
                 | JType::Path
+                | JType::Charset
                 | JType::List { .. }
                 | JType::Stack(_)
                 | JType::LinkedList { .. }
@@ -7083,6 +7112,7 @@ impl JType {
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
             JType::Reader => String::from("Ljava/io/BufferedReader;"),
             JType::Path => String::from("Ljava/nio/file/Path;"),
+            JType::Charset => String::from("Ljava/nio/charset/Charset;"),
             JType::List { .. } => String::from("Ljava/util/ArrayList;"),
             JType::Stack(_) => String::from("Ljava/util/Stack;"),
             // Only reachable for methods that already produced a
@@ -8551,6 +8581,8 @@ enum BParam {
     SelfEntries,
     /// The list's element type (autoboxed at the boundary).
     Elem,
+    /// A `java.nio.charset.Charset` (`getBytes(charset)`).
+    Charset,
     /// `java.lang.Class` (`Class.isAssignableFrom(Class)`).
     Class,
     /// Any reference array (`getConstructor(Class[])`, `newInstance(Object[])`).
@@ -8741,6 +8773,9 @@ enum BRet {
     SelfList,
     /// `java.nio.file.Path` (`Path.of`, `path.getFileName()`).
     Path,
+    /// A `java.nio.charset.Charset` — what `forName` and `defaultCharset`
+    /// answer.
+    Charset,
 }
 
 /// One intrinsic method signature the compiler knows about.
@@ -9141,6 +9176,22 @@ const STRING_METHODS: &[BuiltinMethod] = &[
     // UTF-8 default charset answers. The refusal said "byte arrays are not
     // supported"; they are.
     bm("getBytes", &[], BRet::ByteArray, "()[B"),
+    // ...and told WHICH charset, either way a program names one. The
+    // string-named form is the one that declares `UnsupportedEncodingException`
+    // (see `declared_throws`); a `Charset` cannot be unknown, since the only
+    // way to build one refuses an unknown name.
+    bm(
+        "getBytes",
+        &[BParam::Charset],
+        BRet::ByteArray,
+        "(Ljava/nio/charset/Charset;)[B",
+    ),
+    bm(
+        "getBytes",
+        &[BParam::Str],
+        BRet::ByteArray,
+        "(Ljava/lang/String;)[B",
+    ),
     BuiltinMethod {
         name: "getChars",
         params: &[BParam::Int, BParam::Int, BParam::CharArray, BParam::Int],
@@ -13584,6 +13635,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
+        JType::Charset => Some(("java/nio/charset/Charset", CHARSET_METHODS)),
         JType::List { .. } => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::ListIterator(_) => Some(("java/util/ListIterator", LIST_ITERATOR_METHODS)),
         JType::CharSequence => Some(("java/lang/CharSequence", CHAR_SEQUENCE_METHODS)),
@@ -13617,6 +13669,38 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         _ => None,
     }
 }
+
+/// `java.nio.charset.Charset`'s own factories.
+const CHARSET_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "forName",
+        &[BParam::Str],
+        BRet::Charset,
+        "(Ljava/lang/String;)Ljava/nio/charset/Charset;",
+    ),
+    bm(
+        "defaultCharset",
+        &[],
+        BRet::Charset,
+        "()Ljava/nio/charset/Charset;",
+    ),
+];
+
+/// `java.nio.charset.Charset` — a name and nothing else, which is what
+/// `toString`, `name` and `displayName` all answer.
+const CHARSET_METHODS: &[BuiltinMethod] = &[
+    bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("displayName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
 
 /// The intrinsic static-method table for a class name.
 const CLASS_STATIC_METHODS: &[BuiltinMethod] = &[bm(
@@ -13924,6 +14008,9 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         // target, and `emit_stream_source` answers each one.
         "Stream" => Some(("java/util/stream/Stream", &[])),
         "Class" => Some(("java/lang/Class", CLASS_STATIC_METHODS)),
+        // `Charset.forName(name)` / `defaultCharset()`, and the
+        // `StandardCharsets` constants, which lower to the same call.
+        "Charset" => Some(("java/nio/charset/Charset", CHARSET_STATIC_METHODS)),
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
         "Character" => Some(("java/lang/Character", CHARACTER_METHODS)),
@@ -14201,6 +14288,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
             .first
             .map_or(JType::Error, |elem| elem_value_type(elem, table)),
         BParam::Class => JType::Class,
+        BParam::Charset => JType::Charset,
         BParam::RefArray => JType::Error,
         // `BiConsumer` never reaches here: `bparam_matches` answers it
         // directly, because only the method table knows the target class.
@@ -14546,6 +14634,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Void => None,
         BRet::Writer => Some(JType::Writer),
         BRet::Path => Some(JType::Path),
+        BRet::Charset => Some(JType::Charset),
         BRet::Int => Some(JType::Int),
         BRet::Double => Some(JType::Double),
         BRet::Long => Some(JType::Long),
@@ -19643,6 +19732,7 @@ impl BodyGen<'_> {
     /// `new String()` / `new String(String)` / `new String(char[])` —
     /// creates a fresh (distinct-reference) `String`. The class library
     /// String is intrinsic, so this emits `new; dup; args; <init>`.
+    #[allow(clippy::too_many_lines)] // one arm per String constructor shape
     fn new_string(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let string_class = intern_class(self.pool, "java/lang/String");
         self.code.push_op_u16(op::NEW, string_class, 1);
@@ -19664,6 +19754,13 @@ impl BodyGen<'_> {
                         elem: ElemType::Char,
                         dims: 1,
                     } => "([C)V",
+                    // `new String(bytes)` — the other half of `getBytes()`,
+                    // decoded as UTF-8, which is the default charset here as it
+                    // is on any modern JDK.
+                    JType::Array {
+                        elem: ElemType::Byte,
+                        dims: 1,
+                    } => "([B)V",
                     JType::Error => {
                         self.error_bail(span, "String constructor argument");
                         return JType::Error;
@@ -19672,6 +19769,79 @@ impl BodyGen<'_> {
                         self.error(
                             span,
                             format!("no String constructor takes {}", other.describe(self.table)),
+                        );
+                        return JType::Error;
+                    }
+                }
+            }
+            // `new String(bytes, charset)` — told which charset, either way a
+            // program names one.
+            [bytes, charset]
+                if matches!(
+                    self.type_of(bytes),
+                    JType::Array {
+                        elem: ElemType::Byte,
+                        dims: 1,
+                    }
+                ) =>
+            {
+                self.expr(bytes);
+                match self.expr(charset) {
+                    JType::Charset => "([BLjava/nio/charset/Charset;)V",
+                    JType::Str => "([BLjava/lang/String;)V",
+                    other => {
+                        self.error(
+                            span,
+                            format!(
+                                "no String constructor takes (byte[], {})",
+                                other.describe(self.table)
+                            ),
+                        );
+                        return JType::Error;
+                    }
+                }
+            }
+            // ...and the SUBRANGE forms, with and without a charset.
+            [bytes, offset, count]
+                if matches!(
+                    self.type_of(bytes),
+                    JType::Array {
+                        elem: ElemType::Byte,
+                        dims: 1,
+                    }
+                ) =>
+            {
+                self.expr(bytes);
+                for index in [offset, count] {
+                    let ty = self.expr(index);
+                    self.convert_for_assignment(ty, JType::Int, index.span());
+                }
+                "([BII)V"
+            }
+            [bytes, offset, count, charset]
+                if matches!(
+                    self.type_of(bytes),
+                    JType::Array {
+                        elem: ElemType::Byte,
+                        dims: 1,
+                    }
+                ) =>
+            {
+                self.expr(bytes);
+                for index in [offset, count] {
+                    let ty = self.expr(index);
+                    self.convert_for_assignment(ty, JType::Int, index.span());
+                }
+                match self.expr(charset) {
+                    JType::Charset => "([BIILjava/nio/charset/Charset;)V",
+                    JType::Str => "([BIILjava/lang/String;)V",
+                    other => {
+                        self.error(
+                            span,
+                            format!(
+                                "no String constructor takes (byte[], int, int, {})",
+                                other.describe(self.table)
+                            ),
                         );
                         return JType::Error;
                     }
@@ -19707,7 +19877,8 @@ impl BodyGen<'_> {
                 self.error(
                     span,
                     "caturra supports new String(), new String(String), \
-                     new String(char[]) and new String(char[], int, int)",
+                     new String(char[]/byte[]) and their (offset, count) and \
+                     charset forms",
                 );
                 return JType::Error;
             }
@@ -21144,6 +21315,7 @@ impl BodyGen<'_> {
             | JType::Writer
             | JType::Reader
             | JType::Path
+            | JType::Charset
             | JType::List { .. }
             | JType::Stack(_)
             | JType::LinkedList { .. }
@@ -22283,7 +22455,10 @@ impl BodyGen<'_> {
                 "Ljava/nio/file/Path;",
                 Some(JType::Path),
             )),
-            ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => Some((
+            // `deleteIfExists` answers whether it deleted anything — the same
+            // shape as the predicates, which is how a program tidies up after
+            // itself without a `try`.
+            ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile" | "deleteIfExists") => Some((
                 "java/nio/file/Files",
                 &[(JType::Path, "Ljava/nio/file/Path;")],
                 "Z",
@@ -22303,12 +22478,29 @@ impl BodyGen<'_> {
                     Some(JType::Path)
                 },
             )),
+
             _ => None,
         };
         let Some((internal, params, ret_desc, ret_ty)) = plan else {
             self.no_suitable_library_method(class, method, args, span);
             return None;
         };
+        // The CHARSET overloads: `Files.readAllLines(path, UTF_8)` and the
+        // four beside it take a trailing charset. caturra's virtual filesystem
+        // stores TEXT, so the charset picks no bytes here — what it does pick
+        // is a failure, since building one from an unknown name throws. It is
+        // evaluated and dropped, which keeps that failure and the argument
+        // count honest. (A file WRITTEN in one charset and read back in
+        // another is the one shape this cannot model, and no JDK program that
+        // uses a single charset can tell.)
+        let original_args = args;
+        let mut args = args;
+        let trailing_charset = args.len() == params.len() + 1
+            && class == "Files"
+            && matches!(args.last().map(|a| self.type_of(a)), Some(JType::Charset));
+        if trailing_charset {
+            args = &args[..args.len() - 1];
+        }
         if args.len() != params.len() {
             self.no_suitable_library_method(class, method, args, span);
             return None;
@@ -22337,6 +22529,14 @@ impl BodyGen<'_> {
                 return None;
             }
             arg_descriptor.push_str(desc);
+        }
+        if trailing_charset {
+            // Evaluated for its own failure, then dropped: the call below takes
+            // the arguments the VM knows.
+            let charset = &original_args[original_args.len() - 1];
+            self.expr(charset);
+            self.code.push_op(op::POP, 0);
+            self.code.drop_stack(1);
         }
         let descriptor = format!("({arg_descriptor}){ret_desc}");
         let method_ref = intern_method_ref(self.pool, internal, method, &descriptor);
@@ -22733,6 +22933,7 @@ impl BodyGen<'_> {
             JType::Exception(id) => exception_internal(id).to_owned(),
             JType::File => String::from("java/io/File"),
             JType::Path => String::from("java/nio/file/Path"),
+            JType::Charset => String::from("java/nio/charset/Charset"),
             JType::StringBuilder => String::from("java/lang/StringBuilder"),
             JType::List { .. } => String::from("java/util/ArrayList"),
             JType::Stack(_) => String::from("java/util/Stack"),
@@ -26035,6 +26236,7 @@ impl BodyGen<'_> {
             | JType::Method
             | JType::Type
             | JType::Constructor
+            | JType::Charset
             | JType::Array { .. } => Some(String::from("(Ljava/lang/Object;)V")),
             JType::Int | JType::Short | JType::Byte => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
@@ -26204,6 +26406,10 @@ impl BodyGen<'_> {
                     .class_id("__Comparator")
                     .map_or(JType::Error, JType::Object)
             }
+            // `StandardCharsets.UTF_8` and the names beside it — constants of a
+            // class whose only role is to hold them.
+            Expr::Name { path, .. }
+                if standard_charset(path, self.table).is_some() => JType::Charset,
             Expr::Name { path, .. }
                 if path.len() == 2
                     && !self.table.has_class(&path[0])
@@ -28481,6 +28687,21 @@ impl BodyGen<'_> {
                 .class_id("__Comparator")
                 .map_or(JType::Error, JType::Object);
         }
+        // `StandardCharsets.UTF_8` — a constant whose value is a Charset, built
+        // by the same call `Charset.forName` makes.
+        if let Some(name) = standard_charset(path, self.table) {
+            let utf8 = self.pool.intern_utf8(name);
+            let index = self.pool.intern(Constant::String { string_index: utf8 });
+            self.code.push_ldc(index);
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/nio/charset/Charset",
+                "__standard",
+                "(Ljava/lang/String;)Ljava/nio/charset/Charset;",
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+            return JType::Charset;
+        }
         // Intrinsic constants: Integer.MAX_VALUE / MIN_VALUE.
         if path.len() == 2
             && !self.table.has_class(&path[0])
@@ -30683,6 +30904,7 @@ impl BodyGen<'_> {
             | JType::Stack(_)
             | JType::File
             | JType::Path
+            | JType::Charset
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
             JType::Scanner | JType::Writer | JType::Reader => {
                 self.error(

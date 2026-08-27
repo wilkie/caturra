@@ -39138,3 +39138,108 @@ public class ElementKinds {
 }
 "#
 );
+
+// Text to BYTES and back — `getBytes`, `new String(bytes, …)`, and the
+// charsets a program names for them. `getBytes()` (UTF-8) was the whole of it:
+// `java.nio.charset` did not exist, `new String(byte[])` was "no String
+// constructor takes byte[]", and the `Files` readers took no charset — so the
+// round trip every file-handling program writes stopped halfway.
+//
+// The six standard charsets encode exactly as a JDK's do, down to the `?` an
+// unmappable character becomes and the BOM `UTF-16` writes; an unknown name is
+// the checked `UnsupportedEncodingException` where the program named it as
+// text, and the unchecked `UnsupportedCharsetException` from `Charset.forName`.
+differential_test!(
+    text_to_bytes_and_back,
+    "Charsets",
+    r#"
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.charset.UnsupportedCharsetException;
+import java.util.Arrays;
+
+public class Charsets {
+    public static void main(String[] args) throws Exception {
+        String text = "aé世";
+        Charset[] all = {
+            StandardCharsets.UTF_8,
+            StandardCharsets.US_ASCII,
+            StandardCharsets.ISO_8859_1,
+            StandardCharsets.UTF_16,
+            StandardCharsets.UTF_16BE,
+            StandardCharsets.UTF_16LE,
+        };
+        for (Charset charset : all) {
+            byte[] bytes = text.getBytes(charset);
+            System.out.println(charset + " " + charset.name() + " " + Arrays.toString(bytes)
+                + " -> [" + new String(bytes, charset) + "]");
+        }
+
+        System.out.println(Arrays.toString(text.getBytes()) + text.getBytes().length);
+        System.out.println(new String(text.getBytes()).equals(text));
+        System.out.println(new String(new byte[] {104, 105}) + new String(new byte[] {97, 98, 99}, 1, 2));
+        System.out.println(Arrays.toString(text.getBytes("ISO-8859-1")));
+        System.out.println(new String(text.getBytes("UTF-8"), "UTF-8"));
+
+        System.out.println(Charset.forName("utf-8").name() + Charset.defaultCharset().name());
+        System.out.println(StandardCharsets.UTF_8.equals(Charset.forName("UTF-8")));
+
+        // A malformed byte decodes to the replacement character, as a JDK's
+        // decoder gives — never an exception.
+        System.out.println(Arrays.toString(new String(new byte[] {(byte) 0xC3}).getBytes()));
+
+        try {
+            Charset.forName("nope-8");
+        } catch (UnsupportedCharsetException e) {
+            System.out.println("uce " + e.getMessage());
+        }
+        try {
+            text.getBytes("nope-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            System.out.println("uee " + e.getMessage());
+        }
+    }
+}
+"#
+);
+
+// ...and the same charset handed to the file readers, which took none.
+differential_test!(
+    the_file_readers_take_a_charset,
+    "CharsetFiles",
+    r#"
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
+
+public class CharsetFiles {
+    public static void main(String[] args) throws Exception {
+        Path path = Paths.get("charset-demo.txt");
+        Files.write(path, Arrays.asList("héllo", "wörld"));
+        System.out.println(Files.readAllLines(path));
+        System.out.println(Files.readAllLines(path, StandardCharsets.UTF_8));
+        System.out.println(Files.readString(path).length());
+        Files.writeString(path, "aé", StandardCharsets.UTF_8);
+        System.out.println(Files.readString(path, StandardCharsets.UTF_8));
+        System.out.println(Files.deleteIfExists(path) + " " + Files.deleteIfExists(path));
+    }
+}
+"#
+);
+
+// A method reference to a member that no charset name can rescue: the checked
+// exception is REQUIRED where the charset is named as text, exactly as javac
+// requires it.
+differential_reject!(
+    naming_a_charset_as_text_is_checked,
+    "CharsetChecked",
+    r#"
+public class CharsetChecked {
+    public static void main(String[] args) {
+        System.out.println(new String(new byte[] {104}, "UTF-8"));
+    }
+}
+"#
+);

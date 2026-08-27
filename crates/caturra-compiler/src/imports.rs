@@ -82,6 +82,15 @@ const JAVA_IO: &[&str] = &[
 /// `java.nio.file` — the modeled slice: build a `Path` and read/write it through
 /// `Files`. The rest of `java.nio` stays unsupported.
 const JAVA_NIO_FILE: &[&str] = &["Files", "Path", "Paths"];
+/// `java.nio.charset` — the charsets a program names when it turns text into
+/// bytes and back. `Charset` is the type; `StandardCharsets` holds the
+/// constants; the exceptions are what an unknown name throws.
+const JAVA_NIO_CHARSET: &[&str] = &[
+    "Charset",
+    "StandardCharsets",
+    "UnsupportedCharsetException",
+    "IllegalCharsetNameException",
+];
 /// `java.util.function` — the standard functional interfaces. They alias the
 /// bundled erased `__`-interfaces (see `functional_erased` in codegen).
 /// Every `java.util.function` interface caturra names. The SAME set has to be
@@ -471,6 +480,7 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("java.util.function", JAVA_UTIL_FUNCTION),
     ("java.io", JAVA_IO),
     ("java.nio.file", JAVA_NIO_FILE),
+    ("java.nio.charset", JAVA_NIO_CHARSET),
     ("java.lang", JAVA_LANG),
     ("java.lang.reflect", JAVA_LANG_REFLECT),
     ("org.code.neighborhood", ORG_CODE_NEIGHBORHOOD),

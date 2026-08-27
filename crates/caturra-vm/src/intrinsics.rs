@@ -549,6 +549,57 @@ pub fn invoke_special(
                 ))),
             }
         }
+        // `new String(bytes)` / `new String(bytes, charset)` — the decoder,
+        // told which charset (UTF-8 by default, as the JDK's default is here).
+        // Malformed input decodes to U+FFFD rather than throwing, which is what
+        // a program reading a file relies on.
+        ("<init>", "([B)V" | "([BLjava/nio/charset/Charset;)V" | "([BLjava/lang/String;)V") => {
+            let bytes = byte_array_values(heap, &args[0])?;
+            let charset = charset_argument(heap, args.get(1))?;
+            let units = decode_charset(&bytes, &charset);
+            if let Some(HeapObject::JavaString(target)) = heap.get_mut(receiver) {
+                *target = units;
+                Ok(())
+            } else {
+                Err(VmError::UnknownIntrinsic(format!(
+                    "{class}.{method}{descriptor}"
+                )))
+            }
+        }
+        // ...and the SUBRANGE forms, which read a used prefix of a buffer.
+        (
+            "<init>",
+            "([BII)V" | "([BIILjava/nio/charset/Charset;)V" | "([BIILjava/lang/String;)V",
+        ) => {
+            let bytes = byte_array_values(heap, &args[0])?;
+            let (offset, count) = match (&args[1], &args[2]) {
+                (JValue::Int(offset), JValue::Int(count)) => (*offset, *count),
+                _ => return Err(throw("java.lang.VerifyError: expected two ints")),
+            };
+            let end = offset.checked_add(count);
+            if offset < 0
+                || count < 0
+                || end.is_none_or(|end| end > i32::try_from(bytes.len()).unwrap_or(i32::MAX))
+            {
+                return Err(throw(format!(
+                    "java.lang.StringIndexOutOfBoundsException: offset {offset}, count {count}, \
+                     length {}",
+                    bytes.len()
+                )));
+            }
+            let start = usize::try_from(offset).unwrap_or(0);
+            let taken = usize::try_from(count).unwrap_or(0);
+            let charset = charset_argument(heap, args.get(3))?;
+            let units = decode_charset(&bytes[start..start + taken], &charset);
+            if let Some(HeapObject::JavaString(target)) = heap.get_mut(receiver) {
+                *target = units;
+                Ok(())
+            } else {
+                Err(VmError::UnknownIntrinsic(format!(
+                    "{class}.{method}{descriptor}"
+                )))
+            }
+        }
         // `new String(char[])` — char arrays are stored as int arrays.
         ("<init>", "([C)V") => {
             let units: Vec<u16> = match &args[0] {
@@ -854,6 +905,22 @@ pub fn invoke_virtual(
         }
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
         (HeapObject::Path(_), _) => path_method(heap, receiver, method),
+        // A `Charset` is its NAME: `toString`, `name` and `displayName` all
+        // answer it, and two charsets are equal when they name the same one.
+        (HeapObject::Charset(name), "toString" | "name" | "displayName") => {
+            let name = name.clone();
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&name)))))
+        }
+        (HeapObject::Charset(name), "equals") => {
+            let name = name.clone();
+            let equal = match args.first() {
+                Some(JValue::Ref(Some(other))) => {
+                    matches!(heap.get(*other), Some(HeapObject::Charset(theirs)) if *theirs == name)
+                }
+                _ => false,
+            };
+            Ok(Some(JValue::Int(i32::from(equal))))
+        }
         (
             HeapObject::Exception {
                 class_name,
@@ -1590,6 +1657,30 @@ fn string_method(
         // `getBytes()` encodes in the default charset, which is UTF-8 here.
         // An unpaired surrogate is unencodable and becomes `?`, the same
         // substitution the console makes.
+        // `getBytes(charset)` / `getBytes("UTF-8")` — the same encoder, told
+        // which charset. An unknown NAME is the JDK's checked
+        // `UnsupportedEncodingException`; an unknown Charset cannot happen,
+        // since `forName` refuses to build one.
+        ("getBytes", [JValue::Ref(Some(which))]) => {
+            let name = match heap.get(*which) {
+                Some(HeapObject::Charset(name)) => name.clone(),
+                Some(HeapObject::JavaString(units)) => {
+                    let written = String::from_utf16_lossy(units);
+                    match canonical_charset(&written) {
+                        Some(name) => name.to_owned(),
+                        None => {
+                            return Err(throw(format!(
+                                "java.io.UnsupportedEncodingException: {written}"
+                            )));
+                        }
+                    }
+                }
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            let bytes = encode_charset(&units, &name);
+            let reference = heap.alloc(HeapObject::ByteArray(bytes));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("getBytes", []) => {
             let mut bytes: Vec<i8> = Vec::new();
             for decoded in char::decode_utf16(units.iter().copied()) {
@@ -4729,6 +4820,177 @@ fn file_method(
 
 /// `java.nio.file.Path` methods. `getFileName`/`getParent` return a `Path`;
 /// `getParent` is null when the path has no directory part.
+/// The charsets a program names, in the JDK's canonical spelling. `None` for a
+/// name no JDK would accept either, which is what makes the failure honest.
+#[must_use]
+pub fn canonical_charset(name: &str) -> Option<&'static str> {
+    let folded = name.to_ascii_uppercase();
+    Some(match folded.as_str() {
+        "UTF-8" | "UTF8" | "UNICODE-1-1-UTF-8" => "UTF-8",
+        "US-ASCII" | "ASCII" | "ANSI_X3.4-1968" | "ISO646-US" => "US-ASCII",
+        "ISO-8859-1" | "ISO8859-1" | "LATIN1" | "ISO_8859-1" | "L1" | "8859_1" => "ISO-8859-1",
+        "UTF-16" | "UTF16" => "UTF-16",
+        "UTF-16BE" | "UTF16BE" | "UNICODEBIGUNMARKED" => "UTF-16BE",
+        "UTF-16LE" | "UTF16LE" | "UNICODELITTLEUNMARKED" => "UTF-16LE",
+        _ => return None,
+    })
+}
+
+/// Encode UTF-16 units the way `String.getBytes(charset)` does. An unmappable
+/// character is `?` in the byte charsets, exactly as the JDK's encoder
+/// replaces it; `UTF-16` writes the big-endian BOM first, which is the one
+/// place the three UTF-16 spellings differ.
+#[must_use]
+pub fn encode_charset(units: &[u16], charset: &str) -> Vec<i8> {
+    let mut bytes: Vec<i8> = Vec::new();
+    match charset {
+        "US-ASCII" => {
+            for unit in units {
+                bytes.push(if *unit < 0x80 {
+                    u8::try_from(*unit).unwrap_or(b'?').cast_signed()
+                } else {
+                    b'?'.cast_signed()
+                });
+            }
+        }
+        "ISO-8859-1" => {
+            for unit in units {
+                bytes.push(if *unit < 0x100 {
+                    u8::try_from(*unit).unwrap_or(b'?').cast_signed()
+                } else {
+                    b'?'.cast_signed()
+                });
+            }
+        }
+        "UTF-16" | "UTF-16BE" | "UTF-16LE" => {
+            let little = charset == "UTF-16LE";
+            if charset == "UTF-16" {
+                bytes.push(0xFEu8.cast_signed());
+                bytes.push(0xFFu8.cast_signed());
+            }
+            for unit in units {
+                let (high, low) = ((unit >> 8) as u8, (unit & 0xFF) as u8);
+                if little {
+                    bytes.push(low.cast_signed());
+                    bytes.push(high.cast_signed());
+                } else {
+                    bytes.push(high.cast_signed());
+                    bytes.push(low.cast_signed());
+                }
+            }
+        }
+        // UTF-8, and the default. A lone surrogate is unmappable, and the
+        // JDK's encoder writes `?` for it.
+        _ => {
+            for decoded in char::decode_utf16(units.iter().copied()) {
+                match decoded {
+                    Ok(character) => {
+                        let mut buffer = [0u8; 4];
+                        for byte in character.encode_utf8(&mut buffer).as_bytes() {
+                            bytes.push(byte.cast_signed());
+                        }
+                    }
+                    Err(_) => bytes.push(b'?'.cast_signed()),
+                }
+            }
+        }
+    }
+    bytes
+}
+
+/// Decode bytes the way `new String(bytes, charset)` does. Malformed input is
+/// the replacement character U+FFFD, as the JDK's decoder gives — never an
+/// exception, which is the part a program relies on.
+#[must_use]
+pub fn decode_charset(bytes: &[i8], charset: &str) -> Vec<u16> {
+    let raw: Vec<u8> = bytes.iter().map(|b| b.cast_unsigned()).collect();
+    match charset {
+        "US-ASCII" => raw
+            .iter()
+            .map(|b| if *b < 0x80 { u16::from(*b) } else { 0xFFFD })
+            .collect(),
+        "ISO-8859-1" => raw.iter().map(|b| u16::from(*b)).collect(),
+        "UTF-16" | "UTF-16BE" | "UTF-16LE" => {
+            let mut little = charset == "UTF-16LE";
+            let mut at = 0;
+            // `UTF-16` reads the BOM when there is one, and is big-endian
+            // without it.
+            if charset == "UTF-16" && raw.len() >= 2 {
+                match (raw[0], raw[1]) {
+                    (0xFE, 0xFF) => at = 2,
+                    (0xFF, 0xFE) => {
+                        little = true;
+                        at = 2;
+                    }
+                    _ => {}
+                }
+            }
+            let mut units = Vec::new();
+            while at + 1 < raw.len() {
+                let (a, b) = (u16::from(raw[at]), u16::from(raw[at + 1]));
+                units.push(if little { (b << 8) | a } else { (a << 8) | b });
+                at += 2;
+            }
+            if at < raw.len() {
+                units.push(0xFFFD);
+            }
+            units
+        }
+        _ => {
+            let mut text = String::with_capacity(raw.len());
+            let mut rest = &raw[..];
+            loop {
+                match std::str::from_utf8(rest) {
+                    Ok(valid) => {
+                        text.push_str(valid);
+                        break;
+                    }
+                    Err(error) => {
+                        let (valid, remainder) = rest.split_at(error.valid_up_to());
+                        text.push_str(std::str::from_utf8(valid).unwrap_or(""));
+                        text.push('\u{FFFD}');
+                        match error.error_len() {
+                            Some(skipped) => rest = &remainder[skipped..],
+                            None => break,
+                        }
+                    }
+                }
+            }
+            text.encode_utf16().collect()
+        }
+    }
+}
+
+/// The `byte[]` an argument names, as signed bytes.
+fn byte_array_values(heap: &Heap, value: &JValue) -> Result<Vec<i8>, VmError> {
+    match value {
+        JValue::Ref(Some(reference)) => match heap.get(*reference) {
+            Some(HeapObject::ByteArray(bytes)) => Ok(bytes.clone()),
+            _ => Err(throw("java.lang.ClassCastException: not a byte[]")),
+        },
+        _ => Err(throw("java.lang.NullPointerException")),
+    }
+}
+
+/// The charset an optional argument names — a `Charset` object or its NAME —
+/// defaulting to UTF-8, which is the default charset here as it is on any
+/// modern JDK.
+fn charset_argument(heap: &Heap, value: Option<&JValue>) -> Result<String, VmError> {
+    let Some(JValue::Ref(Some(reference))) = value else {
+        return Ok(String::from("UTF-8"));
+    };
+    match heap.get(*reference) {
+        Some(HeapObject::Charset(name)) => Ok(name.clone()),
+        Some(HeapObject::JavaString(units)) => {
+            let written = String::from_utf16_lossy(units);
+            canonical_charset(&written).map(ToOwned::to_owned).ok_or_else(|| {
+                throw(format!("java.io.UnsupportedEncodingException: {written}"))
+            })
+        }
+        _ => Err(throw("java.lang.NullPointerException")),
+    }
+}
+
 fn path_method(
     heap: &mut Heap,
     receiver: HeapRef,
@@ -5263,7 +5525,7 @@ fn system_image(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one arm per library class
 pub fn invoke_static(
     heap: &mut Heap,
     rng: &mut JavaRng,
@@ -5395,6 +5657,26 @@ pub fn invoke_static(
             Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Path(text))))))
         }
         "java/nio/file/Files" => files_static(heap, vfs, method, args),
+        // `Charset.forName(name)` — and the `StandardCharsets` constants, which
+        // the compiler lowers to the same call. An unknown name is the JDK's
+        // `UnsupportedCharsetException`, whose message is the name itself.
+        "java/nio/charset/Charset" => match method {
+            "defaultCharset" => Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::Charset(String::from("UTF-8"))),
+            )))),
+            "forName" | "__standard" => {
+                let written = arg_string(heap, &args[0])?;
+                let Some(name) = canonical_charset(&written) else {
+                    return Err(throw(format!(
+                        "java.nio.charset.UnsupportedCharsetException: {written}"
+                    )));
+                };
+                Ok(Some(JValue::Ref(Some(
+                    heap.alloc(HeapObject::Charset(name.to_owned())),
+                ))))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("Charset.{method}"))),
+        },
         _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
     }
 }
@@ -5491,6 +5773,8 @@ fn files_static(
             vfs.remove(&path).map_err(|_| not_found())?;
             Ok(None)
         }
+        // ...and the form that answers instead of throwing.
+        "deleteIfExists" => Ok(Some(JValue::Int(i32::from(vfs.remove(&path).is_ok())))),
         "createFile" => {
             vfs.write_file(&path, Vec::new())
                 .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
