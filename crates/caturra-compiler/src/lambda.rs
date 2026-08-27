@@ -669,9 +669,46 @@ fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::Hash
 
 /// Whether `method` is a static method of the library type `class`
 /// (a curated set; used only for method-reference disambiguation).
-fn is_library_static(method: &str) -> bool {
-    matches!(
-        method,
+fn is_library_static(class: &str, method: &str) -> bool {
+    // The statics of the classes a method REFERENCE is written on. Judged by
+    // NAME alone below, which is why `Arrays::stream` — the ordinary way to
+    // flatten a grid — read as an instance call on a row and was "cannot find
+    // symbol: method stream() in variable __p0 of type String[]".
+    let by_class = match class {
+        "Arrays" => matches!(
+            method,
+            "stream" | "asList" | "toString" | "deepToString" | "hashCode" | "deepHashCode"
+        ),
+        "Character" => matches!(
+            method,
+            "isDigit"
+                | "isLetter"
+                | "isLetterOrDigit"
+                | "isUpperCase"
+                | "isLowerCase"
+                | "isWhitespace"
+                | "isSpaceChar"
+                | "isAlphabetic"
+                | "toUpperCase"
+                | "toLowerCase"
+                | "getNumericValue"
+        ),
+        "String" => matches!(method, "join" | "format" | "copyValueOf"),
+        "Objects" => matches!(
+            method,
+            "isNull" | "nonNull" | "requireNonNull" | "requireNonNullElse" | "hash" | "toString"
+        ),
+        "Integer" | "Long" | "Short" | "Byte" => matches!(
+            method,
+            "toBinaryString" | "toHexString" | "toOctalString" | "bitCount" | "signum"
+        ),
+        "Boolean" => matches!(method, "logicalAnd" | "logicalOr" | "logicalXor"),
+        "Collections" => matches!(method, "reverseOrder" | "emptyList" | "emptySet" | "emptyMap"),
+        _ => false,
+    };
+    by_class
+        || matches!(
+            method,
         "parseInt"
             | "parseLong"
             | "parseDouble"
@@ -698,7 +735,7 @@ fn is_library_static(method: &str) -> bool {
             | "tan"
             | "log"
             | "exp"
-    )
+        )
 }
 
 /// Class name -> each constructor's parameter-type list, for target typing
@@ -1284,6 +1321,18 @@ fn substitute_vars(
 fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     use crate::ast::Literal;
     match expr {
+        // An ARRAY written inline says its own type. Without this a stream
+        // whose element is an array — `Stream.iterate(new long[] {0, 1}, p ->
+        // …)`, the fold every Fibonacci one-liner uses — had no element, and
+        // the lambda after it was refused for having no functional-interface
+        // position.
+        Expr::NewArray { elem, dims, .. } => {
+            let mut ty = elem.clone();
+            for _ in 0..dims.len().max(1) {
+                ty = TypeRef::Array(Box::new(ty));
+            }
+            Some(ty)
+        }
         Expr::Literal { value, .. } => Some(TypeRef::Named(String::from(match value {
             Literal::Str(_) => "String",
             Literal::Int(_) => "Integer",
@@ -2273,8 +2322,14 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     }
                     "map" | "mapToObj" | "mapToInt" | "mapToLong" | "mapToDouble"
                     // `flatMap(f)` returns a STREAM per element, which the
-                    // pipeline splices in; the SAM shape is `map`'s.
-                    | "flatMap" => Some(("__UnaryOperator", "apply", object.clone())),
+                    // pipeline splices in; the SAM shape is `map`'s. The
+                    // primitive forms take the same function and differ only in
+                    // which pipeline they splice into — left out, a
+                    // `flatMapToInt(Arrays::stream)` over a grid had no
+                    // functional-interface position at all.
+                    | "flatMap" | "flatMapToInt" | "flatMapToLong" | "flatMapToDouble" => {
+                        Some(("__UnaryOperator", "apply", object.clone()))
+                    }
                     "forEach" | "forEachOrdered" | "peek" => {
                         Some(("__Consumer", "accept", TypeRef::Void))
                     }
@@ -2907,7 +2962,14 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
             .static_methods
             .get(&class)
             .is_some_and(|set| set.contains(method))
-            || (!ctx_user_class(ctx, &class) && is_library_static(method));
+            // ...or a LIBRARY static the VM answers, which no bundled class
+            // declares. The guard was "not a class the program (or the bundle)
+            // declares", and caturra bundles an `Arrays` — so `Arrays::stream`
+            // fell through to the unbound-INSTANCE form and compiled to
+            // `row.stream()`. A bundled class that declares the name itself
+            // still wins, above.
+            || (!declares_instance_method(ctx, &class, method)
+                && is_library_static(&class, method));
         if is_static {
             // `Type.method(p0, ...)`.
             Expr::Call {
@@ -2979,8 +3041,15 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
     }
 }
 
-fn ctx_user_class(ctx: &Ctx, class: &str) -> bool {
-    ctx.static_methods.contains_key(class)
+/// Whether the program (or a bundled class) declares `method` on `class` as an
+/// INSTANCE method — the one thing that must beat the library-static table,
+/// since a class of one's own shadows a library name entirely.
+fn declares_instance_method(ctx: &Ctx, class: &str, method: &str) -> bool {
+    ctx.shapes.get(class).is_some_and(|shapes| {
+        shapes
+            .iter()
+            .any(|shape| shape.name == method && !shape.is_static)
+    })
 }
 
 /// The type name a constructor-reference qualifier denotes.
@@ -4768,6 +4837,19 @@ fn literal_element_type(args: &[Expr], ctx: &Ctx) -> TypeRef {
         // LITERALS left `Stream.of(new Point(1, 2)).map(p -> p.x)` with an
         // `Object` for `p` — while the same stream taken from a declared
         // `List<Point>` had the element all along.
+        // ...and an ARRAY written inline, for the same reason: `Stream.of(new
+        // int[] {1, 2}, new int[] {3})` is a stream of two arrays, and its
+        // lambda could not read `a.length` off an `Object`.
+        if let Expr::NewArray { .. } = arg
+            && let Some(this) = static_type_of(arg, ctx)
+        {
+            kind = Some(match &kind {
+                Some(seen) if *seen == this => this,
+                Some(_) => return object,
+                None => this,
+            });
+            continue;
+        }
         if let Expr::NewObject { class, .. } = arg {
             let this = TypeRef::Named(class.clone());
             kind = Some(match &kind {
@@ -4941,6 +5023,39 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         } if method == "values" && args.is_empty() => {
             let name = enum_owner_name(owner, ctx)?;
             return Some(TypeRef::Named(name));
+        }
+        // A library call that ANSWERS an array — `csv.split(",")`,
+        // `word.toCharArray()`, `list.toArray(new String[0])`. Each is the
+        // ordinary way to get one, and a stream over any of them had no
+        // element type inline while the same array through a VARIABLE worked.
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } if matches!(
+            method.as_str(),
+            "split" | "toCharArray" | "getBytes" | "toArray" | "copyOf" | "copyOfRange"
+        ) =>
+        {
+            return match method.as_str() {
+                "split" => Some(TypeRef::Named(String::from("String"))),
+                "toCharArray" => Some(TypeRef::Char),
+                "getBytes" => Some(TypeRef::Byte),
+                // `Arrays.copyOf(source, n)` keeps the SOURCE's element.
+                "copyOf" | "copyOfRange" => {
+                    array_elem_type(args.first()?, ctx).filter(|_| {
+                        matches!(owner.as_ref(), Expr::Name { path, .. }
+                            if path.last().is_some_and(|name| name == "Arrays"))
+                    })
+                }
+                // `toArray(new String[0])` says its element in the MODEL it is
+                // given; the no-argument form answers `Object[]`.
+                _ => match args.first() {
+                    Some(model) => array_elem_type(model, ctx),
+                    None => Some(TypeRef::Named(String::from("Object"))),
+                },
+            };
         }
         // An array written INLINE — `Arrays.stream(new int[]{1, 2, 3})` — is
         // its own declaration. Only a variable was looked up, so the identical

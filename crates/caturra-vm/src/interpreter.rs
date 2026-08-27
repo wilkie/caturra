@@ -10756,7 +10756,10 @@ impl<'run> Interpreter<'run> {
             // materialized and spliced in. A JDK's is lazy per element; the
             // difference is only WHEN a downstream side effect runs relative to
             // an upstream one within the same element's sub-stream.
-            ("flatMap", [JValue::Ref(Some(function))]) => {
+            (
+                "flatMap" | "flatMapToInt" | "flatMapToLong" | "flatMapToDouble",
+                [JValue::Ref(Some(function))],
+            ) => {
                 let function = *function;
                 let elements = self.stream_materialize(receiver)?;
                 let mut flat = Vec::new();

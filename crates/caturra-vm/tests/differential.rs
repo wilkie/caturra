@@ -38780,3 +38780,55 @@ public class MapCollectors {
 }
 "#
 );
+
+// A stream whose element is an ARRAY, and the array-returning calls that start
+// one. A second spelling sweep — parse numbers, reverse a string, sum a grid,
+// copy an array, count characters, repeat a string, search, Fibonacci,
+// palindrome, split lines — put four of its forty spellings here.
+//
+// `Arrays.stream(csv.split(","))` had no element inline (through a variable it
+// did); `Arrays.stream(grid)` on an `int[][]` was "no suitable method found for
+// stream(int[][])", about the ordinary way to walk a grid; `Arrays::stream` as
+// a method reference compiled to `row.stream()`, because caturra BUNDLES an
+// `Arrays` and the library-static table was consulted only for classes it does
+// not; `flatMapToInt` was in no table at all; and a stream whose element is an
+// array — `Stream.iterate(new long[] {0, 1}, …)`, the Fibonacci one-liner —
+// erased that element, so the `[0]` after it was "array required".
+differential_test!(
+    a_stream_of_arrays,
+    "ArrayStreams",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class ArrayStreams {
+    public static void main(String[] args) {
+        String csv = "12,7,30";
+        System.out.println(Arrays.stream(csv.split(",")).mapToInt(Integer::parseInt).sum());
+        System.out.println(Arrays.stream(csv.split(",")).map(String::trim).collect(Collectors.toList()));
+        System.out.println(Stream.of(csv.split(",")).count() + new String("abc".toCharArray()));
+
+        int[][] grid = {{1, 2, 3}, {4, 5}, {}};
+        System.out.println(Arrays.stream(grid).mapToInt(row -> Arrays.stream(row).sum()).sum());
+        System.out.println(Arrays.stream(grid).flatMapToInt(Arrays::stream).sum());
+        System.out.println(Arrays.stream(grid).count());
+
+        String[][] names = {{"a"}, {"b", "c"}};
+        System.out.println(Arrays.stream(names).flatMap(Arrays::stream).collect(Collectors.toList()));
+
+        long[] seed = {0, 1};
+        System.out.println(Stream.iterate(seed, p -> new long[] {p[1], p[0] + p[1]})
+            .limit(6).map(p -> p[0]).collect(Collectors.toList()));
+        System.out.println(Stream.iterate(new long[] {0, 1}, p -> new long[] {p[1], p[0] + p[1]})
+            .limit(16).reduce((x, y) -> y).get()[0]);
+        System.out.println(Stream.of(new int[] {1, 2}, new int[] {3}).mapToInt(a -> a.length).sum());
+
+        // A library static as a method reference, on the classes a program
+        // writes one for.
+        System.out.println(Stream.of('a', '1', ' ').filter(Character::isDigit).count()
+            + "abc".chars().filter(Character::isLetter).count());
+        System.out.println(Stream.of(1, 2).map(String::valueOf).collect(Collectors.joining("+")));
+    }
+}
+"#
+);

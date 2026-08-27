@@ -10225,6 +10225,27 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
         BRet::StreamErased,
         "(Ljava/util/function/Function;)Ljava/util/stream/Stream;",
     ),
+    // The primitive splices: the same function, into a primitive pipeline.
+    // `Arrays.stream(grid).flatMapToInt(Arrays::stream)` is how a program sums
+    // a grid, and the name was in no table at all.
+    bm(
+        "flatMapToInt",
+        &[BParam::UnaryOperator],
+        BRet::IntStream,
+        "(Ljava/util/function/Function;)Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "flatMapToLong",
+        &[BParam::UnaryOperator],
+        BRet::LongStream,
+        "(Ljava/util/function/Function;)Ljava/util/stream/LongStream;",
+    ),
+    bm(
+        "flatMapToDouble",
+        &[BParam::UnaryOperator],
+        BRet::DoubleStream,
+        "(Ljava/util/function/Function;)Ljava/util/stream/DoubleStream;",
+    ),
     // `reduce(identity, accumulator)` folds to a value of the identity's type;
     // the one-argument form answers an `Optional`.
     bm(
@@ -25220,9 +25241,13 @@ impl BodyGen<'_> {
                 return None;
             }
             let elem = if method == "iterate" {
+                // The seed may be an ARRAY (`iterate(new long[] {0, 1}, …)` —
+                // the fold every Fibonacci one-liner uses), which is not an
+                // element KIND of its own: it interns, as it does anywhere a
+                // container holds one.
                 arg_types
                     .first()
-                    .and_then(|ty| collection_elem_of(*ty))
+                    .and_then(|ty| value_elem_of(*ty, self.table))
                     .unwrap_or(object_elem)
             } else {
                 arg_types
@@ -25295,6 +25320,12 @@ impl BodyGen<'_> {
                         || primitive_elem.is_some()
                         || method == "stream"
                 }
+                // A MULTI-dimensional array is a reference array whatever its
+                // element, so it always spreads — into a stream of ROWS.
+                // `Arrays.stream(grid)` on an `int[][]` was "no suitable method
+                // found for stream(int[][])", about the ordinary way to walk a
+                // grid.
+                JType::Array { dims, .. } if dims >= 2 => true,
                 _ => false,
             },
             _ => false,

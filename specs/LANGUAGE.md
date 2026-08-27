@@ -9403,3 +9403,39 @@ and their widths) gathered correctly and typed as nothing, so `+ 1` after one
 was "bad operand types".
 
 Pinned by `the_map_building_collectors`.
+
+### A stream of arrays (2026-08-27)
+
+A second spelling sweep — parse numbers out of a string, reverse one, sum a
+grid, copy an array, count characters, repeat a string, search, Fibonacci,
+palindrome, split lines, forty spellings — put four failures here, all around
+the same idea: an ARRAY as a stream's element or source.
+
+**`Arrays.stream(csv.split(","))`** had no element inline, though the same
+array through a variable did — a library call that ANSWERS an array
+(`split`, `toCharArray`, `toArray`, `copyOf`) is its own declaration, and the
+pass read only variables and literals.
+
+**`Arrays.stream(grid)` on an `int[][]`** was "no suitable method found for
+stream(int[][])". A multi-dimensional array is a reference array whatever its
+element, so it always spreads — into a stream of ROWS, which is how a program
+walks a grid.
+
+**`Arrays::stream` as a method reference compiled to `row.stream()`.** The
+library-static table was consulted only for a class the program (or the
+bundle) does not declare — and caturra BUNDLES an `Arrays`, so the reference
+fell through to the unbound-instance form. The table is class-aware now, and
+what beats it is a class that declares the name as an INSTANCE method, which is
+the only case that should shadow.
+
+**`flatMapToInt` was in no table at all**, though `flatMapToInt(Arrays::stream)`
+is the ordinary way to sum a grid; the VM's `flatMap` already does exactly what
+it needs.
+
+**And a stream whose element IS an array erased it.** `Stream.iterate(new
+long[] {0, 1}, p -> new long[] {p[1], p[0] + p[1]})` — the Fibonacci one-liner
+— typed its element as `Object`, so `p[1]` inside the lambda and `[0]` after
+the fold were both "array required, but Object found". An array is not an
+element KIND of its own: it interns, as it does anywhere a container holds one.
+
+Pinned by `a_stream_of_arrays`.
