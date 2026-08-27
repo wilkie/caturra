@@ -56,6 +56,7 @@ pub fn desugar_lambdas(
             (class.name.clone(), parents)
         })
         .collect();
+    let hierarchy = class_hierarchy(units);
     let enums = enum_names(units);
     let field_types: HashMap<(String, String), TypeRef> = units
         .iter()
@@ -128,6 +129,7 @@ pub fn desugar_lambdas(
                     bridges: &mut bridges,
                     shapes: &shapes,
                     supers: &supers,
+                    hierarchy: &hierarchy,
                     enums: &enums,
                     class_prefix: crate::LAMBDA_CLASS_PREFIX,
                     path,
@@ -167,6 +169,7 @@ pub fn desugar_lambdas(
                     bridges: &mut bridges,
                     shapes: &shapes,
                     supers: &supers,
+                    hierarchy: &hierarchy,
                     enums: &enums,
                     class_prefix: crate::LAMBDA_CLASS_PREFIX,
                     path,
@@ -201,6 +204,7 @@ pub fn desugar_lambdas(
                         bridges: &mut bridges,
                         shapes: &shapes,
                         supers: &supers,
+                        hierarchy: &hierarchy,
                         enums: &enums,
                         class_prefix: crate::LAMBDA_CLASS_PREFIX,
                         path,
@@ -272,6 +276,10 @@ struct Ctx<'a> {
     shapes: &'a HashMap<String, Vec<MethodShape>>,
     /// Each class's DIRECT supertypes, for joining two element types.
     supers: &'a HashMap<String, Vec<String>>,
+    /// Each class's type parameters and the ARGUMENTS it writes on its own
+    /// supertypes, for reading a type variable a supertype owns off a
+    /// subclass receiver (`class SBox implements Box<String>` answers `T`).
+    hierarchy: &'a HashMap<String, ClassGenerics>,
     /// The `enum` classes, which have no accessible constructor.
     enums: &'a std::collections::HashSet<String>,
     /// The prefix for the next synthesized class — a method REFERENCE gets
@@ -824,9 +832,21 @@ struct GenericSig {
     /// The type parameters of the DECLARING class, so a variable the class
     /// owns can be pinned from the receiver's own type arguments instead.
     class_params: Vec<String>,
+    /// That class's NAME. A receiver is often a SUBTYPE of it
+    /// (`SBox implements Box<String>`, calling a `default` method of `Box`),
+    /// and then the arguments are read off the subclass's own `implements`
+    /// clause rather than off the receiver's written type.
+    owner: String,
     /// The method's OWN type parameters, in the order an explicit witness
     /// gives them (`W.<String>box(v)`), and the return type they appear in.
     own_params: Vec<String>,
+    /// The parameter types after ERASURE, beside `params` as written. A
+    /// variable this call cannot pin takes its erased form from here rather
+    /// than abandoning the whole target: `<R> List<R> mapped(Function<T, R>)`
+    /// pins `T` from the receiver and can never pin `R`, whose only source is
+    /// the lambda's own body — and the target that types the lambda's
+    /// PARAMETER does not need it.
+    erased: Vec<TypeRef>,
     return_type: TypeRef,
 }
 
@@ -850,8 +870,10 @@ fn generic_signatures(units: &[(String, CompilationUnit)]) -> HashMap<String, Ve
                     .or_default()
                     .push(GenericSig {
                         params: method.declared_params.clone(),
+                        erased: method.params.iter().map(|p| p.ty.clone()).collect(),
                         sources: method.type_var_sources.clone(),
                         class_params: class_params.clone(),
+                        owner: class.name.clone(),
                         own_params: method
                             .type_params
                             .iter()
@@ -880,9 +902,11 @@ fn generic_signatures(units: &[(String, CompilationUnit)]) -> HashMap<String, Ve
                     out.entry(method.name.clone())
                         .or_default()
                         .push(GenericSig {
-                            params: written,
+                            params: written.clone(),
+                            erased: written,
                             sources: Vec::new(),
                             class_params: class_params.clone(),
+                            owner: class.name.clone(),
                             own_params: Vec::new(),
                             return_type: method
                                 .declared_return
@@ -907,6 +931,95 @@ fn mentions_any(ty: &TypeRef, names: &[String]) -> bool {
         }
         TypeRef::Array(inner) => mentions_any(inner, names),
         _ => false,
+    }
+}
+
+/// A class's own type parameters and the type arguments it writes on each of
+/// its direct supertypes.
+struct ClassGenerics {
+    params: Vec<String>,
+    supers: Vec<(String, Vec<TypeRef>)>,
+}
+
+fn class_hierarchy(units: &[(String, CompilationUnit)]) -> HashMap<String, ClassGenerics> {
+    let mut out = HashMap::new();
+    for (_, unit) in units {
+        for class in &unit.classes {
+            let supers = class
+                .superclass
+                .iter()
+                .chain(class.interfaces.iter())
+                .map(|parent| {
+                    let args = class
+                        .supertype_args
+                        .iter()
+                        .find(|(name, _)| name == parent)
+                        .map_or_else(Vec::new, |(_, args)| args.clone());
+                    (parent.clone(), args)
+                })
+                .collect();
+            out.insert(
+                class.name.clone(),
+                ClassGenerics {
+                    params: class.type_params.iter().map(|tp| tp.name.clone()).collect(),
+                    supers,
+                },
+            );
+        }
+    }
+    out
+}
+
+/// The type arguments `owner` is given, seen from `class` parameterized with
+/// `args` — the same walk codegen makes for an inherited RETURN type, here for
+/// a lambda PARAMETER. `SBox implements Box<String>` answers `[String]` for
+/// `Box`, and an intermediate class substitutes as it goes, so
+/// `SBox extends Mid<String>` where `Mid<T> implements Box<T>` answers the
+/// same. `None` when the supertype is reached raw, or not reached at all.
+fn inherited_arguments(
+    class: &str,
+    args: &[TypeRef],
+    owner: &str,
+    ctx: &Ctx,
+    depth: usize,
+) -> Option<Vec<TypeRef>> {
+    if class == owner {
+        return (!args.is_empty()).then(|| args.to_vec());
+    }
+    // A cyclic `extends` is a program error resolution reports; this pass only
+    // has to not hang on one.
+    if depth > 16 {
+        return None;
+    }
+    let info = ctx.hierarchy.get(class)?;
+    let bound: HashMap<String, TypeRef> = info
+        .params
+        .iter()
+        .cloned()
+        .zip(args.iter().cloned())
+        .collect();
+    info.supers.iter().find_map(|(parent, written)| {
+        let substituted: Vec<TypeRef> = written
+            .iter()
+            .map(|ty| substitute_vars(ty, &bound, &info.params).unwrap_or_else(|| ty.clone()))
+            .collect();
+        inherited_arguments(parent, &substituted, owner, ctx, depth + 1)
+    })
+}
+
+/// The type arguments the RECEIVER gives the class that declares the method
+/// being called: written on the receiver's own type where it names that class,
+/// and inherited from its `extends`/`implements` clause where it does not.
+fn receiver_class_arguments(receiver: &Expr, owner: &str, ctx: &Ctx) -> Option<Vec<TypeRef>> {
+    match static_type_of(receiver, ctx)? {
+        TypeRef::Generic { base, args } if base == owner => Some(args),
+        TypeRef::Generic { base, args } => inherited_arguments(&base, &args, owner, ctx, 0)
+            // A receiver written with arguments for a class this pass cannot
+            // place still pins by POSITION, which is what it did before the
+            // walk existed.
+            .or(Some(args)),
+        TypeRef::Named(name) => inherited_arguments(&name, &[], owner, ctx, 0),
+        _ => None,
     }
 }
 
@@ -946,8 +1059,7 @@ fn pinned_vars(
         }
     }
     if !sig.class_params.is_empty()
-        && let Some(TypeRef::Generic { args: written, .. }) =
-            receiver.and_then(|r| static_type_of(r, ctx))
+        && let Some(written) = receiver.and_then(|r| receiver_class_arguments(r, &sig.owner, ctx))
     {
         for (name, actual) in sig.class_params.iter().zip(written) {
             bound.entry(name.clone()).or_insert(actual);
@@ -1011,9 +1123,45 @@ fn generic_argument_targets(
     Some(
         sig.params
             .iter()
-            .map(|declared| substitute_vars(declared, &bound, &sig.vars))
+            .zip(&sig.erased)
+            .map(|(declared, erased)| Some(substitute_partly(declared, erased, &bound, &sig.vars)))
             .collect(),
     )
+}
+
+/// A written type with every PINNED variable replaced, and every unpinned one
+/// taken from the same position of the ERASED type — the answer the call site
+/// would have fallen back to anyway.
+///
+/// Substituting nothing at all where one variable is missing is what made
+/// `src.mapped(s -> s.length())` refuse: `Function<T, R>` could pin `T` from
+/// the receiver but never `R`, and dropping the whole target left `s` an
+/// Object. An unpinned name must not reach codegen, which is why the erased
+/// type is merged in rather than the variable left standing.
+fn substitute_partly(
+    declared: &TypeRef,
+    erased: &TypeRef,
+    bound: &HashMap<String, TypeRef>,
+    vars: &[String],
+) -> TypeRef {
+    match (declared, erased) {
+        (TypeRef::Generic { base, args }, TypeRef::Generic { args: erased_args, .. })
+            if args.len() == erased_args.len() && !vars.iter().any(|v| v == base) =>
+        {
+            TypeRef::Generic {
+                base: base.clone(),
+                args: args
+                    .iter()
+                    .zip(erased_args)
+                    .map(|(a, e)| substitute_partly(a, e, bound, vars))
+                    .collect(),
+            }
+        }
+        (TypeRef::Array(inner), TypeRef::Array(erased_inner)) => {
+            TypeRef::Array(Box::new(substitute_partly(inner, erased_inner, bound, vars)))
+        }
+        _ => substitute_vars(declared, bound, vars).unwrap_or_else(|| erased.clone()),
+    }
 }
 
 /// A written type with every bound variable replaced. `None` when a variable

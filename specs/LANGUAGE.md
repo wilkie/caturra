@@ -8880,13 +8880,24 @@ being walked had its own methods consulted, so `b.all().stream().map(…)` — w
 refused for having no functional-interface position, though the same call
 inside that class compiled.
 
-**One shape is left, and it is the deeper one:** a lambda whose parameter is
-typed by a USER interface's own type variable — `default <R> List<R> mapped(
-Function<T, R> f)` called as `source.mapped(s -> s.length())`. The parameter
-would take its type from the receiver's type ARGUMENT, which is the same walk
-`inherited_type_var` makes for returns, in a pass that does not have it.
+**A lambda whose parameter is typed by the RECEIVER'S class type variable.**
+`default void each(Consumer<T> c)` on a `SBox implements Box<String>`: the
+receiver's own written type says nothing — `SBox` takes no arguments — so `T`
+is read by walking its `implements`/`extends` clause, substituting at each
+step, the same walk codegen makes for an inherited RETURN type. A receiver
+written as the interface itself (`Box<String> b`) already worked.
 
-Pinned by `diff_generics_as_a_program_writes_them`.
+**A functional parameter mentioning a variable that cannot be pinned.**
+`<R> List<R> mapped(Function<T, R> f)` called as `source.mapped(s ->
+s.length())`. `T` comes from the receiver, but `R`'s only source is the
+lambda's own body, and abandoning the whole target for the one missing
+variable left the lambda's parameter an `Object` — so `s.length()` was
+"cannot find symbol". A variable that stays unpinned now takes its ERASED
+form from the same position of the erased signature, which is the answer the
+call site fell back to anyway; the ones that ARE pinned survive.
+
+Pinned by `diff_generics_as_a_program_writes_them` and
+`a_lambda_parameter_typed_by_the_receivers_own_type_argument`.
 
 ## Divergences from javac
 

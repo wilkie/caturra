@@ -38121,3 +38121,88 @@ public class OverloadNotOverride {
 }
 "#
 );
+
+// A lambda whose parameter is typed by a type variable the RECEIVER'S CLASS
+// owns, not the method's — `default void each(Consumer<T> c)` called on a
+// `SBox implements Box<String>`. The variable is pinned by walking the
+// receiver's `implements`/`extends` clause, so it is the SUBCLASS that answers
+// what `T` is; a receiver written as the interface itself already worked.
+//
+// The `<R>` shape is the one that stayed broken longest: `Function<T, R>` can
+// pin `T` from the receiver but can never pin `R`, whose only source is the
+// lambda's own body — and dropping the whole target for the sake of the one
+// missing variable left the lambda's parameter an Object, so `s.length()` was
+// "cannot find symbol".
+differential_test!(
+    a_lambda_parameter_typed_by_the_receivers_own_type_argument,
+    "InheritedTypeVarLambda",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class InheritedTypeVarLambda {
+    interface Src<T> {
+        List<T> items();
+
+        default <R> List<R> mapped(Function<T, R> f) {
+            List<R> out = new ArrayList<>();
+            for (T t : items()) {
+                out.add(f.apply(t));
+            }
+            return out;
+        }
+
+        default void each(Consumer<T> c) {
+            for (T t : items()) {
+                c.accept(t);
+            }
+        }
+
+        default boolean any(Predicate<T> p) {
+            for (T t : items()) {
+                if (p.test(t)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    static class Words implements Src<String> {
+        public List<String> items() { return Arrays.asList("alpha", "be", "cee"); }
+    }
+
+    static class Holder<T> {
+        private final T value;
+        Holder(T value) { this.value = value; }
+        void use(Consumer<T> c) { c.accept(value); }
+        <R> R pick(Function<T, R> f) { return f.apply(value); }
+    }
+
+    // The argument is written on an INTERMEDIATE class, so the walk has to
+    // substitute as it climbs rather than read the receiver's own clause.
+    static class Ints extends Holder<Integer> {
+        Ints() { super(7); }
+    }
+
+    public static void main(String[] args) {
+        Words w = new Words();
+        System.out.println(w.mapped(s -> s.length()));
+        System.out.println(w.mapped(s -> s.toUpperCase().charAt(0)));
+        w.each(s -> System.out.println(s.substring(1)));
+        System.out.println(w.any(s -> s.startsWith("b")));
+
+        Src<String> asSrc = w;
+        System.out.println(asSrc.mapped(s -> s.indexOf('e')));
+
+        Ints ints = new Ints();
+        ints.use(n -> System.out.println(n.intValue() + 1));
+        System.out.println("" + ints.pick(n -> n * 3));
+
+        Holder<String> held = new Holder<>("abcd");
+        held.use(s -> System.out.println(s.charAt(2)));
+        System.out.println("" + held.pick(s -> s.length() * 2));
+    }
+}
+"#
+);
