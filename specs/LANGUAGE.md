@@ -8752,6 +8752,38 @@ because `CharSequence` is a TYPE here and not a class in the table — where
 
 Pinned by `diff_a_bounded_type_parameter_keeps_its_position`.
 
+### What a mixed program crosses (2026-08-26)
+
+Every dimension fuzzed so far has been one dimension. This one composes them:
+a program with an interface and a default method, a `Comparable` class with
+`equals`/`hashCode`, a bounded generic container, an enum with a method, and
+then a random handful of statements that use all of it together — streams over
+the collection, a map keyed by the enum, an iterator removal, a lambda that
+throws, a cast that fails, an unboxed null. 220 programs, three defects, and
+each one is a PAIRING that the single-feature sweeps had no way to reach.
+
+**A method reference converted by a stream op was not marked as one.** Every
+other conversion site marks the synthesized class as a method-reference class;
+the stream ops (`map(Item::score)`, `mapToInt`, `forEach`) did not, so it was a
+LAMBDA class — which meant it took a number in javac's per-class lambda
+sequence and pushed every later lambda's frame name one too high, and grew a
+stack-trace frame a JDK does not have. The mark now happens where the
+conversion does, which is the one place that always knows.
+
+**`Collectors` named through its package.** `collect(java.util.stream.Collectors
+.toList())` typed as a null collection where the one-segment spelling typed as
+a list, so `String.join("+", …)` took the whole list for a single element and
+printed `null` — a silent wrong answer, and only for a program that writes the
+qualified name.
+
+**The one-argument `reduce`.** It answers an `Optional` of the stream's element
+(the two-argument form answers the element itself), and nothing knew that: the
+`map` after it was refused for having no functional-interface position. Through
+a declared `Optional<Item>` variable the same chain worked, which is the tell
+this codebase now recognises on sight.
+
+Pinned by `diff_a_mixed_pipeline_keeps_its_types`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

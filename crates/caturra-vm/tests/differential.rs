@@ -29838,6 +29838,62 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// Three pairings a MIXED fuzz found, each invisible to a single-feature test.
+// A method reference converted to a lambda by a STREAM op was not marked as
+// one, so it took a number in javac's per-class lambda sequence and every
+// lambda after it in the same class was numbered one too high — and it grew a
+// stack-trace frame a JDK does not have. `Collectors` named through its
+// package typed a `collect` as a null collection, so `String.join` took the
+// whole list for one element and printed `null`. And the ONE-argument
+// `reduce` answers an `Optional` of the stream's element, which nothing knew:
+// the `map` after it was refused for having no functional-interface position.
+differential_test!(
+    diff_a_mixed_pipeline_keeps_its_types,
+    "Mixed",
+    r#"
+import java.util.*;
+
+public class Mixed {
+    interface Scored { int score(); default String label() { return "s" + score(); } }
+
+    static class Item implements Scored, Comparable<Item> {
+        final String tag;
+        final int n;
+        Item(String tag, int n) { this.tag = tag; this.n = n; }
+        public int score() { return n * 2; }
+        public int compareTo(Item other) { return Integer.compare(n, other.n); }
+        @Override public String toString() { return tag + n; }
+    }
+
+    public static void main(String[] args) {
+        List<Item> items = new ArrayList<>(List.of(new Item("a", 3), new Item("b", 1), new Item("a", 3)));
+
+        System.out.println(items.stream().mapToInt(Scored::score).sum());
+        try {
+            items.stream().map(x -> {
+                if (x.n == 1) {
+                    throw new IllegalStateException("bad " + x);
+                }
+                return x.label();
+            }).forEach(System.out::println);
+        } catch (RuntimeException e) {
+            System.out.println("! " + e.getMessage() + " / " + e.getStackTrace()[0].getMethodName());
+        }
+
+        String joined = String.join("+",
+            items.stream().map(Item::toString).collect(java.util.stream.Collectors.toList()));
+        System.out.println(joined);
+        System.out.println(java.util.stream.Stream.of("x", "yy")
+            .collect(java.util.stream.Collectors.toSet()).size());
+
+        System.out.println(items.stream().reduce((a, b) -> a.n > b.n ? a : b).map(Item::label).orElse("-"));
+        System.out.println(items.stream().reduce((a, b) -> a.n < b.n ? a : b).isPresent());
+        System.out.println(items.stream().reduce(new Item("z", 0), (a, b) -> a.n > b.n ? a : b).label());
+    }
+}
+"#
+);
+
 // A class type parameter with a BOUND keeps its POSITION as well as its
 // bound: `Box<T extends Comparable<T>>` resolves `value.compareTo(other)`
 // inside the class (that is what the bound buys) AND reads `get()` through a

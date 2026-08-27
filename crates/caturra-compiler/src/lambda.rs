@@ -2537,6 +2537,14 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
     else {
         unreachable!("guarded by caller");
     };
+    // The class built for THIS lambda is a method-reference class: its captures
+    // follow the reference's rules, and — since a JDK's `invokedynamic` calls
+    // the target directly — it has no stack-trace frame and takes no number in
+    // javac's per-class lambda sequence. Marked here rather than at each call
+    // site: the STREAM ops converted a reference without marking it, so
+    // `map(Item::score)` was counted as a lambda and every lambda after it in
+    // the same class was numbered one too high.
+    ctx.class_prefix = crate::METHOD_REF_CLASS_PREFIX;
     let span = *span;
     let arity = sam.params.len();
     let param_names: Vec<String> = (0..arity).map(|i| format!("__p{i}")).collect();
@@ -4569,7 +4577,14 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             "map" | "flatMap" => {
                 optional_elem_type(prev, ctx).map(|_| TypeRef::Named(String::from("Object")))
             }
-            "findFirst" | "max" | "min" => stream_elem_type(prev, ctx),
+            "findFirst" | "findAny" | "max" | "min" => stream_elem_type(prev, ctx),
+            // `reduce(accumulator)` — the ONE-argument form answers an
+            // `Optional` of the stream's own element (the two-argument form
+            // answers the element itself, and is not an Optional at all). So
+            // `stream.reduce((a, b) -> …).map(Item::label)` had no element for
+            // the `map`'s lambda, and was refused for having no
+            // functional-interface position.
+            "reduce" if args.len() == 1 => stream_elem_type(prev, ctx),
             _ => None,
         };
     }

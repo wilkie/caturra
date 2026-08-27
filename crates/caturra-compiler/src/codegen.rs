@@ -19648,7 +19648,13 @@ impl BodyGen<'_> {
                 receiver: Some(receiver),
                 method,
                 ..
-            } if matches!(receiver.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "Collectors") => {
+            // The QUALIFIED spelling names the same class: reading only the
+            // one-segment form left `collect(java.util.stream.Collectors
+            // .toList())` typed as a null collection, and `String.join` then
+            // took the whole list for a single element and printed `null`.
+            } if matches!(receiver.as_ref(), Expr::Name { path, .. }
+                if path.last().is_some_and(|name| name == "Collectors")) =>
+            {
                 method.as_str()
             }
             _ => return JType::Null,
