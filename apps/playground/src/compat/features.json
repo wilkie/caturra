@@ -488,7 +488,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-40_y0_ya/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-kt0vxcev/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -499,7 +499,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-j54fx9m1/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-mt455pui/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -510,7 +510,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-n56mc_76/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-03_9kzoi/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -901,6 +901,16 @@
     "source": "import java.util.Arrays;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nSystem.out.println(Arrays.toString(\"1.2.3\".split(\"\\\\.\")));\n        System.out.println(Arrays.toString(\"a1b22c\".split(\"[0-9]+\")));\n        System.out.println(\"2024-01-15\".matches(\"\\\\d{4}-\\\\d{2}-\\\\d{2}\"));\n        System.out.println(\"John Smith\".replaceAll(\"(\\\\w+) (\\\\w+)\", \"$2, $1\"));\n        System.out.println(\"a b  c\".replaceAll(\"\\\\s+\", \"_\"));\n    }\n}\n",
     "status": "supported",
     "expected": "[1, 2, 3]\n[a, b, c]\ntrue\nSmith, John\na_b_c\n"
+  },
+  {
+    "id": "g-matcher",
+    "category": "Library",
+    "title": "Pattern and Matcher",
+    "summary": "A compiled pattern, walked with find/group/start \u2014 the same engine String.matches uses.",
+    "main": "G",
+    "source": "import java.util.regex.Matcher;\nimport java.util.regex.Pattern;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nMatcher m = Pattern.compile(\"(\\\\w+)@(\\\\w+)\").matcher(\"a@b and c@d\");\n        while (m.find()) {\n            System.out.println(m.group() + \" \" + m.group(1) + \" \" + m.start());\n        }\n        System.out.println(Pattern.compile(\"A\", Pattern.CASE_INSENSITIVE).matcher(\"xax\").find());\n        System.out.println(Pattern.compile(\"(\\\\d)(\\\\d)\").matcher(\"12\").replaceAll(\"$2$1\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": "a@b a 0\nc@d c 8\ntrue\n21\n"
   },
   {
     "id": "g-fail-fast",

@@ -9669,3 +9669,33 @@ Pinned by `text_to_bytes_and_back`, `the_file_readers_take_a_charset`,
 `naming_a_charset_as_text_is_checked` and `only_a_named_charset_is_checked`;
 the compatibility page gained a "Text to bytes and back" claim, recorded
 against a real JDK like the rest.
+
+### Pattern and Matcher (2026-08-27)
+
+`java.util.regex.Pattern` was refused outright — "the class library covers the
+AP CS A subset" — while the ENGINE behind `String.matches`, `replaceAll` and
+`split` was caturra's own, and had every part a matcher needs: a search from an
+offset, the group spans it captured, named groups, and the syntax errors. What
+was missing was the object API a program writes when it wants more than one
+match: `while (m.find()) { … m.group(1) … }`.
+
+A `Pattern` keeps its source as WRITTEN — which is what `pattern()` answers —
+beside the flags it was compiled with. The two fold into the inline `(?ims)`
+prefix the engine already reads, and `LITERAL` folds into the `\Q…\E` that
+`Pattern.quote` produces, so a flag never has to be modelled twice. A malformed
+pattern fails at `compile`, where a JDK reports it, rather than at the first
+`find`.
+
+A `Matcher` remembers its last match, because `group`, `start` and `end` all
+read it: asking before there is one is Java's `IllegalStateException("No match
+found")`, a group index past the count is `IndexOutOfBoundsException("No group
+9")`, and a group that took no part in the match is `null` with a span of `-1`
+— not an empty string. `find` resumes where the last match ended and advances
+one unit past a zero-width match, which is the rule that keeps
+`while (m.find())` from stalling.
+
+Everything the probes asked matched a real JDK byte for byte on the first run,
+which is what a shared engine buys: the only new code is the object around it.
+
+Pinned by `pattern_and_matcher`; the compatibility page gained a "Pattern and
+Matcher" claim (87 supported / 5 unsupported / 3 beyond-11).

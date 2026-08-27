@@ -1887,6 +1887,16 @@ GRAMMAR = [
                       '        System.out.println("John Smith".replaceAll("(\\\\w+) (\\\\w+)", "$2, $1"));\n'
                       '        System.out.println("a b  c".replaceAll("\\\\s+", "_"));',
                       '', 'import java.util.Arrays;')),
+    dict(id="g-matcher", category="Library", title="Pattern and Matcher",
+         summary="A compiled pattern, walked with find/group/start — the same engine String.matches uses.",
+         main="G",
+         source=_prog('Matcher m = Pattern.compile("(\\\\w+)@(\\\\w+)").matcher("a@b and c@d");\n'
+                      '        while (m.find()) {\n'
+                      '            System.out.println(m.group() + " " + m.group(1) + " " + m.start());\n'
+                      '        }\n'
+                      '        System.out.println(Pattern.compile("A", Pattern.CASE_INSENSITIVE).matcher("xax").find());\n'
+                      '        System.out.println(Pattern.compile("(\\\\d)(\\\\d)").matcher("12").replaceAll("$2$1"));',
+                      '', 'import java.util.regex.Matcher;\nimport java.util.regex.Pattern;')),
     dict(id="g-fail-fast", category="Collections", title="Fail-fast iterators (ConcurrentModificationException)",
          summary="Modifying a collection while iterating it throws, as on a real JVM — including the quirk where removing the second-to-last element does not.",
          main="G",

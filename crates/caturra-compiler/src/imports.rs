@@ -155,7 +155,7 @@ pub(crate) const JAVA_UTIL_FUNCTION: &[&str] = &[
 /// `Pattern`/`Matcher` are not modelled — caturra compiles patterns inside
 /// `String.split`/`matches`/`replaceAll` rather than exposing the objects —
 /// but the exception those methods throw is part of the API students catch.
-const JAVA_UTIL_REGEX: &[&str] = &["PatternSyntaxException"];
+const JAVA_UTIL_REGEX: &[&str] = &["Pattern", "Matcher", "PatternSyntaxException"];
 
 const JAVA_UTIL_STREAM: &[&str] = &[
     "Stream",

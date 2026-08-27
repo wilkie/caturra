@@ -911,6 +911,49 @@ pub fn invoke_virtual(
             let name = name.clone();
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&name)))))
         }
+        // A `Pattern`: its own text, a `Matcher` over some input, and the two
+        // split forms — the same splitter `String.split` uses.
+        (HeapObject::Pattern { source, .. }, "pattern" | "toString") => {
+            let text = String::from_utf16_lossy(source);
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        (HeapObject::Pattern { .. }, "flags") => {
+            let flags = match heap.get(receiver) {
+                Some(HeapObject::Pattern { flags, .. }) => *flags,
+                _ => 0,
+            };
+            Ok(Some(JValue::Int(flags)))
+        }
+        (HeapObject::Pattern { .. }, "matcher") => {
+            let input = string_units(heap, args.first().unwrap_or(&JValue::NULL))?;
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Matcher {
+                pattern: receiver,
+                input,
+                at: 0,
+                last: None,
+            })))))
+        }
+        (HeapObject::Pattern { source, flags }, "split") => {
+            let source = fold_regex_flags(source, *flags);
+            let input = string_units(heap, args.first().unwrap_or(&JValue::NULL))?;
+            let limit = match args.get(1) {
+                Some(JValue::Int(limit)) => *limit,
+                _ => 0,
+            };
+            let parts = split_regex(&input, &source, limit)?;
+            let refs: Vec<JValue> = parts
+                .into_iter()
+                .map(|part| {
+                    let text = String::from_utf16_lossy(&part);
+                    JValue::Ref(Some(heap.alloc_string(&text)))
+                })
+                .collect();
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::RefArray(
+                String::from("java/lang/String"),
+                refs,
+            ))))))
+        }
+        (HeapObject::Matcher { .. }, _) => matcher_method(heap, receiver, method, args),
         (HeapObject::Charset(name), "equals") => {
             let name = name.clone();
             let equal = match args.first() {
@@ -4961,6 +5004,219 @@ pub fn decode_charset(bytes: &[i8], charset: &str) -> Vec<u16> {
     }
 }
 
+/// A `java.util.regex.Matcher`'s own methods — the walk a program writes as
+/// `while (m.find()) { … m.group(1) … }`.
+///
+/// A matcher REMEMBERS its last match: `group`, `start` and `end` all read it,
+/// and asking before there is one is Java's `IllegalStateException`, not a
+/// silent answer.
+#[allow(clippy::too_many_lines)] // one arm per Matcher method
+fn matcher_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let (pattern, input, at, last) = match heap.get(receiver) {
+        Some(HeapObject::Matcher {
+            pattern,
+            input,
+            at,
+            last,
+        }) => (*pattern, input.clone(), *at, last.clone()),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    let source = match heap.get(pattern) {
+        Some(HeapObject::Pattern { source, flags }) => fold_regex_flags(source, *flags),
+        _ => return Err(throw("java.lang.IllegalStateException: no pattern")),
+    };
+    let regex = compile_regex(&source)?;
+    let no_match = || throw("java.lang.IllegalStateException: No match found");
+    let group_span = |index: usize| -> Result<Option<(usize, usize)>, VmError> {
+        let spans = last.clone().ok_or_else(no_match)?;
+        spans
+            .get(index)
+            .copied()
+            .ok_or_else(|| throw(format!("java.lang.IndexOutOfBoundsException: No group {index}")))
+    };
+    let group_index = |args: &[JValue]| -> Result<usize, VmError> {
+        match args.first() {
+            Some(JValue::Int(index)) => usize::try_from(*index).map_err(|_| {
+                throw(format!("java.lang.IndexOutOfBoundsException: No group {index}"))
+            }),
+            // `group("name")` — the group a `(?<name>…)` stands for.
+            Some(JValue::Ref(Some(name))) => {
+                let name = heap.string_text(*name).unwrap_or_default();
+                regex.group_named(&name).ok_or_else(|| {
+                    throw(format!(
+                        "java.lang.IllegalArgumentException: No group with name <{name}>"
+                    ))
+                })
+            }
+            // No argument at all is the WHOLE match, which is group zero.
+            _ => Ok(0),
+        }
+    };
+    let store = |heap: &mut Heap, at: usize, spans: Option<Vec<Option<(usize, usize)>>>| {
+        if let Some(HeapObject::Matcher {
+            at: slot,
+            last: kept,
+            ..
+        }) = heap.get_mut(receiver)
+        {
+            *slot = at;
+            *kept = spans;
+        }
+    };
+    match method {
+        // `find()` resumes where the last match ended; a zero-width match
+        // advances one unit, or the loop would never end.
+        "find" => {
+            let from = match args.first() {
+                Some(JValue::Int(start)) => usize::try_from(*start).unwrap_or(0),
+                _ => at,
+            };
+            if from > input.len() {
+                store(heap, input.len(), None);
+                return Ok(Some(JValue::Int(0)));
+            }
+            let Some(found) = regex.find_at(&input, from) else {
+                store(heap, input.len() + 1, None);
+                return Ok(Some(JValue::Int(0)));
+            };
+            // A zero-width match advances one unit, or `while (m.find())`
+            // would never end.
+            let next = if found.end == found.start {
+                found.end + 1
+            } else {
+                found.end
+            };
+            store(heap, next, Some(found.groups.clone()));
+            Ok(Some(JValue::Int(1)))
+        }
+        // `matches()` is the WHOLE input; `lookingAt()` only anchors the start.
+        "matches" => {
+            let matched = regex.matches_whole(&input);
+            let spans = if matched {
+                regex
+                    .find_at(&input, 0)
+                    .filter(|found| found.end == input.len())
+                    .map(|found| found.groups)
+                    .or_else(|| Some(vec![Some((0, input.len()))]))
+            } else {
+                None
+            };
+            store(heap, 0, spans);
+            Ok(Some(JValue::Int(i32::from(matched))))
+        }
+        "lookingAt" => {
+            let found = regex.find_at(&input, 0).filter(|found| found.start == 0);
+            let matched = found.is_some();
+            store(heap, 0, found.map(|found| found.groups));
+            Ok(Some(JValue::Int(i32::from(matched))))
+        }
+        "group" => {
+            let index = group_index(args)?;
+            match group_span(index)? {
+                Some((start, end)) => {
+                    let text = String::from_utf16_lossy(&input[start..end]);
+                    Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+                }
+                // A group that took part in no match is `null`, not "".
+                None => Ok(Some(JValue::NULL)),
+            }
+        }
+        "start" | "end" => {
+            let index = group_index(args)?;
+            let span = group_span(index)?;
+            let value = match span {
+                Some((start, end)) => {
+                    if method == "start" {
+                        start
+                    } else {
+                        end
+                    }
+                }
+                None => return Ok(Some(JValue::Int(-1))),
+            };
+            Ok(Some(JValue::Int(i32::try_from(value).unwrap_or(-1))))
+        }
+        "groupCount" => Ok(Some(JValue::Int(
+            i32::try_from(regex.group_count()).unwrap_or(0),
+        ))),
+        "hitEnd" => Ok(Some(JValue::Int(i32::from(at >= input.len())))),
+        "reset" => {
+            let input = match args.first() {
+                Some(value) => string_units(heap, value)?,
+                None => input,
+            };
+            if let Some(HeapObject::Matcher {
+                input: slot,
+                at,
+                last,
+                ..
+            }) = heap.get_mut(receiver)
+            {
+                *slot = input;
+                *at = 0;
+                *last = None;
+            }
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        // The two replacements are the string ones, told which pattern.
+        "replaceAll" | "replaceFirst" => {
+            let replacement = string_units(heap, args.first().unwrap_or(&JValue::NULL))?;
+            let replaced = replace_regex(&input, &source, &replacement, method == "replaceFirst")?;
+            let text = String::from_utf16_lossy(&replaced);
+            store(heap, 0, None);
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("Matcher.{method}"))),
+    }
+}
+
+/// The UTF-16 units of a `String` argument (null throws NPE).
+fn string_units(heap: &Heap, value: &JValue) -> Result<Vec<u16>, VmError> {
+    match value {
+        JValue::Ref(Some(reference)) => match heap.get(*reference) {
+            // A `CharSequence` is a String or a builder, and both hold the
+            // same units.
+            Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
+                Ok(units.clone())
+            }
+            _ => Err(throw("java.lang.ClassCastException: not a CharSequence")),
+        },
+        _ => Err(throw("java.lang.NullPointerException")),
+    }
+}
+
+/// `Pattern.compile(regex, flags)` — the flags a JDK gives as an int, folded
+/// into the inline `(?ims)` prefix the engine reads. The four the engine
+/// models are the four a program writes; anything else is ignored, as a flag
+/// that changes nothing may be.
+fn fold_regex_flags(source: &[u16], flags: i32) -> Vec<u16> {
+    // `LITERAL` says the pattern is TEXT, not a pattern — the same thing
+    // `Pattern.quote` produces, which the engine already reads.
+    if flags & 0x10 != 0 {
+        let mut out: Vec<u16> = "\\Q".encode_utf16().collect();
+        out.extend_from_slice(source);
+        out.extend("\\E".encode_utf16());
+        return out;
+    }
+    let mut inline = String::new();
+    for (bit, letter) in [(0x02, 'i'), (0x08, 'm'), (0x20, 's'), (0x04, 'x')] {
+        if flags & bit != 0 {
+            inline.push(letter);
+        }
+    }
+    if inline.is_empty() {
+        return source.to_vec();
+    }
+    let mut out: Vec<u16> = format!("(?{inline})").encode_utf16().collect();
+    out.extend_from_slice(source);
+    out
+}
+
 /// The `byte[]` an argument names, as signed bytes.
 fn byte_array_values(heap: &Heap, value: &JValue) -> Result<Vec<i8>, VmError> {
     match value {
@@ -5657,6 +5913,40 @@ pub fn invoke_static(
             Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Path(text))))))
         }
         "java/nio/file/Files" => files_static(heap, vfs, method, args),
+        // `Pattern.compile(regex[, flags])` / `Pattern.matches(regex, text)` /
+        // `Pattern.quote(text)`. A pattern object holds its SOURCE, with the
+        // flags folded in as the inline prefix the engine already reads, and
+        // the compiled form is rebuilt per use exactly as `String.matches`
+        // rebuilds it.
+        "java/util/regex/Pattern" => match method {
+            "compile" => {
+                let source = string_units(heap, &args[0])?;
+                let flags = match args.get(1) {
+                    Some(JValue::Int(flags)) => *flags,
+                    _ => 0,
+                };
+                // Compiled once HERE so a malformed pattern fails at
+                // `compile`, where a JDK reports it, rather than at the first
+                // `find`.
+                compile_regex(&fold_regex_flags(&source, flags))?;
+                Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Pattern {
+                    source,
+                    flags,
+                })))))
+            }
+            "matches" => {
+                let source = string_units(heap, &args[0])?;
+                let input = string_units(heap, &args[1])?;
+                let regex = compile_regex(&source)?;
+                Ok(Some(JValue::Int(i32::from(regex.matches_whole(&input)))))
+            }
+            "quote" => {
+                let text = arg_string(heap, &args[0])?;
+                let quoted = format!("\\Q{text}\\E");
+                Ok(Some(JValue::Ref(Some(heap.alloc_string(&quoted)))))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("Pattern.{method}"))),
+        },
         // `Charset.forName(name)` — and the `StandardCharsets` constants, which
         // the compiler lowers to the same call. An unknown name is the JDK's
         // `UnsupportedCharsetException`, whose message is the name itself.

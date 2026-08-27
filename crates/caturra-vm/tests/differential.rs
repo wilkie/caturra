@@ -39243,3 +39243,94 @@ public class CharsetChecked {
 }
 "#
 );
+
+// `java.util.regex.Pattern` and `Matcher` — refused outright as outside the AP
+// subset, though the ENGINE behind `String.matches`/`replaceAll`/`split` is the
+// same one and had every part a matcher needs: a search from an offset, the
+// group spans it captured, the named groups, and the syntax errors.
+//
+// A Pattern keeps its source as WRITTEN (which is what `pattern()` answers)
+// beside the flags it was compiled with; the two fold into the inline `(?ims)`
+// prefix the engine reads, and `LITERAL` folds into the `\Q…\E` that
+// `Pattern.quote` produces.
+differential_test!(
+    pattern_and_matcher,
+    "Regexes",
+    r#"
+import java.util.Arrays;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
+
+public class Regexes {
+    public static void main(String[] args) {
+        Pattern mail = Pattern.compile("(\\w+)@(\\w+)\\.com");
+        Matcher found = mail.matcher("a@b.com and cc@dd.com");
+        while (found.find()) {
+            System.out.println(found.group() + "|" + found.group(1) + "|" + found.group(2)
+                + "|" + found.start() + "-" + found.end());
+        }
+        System.out.println(found.groupCount() + "|" + mail.pattern());
+
+        // A group that took no part in the match is null, and its span is -1.
+        Matcher optional = Pattern.compile("(a)(b)?").matcher("a ab");
+        optional.find();
+        System.out.println(optional.group() + "|" + optional.group(2) + "|"
+            + optional.start(1) + "|" + optional.end(2));
+        optional.find();
+        System.out.println(optional.group() + "|" + optional.group(2) + "|" + optional.find());
+
+        Matcher named = Pattern.compile("(?<word>\\w+)-(?<num>\\d+)").matcher("abc-42");
+        System.out.println(named.matches() + "|" + named.group("word") + "|" + named.group("num"));
+
+        Matcher nothing = Pattern.compile("x").matcher("yyy");
+        try {
+            nothing.group();
+        } catch (IllegalStateException e) {
+            System.out.println("ise " + e.getMessage());
+        }
+        try {
+            named.group(9);
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println("ioobe " + e.getMessage());
+        }
+        try {
+            Pattern.compile("[a");
+        } catch (PatternSyntaxException e) {
+            System.out.println("pse " + (e.getMessage() != null));
+        }
+
+        Matcher again = Pattern.compile("\\d").matcher("1 2");
+        again.find();
+        again.reset();
+        System.out.println(again.find() + "|" + again.start() + "|"
+            + again.reset("9").find() + again.group());
+
+        System.out.println(Pattern.compile("(\\w)(\\w)").matcher("ab cd").replaceAll("$2$1")
+            + "|" + Pattern.compile("a").matcher("aaa").replaceFirst("-"));
+        System.out.println(Pattern.compile("^a").matcher("ab").lookingAt()
+            + "|" + Pattern.compile("b").matcher("ab").lookingAt());
+
+        // The flags, OR'd as a program writes them — and LITERAL, which says
+        // the pattern is text.
+        System.out.println(Pattern.compile("a.c", Pattern.CASE_INSENSITIVE | Pattern.DOTALL)
+            .matcher("A\nC").matches());
+        System.out.println(Pattern.compile("a.c", Pattern.LITERAL).matcher("a.c").matches()
+            + "|" + Pattern.compile("a.c", Pattern.LITERAL).matcher("abc").matches());
+        System.out.println(Pattern.compile("^x", Pattern.MULTILINE).matcher("a\nx").find());
+        System.out.println(Pattern.compile("A", Pattern.CASE_INSENSITIVE).pattern());
+
+        Pattern spaces = Pattern.compile("\\s+");
+        System.out.println(Arrays.toString(spaces.split("a b  c"))
+            + Arrays.toString(spaces.split("a b  c", 2)));
+        System.out.println(Pattern.matches("[a-c]+", "abcb") + Pattern.quote("a.b"));
+
+        // A builder is a CharSequence, and `find(at)` starts where it is told.
+        Matcher over = Pattern.compile("\\w+").matcher(new StringBuilder("hi there"));
+        System.out.println(over.find() + over.group());
+        Matcher from = Pattern.compile("\\d").matcher("a1b2");
+        System.out.println(from.find(2) + "|" + from.group() + "|" + from.start());
+    }
+}
+"#
+);

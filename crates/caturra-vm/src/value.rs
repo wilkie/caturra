@@ -653,6 +653,19 @@ pub enum HeapObject {
     /// beside it. It carries its canonical NAME and nothing else, which is all
     /// `getBytes`, `new String(bytes, …)` and its own `toString` need.
     Charset(String),
+    /// A `java.util.regex.Pattern`: the pattern SOURCE as the program wrote it
+    /// — which is what `pattern()` answers — beside the flags it was compiled
+    /// with. The two are folded into what the engine reads at each use, and
+    /// the compiled form is rebuilt there, exactly as `String.matches` does.
+    Pattern { source: Vec<u16>, flags: i32 },
+    /// A `java.util.regex.Matcher`: a pattern, the text it walks, where the
+    /// next search starts, and the last match's spans (group 0 first).
+    Matcher {
+        pattern: HeapRef,
+        input: Vec<u16>,
+        at: usize,
+        last: Option<Vec<Option<(usize, usize)>>>,
+    },
     /// A `java.io.PrintWriter` into the virtual filesystem
     /// (write-through: output is durable without `close()`).
     Writer { path: String },
@@ -884,6 +897,7 @@ impl HeapObject {
             | HeapObject::File(_)
             | HeapObject::Path(_)
             | HeapObject::Charset(_)
+            | HeapObject::Pattern { .. }
             | HeapObject::Writer { .. }
             | HeapObject::Class { .. }
             | HeapObject::Field { .. }
@@ -892,6 +906,8 @@ impl HeapObject {
             | HeapObject::Constructor { .. }
             | HeapObject::Free
             | HeapObject::Method { .. } => {}
+            // A matcher holds the pattern it walks.
+            HeapObject::Matcher { pattern, .. } => visit(*pattern),
             HeapObject::Boxed { value, .. } => visit_value(*value, visit),
             HeapObject::RefArray(_, items)
             | HeapObject::ArrayList(items)

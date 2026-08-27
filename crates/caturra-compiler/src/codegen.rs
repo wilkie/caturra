@@ -3080,6 +3080,8 @@ impl MethodTable {
                     }
                     "Path" => Some(JType::Path),
                     "Charset" if !self.has_class(simple) => Some(JType::Charset),
+                    "Pattern" if !self.has_class(simple) => Some(JType::Pattern),
+                    "Matcher" if !self.has_class(simple) => Some(JType::Matcher),
                     // The primitive-specialized pipeline names a type too, so
                     // one can be held in a variable rather than only chained.
                     "IntStream" if !self.has_class(simple) => Some(JType::IntStream),
@@ -6461,6 +6463,12 @@ enum JType {
     /// `java.nio.file.Path` (intrinsic) — a filesystem path, from `Path.of` /
     /// `Paths.get`, read and written through `Files`.
     Path,
+    /// `java.util.regex.Pattern` (intrinsic) — a compiled pattern, from
+    /// `Pattern.compile`. The engine behind `String.matches` is the same one.
+    Pattern,
+    /// `java.util.regex.Matcher` (intrinsic) — a pattern walking one input,
+    /// which is what `find`/`group`/`start`/`end` read.
+    Matcher,
     /// `java.nio.charset.Charset` (intrinsic) — `StandardCharsets.UTF_8` and
     /// the names beside it, which a program passes to `getBytes`, to
     /// `new String(bytes, …)` and to the `Files` readers. The object carries
@@ -6945,6 +6953,8 @@ impl JType {
             JType::Reader => String::from("BufferedReader"),
             JType::Path => String::from("Path"),
             JType::Charset => String::from("Charset"),
+            JType::Pattern => String::from("Pattern"),
+            JType::Matcher => String::from("Matcher"),
             // The FACE the program wrote, not whichever of the two names
             // caturra models the pair under: a diagnostic about a `List<String>`
             // parameter named `ArrayList<String>`, a class the program never
@@ -6985,6 +6995,8 @@ impl JType {
                 | JType::Reader
                 | JType::Path
                 | JType::Charset
+                | JType::Pattern
+                | JType::Matcher
                 | JType::List { .. }
                 | JType::Stack(_)
                 | JType::LinkedList { .. }
@@ -7116,6 +7128,8 @@ impl JType {
             JType::Reader => String::from("Ljava/io/BufferedReader;"),
             JType::Path => String::from("Ljava/nio/file/Path;"),
             JType::Charset => String::from("Ljava/nio/charset/Charset;"),
+            JType::Pattern => String::from("Ljava/util/regex/Pattern;"),
+            JType::Matcher => String::from("Ljava/util/regex/Matcher;"),
             JType::List { .. } => String::from("Ljava/util/ArrayList;"),
             JType::Stack(_) => String::from("Ljava/util/Stack;"),
             // Only reachable for methods that already produced a
@@ -8779,6 +8793,9 @@ enum BRet {
     /// A `java.nio.charset.Charset` — what `forName` and `defaultCharset`
     /// answer.
     Charset,
+    /// `java.util.regex.Pattern` / `Matcher`.
+    Pattern,
+    Matcher,
 }
 
 /// One intrinsic method signature the compiler knows about.
@@ -13639,6 +13656,8 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
         JType::Charset => Some(("java/nio/charset/Charset", CHARSET_METHODS)),
+        JType::Pattern => Some(("java/util/regex/Pattern", PATTERN_METHODS)),
+        JType::Matcher => Some(("java/util/regex/Matcher", MATCHER_METHODS)),
         JType::List { .. } => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::ListIterator(_) => Some(("java/util/ListIterator", LIST_ITERATOR_METHODS)),
         JType::CharSequence => Some(("java/lang/CharSequence", CHAR_SEQUENCE_METHODS)),
@@ -13672,6 +13691,102 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         _ => None,
     }
 }
+
+/// `java.util.regex.Pattern` — the compiled pattern a program keeps.
+const PATTERN_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "matcher",
+        &[BParam::CharSeq],
+        BRet::Matcher,
+        "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;",
+    ),
+    bm("pattern", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("flags", &[], BRet::Int, "()I"),
+    bm(
+        "split",
+        &[BParam::CharSeq],
+        BRet::StrArray,
+        "(Ljava/lang/CharSequence;)[Ljava/lang/String;",
+    ),
+    bm(
+        "split",
+        &[BParam::CharSeq, BParam::Int],
+        BRet::StrArray,
+        "(Ljava/lang/CharSequence;I)[Ljava/lang/String;",
+    ),
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+];
+
+/// `java.util.regex.Matcher` — one pattern walking one input.
+const MATCHER_METHODS: &[BuiltinMethod] = &[
+    bm("find", &[], BRet::Boolean, "()Z"),
+    bm("find", &[BParam::Int], BRet::Boolean, "(I)Z"),
+    bm("matches", &[], BRet::Boolean, "()Z"),
+    bm("lookingAt", &[], BRet::Boolean, "()Z"),
+    bm("hitEnd", &[], BRet::Boolean, "()Z"),
+    bm("group", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("group", &[BParam::Int], BRet::Str, "(I)Ljava/lang/String;"),
+    bm(
+        "group",
+        &[BParam::Str],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
+    bm("start", &[], BRet::Int, "()I"),
+    bm("start", &[BParam::Int], BRet::Int, "(I)I"),
+    bm("end", &[], BRet::Int, "()I"),
+    bm("end", &[BParam::Int], BRet::Int, "(I)I"),
+    bm("groupCount", &[], BRet::Int, "()I"),
+    bm("reset", &[], BRet::Matcher, "()Ljava/util/regex/Matcher;"),
+    bm(
+        "reset",
+        &[BParam::CharSeq],
+        BRet::Matcher,
+        "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;",
+    ),
+    bm(
+        "replaceAll",
+        &[BParam::Str],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
+    bm(
+        "replaceFirst",
+        &[BParam::Str],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+];
+
+/// `java.util.regex.Pattern`'s factories.
+const PATTERN_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "compile",
+        &[BParam::Str],
+        BRet::Pattern,
+        "(Ljava/lang/String;)Ljava/util/regex/Pattern;",
+    ),
+    bm(
+        "compile",
+        &[BParam::Str, BParam::Int],
+        BRet::Pattern,
+        "(Ljava/lang/String;I)Ljava/util/regex/Pattern;",
+    ),
+    bm(
+        "matches",
+        &[BParam::Str, BParam::CharSeq],
+        BRet::Boolean,
+        "(Ljava/lang/String;Ljava/lang/CharSequence;)Z",
+    ),
+    bm(
+        "quote",
+        &[BParam::Str],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
+];
 
 /// `java.nio.charset.Charset`'s own factories.
 const CHARSET_STATIC_METHODS: &[BuiltinMethod] = &[
@@ -14014,6 +14129,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         // `Charset.forName(name)` / `defaultCharset()`, and the
         // `StandardCharsets` constants, which lower to the same call.
         "Charset" => Some(("java/nio/charset/Charset", CHARSET_STATIC_METHODS)),
+        "Pattern" => Some(("java/util/regex/Pattern", PATTERN_STATIC_METHODS)),
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
         "Character" => Some(("java/lang/Character", CHARACTER_METHODS)),
@@ -14066,6 +14182,15 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
         ("Integer" | "Float", "BYTES") => Some(Int(4)),
         ("Character", "SIZE") => Some(Int(16)),
         ("Character", "BYTES") => Some(Int(2)),
+        // `Pattern.CASE_INSENSITIVE` and the flags beside it — ints, and the
+        // JDK's own values, since a program may OR them together.
+        ("Pattern", "UNIX_LINES") => Some(Int(0x01)),
+        ("Pattern", "CASE_INSENSITIVE") => Some(Int(0x02)),
+        ("Pattern", "COMMENTS") => Some(Int(0x04)),
+        ("Pattern", "MULTILINE") => Some(Int(0x08)),
+        ("Pattern", "LITERAL") => Some(Int(0x10)),
+        ("Pattern", "DOTALL") => Some(Int(0x20)),
+        ("Pattern", "UNICODE_CASE") => Some(Int(0x40)),
         ("Math", "PI") => Some(Double(std::f64::consts::PI)),
         ("Math", "E") => Some(Double(std::f64::consts::E)),
         ("Double", "MAX_VALUE") => Some(Double(f64::MAX)),
@@ -14638,6 +14763,8 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Writer => Some(JType::Writer),
         BRet::Path => Some(JType::Path),
         BRet::Charset => Some(JType::Charset),
+        BRet::Pattern => Some(JType::Pattern),
+        BRet::Matcher => Some(JType::Matcher),
         BRet::Int => Some(JType::Int),
         BRet::Double => Some(JType::Double),
         BRet::Long => Some(JType::Long),
@@ -21319,6 +21446,8 @@ impl BodyGen<'_> {
             | JType::Reader
             | JType::Path
             | JType::Charset
+            | JType::Pattern
+            | JType::Matcher
             | JType::List { .. }
             | JType::Stack(_)
             | JType::LinkedList { .. }
@@ -22937,6 +23066,8 @@ impl BodyGen<'_> {
             JType::File => String::from("java/io/File"),
             JType::Path => String::from("java/nio/file/Path"),
             JType::Charset => String::from("java/nio/charset/Charset"),
+            JType::Pattern => String::from("java/util/regex/Pattern"),
+            JType::Matcher => String::from("java/util/regex/Matcher"),
             JType::StringBuilder => String::from("java/lang/StringBuilder"),
             JType::List { .. } => String::from("java/util/ArrayList"),
             JType::Stack(_) => String::from("java/util/Stack"),
@@ -26240,6 +26371,8 @@ impl BodyGen<'_> {
             | JType::Type
             | JType::Constructor
             | JType::Charset
+            | JType::Pattern
+            | JType::Matcher
             | JType::Array { .. } => Some(String::from("(Ljava/lang/Object;)V")),
             JType::Int | JType::Short | JType::Byte => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
@@ -30908,6 +31041,8 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Path
             | JType::Charset
+            | JType::Pattern
+            | JType::Matcher
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
             JType::Scanner | JType::Writer | JType::Reader => {
                 self.error(
