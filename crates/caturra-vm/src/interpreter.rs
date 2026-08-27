@@ -10015,16 +10015,23 @@ impl<'run> Interpreter<'run> {
                         Vec::new()
                     }
                 };
+                // `distinct()` is a `HashSet` in the JDK: it HASHES first and
+                // only compares within a bucket. Comparing by `equals` alone
+                // deduplicated what a JDK keeps — a class with `equals` and no
+                // `hashCode` (the classic student mistake) has a different
+                // hash per instance, so a real `distinct()` removes nothing,
+                // and caturra removed duplicates a JDK keeps.
+                let hash = self.java_hash_code(value)?;
                 let mut duplicate = false;
-                for kept in &seen {
-                    if self.java_equals(value, *kept)? {
+                for (kept_hash, kept) in &seen {
+                    if *kept_hash == hash && self.java_equals(value, *kept)? {
                         duplicate = true;
                         break;
                     }
                 }
                 let mut seen = seen;
                 if !duplicate {
-                    seen.push(value);
+                    seen.push((hash, value));
                 }
                 states[i] = StreamOpState::Seen(seen);
                 if duplicate {
@@ -16565,7 +16572,10 @@ enum UserDispatch<'run> {
 enum StreamOpState {
     None,
     Counter(usize),
-    Seen(Vec<JValue>),
+    /// What a `distinct()` has kept, each with the hash it was filed under —
+    /// a JDK's is a `HashSet`, so two elements are compared only when their
+    /// hashes agree.
+    Seen(Vec<(i32, JValue)>),
     /// What a `sorted` barrier has taken in so far, emitted only once the
     /// source runs dry.
     Buffer(Vec<JValue>),

@@ -2929,9 +2929,11 @@ fn scanner_method(
         // pattern (which is the whole point of the overload).
         "next" if !args.is_empty() => {
             let pattern = scanner_pattern_arg(heap, args)?;
-            let token = scanner_peek_token(heap, console, receiver)?
-                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            let Some((token, consumed)) = scanner_scan(heap, console, receiver)? else {
+                return Err(scanner_exhausted(heap, receiver));
+            };
             if !scanner_token_matches(&token, &pattern)? {
+                scanner_skip_to_token(heap, receiver, &token, consumed);
                 return Err(throw("java.util.InputMismatchException"));
             }
             scanner_next_token(heap, console, receiver)?;
@@ -2939,8 +2941,9 @@ fn scanner_method(
             Ok(Some(JValue::Ref(Some(reference))))
         }
         "next" => {
-            let token = scanner_next_token(heap, console, receiver)?
-                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            let Some(token) = scanner_next_token(heap, console, receiver)? else {
+                return Err(scanner_exhausted(heap, receiver));
+            };
             let reference = heap.alloc_string(&token);
             Ok(Some(JValue::Ref(Some(reference))))
         }
@@ -3238,18 +3241,37 @@ fn scanner_ungroup(token: &str) -> Option<String> {
 /// that is a well-formed number but does not fit reports the failure the
 /// underlying parse would have ("For input string", or the range complaint
 /// the byte/short paths give).
+/// The exception a token read raises when the input has run out — and the
+/// SIDE EFFECT that comes with it. A JDK's `next()` skips delimiters looking
+/// for a token, and the whitespace it skipped stays skipped: after a failed
+/// `next()` at the end of input the position is at the end, so a `hasNextLine()`
+/// that followed answered false where caturra, which left the cursor where it
+/// was, still saw the trailing newline as a line.
+fn scanner_exhausted(heap: &mut Heap, receiver: HeapRef) -> VmError {
+    let (buffer, _, _) = scanner_state(heap, receiver);
+    scanner_set_pos(heap, receiver, buffer.len());
+    throw("java.util.NoSuchElementException")
+}
+
 fn scanner_take_msg<T>(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
     receiver: HeapRef,
     parse: impl FnOnce(&str) -> Result<T, Option<String>>,
 ) -> Result<T, VmError> {
-    let token = scanner_peek_token(heap, console, receiver)?
-        .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
-    let value = parse(&token).map_err(|message| match message {
-        Some(message) => throw(format!("java.util.InputMismatchException: {message}")),
-        None => throw("java.util.InputMismatchException"),
-    })?;
+    let Some((token, consumed)) = scanner_scan(heap, console, receiver)? else {
+        return Err(scanner_exhausted(heap, receiver));
+    };
+    let value = match parse(&token) {
+        Ok(value) => value,
+        Err(message) => {
+            scanner_skip_to_token(heap, receiver, &token, consumed);
+            return Err(match message {
+                Some(message) => throw(format!("java.util.InputMismatchException: {message}")),
+                None => throw("java.util.InputMismatchException"),
+            });
+        }
+    };
     scanner_next_token(heap, console, receiver)?;
     Ok(value)
 }
@@ -3260,9 +3282,13 @@ fn scanner_take<T>(
     receiver: HeapRef,
     parse: impl FnOnce(&str) -> Option<T>,
 ) -> Result<T, VmError> {
-    let token = scanner_peek_token(heap, console, receiver)?
-        .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
-    let value = parse(&token).ok_or_else(|| throw("java.util.InputMismatchException"))?;
+    let Some((token, consumed)) = scanner_scan(heap, console, receiver)? else {
+        return Err(scanner_exhausted(heap, receiver));
+    };
+    let Some(value) = parse(&token) else {
+        scanner_skip_to_token(heap, receiver, &token, consumed);
+        return Err(throw("java.util.InputMismatchException"));
+    };
     scanner_next_token(heap, console, receiver)?;
     Ok(value)
 }
@@ -3309,6 +3335,17 @@ fn scanner_peek_token(
     receiver: HeapRef,
 ) -> Result<Option<String>, VmError> {
     Ok(scanner_scan(heap, console, receiver)?.map(|(token, _)| token))
+}
+
+/// Move the cursor to the START of the next token, past the delimiters before
+/// it. A JDK's failed `nextInt()` "will not pass the token that caused the
+/// exception" — but it does not put back the WHITESPACE it skipped either, so
+/// the `nextLine()` that follows answers the rest of the line from the token
+/// onwards. caturra left the cursor where it was and returned the leading
+/// spaces too.
+fn scanner_skip_to_token(heap: &mut Heap, receiver: HeapRef, token: &str, consumed: usize) {
+    let (_, pos, _) = scanner_state(heap, receiver);
+    scanner_set_pos(heap, receiver, pos + consumed.saturating_sub(token.len()));
 }
 
 /// The next token AND how many bytes reading it consumes — the token itself

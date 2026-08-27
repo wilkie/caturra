@@ -29838,6 +29838,93 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// `distinct()` is a `HashSet`, not an equals scan. A class with `equals` and
+// no `hashCode` — the classic mistake, and the one a lesson is built around —
+// gives every instance a different hash, so a JDK's `distinct()` removes
+// NOTHING; caturra compared with `equals` alone and removed the duplicates.
+// The collections beside it already hashed first, which is what made the
+// stream the odd one out.
+differential_test!(
+    diff_distinct_hashes_before_it_compares,
+    "Dedup",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class Dedup {
+    static class NoHash {
+        final int v;
+        NoHash(int v) { this.v = v; }
+        @Override public boolean equals(Object o) { return o instanceof NoHash && ((NoHash) o).v == v; }
+        @Override public String toString() { return "n" + v; }
+    }
+
+    static class WithHash {
+        final int v;
+        WithHash(int v) { this.v = v; }
+        @Override public boolean equals(Object o) { return o instanceof WithHash && ((WithHash) o).v == v; }
+        @Override public int hashCode() { return v; }
+        @Override public String toString() { return "w" + v; }
+    }
+
+    public static void main(String[] args) {
+        List<NoHash> loose = List.of(new NoHash(1), new NoHash(1), new NoHash(2));
+        System.out.println(loose.stream().distinct().count()
+            + " " + new HashSet<>(loose).size()
+            + " " + loose.contains(new NoHash(1))
+            + " " + loose.indexOf(new NoHash(2)));
+
+        List<WithHash> proper = List.of(new WithHash(1), new WithHash(1), new WithHash(2));
+        System.out.println(proper.stream().distinct().count()
+            + " " + new HashSet<>(proper).size()
+            + " " + proper.contains(new WithHash(1)));
+
+        Map<NoHash, String> map = new HashMap<>();
+        map.put(new NoHash(1), "x");
+        System.out.println(map.get(new NoHash(1)) + " " + map.containsKey(new NoHash(1)) + " " + map.size());
+
+        System.out.println(Stream.of("a", "a", "b").distinct().count()
+            + " " + Stream.of(1, 1, 2).distinct().count()
+            + " " + Stream.of(1.5, 1.5).distinct().count());
+    }
+}
+"#
+);
+
+// What a `Scanner` does when a read FAILS, which is where the cursor ends up.
+// A JDK skips delimiters looking for a token, and the whitespace it skipped
+// stays skipped: after a failed `nextInt()` the cursor sits at the offending
+// TOKEN — not before the spaces in front of it — so the `nextLine()` that
+// follows answers the rest of the line from the token onwards. And a read that
+// runs out of input entirely leaves the cursor at the END, so the
+// `hasNextLine()` after it is false where caturra still saw the trailing
+// newline as a line of its own.
+differential_test_stdin!(
+    diff_a_failed_scan_leaves_the_cursor_where_a_jdk_leaves_it,
+    "Cursor",
+    r#"
+import java.util.*;
+
+public class Cursor {
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+        try { System.out.println(sc.nextInt()); }
+        catch (RuntimeException e) { System.out.println("! " + e.getClass().getName()); }
+        System.out.println("rest=[" + sc.nextLine() + "]");
+
+        System.out.println("t=" + sc.next());
+        System.out.println("hl=" + sc.hasNextLine() + " h=" + sc.hasNext());
+        try { sc.next(); }
+        catch (NoSuchElementException e) { System.out.println("exhausted"); }
+        System.out.println("after=" + sc.hasNextLine() + " " + sc.hasNext());
+        try { System.out.println("[" + sc.nextLine() + "]"); }
+        catch (RuntimeException e) { System.out.println("! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+}
+"#,
+    "   x y   \nlast\n"
+);
+
 // Three corners of the String surface a sequence fuzz found. `intern()` adds
 // the RECEIVER to the pool when the pool has never seen that text, so
 // `String.valueOf(42).intern()` IS its receiver — caturra allocated a

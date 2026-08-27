@@ -8659,6 +8659,42 @@ it was refused.
 Pinned by `diff_string_identity_joining_and_statics` and
 `diff_the_case_insensitive_order_needs_no_import`.
 
+### Hashing before comparing, and where a failed scan stops (2026-08-26)
+
+Two fuzzes in one round. The first put random USER CLASSES — with and without
+`equals`, `hashCode`, `compareTo` — through the collections that consult them:
+`contains`, `indexOf`, `remove`, `sort`, a `HashSet`, a `HashMap`, a `TreeSet`,
+`binarySearch`, `distinct`. 200 programs, one defect, and it is the one a
+lesson is built around.
+
+**`distinct()` is a `HashSet`, not an `equals` scan.** A class with `equals`
+and no `hashCode` gives every instance a different hash, so a JDK's
+`distinct()` removes NOTHING — the duplicates land in different buckets and are
+never compared. caturra compared with `equals` alone and removed them, which is
+the answer the student EXPECTED and not the one Java gives. Every collection
+beside it already hashed first; the stream was the odd one out.
+
+The second fuzz drove random `Scanner` programs against random input —
+`nextInt`, `next`, `nextLine`, `nextDouble`, `hasNext*` in random order over
+tokens, blank lines and input that runs out mid-read. Two defects, both about
+where the cursor STOPS when a read fails.
+
+**A failed `nextInt()` leaves the cursor at the offending TOKEN.** A JDK "will
+not pass the token that caused the exception" — but it does not put back the
+delimiters it skipped on the way there either. So after a mismatch on
+`   x y   `, a JDK's `nextLine()` answers `x y   ` and caturra's answered
+`   x y   `, leading spaces and all.
+
+**And a read that runs out of input leaves the cursor at the END.** The skipped
+whitespace stays skipped, so the `hasNextLine()` after a failed `next()` is
+false — where caturra, which left the cursor untouched, still saw the trailing
+newline as a line of its own and answered an empty one.
+
+240 generated programs across the two dimensions agree with a real JDK.
+
+Pinned by `diff_distinct_hashes_before_it_compares` and
+`diff_a_failed_scan_leaves_the_cursor_where_a_jdk_leaves_it`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
