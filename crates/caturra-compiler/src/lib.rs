@@ -614,6 +614,11 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // `Collections.reverseOrder()` also yields one without naming it.
             || s.text.contains("Comparator")
             || s.text.contains("reverseOrder")
+            // ...and so does `String.CASE_INSENSITIVE_ORDER`, whose TYPE is a
+            // `Comparator<String>` the program never spells. Without the
+            // bundle its type was unknown, so calling `compare` on it was
+            // refused in a program that names `java.util` nowhere.
+            || s.text.contains("CASE_INSENSITIVE_ORDER")
             // The `java.util.function` interfaces alias the bundled erased ones.
             || s.text.contains("java.util.function")
             || s.text.contains("Function")

@@ -14278,7 +14278,12 @@ impl<'run> Interpreter<'run> {
             && let Some(crate::value::HeapObject::JavaString(units)) = self.heap.get(receiver)
         {
             let text = String::from_utf16_lossy(units);
-            let canonical = self.intern_string(&text);
+            // A string the pool has never seen becomes the pooled one ITSELF:
+            // `String.valueOf(42).intern() == String.valueOf(42)`'s receiver
+            // is true on a JDK, because `intern` adds the receiver rather than
+            // a canonical copy of it. Allocating one made the identity false
+            // for every string the program built rather than wrote.
+            let canonical = *self.string_pool.entry(text).or_insert(receiver);
             frame.stack.push(JValue::Ref(Some(canonical)));
             return Ok(None);
         }

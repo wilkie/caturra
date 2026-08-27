@@ -3922,6 +3922,17 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
                 return Some(shape.return_type.clone());
             }
             let receiver = receiver.as_deref()?;
+            // A library STATIC, whose receiver is a class name rather than a
+            // value: `String.valueOf(c)` is a `String`, and reading its type
+            // through the receiver (as an instance call would) answered
+            // nothing — so `mapToObj(c -> String.valueOf(c))` produced an
+            // `Object` element and the `String::concat` after it could not
+            // resolve.
+            if let Expr::Name { path, .. } = receiver
+                && let Some(ty) = library_static_type(path.last()?, method, args.len())
+            {
+                return Some(ty);
+            }
             // An ENUM's own statics, which have no receiver VALUE to type:
             // `Kind.values()` is a `Kind[]` and `Kind.valueOf(s)` a `Kind`.
             if let Some(name) = enum_owner_name(receiver, ctx) {
@@ -4384,6 +4395,88 @@ fn literal_element_type(args: &[Expr], ctx: &Ctx) -> TypeRef {
 
 /// The element type of a receiver declared as an array (`int[]` → `int`,
 /// `String[]` → `String`) — for typing the generator of `Arrays.setAll`.
+/// What a LIBRARY STATIC answers, for the handful whose return is a scalar or
+/// a String. The instance table beside this one is keyed by the receiver's
+/// TYPE, which a static call has no value to give — the receiver is a class
+/// name. Kept to the calls a lambda body actually makes; anything else stays
+/// unknown, which is where it was.
+fn library_static_type(class: &str, method: &str, argc: usize) -> Option<TypeRef> {
+    // Written as a sequence of questions rather than one table: the families
+    // cut across classes (every wrapper's `toString` is a String, every
+    // `parse` a scalar of its own width), and a match keyed by the pair says
+    // that far less clearly.
+    let wrapper = matches!(
+        class,
+        "Integer" | "Long" | "Double" | "Float" | "Short" | "Byte" | "Boolean" | "Character"
+    );
+    if class == "String" && matches!(method, "valueOf" | "copyValueOf" | "format" | "join") {
+        return Some(TypeRef::Named(String::from("String")));
+    }
+    if (wrapper && method == "toString")
+        || (matches!(class, "Integer" | "Long")
+            && matches!(method, "toBinaryString" | "toHexString" | "toOctalString"))
+        || (class == "Objects" && method == "toString")
+    {
+        return Some(TypeRef::Named(String::from("String")));
+    }
+    if class == "Math" {
+        // `abs`/`max`/`min`/`round` and the exact-arithmetic helpers answer the
+        // ARGUMENT's own width, which nothing here knows; the rest are doubles.
+        let by_argument = matches!(
+            method,
+            "abs"
+                | "max"
+                | "min"
+                | "round"
+                | "floorDiv"
+                | "floorMod"
+                | "addExact"
+                | "subtractExact"
+                | "multiplyExact"
+                | "toIntExact"
+                | "negateExact"
+                | "incrementExact"
+                | "decrementExact"
+        );
+        return (!by_argument).then_some(TypeRef::Double);
+    }
+    let answer = match class {
+        "Integer" => match method {
+            "parseInt" | "compare" | "signum" | "bitCount" | "max" | "min" | "sum" => TypeRef::Int,
+            _ => return None,
+        },
+        "Long" => match method {
+            "parseLong" | "max" | "min" | "sum" => TypeRef::Long,
+            "compare" | "signum" | "bitCount" => TypeRef::Int,
+            _ => return None,
+        },
+        "Double" | "Float" => match (method, argc) {
+            ("parseDouble" | "parseFloat", 1) | ("max" | "min" | "sum", 2) => TypeRef::Double,
+            ("compare" | "signum", _) => TypeRef::Int,
+            _ => return None,
+        },
+        "Boolean" => match method {
+            "parseBoolean" | "logicalAnd" | "logicalOr" | "logicalXor" => TypeRef::Boolean,
+            "compare" => TypeRef::Int,
+            _ => return None,
+        },
+        "Character" => match method {
+            "toUpperCase" | "toLowerCase" | "forDigit" => TypeRef::Char,
+            "getNumericValue" | "compare" | "digit" => TypeRef::Int,
+            "isDigit" | "isLetter" | "isLetterOrDigit" | "isUpperCase" | "isLowerCase"
+            | "isWhitespace" | "isAlphabetic" | "isSpaceChar" => TypeRef::Boolean,
+            _ => return None,
+        },
+        "Objects" => match method {
+            "equals" | "isNull" | "nonNull" => TypeRef::Boolean,
+            "hash" | "hashCode" => TypeRef::Int,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(answer)
+}
+
 /// The ENUM an expression names, when it names one: `Kind.values()`'s owner.
 fn enum_owner_name(owner: &Expr, ctx: &Ctx) -> Option<String> {
     let Expr::Name { path, .. } = owner else {

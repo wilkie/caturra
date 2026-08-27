@@ -8618,6 +8618,47 @@ the very same order, since an enum's natural ordering is its ordinal.
 
 Pinned by `diff_an_enums_constants_keep_their_type`.
 
+### Three corners of the String surface (2026-08-26)
+
+Random SEQUENCES of `String` and `StringBuilder` calls — every method against
+edge arguments, indices from -1 to past the end, unicode, surrogate pairs and
+regex specials, with the exceptions caught so their class and message are
+compared too — found three defects that two hand-written sweeps of the same
+surface had not.
+
+**`intern()` adds the RECEIVER to the pool.** A JDK pools the string it is
+given when that text has never been pooled, so
+`String.valueOf(42).intern() == String.valueOf(42)`'s receiver is true. caturra
+allocated a canonical copy instead, which made the identity false for every
+string a program BUILT rather than wrote — and the pool was consulted by
+scanning the heap for equal text, so an unrelated earlier string could be
+handed back as "the canonical one".
+
+**`String.join(delimiter, iterable)` reads any collection.** It falls back to
+the general element reader for anything that is not a plain list, and that
+reader had no arm for an unmodifiable LIST — so `String.join("-", List.of("a"))`
+threw `NullPointerException` where the same call over an `ArrayList` worked.
+
+**And a lambda body could not type a library STATIC.** The table beside it is
+keyed by the receiver's TYPE, which a static call has no value to give: its
+receiver is a class name. So `mapToObj(c -> String.valueOf(c))` produced an
+`Object` element and the `String::concat` after it had no method to resolve.
+The common statics — every wrapper's `toString`/`parse`/`compare`,
+`Character`'s classification methods, `Math`, `Objects`, `String.valueOf` and
+friends — answer their own types now; `Math.abs`/`max`/`min`/`round` stay
+unknown on purpose, since they answer the ARGUMENT's width.
+
+A fourth came out of the same batch: **`String.CASE_INSENSITIVE_ORDER` needs no
+import.** Its type is a `Comparator<String>` the program never spells, so a
+program that names `java.util` nowhere still needs the bundled comparator
+interface — without it the constant's type was unknown and calling `compare` on
+it was refused.
+
+210 generated programs agree with a real JDK.
+
+Pinned by `diff_string_identity_joining_and_statics` and
+`diff_the_case_insensitive_order_needs_no_import`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

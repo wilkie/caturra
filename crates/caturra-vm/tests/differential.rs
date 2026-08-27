@@ -29838,6 +29838,70 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// Three corners of the String surface a sequence fuzz found. `intern()` adds
+// the RECEIVER to the pool when the pool has never seen that text, so
+// `String.valueOf(42).intern()` IS its receiver — caturra allocated a
+// canonical copy and the identity was false for every string a program built
+// rather than wrote. `String.join(delimiter, iterable)` reads any collection,
+// and the one reader it fell back to had no arm for an unmodifiable LIST, so
+// `String.join("-", List.of("a"))` threw `NullPointerException`. And a lambda
+// body could not type a library STATIC — `mapToObj(c -> String.valueOf(c))`
+// produced an `Object` element, so the `String::concat` after it had no method
+// to resolve.
+differential_test!(
+    diff_string_identity_joining_and_statics,
+    "StringCorners",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class StringCorners {
+    public static void main(String[] args) {
+        String built = String.valueOf(42);
+        System.out.println((built.intern() == built) + " " + ("hello".intern() == "hello"));
+        String copied = new String("hi");
+        System.out.println((copied.intern() == copied) + " " + (copied.intern() == "hi"));
+        String half = "he";
+        System.out.println(((half + "llo").intern() == "hello") + " " + (("x" + 1).intern() == "x1"));
+
+        System.out.println(String.join("-", List.of("a", "b")));
+        System.out.println(String.join(",", new ArrayList<>(List.of("x"))));
+        System.out.println(String.join("+", Collections.unmodifiableList(new ArrayList<>(List.of("p", "q")))));
+        System.out.println(String.join("/", new TreeSet<>(List.of("b", "a"))));
+        System.out.println("[" + String.join("", new String[0]) + "]");
+        System.out.println(String.join("-", "a", "b"));
+
+        System.out.println("abc".chars().map(c -> c - 32).mapToObj(c -> String.valueOf((char) c))
+            .reduce("", String::concat));
+        System.out.println(Stream.of(1, 2).map(n -> Integer.toString(n)).collect(Collectors.joining("|")));
+        System.out.println(Stream.of("4", "5").map(t -> Integer.parseInt(t) * 2).collect(Collectors.toList()));
+        System.out.println(Stream.of('a', 'B').map(c -> Character.toUpperCase(c)).collect(Collectors.toList()));
+        System.out.println(Stream.of("x").map(t -> Math.sqrt(4.0)).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// `String.CASE_INSENSITIVE_ORDER` is a `Comparator<String>` the program never
+// spells, so a program that names `java.util` NOWHERE still needs the bundled
+// comparator interface to have a type for it. Without that the receiver's type
+// was unknown and calling `compare` on it was refused.
+differential_test!(
+    diff_the_case_insensitive_order_needs_no_import,
+    "NoImport",
+    r#"
+public class NoImport {
+    public static void main(String[] args) {
+        System.out.println(String.CASE_INSENSITIVE_ORDER.compare("A", "a"));
+        System.out.println(String.CASE_INSENSITIVE_ORDER.compare("b", "A"));
+        String[] words = {"pear", "Apple"};
+        java.util.Arrays.sort(words, String.CASE_INSENSITIVE_ORDER);
+        System.out.println(java.util.Arrays.toString(words));
+    }
+}
+"#
+);
+
 // An enum's own statics have no receiver VALUE to read a type from, so
 // `Kind.values()` had none: a stream over it refused the lambda after it
 // outright (no functional-interface position), and every other source — a

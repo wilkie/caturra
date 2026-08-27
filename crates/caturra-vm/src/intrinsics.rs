@@ -7480,6 +7480,15 @@ fn set_like_elements(heap: &Heap, reference: HeapRef) -> Option<Vec<JValue>> {
             .collect(),
         HeapObject::TreeSet { values, .. } => values.clone(),
         HeapObject::UnmodifiableSet(inner) => set_like_elements(heap, *inner)?,
+        // ...and an unmodifiable LIST, which `List.of` and
+        // `Collections.unmodifiableList` both answer. Without this arm the one
+        // reader that falls back here — `String.join(delimiter, iterable)` —
+        // threw `NullPointerException` for `String.join("-", List.of("a"))`,
+        // ordinary Java that works through any other list.
+        HeapObject::UnmodifiableList(inner) => heap
+            .list_values(*inner)
+            .cloned()
+            .or_else(|| set_like_elements(heap, *inner))?,
         // A sorted view is iterable like any other collection, and a MapView
         // over one reaches here through the same door.
         HeapObject::SortedView { .. } => sorted_view_pairs(heap, reference)
