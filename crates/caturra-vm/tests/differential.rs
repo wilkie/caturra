@@ -33176,10 +33176,12 @@ public class ToArrayGeneratorVar {
 );
 
 // A generic method whose RETURN variable is pinned only by what the lambda body
-// gives back. The lambda's PARAMETER types are inferred; the result stays
-// `Object`, so a call assigned to an `Integer` is an incompatible type here.
-stricter_than_javac!(
-    stricter_return_variable_pinned_only_by_a_lambda,
+// gives back — `<T, R> R conv(T v, Function<T, R> f)`. Nothing at the call site
+// names `R`: the lambda's own body is the only thing that says what it is, and
+// the lambda pass records that on the synthesized class. This was a pinned
+// STRICTNESS for four rounds, and closing it is what retired the bullet.
+differential_test!(
+    a_return_variable_pinned_only_by_a_lambda,
     "ReturnFromLambdaBody",
     r#"
 import java.util.function.*;
@@ -33189,9 +33191,32 @@ public class ReturnFromLambdaBody {
         return f.apply(value);
     }
 
+    static <R> R produce(Supplier<R> supplier) {
+        return supplier.get();
+    }
+
+    static class Box<T> {
+        private final T value;
+        Box(T value) { this.value = value; }
+        T get() { return value; }
+        <R> Box<R> map(Function<T, R> f) { return new Box<>(f.apply(value)); }
+    }
+
     public static void main(String[] args) {
         Integer length = conv("abc", s -> s.length());
-        System.out.println(length);
+        System.out.println(length + 1);
+        String upper = conv("abc", s -> s.toUpperCase());
+        System.out.println(upper.length());
+        System.out.println(conv(3, n -> n * 2) + 1);
+
+        int five = produce(() -> 5);
+        String text = produce(() -> "text");
+        System.out.println(five * 2 + text.charAt(0));
+
+        // ...and CHAINED, which reads the receiver's own argument and the
+        // method's inference in the same breath.
+        Box<String> box = new Box<>("hi");
+        System.out.println(box.map(s -> s.length()).get() + 1);
     }
 }
 "#
@@ -38391,7 +38416,7 @@ public class GenericUse {
 differential_reject!(
     a_parameterized_new_is_not_another_parameterization,
     "NewArgumentChecked",
-    r#"
+    r"
 import java.util.*;
 
 public class NewArgumentChecked {
@@ -38406,5 +38431,5 @@ public class NewArgumentChecked {
         System.out.println(list.size());
     }
 }
-"#
+"
 );

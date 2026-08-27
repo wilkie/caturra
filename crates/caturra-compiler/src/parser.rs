@@ -5447,9 +5447,24 @@ fn infer_return_plan(
             // `<T> T max(List<T> xs)` — the ELEMENT pins T. Only a single
             // type argument is read: with two, which one is `T` depends on
             // the container, and guessing would be worse than erasing.
-            TypeRef::Generic { args, .. } => match args.as_slice() {
-                [TypeRef::Named(name)] if name == ret_var => Some(InferSource::Element(index)),
-                _ => None,
+            TypeRef::Generic { base, args } => match args.as_slice() {
+                [TypeRef::Named(name)] if name == ret_var && base != "Supplier" => {
+                    Some(InferSource::Element(index))
+                }
+                // A functional interface whose RESULT is the variable
+                // (`Function<T, R> f`): the lambda's own body is the only
+                // thing that pins it, and the lambda pass records what that
+                // body answers. Without this a `<T, R> R conv(T, Function<T,
+                // R>)` had no source at all and its result stayed `Object`.
+                args => crate::ast::functional_result_arity(base)
+                    .filter(|arity| *arity == args.len())
+                    .and_then(|_| args.last())
+                    .and_then(|last| match last {
+                        TypeRef::Named(name) if name == ret_var => {
+                            Some(InferSource::LambdaResult(index))
+                        }
+                        _ => None,
+                    }),
             },
             _ => None,
         })

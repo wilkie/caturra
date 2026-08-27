@@ -5825,8 +5825,9 @@ Two structural gaps fell out of the same probe:
 
 ~~One gap left open, a refusal with its own message: a functional interface
 parameterized on a METHOD's own type variable~~ — **closed later**, see "A
-generic method's lambda argument". What remains of it is narrower: a return
-variable pinned only by what the lambda BODY gives back.
+generic method's lambda argument". ~~What remains of it is narrower: a return
+variable pinned only by what the lambda BODY gives back.~~ — closed too, see
+"A type variable the lambda's body pins".
 
 ### What a library object says it IS
 
@@ -6171,11 +6172,10 @@ could not pin falls back to the erased signature, because a half-substituted
 target reaches codegen as a name nothing declares: the first version of this
 answered "unknown type 'R'", which is a worse reply than the honest erasure.
 
-One form is still out, and it is the one that needs a different mechanism:
+One form was still out, and it is the one that needed a different mechanism:
 `<T, R> R conv(T v, Function<T, R> f)`, where `R` is pinned only by what the
-lambda BODY returns. javac infers it from the body; caturra types the lambda's
-parameter correctly and leaves the result `Object`, so a call assigned to an
-`Integer` is refused as an incompatible type rather than a missing feature.
+lambda BODY returns. **Closed later**, see "A type variable the lambda's body
+pins".*
 
 ### A constant conditional keeps its type
 
@@ -8965,10 +8965,6 @@ entries after it was written down.
 - `IntFunction<String[]> gen = String[]::new; list.toArray(gen)` — the
   generator overload is modelled by reducing `String[]::new` to the array it
   makes, which a VARIABLE holding the same function cannot be. (`stricter_to_array_needs_a_generator_written_out`)
-- `<T, R> R conv(T v, Function<T, R> f)` assigned to an `Integer` — the
-  lambda's PARAMETER types are inferred (see "A generic method's lambda
-  argument"), but a return variable pinned only by what the lambda BODY gives
-  back stays `Object`. (`stricter_return_variable_pinned_only_by_a_lambda`)
 - `Arrays.stream(array, from, to)` — the RANGE overload; the whole-array form
   is modelled. (`stricter_arrays_stream_takes_no_range`)
 - `Comparator.comparing(Map.Entry::getKey)` — the key extractor's parameter is
@@ -9214,3 +9210,42 @@ to itself. It describes as what it is, which is javac's wording exactly.
 
 Pinned by `a_generic_class_as_a_program_uses_one` and
 `a_parameterized_new_is_not_another_parameterization`.
+
+### A type variable the lambda's body pins (2026-08-27)
+
+`<T, R> R conv(T value, Function<T, R> f)` called as `conv("abc", s ->
+s.length())`. Nothing at the call site names `R`: the lambda's own BODY is the
+only thing that says what it is. That was a pinned STRICTNESS for four rounds —
+the lambda's parameter typed correctly, its result stayed `Object`, and a call
+assigned to an `Integer` was an incompatible type.
+
+Everything needed was already in place and never joined up. The lambda pass
+types the body and leaves the answer on the synthesized class as a synthetic
+static field, which is how a mapped stream keeps its element. The inference
+plan a generic method carries had two kinds of source — the parameter IS the
+variable, or a container OF it — and a functional interface whose RESULT is the
+variable is a third: `InferSource::LambdaResult`. `Predicate` and `Consumer`
+are deliberately not among the interfaces that qualify; their result is
+`boolean`/`void`, so a variable in their last position is a PARAMETER and pins
+nothing.
+
+Two things had to be fixed for the field to be readable at all.
+
+**The lambda's answer sat in a synthesized local.** A body with a declared
+result type compiles to `R __caturraResult = (expr); return __caturraResult;`,
+and that local is declared as the target's result — `Object` when the target is
+parameterized on a type variable. Reading the returned NAME gave the erasure
+and nothing else, so no lambda in this position ever recorded what it produced.
+The initializer is the answer.
+
+**A parameterized receiver skipped the method's own inference.** `type_of`'s
+arm for a call on a `Box<String>` read `sig.ret` straight and substituted the
+receiver's argument into it — so `box.map(s -> s.length())` assigned to a
+variable typed fine, while the same call CHAINED into `.get()` answered an
+`Object`. The type_of/emit divergence, in the one arm that had not been
+converted.
+
+The strictness bullet is gone from the list below; the test that pinned it is
+an ordinary differential test now, widened to the chained and container forms.
+
+Pinned by `a_return_variable_pinned_only_by_a_lambda`.

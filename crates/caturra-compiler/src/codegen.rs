@@ -5073,6 +5073,18 @@ pub(crate) fn functional_erased(name: &str) -> Option<&'static str> {
     })
 }
 
+/// What a synthesized LAMBDA class answers, read off the synthetic field the
+/// lambda pass leaves on it. `None` for anything that is not a lambda class,
+/// and for a lambda whose body could not be typed — the caller then keeps the
+/// erased answer it had.
+fn lambda_produces(arg: JType, table: &MethodTable) -> Option<JType> {
+    let JType::Object(lambda) = arg else {
+        return None;
+    };
+    let (_, produces) = table.field(table.class_name(lambda), crate::lambda::PRODUCES_FIELD)?;
+    Some(produces.ty)
+}
+
 /// Which of a CONSTRUCTOR's parameters pin the class's single type variable,
 /// so a diamond can infer its argument the way javac does: `new Node<>(5)` on
 /// a `class Node<T> { Node(T v) }` is a `Node<Integer>`, not a raw `Node`.
@@ -5126,7 +5138,9 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) ->
     let sources = &plan.sources;
     let mut joined: Option<JType> = None;
     for &source in sources {
-        let (InferSource::Direct(index) | InferSource::Element(index)) = source;
+        let (InferSource::Direct(index)
+        | InferSource::Element(index)
+        | InferSource::LambdaResult(index)) = source;
         let Some(&arg) = arg_types.get(index) else {
             return sig.ret;
         };
@@ -5136,6 +5150,14 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) ->
             InferSource::Direct(_) => arg,
             InferSource::Element(_) => match TypeArgs::of(arg).first {
                 Some(elem) => elem.base_type(),
+                None => return sig.ret,
+            },
+            // The lambda's own BODY pins it: the lambda pass typed that body
+            // and left the answer on the synthesized class, which is the only
+            // thing that still knows it here — the same field a mapped
+            // stream's element is read from.
+            InferSource::LambdaResult(_) => match lambda_produces(arg, table) {
+                Some(produced) => produced,
                 None => return sig.ret,
             },
         };
@@ -19219,11 +19241,14 @@ impl BodyGen<'_> {
         let plan = sig.ret_infer.as_ref()?;
         let mut joined: Option<JType> = None;
         for &source in &plan.sources {
-            let (InferSource::Direct(index) | InferSource::Element(index)) = source;
+            let (InferSource::Direct(index)
+            | InferSource::Element(index)
+            | InferSource::LambdaResult(index)) = source;
             let &arg = arg_types.get(index)?;
             let arg = match source {
                 InferSource::Direct(_) => arg,
                 InferSource::Element(_) => TypeArgs::of(arg).first?.base_type(),
+                InferSource::LambdaResult(_) => lambda_produces(arg, self.table)?,
             };
             let reference = match boxable_primitive(arg) {
                 Some(elem) => JType::Boxed(elem),
@@ -26292,18 +26317,33 @@ impl BodyGen<'_> {
                             let arg_types: Vec<JType> =
                                 args.iter().map(|a| self.type_of(a)).collect();
                             return match self.table.resolve(&class_name, method, &arg_types) {
-                                Resolution::Found(sig) => match sig.ret {
-                                    // Must agree with `substitute_type_var`,
-                                    // down to WHICH parameter this is: a
-                                    // `Pair<String, Integer>.getValue()`
-                                    // returns the second argument.
-                                    Some(JType::TypeVar(index)) => self
-                                        .table
-                                        .type_arg(arg, rest, index)
-                                        .map_or(JType::Error, |a| substituted_read(a, self.table)),
-                                    Some(ret) => substitute_member_type(ret, arg, rest, self.table),
-                                    None => JType::Error,
-                                },
+                                // The method's OWN return inference runs first
+                                // — `<R> Box<R> map(Function<T, R>)` is pinned
+                                // by what the lambda answers — and the
+                                // receiver's argument is substituted into
+                                // whatever that leaves. Reading `sig.ret`
+                                // straight was the type_of/emit divergence
+                                // once more: `b.map(f)` assigned to a variable
+                                // typed fine, and the same call CHAINED into
+                                // `.get()` answered an Object.
+                                Resolution::Found(sig) => {
+                                    match inferred_return(sig, &arg_types, self.table) {
+                                        // Must agree with `substitute_type_var`,
+                                        // down to WHICH parameter this is: a
+                                        // `Pair<String, Integer>.getValue()`
+                                        // returns the second argument.
+                                        Some(JType::TypeVar(index)) => {
+                                            self.table.type_arg(arg, rest, index).map_or(
+                                                JType::Error,
+                                                |a| substituted_read(a, self.table),
+                                            )
+                                        }
+                                        Some(ret) => {
+                                            substitute_member_type(ret, arg, rest, self.table)
+                                        }
+                                        None => JType::Error,
+                                    }
+                                }
                                 _ => JType::Error,
                             };
                         }

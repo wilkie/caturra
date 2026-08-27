@@ -135,6 +135,25 @@ pub enum InferSource {
     /// argument's ELEMENT type is what pins `T`, which is the commoner shape
     /// of the two — every "biggest of a list" method is written this way.
     Element(usize),
+    /// The parameter is a FUNCTIONAL INTERFACE whose result is the variable:
+    /// `<T, R> R conv(T v, Function<T, R> f)`. Nothing at the call site names
+    /// `R` — what pins it is the lambda's own body, whose type the lambda pass
+    /// leaves on the synthesized class.
+    LambdaResult(usize),
+}
+
+/// The functional interfaces whose RESULT is their last type argument, and how
+/// many arguments they take. `Predicate`/`Consumer` are absent on purpose:
+/// their result is `boolean`/`void`, not a type argument, so a variable in
+/// their last position is a PARAMETER and pins nothing.
+pub fn functional_result_arity(base: &str) -> Option<usize> {
+    Some(match base.rsplit('.').next().unwrap_or(base) {
+        "Supplier" | "UnaryOperator" | "BinaryOperator" | "IntFunction" | "LongFunction"
+        | "DoubleFunction" => 1,
+        "Function" => 2,
+        "BiFunction" => 3,
+        _ => return None,
+    })
 }
 
 /// How a generic method's return type mentions the variable its parameters

@@ -1053,6 +1053,10 @@ fn pinned_vars(
         let pinned = sources.iter().find_map(|source| match source {
             InferSource::Direct(index) => static_type_of(args.get(*index)?, ctx),
             InferSource::Element(index) => list_elem_type(args.get(*index)?, ctx),
+            // What a lambda's BODY answers is read in codegen, off the class
+            // this pass synthesizes — by the time it exists, this pass has
+            // already handed out the target types it was asked for.
+            InferSource::LambdaResult(_) => None,
         });
         if let Some(pinned) = pinned {
             bound.insert(var.clone(), pinned);
@@ -3921,6 +3925,12 @@ fn lambda_answer(decl: &ClassDecl) -> Option<(&Expr, HashMap<String, TypeRef>)> 
     let body = decl.methods.iter().find(|method| !method.is_constructor)?;
     let mut bound: HashMap<String, TypeRef> = HashMap::new();
     let mut answer = None;
+    // The body's value may sit in the synthesized `__caturraResult` local,
+    // which is DECLARED as the target's result type — `Object` when the target
+    // is a functional interface parameterized on a type variable. Reading the
+    // name gives that erasure and nothing else, so the initializer is the
+    // answer: `conv("abc", s -> s.length())` produces an `int`, not an Object.
+    let mut result_init = None;
     for stmt in &body.body {
         match stmt {
             Stmt::LocalDecl {
@@ -3938,6 +3948,8 @@ fn lambda_answer(decl: &ClassDecl) -> Option<(&Expr, HashMap<String, TypeRef>)> 
                     );
                     if unwraps {
                         bound.insert(declarator.name.clone(), ty.clone());
+                    } else if declarator.name == "__caturraResult" {
+                        result_init = declarator.init.as_ref();
                     }
                 }
             }
@@ -3947,7 +3959,11 @@ fn lambda_answer(decl: &ClassDecl) -> Option<(&Expr, HashMap<String, TypeRef>)> 
             _ => {}
         }
     }
-    Some((answer?, bound))
+    let answer = match (answer?, result_init) {
+        (Expr::Name { path, .. }, Some(init)) if path == &[String::from("__caturraResult")] => init,
+        (other, _) => other,
+    };
+    Some((answer, bound))
 }
 
 /// The element of the stream a `flatMap` lambda answers. Its parameter is not
