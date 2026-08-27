@@ -19,7 +19,7 @@ use crate::debug::{
     WatchEvaluator,
 };
 use crate::format::ArgNeed;
-use crate::intrinsics::{self, IntrinsicStatics, check_comodification, iterated_len_of};
+use crate::intrinsics::{self, IntrinsicStatics, check_comodification, iterated_len_of, regex_predicate};
 use crate::io::ConsoleIo;
 use crate::value::{Heap, HeapRef, IteratorWrites, JValue, MapViewKind};
 use crate::vfs::VirtualFileSystem;
@@ -9975,6 +9975,19 @@ impl<'run> Interpreter<'run> {
                     break;
                 }
             },
+            // `matcher.results()` — one match at a time, off the matcher
+            // itself, so the pipeline consumes exactly as many as it asks for
+            // and the matcher is left where they stopped. That is what a JDK
+            // does, and it is observable: `results().limit(1)` leaves the
+            // next match to `find()`.
+            crate::value::StreamSource::Matches { matcher } => {
+                let matcher = *matcher;
+                while let Some(element) = self.next_match_result(matcher)? {
+                    if !self.stream_feed(ops, states, sink, 0, element)? {
+                        break;
+                    }
+                }
+            }
         }
         // A barrier held its elements back until now: the source is dry, so
         // each one is sorted and pushed through the ops BELOW the barrier —
@@ -10396,6 +10409,27 @@ impl<'run> Interpreter<'run> {
         descriptor: &str,
         element: JValue,
     ) -> Result<Option<JValue>, VmError> {
+        // A `Pattern`'s own predicate is not a user class — it runs here.
+        if let Some(crate::value::HeapObject::RegexPredicate { pattern, whole }) =
+            self.heap.get(target)
+        {
+            let (pattern, whole) = (*pattern, *whole);
+            let text = match element {
+                JValue::Ref(Some(reference)) => self
+                    .heap
+                    .string_text(reference)
+                    .unwrap_or_default()
+                    .encode_utf16()
+                    .collect::<Vec<u16>>(),
+                _ => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                }
+            };
+            let answer = regex_predicate(&self.heap, pattern, whole, &text)?;
+            return Ok(Some(JValue::Int(i32::from(answer))));
+        }
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(target)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -10409,6 +10443,98 @@ impl<'run> Interpreter<'run> {
             UserDispatch::Call(frame) => self.run_nested(frame)?,
             UserDispatch::Value(value) => value,
         })
+    }
+
+    /// The next match a `results()` stream yields: the matcher's own `find`,
+    /// frozen into a `MatchResult`. `None` once the matcher runs dry.
+    fn next_match_result(&mut self, matcher: HeapRef) -> Result<Option<JValue>, VmError> {
+        use crate::value::HeapObject;
+        let found = intrinsics::invoke_virtual(
+            &mut self.heap,
+            self.console,
+            self.vfs,
+            matcher,
+            "java/util/regex/Matcher",
+            "find",
+            "()Z",
+            &[],
+        )?;
+        if found == Some(JValue::Int(0)) {
+            return Ok(None);
+        }
+        let Some(HeapObject::Matcher {
+            input, last: Some(groups), ..
+        }) = self.heap.get(matcher)
+        else {
+            return Ok(None);
+        };
+        let (input, groups) = (input.clone(), groups.clone());
+        let frozen = self.heap.alloc(HeapObject::MatchResult { input, groups });
+        Ok(Some(JValue::Ref(Some(frozen))))
+    }
+
+    /// `matcher.replaceAll(function)` / `replaceFirst(function)` (Java 9):
+    /// every match (or the first) replaced by what the function answers FOR
+    /// that match. Written as the JDK writes it — reset, then
+    /// find/appendReplacement until there is nothing left, then appendTail —
+    /// so the matcher is left in exactly the state the string forms leave it,
+    /// and one loop cannot drift from the other.
+    ///
+    /// What the function answers is EXPANDED, not literal: a `$1` in it is
+    /// still a group reference, which is why this goes through
+    /// `appendReplacement` rather than appending the text.
+    fn matcher_replace_with(
+        &mut self,
+        receiver: HeapRef,
+        function: HeapRef,
+        every: bool,
+    ) -> Result<JValue, VmError> {
+        use crate::value::HeapObject;
+        let builder = self.heap.alloc(HeapObject::StringBuilder(Vec::new()));
+        let matcher = JValue::Ref(Some(receiver));
+        let call = |vm: &mut Self, method: &str, descriptor: &str, args: &[JValue]| {
+            intrinsics::invoke_virtual(
+                &mut vm.heap,
+                vm.console,
+                vm.vfs,
+                receiver,
+                "java/util/regex/Matcher",
+                method,
+                descriptor,
+                args,
+            )
+        };
+        call(self, "reset", "()Ljava/util/regex/Matcher;", &[])?;
+        while call(self, "find", "()Z", &[])? != Some(JValue::Int(0)) {
+            // The JDK hands the function the MATCHER itself, positioned at the
+            // current match — which is a `MatchResult` and reads as one.
+            let replacement = self.call_apply(function, matcher)?;
+            if !matches!(replacement, JValue::Ref(Some(_))) {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
+            call(
+                self,
+                "appendReplacement",
+                "(Ljava/lang/StringBuilder;Ljava/lang/String;)Ljava/util/regex/Matcher;",
+                &[JValue::Ref(Some(builder)), replacement],
+            )?;
+            if !every {
+                break;
+            }
+        }
+        call(
+            self,
+            "appendTail",
+            "(Ljava/lang/StringBuilder;)Ljava/lang/StringBuilder;",
+            &[JValue::Ref(Some(builder))],
+        )?;
+        let text = match self.heap.get(builder) {
+            Some(HeapObject::StringBuilder(units)) => String::from_utf16_lossy(units),
+            _ => String::new(),
+        };
+        Ok(JValue::Ref(Some(self.heap.alloc_string(&text))))
     }
 
     /// `predicate.test(element)`.
@@ -14509,6 +14635,31 @@ impl<'run> Interpreter<'run> {
             // for every string the program built rather than wrote.
             let canonical = *self.string_pool.entry(text).or_insert(receiver);
             frame.stack.push(JValue::Ref(Some(canonical)));
+            return Ok(None);
+        }
+
+        // `matcher.replaceAll(mr -> …)` (Java 9) — the replacement is COMPUTED
+        // from each match, so the loop has to call user code, which the
+        // intrinsic layer cannot do. Everything else a Matcher answers is
+        // native.
+        if matches!(method_name, "replaceAll" | "replaceFirst")
+            && matches!(
+                self.heap.get(receiver),
+                Some(crate::value::HeapObject::Matcher { .. })
+            )
+            && let [JValue::Ref(function)] = args[..]
+            && !matches!(
+                function.and_then(|r| self.heap.get(r)),
+                Some(crate::value::HeapObject::JavaString(_))
+            )
+        {
+            let Some(function) = function else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
+            let value = self.matcher_replace_with(receiver, function, method_name == "replaceAll")?;
+            frame.stack.push(value);
             return Ok(None);
         }
 
@@ -18710,6 +18861,12 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         // Every array is `Cloneable` (and `Serializable`), whatever it holds.
         _ if class.starts_with('[') => &["java/lang/Cloneable"],
         "java/io/File" => &["java/lang/Comparable"],
+        // A `Matcher` IS a `MatchResult` (it implements the interface), and so
+        // is the frozen result it hands out — which a JDK calls
+        // `Matcher$ImmutableMatchResult`.
+        "java/util/regex/Matcher" | "java/util/regex/Matcher$ImmutableMatchResult" => {
+            &["java/util/regex/MatchResult"]
+        }
         _ => &[],
     }
 }
@@ -18809,6 +18966,14 @@ pub(crate) fn object_class_name_of(
         Some(HeapObject::Writer { .. }) => String::from("java/io/PrintWriter"),
         Some(HeapObject::StackFrame { .. }) => String::from("java/lang/StackTraceElement"),
         Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),
+        // The regex trio. A frozen match is an INNER class of Matcher in a
+        // JDK, and that name is what `getClass()` and a default `toString`
+        // show, so it is the name here too.
+        Some(HeapObject::Pattern { .. }) => String::from("java/util/regex/Pattern"),
+        Some(HeapObject::Matcher { .. }) => String::from("java/util/regex/Matcher"),
+        Some(HeapObject::MatchResult { .. }) => {
+            String::from("java/util/regex/Matcher$ImmutableMatchResult")
+        }
         _ if is_array_object(heap.get(receiver)) => {
             intrinsics::array_class_name(heap, receiver).unwrap_or_default()
         }

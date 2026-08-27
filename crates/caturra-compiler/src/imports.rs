@@ -151,11 +151,14 @@ pub(crate) const JAVA_UTIL_FUNCTION: &[&str] = &[
     "ToLongBiFunction",
     "ToDoubleBiFunction",
 ];
-/// `java.util.stream` — the Stream pipeline and its collectors.
-/// `Pattern`/`Matcher` are not modelled — caturra compiles patterns inside
-/// `String.split`/`matches`/`replaceAll` rather than exposing the objects —
-/// but the exception those methods throw is part of the API students catch.
-const JAVA_UTIL_REGEX: &[&str] = &["Pattern", "Matcher", "PatternSyntaxException"];
+/// `java.util.regex` — the compiled pattern, the matcher that walks an input,
+/// the frozen match either hands out, and the exception a bad pattern throws.
+const JAVA_UTIL_REGEX: &[&str] = &[
+    "Pattern",
+    "Matcher",
+    "MatchResult",
+    "PatternSyntaxException",
+];
 
 const JAVA_UTIL_STREAM: &[&str] = &[
     "Stream",
@@ -245,7 +248,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // number it could answer would be fiction about a heap the program cannot
     // influence — and `exec` has nothing to exec.
     ("java.lang", &["Runtime", "Process", "ProcessBuilder"]),
-    ("java.util.regex", &["Pattern", "Matcher", "MatchResult"]),
     (
         "java.io",
         &[

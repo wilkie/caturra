@@ -9699,3 +9699,83 @@ which is what a shared engine buys: the only new code is the object around it.
 
 Pinned by `pattern_and_matcher`; the compatibility page gained a "Pattern and
 Matcher" claim (87 supported / 5 unsupported / 3 beyond-11).
+
+### The whole of Pattern and Matcher (2026-08-27)
+
+The regex objects shipped as a SUBSET: compile, matcher, find/group/start/end,
+the flags, split and quote. Everything a program reaches for once one match is
+not enough was missing — the region, the append/tail rewriting loop, the frozen
+match, the Java 9 computed replacements, the predicates — so this unit is the
+rest of the Java 11 API, method for method.
+
+The **engine** grew a region and two bound modes. A `Matcher` now carries
+`start`/`end` (what `region(a, b)` sets), whether its edges ANCHOR (the
+default: `^` and `$` treat the region's edges as the input's) and whether they
+are TRANSPARENT (lookaround and `\b` may read outside, though the match may
+not). Every read, every anchor and every boundary asks the region rather than
+the input, which is what makes an opaque region behave like a substring: over
+`[3, 6)` of `"thecat here"`, `\bcat\b` matches, and with transparent bounds it
+does not, because the `the` before it is visible again.
+
+The same pass made `hitEnd()` and `requireEnd()` real rather than
+approximations — the engine records them as it reads, so a `\b` at the end of
+the input reports both (it had to look past the last character to decide the
+boundary was there, and one more word character would take it away). That is
+how an editor tells "no match" from "not yet".
+
+`appendReplacement`/`appendTail` are the rewriting loop, expanding `$1` and
+`${name}` exactly as the string replacements do — and the string replacements
+are now written as that same loop, which fixed what they LEFT BEHIND: a JDK
+resets the matcher first and leaves it wherever the scan stopped, so after
+`replaceFirst` the next `find` answers the SECOND match and after `replaceAll`
+it answers nothing. Rewriting the whole string in one pass and resetting had
+made both start over.
+
+A `MatchResult` is one match, frozen — a real type here, with its own
+`ElemType`, so `results().map(MatchResult::group)` types. `toMatchResult()`
+hands one out; `results()` is a LAZY stream over the matcher itself (a new
+`StreamSource::Matches`), so `results().limit(1)` consumes one match and leaves
+the rest to `find()`, as a JDK's does. A `Matcher` IS a `MatchResult` — it
+implements the interface — and both answer `instanceof`, which needed the VM's
+one class-name table to learn all three regex classes (a frozen match is a
+JDK's `Matcher$ImmutableMatchResult`, which is what `getClass()` and a default
+`toString` print).
+
+`asPredicate()` and `asMatchPredicate()` are a native predicate object: no user
+code runs, but `filter(pattern.asPredicate())` works because the interpreter's
+functional-call path answers for it directly. `replaceAll(Function)` is the
+other direction — the intrinsic layer cannot call user code, so the interpreter
+drives the JDK's own loop over the native pieces (`reset`, `find`,
+`appendReplacement`, `appendTail`), which is why the two forms cannot drift
+apart.
+
+Three defects fell out of the fixture rather than the feature. Casting an
+erased `Object` DOWN to a regex object was "incompatible types", and worse, the
+cast fell through to the UNBOXING arm and emitted `intValue()` on the object —
+the shape that noticed was the `(MatchResult) __p0` a lambda over `results()`
+is desugared into. A method reference through a library class the desugaring
+does not know is not a class at all ("cannot find symbol: 'MatchResult'"). And
+`PatternSyntaxException` had no accessors, though its message is BUILT from the
+three they answer.
+
+Which turned into a sweep of what a malformed pattern reports. A JDK's index is
+the cursor MINUS one — at the end of the input that is the pattern's length,
+and for a `)` in first position it is `-1`, which the message then leaves out
+entirely. Seven of eighteen probes differed: the index for an unclosed
+character class, the negative one, the wording for a truncated counted closure
+(`a{2` is an unclosed closure, not an illegal repetition), for a trailing
+backslash (a JDK reports its own `Unexpected internal error`), for a truncated
+inline modifier, and a trailing `-` in a class (an illegal RANGE, not an
+unclosed class).
+
+Known gaps, both refused rather than answered wrongly: `CANON_EQ` and
+`UNICODE_CHARACTER_CLASS` change what matches for ordinary text, and the engine
+models neither, so `compile` says so where a JDK would have compiled;
+`\p{...}` (Unicode character properties) is likewise unimplemented, and its
+message is caturra's own rather than the JDK's `Unknown character property
+name`.
+
+Pinned by `a_matchers_region_and_bounds`, `the_append_and_tail_loop`,
+`a_frozen_match_and_the_results_stream`, `a_patterns_own_predicates`,
+`the_computed_replacements`, `what_the_last_attempt_learned`,
+`a_pattern_syntax_exception_reports_where` and `a_malformed_pattern_says_where`.

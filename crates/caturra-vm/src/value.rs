@@ -333,6 +333,13 @@ pub enum StreamSource {
     Generate {
         supplier: HeapRef,
     },
+    /// `matcher.results()`: the matches still ahead of a Matcher, pulled ONE
+    /// at a time from the matcher itself. A JDK's is lazy over the same
+    /// matcher — `results().limit(1)` consumes one match and leaves the rest
+    /// to `find()` — so a fixed vector would have consumed them all.
+    Matches {
+        matcher: HeapRef,
+    },
 }
 
 impl StreamSource {
@@ -659,13 +666,32 @@ pub enum HeapObject {
     /// the compiled form is rebuilt there, exactly as `String.matches` does.
     Pattern { source: Vec<u16>, flags: i32 },
     /// A `java.util.regex.Matcher`: a pattern, the text it walks, where the
-    /// next search starts, and the last match's spans (group 0 first).
+    /// next search starts, and the last match's spans (group 0 first) — plus
+    /// the REGION it is confined to, how that region's edges behave, what the
+    /// last attempt learned, and how far `appendReplacement` has copied.
     Matcher {
         pattern: HeapRef,
         input: Vec<u16>,
         at: usize,
         last: Option<Vec<Option<(usize, usize)>>>,
+        region: (usize, usize),
+        anchoring: bool,
+        transparent: bool,
+        hit_end: bool,
+        require_end: bool,
+        appended: usize,
     },
+    /// A `java.util.regex.MatchResult` — one match, frozen: the spans it
+    /// captured and the text they index. `toMatchResult` and the `results()`
+    /// stream hand these out, and unlike a Matcher they never move.
+    MatchResult {
+        input: Vec<u16>,
+        groups: Vec<Option<(usize, usize)>>,
+    },
+    /// The `Predicate` a `Pattern` answers — `asPredicate` (find) and
+    /// `asMatchPredicate` (matches). It behaves as a lambda would, so
+    /// `filter(pattern.asPredicate())` works, but it runs no user code.
+    RegexPredicate { pattern: HeapRef, whole: bool },
     /// A `java.io.PrintWriter` into the virtual filesystem
     /// (write-through: output is durable without `close()`).
     Writer { path: String },
@@ -859,6 +885,7 @@ impl StreamSource {
                 visit(*next);
             }
             StreamSource::Generate { supplier } => visit(*supplier),
+            StreamSource::Matches { matcher } => visit(*matcher),
         }
     }
 }
@@ -898,6 +925,7 @@ impl HeapObject {
             | HeapObject::Path(_)
             | HeapObject::Charset(_)
             | HeapObject::Pattern { .. }
+            | HeapObject::MatchResult { .. }
             | HeapObject::Writer { .. }
             | HeapObject::Class { .. }
             | HeapObject::Field { .. }
@@ -906,8 +934,11 @@ impl HeapObject {
             | HeapObject::Constructor { .. }
             | HeapObject::Free
             | HeapObject::Method { .. } => {}
-            // A matcher holds the pattern it walks.
-            HeapObject::Matcher { pattern, .. } => visit(*pattern),
+            // A matcher — and the predicate a pattern answers — hold the
+            // pattern they walk.
+            HeapObject::Matcher { pattern, .. } | HeapObject::RegexPredicate { pattern, .. } => {
+                visit(*pattern);
+            }
             HeapObject::Boxed { value, .. } => visit_value(*value, visit),
             HeapObject::RefArray(_, items)
             | HeapObject::ArrayList(items)

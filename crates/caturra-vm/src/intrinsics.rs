@@ -926,14 +926,42 @@ pub fn invoke_virtual(
         }
         (HeapObject::Pattern { .. }, "matcher") => {
             let input = string_units(heap, args.first().unwrap_or(&JValue::NULL))?;
+            let end = input.len();
             Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Matcher {
                 pattern: receiver,
                 input,
                 at: 0,
                 last: None,
+                region: (0, end),
+                anchoring: true,
+                transparent: false,
+                hit_end: false,
+                require_end: false,
+                appended: 0,
             })))))
         }
-        (HeapObject::Pattern { source, flags }, "split") => {
+        // The predicate a pattern answers, asked directly.
+        (HeapObject::RegexPredicate { pattern, whole }, "test") => {
+            let (pattern, whole) = (*pattern, *whole);
+            let text = string_units(heap, args.first().unwrap_or(&JValue::NULL))?;
+            Ok(Some(JValue::Int(i32::from(regex_predicate(
+                heap, pattern, whole, &text,
+            )?))))
+        }
+        // `asPredicate()` tests whether the pattern is FOUND;
+        // `asMatchPredicate()` (Java 11) whether it matches the whole input.
+        (HeapObject::Pattern { .. }, "asPredicate" | "asMatchPredicate") => {
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::RegexPredicate {
+                pattern: receiver,
+                whole: method == "asMatchPredicate",
+            })))))
+        }
+        // A frozen match answers the same four questions a Matcher does.
+        (HeapObject::MatchResult { input, groups }, _) => {
+            let (input, groups) = (input.clone(), groups.clone());
+            match_result_method(heap, receiver, &input, &groups, method, args)
+        }
+        (HeapObject::Pattern { source, flags }, "split" | "splitAsStream") => {
             let source = fold_regex_flags(source, *flags);
             let input = string_units(heap, args.first().unwrap_or(&JValue::NULL))?;
             let limit = match args.get(1) {
@@ -948,6 +976,13 @@ pub fn invoke_virtual(
                     JValue::Ref(Some(heap.alloc_string(&text)))
                 })
                 .collect();
+            // `splitAsStream` is the same split, handed over as a pipeline.
+            if method == "splitAsStream" {
+                return Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Stream {
+                    source: crate::value::StreamSource::Fixed(refs),
+                    ops: Vec::new(),
+                })))));
+            }
             Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::RefArray(
                 String::from("java/lang/String"),
                 refs,
@@ -1003,6 +1038,34 @@ pub fn invoke_virtual(
             };
             let reference = heap.alloc_string(&rendered);
             Ok(Some(JValue::Ref(Some(reference))))
+        }
+        // A `PatternSyntaxException` says what was wrong, and where. Its
+        // message is BUILT from those three, in the JDK's documented layout,
+        // so reading them back out of it keeps one source of truth.
+        (
+            HeapObject::Exception {
+                class_name, message, ..
+            },
+            "getDescription" | "getPattern" | "getIndex",
+        ) if class_name == "java.util.regex.PatternSyntaxException" => {
+            let message = message.clone().unwrap_or_default();
+            let mut lines = message.lines();
+            let first = lines.next().unwrap_or_default().to_owned();
+            let (description, index) = match first.rsplit_once(" near index ") {
+                Some((description, index)) => (
+                    description.to_owned(),
+                    index.parse::<i32>().unwrap_or(-1),
+                ),
+                None => (first, -1),
+            };
+            match method {
+                "getIndex" => Ok(Some(JValue::Int(index))),
+                "getDescription" => Ok(Some(JValue::Ref(Some(heap.alloc_string(&description))))),
+                _ => {
+                    let pattern = lines.next().unwrap_or_default().to_owned();
+                    Ok(Some(JValue::Ref(Some(heap.alloc_string(&pattern)))))
+                }
+            }
         }
         // `getCause()` — the chained cause, or null.
         (HeapObject::Exception { cause, .. }, "getCause") => Ok(Some(JValue::Ref(*cause))),
@@ -1190,6 +1253,12 @@ pub(crate) fn uses_identity_equality(object: &HeapObject) -> bool {
             | HeapObject::StringBuilder(_)
             | HeapObject::Exception { .. }
             | HeapObject::Iterator { .. }
+            // The regex trio: a JDK's Pattern, Matcher and MatchResult all
+            // inherit `Object.equals`, so two equal patterns are not equal.
+            | HeapObject::Pattern { .. }
+            | HeapObject::Matcher { .. }
+            | HeapObject::MatchResult { .. }
+            | HeapObject::RegexPredicate { .. }
     )
 }
 
@@ -5010,6 +5079,14 @@ pub fn decode_charset(bytes: &[i8], charset: &str) -> Vec<u16> {
 /// A matcher REMEMBERS its last match: `group`, `start` and `end` all read it,
 /// and asking before there is one is Java's `IllegalStateException`, not a
 /// silent answer.
+/// A `java.util.regex.Matcher`'s own methods — the walk a program writes as
+/// `while (m.find()) { … m.group(1) … }`, and everything around it: the region
+/// it is confined to, how that region's edges behave, the append/tail
+/// rewriting loop, and what the last attempt learned.
+///
+/// A matcher REMEMBERS its last match: `group`, `start` and `end` all read it,
+/// and asking before there is one is Java's `IllegalStateException`, not a
+/// silent answer.
 #[allow(clippy::too_many_lines)] // one arm per Matcher method
 fn matcher_method(
     heap: &mut Heap,
@@ -5017,23 +5094,18 @@ fn matcher_method(
     method: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
-    let (pattern, input, at, last) = match heap.get(receiver) {
-        Some(HeapObject::Matcher {
-            pattern,
-            input,
-            at,
-            last,
-        }) => (*pattern, input.clone(), *at, last.clone()),
-        _ => unreachable!("receiver kind checked by caller"),
-    };
-    let source = match heap.get(pattern) {
+    let state = matcher_state(heap, receiver)?;
+    let source = match heap.get(state.pattern) {
         Some(HeapObject::Pattern { source, flags }) => fold_regex_flags(source, *flags),
         _ => return Err(throw("java.lang.IllegalStateException: no pattern")),
     };
     let regex = compile_regex(&source)?;
+    let bounds = state.bounds();
+    let input = state.input.clone();
     let no_match = || throw("java.lang.IllegalStateException: No match found");
+    let spans = state.last.clone();
     let group_span = |index: usize| -> Result<Option<(usize, usize)>, VmError> {
-        let spans = last.clone().ok_or_else(no_match)?;
+        let spans = spans.clone().ok_or_else(no_match)?;
         spans
             .get(index)
             .copied()
@@ -5044,8 +5116,14 @@ fn matcher_method(
             Some(JValue::Int(index)) => usize::try_from(*index).map_err(|_| {
                 throw(format!("java.lang.IndexOutOfBoundsException: No group {index}"))
             }),
-            // `group("name")` — the group a `(?<name>…)` stands for.
+            // `group("name")` — the group a `(?<name>…)` stands for. Whether
+            // there IS a match is asked FIRST, as a JDK asks it: naming a
+            // group that does not exist on a matcher that has not matched is
+            // "No match found", not "No group with name".
             Some(JValue::Ref(Some(name))) => {
+                if spans.is_none() {
+                    return Err(no_match());
+                }
                 let name = heap.string_text(*name).unwrap_or_default();
                 regex.group_named(&name).ok_or_else(|| {
                     throw(format!(
@@ -5057,62 +5135,73 @@ fn matcher_method(
             _ => Ok(0),
         }
     };
-    let store = |heap: &mut Heap, at: usize, spans: Option<Vec<Option<(usize, usize)>>>| {
-        if let Some(HeapObject::Matcher {
-            at: slot,
-            last: kept,
-            ..
-        }) = heap.get_mut(receiver)
-        {
-            *slot = at;
-            *kept = spans;
-        }
-    };
     match method {
         // `find()` resumes where the last match ended; a zero-width match
-        // advances one unit, or the loop would never end.
+        // advances one unit, or the loop would never end. `find(at)` RESETS
+        // the matcher and starts there, as a JDK's does.
         "find" => {
             let from = match args.first() {
-                Some(JValue::Int(start)) => usize::try_from(*start).unwrap_or(0),
-                _ => at,
+                Some(JValue::Int(start)) => {
+                    let start = usize::try_from(*start).map_err(|_| {
+                        throw("java.lang.IndexOutOfBoundsException: Illegal start index")
+                    })?;
+                    if start > input.len() {
+                        return Err(throw(
+                            "java.lang.IndexOutOfBoundsException: Illegal start index",
+                        ));
+                    }
+                    start
+                }
+                _ => state.at.max(bounds.start),
             };
-            if from > input.len() {
-                store(heap, input.len(), None);
+            if from > bounds.end {
+                store_match(heap, receiver, bounds.end + 1, None, true, false);
                 return Ok(Some(JValue::Int(0)));
             }
-            let Some(found) = regex.find_at(&input, from) else {
-                store(heap, input.len() + 1, None);
+            let attempt = regex.find_in(&input, from, bounds);
+            let Some(found) = attempt.matched else {
+                store_match(
+                    heap,
+                    receiver,
+                    bounds.end + 1,
+                    None,
+                    attempt.hit_end,
+                    attempt.require_end,
+                );
                 return Ok(Some(JValue::Int(0)));
             };
-            // A zero-width match advances one unit, or `while (m.find())`
-            // would never end.
             let next = if found.end == found.start {
                 found.end + 1
             } else {
                 found.end
             };
-            store(heap, next, Some(found.groups.clone()));
+            store_match(
+                heap,
+                receiver,
+                next,
+                Some(found.groups.clone()),
+                attempt.hit_end,
+                attempt.require_end,
+            );
             Ok(Some(JValue::Int(1)))
         }
-        // `matches()` is the WHOLE input; `lookingAt()` only anchors the start.
-        "matches" => {
-            let matched = regex.matches_whole(&input);
-            let spans = if matched {
-                regex
-                    .find_at(&input, 0)
-                    .filter(|found| found.end == input.len())
-                    .map(|found| found.groups)
-                    .or_else(|| Some(vec![Some((0, input.len()))]))
+        // `matches()` must fill the REGION; `lookingAt()` only anchors its
+        // start.
+        "matches" | "lookingAt" => {
+            let attempt = if method == "matches" {
+                regex.matches_in(&input, bounds)
             } else {
-                None
+                regex.looking_at(&input, bounds)
             };
-            store(heap, 0, spans);
-            Ok(Some(JValue::Int(i32::from(matched))))
-        }
-        "lookingAt" => {
-            let found = regex.find_at(&input, 0).filter(|found| found.start == 0);
-            let matched = found.is_some();
-            store(heap, 0, found.map(|found| found.groups));
+            let matched = attempt.matched.is_some();
+            store_match(
+                heap,
+                receiver,
+                state.at,
+                attempt.matched.map(|found| found.groups),
+                attempt.hit_end,
+                attempt.require_end,
+            );
             Ok(Some(JValue::Int(i32::from(matched))))
         }
         "group" => {
@@ -5128,50 +5217,431 @@ fn matcher_method(
         }
         "start" | "end" => {
             let index = group_index(args)?;
-            let span = group_span(index)?;
-            let value = match span {
-                Some((start, end)) => {
-                    if method == "start" {
-                        start
-                    } else {
-                        end
-                    }
-                }
-                None => return Ok(Some(JValue::Int(-1))),
+            let Some((start, end)) = group_span(index)? else {
+                return Ok(Some(JValue::Int(-1)));
             };
+            let value = if method == "start" { start } else { end };
             Ok(Some(JValue::Int(i32::try_from(value).unwrap_or(-1))))
         }
         "groupCount" => Ok(Some(JValue::Int(
             i32::try_from(regex.group_count()).unwrap_or(0),
         ))),
-        "hitEnd" => Ok(Some(JValue::Int(i32::from(at >= input.len())))),
-        "reset" => {
-            let input = match args.first() {
-                Some(value) => string_units(heap, value)?,
-                None => input,
+        // What the last attempt learned: whether it ran out of input, and
+        // whether its answer leaned on the end.
+        "hitEnd" => Ok(Some(JValue::Int(i32::from(state.hit_end)))),
+        "requireEnd" => Ok(Some(JValue::Int(i32::from(state.require_end)))),
+        "pattern" => Ok(Some(JValue::Ref(Some(state.pattern)))),
+        // `usePattern` keeps the position and drops the match, as a JDK's does.
+        "usePattern" => {
+            let Some(JValue::Ref(Some(pattern))) = args.first() else {
+                return Err(throw("java.lang.IllegalArgumentException: Pattern cannot be null"));
             };
+            if !matches!(heap.get(*pattern), Some(HeapObject::Pattern { .. })) {
+                return Err(throw("java.lang.ClassCastException: not a Pattern"));
+            }
             if let Some(HeapObject::Matcher {
-                input: slot,
-                at,
+                pattern: slot,
                 last,
                 ..
             }) = heap.get_mut(receiver)
             {
-                *slot = input;
-                *at = 0;
+                *slot = *pattern;
                 *last = None;
             }
             Ok(Some(JValue::Ref(Some(receiver))))
         }
-        // The two replacements are the string ones, told which pattern.
+        // The REGION, and the two ways its edges can behave.
+        "region" => {
+            let (from, to) = match (args.first(), args.get(1)) {
+                (Some(JValue::Int(from)), Some(JValue::Int(to))) => (*from, *to),
+                _ => return Err(throw("java.lang.VerifyError: expected two ints")),
+            };
+            // The JDK's three messages, in its order: the bare word for an
+            // edge outside the input, "start > end" for an inverted region.
+            let len = i32::try_from(input.len()).unwrap_or(i32::MAX);
+            if from < 0 || from > len {
+                return Err(throw("java.lang.IndexOutOfBoundsException: start"));
+            }
+            if to < 0 || to > len {
+                return Err(throw("java.lang.IndexOutOfBoundsException: end"));
+            }
+            if from > to {
+                return Err(throw("java.lang.IndexOutOfBoundsException: start > end"));
+            }
+            let (from, to) = (
+                usize::try_from(from).unwrap_or(0),
+                usize::try_from(to).unwrap_or(0),
+            );
+            if let Some(HeapObject::Matcher {
+                region,
+                at,
+                last,
+                appended,
+                ..
+            }) = heap.get_mut(receiver)
+            {
+                *region = (from, to);
+                *at = from;
+                *last = None;
+                *appended = from;
+            }
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        "regionStart" => Ok(Some(JValue::Int(
+            i32::try_from(state.region.0).unwrap_or(0),
+        ))),
+        "regionEnd" => Ok(Some(JValue::Int(
+            i32::try_from(state.region.1).unwrap_or(0),
+        ))),
+        "hasAnchoringBounds" => Ok(Some(JValue::Int(i32::from(state.anchoring)))),
+        "hasTransparentBounds" => Ok(Some(JValue::Int(i32::from(state.transparent)))),
+        "useAnchoringBounds" | "useTransparentBounds" => {
+            let on = matches!(args.first(), Some(JValue::Int(value)) if *value != 0);
+            if let Some(HeapObject::Matcher {
+                anchoring,
+                transparent,
+                ..
+            }) = heap.get_mut(receiver)
+            {
+                if method == "useAnchoringBounds" {
+                    *anchoring = on;
+                } else {
+                    *transparent = on;
+                }
+            }
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        "reset" => {
+            // `reset(text)` swaps the input too; both forms put the matcher
+            // back at the beginning, over the WHOLE input.
+            if let Some(value) = args.first() {
+                let text = string_units(heap, value)?;
+                if let Some(HeapObject::Matcher { input: slot, .. }) = heap.get_mut(receiver) {
+                    *slot = text;
+                }
+            }
+            matcher_reset(heap, receiver);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        // The string replacements are the JDK's own loop: `reset()`, then
+        // find/appendReplacement until there is nothing left (or once), then
+        // `appendTail`. Writing them as a one-shot rewrite instead left the
+        // matcher at the BEGINNING, where a JDK leaves it wherever the scan
+        // stopped: after `replaceFirst` the next `find` answers the SECOND
+        // match, and after `replaceAll` it answers nothing at all.
         "replaceAll" | "replaceFirst" => {
             let replacement = string_units(heap, args.first().unwrap_or(&JValue::NULL))?;
-            let replaced = replace_regex(&input, &source, &replacement, method == "replaceFirst")?;
-            let text = String::from_utf16_lossy(&replaced);
-            store(heap, 0, None);
+            // `reset()` restores the whole input as the region, and the two
+            // bound modes survive it.
+            let full = crate::regex::Bounds {
+                start: 0,
+                end: input.len(),
+                anchoring: state.anchoring,
+                transparent: state.transparent,
+            };
+            let mut out: Vec<u16> = Vec::new();
+            let (mut at, mut appended) = (0usize, 0usize);
+            let mut last: Option<Vec<Option<(usize, usize)>>>;
+            let (mut hit, mut require);
+            loop {
+                let attempt = regex.find_in(&input, at, full);
+                hit = attempt.hit_end;
+                require = attempt.require_end;
+                let Some(one) = attempt.matched else {
+                    at = full.end + 1;
+                    last = None;
+                    break;
+                };
+                out.extend_from_slice(&input[appended..one.start]);
+                out.extend(expand_replacement(&input, &one, &replacement, &regex)?);
+                appended = one.end;
+                at = if one.end == one.start {
+                    one.end + 1
+                } else {
+                    one.end
+                };
+                last = Some(one.groups);
+                if method == "replaceFirst" {
+                    break;
+                }
+            }
+            out.extend_from_slice(&input[appended.min(input.len())..]);
+            if let Some(HeapObject::Matcher {
+                region,
+                at: slot,
+                last: last_slot,
+                appended: appended_slot,
+                hit_end,
+                require_end,
+                ..
+            }) = heap.get_mut(receiver)
+            {
+                *region = (0, input.len());
+                *slot = at;
+                *last_slot = last;
+                *appended_slot = appended;
+                *hit_end = hit;
+                *require_end = require;
+            }
+            let text = String::from_utf16_lossy(&out);
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        // `appendReplacement(sb, replacement)` copies the text since the last
+        // append, then the expanded replacement — the loop a program writes
+        // when it rewrites some matches and keeps others.
+        "appendReplacement" => {
+            let Some(JValue::Ref(Some(builder))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let builder = *builder;
+            let replacement = string_units(heap, args.get(1).unwrap_or(&JValue::NULL))?;
+            // A JDK words THIS one differently from `group`'s: the append
+            // loop reports "No match available".
+            let unavailable = || throw("java.lang.IllegalStateException: No match available");
+            let groups = spans.clone().ok_or_else(unavailable)?;
+            let Some((start, end)) = groups.first().copied().flatten() else {
+                return Err(unavailable());
+            };
+            let mut text: Vec<u16> = input[state.appended..start].to_vec();
+            let one = crate::regex::Match {
+                start,
+                end,
+                groups: groups.clone(),
+            };
+            text.extend(expand_replacement(&input, &one, &replacement, &regex)?);
+            append_units(heap, builder, &text)?;
+            if let Some(HeapObject::Matcher { appended, .. }) = heap.get_mut(receiver) {
+                *appended = end;
+            }
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        "appendTail" => {
+            let Some(JValue::Ref(Some(builder))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let builder = *builder;
+            let rest = input[state.appended.min(input.len())..].to_vec();
+            append_units(heap, builder, &rest)?;
+            Ok(Some(JValue::Ref(Some(builder))))
+        }
+        // A frozen copy of the current match, which outlives the next `find`.
+        "toMatchResult" => {
+            let groups = spans.clone().ok_or_else(no_match)?;
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::MatchResult {
+                input: input.clone(),
+                groups,
+            })))))
+        }
+        // `results()` — the matches still ahead, as a LAZY stream over this
+        // matcher: each element is one `find`, so the pipeline consumes only
+        // what it asks for and the matcher is left where it stopped.
+        "results" => Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Stream {
+            source: crate::value::StreamSource::Matches { matcher: receiver },
+            ops: Vec::new(),
+        }))))),
+        // A JDK's `Matcher.toString` prints its own state — pattern, region
+        // and last match — and a program that prints a matcher sees it.
+        "toString" => {
+            let matched = match spans.as_ref().and_then(|groups| groups.first().copied().flatten()) {
+                Some((start, end)) => String::from_utf16_lossy(&input[start..end]),
+                None => String::new(),
+            };
+            let text = format!(
+                "java.util.regex.Matcher[pattern={} region={},{} lastmatch={matched}]",
+                String::from_utf16_lossy(&source),
+                state.region.0,
+                state.region.1,
+            );
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
         }
         _ => Err(VmError::UnknownIntrinsic(format!("Matcher.{method}"))),
+    }
+}
+
+/// A `MatchResult`'s four questions, answered from a frozen match.
+fn match_result_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    input: &[u16],
+    groups: &[Option<(usize, usize)>],
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let index = match args.first() {
+        Some(JValue::Int(index)) => usize::try_from(*index).map_err(|_| {
+            throw(format!("java.lang.IndexOutOfBoundsException: No group {index}"))
+        })?,
+        _ => 0,
+    };
+    let span = || -> Result<Option<(usize, usize)>, VmError> {
+        groups
+            .get(index)
+            .copied()
+            .ok_or_else(|| throw(format!("java.lang.IndexOutOfBoundsException: No group {index}")))
+    };
+    match method {
+        "group" => match span()? {
+            Some((start, end)) => {
+                let text = String::from_utf16_lossy(&input[start..end]);
+                Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+            }
+            None => Ok(Some(JValue::NULL)),
+        },
+        "start" | "end" => {
+            let Some((start, end)) = span()? else {
+                return Ok(Some(JValue::Int(-1)));
+            };
+            let value = if method == "start" { start } else { end };
+            Ok(Some(JValue::Int(i32::try_from(value).unwrap_or(-1))))
+        }
+        "groupCount" => Ok(Some(JValue::Int(
+            i32::try_from(groups.len().saturating_sub(1)).unwrap_or(0),
+        ))),
+        // A frozen match is an inner class of Matcher in a JDK and overrides
+        // nothing, so printing one shows that class and an identity hash —
+        // not the text it matched.
+        "toString" => {
+            let text = format!(
+                "java.util.regex.Matcher$ImmutableMatchResult@{:x}",
+                identity_hash(receiver)
+            );
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("MatchResult.{method}"))),
+    }
+}
+
+/// What a `Pattern`'s predicate answers for one input: `asPredicate` looks for
+/// the pattern anywhere, `asMatchPredicate` demands the whole string.
+pub(crate) fn regex_predicate(
+    heap: &Heap,
+    pattern: HeapRef,
+    whole: bool,
+    text: &[u16],
+) -> Result<bool, VmError> {
+    let source = match heap.get(pattern) {
+        Some(HeapObject::Pattern { source, flags }) => fold_regex_flags(source, *flags),
+        _ => return Err(throw("java.lang.IllegalStateException: no pattern")),
+    };
+    let regex = compile_regex(&source)?;
+    Ok(if whole {
+        regex.matches_whole(text)
+    } else {
+        regex.find_at(text, 0).is_some()
+    })
+}
+
+/// Put a matcher back where `reset()` puts it: at the beginning, with the
+/// whole input as its region and no match remembered.
+pub(crate) fn matcher_reset(heap: &mut Heap, receiver: HeapRef) {
+    if let Some(HeapObject::Matcher {
+        input,
+        at,
+        last,
+        region,
+        appended,
+        hit_end,
+        require_end,
+        ..
+    }) = heap.get_mut(receiver)
+    {
+        *region = (0, input.len());
+        *at = 0;
+        *last = None;
+        *appended = 0;
+        *hit_end = false;
+        *require_end = false;
+    }
+}
+
+/// A matcher's own state, read out in one go.
+#[allow(clippy::struct_excessive_bools)] // a JDK's Matcher has exactly these switches
+struct MatcherState {
+    pattern: HeapRef,
+    input: Vec<u16>,
+    at: usize,
+    last: Option<Vec<Option<(usize, usize)>>>,
+    region: (usize, usize),
+    anchoring: bool,
+    transparent: bool,
+    hit_end: bool,
+    require_end: bool,
+    appended: usize,
+}
+
+impl MatcherState {
+    fn bounds(&self) -> crate::regex::Bounds {
+        crate::regex::Bounds {
+            start: self.region.0,
+            end: self.region.1,
+            anchoring: self.anchoring,
+            transparent: self.transparent,
+        }
+    }
+}
+
+fn matcher_state(heap: &Heap, receiver: HeapRef) -> Result<MatcherState, VmError> {
+    match heap.get(receiver) {
+        Some(HeapObject::Matcher {
+            pattern,
+            input,
+            at,
+            last,
+            region,
+            anchoring,
+            transparent,
+            hit_end,
+            require_end,
+            appended,
+        }) => Ok(MatcherState {
+            pattern: *pattern,
+            input: input.clone(),
+            at: *at,
+            last: last.clone(),
+            region: *region,
+            anchoring: *anchoring,
+            transparent: *transparent,
+            hit_end: *hit_end,
+            require_end: *require_end,
+            appended: *appended,
+        }),
+        _ => Err(throw("java.lang.ClassCastException: not a Matcher")),
+    }
+}
+
+/// Record what an attempt found and where the next one starts.
+fn store_match(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    next: usize,
+    spans: Option<Vec<Option<(usize, usize)>>>,
+    hit: bool,
+    require: bool,
+) {
+    if let Some(HeapObject::Matcher {
+        at,
+        last,
+        hit_end,
+        require_end,
+        ..
+    }) = heap.get_mut(receiver)
+    {
+        *at = next;
+        *last = spans;
+        *hit_end = hit;
+        *require_end = require;
+    }
+}
+
+/// Append units to a `StringBuilder` (the `StringBuffer` a JDK takes is the
+/// same object here).
+fn append_units(heap: &mut Heap, builder: HeapRef, units: &[u16]) -> Result<(), VmError> {
+    match heap.get_mut(builder) {
+        Some(HeapObject::StringBuilder(text)) => {
+            text.extend_from_slice(units);
+            Ok(())
+        }
+        _ => Err(throw("java.lang.ClassCastException: not a StringBuilder")),
     }
 }
 
@@ -5194,6 +5664,22 @@ fn string_units(heap: &Heap, value: &JValue) -> Result<Vec<u16>, VmError> {
 /// into the inline `(?ims)` prefix the engine reads. The four the engine
 /// models are the four a program writes; anything else is ignored, as a flag
 /// that changes nothing may be.
+/// The flags whose EFFECT this engine models. `CANON_EQ` (canonical
+/// equivalence) and `UNICODE_CHARACTER_CLASS` (Unicode-aware `\w`, `\d` and
+/// `\b`) change what matches for ordinary text, and accepting them silently
+/// would answer a different question from the one the program asked — so
+/// `compile` says so instead, where a JDK would have compiled.
+fn check_regex_flags(flags: i32) -> Result<(), VmError> {
+    for (bit, name) in [(0x80, "CANON_EQ"), (0x100, "UNICODE_CHARACTER_CLASS")] {
+        if flags & bit != 0 {
+            return Err(VmError::UnknownIntrinsic(format!(
+                "Pattern.compile with Pattern.{name}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn fold_regex_flags(source: &[u16], flags: i32) -> Vec<u16> {
     // `LITERAL` says the pattern is TEXT, not a pattern — the same thing
     // `Pattern.quote` produces, which the engine already reads.
@@ -5928,6 +6414,7 @@ pub fn invoke_static(
                 // Compiled once HERE so a malformed pattern fails at
                 // `compile`, where a JDK reports it, rather than at the first
                 // `find`.
+                check_regex_flags(flags)?;
                 compile_regex(&fold_regex_flags(&source, flags))?;
                 Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Pattern {
                     source,
@@ -5946,6 +6433,25 @@ pub fn invoke_static(
                 Ok(Some(JValue::Ref(Some(heap.alloc_string(&quoted)))))
             }
             _ => Err(VmError::UnknownIntrinsic(format!("Pattern.{method}"))),
+        },
+        // `Matcher.quoteReplacement(text)` — the escaping that makes a
+        // replacement literal, so a `$` in it is a dollar and not a group.
+        "java/util/regex/Matcher" => match method {
+            "quoteReplacement" => {
+                let text = arg_string(heap, &args[0])?;
+                if !text.contains('\\') && !text.contains('$') {
+                    return Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))));
+                }
+                let mut quoted = String::with_capacity(text.len() * 2);
+                for ch in text.chars() {
+                    if ch == '\\' || ch == '$' {
+                        quoted.push('\\');
+                    }
+                    quoted.push(ch);
+                }
+                Ok(Some(JValue::Ref(Some(heap.alloc_string(&quoted)))))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("Matcher.{method}"))),
         },
         // `Charset.forName(name)` — and the `StandardCharsets` constants, which
         // the compiler lowers to the same call. An unknown name is the JDK's

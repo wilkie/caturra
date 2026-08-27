@@ -488,7 +488,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-kt0vxcev/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-eu0lo1cf/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -499,7 +499,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-mt455pui/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-fset8otw/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -510,7 +510,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-03_9kzoi/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-pmkvic_d/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -911,6 +911,16 @@
     "source": "import java.util.regex.Matcher;\nimport java.util.regex.Pattern;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nMatcher m = Pattern.compile(\"(\\\\w+)@(\\\\w+)\").matcher(\"a@b and c@d\");\n        while (m.find()) {\n            System.out.println(m.group() + \" \" + m.group(1) + \" \" + m.start());\n        }\n        System.out.println(Pattern.compile(\"A\", Pattern.CASE_INSENSITIVE).matcher(\"xax\").find());\n        System.out.println(Pattern.compile(\"(\\\\d)(\\\\d)\").matcher(\"12\").replaceAll(\"$2$1\"));\n    }\n}\n",
     "status": "supported",
     "expected": "a@b a 0\nc@d c 8\ntrue\n21\n"
+  },
+  {
+    "id": "g-matcher-region",
+    "category": "Library",
+    "title": "Matcher: regions, rewriting, results",
+    "summary": "The rest of the Matcher API \u2014 a region with anchoring and transparent bounds, the appendReplacement loop, and results() as a lazy stream of frozen matches.",
+    "main": "G",
+    "source": "import java.util.regex.MatchResult;\nimport java.util.regex.Matcher;\nimport java.util.regex.Pattern;\nimport java.util.stream.Collectors;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nMatcher m = Pattern.compile(\"\\\\d+\").matcher(\"a12b345\");\n        StringBuilder sb = new StringBuilder();\n        while (m.find()) {\n            m.appendReplacement(sb, \"<\" + m.group().length() + \">\");\n        }\n        System.out.println(m.appendTail(sb));\n        Matcher r = Pattern.compile(\"\\\\bcat\\\\b\").matcher(\"thecat here\");\n        r.region(3, 6);\n        System.out.println(r.matches());\n        r.useTransparentBounds(true);\n        r.reset();\n        r.region(3, 6);\n        System.out.println(r.matches());\n        Matcher w = Pattern.compile(\"\\\\w+\").matcher(\"one two three\");\n        System.out.println(w.results().map(MatchResult::group).collect(Collectors.toList()));\n        System.out.println(Pattern.compile(\"\\\\d\").matcher(\"a1b2\")\n            .replaceAll(one -> \"[\" + one.group() + \"]\"));\n        System.out.println(Pattern.compile(\"^a\").asPredicate().test(\"abc\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": "a<2>b<3>\ntrue\nfalse\n[one, two, three]\na[1]b[2]\ntrue\n"
   },
   {
     "id": "g-fail-fast",

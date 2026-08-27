@@ -1897,6 +1897,29 @@ GRAMMAR = [
                       '        System.out.println(Pattern.compile("A", Pattern.CASE_INSENSITIVE).matcher("xax").find());\n'
                       '        System.out.println(Pattern.compile("(\\\\d)(\\\\d)").matcher("12").replaceAll("$2$1"));',
                       '', 'import java.util.regex.Matcher;\nimport java.util.regex.Pattern;')),
+    dict(id="g-matcher-region", category="Library", title="Matcher: regions, rewriting, results",
+         summary="The rest of the Matcher API — a region with anchoring and transparent bounds, the appendReplacement loop, and results() as a lazy stream of frozen matches.",
+         main="G",
+         source=_prog('Matcher m = Pattern.compile("\\\\d+").matcher("a12b345");\n'
+                      '        StringBuilder sb = new StringBuilder();\n'
+                      '        while (m.find()) {\n'
+                      '            m.appendReplacement(sb, "<" + m.group().length() + ">");\n'
+                      '        }\n'
+                      '        System.out.println(m.appendTail(sb));\n'
+                      '        Matcher r = Pattern.compile("\\\\bcat\\\\b").matcher("thecat here");\n'
+                      '        r.region(3, 6);\n'
+                      '        System.out.println(r.matches());\n'
+                      '        r.useTransparentBounds(true);\n'
+                      '        r.reset();\n'
+                      '        r.region(3, 6);\n'
+                      '        System.out.println(r.matches());\n'
+                      '        Matcher w = Pattern.compile("\\\\w+").matcher("one two three");\n'
+                      '        System.out.println(w.results().map(MatchResult::group).collect(Collectors.toList()));\n'
+                      '        System.out.println(Pattern.compile("\\\\d").matcher("a1b2")\n'
+                      '            .replaceAll(one -> "[" + one.group() + "]"));\n'
+                      '        System.out.println(Pattern.compile("^a").asPredicate().test("abc"));',
+                      '', 'import java.util.regex.MatchResult;\nimport java.util.regex.Matcher;\n'
+                      'import java.util.regex.Pattern;\nimport java.util.stream.Collectors;')),
     dict(id="g-fail-fast", category="Collections", title="Fail-fast iterators (ConcurrentModificationException)",
          summary="Modifying a collection while iterating it throws, as on a real JVM — including the quirk where removing the second-to-last element does not.",
          main="G",

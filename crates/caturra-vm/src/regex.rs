@@ -34,7 +34,10 @@ pub struct Regex {
 #[derive(Debug, Clone)]
 pub struct SyntaxError {
     pub description: String,
-    pub index: usize,
+    /// Where the parser stopped, as a JDK reports it: the cursor MINUS one, so
+    /// a pattern that is nothing but `)` reports -1 — an index before the
+    /// pattern begins, which is why this is signed.
+    pub index: isize,
     pub pattern: String,
 }
 
@@ -42,13 +45,20 @@ impl SyntaxError {
     /// Java's `PatternSyntaxException.getMessage()` layout: description, the
     /// pattern, and a caret under the offending index.
     pub fn message(&self) -> String {
-        format!(
-            "{} near index {}\n{}\n{}^",
-            self.description,
-            self.index,
-            self.pattern,
-            " ".repeat(self.index)
-        )
+        // A NEGATIVE index is left out of the message entirely, as a JDK
+        // leaves it out: `Pattern.compile(")")` reports the description and
+        // the pattern, and nothing about where.
+        let Ok(index) = usize::try_from(self.index) else {
+            return format!("{}\n{}", self.description, self.pattern);
+        };
+        let head = format!("{} near index {}\n{}", self.description, index, self.pattern);
+        // The caret line only appears when the index points INTO the pattern:
+        // a JDK writes no caret for an error at the very end ("a(b" is
+        // unclosed at index 3, which is past its last character).
+        if index >= self.pattern.chars().count() {
+            return head;
+        }
+        format!("{head}\n{}^", " ".repeat(index))
     }
 }
 
@@ -331,6 +341,12 @@ type ParseResult<T> = Result<T, SyntaxError>;
 
 impl Parser<'_> {
     fn error(&self, description: &str, index: usize) -> SyntaxError {
+        self.error_at(description, isize::try_from(index).unwrap_or(0))
+    }
+
+    /// The same, for the one site whose index can be NEGATIVE — a `)` in first
+    /// position, which a JDK reports at -1.
+    fn error_at(&self, description: &str, index: isize) -> SyntaxError {
         SyntaxError {
             description: description.to_owned(),
             index,
@@ -518,8 +534,10 @@ impl Parser<'_> {
             return Ok(Some((min, Some(min))));
         }
         if !self.eat(u16::from(b',')) {
-            self.at = open;
-            return Ok(None);
+            // Digits, then neither `}` nor `,`: the closure was OPENED and
+            // never closed, which a JDK reports at the character that should
+            // have closed it (or at the end of the pattern).
+            return Err(self.error("Unclosed counted closure", self.at));
         }
         self.skip_ignorable();
         if self.eat(u16::from(b'}')) {
@@ -535,7 +553,7 @@ impl Parser<'_> {
         }
         self.skip_ignorable();
         if max_digits.is_empty() || !self.eat(u16::from(b'}')) {
-            return Err(self.error("Unclosed counted closure", open));
+            return Err(self.error("Unclosed counted closure", self.at));
         }
         let max = max_digits
             .parse::<u32>()
@@ -570,9 +588,10 @@ impl Parser<'_> {
             // The JDK's `error` reports the cursor it stopped at, one before
             // the character it just read — for `a)` that is index 0, not the
             // `)`'s own index.
-            u if u == u16::from(b')') => {
-                Err(self.error("Unmatched closing ')'", start.saturating_sub(1)))
-            }
+            u if u == u16::from(b')') => Err(self.error_at(
+                "Unmatched closing ')'",
+                isize::try_from(start).unwrap_or(0) - 1,
+            )),
             u if u == u16::from(b'*') || u == u16::from(b'+') || u == u16::from(b'?') => {
                 let meta = char::from_u32(u32::from(u)).unwrap_or('?');
                 Err(self.error(&format!("Dangling meta character '{meta}'"), start))
@@ -677,7 +696,18 @@ impl Parser<'_> {
                 });
             }
             if !self.eat(u16::from(b':')) {
-                return Err(self.error("Unsupported group construct", open));
+                // `(?>` is an ATOMIC group — real Java syntax this engine does
+                // not implement, and saying so is honest. Anything else after
+                // `(?` is a modifier a JDK does not know either, reported at
+                // the offending character (or at the end, if there is none).
+                let unsupported = self.peek() == Some(u16::from(b'>'));
+                let description = if unsupported {
+                    "Unsupported group construct"
+                } else {
+                    "Unknown inline modifier"
+                };
+                let at = if unsupported { open } else { self.at };
+                return Err(self.error(description, at));
             }
         } else {
             self.groups += 1;
@@ -704,7 +734,16 @@ impl Parser<'_> {
         let mut name = String::new();
         loop {
             let Some(unit) = self.peek() else {
-                return Err(self.error("Unclosed group name", open));
+                // Ran out inside the name: with nothing read yet the JDK
+                // complains about the first character, and with a name in
+                // hand about the `>` that never came.
+                let _ = open;
+                let description = if name.is_empty() {
+                    "capturing group name does not start with a Latin letter"
+                } else {
+                    "named capturing group is missing trailing '>'"
+                };
+                return Err(self.error(description, self.units.len()));
             };
             if unit == u16::from(b'>') {
                 if name.is_empty() {
@@ -746,7 +785,10 @@ impl Parser<'_> {
         let mut clearing = false;
         loop {
             let Some(unit) = self.peek() else {
-                return Err(self.error("Unclosed group", self.units.len()));
+                // `(?i` — the flags ran into the end of the pattern, which a
+                // JDK reports as an unknown modifier rather than an unclosed
+                // group.
+                return Err(self.error("Unknown inline modifier", self.units.len()));
             };
             if unit == u16::from(b'-') {
                 self.at += 1;
@@ -778,7 +820,8 @@ impl Parser<'_> {
             return Ok(Node::Empty);
         }
         if !self.eat(u16::from(b':')) {
-            return Err(self.error("Unsupported group construct", open));
+            let _ = open;
+            return Err(self.error("Unknown inline modifier", self.at));
         }
         self.flags = flags;
         let node = self.parse_alt()?;
@@ -806,7 +849,11 @@ impl Parser<'_> {
         loop {
             self.skip_ignorable();
             let Some(unit) = self.peek() else {
-                return Err(self.error("Unclosed character class", open));
+                // Ran out of input: a JDK reports the cursor minus one, which
+                // is the pattern's LAST character — not the `[` that opened
+                // the class.
+                let _ = open;
+                return Err(self.error("Unclosed character class", self.at.saturating_sub(1)));
             };
             if unit == u16::from(b']') {
                 self.at += 1;
@@ -844,7 +891,8 @@ impl Parser<'_> {
     fn parse_class_item(&mut self) -> ParseResult<ClassItem> {
         let start = self.at;
         let Some(unit) = self.next() else {
-            return Err(self.error("Unclosed character class", start));
+            let _ = start;
+            return Err(self.error("Unclosed character class", self.at.saturating_sub(1)));
         };
         // A nested class: `[a-d[m-p]]`.
         if unit == u16::from(b'[') {
@@ -869,12 +917,15 @@ impl Parser<'_> {
             && self
                 .units
                 .get(self.at + 1)
-                .is_some_and(|next| *next != u16::from(b']') && *next != u16::from(b'['))
+                // A `-` with NOTHING after it opens a range all the same: the
+                // pattern ran out before its high end, which a JDK reports as
+                // an illegal range rather than an unclosed class.
+                .is_none_or(|next| *next != u16::from(b']') && *next != u16::from(b'['))
         {
             self.at += 1;
             let high_start = self.at;
             let Some(high_unit) = self.next() else {
-                return Err(self.error("Unclosed character class", high_start));
+                return Err(self.error("Illegal character range", high_start));
             };
             let high = if high_unit == u16::from(b'\\') {
                 match self.parse_class_escape(high_start)? {
@@ -897,7 +948,12 @@ impl Parser<'_> {
     #[allow(clippy::too_many_lines)] // one arm per escape kind
     fn parse_escape(&mut self, start: usize) -> ParseResult<Node> {
         let Some(unit) = self.peek() else {
-            return Err(self.error("Trailing backslash", start));
+            // A backslash at the very end: the JDK reads PAST the pattern and
+            // reports its own confusion, at the index one past the last
+            // character. Odd wording for an ordinary typo, but it is the
+            // wording a student sees.
+            let _ = start;
+            return Err(self.error("Unexpected internal error", self.units.len()));
         };
         match unit {
             u if u == u16::from(b'b') => {
@@ -1032,7 +1088,10 @@ impl Parser<'_> {
     /// The escapes meaningful both inside and outside a character class.
     fn parse_class_escape(&mut self, start: usize) -> ParseResult<ClassEscape> {
         let Some(unit) = self.next() else {
-            return Err(self.error("Trailing backslash", start));
+            // Inside a class the same truncation is the CLASS's complaint:
+            // `[\` never closed.
+            let _ = start;
+            return Err(self.error("Unclosed character class", self.units.len()));
         };
         let literal = match unit {
             u if u == u16::from(b'd') => return Ok(ClassEscape::Predefined(Predefined::Digit)),
@@ -1173,9 +1232,77 @@ enum Cont<'a> {
 
 struct Matcher<'a> {
     input: &'a [u16],
+    /// The REGION the match may read — `Matcher.region(start, end)`, and the
+    /// whole input by default. Reads stop at `end`, so a pattern cannot match
+    /// text outside the region even when the input has more of it.
+    start: usize,
+    end: usize,
+    /// Anchoring bounds (the JDK's default): `^`, `$`, `\A` and `\z` treat the
+    /// REGION's edges as the input's. Turned off, they match only at the true
+    /// edges, which is what `useAnchoringBounds(false)` asks for.
+    anchoring: bool,
+    /// Transparent bounds: lookaround and `\b` may READ outside the region,
+    /// though the match itself still may not. Off by default, which is why a
+    /// region behaves like a substring.
+    transparent: bool,
+    /// How far a READ may go right now — the region's end, or the whole input
+    /// while a transparent lookaround is running. `floor` is the same from the
+    /// left, for lookbehind.
+    limit: std::cell::Cell<usize>,
+    floor: std::cell::Cell<usize>,
+    /// Whether the last attempt ran out of INPUT (rather than failing on what
+    /// it read), and whether its success depended on an end anchor — Java's
+    /// `hitEnd()` and `requireEnd()`, which a program uses to tell "no match"
+    /// from "not yet".
+    hit_end: std::cell::Cell<bool>,
+    require_end: std::cell::Cell<bool>,
     /// A ceiling on backtracking steps. A pathological pattern must fail
     /// rather than hang the browser tab the engine runs in.
     steps: std::cell::Cell<u64>,
+}
+
+impl<'a> Matcher<'a> {
+    fn over(
+        input: &'a [u16],
+        start: usize,
+        end: usize,
+        anchoring: bool,
+        transparent: bool,
+    ) -> Matcher<'a> {
+        Matcher {
+            input,
+            start,
+            end,
+            anchoring,
+            transparent,
+            limit: std::cell::Cell::new(end),
+            floor: std::cell::Cell::new(start),
+            hit_end: std::cell::Cell::new(false),
+            require_end: std::cell::Cell::new(false),
+            steps: std::cell::Cell::new(STEP_LIMIT),
+        }
+    }
+
+    /// Where a read may stop, and where an ANCHOR thinks the input ends.
+    fn read_limit(&self) -> usize {
+        self.limit.get()
+    }
+
+    fn anchor_end(&self) -> usize {
+        if self.anchoring { self.end } else { self.input.len() }
+    }
+
+    fn anchor_start(&self) -> usize {
+        if self.anchoring { self.start } else { 0 }
+    }
+
+    /// A read at `at` that found nothing because the region ended there: the
+    /// attempt HIT THE END, which is the whole of what `hitEnd` reports.
+    fn note_end(&self, at: usize) {
+        if at >= self.read_limit() {
+            self.hit_end.set(true);
+        }
+    }
 }
 
 /// The backtracking budget. It exists so a pathological pattern fails instead
@@ -1194,6 +1321,10 @@ impl<'a> Matcher<'a> {
     /// string containing a LONE surrogate — a corrupt result, not merely a
     /// wrong count.
     fn code_point_at(&self, at: usize) -> Option<(u32, usize)> {
+        if at >= self.read_limit() {
+            self.hit_end.set(true);
+            return None;
+        }
         let high = *self.input.get(at)?;
         if (0xD800..0xDC00).contains(&high)
             && let Some(&low) = self.input.get(at + 1)
@@ -1205,13 +1336,53 @@ impl<'a> Matcher<'a> {
         Some((u32::from(high), 1))
     }
 
+    /// The code point at `at` with no bookkeeping — what a BOUNDARY reads.
+    /// `\b` looks at a character without consuming it, so a read here must not
+    /// count as running out of input the way a consuming one does.
+    fn point_at(&self, at: usize) -> Option<u32> {
+        let high = *self.input.get(at)?;
+        if (0xD800..0xDC00).contains(&high)
+            && let Some(&low) = self.input.get(at + 1)
+            && (0xDC00..0xE000).contains(&low)
+        {
+            return Some(0x1_0000 + ((u32::from(high) - 0xD800) << 10) + (u32::from(low) - 0xDC00));
+        }
+        Some(u32::from(high))
+    }
+
+    /// What a boundary can SEE. A boundary reads, so it stops where a read
+    /// stops — outside the region the text is not there at all, which is what
+    /// makes a region behave like a substring. Under transparent bounds it is
+    /// there: `\bcat\b` over the region `[3, 6)` of "thecat here" does not
+    /// match, because the "the" before it is visible and there is no boundary.
+    fn word_window(&self) -> (usize, usize) {
+        if self.transparent {
+            (0, self.input.len())
+        } else {
+            (self.floor.get(), self.read_limit())
+        }
+    }
+
     fn at_word(&self, at: usize) -> bool {
-        self.code_point_at(at)
-            .is_some_and(|(point, _)| is_java_word(point))
+        // A boundary at the end of the input READ the end, and that counts
+        // twice: `"dog\b"` against "dog" reports BOTH `hitEnd()` and
+        // `requireEnd()` on a JDK — the engine had to look past the g to
+        // decide the boundary was there, and one more word character would
+        // take it away.
+        if at >= self.read_limit() {
+            self.hit_end.set(true);
+            self.require_end.set(true);
+        }
+        let (floor, limit) = self.word_window();
+        if at >= limit || at < floor {
+            return false;
+        }
+        self.point_at(at).is_some_and(is_java_word)
     }
 
     fn is_boundary(&self, at: usize) -> bool {
-        let before = at > 0 && self.at_word(at - 1);
+        let (floor, _) = self.word_window();
+        let before = at > floor && self.at_word(at - 1);
         let after = self.at_word(at);
         before != after
     }
@@ -1241,7 +1412,8 @@ impl<'a> Matcher<'a> {
         match node {
             Node::Empty => self.resume(pos, caps, cont),
             Node::Literal(expected) => {
-                if self.input.get(pos) == Some(expected) {
+                self.note_end(pos);
+                if pos < self.read_limit() && self.input.get(pos) == Some(expected) {
                     return self.resume(pos + 1, caps, cont);
                 }
                 None
@@ -1312,7 +1484,8 @@ impl<'a> Matcher<'a> {
                     return None;
                 };
                 let text = &self.input[from..to];
-                if self.input.len() < pos + text.len() {
+                if self.read_limit() < pos + text.len() {
+                    self.hit_end.set(true);
                     return None;
                 }
                 let here = &self.input[pos..pos + text.len()];
@@ -1329,27 +1502,34 @@ impl<'a> Matcher<'a> {
                 None
             }
             Node::Start | Node::InputStart => {
-                if pos == 0 {
+                if pos == self.anchor_start() {
                     return self.resume(pos, caps, cont);
                 }
                 None
             }
             Node::End => {
                 // Java's `$` (without MULTILINE) also matches before a final
-                // line terminator.
-                if pos == self.input.len() || self.at_final_terminator(pos) {
+                // line terminator. Reaching one is what `requireEnd` reports:
+                // more input could have changed the answer.
+                self.hit_end.set(true);
+                if pos == self.anchor_end() || self.at_final_terminator(pos) {
+                    self.require_end.set(true);
                     return self.resume(pos, caps, cont);
                 }
                 None
             }
             Node::InputEnd => {
-                if pos == self.input.len() {
+                self.hit_end.set(true);
+                if pos == self.anchor_end() {
+                    self.require_end.set(true);
                     return self.resume(pos, caps, cont);
                 }
                 None
             }
             Node::InputEndBeforeFinalTerminator => {
-                if pos == self.input.len() || self.at_final_terminator(pos) {
+                self.hit_end.set(true);
+                if pos == self.anchor_end() || self.at_final_terminator(pos) {
+                    self.require_end.set(true);
                     return self.resume(pos, caps, cont);
                 }
                 None
@@ -1362,14 +1542,14 @@ impl<'a> Matcher<'a> {
                 // even after newline". So the END of the input is never a line
                 // start — which for an EMPTY input is position 0 too, and
                 // `"".matches("(?m)^.*$")` is false because of it.
-                if pos == self.input.len() {
+                if pos == self.anchor_end() {
                     return None;
                 }
-                let after_terminator = pos > 0
+                let after_terminator = pos > self.anchor_start()
                     && is_line_terminator(u32::from(self.input[pos - 1]))
                     // NOT between a CR and its LF: the pair is ONE terminator.
                     && !(self.input[pos - 1] == 0x0D && self.input.get(pos) == Some(&0x0A));
-                if pos == 0 || after_terminator {
+                if pos == self.anchor_start() || after_terminator {
                     return self.resume(pos, caps, cont);
                 }
                 None
@@ -1382,7 +1562,11 @@ impl<'a> Matcher<'a> {
                     // A CRLF pair is ONE terminator: the line ends before the
                     // CR, not again between the CR and the LF.
                     && !(self.input[pos] == 0x0A && pos > 0 && self.input[pos - 1] == 0x0D);
-                if pos == self.input.len() || before_terminator {
+                if pos == self.anchor_end() || before_terminator {
+                    if pos == self.anchor_end() {
+                        self.hit_end.set(true);
+                        self.require_end.set(true);
+                    }
                     return self.resume(pos, caps, cont);
                 }
                 None
@@ -1398,6 +1582,19 @@ impl<'a> Matcher<'a> {
                 negated,
                 node,
             } => {
+                // TRANSPARENT bounds: a lookaround may read outside the
+                // region, though the match itself may not. The window is
+                // widened for the duration and put back after, which is the
+                // whole of what `useTransparentBounds(true)` asks for.
+                let (kept_limit, kept_floor) = (self.limit.get(), self.floor.get());
+                if self.transparent {
+                    self.limit.set(self.input.len());
+                    self.floor.set(0);
+                }
+                let restore = |matcher: &Self| {
+                    matcher.limit.set(kept_limit);
+                    matcher.floor.set(kept_floor);
+                };
                 let mut probe = caps.clone();
                 let hit = match direction {
                     // Backwards: the body must END at `pos`, and it can begin
@@ -1419,6 +1616,7 @@ impl<'a> Matcher<'a> {
                     }
                     Look::Ahead => self.run(node, pos, &mut probe, &Cont::Done).is_some(),
                 };
+                restore(self);
                 if hit == *negated {
                     return None;
                 }
@@ -1436,7 +1634,7 @@ impl<'a> Matcher<'a> {
     /// Whether `pos` sits just before the input's final line terminator
     /// (`\n`, `\r\n`, or a lone `\r`).
     fn at_final_terminator(&self, pos: usize) -> bool {
-        let len = self.input.len();
+        let len = self.anchor_end();
         if pos == len {
             return false;
         }
@@ -1653,6 +1851,36 @@ impl<'a> Matcher<'a> {
 // Public surface
 // ---------------------------------------------------------------------------
 
+/// The window a match may read and anchor against — `Matcher.region` and the
+/// two bound modes beside it. The default is the whole input, anchored, opaque.
+#[derive(Debug, Clone, Copy)]
+pub struct Bounds {
+    pub start: usize,
+    pub end: usize,
+    pub anchoring: bool,
+    pub transparent: bool,
+}
+
+impl Bounds {
+    #[must_use]
+    pub fn whole(input: &[u16]) -> Bounds {
+        Bounds {
+            start: 0,
+            end: input.len(),
+            anchoring: true,
+            transparent: false,
+        }
+    }
+}
+
+/// What one attempt found, and what it learned on the way.
+#[derive(Debug, Clone)]
+pub struct Attempt {
+    pub matched: Option<Match>,
+    pub hit_end: bool,
+    pub require_end: bool,
+}
+
 /// One match: the whole-match span plus each group's span.
 #[derive(Debug, Clone)]
 pub struct Match {
@@ -1676,7 +1904,10 @@ impl Regex {
         if parser.at < parser.units.len() {
             // Only an unbalanced `)` can stop the parse early.
             // The JDK's cursor sits one BEFORE the `)` it stopped at.
-            return Err(parser.error("Unmatched closing ')'", parser.at.saturating_sub(1)));
+            return Err(parser.error_at(
+                "Unmatched closing ')'",
+                isize::try_from(parser.at).unwrap_or(0) - 1,
+            ));
         }
         Ok(Regex {
             node,
@@ -1701,22 +1932,100 @@ impl Regex {
 
     /// The leftmost match at or after `from`.
     pub fn find_at(&self, input: &[u16], from: usize) -> Option<Match> {
-        let matcher = Matcher {
+        self.find_in(input, from, Bounds::whole(input)).matched
+    }
+
+    /// The leftmost match at or after `from`, within `bounds` — and what the
+    /// attempt learned on the way: whether it ran out of input, and whether
+    /// its answer depended on the end. `Matcher.find`, `hitEnd` and
+    /// `requireEnd` are the same walk asked three questions.
+    pub fn find_in(&self, input: &[u16], from: usize, bounds: Bounds) -> Attempt {
+        let matcher = Matcher::over(
             input,
-            steps: std::cell::Cell::new(STEP_LIMIT),
-        };
-        for start in from..=input.len() {
+            bounds.start,
+            bounds.end,
+            bounds.anchoring,
+            bounds.transparent,
+        );
+        for start in from..=bounds.end {
             let mut caps: Captures = vec![None; self.group_count + 1];
             if let Some(end) = matcher.run(&self.node, start, &mut caps, &Cont::Done) {
                 caps[0] = Some((start, end));
-                return Some(Match {
-                    start,
-                    end,
-                    groups: caps,
-                });
+                return Attempt {
+                    matched: Some(Match {
+                        start,
+                        end,
+                        groups: caps,
+                    }),
+                    hit_end: matcher.hit_end.get(),
+                    require_end: matcher.require_end.get(),
+                };
             }
         }
-        None
+        Attempt {
+            matched: None,
+            hit_end: matcher.hit_end.get(),
+            require_end: matcher.require_end.get(),
+        }
+    }
+
+    /// The match ANCHORED at `bounds.start` — `Matcher.lookingAt`, which is
+    /// `find` that may not move.
+    pub fn looking_at(&self, input: &[u16], bounds: Bounds) -> Attempt {
+        let matcher = Matcher::over(
+            input,
+            bounds.start,
+            bounds.end,
+            bounds.anchoring,
+            bounds.transparent,
+        );
+        let mut caps: Captures = vec![None; self.group_count + 1];
+        let landed = matcher.run(&self.node, bounds.start, &mut caps, &Cont::Done);
+        let found = landed.map(|end| {
+            caps[0] = Some((bounds.start, end));
+            Match {
+                start: bounds.start,
+                end,
+                groups: caps,
+            }
+        });
+        Attempt {
+            matched: found,
+            hit_end: matcher.hit_end.get(),
+            require_end: matcher.require_end.get(),
+        }
+    }
+
+    /// The match that fills the whole region — `Matcher.matches`, with the
+    /// groups it captured, which `matches_whole` (a bare yes/no) cannot give.
+    pub fn matches_in(&self, input: &[u16], bounds: Bounds) -> Attempt {
+        let anchored = Node::Concat(vec![self.node.clone(), Node::InputEnd]);
+        let matcher = Matcher::over(
+            input,
+            bounds.start,
+            bounds.end,
+            // `matches` compares against the REGION's end whatever the
+            // anchoring mode says, since it is the region it must fill.
+            true,
+            bounds.transparent,
+        );
+        let mut caps: Captures = vec![None; self.group_count + 1];
+        let landed = matcher
+            .run(&anchored, bounds.start, &mut caps, &Cont::Done)
+            .filter(|end| *end == bounds.end);
+        let found = landed.map(|end| {
+            caps[0] = Some((bounds.start, end));
+            Match {
+                start: bounds.start,
+                end,
+                groups: caps,
+            }
+        });
+        Attempt {
+            matched: found,
+            hit_end: matcher.hit_end.get(),
+            require_end: matcher.require_end.get(),
+        }
     }
 
     /// Whether the pattern matches the *entire* input — `String.matches`.
@@ -1726,15 +2035,7 @@ impl Regex {
     /// prefix (`"aab".matches("a*b?")` stops after `aa`), and only an anchor
     /// inside the pattern makes the engine give those characters back.
     pub fn matches_whole(&self, input: &[u16]) -> bool {
-        let anchored = Node::Concat(vec![self.node.clone(), Node::InputEnd]);
-        let matcher = Matcher {
-            input,
-            steps: std::cell::Cell::new(STEP_LIMIT),
-        };
-        let mut caps: Captures = vec![None; self.group_count + 1];
-        matcher
-            .run(&anchored, 0, &mut caps, &Cont::Done)
-            .is_some_and(|end| end == input.len())
+        self.matches_in(input, Bounds::whole(input)).matched.is_some()
     }
 }
 

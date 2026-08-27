@@ -39334,3 +39334,340 @@ public class Regexes {
 }
 "#
 );
+
+// The rest of `Matcher`: the REGION it is confined to and how that region's
+// edges behave. Anchoring bounds (the default) make `^`/`$` treat the region's
+// edges as the input's; transparent bounds let `\b` and lookaround READ
+// outside it, which is how a region stops behaving like a substring.
+differential_test!(
+    a_matchers_region_and_bounds,
+    "Regions",
+    r#"
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Regions {
+    public static void main(String[] args) {
+        Matcher m = Pattern.compile("\\d+").matcher("abc 12 def 345");
+        m.region(4, 10);
+        System.out.println(m.regionStart() + " " + m.regionEnd());
+        while (m.find()) {
+            System.out.println(m.group() + " at " + m.start() + "-" + m.end());
+        }
+        Matcher w = Pattern.compile("^\\d+$").matcher("ab123cd");
+        w.region(2, 5);
+        System.out.println("anchored: " + w.matches() + " " + w.hasAnchoringBounds());
+        w.useAnchoringBounds(false);
+        w.reset();
+        w.region(2, 5);
+        System.out.println("unanchored find: " + w.find());
+
+        // `\bcat\b` over the region [3, 6) of "thecat here": opaque bounds see
+        // a region that begins at "cat", so the boundary is there; transparent
+        // ones see the "the" before it, and it is not.
+        Matcher t = Pattern.compile("\\bcat\\b").matcher("thecat here");
+        t.region(3, 6);
+        System.out.println("opaque: " + t.matches() + " " + t.hasTransparentBounds());
+        t.useTransparentBounds(true);
+        t.reset();
+        t.region(3, 6);
+        System.out.println("transparent: " + t.matches());
+        System.out.println(t.regionStart() + "," + t.regionEnd());
+
+        // `reset()` restores the whole input as the region.
+        Matcher r = Pattern.compile("a").matcher("banana");
+        r.region(2, 5);
+        System.out.println(r.find() + " " + r.start());
+        r.reset();
+        System.out.println(r.regionStart() + " " + r.regionEnd() + " " + r.find() + " " + r.start());
+        try {
+            r.region(3, 1);
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println(e.getClass().getName() + ": " + e.getMessage());
+        }
+        try {
+            r.region(0, 99);
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println(e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+}
+"#
+);
+
+// The append/tail rewriting loop — the one a program writes when it rewrites
+// SOME matches and keeps the rest. `appendReplacement` copies the text since
+// the last append and then the EXPANDED replacement (`$1`, `${name}`, `\$` for
+// a literal dollar); `appendTail` copies whatever is left.
+differential_test!(
+    the_append_and_tail_loop,
+    "Appending",
+    r#"
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Appending {
+    public static void main(String[] args) {
+        Matcher m = Pattern.compile("\\d+").matcher("a12b345c6");
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            m.appendReplacement(sb, "<" + m.group() + ">");
+        }
+        m.appendTail(sb);
+        System.out.println(sb + "|" + sb.length());
+
+        Matcher n = Pattern.compile("(?<pre>[a-z]+)-(?<post>\\d+)").matcher("ab-12 cd-34");
+        StringBuilder out = new StringBuilder("keep|");
+        while (n.find()) {
+            n.appendReplacement(out, "${post}/${pre}");
+        }
+        System.out.println(n.appendTail(out));
+
+        Matcher g = Pattern.compile("(x)(y)").matcher("xy");
+        g.find();
+        StringBuilder both = new StringBuilder();
+        g.appendReplacement(both, "$2$1\\$literal");
+        System.out.println(g.appendTail(both));
+
+        // Appending before there is a match is an IllegalStateException, and
+        // this one is worded differently from `group`'s.
+        Matcher none = Pattern.compile("z").matcher("az");
+        try {
+            none.appendReplacement(new StringBuilder(), "!");
+        } catch (IllegalStateException e) {
+            System.out.println("ise " + e.getMessage());
+        }
+        Matcher bad = Pattern.compile("a").matcher("a");
+        bad.find();
+        try {
+            bad.appendReplacement(new StringBuilder(), "$9");
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println(e.getClass().getName() + ": " + e.getMessage());
+        }
+        System.out.println(Matcher.quoteReplacement("a$b\\c") + "|"
+            + Matcher.quoteReplacement("plain") + "|"
+            + "a1b".replaceAll("\\d", Matcher.quoteReplacement("$0")));
+    }
+}
+"#
+);
+
+// A `MatchResult` is one match, frozen: it outlives the `find` that follows,
+// where a Matcher moves on. `results()` hands them out as a LAZY stream over
+// the same matcher — it consumes exactly as many matches as the pipeline asks
+// for, and `find()` picks up after them.
+differential_test!(
+    a_frozen_match_and_the_results_stream,
+    "Frozen",
+    r#"
+import java.util.List;
+import java.util.regex.MatchResult;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+public class Frozen {
+    public static void main(String[] args) {
+        Matcher m = Pattern.compile("(\\w)(\\d)").matcher("a1 b2 c3");
+        m.find();
+        MatchResult first = m.toMatchResult();
+        m.find();
+        System.out.println(first.group() + " " + first.group(1) + first.group(2)
+            + " " + first.start() + " " + first.end() + " " + first.groupCount());
+        System.out.println(m.group());
+
+        Matcher r = Pattern.compile("\\d+").matcher("a1 bb22 ccc333");
+        List<String> found = r.results().map(MatchResult::group).collect(Collectors.toList());
+        System.out.println(found);
+        System.out.println(Pattern.compile("\\d+").matcher("x1y2z3").results().count());
+
+        // Lazy, and shared with the matcher: one element consumed leaves the
+        // rest to `find()`, and a full traversal leaves nothing.
+        Matcher v = Pattern.compile("dog").matcher("dogdogdog");
+        System.out.println(v.results().limit(1).count() + " then " + v.find() + " " + v.group());
+        Matcher u = Pattern.compile("dog").matcher("dogdog");
+        System.out.println(u.results().count() + " then " + u.find());
+
+        // A Matcher IS a MatchResult, and the frozen one is its own class.
+        Matcher one = Pattern.compile("a+").matcher("aa");
+        one.find();
+        Object frozen = one.toMatchResult();
+        System.out.println(one instanceof MatchResult);
+        System.out.println(frozen instanceof MatchResult);
+        System.out.println(((MatchResult) frozen).group());
+        System.out.println(one.getClass().getName() + " " + frozen.getClass().getName());
+        System.out.println(Pattern.compile("a").getClass().getName());
+    }
+}
+"#
+);
+
+// `Pattern.asPredicate()` (find) and `asMatchPredicate()` (Java 11: match the
+// whole input) — the pattern handed over as a `Predicate<String>`, which is
+// how a program filters a stream by one. `splitAsStream` is `split` handed
+// over the same way.
+differential_test!(
+    a_patterns_own_predicates,
+    "Predicates",
+    r#"
+import java.util.List;
+import java.util.function.Predicate;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+public class Predicates {
+    public static void main(String[] args) {
+        Pattern digits = Pattern.compile("\\d+");
+        Predicate<String> has = digits.asPredicate();
+        Predicate<String> whole = digits.asMatchPredicate();
+        System.out.println(has.test("a1") + " " + whole.test("a1") + " " + whole.test("12"));
+        List<String> in = List.of("a1", "22", "bb");
+        System.out.println(in.stream().filter(has).collect(Collectors.toList()));
+        System.out.println(in.stream().filter(whole).collect(Collectors.toList()));
+        System.out.println(in.stream().filter(digits.asPredicate()).count());
+        System.out.println(Pattern.compile("\\s*,\\s*").splitAsStream("a , b,c")
+            .map(String::toUpperCase).collect(Collectors.joining("-")));
+        System.out.println(Pattern.compile("z").splitAsStream("abc").count());
+    }
+}
+"#
+);
+
+// The Java 9 replacements, which COMPUTE each replacement from the match
+// instead of expanding a template — and what a JDK leaves behind: both forms
+// reset the matcher first and leave it wherever the scan stopped, so after
+// `replaceFirst` the next `find` answers the SECOND match.
+differential_test!(
+    the_computed_replacements,
+    "Computed",
+    r##"
+import java.util.regex.MatchResult;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Computed {
+    public static void main(String[] args) {
+        Matcher m = Pattern.compile("\\d+").matcher("a1 bb22 c333");
+        System.out.println(m.replaceAll(r -> "<" + r.group().length() + ">"));
+        System.out.println(m.replaceFirst(r -> r.group() + r.group()));
+        System.out.println(m.find() + " " + m.group());
+        Matcher u = Pattern.compile("[a-z]").matcher("a-b");
+        System.out.println(u.replaceAll(MatchResult::group));
+        // What the function answers is EXPANDED, not literal.
+        System.out.println(Pattern.compile("x").matcher("axb").replaceAll(r -> "$0"));
+
+        Matcher s = Pattern.compile("\\d").matcher("a1b2c3");
+        System.out.println(s.replaceAll("#") + " | after: " + s.find());
+        Matcher f = Pattern.compile("\\d").matcher("a1b2c3");
+        System.out.println(f.replaceFirst("#") + " | after: " + f.find() + " " + f.group());
+        Matcher q = Pattern.compile("\\d").matcher("a1b2");
+        q.region(2, 4);
+        System.out.println(q.replaceAll("#") + " | region " + q.regionStart() + q.regionEnd());
+    }
+}
+"##
+);
+
+// What the last attempt LEARNED: `hitEnd()` (it ran out of input) and
+// `requireEnd()` (its answer leaned on the end), which is how an editor tells
+// "no match" from "not yet". A `\b` at the end of the input reports both — the
+// engine had to look past the last character to decide the boundary was there.
+differential_test!(
+    what_the_last_attempt_learned,
+    "Ends",
+    r#"
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Ends {
+    public static void main(String[] args) {
+        String[] patterns = {"dog", "dog$", "do", "dog\\b", "d.g", "(?m)dog$"};
+        String[] texts = {"dog", "do", "dogs", "adog", ""};
+        for (String pattern : patterns) {
+            for (String text : texts) {
+                Matcher m = Pattern.compile(pattern).matcher(text);
+                System.out.println(pattern + " / " + text + " -> " + m.find()
+                    + " " + m.hitEnd() + " " + m.requireEnd());
+            }
+        }
+    }
+}
+"#
+);
+
+// A `PatternSyntaxException` says WHAT was wrong and WHERE, and its message is
+// built from those three — including the caret line, which a JDK leaves off
+// when the index points past the pattern's last character.
+differential_test!(
+    a_pattern_syntax_exception_reports_where,
+    "Broken",
+    r#"
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
+
+public class Broken {
+    public static void main(String[] args) {
+        try {
+            Pattern.compile("a(b");
+        } catch (PatternSyntaxException e) {
+            System.out.println(e.getDescription());
+            System.out.println(e.getPattern());
+            System.out.println(e.getIndex());
+            System.out.println(e.getMessage());
+        }
+        try {
+            Pattern.compile("a[b");
+        } catch (PatternSyntaxException e) {
+            System.out.println(e.getDescription() + "|" + e.getIndex() + "|" + e.getPattern());
+        }
+        Matcher m = Pattern.compile("a").matcher("bab");
+        System.out.println(m.pattern().pattern() + "|" + m.pattern().flags());
+        System.out.println(m);
+        m.find();
+        System.out.println(m);
+        System.out.println(m.usePattern(Pattern.compile("b")).find() + " " + m.group()
+            + " " + m.start());
+    }
+}
+"#
+);
+
+// What a malformed pattern REPORTS — the description and the index, which
+// `PatternSyntaxException` hands out separately and its message is built from.
+// A JDK's index is the cursor MINUS one: at the end of the input that is the
+// pattern's length, and for a `)` in first position it is -1.
+differential_test!(
+    a_malformed_pattern_says_where,
+    "Malformed",
+    r#"
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
+
+public class Malformed {
+    public static void main(String[] args) {
+        String[] bad = {"a[b", "[", "a(b", "(", ")", "a)", "*a", "a{2", "a**", "[z-a]",
+            "\\", "(?<>a)", "(?", "a|*", "[a-", "x{1,0}", "(?<n>a)(?<n>b)",
+            "a{x", "a{2x", "a{2,x", "a{2,3", "ab\\", "(?i", "(?z)", "(?<", "(?<a",
+            "(?:", "[\\", "[a\\"};
+        for (String pattern : bad) {
+            try {
+                Pattern.compile(pattern);
+                System.out.println(pattern + " -> compiles");
+            } catch (PatternSyntaxException e) {
+                System.out.println(pattern + " -> " + e.getDescription() + " @ " + e.getIndex());
+            }
+        }
+        // The message is built from the three, with the caret line left off
+        // when the index points past the pattern's last character.
+        for (String pattern : new String[] {"a[b", ")", "a)", "a(b"}) {
+            try {
+                Pattern.compile(pattern);
+            } catch (PatternSyntaxException e) {
+                System.out.println("[" + e.getMessage() + "]");
+            }
+        }
+    }
+}
+"#
+);

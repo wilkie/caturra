@@ -3082,6 +3082,7 @@ impl MethodTable {
                     "Charset" if !self.has_class(simple) => Some(JType::Charset),
                     "Pattern" if !self.has_class(simple) => Some(JType::Pattern),
                     "Matcher" if !self.has_class(simple) => Some(JType::Matcher),
+                    "MatchResult" if !self.has_class(simple) => Some(JType::MatchResult),
                     // The primitive-specialized pipeline names a type too, so
                     // one can be held in a variable rather than only chained.
                     "IntStream" if !self.has_class(simple) => Some(JType::IntStream),
@@ -3366,6 +3367,7 @@ impl MethodTable {
                     JType::Constructor => ElemType::Constructor,
                     JType::Class => ElemType::Class,
                     JType::StackFrame => ElemType::StackFrame,
+                    JType::MatchResult => ElemType::MatchResult,
                     // A wrapper array (`Integer[]`) is a REFERENCE array of
                     // boxed elements, distinct from the primitive `int[]`.
                     JType::Boxed(elem) => match Prim::of(elem) {
@@ -4104,6 +4106,7 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         // A wrapper element defers to its own primitive.
         ElemType::Wrapper(prim) => wrapper_internal(prim.elem()),
         ElemType::StackFrame => "java/lang/StackTraceElement",
+        ElemType::MatchResult => "java/util/regex/MatchResult",
         // A type variable erases to `Object`, like every other reference here.
         ElemType::TypeVar(_)
         | ElemType::Str
@@ -4349,6 +4352,7 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable, in_class: &str) ->
 fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     match elem {
         ElemType::StackFrame => String::from("StackTraceElement"),
+        ElemType::MatchResult => String::from("MatchResult"),
         ElemType::TypeVar(_) => String::from("Object"),
         ElemType::Builder => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
@@ -4897,6 +4901,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Object(id) => Some(ElemType::Object(id)),
         JType::Class => Some(ElemType::Class),
         JType::StackFrame => Some(ElemType::StackFrame),
+        JType::MatchResult => Some(ElemType::MatchResult),
         JType::Exception(id) => Some(ElemType::Throwable(id)),
         // A wrapper array element is a boxed REFERENCE (`Integer[]`).
         JType::Boxed(elem) => Prim::of(elem).map(ElemType::Wrapper),
@@ -5532,6 +5537,9 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (from, to),
             (JType::Object(sub), JType::Object(sup)) if table.is_subtype(sub, sup)
         )
+        // A `Matcher` IS a `MatchResult` — it implements the interface, so it
+        // assigns to one, passes as one, and answers `instanceof` for one.
+        || matches!((from, to), (JType::Matcher, JType::MatchResult))
         // A type VARIABLE is a reference whose erasure is its BOUND, and which
         // bound that is cannot be known here — only at the call site, which
         // checks it when the argument is converted. For APPLICABILITY this is
@@ -6125,6 +6133,8 @@ enum ElemType {
     Constructor,
     /// `java.lang.Class` (element of a `Class[]`, e.g. `getConstructor` args).
     Class,
+    /// `java.util.regex.MatchResult` (element of `Matcher.results()`).
+    MatchResult,
     /// A throwable element (`Throwable[]` from `getSuppressed()`, or an
     /// array of any exception class), carrying its exception id.
     Throwable(u8),
@@ -6264,6 +6274,7 @@ impl ElemType {
             ElemType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             ElemType::Class => String::from("Ljava/lang/Class;"),
             ElemType::StackFrame => String::from("Ljava/lang/StackTraceElement;"),
+            ElemType::MatchResult => String::from("Ljava/util/regex/MatchResult;"),
             ElemType::Throwable(id) => format!("L{};", exception_internal(id)),
             // A wildcard or nested element erases to its `read` class (Object,
             // unless a wildcard's modelled bound narrows it).
@@ -6330,6 +6341,7 @@ impl ElemType {
             ElemType::Constructor => JType::Constructor,
             ElemType::Class => JType::Class,
             ElemType::StackFrame => JType::StackFrame,
+            ElemType::MatchResult => JType::MatchResult,
             ElemType::Throwable(id) => JType::Exception(id),
             // A wildcard or nested element erases (table-free) to its `read`
             // class; the nesting-aware `elem_value_type` recovers the true
@@ -6469,6 +6481,10 @@ enum JType {
     /// `java.util.regex.Matcher` (intrinsic) — a pattern walking one input,
     /// which is what `find`/`group`/`start`/`end` read.
     Matcher,
+    /// `java.util.regex.MatchResult` (intrinsic) — one match, frozen: what
+    /// `toMatchResult()` hands out and what a `results()` stream carries. It
+    /// answers a Matcher's four reading questions and never moves.
+    MatchResult,
     /// `java.nio.charset.Charset` (intrinsic) — `StandardCharsets.UTF_8` and
     /// the names beside it, which a program passes to `getBytes`, to
     /// `new String(bytes, …)` and to the `Files` readers. The object carries
@@ -6955,6 +6971,7 @@ impl JType {
             JType::Charset => String::from("Charset"),
             JType::Pattern => String::from("Pattern"),
             JType::Matcher => String::from("Matcher"),
+            JType::MatchResult => String::from("MatchResult"),
             // The FACE the program wrote, not whichever of the two names
             // caturra models the pair under: a diagnostic about a `List<String>`
             // parameter named `ArrayList<String>`, a class the program never
@@ -6997,6 +7014,7 @@ impl JType {
                 | JType::Charset
                 | JType::Pattern
                 | JType::Matcher
+                | JType::MatchResult
                 | JType::List { .. }
                 | JType::Stack(_)
                 | JType::LinkedList { .. }
@@ -7130,6 +7148,7 @@ impl JType {
             JType::Charset => String::from("Ljava/nio/charset/Charset;"),
             JType::Pattern => String::from("Ljava/util/regex/Pattern;"),
             JType::Matcher => String::from("Ljava/util/regex/Matcher;"),
+            JType::MatchResult => String::from("Ljava/util/regex/MatchResult;"),
             JType::List { .. } => String::from("Ljava/util/ArrayList;"),
             JType::Stack(_) => String::from("Ljava/util/Stack;"),
             // Only reachable for methods that already produced a
@@ -8600,6 +8619,8 @@ enum BParam {
     Elem,
     /// A `java.nio.charset.Charset` (`getBytes(charset)`).
     Charset,
+    /// A `java.util.regex.Pattern` (`matcher.usePattern(p)`).
+    Pattern,
     /// `java.lang.Class` (`Class.isAssignableFrom(Class)`).
     Class,
     /// Any reference array (`getConstructor(Class[])`, `newInstance(Object[])`).
@@ -8796,6 +8817,13 @@ enum BRet {
     /// `java.util.regex.Pattern` / `Matcher`.
     Pattern,
     Matcher,
+    /// `java.util.regex.MatchResult` — one match, frozen.
+    MatchResult,
+    /// A `Stream<MatchResult>` — what `Matcher.results()` answers.
+    MatchResultStream,
+    /// A `Predicate<String>` — what `Pattern.asPredicate` answers. It is the
+    /// bundled `__Predicate` interface, so it passes wherever a lambda does.
+    Predicate,
 }
 
 /// One intrinsic method signature the compiler knows about.
@@ -11201,99 +11229,110 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
     },
 ];
 
-const EXCEPTION_METHODS: &[BuiltinMethod] = &[
-    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
-    // Every object has one; a throwable's is `Object`'s identity hash.
-    bm("hashCode", &[], BRet::Int, "()I"),
-    bm(
-        "getStackTrace",
-        &[],
-        BRet::StackFrameArray,
-        "()[Ljava/lang/StackTraceElement;",
-    ),
-    // `e.getClass()` — every object has it, and a validator reporting which
-    // exception it caught needs it.
-    BuiltinMethod {
-        name: "getClass",
-        params: &[],
-        ret: BRet::Class,
-        descriptor: "()Ljava/lang/Class;",
-        needs: SortedRole::Sorted,
-    },
-    BuiltinMethod {
-        name: "getMessage",
-        params: &[],
-        ret: BRet::Str,
-        descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
-    },
-    BuiltinMethod {
-        name: "toString",
-        params: &[],
-        ret: BRet::Str,
-        descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
-    },
-    BuiltinMethod {
-        name: "printStackTrace",
-        params: &[],
-        ret: BRet::Void,
-        descriptor: "()V",
-        needs: SortedRole::Sorted,
-    },
-    BuiltinMethod {
-        name: "getLocalizedMessage",
-        params: &[],
-        ret: BRet::Str,
-        descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
-    },
-    // `getCause()` — the chained cause, or null.
-    BuiltinMethod {
-        name: "getCause",
-        params: &[],
-        ret: BRet::Throwable,
-        descriptor: "()Ljava/lang/Throwable;",
-        needs: SortedRole::Sorted,
-    },
-    // `getSuppressed()` — the real suppressed exceptions, typed as `Object[]`
-    // because `ElemType` has no exception variant, so `.length` and iteration
-    // work while an element needs a cast to reach `getMessage()`.
-    BuiltinMethod {
-        name: "getSuppressed",
-        params: &[],
-        ret: BRet::ThrowableArray,
-        descriptor: "()[Ljava/lang/Throwable;",
-        needs: SortedRole::Sorted,
-    },
-    // `addSuppressed(t)` — used by the try-with-resources desugaring, and
-    // available to programs that manage suppression themselves.
-    BuiltinMethod {
-        name: "addSuppressed",
-        params: &[BParam::Throwable],
-        ret: BRet::Void,
-        descriptor: "(Ljava/lang/Throwable;)V",
-        needs: SortedRole::Sorted,
-    },
-    // `fillInStackTrace()` re-records the trace AT THE CALL and returns
-    // `this`, so a throwable rethrown elsewhere can be made to point at the
-    // rethrow rather than its construction.
-    BuiltinMethod {
-        name: "fillInStackTrace",
-        params: &[],
-        ret: BRet::Throwable,
-        descriptor: "()Ljava/lang/Throwable;",
-        needs: SortedRole::Sorted,
-    },
-    // `initCause(t)` sets the cause and returns `this` (for chaining).
-    BuiltinMethod {
-        name: "initCause",
-        params: &[BParam::Throwable],
-        ret: BRet::Throwable,
-        descriptor: "(Ljava/lang/Throwable;)Ljava/lang/Throwable;",
-        needs: SortedRole::Sorted,
-    },
-];
+/// Every throwable's methods, plus whatever a particular one adds. Written
+/// as a macro because a subclass with extra methods (a
+/// `PatternSyntaxException`) needs the shared list AND its own, and a static
+/// slice cannot be concatenated at compile time.
+macro_rules! throwable_methods {
+    ($($extra:expr,)*) => {
+        &[
+        bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+        // Every object has one; a throwable's is `Object`'s identity hash.
+        bm("hashCode", &[], BRet::Int, "()I"),
+        bm(
+            "getStackTrace",
+            &[],
+            BRet::StackFrameArray,
+            "()[Ljava/lang/StackTraceElement;",
+        ),
+        // `e.getClass()` — every object has it, and a validator reporting which
+        // exception it caught needs it.
+        BuiltinMethod {
+            name: "getClass",
+            params: &[],
+            ret: BRet::Class,
+            descriptor: "()Ljava/lang/Class;",
+            needs: SortedRole::Sorted,
+        },
+        BuiltinMethod {
+            name: "getMessage",
+            params: &[],
+            ret: BRet::Str,
+            descriptor: "()Ljava/lang/String;",
+            needs: SortedRole::Sorted,
+        },
+        BuiltinMethod {
+            name: "toString",
+            params: &[],
+            ret: BRet::Str,
+            descriptor: "()Ljava/lang/String;",
+            needs: SortedRole::Sorted,
+        },
+        BuiltinMethod {
+            name: "printStackTrace",
+            params: &[],
+            ret: BRet::Void,
+            descriptor: "()V",
+            needs: SortedRole::Sorted,
+        },
+        BuiltinMethod {
+            name: "getLocalizedMessage",
+            params: &[],
+            ret: BRet::Str,
+            descriptor: "()Ljava/lang/String;",
+            needs: SortedRole::Sorted,
+        },
+        // `getCause()` — the chained cause, or null.
+        BuiltinMethod {
+            name: "getCause",
+            params: &[],
+            ret: BRet::Throwable,
+            descriptor: "()Ljava/lang/Throwable;",
+            needs: SortedRole::Sorted,
+        },
+        // `getSuppressed()` — the real suppressed exceptions, typed as `Object[]`
+        // because `ElemType` has no exception variant, so `.length` and iteration
+        // work while an element needs a cast to reach `getMessage()`.
+        BuiltinMethod {
+            name: "getSuppressed",
+            params: &[],
+            ret: BRet::ThrowableArray,
+            descriptor: "()[Ljava/lang/Throwable;",
+            needs: SortedRole::Sorted,
+        },
+        // `addSuppressed(t)` — used by the try-with-resources desugaring, and
+        // available to programs that manage suppression themselves.
+        BuiltinMethod {
+            name: "addSuppressed",
+            params: &[BParam::Throwable],
+            ret: BRet::Void,
+            descriptor: "(Ljava/lang/Throwable;)V",
+            needs: SortedRole::Sorted,
+        },
+        // `fillInStackTrace()` re-records the trace AT THE CALL and returns
+        // `this`, so a throwable rethrown elsewhere can be made to point at the
+        // rethrow rather than its construction.
+        BuiltinMethod {
+            name: "fillInStackTrace",
+            params: &[],
+            ret: BRet::Throwable,
+            descriptor: "()Ljava/lang/Throwable;",
+            needs: SortedRole::Sorted,
+        },
+        // `initCause(t)` sets the cause and returns `this` (for chaining).
+        BuiltinMethod {
+            name: "initCause",
+            params: &[BParam::Throwable],
+            ret: BRet::Throwable,
+            descriptor: "(Ljava/lang/Throwable;)Ljava/lang/Throwable;",
+            needs: SortedRole::Sorted,
+        },
+            $($extra,)*
+        ]
+    };
+}
+
+const EXCEPTION_METHODS: &[BuiltinMethod] = throwable_methods![];
 
 const MATH_METHODS: &[BuiltinMethod] = &[
     BuiltinMethod {
@@ -13651,6 +13690,16 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Constructor => Some(("java/lang/reflect/Constructor", CONSTRUCTOR_METHODS)),
         JType::Scanner => Some(("java/util/Scanner", SCANNER_METHODS)),
         JType::File => Some(("java/io/File", FILE_METHODS)),
+        // A `PatternSyntaxException` reports what was wrong with the pattern,
+        // and that is three methods no other throwable has.
+        JType::Exception(id)
+            if exception_internal(id) == "java/util/regex/PatternSyntaxException" =>
+        {
+            Some((
+                "java/util/regex/PatternSyntaxException",
+                PATTERN_SYNTAX_METHODS,
+            ))
+        }
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
@@ -13658,6 +13707,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Charset => Some(("java/nio/charset/Charset", CHARSET_METHODS)),
         JType::Pattern => Some(("java/util/regex/Pattern", PATTERN_METHODS)),
         JType::Matcher => Some(("java/util/regex/Matcher", MATCHER_METHODS)),
+        JType::MatchResult => Some(("java/util/regex/MatchResult", MATCH_RESULT_METHODS)),
         JType::List { .. } => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::ListIterator(_) => Some(("java/util/ListIterator", LIST_ITERATOR_METHODS)),
         JType::CharSequence => Some(("java/lang/CharSequence", CHAR_SEQUENCE_METHODS)),
@@ -13715,6 +13765,47 @@ const PATTERN_METHODS: &[BuiltinMethod] = &[
         BRet::StrArray,
         "(Ljava/lang/CharSequence;I)[Ljava/lang/String;",
     ),
+    bm(
+        "splitAsStream",
+        &[BParam::CharSeq],
+        BRet::StreamString,
+        "(Ljava/lang/CharSequence;)Ljava/util/stream/Stream;",
+    ),
+    // The two predicates a pattern answers: `asPredicate` FINDS, and
+    // `asMatchPredicate` (Java 11) demands the whole input.
+    bm(
+        "asPredicate",
+        &[],
+        BRet::Predicate,
+        "()Ljava/util/function/Predicate;",
+    ),
+    bm(
+        "asMatchPredicate",
+        &[],
+        BRet::Predicate,
+        "()Ljava/util/function/Predicate;",
+    ),
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+];
+
+/// `java.util.regex.PatternSyntaxException` — every throwable's methods, plus
+/// the three that say what was wrong with the pattern and where.
+const PATTERN_SYNTAX_METHODS: &[BuiltinMethod] = throwable_methods![
+    bm("getDescription", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getPattern", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getIndex", &[], BRet::Int, "()I"),
+];
+
+/// `java.util.regex.MatchResult` — one match, frozen. A Matcher is one of
+/// these too (it implements the interface), but these four are all it exposes.
+const MATCH_RESULT_METHODS: &[BuiltinMethod] = &[
+    bm("group", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("group", &[BParam::Int], BRet::Str, "(I)Ljava/lang/String;"),
+    bm("start", &[], BRet::Int, "()I"),
+    bm("start", &[BParam::Int], BRet::Int, "(I)I"),
+    bm("end", &[], BRet::Int, "()I"),
+    bm("end", &[BParam::Int], BRet::Int, "(I)I"),
+    bm("groupCount", &[], BRet::Int, "()I"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
 ];
 
@@ -13735,8 +13826,11 @@ const MATCHER_METHODS: &[BuiltinMethod] = &[
     ),
     bm("start", &[], BRet::Int, "()I"),
     bm("start", &[BParam::Int], BRet::Int, "(I)I"),
+    // `start("name")` / `end("name")` — the span of a `(?<name>…)` group.
+    bm("start", &[BParam::Str], BRet::Int, "(Ljava/lang/String;)I"),
     bm("end", &[], BRet::Int, "()I"),
     bm("end", &[BParam::Int], BRet::Int, "(I)I"),
+    bm("end", &[BParam::Str], BRet::Int, "(Ljava/lang/String;)I"),
     bm("groupCount", &[], BRet::Int, "()I"),
     bm("reset", &[], BRet::Matcher, "()Ljava/util/regex/Matcher;"),
     bm(
@@ -13757,6 +13851,82 @@ const MATCHER_METHODS: &[BuiltinMethod] = &[
         BRet::Str,
         "(Ljava/lang/String;)Ljava/lang/String;",
     ),
+    // The Java 9 forms, which COMPUTE each replacement from the match rather
+    // than expanding a template: what the function answers is used literally.
+    bm(
+        "replaceAll",
+        &[BParam::UnaryOperator],
+        BRet::Str,
+        "(Ljava/util/function/Function;)Ljava/lang/String;",
+    ),
+    bm(
+        "replaceFirst",
+        &[BParam::UnaryOperator],
+        BRet::Str,
+        "(Ljava/util/function/Function;)Ljava/lang/String;",
+    ),
+    // The pattern a matcher walks, and swapping it mid-walk.
+    bm("pattern", &[], BRet::Pattern, "()Ljava/util/regex/Pattern;"),
+    bm(
+        "usePattern",
+        &[BParam::Pattern],
+        BRet::Matcher,
+        "(Ljava/util/regex/Pattern;)Ljava/util/regex/Matcher;",
+    ),
+    // The REGION a matcher is confined to, and how its edges behave.
+    bm(
+        "region",
+        &[BParam::Int, BParam::Int],
+        BRet::Matcher,
+        "(II)Ljava/util/regex/Matcher;",
+    ),
+    bm("regionStart", &[], BRet::Int, "()I"),
+    bm("regionEnd", &[], BRet::Int, "()I"),
+    bm("hasAnchoringBounds", &[], BRet::Boolean, "()Z"),
+    bm("hasTransparentBounds", &[], BRet::Boolean, "()Z"),
+    bm(
+        "useAnchoringBounds",
+        &[BParam::Boolean],
+        BRet::Matcher,
+        "(Z)Ljava/util/regex/Matcher;",
+    ),
+    bm(
+        "useTransparentBounds",
+        &[BParam::Boolean],
+        BRet::Matcher,
+        "(Z)Ljava/util/regex/Matcher;",
+    ),
+    // What the last attempt learned.
+    bm("requireEnd", &[], BRet::Boolean, "()Z"),
+    // The append/tail rewriting loop. A JDK also takes a `StringBuffer`;
+    // caturra models the one builder, and the Java 9 `StringBuilder`
+    // overloads are the ones it accepts.
+    bm(
+        "appendReplacement",
+        &[BParam::Builder, BParam::Str],
+        BRet::Matcher,
+        "(Ljava/lang/StringBuilder;Ljava/lang/String;)Ljava/util/regex/Matcher;",
+    ),
+    bm(
+        "appendTail",
+        &[BParam::Builder],
+        BRet::Builder,
+        "(Ljava/lang/StringBuilder;)Ljava/lang/StringBuilder;",
+    ),
+    // A frozen match, and every remaining one as a stream.
+    bm(
+        "toMatchResult",
+        &[],
+        BRet::MatchResult,
+        "()Ljava/util/regex/MatchResult;",
+    ),
+    bm(
+        "results",
+        &[],
+        BRet::MatchResultStream,
+        "()Ljava/util/stream/Stream;",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
 ];
 
@@ -13787,6 +13957,15 @@ const PATTERN_STATIC_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/String;)Ljava/lang/String;",
     ),
 ];
+
+/// `java.util.regex.Matcher`'s one static: escaping a replacement so that its
+/// `$` and `\` stand for themselves.
+const MATCHER_STATIC_METHODS: &[BuiltinMethod] = &[bm(
+    "quoteReplacement",
+    &[BParam::Str],
+    BRet::Str,
+    "(Ljava/lang/String;)Ljava/lang/String;",
+)];
 
 /// `java.nio.charset.Charset`'s own factories.
 const CHARSET_STATIC_METHODS: &[BuiltinMethod] = &[
@@ -14130,6 +14309,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         // `StandardCharsets` constants, which lower to the same call.
         "Charset" => Some(("java/nio/charset/Charset", CHARSET_STATIC_METHODS)),
         "Pattern" => Some(("java/util/regex/Pattern", PATTERN_STATIC_METHODS)),
+        "Matcher" => Some(("java/util/regex/Matcher", MATCHER_STATIC_METHODS)),
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
         "Character" => Some(("java/lang/Character", CHARACTER_METHODS)),
@@ -14191,6 +14371,8 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
         ("Pattern", "LITERAL") => Some(Int(0x10)),
         ("Pattern", "DOTALL") => Some(Int(0x20)),
         ("Pattern", "UNICODE_CASE") => Some(Int(0x40)),
+        ("Pattern", "CANON_EQ") => Some(Int(0x80)),
+        ("Pattern", "UNICODE_CHARACTER_CLASS") => Some(Int(0x100)),
         ("Math", "PI") => Some(Double(std::f64::consts::PI)),
         ("Math", "E") => Some(Double(std::f64::consts::E)),
         ("Double", "MAX_VALUE") => Some(Double(f64::MAX)),
@@ -14417,6 +14599,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
             .map_or(JType::Error, |elem| elem_value_type(elem, table)),
         BParam::Class => JType::Class,
         BParam::Charset => JType::Charset,
+        BParam::Pattern => JType::Pattern,
         BParam::RefArray => JType::Error,
         // `BiConsumer` never reaches here: `bparam_matches` answers it
         // directly, because only the method table knows the target class.
@@ -14765,6 +14948,9 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Charset => Some(JType::Charset),
         BRet::Pattern => Some(JType::Pattern),
         BRet::Matcher => Some(JType::Matcher),
+        BRet::MatchResult => Some(JType::MatchResult),
+        BRet::MatchResultStream => Some(JType::Stream(ElemType::MatchResult)),
+        BRet::Predicate => table.class_id("__Predicate").map(JType::Object),
         BRet::Int => Some(JType::Int),
         BRet::Double => Some(JType::Double),
         BRet::Long => Some(JType::Long),
@@ -21448,6 +21634,7 @@ impl BodyGen<'_> {
             | JType::Charset
             | JType::Pattern
             | JType::Matcher
+            | JType::MatchResult
             | JType::List { .. }
             | JType::Stack(_)
             | JType::LinkedList { .. }
@@ -23068,6 +23255,7 @@ impl BodyGen<'_> {
             JType::Charset => String::from("java/nio/charset/Charset"),
             JType::Pattern => String::from("java/util/regex/Pattern"),
             JType::Matcher => String::from("java/util/regex/Matcher"),
+            JType::MatchResult => String::from("java/util/regex/MatchResult"),
             JType::StringBuilder => String::from("java/lang/StringBuilder"),
             JType::List { .. } => String::from("java/util/ArrayList"),
             JType::Stack(_) => String::from("java/util/Stack"),
@@ -26373,6 +26561,7 @@ impl BodyGen<'_> {
             | JType::Charset
             | JType::Pattern
             | JType::Matcher
+            | JType::MatchResult
             | JType::Array { .. } => Some(String::from("(Ljava/lang/Object;)V")),
             JType::Int | JType::Short | JType::Byte => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
@@ -27974,6 +28163,13 @@ impl BodyGen<'_> {
             // `e instanceof RuntimeException` — a library throwable. The VM
             // climbs the shared exception hierarchy, so a subclass answers true.
             JType::Exception(id) => exception_internal(id).to_owned(),
+            // `o instanceof Pattern` / `Matcher` / `MatchResult` — the three
+            // regex objects, each modelled as ONE class (no interface/concrete
+            // pair to choose between), so their own method table names it.
+            JType::Pattern | JType::Matcher | JType::MatchResult => builtin_instance_table(target)
+                .expect("the regex types have a method table")
+                .0
+                .to_owned(),
             // `o instanceof int[]` / `String[]` / `int[][]` — the constant-pool
             // "class" of an array is its descriptor; the VM answers array-type
             // checks by comparing those.
@@ -28425,110 +28621,64 @@ impl BodyGen<'_> {
     /// Allocate a one-dimensional array of `element` with the length
     /// already on the stack.
     fn emit_new_1d(&mut self, element: ElemType) {
-        match element {
-            ElemType::Str => {
-                let class = intern_class(self.pool, "java/lang/String");
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
-            ElemType::Object(id) => {
-                let class_name = self.table.class_name(id).to_owned();
-                let class = intern_class(self.pool, &class_name);
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
-            ElemType::Field => {
-                let class = intern_class(self.pool, "java/lang/reflect/Field");
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
-            ElemType::Method => {
-                let class = intern_class(self.pool, "java/lang/reflect/Method");
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
-            ElemType::Constructor => {
-                let class = intern_class(self.pool, "java/lang/reflect/Constructor");
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
-            ElemType::Class => {
-                let class = intern_class(self.pool, "java/lang/Class");
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
-            ElemType::StackFrame => {
-                let class = intern_class(self.pool, "java/lang/StackTraceElement");
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
-            ElemType::Builder => {
-                let class = intern_class(self.pool, "java/lang/StringBuilder");
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
-            ElemType::Throwable(id) => {
-                let class = intern_class(self.pool, exception_internal(id));
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
+        // Every REFERENCE element is the same instruction over a different
+        // class name, so the arms only have to say which name. Written out one
+        // by one, each new element kind meant another six identical lines.
+        let internal: Option<String> = match element {
+            ElemType::Str => Some(String::from("java/lang/String")),
+            ElemType::Object(id) => Some(self.table.class_name(id).to_owned()),
+            ElemType::Field => Some(String::from("java/lang/reflect/Field")),
+            ElemType::Method => Some(String::from("java/lang/reflect/Method")),
+            ElemType::Constructor => Some(String::from("java/lang/reflect/Constructor")),
+            ElemType::Class => Some(String::from("java/lang/Class")),
+            ElemType::MatchResult => Some(String::from("java/util/regex/MatchResult")),
+            ElemType::StackFrame => Some(String::from("java/lang/StackTraceElement")),
+            ElemType::Builder => Some(String::from("java/lang/StringBuilder")),
+            ElemType::Throwable(id) => Some(exception_internal(id).to_owned()),
             // `new List[n]` / `new Map[n]` — an array whose element is a
             // COLLECTION. Its descriptor names that collection's class, so the
             // elements read back as one rather than as `Object`.
             ElemType::Nested { inner, .. } => {
                 let inner = self.table.nested_type(inner);
                 let descriptor = inner.descriptor(self.table);
-                let internal = descriptor
-                    .strip_prefix('L')
-                    .and_then(|d| d.strip_suffix(';'))
-                    .map_or_else(|| String::from("java/lang/Object"), String::from);
-                let class = intern_class(self.pool, &internal);
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
+                Some(
+                    descriptor
+                        .strip_prefix('L')
+                        .and_then(|d| d.strip_suffix(';'))
+                        .map_or_else(|| String::from("java/lang/Object"), String::from),
+                )
             }
             // `new T[n]` is `new Object[n]` after erasure — the array a
-            // generic container allocates for itself.
-            ElemType::TypeVar(_) => {
-                let class = intern_class(self.pool, "java/lang/Object");
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
+            // generic container allocates for itself. A WILDCARD element
+            // erases the same way.
+            ElemType::TypeVar(_) | ElemType::Wildcard { .. } => {
+                Some(String::from("java/lang/Object"))
             }
             // `new Integer[n]` — a reference array, null-filled (Java's
             // default for references; the old int[] model zero-filled it).
-            ElemType::Wrapper(prim) => {
-                let class = intern_class(self.pool, wrapper_internal(prim.elem()));
-                self.code.push_op_u16(op::ANEWARRAY, class, 1);
-                self.code.drop_stack(1);
-            }
-            prim => {
-                let atype = match prim {
-                    ElemType::Int => op::T_INT,
-                    ElemType::Double => op::T_DOUBLE,
-                    ElemType::Long => op::T_LONG,
-                    ElemType::Float => op::T_FLOAT,
-                    ElemType::Short => op::T_SHORT,
-                    ElemType::Byte => op::T_BYTE,
-                    ElemType::Boolean => op::T_BOOLEAN,
-                    ElemType::Char => op::T_CHAR,
-                    ElemType::Str
-                    | ElemType::Builder
-                    | ElemType::Throwable(_)
-                    | ElemType::Object(_)
-                    | ElemType::Field
-                    | ElemType::Method
-                    | ElemType::Constructor
-                    | ElemType::Class
-                    | ElemType::Wildcard { .. }
-                    | ElemType::Nested { .. }
-                    | ElemType::TypeVar(_)
-                    | ElemType::StackFrame
-                    | ElemType::Wrapper(_) => unreachable!("reference elements are ANEWARRAY"),
-                };
-                self.code.push_op(op::NEWARRAY, 1);
-                self.code.bytes.push(atype);
-                self.code.drop_stack(1);
-            }
+            ElemType::Wrapper(prim) => Some(wrapper_internal(prim.elem()).to_owned()),
+            _ => None,
+        };
+        if let Some(internal) = internal {
+            let class = intern_class(self.pool, &internal);
+            self.code.push_op_u16(op::ANEWARRAY, class, 1);
+            self.code.drop_stack(1);
+            return;
         }
+        let atype = match element {
+            ElemType::Int => op::T_INT,
+            ElemType::Double => op::T_DOUBLE,
+            ElemType::Long => op::T_LONG,
+            ElemType::Float => op::T_FLOAT,
+            ElemType::Short => op::T_SHORT,
+            ElemType::Byte => op::T_BYTE,
+            ElemType::Boolean => op::T_BOOLEAN,
+            ElemType::Char => op::T_CHAR,
+            _ => unreachable!("reference elements are ANEWARRAY"),
+        };
+        self.code.push_op(op::NEWARRAY, 1);
+        self.code.bytes.push(atype);
+        self.code.drop_stack(1);
     }
 
     /// Emit an array from a `{...}` literal, leaving the reference on
@@ -29573,6 +29723,31 @@ impl BodyGen<'_> {
         {
             if !matches!(source, JType::Exception(_) | JType::Null) {
                 let class_index = intern_class(self.pool, exception_internal(target_id));
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            }
+            return target;
+        }
+        // Casting a reference (commonly an erased `Object`) down to a regex
+        // object: `(Pattern) o`, and — the shape that noticed — the
+        // `(MatchResult) param` a lambda over `matcher.results()` is
+        // desugared into. The class to check is the one the type's own method
+        // table is keyed by, so there is no second list to keep in step, and
+        // it is a class the VM's namer knows: a checkcast to a name it does
+        // not know throws, so this arm covers only the three it does.
+        //
+        // Without it these were "incompatible types: Object cannot be
+        // converted to MatchResult", and worse, the cast fell through to the
+        // UNBOXING arm below, which emitted `intValue()` on the object.
+        if source.is_reference()
+            && source != JType::Null
+            && matches!(
+                target,
+                JType::Pattern | JType::Matcher | JType::MatchResult
+            )
+            && let Some((internal, _)) = builtin_instance_table(target)
+        {
+            if source != target {
+                let class_index = intern_class(self.pool, internal);
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
             }
             return target;
@@ -31043,6 +31218,7 @@ impl BodyGen<'_> {
             | JType::Charset
             | JType::Pattern
             | JType::Matcher
+            | JType::MatchResult
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
             JType::Scanner | JType::Writer | JType::Reader => {
                 self.error(
@@ -31276,6 +31452,7 @@ impl BodyGen<'_> {
             | ElemType::Constructor
             | ElemType::Class
             | ElemType::StackFrame
+            | ElemType::MatchResult
             | ElemType::Throwable(_)
             | ElemType::Wildcard { .. }
             | ElemType::Nested { .. }

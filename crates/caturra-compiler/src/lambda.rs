@@ -663,6 +663,12 @@ fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::Hash
         // a qualifier that names no class here fell to the BOUND form, where
         // the name itself does not resolve.
         "CharSequence",
+        // The regex objects. `MatchResult::group` is how a program reads a
+        // `results()` stream, and a qualifier missing from here is not a class
+        // at all: "cannot find symbol: 'MatchResult'".
+        "Pattern",
+        "Matcher",
+        "MatchResult",
     ]
     .into_iter()
     .chain(LIBRARY_CONTAINERS)
@@ -709,6 +715,10 @@ fn is_library_static(class: &str, method: &str) -> bool {
         ),
         "Boolean" => matches!(method, "logicalAnd" | "logicalOr" | "logicalXor"),
         "Collections" => matches!(method, "reverseOrder" | "emptyList" | "emptySet" | "emptyMap"),
+        // `Pattern::compile` and `Pattern::quote` are statics; `matcher`,
+        // `split` and the predicates beside them are not.
+        "Pattern" => matches!(method, "compile" | "quote" | "matches"),
+        "Matcher" => method == "quoteReplacement",
         _ => false,
     };
     by_class
@@ -1369,6 +1379,30 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             args,
             ..
         } => {
+            // The regex objects, whose types this pass can name. A stream op
+            // is written straight onto them
+            // (`Pattern.compile(p).matcher(s).results().map(…)`), and inline
+            // the chain has no variable to read a declared type from — so
+            // without these the lambda had no target type at all while the
+            // very same chain through a variable compiled.
+            match (method.as_str(), args.len()) {
+                ("compile", 1 | 2) if names_library_class(owner, "Pattern") => {
+                    return Some(TypeRef::Named(String::from("Pattern")));
+                }
+                ("matcher", 1)
+                    if matches!(static_type_of(owner, ctx),
+                        Some(TypeRef::Named(name)) if name == "Pattern") =>
+                {
+                    return Some(TypeRef::Named(String::from("Matcher")));
+                }
+                ("toMatchResult", 0)
+                    if matches!(static_type_of(owner, ctx),
+                        Some(TypeRef::Named(name)) if name == "Matcher") =>
+                {
+                    return Some(TypeRef::Named(String::from("MatchResult")));
+                }
+                _ => {}
+            }
             let name = enum_owner_name(owner, ctx)?;
             match (method.as_str(), args.len()) {
                 ("values", 0) => Some(TypeRef::Array(Box::new(TypeRef::Named(name)))),
@@ -1995,6 +2029,36 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         return;
                     }
                 }
+            }
+            // `matcher.replaceAll(mr -> …)` (Java 9) — a `Function` whose
+            // parameter is the MATCH, not an element of anything, so the
+            // element-typed arm below cannot reach it.
+            if matches!(method.as_str(), "replaceAll" | "replaceFirst")
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { .. } | Expr::MethodRef { .. })
+                && matches!(receiver.as_deref().and_then(|r| static_type_of(r, ctx)),
+                    Some(TypeRef::Named(name)) if name == "Matcher")
+            {
+                let result = TypeRef::Named(String::from("String"));
+                let param = TypeRef::Named(String::from("MatchResult"));
+                if matches!(&args[0], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from("apply"),
+                        params: vec![param.clone()],
+                        ret: result.clone(),
+                    };
+                    args[0] = method_ref_to_lambda(&args[0], &synth, ctx);
+                }
+                args[0] = build_erased_lambda(
+                    &mut args[0],
+                    "__UnaryOperator",
+                    "apply",
+                    &TypeRef::Named(String::from("Object")),
+                    &[param],
+                    Some(&result),
+                    ctx,
+                );
+                return;
             }
             // `list.forEach(x -> ...)` / `list.removeIf(x -> ...)`: a single
             // lambda whose parameter type is the receiver's element type. The
@@ -4520,6 +4584,8 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             _,
         )
         | ("Integer" | "Short" | "Byte", "intValue", 0)
+        // A match's own spans, so a lambda over `results()` can chain.
+        | ("Matcher" | "MatchResult", "start" | "end" | "groupCount", _)
         | (_, "hashCode", 0) => Some(TypeRef::Int),
         ("Long", "longValue", 0) => Some(TypeRef::Long),
         ("Double" | "Float", "doubleValue", 0) => Some(TypeRef::Double),
@@ -4536,6 +4602,8 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             | "repeat",
             _,
         )
+        // A match's own text, likewise.
+        | ("Matcher" | "MatchResult", "group", _)
         | (_, "toString", 0) => Some(string()),
         (_, "size", 0) if collection => Some(TypeRef::Int),
         (_, "isEmpty" | "contains" | "containsKey" | "containsValue", _) if collection => {
@@ -4575,6 +4643,24 @@ fn numeric_join(lhs: &TypeRef, rhs: &TypeRef) -> Option<TypeRef> {
         2 => TypeRef::Long,
         _ => TypeRef::Int,
     })
+}
+
+/// `matcher.results()` — a stream of frozen matches — and
+/// `pattern.splitAsStream(text)`, which is `split` handed over as a pipeline.
+/// Both are typed from the RECEIVER, so a user method of either name keeps its
+/// own meaning.
+fn regex_stream_elem(prev: &Expr, method: &str, ctx: &Ctx) -> Option<TypeRef> {
+    if !matches!(method, "results" | "splitAsStream") {
+        return None;
+    }
+    let Some(TypeRef::Named(name)) = static_type_of(prev, ctx) else {
+        return None;
+    };
+    match name.rsplit('.').next().unwrap_or(&name) {
+        "Matcher" if method == "results" => Some(TypeRef::Named(String::from("MatchResult"))),
+        "Pattern" if method == "splitAsStream" => Some(TypeRef::Named(String::from("String"))),
+        _ => None,
+    }
 }
 
 /// The current element type of a stream-pipeline receiver, for typing a stream
@@ -4623,6 +4709,9 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // below. Without this a lambda over one had no element and was refused.
     if method == "lines" && args.len() == 1 && names_library_class(prev.as_ref(), "Files") {
         return Some(TypeRef::Named(String::from("String")));
+    }
+    if let Some(elem) = regex_stream_elem(prev, method, ctx) {
+        return Some(elem);
     }
     // `"text".lines()` — a Stream<String>; `chars()` — an IntStream.
     if method == "lines" && args.is_empty() {
