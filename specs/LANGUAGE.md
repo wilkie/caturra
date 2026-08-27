@@ -8720,15 +8720,37 @@ uses — could not assign `items.get(0)` to a `T`: the parser records a
 wildcard's bound as written, so `? extends T` arrived naming `T`, which is no
 class, and the element read as `Object`. It takes T's own erasure now.
 
-**One shape is knowingly left.** A class type parameter with a BOUND
-(`class Box<T extends Comparable<T>>`) erases to that bound and loses its
-POSITION, so a `Box<String>` does not read `get()` as a `String` — where the
-unbounded `class Box<T>` does. The erasure is deliberate: it is what makes a
-bounded `T`'s own methods resolve inside the class body (`value.compareTo(x)`).
-Carrying both would mean a type variable that remembers its bound, which is a
-change to the type representation rather than an addition to it.
+**One shape was left for the next entry**, and is closed there: a class type
+parameter with a BOUND (`class Box<T extends Comparable<T>>`) erased to that
+bound and lost its POSITION, so a `Box<String>` did not read `get()` as a
+`String` where the unbounded `class Box<T>` did.
 
 Pinned by `diff_a_fixed_type_argument_is_inherited`.
+
+### A bounded type parameter keeps its position (2026-08-26)
+
+The shape the entry above left open. `class Box<T extends Comparable<T>>` has
+to do two things at once: inside the class, `value.compareTo(other)` must
+resolve — that is what the bound buys — and outside it, a `Box<String>` must
+read `get()` as a `String`. caturra could do either but not both: a bounded
+parameter erased to its BOUND, which resolved the methods and lost the
+position, so `new SortedBag<String>().smallest().toUpperCase()` was "cannot
+find symbol" on a `Comparable`, and every generic class written the way the
+exercises write them ran into it.
+
+The two facts live in different places now. The POSITION is what the parameter
+erases to, bounded or not — one rule for all of them, where there had been two
+— and the BOUND is recorded on the class, which is where a type variable's
+methods are looked up from: a call on a type-variable receiver resolves against
+its bound, in the emit path and in `type_of` alike.
+
+**A method-level bound whose name is not a class is still flat.**
+`<T extends CharSequence> int longest(List<T>)` reads its elements as `Object`,
+because `CharSequence` is a TYPE here and not a class in the table — where
+`Number` and `Comparable` are. `<T extends Number>` and
+`<T extends Comparable<T>>`, which is what an exercise asks for, both work.
+
+Pinned by `diff_a_bounded_type_parameter_keeps_its_position`.
 
 ## Divergences from javac
 

@@ -2504,6 +2504,17 @@ impl MethodTable {
             .join(",")
     }
 
+    /// The class a type variable is BOUNDED by, for the variable at `index` of
+    /// `owner` — `<T extends Comparable<T>>` answers `Comparable`. `None` when
+    /// the variable is unbounded (its methods are Object's) or the bound names
+    /// no class the table knows.
+    fn type_var_bound(&self, owner: ClassId, index: u8) -> Option<ClassId> {
+        let info = self.info_by_id(owner)?;
+        let bound = info.type_param_bounds.get(usize::from(index))?.as_ref()?;
+        let canonical = crate::imports::canonical_library_class(bound).unwrap_or(bound);
+        self.class_id(canonical)
+    }
+
     /// What an inherited method's TYPE-VARIABLE return is, for a receiver of
     /// class `from`: `class IntBox extends Box<Integer>` reads `Box`'s
     /// `T get()` as an `Integer`. The receiver's own type carries no arguments
@@ -20292,8 +20303,14 @@ impl BodyGen<'_> {
             JType::Boxed(elem) => {
                 return self.boxed_instance_call(elem, method, args, span, None);
             }
-            // A method on a type variable: only Object's methods.
-            JType::TypeVar(_) => self.table.object_id,
+            // A method on a type variable resolves against its BOUND — that
+            // is what `<T extends Comparable<T>>` buys, and inside the class
+            // that declares it `value.compareTo(other)` is the ordinary way to
+            // use one. An unbounded variable has only Object's methods.
+            JType::TypeVar(index) => self
+                .table
+                .type_var_bound(self.current_class_id, index)
+                .unwrap_or(self.table.object_id),
             JType::Error => {
                 self.error_bail(span, "call receiver");
                 return None;
@@ -25915,6 +25932,17 @@ impl BodyGen<'_> {
                                 ("clone", 0) => array,
                                 _ => JType::Error,
                             };
+                        }
+                        // A type variable's methods are its BOUND's, the same
+                        // reading the emit path takes — without it a
+                        // `<T extends Comparable<T>>` field's `compareTo` typed
+                        // as nothing while it emitted fine, and the `> 0`
+                        // beside it was "bad operand types".
+                        JType::TypeVar(index) => {
+                            match self.table.type_var_bound(self.current_class_id, index) {
+                                Some(bound) => self.table.class_name(bound).to_owned(),
+                                None => return JType::Error,
+                            }
                         }
                         _ => return JType::Error,
                     },

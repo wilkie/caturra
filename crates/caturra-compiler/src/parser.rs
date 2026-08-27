@@ -5284,17 +5284,20 @@ fn erased_type_key(ty: &TypeRef) -> String {
 fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
     use std::collections::HashMap;
     let span = class.span;
-    // Every UNBOUNDED type parameter is tracked, each under its own position:
-    // it erases to that position's `TypeVar` sentinel, which enables
-    // cast-free reads. A BOUNDED one erases to its bound instead — `T extends
-    // Comparable` becomes `Comparable`, so a bounded `T`'s methods resolve —
-    // and an unbounded one in a class that has any bounded parameter still
-    // gets its own slot, since the slot is the DECLARED position.
+    // EVERY type parameter is tracked, each under its own position: it erases
+    // to that position's `TypeVar` sentinel, which is what lets a read put the
+    // receiver's own argument back (`Box<String>.get()` is a `String`).
+    //
+    // A BOUNDED one used to erase to its bound instead, so that `T`'s own
+    // methods would resolve inside the class body — and that cost it its
+    // position everywhere else, so `Box<String>` where
+    // `Box<T extends Comparable<T>>` read `get()` as a `Comparable`. The bound
+    // is recorded on the class instead (`type_param_bounds`), and a call on a
+    // type-variable receiver resolves against it.
     let tracked: Tracked = class
         .type_params
         .iter()
         .enumerate()
-        .filter(|(_, tp)| tp.bound.is_none())
         .filter_map(|(i, tp)| u8::try_from(i).ok().map(|i| (tp.name.clone(), i)))
         .collect();
     let class_erasures: HashMap<String, TypeRef> = class

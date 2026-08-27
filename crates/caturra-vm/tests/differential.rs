@@ -29838,6 +29838,65 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// A class type parameter with a BOUND keeps its POSITION as well as its
+// bound: `Box<T extends Comparable<T>>` resolves `value.compareTo(other)`
+// inside the class (that is what the bound buys) AND reads `get()` through a
+// `Box<String>` as a `String`. caturra had to choose one, erasing a bounded
+// variable to its bound and losing the position — so `new SortedBag<String>()
+// .smallest().toUpperCase()` was "cannot find symbol" on a `Comparable`.
+differential_test!(
+    diff_a_bounded_type_parameter_keeps_its_position,
+    "Bounded",
+    r#"
+import java.util.*;
+
+public class Bounded {
+    static class SortedBag<T extends Comparable<T>> {
+        private final List<T> items = new ArrayList<>();
+        void add(T item) { items.add(item); Collections.sort(items); }
+        T smallest() { return items.get(0); }
+        T largest() { return items.get(items.size() - 1); }
+        boolean has(T item) { return items.contains(item); }
+        int compareEnds() { return smallest().compareTo(largest()); }
+        @Override public String toString() { return items.toString(); }
+    }
+
+    static class Pair<K extends Comparable<K>, V> {
+        final K key;
+        final V value;
+        Pair(K key, V value) { this.key = key; this.value = value; }
+        K key() { return key; }
+        V value() { return value; }
+        boolean keyBefore(Pair<K, V> other) { return key.compareTo(other.key) < 0; }
+    }
+
+    static class Named extends Pair<String, Integer> {
+        Named(String key, Integer value) { super(key, value); }
+        String shout() { return key().toUpperCase() + value(); }
+    }
+
+    public static void main(String[] args) {
+        SortedBag<String> words = new SortedBag<>();
+        words.add("pear");
+        words.add("apple");
+        words.add("fig");
+        System.out.println(words + " " + words.smallest().toUpperCase() + " " + words.largest().length());
+        System.out.println(words.has("fig") + " " + words.compareEnds());
+
+        SortedBag<Integer> numbers = new SortedBag<>();
+        numbers.add(5);
+        numbers.add(2);
+        System.out.println(numbers + " " + (numbers.smallest() + 100));
+
+        Pair<String, Integer> pair = new Pair<>("a", 1);
+        System.out.println(pair.key().length() + " " + (pair.value() + 1)
+            + " " + pair.keyBefore(new Pair<>("b", 2)));
+        System.out.println(new Named("k", 4).shout());
+    }
+}
+"#
+);
+
 // A subclass that FIXES a generic supertype's argument reads the methods it
 // inherits as that argument: `class IntBox extends Box<Integer>` sees `T get()`
 // as an `Integer`, through a variable, inside its own body, and after widening
