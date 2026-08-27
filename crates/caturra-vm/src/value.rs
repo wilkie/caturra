@@ -162,6 +162,13 @@ pub enum CollectorKind {
     /// of the mapped values, and `averagingInt`/… their mean (always a
     /// `Double`, and 0.0 over no elements).
     Summing { mapper: HeapRef, kind: SumKind },
+    /// `Collectors.mapping(f, downstream)` — each element through `f`, then
+    /// gathered by the collector below. Almost always a groupingBy downstream,
+    /// which is the shape it exists for.
+    Mapping {
+        mapper: HeapRef,
+        downstream: HeapRef,
+    },
 }
 
 /// Which numeric summary a [`CollectorKind::Summing`] produces.
@@ -786,6 +793,10 @@ impl CollectorKind {
             }
             CollectorKind::PartitioningBy(f) | CollectorKind::Summing { mapper: f, .. } => {
                 visit(*f);
+            }
+            CollectorKind::Mapping { mapper, downstream } => {
+                visit(*mapper);
+                visit(*downstream);
             }
             CollectorKind::ToMap { key, value, merge } => {
                 visit(*key);

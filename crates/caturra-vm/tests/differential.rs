@@ -38723,3 +38723,60 @@ public class HoistedBodies {
 }
 "#
 );
+
+// The MAP-building collectors, used inline. A sweep of one behaviour written
+// several ways — iterate, build, sort, filter, look up, join, count, max,
+// dedup, group — agreed on 48 of 49 spellings; the one that failed was
+// `new TreeMap<>(stream.collect(groupingBy(f)))`, refused as "takes a Map or a
+// Comparator", about a Map.
+//
+// `groupingBy`, `toMap` and `partitioningBy` had no result TYPE: through a
+// declared variable the call worked, and inline it produced nothing, so the
+// map could not be copied, walked with a two-argument lambda, or read from.
+// The key is what the classifier ANSWERS — the lambda pass leaves that on the
+// synthesized class — and the value is the downstream collector's result, or a
+// list of the stream's own element. `Collectors.mapping` was missing outright.
+differential_test!(
+    the_map_building_collectors,
+    "MapCollectors",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class MapCollectors {
+    public static void main(String[] args) {
+        List<String> words = new ArrayList<>(Arrays.asList("pear", "fig", "apple", "fig"));
+
+        System.out.println(new TreeMap<>(words.stream().collect(Collectors.groupingBy(String::length))));
+        System.out.println(words.stream().collect(Collectors.groupingBy(String::length)).get(3));
+        words.stream().collect(Collectors.groupingBy(String::length))
+            .forEach((k, v) -> System.out.print(k + "" + v));
+        System.out.println();
+
+        System.out.println(words.stream()
+            .collect(Collectors.groupingBy(String::length, Collectors.counting())).get(3) + 1);
+        System.out.println(words.stream()
+            .collect(Collectors.toMap(w -> w, String::length, (a, b) -> a)).get("fig") + 1);
+        System.out.println(words.stream()
+            .collect(Collectors.partitioningBy(w -> w.length() > 3)).get(true).size());
+        System.out.println(words.stream()
+            .collect(Collectors.groupingBy(String::length, Collectors.joining("/"))).get(3).length());
+
+        // `mapping`, which exists to be a groupingBy downstream.
+        System.out.println(new TreeMap<>(words.stream().collect(
+            Collectors.groupingBy(String::length,
+                Collectors.mapping(String::toUpperCase, Collectors.toList())))));
+        System.out.println(new TreeMap<>(words.stream().collect(
+            Collectors.groupingBy(String::length,
+                Collectors.mapping(w -> w.charAt(0), Collectors.toSet())))));
+        System.out.println(words.stream()
+            .collect(Collectors.mapping(String::length, Collectors.counting())) + 1);
+
+        // The numeric collectors, whose result types were missing too.
+        System.out.println(words.stream().collect(Collectors.counting()) + 1);
+        System.out.println(words.stream().collect(Collectors.summingInt(String::length)) + 1);
+        System.out.println(words.stream().collect(Collectors.averagingInt(String::length)) + 1);
+    }
+}
+"#
+);

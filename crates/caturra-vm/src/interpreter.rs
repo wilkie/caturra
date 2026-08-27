@@ -5206,6 +5206,12 @@ impl<'run> Interpreter<'run> {
             ("partitioningBy", [JValue::Ref(Some(predicate))]) => {
                 CollectorKind::PartitioningBy(*predicate)
             }
+            ("mapping", [JValue::Ref(Some(mapper)), JValue::Ref(Some(downstream))]) => {
+                CollectorKind::Mapping {
+                    mapper: *mapper,
+                    downstream: *downstream,
+                }
+            }
             ("toUnmodifiableMap", [JValue::Ref(Some(key)), JValue::Ref(Some(value))]) => {
                 CollectorKind::Unmodifiable(Box::new(CollectorKind::ToMap {
                     key: *key,
@@ -11221,6 +11227,15 @@ impl<'run> Interpreter<'run> {
                     self.map_put(map, key, value)?;
                 }
                 Ok(JValue::Ref(Some(map)))
+            }
+            // `mapping(f, downstream)`: each element through `f`, then the
+            // collector below gathers what comes out.
+            CollectorKind::Mapping { mapper, downstream } => {
+                let mut mapped = Vec::with_capacity(elements.len());
+                for element in elements {
+                    mapped.push(self.call_apply(mapper, element)?);
+                }
+                self.stream_collect(mapped, downstream)
             }
             CollectorKind::PartitioningBy(predicate) => {
                 let map = self

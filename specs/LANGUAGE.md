@@ -9376,3 +9376,30 @@ type from the receiver's own written type: a map's `get` is its VALUE type, a
 list's `get` (or a queue's `poll`, or an `Optional`'s `orElse`) its element.
 
 Pinned by `a_lambda_inside_a_hoisted_body`.
+
+### The map-building collectors (2026-08-27)
+
+A sweep of one BEHAVIOUR written several ways — iterate, build a list, sort,
+filter, look up, join, count, take the max, dedup, group — each spelling a
+program actually chooses between, 49 in all. Every spelling agreed but one, and
+the one that failed was `new TreeMap<>(stream.collect(groupingBy(f)))`, refused
+as "takes a Map or a Comparator", about a Map.
+
+**The map-building collectors had no result type.** `groupingBy`, `toMap` and
+`partitioningBy` typed as nothing, so their result could not be copied, walked
+with a two-argument lambda, or read from — inline. Through a declared variable
+every one of them worked, which is the tell this file keeps recording.
+
+The key is what the classifier ANSWERS: the lambda pass types the body and
+leaves it on the synthesized class, the same field a mapped stream's element
+comes from. The value is the downstream collector's result, or a list of the
+stream's own element when there is no downstream. Both halves needed it — the
+lambda pass, to type a `forEach((k, v) -> …)` over the result, and codegen, to
+type the value everywhere else.
+
+**`Collectors.mapping` was missing outright**, and it exists to be a
+`groupingBy` downstream. The numeric collectors (`summingInt`, `averagingInt`
+and their widths) gathered correctly and typed as nothing, so `+ 1` after one
+was "bad operand types".
+
+Pinned by `the_map_building_collectors`.

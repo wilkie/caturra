@@ -13561,6 +13561,14 @@ const COLLECTORS_METHODS: &[BuiltinMethod] = &[
         BRet::Collector,
         "(Ljava/util/function/Predicate;)Ljava/util/stream/Collector;",
     ),
+    // `mapping(f, downstream)` — the groupingBy downstream that maps each
+    // member before gathering it.
+    bm(
+        "mapping",
+        &[BParam::UnaryOperator, BParam::Collector],
+        BRet::Collector,
+        "(Ljava/util/function/Function;Ljava/util/stream/Collector;)Ljava/util/stream/Collector;",
+    ),
     bm(
         "toMap",
         &[BParam::UnaryOperator, BParam::UnaryOperator],
@@ -20169,10 +20177,11 @@ impl BodyGen<'_> {
     /// `new`), so `List<R> r = ....map(...).collect(toList())` still type-checks.
     fn collector_result_type(&mut self, collector: &Expr, stream_elem: ElemType) -> JType {
         let erased = matches!(stream_elem, ElemType::Object(id) if id == self.table.object_id);
-        let factory = match collector {
+        let (factory, args) = match collector {
             Expr::Call {
                 receiver: Some(receiver),
                 method,
+                args,
                 ..
             // The QUALIFIED spelling names the same class: reading only the
             // one-segment form left `collect(java.util.stream.Collectors
@@ -20181,7 +20190,7 @@ impl BodyGen<'_> {
             } if matches!(receiver.as_ref(), Expr::Name { path, .. }
                 if path.last().is_some_and(|name| name == "Collectors")) =>
             {
-                method.as_str()
+                (method.as_str(), &args[..])
             }
             _ => return JType::Null,
         };
@@ -20189,8 +20198,54 @@ impl BodyGen<'_> {
             "joining" => JType::Str,
             "toSet" | "toUnmodifiableSet" if !erased => JType::library_set(stream_elem),
             "toList" | "toUnmodifiableList" if !erased => JType::library_list(stream_elem),
+            // The MAP-building collectors. Their key comes from what the
+            // classifier ANSWERS — the lambda pass left that on the
+            // synthesized class — and their value from the downstream
+            // collector, or a list of the stream's own element. Typed as
+            // nothing, `new TreeMap<>(stream.collect(groupingBy(f)))` was
+            // "takes a Map or a Comparator", about a Map; through a declared
+            // variable the same call worked, which is the tell.
+            "counting" | "summingLong" => JType::Boxed(ElemType::Long),
+            "summingInt" => JType::Boxed(ElemType::Int),
+            "summingDouble" | "averagingInt" | "averagingLong" | "averagingDouble" => {
+                JType::Boxed(ElemType::Double)
+            }
+            "mapping" if args.len() == 2 => self.collector_result_type(&args[1], stream_elem),
+            "toMap" if args.len() >= 2 => {
+                match (self.collector_key(&args[0]), self.collector_key(&args[1])) {
+                    (Some(key), Some(value)) => JType::library_map(key, value),
+                    _ => JType::Null,
+                }
+            }
+            "groupingBy" | "partitioningBy" if !args.is_empty() => {
+                let key = if factory == "partitioningBy" {
+                    Some(ElemType::Wrapper(Prim::Boolean))
+                } else {
+                    self.collector_key(&args[0])
+                };
+                let value = match args.get(1) {
+                    Some(downstream) => {
+                        let ty = self.collector_result_type(downstream, stream_elem);
+                        value_elem_of(ty, self.table)
+                    }
+                    None => value_elem_of(JType::library_list(stream_elem), self.table),
+                };
+                match (key, value) {
+                    (Some(key), Some(value)) => JType::library_map(key, value),
+                    _ => JType::Null,
+                }
+            }
             _ => JType::Null,
         }
+    }
+
+    /// What a collector's key/value FUNCTION answers, as a map element: the
+    /// lambda pass typed the body and left it on the synthesized class, the
+    /// same field a mapped stream's element is read from. A primitive answer
+    /// is the WRAPPER, since a map holds references.
+    fn collector_key(&mut self, function: &Expr) -> Option<ElemType> {
+        let produced = lambda_produces(self.type_of(function), self.table)?;
+        collection_elem_of(produced)
     }
 
     /// `comparator.reversed()` / `.thenComparing(...)` — build a derived

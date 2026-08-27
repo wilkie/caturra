@@ -3242,6 +3242,99 @@ fn witnessed_return(call: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 /// syntactically from the local, parameter or field it names. `getMap()
 /// .forEach(...)` has no declaration to read, so its lambda is left in place
 /// and codegen reports the honest "lambdas are not supported" it always did.
+/// The key and value of a MAP-building collector — `stream.collect(
+/// Collectors.groupingBy(f))` and its family. The classifier's answer is the
+/// key, and the value is the downstream collector's result (a list of the
+/// stream's own element when there is none). By the time an outer call asks,
+/// the classifier is already a synthesized CLASS, which is what says what it
+/// answers.
+fn collector_map_types(collector: &Expr, source: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
+    let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        ..
+    } = collector
+    else {
+        return None;
+    };
+    if !matches!(owner.as_ref(), Expr::Name { path, .. }
+        if path.last().is_some_and(|name| name == "Collectors"))
+    {
+        return None;
+    }
+    let object = || TypeRef::Named(String::from("Object"));
+    let list_of = |elem: TypeRef| TypeRef::Generic {
+        base: String::from("List"),
+        args: vec![elem],
+    };
+    let elem = || stream_elem_type(source, ctx).unwrap_or_else(object);
+    let key = match (method.as_str(), args.first()) {
+        ("partitioningBy", _) => TypeRef::Named(String::from("Boolean")),
+        ("groupingBy" | "toMap", Some(classifier)) => {
+            boxed_name(mapped_element_type(std::slice::from_ref(classifier), ctx)?)
+        }
+        _ => return None,
+    };
+    let value = match (method.as_str(), args.get(1)) {
+        ("toMap", Some(value)) => {
+            boxed_name(mapped_element_type(std::slice::from_ref(value), ctx)?)
+        }
+        ("toMap", None) => return None,
+        (_, Some(downstream)) => collector_value_type(downstream, source, ctx)?,
+        (_, None) => list_of(elem()),
+    };
+    Some((key, value))
+}
+
+/// What a DOWNSTREAM collector produces, as a written type.
+fn collector_value_type(collector: &Expr, source: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let Expr::Call { method, args, .. } = collector else {
+        return None;
+    };
+    let object = || TypeRef::Named(String::from("Object"));
+    let elem = || stream_elem_type(source, ctx).unwrap_or_else(object);
+    Some(match method.as_str() {
+        "toList" | "toUnmodifiableList" => TypeRef::Generic {
+            base: String::from("List"),
+            args: vec![elem()],
+        },
+        "toSet" | "toUnmodifiableSet" => TypeRef::Generic {
+            base: String::from("Set"),
+            args: vec![elem()],
+        },
+        "joining" => TypeRef::Named(String::from("String")),
+        "counting" => TypeRef::Named(String::from("Long")),
+        "mapping" if args.len() == 2 => {
+            let mapped = boxed_name(mapped_element_type(std::slice::from_ref(&args[0]), ctx)?);
+            TypeRef::Generic {
+                base: String::from("List"),
+                args: vec![mapped],
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// A primitive answer becomes its WRAPPER: a map holds references, so a
+/// classifier that answers an `int` keys the map by `Integer`.
+fn boxed_name(ty: TypeRef) -> TypeRef {
+    let TypeRef::Named(name) = &ty else {
+        return ty;
+    };
+    TypeRef::Named(String::from(match name.as_str() {
+        "int" => "Integer",
+        "long" => "Long",
+        "double" => "Double",
+        "float" => "Float",
+        "short" => "Short",
+        "byte" => "Byte",
+        "char" => "Character",
+        "boolean" => "Boolean",
+        _ => return ty,
+    }))
+}
+
 fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
     let witnessed = generic_call_return(receiver, ctx).or_else(|| witnessed_return(receiver, ctx));
     let ty = match witnessed {
@@ -3260,6 +3353,19 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
                 base: class.clone(),
                 args: type_args.clone(),
             },
+            // A MAP-building collector used straight as a receiver:
+            // `stream.collect(groupingBy(f)).forEach((k, v) -> …)`. Through a
+            // declared variable this worked; inline it had no key or value,
+            // and the lambda was refused for having no functional-interface
+            // position — the same tell every missing recogniser leaves.
+            Expr::Call {
+                receiver: Some(stream),
+                method,
+                args,
+                ..
+            } if method == "collect" && args.len() == 1 => {
+                return collector_map_types(&args[0], stream, ctx);
+            }
             // `Collections.unmodifiableMap(m).keySet()` — a read-only view keeps
             // the map's key and value types.
             Expr::Call { method, args, .. }
