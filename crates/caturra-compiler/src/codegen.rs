@@ -13702,6 +13702,22 @@ const MAP_ENTRY_STATIC_METHODS: &[BuiltinMethod] = &[
         BRet::Comparator,
         "()Ljava/util/Comparator;",
     ),
+    // …and the overloads that take an ordering for the key (or value) rather
+    // than using its natural one. `sort(Map.Entry.comparingByValue(reverse))`
+    // is how a program sorts entries by descending value, which is the
+    // commonest thing anyone does with an entry list at all.
+    bm(
+        "comparingByKey",
+        &[BParam::Comparator],
+        BRet::Comparator,
+        "(Ljava/util/Comparator;)Ljava/util/Comparator;",
+    ),
+    bm(
+        "comparingByValue",
+        &[BParam::Comparator],
+        BRet::Comparator,
+        "(Ljava/util/Comparator;)Ljava/util/Comparator;",
+    ),
 ];
 
 /// The [`builtin_static_table`] key a static-call RECEIVER path names.

@@ -5046,8 +5046,29 @@ impl<'run> Interpreter<'run> {
         // they build the same kind of object and are reached the same way.
         if matches!(class_name, "Map.Entry" | "Entry" | "java/util/Map$Entry") {
             let spec = match (method_name, args) {
-                ("comparingByKey", []) => ComparatorSpec::Entry { by_value: false },
-                ("comparingByValue", []) => ComparatorSpec::Entry { by_value: true },
+                ("comparingByKey", []) => ComparatorSpec::Entry {
+                    by_value: false,
+                    inner: None,
+                },
+                ("comparingByValue", []) => ComparatorSpec::Entry {
+                    by_value: true,
+                    inner: None,
+                },
+                // The overloads that order the key (or value) by a comparator
+                // of their own. A null one is NOT "natural ordering" the way
+                // `sort(null)` is: the JDK runs `Objects.requireNonNull` on
+                // it, so the factory itself throws.
+                ("comparingByKey" | "comparingByValue", [JValue::Ref(inner)]) => {
+                    let Some(inner) = *inner else {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.NullPointerException",
+                        )));
+                    };
+                    ComparatorSpec::Entry {
+                        by_value: method_name == "comparingByValue",
+                        inner: Some(inner),
+                    }
+                }
                 _ => return Ok(false),
             };
             let comparator = self.heap.alloc(HeapObject::Comparator(spec));
@@ -7082,7 +7103,12 @@ impl<'run> Interpreter<'run> {
             // iteration order. The positional `addAll(int, c)` form has two
             // arguments and falls through untouched.
             ("addAll", "(Ljava/util/Collection;)Z", [other]) => {
-                let incoming = self.collection_elements(collection_argument(*other)?);
+                // MATERIALIZED, not the cheap walk: an `entrySet()` view walks
+                // as its map's KEYS, so `list.addAll(m.entrySet())` copied the
+                // keys and printed `[a, b]` where a JDK prints `[a=3, b=2]` —
+                // the same wrong-answer-with-no-error the copy CONSTRUCTORS
+                // were fixed for, in the paths that add rather than construct.
+                let incoming = self.materialized_elements(collection_argument(*other)?);
                 let changed = !incoming.is_empty();
                 if let Some(values) = self.heap.list_values_mut(receiver) {
                     values.extend(incoming);
@@ -7093,7 +7119,7 @@ impl<'run> Interpreter<'run> {
             // contains each of the other's elements, so the probe is theirs.
             // The other side may be ANY collection, not only a list.
             ("containsAll", _, [other]) => {
-                let others = self.collection_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?);
                 let mut all = true;
                 for theirs in others {
                     if !self.list_contains(receiver, theirs)? {
@@ -7107,7 +7133,7 @@ impl<'run> Interpreter<'run> {
             // contains each of ours, so here the probe is ours. Both report
             // whether the list changed.
             ("removeAll" | "retainAll", _, [other]) => {
-                let others = self.collection_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?);
                 let keep_when_present = method_name == "retainAll";
                 let ours = self.list_items(receiver);
                 let mut kept = Vec::with_capacity(ours.len());
@@ -7984,7 +8010,7 @@ impl<'run> Interpreter<'run> {
             }
             ("addAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.collection_elements(*source) {
+                for element in self.materialized_elements(*source) {
                     changed |= self.set_add(receiver, element)?;
                 }
                 JValue::Int(i32::from(changed))
@@ -8007,7 +8033,7 @@ impl<'run> Interpreter<'run> {
             }
             ("containsAll", [JValue::Ref(Some(source))]) => {
                 let mut all = true;
-                for element in self.collection_elements(*source) {
+                for element in self.materialized_elements(*source) {
                     if self.map_find(receiver, element)?.is_none() {
                         all = false;
                         break;
@@ -8017,7 +8043,7 @@ impl<'run> Interpreter<'run> {
             }
             ("removeAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.collection_elements(*source) {
+                for element in self.materialized_elements(*source) {
                     if let Some(at) = self.map_find(receiver, element)? {
                         self.map_remove_at(receiver, at);
                         changed = true;
@@ -8026,7 +8052,7 @@ impl<'run> Interpreter<'run> {
                 JValue::Int(i32::from(changed))
             }
             ("retainAll", [JValue::Ref(Some(source))]) => {
-                let keep = self.collection_elements(*source);
+                let keep = self.materialized_elements(*source);
                 let mut changed = false;
                 for element in self.collection_elements(receiver) {
                     let mut found = false;
@@ -8305,14 +8331,14 @@ impl<'run> Interpreter<'run> {
             }
             ("addAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.collection_elements(*source) {
+                for element in self.materialized_elements(*source) {
                     changed |= self.tree_set_add(receiver, element)?;
                 }
                 JValue::Int(i32::from(changed))
             }
             ("containsAll", [JValue::Ref(Some(source))]) => {
                 let mut all = true;
-                for element in self.collection_elements(*source) {
+                for element in self.materialized_elements(*source) {
                     if self.tree_set_index_of(receiver, element)?.is_none() {
                         all = false;
                         break;
@@ -8324,7 +8350,7 @@ impl<'run> Interpreter<'run> {
             // elements stay in sorted order, so the vector writes back whole.
             ("removeAll" | "retainAll", [other]) => {
                 let keep_when_present = method_name == "retainAll";
-                let others = self.collection_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?);
                 let mut kept = Vec::new();
                 let mut changed = false;
                 for element in self.tree_set_values(receiver) {
@@ -9508,7 +9534,7 @@ impl<'run> Interpreter<'run> {
             }
             ("addAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.collection_elements(*source) {
+                for element in self.materialized_elements(*source) {
                     self.pq_offer(receiver, element)?;
                     changed = true;
                 }
@@ -9519,7 +9545,7 @@ impl<'run> Interpreter<'run> {
             // the argument as the predicate.
             ("removeAll" | "retainAll", [other]) => {
                 let keep_when_present = method_name == "retainAll";
-                let others = self.collection_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?);
                 let mut survivors = Vec::new();
                 let mut removed = false;
                 for element in self.pq_heap(receiver) {
@@ -9543,7 +9569,7 @@ impl<'run> Interpreter<'run> {
                 JValue::Int(i32::from(removed))
             }
             ("containsAll", [other]) => {
-                let others = self.collection_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?);
                 let mine = self.pq_heap(receiver);
                 let mut all = true;
                 'others: for candidate in others {
@@ -14876,7 +14902,7 @@ impl<'run> Interpreter<'run> {
             // read through the entry's MAP rather than off the entry, which is
             // what `getValue` does — an entry from an `entrySet()` sees the
             // current value, so sorting after a `put` orders by the new one.
-            ComparatorSpec::Entry { by_value } => {
+            ComparatorSpec::Entry { by_value, inner } => {
                 let side = |vm: &mut Self, value: JValue| -> Result<JValue, VmError> {
                     let JValue::Ref(Some(entry)) = value else {
                         return Ok(value);
@@ -14892,7 +14918,10 @@ impl<'run> Interpreter<'run> {
                     }
                 };
                 let (left, right) = (side(self, a)?, side(self, b)?);
-                self.compare_for_sort(left, right)
+                match inner {
+                    Some(inner) => self.compare_with(left, right, Some(inner)),
+                    None => self.compare_for_sort(left, right),
+                }
             }
             ComparatorSpec::Reversed(inner) => Ok(-self.compare_with(a, b, Some(inner))?),
             ComparatorSpec::Then(first, second) => {

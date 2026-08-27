@@ -58,7 +58,13 @@ pub enum ComparatorSpec {
     /// entries by the natural ordering of their keys (or values). A key
     /// extractor cannot express these: `ByKey` runs a `Function` from the
     /// heap, and there is no user lambda here to run.
-    Entry { by_value: bool },
+    ///
+    /// `inner` is the overload that takes an ordering for the key (or value)
+    /// instead of its natural one — `comparingByValue(reverseOrder())`.
+    Entry {
+        by_value: bool,
+        inner: Option<HeapRef>,
+    },
     /// `Comparator.nullsFirst(inner)` / `nullsLast(inner)` — `null` sorts
     /// before (or after) everything, two nulls are equal, and anything else is
     /// left to `inner`. `first` selects which end the nulls go to.
@@ -795,15 +801,15 @@ impl CollectorKind {
 impl ComparatorSpec {
     fn visit_refs(&self, visit: &mut impl FnMut(HeapRef)) {
         match self {
-            ComparatorSpec::Natural
-            | ComparatorSpec::CaseInsensitive
-            | ComparatorSpec::Entry { .. } => {}
+            ComparatorSpec::Natural | ComparatorSpec::CaseInsensitive => {}
             ComparatorSpec::ByKey(f) | ComparatorSpec::Reversed(f) => visit(*f),
             ComparatorSpec::Then(a, b) | ComparatorSpec::ByKeyWith(a, b) => {
                 visit(*a);
                 visit(*b);
             }
-            ComparatorSpec::Nulls { inner, .. } => {
+            // Both carry an OPTIONAL inner comparator — an entry factory given
+            // an ordering for its key, and a nulls-first/last wrapper.
+            ComparatorSpec::Entry { inner, .. } | ComparatorSpec::Nulls { inner, .. } => {
                 if let Some(inner) = inner {
                     visit(*inner);
                 }

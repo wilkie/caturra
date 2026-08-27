@@ -22392,14 +22392,15 @@ public class EntryMethodRefs {
 "#
 );
 
-// `Comparator.comparing(Map.Entry::getKey)` is still refused: the key
-// extractor's parameter is typed by the surrounding factory, which has no
-// element to give, so the reference resolves `getKey()` against `Object`. The
-// two spellings a program actually uses both work — `Map.Entry.comparingByKey()`
-// and the lambda `e -> e.getKey()` — and the same method reference works in a
-// stream, where the element type is known.
-stricter_than_javac!(
-    stricter_entry_method_ref_in_a_comparator,
+// Sorting a map's entries, in every spelling a program uses for it — including
+// the two that were refused: `Comparator.comparing(Map.Entry::getKey)`, whose
+// reference has a NESTED library qualifier that the extractor rule could not
+// read (it resolved `getKey()` against `Object`), and the comparator-taking
+// `comparingByKey`/`comparingByValue` overloads, which were missing outright.
+// Both take their element from the `Comparator<E>` position the factory sits
+// in, which the sort site hands down.
+differential_test!(
+    sorting_a_maps_entries,
     "EntryComparatorRef",
     r#"
 import java.util.ArrayList;
@@ -22407,14 +22408,46 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 public class EntryComparatorRef {
     public static void main(String[] args) {
         Map<String, Integer> m = new LinkedHashMap<>();
-        m.put("z", 1);
+        m.put("bb", 2);
+        m.put("a", 3);
+        m.put("ccc", 2);
         List<Map.Entry<String, Integer>> es = new ArrayList<>(m.entrySet());
+
         es.sort(Comparator.comparing(Map.Entry::getKey));
         System.out.println(es);
+        es.sort(Comparator.comparingInt(Map.Entry::getValue));
+        System.out.println(es);
+        es.sort((x, y) -> y.getValue() - x.getValue());
+        System.out.println(es);
+
+        es.sort(Map.Entry.comparingByValue(Comparator.reverseOrder()));
+        System.out.println(es);
+        es.sort(Map.Entry.comparingByKey(Comparator.comparingInt(String::length)));
+        System.out.println(es);
+        es.sort(Map.Entry.comparingByValue((x, y) -> y - x));
+        System.out.println(es);
+        es.sort(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())
+                .thenComparing(Map.Entry.comparingByKey()));
+        System.out.println(es);
+
+        // A comparator the program never names `Comparator` for: without the
+        // bundled interface this was refused as "takes a Collection or a
+        // Comparator", about a Comparator.
+        TreeSet<Map.Entry<String, Integer>> sorted =
+            new TreeSet<>(Map.Entry.comparingByKey(Comparator.reverseOrder()));
+        sorted.addAll(m.entrySet());
+        System.out.println(sorted);
+
+        try {
+            System.out.println(Map.Entry.<String, Integer>comparingByValue(null));
+        } catch (NullPointerException e) {
+            System.out.println("npe");
+        }
     }
 }
 "#

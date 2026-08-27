@@ -8967,12 +8967,6 @@ entries after it was written down.
   makes, which a VARIABLE holding the same function cannot be. (`stricter_to_array_needs_a_generator_written_out`)
 - `Arrays.stream(array, from, to)` — the RANGE overload; the whole-array form
   is modelled. (`stricter_arrays_stream_takes_no_range`)
-- `Comparator.comparing(Map.Entry::getKey)` — the key extractor's parameter is
-  typed by the surrounding factory, which has no element to give, so the
-  reference resolves `getKey()` against `Object`. Both spellings a program
-  actually uses work (`Map.Entry.comparingByKey()`, and the lambda
-  `e -> e.getKey()`), as does the same reference in a STREAM, where the element
-  type is known. (`stricter_entry_method_ref_in_a_comparator`)
 - A factory that ADOPTS its context (`Collections.emptyList()`,
   `Optional.empty()`, `List.of()`) used as an argument where the OVERLOADS
   disagree about it: `two(Collections.emptyList())`, against
@@ -9249,3 +9243,44 @@ The strictness bullet is gone from the list below; the test that pinned it is
 an ordinary differential test now, widened to the chained and container forms.
 
 Pinned by `a_return_variable_pinned_only_by_a_lambda`.
+
+### Sorting a map's entries (2026-08-27)
+
+A 60-program mixed fuzz — random compositions of independent snippets — came
+back with 14 failures that were all ONE missing overload, and pulling on it
+found four more defects around it. The other 46 programs were byte-identical,
+which is what a sweep is for after a week of typing changes.
+
+**`Map.Entry.comparingByKey(cmp)` / `comparingByValue(cmp)` were missing.** The
+no-argument forms were modelled; the overloads that take an ordering for the
+key (or value) — how a program sorts entries by DESCENDING value — were not.
+`ComparatorSpec::Entry` carries an optional inner comparator now. A null one is
+not "natural ordering" the way `sort(null)` is: the JDK runs
+`Objects.requireNonNull`, so the factory itself throws, and so does this.
+
+**A program that sorts entries and names `Comparator` nowhere had no
+comparator interface at all.** The bundled `__Comparator` is pulled in by
+scanning the source for the words that imply it, and `Map.Entry.comparingByKey()`
+spells none of them — so `new TreeSet<>(Map.Entry.comparingByKey())` was refused
+as "takes a Collection or a Comparator", about a Comparator. `comparingBy` is
+one of those words now.
+
+**`addAll` from an `entrySet()` copied the KEYS.** The cheap element walk of a
+map view answers keys for anything that is not the values view, and the copy
+CONSTRUCTORS had already been fixed to materialize real entries — the paths
+that ADD had not, so `list.addAll(m.entrySet())` printed `[a, b]` where a JDK
+prints `[a=3, b=2]`. `containsAll`/`removeAll`/`retainAll` walk the argument the
+same way and needed the same fix, which the first half of this exposed: with
+`addAll` fixed and the others not, a set of entries did not contain the entries
+it had just been given.
+
+**`Comparator.comparing(Map.Entry::getKey)` — a pinned strictness — is closed.**
+The extractor rule types a method reference from its QUALIFIER, and a nested
+library type is not a name it can read. The element the surrounding
+`Comparator<E>` position gives is the same answer, and the sort site hands it
+down; the lambda form of the same thing
+(`Map.Entry.comparingByValue((a, b) -> ...)`) takes its two parameters from the
+entry's key or value the same way.
+
+Pinned by `sorting_a_maps_entries`; the strictness bullet is gone from the list
+below.

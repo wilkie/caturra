@@ -614,6 +614,13 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // `Collections.reverseOrder()` also yields one without naming it.
             || s.text.contains("Comparator")
             || s.text.contains("reverseOrder")
+            // `Map.Entry.comparingByKey()` / `comparingByValue()` yield one
+            // while naming neither `Comparator` nor any word above, so a
+            // program that sorts entries and nothing else had no bundle: the
+            // comparator's own TYPE was unknown, and `new TreeSet<>(
+            // Map.Entry.comparingByKey())` was refused as "takes a Collection
+            // or a Comparator" — about a Comparator.
+            || s.text.contains("comparingBy")
             // ...and so does `String.CASE_INSENSITIVE_ORDER`, whose TYPE is a
             // `Comparator<String>` the program never spells. Without the
             // bundle its type was unknown, so calling `compare` on it was

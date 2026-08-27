@@ -1736,6 +1736,30 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             if desugar_comparator_chain(receiver, method, args, expected, ctx) {
                 return;
             }
+            // `Map.Entry.comparingByValue((a, b) -> ...)`: the lambda compares
+            // two VALUES (or two KEYS), which nothing in the call itself says
+            // — the entry type comes from the `Comparator<Map.Entry<K, V>>`
+            // position the factory sits in, which the sort site hands down.
+            if let ("comparingByKey" | "comparingByValue", [Expr::Lambda { params, .. }]) =
+                (method.as_str(), &args[..])
+                && params.len() == 2
+                && matches!(receiver.as_deref(), Some(Expr::Name { path, .. })
+                        if path.last().is_some_and(|last| last == "Entry"))
+                && let Some(side) = expected
+                    .and_then(comparator_target_elem)
+                    .and_then(|entry| entry_side_type(&entry, method == "comparingByValue"))
+            {
+                args[0] = build_erased_lambda(
+                    &mut args[0],
+                    "__Comparator",
+                    "compare",
+                    &TypeRef::Int,
+                    &[side.clone(), side],
+                    None,
+                    ctx,
+                );
+                return;
+            }
             if let Some(r) = receiver {
                 desugar_expr(r, None, ctx);
             }
@@ -3651,6 +3675,18 @@ pub(crate) fn functional_lambda_spec(target: &TypeRef) -> Option<FunctionalSpec>
 
 /// The element type `E` of a `Comparator<E>` target type, for casting a
 /// comparator lambda's two parameters. `null` for anything else.
+/// The KEY or VALUE type of a written `Map.Entry<K, V>`.
+fn entry_side_type(entry: &TypeRef, value: bool) -> Option<TypeRef> {
+    let TypeRef::Generic { base, args } = entry else {
+        return None;
+    };
+    (matches!(
+        simple_base(base),
+        "Map.Entry" | "Entry" | "java.util.Map.Entry"
+    ) && args.len() == 2)
+        .then(|| args[usize::from(value)].clone())
+}
+
 fn comparator_target_elem(target: &TypeRef) -> Option<TypeRef> {
     let TypeRef::Generic { base, args } = target else {
         return None;
@@ -3812,6 +3848,30 @@ fn desugar_comparator_chain(
             "__UnaryOperator",
             "apply",
             &object,
+            &[elem],
+            None,
+            ctx,
+        );
+        return true;
+    }
+    // A method REFERENCE whose qualifier is not a plain class name — the one
+    // that matters is `Map.Entry::getKey`, written on the list being sorted.
+    // `desugar_key_extractor` types such a reference from its QUALIFIER, and a
+    // nested library type is not a name it can read; the element the
+    // surrounding `Comparator<E>` position gives is the same answer, and the
+    // sort site hands it down. Without this the reference resolved `getKey()`
+    // against `Object` — a refusal for one of the two spellings a program
+    // uses to sort a map's entries.
+    if matches!(&args[0], Expr::MethodRef { .. })
+        && let Some(elem) = expected.and_then(comparator_target_elem)
+        && let Some(sam) = ctx.sams.get("__UnaryOperator").cloned()
+    {
+        args[0] = method_ref_to_lambda(&args[0], &sam, ctx);
+        args[0] = build_erased_lambda(
+            &mut args[0],
+            "__UnaryOperator",
+            "apply",
+            &TypeRef::Named(String::from("Object")),
             &[elem],
             None,
             ctx,
