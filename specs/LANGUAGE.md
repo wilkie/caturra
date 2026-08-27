@@ -9346,3 +9346,33 @@ falls back, and a `List<CharSequence>` is refused outright with its own honest
 message.)
 
 Pinned by `cursors_and_wildcards_over_every_collection`.
+
+### A lambda inside a hoisted body (2026-08-27)
+
+A MIRROR sweep — the same expression written in twelve syntactic positions
+(a `println` argument, a `var`, a concatenation, an argument, a return, a field
+initializer, an array element, a ternary branch, a lambda body, an anonymous
+class body, `String.valueOf`, a plain assignment) across 26 expressions, 299
+programs — agreed everywhere but one position, which is exactly what such a
+sweep is for.
+
+**A lambda inside an anonymous class body was refused.** The parser lifts that
+body out of the expression it was written in, and this pass walks it like any
+other class — so it lost the enclosing class's fields and the locals the body
+captures, and a stream pipeline inside one had no element type: "a lambda or
+method reference is only allowed where a functional-interface type is
+expected", for a program whose identical pipeline one line OUTSIDE compiles.
+The `new` site records what it can see, and the hoisted body reads it back.
+
+The bodies are walked AFTER the classes that create them, and in reverse of
+their appearance: the parser appends the innermost first, so an anonymous class
+inside an anonymous class was walked BEFORE the body that creates it, and
+nothing had yet recorded a scope for it.
+
+**And the same tell, one level down.** `byKey.get("k").stream().map(v -> …)` —
+a pipeline over a collection stored INSIDE another collection — was refused
+while the identical list through a variable compiled. A library READ takes its
+type from the receiver's own written type: a map's `get` is its VALUE type, a
+list's `get` (or a queue's `poll`, or an `Optional`'s `orElse`) its element.
+
+Pinned by `a_lambda_inside_a_hoisted_body`.

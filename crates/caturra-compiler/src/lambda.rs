@@ -74,10 +74,46 @@ pub fn desugar_lambdas(
     // its `SourceFile` matches the line numbers it carries — otherwise a
     // lambda in a non-first file would get the first file's SourceFile and
     // its breakpoints/stack traces would point at the wrong file.
+    // The classes the PARSER hoisted out of an expression — an anonymous class
+    // body, a local class. They are walked like any other class here, which
+    // loses the scope they were written in: a lambda inside one could not see
+    // the enclosing class's fields or the locals the body captures, so
+    // `new Supplier<Object>() { … list.stream().map(String::length) … }` was
+    // refused for having no functional-interface position, though the same
+    // pipeline one line outside compiled. The `new` site records what was in
+    // scope; the class body reads it back.
+    let hoisted: std::collections::HashSet<String> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .filter(|class| class.is_anonymous || class.is_local)
+        .map(|class| class.name.clone())
+        .collect();
+    let mut captured_scopes: HashMap<String, HashMap<String, TypeRef>> = HashMap::new();
     let mut counter = 0usize;
     for (path, unit) in units.iter_mut() {
         let mut new_classes: Vec<ClassDecl> = Vec::new();
-        for class in &mut unit.classes {
+        // The classes a program WROTE first, then the hoisted bodies — and
+        // those in reverse, because the parser appends the innermost one
+        // first. A body's `new` site records what is in scope there, so the
+        // class it creates has to be walked after it: an anonymous class
+        // inside an anonymous class was walked BEFORE the one that creates it,
+        // and saw nothing.
+        let order: Vec<usize> = {
+            let mut plain: Vec<usize> = Vec::with_capacity(unit.classes.len());
+            let mut nested: Vec<usize> = Vec::new();
+            for (index, class) in unit.classes.iter().enumerate() {
+                if hoisted.contains(&class.name) {
+                    nested.push(index);
+                } else {
+                    plain.push(index);
+                }
+            }
+            nested.reverse();
+            plain.extend(nested);
+            plain
+        };
+        for index in order {
+            let class = &mut unit.classes[index];
             let class_name = class.name.clone();
             // The name a FRAME in this class carries: the binary one, so a
             // lambda in a nested class is `Outer$Inner.lambda$go$0`.
@@ -98,11 +134,29 @@ pub fn desugar_lambdas(
             // The enclosing class's fields are in scope for target typing:
             // `vocab.forEach(...)` needs `vocab`'s declared type args, and
             // `vocab` is usually a field.
-            let fields: HashMap<String, TypeRef> = class
+            let mut fields: HashMap<String, TypeRef> = class
                 .fields
                 .iter()
                 .map(|f| (f.name.clone(), f.ty.clone()))
                 .collect();
+            // A hoisted body sees what its `new` site saw: the enclosing
+            // class's own fields, then the locals in scope there — each only
+            // where the body does not shadow it.
+            if class.is_anonymous || class.is_local {
+                let enclosing = class.enclosing.clone().unwrap_or_default();
+                let outer = field_types
+                    .iter()
+                    .filter(|((owner, _), _)| *owner == enclosing)
+                    .map(|((_, name), ty)| (name.clone(), ty.clone()));
+                let locals = captured_scopes
+                    .get(&class_name)
+                    .into_iter()
+                    .flatten()
+                    .map(|(name, ty)| (name.clone(), ty.clone()));
+                for (name, ty) in outer.chain(locals) {
+                    fields.entry(name).or_insert(ty);
+                }
+            }
             for (method, ret) in class.methods.iter_mut().zip(return_types) {
                 let params: HashMap<String, TypeRef> = method
                     .params
@@ -131,6 +185,8 @@ pub fn desugar_lambdas(
                     supers: &supers,
                     hierarchy: &hierarchy,
                     enums: &enums,
+                    hoisted: &hoisted,
+                    captured_scopes: &mut captured_scopes,
                     class_prefix: crate::LAMBDA_CLASS_PREFIX,
                     path,
                     diags: &mut diags,
@@ -171,6 +227,8 @@ pub fn desugar_lambdas(
                     supers: &supers,
                     hierarchy: &hierarchy,
                     enums: &enums,
+                    hoisted: &hoisted,
+                    captured_scopes: &mut captured_scopes,
                     class_prefix: crate::LAMBDA_CLASS_PREFIX,
                     path,
                     diags: &mut diags,
@@ -206,6 +264,8 @@ pub fn desugar_lambdas(
                         supers: &supers,
                         hierarchy: &hierarchy,
                         enums: &enums,
+                        hoisted: &hoisted,
+                        captured_scopes: &mut captured_scopes,
                         class_prefix: crate::LAMBDA_CLASS_PREFIX,
                         path,
                         diags: &mut diags,
@@ -282,6 +342,12 @@ struct Ctx<'a> {
     hierarchy: &'a HashMap<String, ClassGenerics>,
     /// The `enum` classes, which have no accessible constructor.
     enums: &'a std::collections::HashSet<String>,
+    /// The classes the parser HOISTED out of an expression (an anonymous class
+    /// body, a local class), and what was in scope at each one's `new` site.
+    /// A hoisted body is walked like any other class, which loses the scope it
+    /// was written in.
+    hoisted: &'a std::collections::HashSet<String>,
+    captured_scopes: &'a mut HashMap<String, HashMap<String, TypeRef>>,
     /// The prefix for the next synthesized class — a method REFERENCE gets
     /// its own, because its captures follow different rules (see
     /// `crate::METHOD_REF_CLASS_PREFIX`).
@@ -2396,6 +2462,18 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             args,
             ..
         } => {
+            // A HOISTED body (an anonymous class, a local class) is walked as
+            // a class of its own, long after this expression. What is in scope
+            // HERE is what it was written inside, so record it for that walk.
+            if ctx.hoisted.contains(class) && !ctx.captured_scopes.contains_key(class) {
+                let mut visible: HashMap<String, TypeRef> = HashMap::new();
+                for frame in &ctx.scope {
+                    for (name, ty) in frame {
+                        visible.insert(name.clone(), ty.clone());
+                    }
+                }
+                ctx.captured_scopes.insert(class.clone(), visible);
+            }
             // A comparator lambda argument to a sorted collection's constructor
             // (`TreeSet`/`TreeMap`/`PriorityQueue`): its parameters are the
             // element / key type, read from the `new`'s own type arguments or,
@@ -5012,6 +5090,41 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         && let Some(elem) = element_of_declared(&shape.return_type)
     {
         return Some(elem);
+    }
+    // A library READ whose type is written on the RECEIVER: `map.get(k)` is
+    // the map's value type, `list.get(i)` / `queue.poll()` / `opt.orElse(d)`
+    // its element. Without it a collection stored INSIDE another collection
+    // had no element of its own, so `byKey.get("k").stream().map(v -> …)` was
+    // refused for having no functional-interface position — while the same
+    // list through a variable compiled, the tell of a missing recogniser.
+    if let Expr::Call {
+        receiver: Some(owner),
+        method,
+        ..
+    } = receiver
+        && let Some(TypeRef::Generic { base, args: written }) = static_type_of(owner, ctx)
+    {
+        let read = match (simple_base(&base), method.as_str(), written.len()) {
+            (
+                "Map" | "HashMap" | "LinkedHashMap" | "TreeMap" | "SortedMap" | "NavigableMap",
+                "get" | "getOrDefault" | "remove" | "put" | "putIfAbsent" | "computeIfAbsent"
+                | "compute" | "computeIfPresent" | "merge" | "replace",
+                2,
+            ) => written.get(1),
+            (
+                _,
+                "get" | "getFirst" | "getLast" | "peek" | "peekFirst" | "peekLast" | "poll"
+                | "pollFirst" | "pollLast" | "pop" | "element" | "remove" | "first" | "last"
+                | "orElse" | "orElseThrow" | "floor" | "ceiling" | "higher" | "lower",
+                1,
+            ) => written.first(),
+            _ => None,
+        };
+        if let Some(read) = read
+            && let Some(elem) = element_of_declared(read)
+        {
+            return Some(elem);
+        }
     }
     // The `Collections` factories and `copyOf`, whose element comes from what
     // they are given rather than from a type argument.

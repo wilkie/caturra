@@ -38643,3 +38643,83 @@ public class CursorMatrix {
 }
 "#
 );
+
+// A lambda inside a HOISTED body — an anonymous class, a local class — and a
+// pipeline over a collection stored inside another collection.
+//
+// The parser lifts an anonymous class body out of the expression it was
+// written in, and this pass walks it like any other class: it lost the
+// enclosing class's fields and the locals the body captures, so a stream
+// pipeline inside one was refused for having no functional-interface position,
+// though the same pipeline one line outside compiled. The `new` site records
+// what it can see; the hoisted body reads it back — and the bodies are walked
+// AFTER the classes that create them, since an anonymous class inside an
+// anonymous class is appended first and was walked before anything had told it
+// what was in scope.
+differential_test!(
+    a_lambda_inside_a_hoisted_body,
+    "HoistedBodies",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class HoistedBodies {
+    static Map<String, List<Integer>> BY_KEY = new LinkedHashMap<>();
+
+    interface Job {
+        String run();
+    }
+
+    public static void main(String[] args) {
+        BY_KEY.put("k", new ArrayList<>(Arrays.asList(1, 2)));
+        List<String> outer = new ArrayList<>(Arrays.asList("aa", "b"));
+        int limit = 1;
+
+        Job job = new Job() {
+            public String run() {
+                // a captured local, a captured constant, and a static field of
+                // the enclosing class
+                String kept = outer.stream()
+                    .filter(s -> s.length() > limit)
+                    .collect(Collectors.joining());
+                String doubled = BY_KEY.get("k").stream()
+                    .map(v -> v * 2)
+                    .map(String::valueOf)
+                    .collect(Collectors.joining("-"));
+
+                // an anonymous class INSIDE the anonymous class
+                Supplier<String> inner = new Supplier<String>() {
+                    public String get() {
+                        return outer.stream()
+                            .map(String::toUpperCase)
+                            .collect(Collectors.joining("|"));
+                    }
+                };
+
+                // and a local class in the same body
+                class Helper {
+                    String join() {
+                        return outer.stream().sorted().collect(Collectors.joining("+"));
+                    }
+                }
+
+                return kept + " " + doubled + " " + inner.get() + " " + new Helper().join();
+            }
+        };
+        System.out.println(job.run());
+
+        class Counter {
+            long nonEmpty() {
+                return outer.stream().filter(s -> !s.isEmpty()).count();
+            }
+        }
+        System.out.println(new Counter().nonEmpty());
+
+        // The same read through a collection stored in a map, at the top
+        // level: it works through a variable, and had to work inline too.
+        System.out.println(BY_KEY.get("k").stream().map(v -> v + 1).collect(Collectors.toList()));
+    }
+}
+"#
+);
