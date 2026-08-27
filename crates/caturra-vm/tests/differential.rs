@@ -38867,3 +38867,156 @@ public class HardNumerics {
 }
 "#
 );
+
+// A hierarchy walked every way a program walks one: overriding, hiding,
+// `super`, an interface default and its `super` form, a constructor that calls
+// an overridable method, the overload matrix, private methods that do NOT
+// override — nine probes, and five failures, all where a type VARIABLE meets
+// inheritance.
+//
+// `held.compareTo(other)` inside a `Box<T extends Animal>` could not find
+// `compareTo(Animal)` at all: a type variable's erasure is its BOUND, and
+// applicability never knew it. A parameter declared as the variable then had
+// to take what the receiver's own argument says — `new Box<>(animal)` and
+// `box.compareHeld(animal)` were both "Object cannot be converted to Animal".
+// An inherited `protected List<T> items` read through a subclass that FIXED
+// the argument substituted only when it was a BARE variable, so the field
+// every generic base class keeps was an Object list. `Iterable<Integer>`
+// dropped its wrapper argument, so a for-each over the interface face saw an
+// Object. And `@Override public void remove()` on a cursor — the way one
+// refuses removal — was "does not override or implement a method from a
+// supertype", because `Iterator.remove` is a DEFAULT since Java 8 and the
+// interface did not declare it.
+differential_test!(
+    a_hierarchy_walked_every_way,
+    "Hierarchy",
+    r#"
+import java.util.*;
+
+public class Hierarchy {
+    static class Animal implements Comparable<Animal> {
+        final int size;
+        Animal(int size) { this.size = size; }
+        public int compareTo(Animal other) { return Integer.compare(size, other.size); }
+        Animal self() { return this; }
+        public String toString() { return getClass().getSimpleName() + size; }
+    }
+
+    static class Cat extends Animal {
+        Cat(int size) { super(size); }
+        @Override Cat self() { return this; }
+    }
+
+    static class Box<T extends Animal> {
+        final T held;
+        Box(T held) { this.held = held; }
+        T get() { return held; }
+        int compareHeld(T other) { return held.compareTo(other); }
+    }
+
+    static abstract class BaseRepo<T> {
+        protected final List<T> items = new ArrayList<>();
+        void save(T item) { items.add(item); }
+        T find(int at) { return items.get(at); }
+        abstract String label();
+        String summary() { return label() + ":" + items.size(); }
+    }
+
+    static class Names extends BaseRepo<String> {
+        String label() { return "names"; }
+        String longest() {
+            String best = "";
+            for (String s : items) {
+                if (s.length() > best.length()) {
+                    best = s;
+                }
+            }
+            return best;
+        }
+    }
+
+    static class Counter implements Iterable<Integer> {
+        private final int limit;
+        Counter(int limit) { this.limit = limit; }
+        public Iterator<Integer> iterator() {
+            return new Iterator<Integer>() {
+                private int at = 0;
+                public boolean hasNext() { return at < limit; }
+                public Integer next() {
+                    if (!hasNext()) {
+                        throw new NoSuchElementException();
+                    }
+                    return at++;
+                }
+                @Override public void remove() { throw new UnsupportedOperationException("no"); }
+            };
+        }
+    }
+
+    public static void main(String[] args) {
+        // A type variable's bound is its erasure, inside the class and at the
+        // call.
+        Box<Animal> box = new Box<>(new Animal(1));
+        System.out.println(box.compareHeld(new Animal(2)) + " " + box.get());
+        Box<Cat> cats = new Box<>(new Cat(4));
+        System.out.println(cats.get().self() + " " + cats.compareHeld(new Cat(4)));
+
+        // An inherited container field, through a subclass that fixed the
+        // argument.
+        Names names = new Names();
+        names.save("ann");
+        names.save("bartholomew");
+        System.out.println(names.summary() + " " + names.find(0) + " " + names.longest());
+        BaseRepo<String> base = names;
+        System.out.println(base.find(1).length() + " " + base.summary());
+
+        // A diamond COPY adopts the declaration's element, so a list of the
+        // base takes a list of the subclass.
+        List<BaseRepo<String>> all = new ArrayList<>(Arrays.asList(names));
+        System.out.println(all.get(0).label() + all.get(0).find(0));
+
+        // A user `Iterable`, walked through its own type and through the
+        // interface face.
+        int total = 0;
+        for (int v : new Counter(4)) {
+            total += v;
+        }
+        Iterable<Integer> face = new Counter(3);
+        int sum = 0;
+        for (Integer v : face) {
+            sum += v;
+        }
+        System.out.println(total + " " + sum);
+        try {
+            new Counter(2).iterator().remove();
+        } catch (UnsupportedOperationException e) {
+            System.out.println("uoe " + e.getMessage());
+        }
+    }
+}
+"#
+);
+
+// ...and what a type variable must still REFUSE: its bound is what it is
+// assignable to, and nothing else. Resolution is lenient (it has no way to
+// know which variable this is), so the check has to be the conversion's.
+differential_reject!(
+    a_type_variable_is_only_its_bound,
+    "TypeVarBound",
+    r"
+public class TypeVarBound {
+    static class Animal { int size = 1; }
+
+    static class Box<T extends Animal> {
+        final T held;
+        Box(T held) { this.held = held; }
+        int take(String text) { return text.length(); }
+        int wrong() { return take(held); }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Box<>(new Animal()).wrong());
+    }
+}
+"
+);

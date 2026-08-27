@@ -9458,3 +9458,45 @@ says "likely document not fix" reads as "do not check again", and this one hid
 work that was already done.
 
 Pinned by `the_numerics_that_were_known_hard`.
+
+### A hierarchy walked every way (2026-08-27)
+
+Nine probes over inheritance and dispatch: overriding and hiding, `super` and
+an interface's `X.super.m()`, a constructor calling an overridable method (the
+trap where the subclass's fields are not set yet), static hiding and a static
+called through a null reference, private methods that do NOT override, the
+overload matrix (`Object`/`String`/`Integer`/`int`/`long`/varargs, and a `null`
+argument), covariant returns, a generic repository behind an abstract class,
+and a user `Iterable`.
+
+Four of the nine agreed exactly — including every corner above. The five
+failures were all in one place: where a type VARIABLE meets inheritance.
+
+**A type variable's erasure is its BOUND, and applicability never knew it.**
+`held.compareTo(other)` inside a `Box<T extends Animal>` could not find
+`compareTo(Animal)` at all — the call was refused before anything could check
+it. Resolution is lenient about a variable now (it has no way to know WHICH
+variable it is), and the conversion is what checks the bound, which keeps the
+mismatched `take(held)` for a `take(String)` refused.
+
+**A parameter declared as the variable takes what the RECEIVER'S argument
+says.** `new Box<>(animal)` and `box.compareHeld(animal)` were both "Object
+cannot be converted to Animal". The receiver's arguments are recorded around
+the call — including a `new`'s own, written or inferred.
+
+**An inherited CONTAINER field did not substitute.** A subclass that fixes its
+supertype's argument reads an inherited `T value` as that argument; the
+`protected List<T> items` every generic base class keeps was left an Object
+list, so `for (String s : items)` inside the subclass was an error.
+
+**`Iterable<Integer>` dropped its argument.** A wrapper argument is not carried
+on a synthesized interface — right for `Comparable<Integer>`, which is modelled
+as the face a wrapper widens to, wrong for the iteration pair: a for-each over
+the interface face saw an `Object` element.
+
+**`Iterator.remove()` is a DEFAULT** since Java 8, and the synthesized
+interface did not declare it, so the `@Override public void remove()` a cursor
+writes to refuse removal was "does not override or implement a method from a
+supertype".
+
+Pinned by `a_hierarchy_walked_every_way` and `a_type_variable_is_only_its_bound`.

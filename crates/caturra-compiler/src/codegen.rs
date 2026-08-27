@@ -272,6 +272,7 @@ fn emit_clinit(
         .expect("class registered");
     let mut body = BodyGen {
         receiver_location: None,
+        receiver_args: None,
         path,
         diagnostics,
         pool,
@@ -962,6 +963,22 @@ impl MethodTable {
                         is_private: false,
                         is_final: false,
                         is_abstract: true,
+                        is_varargs: false,
+                        ret_infer: None,
+                    },
+                    // `remove()` is a DEFAULT since Java 8 — an implementor
+                    // need not write one, and one that does is OVERRIDING it.
+                    // Left out, the `@Override public void remove()` that a
+                    // cursor writes to refuse removal was "method does not
+                    // override or implement a method from a supertype".
+                    MethodSig {
+                        name: String::from("remove"),
+                        params: Vec::new(),
+                        ret: None,
+                        is_static: false,
+                        is_private: false,
+                        is_final: false,
+                        is_abstract: false,
                         is_varargs: false,
                         ret_infer: None,
                     },
@@ -3276,7 +3293,17 @@ impl MethodTable {
                     // as `Object`, which made `Integer y = node.get()` a
                     // compile error and `p(node.get())` pick `p(Object)`.
                     let carryable = |elem: &ElemType| match elem {
-                        ElemType::Wrapper(_) => !self.synthesized.contains(base.as_str()),
+                        // A WRAPPER argument on a SYNTHESIZED interface is
+                        // carried only for the iteration pair: `Comparable
+                        // <Integer>` is modelled as the erased face a wrapper
+                        // widens to, but `Iterable<Integer>` really does answer
+                        // an `Iterator<Integer>` — without the argument,
+                        // `for (Integer v : face)` over one saw an `Object`
+                        // element and would not compile.
+                        ElemType::Wrapper(_) => {
+                            !self.synthesized.contains(base.as_str())
+                                || matches!(base.as_str(), "Iterable" | "Iterator")
+                        }
                         ElemType::Str
                         | ElemType::Object(_)
                         | ElemType::Builder
@@ -5394,6 +5421,13 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (from, to),
             (JType::Object(sub), JType::Object(sup)) if table.is_subtype(sub, sup)
         )
+        // A type VARIABLE is a reference whose erasure is its BOUND, and which
+        // bound that is cannot be known here — only at the call site, which
+        // checks it when the argument is converted. For APPLICABILITY this is
+        // enough, and without it `held.compareTo(other)` inside a
+        // `Box<T extends Animal>` could not find `compareTo(Animal)` at all:
+        // the call was refused before anything could check it.
+        || matches!((from, to), (JType::TypeVar(_), to) if to.is_reference())
         // An array of a RAW collection assigns to an array of a PARAMETERIZED
         // one: `List<String>[] a = new List[2]`. Java calls that an unchecked
         // conversion — a warning, not an error — and it is the only way to
@@ -7858,6 +7892,7 @@ fn emit_method(
     };
     let mut body = BodyGen {
         receiver_location: None,
+        receiver_args: None,
         path,
         diagnostics,
         pool,
@@ -14918,6 +14953,12 @@ struct BodyGen<'a> {
     /// of which is given the receiver EXPRESSION — only its type, which cannot
     /// say whether a variable was named.
     receiver_location: Option<String>,
+    /// The type ARGUMENTS of the receiver a call is being emitted on, while it
+    /// is being emitted. A parameter declared as a type VARIABLE takes what
+    /// they say it takes: `new Box<Animal>().compareHeld(animal)` hands an
+    /// Animal to a `T`, and with nothing recorded the conversion saw only the
+    /// bare variable and refused an ordinary call.
+    receiver_args: Option<(ElemType, TypeArgsId)>,
 }
 
 /// An enclosing `finally` an abrupt exit has to run on its way out.
@@ -16944,6 +16985,18 @@ impl BodyGen<'_> {
         }
         let widens = |from: ElemType, to: ElemType| match (from, to) {
             (ElemType::Object(sub), ElemType::Object(sup)) => self.table.is_subtype(sub, sup),
+            // A PARAMETERIZED supertype element — `List<BaseRepo<String>> all
+            // = new ArrayList<>(listOfNames)`, where the copy source holds a
+            // subclass. The element rides as an interned nested type, so
+            // asking about it needs the inner class, and without this the
+            // ordinary "collect the subclasses into a list of the base" was
+            // refused.
+            (_, ElemType::Nested { inner, .. }) => match self.table.nested_type(inner) {
+                JType::Generic { class, .. } | JType::Object(class) => {
+                    elem_widens_to_class(from, class, self.table)
+                }
+                _ => from == to,
+            },
             _ => from == to,
         };
         match (init_ty, target) {
@@ -18512,12 +18565,21 @@ impl BodyGen<'_> {
     /// Only the answered TYPE is substituted: the field reference still has to
     /// be interned with the declared descriptor, or it names no field at all.
     fn substituted_field_type(&self, receiver: ClassId, owner: ClassId, ty: JType) -> JType {
-        if receiver == owner || !matches!(ty, JType::TypeVar(_)) {
+        if receiver == owner {
             return ty;
         }
-        match self.table.generic_supertype_arg(receiver, owner) {
-            Some(arg) => arg.base_type(),
-            None => ty,
+        let Some(arg) = self.table.generic_supertype_arg(receiver, owner) else {
+            return ty;
+        };
+        match ty {
+            JType::TypeVar(_) => arg.base_type(),
+            // ...and a field whose type is a CONTAINER of the variable — the
+            // `protected List<T> items` every generic base class keeps, read
+            // through a `Names extends Base<String>`. Only the BARE variable
+            // was substituted, so `for (String s : items)` inside the subclass
+            // was "Object cannot be converted to String", about the field the
+            // subclass exists to hold.
+            other => substitute_member_type(other, arg, NO_TYPE_ARGS, self.table),
         }
     }
 
@@ -19245,7 +19307,16 @@ impl BodyGen<'_> {
         let class_index = intern_class(self.pool, &emitted);
         self.code.push_op_u16(op::NEW, class_index, 1);
         self.code.push_op(op::DUP, 1);
+        // A constructor parameter declared as the class's own type VARIABLE
+        // takes what this `new` gives it: `new Box<Animal>(animal)` and the
+        // diamond that infers the same. Without it the conversion saw a bare
+        // variable and refused every `new` of a generic class that takes one.
+        let outer = match argument {
+            Some(arg) => self.receiver_args.replace((arg, NO_TYPE_ARGS)),
+            None => self.receiver_args.take(),
+        };
         let args_width = self.emit_call_args(args, &sig, span);
+        self.receiver_args = outer;
         let descriptor = sig.descriptor(self.table);
         let init_ref = intern_method_ref(self.pool, &emitted, "<init>", &descriptor);
         self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
@@ -20900,8 +20971,10 @@ impl BodyGen<'_> {
             // then substitute the type variable in the return with the
             // tracked argument (inserting a checkcast on reads).
             JType::Generic { class, arg, rest } => {
-                let result =
-                    self.emit_virtual_call_on_stacked_receiver(class, method, args, span)?;
+                let outer = self.receiver_args.replace((arg, rest));
+                let result = self.emit_virtual_call_on_stacked_receiver(class, method, args, span);
+                self.receiver_args = outer;
+                let result = result?;
                 return Some(result.map(|ret| {
                     let ret = self.substitute_type_var(ret, arg, rest);
                     substitute_member_type(ret, arg, rest, self.table)
@@ -30921,6 +30994,19 @@ impl BodyGen<'_> {
 
     /// Convert (or reject) a value being assigned into a variable of
     /// type `to` (JLS §5.2 assignment contexts, minus boxing).
+    /// What a parameter declared as type variable `index` accepts here: the
+    /// receiver's own type argument while a call is being emitted on one, and
+    /// the variable's declared BOUND otherwise (its erasure, JLS §4.6).
+    fn typevar_target(&self, index: u8) -> Option<JType> {
+        if let Some((arg, rest)) = self.receiver_args {
+            let elem = self.table.type_arg(arg, rest, index)?;
+            return Some(elem_value_type(elem, self.table));
+        }
+        self.table
+            .type_var_bound(self.current_class_id, index)
+            .map(JType::Object)
+    }
+
     fn convert_for_assignment(&mut self, from: JType, to: JType, span: SourceSpan) {
         self.convert_for_assignment_const(from, to, span, None);
     }
@@ -31145,6 +31231,27 @@ impl BodyGen<'_> {
             // run time, so the reference is unchanged — and this matrix gates
             // separately from `widens`, the trap noted throughout.
             (JType::Set { .. }, JType::EntrySet { .. }) if widens(from, to, self.table) => {}
+            // A type VARIABLE's erasure is its BOUND (JLS §4.6): inside the
+            // class that declares `T extends Animal`, a `T` IS an Animal, and
+            // handing one to a method that takes an Animal needs no conversion
+            // at all. Without this the ordinary `held.compareTo(other)` inside
+            // a `Box<T extends Animal>` was "Object cannot be converted to
+            // Animal" — about a program javac compiles. The other direction
+            // stays refused, as javac refuses it: an Animal is not a `T`.
+            (JType::TypeVar(index), _)
+                if self
+                    .table
+                    .type_var_bound(self.current_class_id, index)
+                    .is_some_and(|bound| widens(JType::Object(bound), to, self.table)) => {}
+            // ...and a parameter declared as the variable takes what the
+            // RECEIVER's own argument says: `new Box<Animal>().compareHeld(
+            // animal)`. With no receiver recorded (a raw one, or a call inside
+            // the class) the variable's erasure is its bound, which is what
+            // javac checks against.
+            (_, JType::TypeVar(index))
+                if self
+                    .typevar_target(index)
+                    .is_some_and(|want| widens(from, want, self.table)) => {}
             // A USER exception subclass (typed `Object(id)`) widening to its
             // bundled throwable superclass: `Exception e = new MyException()`.
             // `widens` allows it (via `library_throwable_ancestor`); this
