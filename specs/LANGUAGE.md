@@ -9660,5 +9660,12 @@ written in one charset and read back in another is the one shape this does not
 model, and no program that uses a single charset can tell. `deleteIfExists`
 joined them, since a program that writes a file tidies up after itself.
 
-Pinned by `text_to_bytes_and_back`, `the_file_readers_take_a_charset` and
-`naming_a_charset_as_text_is_checked`.
+One correction the compat page caught within the hour: the checked exception
+was keyed on the ARITY of `getBytes`, so `getBytes(StandardCharsets.UTF_8)` —
+which cannot name a charset that does not exist — was refused for it. The
+ARGUMENT is what tells the two apart, in either spelling of the constant.
+
+Pinned by `text_to_bytes_and_back`, `the_file_readers_take_a_charset`,
+`naming_a_charset_as_text_is_checked` and `only_a_named_charset_is_checked`;
+the compatibility page gained a "Text to bytes and back" claim, recorded
+against a real JDK like the rest.

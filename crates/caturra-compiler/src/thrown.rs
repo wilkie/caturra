@@ -586,7 +586,7 @@ fn thrown_of_expr(expr: &Expr, handlers: &mut Vec<Vec<Exc>>, ctx: &mut Ctx) -> T
             out.absorb(call_throws(
                 receiver.as_deref(),
                 method,
-                args.len(),
+                args,
                 *span,
                 handlers,
                 ctx,
@@ -670,11 +670,12 @@ fn thrown_of_expr(expr: &Expr, handlers: &mut Vec<Vec<Exc>>, ctx: &mut Ctx) -> T
 fn call_throws(
     receiver: Option<&Expr>,
     method: &str,
-    arity: usize,
+    args: &[Expr],
     span: SourceSpan,
     handlers: &[Vec<Exc>],
     ctx: &mut Ctx,
 ) -> ThrownSet {
+    let arity = args.len();
     match receiver {
         None | Some(Expr::This { .. }) => {
             let own = ctx.class.name.clone();
@@ -685,7 +686,7 @@ fn call_throws(
             if let Some(binding) = ctx.locals.get(head).cloned() {
                 // A typed receiver: a user class method, or a library kind.
                 if let Binding::Declared(ty) = binding {
-                    receiver_type_throws(&ty, method, arity, span, handlers, ctx)
+                    receiver_type_throws(&ty, method, args, span, handlers, ctx)
                 } else {
                     // A catch parameter as a receiver (e.getMessage()):
                     // throwable methods throw nothing checked.
@@ -708,7 +709,7 @@ fn call_throws(
         Some(Expr::Literal {
             value: crate::ast::Literal::Str(_),
             ..
-        }) => library_kind_throws(Some("String"), method, arity, span, handlers, ctx),
+        }) => library_kind_throws(Some("String"), method, args, span, handlers, ctx),
         // A directly-constructed receiver: `new Foo().m()`.
         Some(Expr::NewObject { class, .. }) => {
             let class = class.clone();
@@ -718,7 +719,7 @@ fn call_throws(
                 library_kind_throws(
                     library_kind_of_class(&class),
                     method,
-                    arity,
+                    args,
                     span,
                     handlers,
                     ctx,
@@ -757,7 +758,7 @@ fn callee_throws_named(
 fn receiver_type_throws(
     ty: &TypeRef,
     method: &str,
-    arity: usize,
+    args: &[Expr],
     span: SourceSpan,
     handlers: &[Vec<Exc>],
     ctx: &mut Ctx,
@@ -768,16 +769,46 @@ fn receiver_type_throws(
         _ => return ThrownSet::default(),
     };
     if ctx.table.has_class(&name) {
-        return callee_throws_named(&name, method, arity, span, handlers, ctx);
+        return callee_throws_named(&name, method, args.len(), span, handlers, ctx);
     }
     library_kind_throws(
         library_kind_of_class(&name),
         method,
-        arity,
+        args,
         span,
         handlers,
         ctx,
     )
+}
+
+/// Whether an expression names a `Charset` VALUE rather than a charset's name
+/// as text — `StandardCharsets.UTF_8`, a `Charset`-typed variable, or what
+/// `Charset.forName` answers. Only the text form can name a charset that does
+/// not exist, so only the text form declares the checked exception.
+fn names_a_charset(expr: &Expr, ctx: &Ctx) -> bool {
+    match expr {
+        Expr::Name { path, .. } => match path.as_slice() {
+            [only] => matches!(
+                ctx.locals.get(only),
+                Some(Binding::Declared(TypeRef::Named(name))) if name == "Charset"
+                    || name.ends_with(".Charset")
+            ),
+            // ...written plainly or in full: `java.nio.charset.StandardCharsets
+            // .UTF_8` names the same constant.
+            [.., owner, _] => owner == "StandardCharsets",
+            _ => false,
+        },
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            ..
+        } => {
+            method == "forName"
+                && matches!(owner.as_ref(), Expr::Name { path, .. }
+                    if path.last().is_some_and(|last| last == "Charset"))
+        }
+        _ => false,
+    }
 }
 
 /// The library "kind" a declared type name maps to, for the closed-world
@@ -812,16 +843,18 @@ fn library_kind_of_class(name: &str) -> Option<&'static str> {
 fn library_kind_throws(
     kind: Option<&'static str>,
     method: &str,
-    arity: usize,
+    args: &[Expr],
     span: SourceSpan,
     handlers: &[Vec<Exc>],
     ctx: &mut Ctx,
 ) -> ThrownSet {
     let thrown: &[&'static str] = match (kind, method) {
         // `getBytes(String)` declares it; `getBytes()` and `getBytes(Charset)`
-        // do not — the arity is what tells them apart here, and a `Charset`
-        // argument cannot name an unknown charset by construction.
-        (Some("String"), "getBytes") if arity == 1 => &["java/io/UnsupportedEncodingException"],
+        // do not — a charset OBJECT cannot name an unknown charset, since the
+        // only way to build one refuses an unknown name.
+        (Some("String"), "getBytes") if args.len() == 1 && !names_a_charset(&args[0], ctx) => {
+            &["java/io/UnsupportedEncodingException"]
+        }
         // Every I/O method that declares the same one exception, in one arm:
         // a reader's reads, a writer's writes, and `File.createNewFile`.
         (Some("Reader"), "read" | "readLine" | "ready" | "close" | "lines")

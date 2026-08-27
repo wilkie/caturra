@@ -220,6 +220,16 @@
     "expected": "7 4 1024.0\n12.0 3 0.25\n124\n2147483647 1010\ntrue false A\n5.0\n3 1 3.5\n"
   },
   {
+    "id": "charsets",
+    "category": "Library",
+    "title": "Text to bytes and back",
+    "summary": "getBytes and new String(bytes), in the charset the program names.",
+    "main": "Bytes",
+    "source": "import java.nio.charset.Charset;\nimport java.nio.charset.StandardCharsets;\nimport java.util.Arrays;\n\npublic class Bytes {\n    public static void main(String[] args) {\n        String text = \"hi\";\n        System.out.println(Arrays.toString(text.getBytes()));\n        System.out.println(Arrays.toString(text.getBytes(StandardCharsets.UTF_8)));\n        System.out.println(new String(text.getBytes(), StandardCharsets.UTF_8));\n        System.out.println(new String(new byte[] {104, 101, 108, 108, 111}));\n        Charset charset = Charset.forName(\"US-ASCII\");\n        System.out.println(charset + \" \" + charset.name());\n    }\n}\n",
+    "status": "supported",
+    "expected": "[104, 105]\n[104, 105]\nhi\nhello\nUS-ASCII US-ASCII\n"
+  },
+  {
     "id": "file-io",
     "category": "Library",
     "title": "File I/O",
@@ -478,7 +488,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-mnmo4dcl/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-40_y0_ya/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -489,7 +499,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-h36fs195/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-j54fx9m1/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -500,7 +510,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-uo_z4ywj/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-n56mc_76/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",

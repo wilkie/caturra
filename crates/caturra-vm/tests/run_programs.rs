@@ -13752,3 +13752,45 @@ fn a_type_variable_is_named_in_a_diagnostic() {
         "got: {message}"
     );
 }
+
+/// `getBytes(charset)` declares NOTHING, `getBytes(name)` declares the checked
+/// `UnsupportedEncodingException` — the argument is what tells them apart, not
+/// the arity. Keyed on arity alone, the compat page's own charset snippet was
+/// refused for an exception a `Charset` cannot raise.
+#[test]
+fn only_a_named_charset_is_checked() {
+    for (source, compiles) in [
+        ("\"x\".getBytes(java.nio.charset.StandardCharsets.UTF_8);", true),
+        (
+            "java.nio.charset.Charset cs = java.nio.charset.StandardCharsets.UTF_8; \
+             \"x\".getBytes(cs);",
+            true,
+        ),
+        (
+            "\"x\".getBytes(java.nio.charset.Charset.forName(\"UTF-8\"));",
+            true,
+        ),
+        ("\"x\".getBytes();", true),
+        ("\"x\".getBytes(\"UTF-8\");", false),
+        (
+            "String name = \"UTF-8\"; \"x\".getBytes(name);",
+            false,
+        ),
+    ] {
+        let text = format!("public class M {{ public static void main(String[] a) {{ {source} }} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert_eq!(
+            compilation.success(),
+            compiles,
+            "{source} -> {:?}",
+            compilation
+                .diagnostics
+                .iter()
+                .map(|d| d.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+}

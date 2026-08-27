@@ -5101,7 +5101,10 @@ fn strip_local_suffix(name: &str) -> &str {
 /// spelling. `None` for anything else — including a program's own class of that
 /// name, which shadows the library one as every other name does.
 fn standard_charset(path: &[String], table: &MethodTable) -> Option<&'static str> {
-    let [owner, constant] = path else {
+    // Written plainly (`StandardCharsets.UTF_8`) or in full
+    // (`java.nio.charset.StandardCharsets.UTF_8`) — the same constant either
+    // way, and a program that imports nothing writes the second.
+    let [.., owner, constant] = path else {
         return None;
     };
     if owner != "StandardCharsets" || table.has_class(owner) {

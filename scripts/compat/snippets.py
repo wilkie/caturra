@@ -722,6 +722,30 @@ public class Numbers {
 ''',
     ),
     dict(
+        id="charsets",
+        category="Library",
+        title="Text to bytes and back",
+        summary="getBytes and new String(bytes), in the charset the program names.",
+        main="Bytes",
+        source='''
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+
+public class Bytes {
+    public static void main(String[] args) {
+        String text = "hi";
+        System.out.println(Arrays.toString(text.getBytes()));
+        System.out.println(Arrays.toString(text.getBytes(StandardCharsets.UTF_8)));
+        System.out.println(new String(text.getBytes(), StandardCharsets.UTF_8));
+        System.out.println(new String(new byte[] {104, 101, 108, 108, 111}));
+        Charset charset = Charset.forName("US-ASCII");
+        System.out.println(charset + " " + charset.name());
+    }
+}
+''',
+    ),
+    dict(
         id="file-io",
         category="Library",
         title="File I/O",
