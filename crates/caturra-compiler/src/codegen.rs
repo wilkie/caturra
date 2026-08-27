@@ -2927,6 +2927,22 @@ impl MethodTable {
     fn resolve_type(&self, ty: &TypeRef) -> Option<JType> {
         match ty {
             TypeRef::Named(name) => {
+                // A type-variable ERASURE sentinel used as a TYPE — the local a
+                // synthesized lambda declares for its own parameter or result
+                // when the interface is parameterized on a METHOD's type
+                // variable (`<R> void run(Function<String, R> f)`). It IS a
+                // type: the variable's erasure, its bound or `Object`. Leaving
+                // it unresolved refused the whole method, which is how
+                // `<R> R get(Supplier<R> s)` — an ordinary generic helper —
+                // came to be "not supported by caturra".
+                if let Some((variance, bound)) = crate::ast::wildcard_parts(name)
+                    && variance == '='
+                {
+                    if bound.is_empty() {
+                        return Some(JType::Object(self.object_id));
+                    }
+                    return self.resolve_type(&TypeRef::Named(bound.to_owned()));
+                }
                 // `java.util.Scanner` and friends resolve without an
                 // import; qualified names never match user classes.
                 let simple = crate::imports::canonical_library_class(name).unwrap_or(name.as_str());
@@ -4532,6 +4548,14 @@ fn array_spread_elem(ty: JType, table: &MethodTable) -> Option<ElemType> {
 
 fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
     if arg == param {
+        return true;
+    }
+    // A TYPE-VARIABLE element accepts any element, the way the erased `=`
+    // wildcard beside it does: `List<T> all()` in a generic interface is
+    // implemented by a `List<String> all()`, and the two are one type after
+    // erasure. Without this the ordinary generic-source interface — `interface
+    // Source<T> { List<T> all(); }` — could not be implemented at all.
+    if matches!(param, ElemType::TypeVar(_)) || matches!(arg, ElemType::TypeVar(_)) {
         return true;
     }
     // The UNCHECKED conversion runs both ways: a raw collection is assignable

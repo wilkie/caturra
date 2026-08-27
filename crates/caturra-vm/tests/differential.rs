@@ -29844,6 +29844,74 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// Generics as a program actually writes them, from a mixed fuzz over a tree of
+// nodes: a generic INTERFACE implemented by a class that fixes its argument
+// (`List<T> all()` implemented by `List<Node> all()`, which could not be
+// implemented at all), a generic METHOD whose functional parameter is
+// parameterized on its own type variable (`<R> R get(Supplier<R> s)` — the
+// synthesized lambda declares a local of that variable's erasure, and leaving
+// it unresolved refused the whole method), and a lambda over a collection some
+// OTHER object's method returned (only the class being walked had its methods
+// consulted).
+differential_test!(
+    diff_generics_as_a_program_writes_them,
+    "Generic",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class Generic {
+    interface Source<T> {
+        List<T> all();
+        default int count() { return all().size(); }
+    }
+
+    static abstract class Node {
+        protected final String label;
+        Node(String label) { this.label = label; }
+        abstract int weight();
+        @Override public String toString() { return label + "/" + weight(); }
+    }
+
+    static class Leaf extends Node {
+        private final int w;
+        Leaf(String label, int w) { super(label); this.w = w; }
+        @Override int weight() { return w; }
+    }
+
+    static class Branch extends Node implements Source<Node> {
+        private final List<Node> kids = new ArrayList<>();
+        Branch(String label) { super(label); }
+        Branch add(Node kid) { kids.add(kid); return this; }
+        @Override int weight() { int total = 0; for (Node k : kids) { total += k.weight(); } return total; }
+        public List<Node> all() { return kids; }
+    }
+
+    static <R> R produce(Supplier<R> supplier) { return supplier.get(); }
+
+    static <R> void show(Function<String, R> f) { System.out.println(f.apply("hello")); }
+
+    public static void main(String[] args) {
+        Branch root = new Branch("r").add(new Leaf("a", 2)).add(new Leaf("b", 3));
+        System.out.println(root + " " + root.count() + " " + root.all().get(0).weight());
+        System.out.println(root.all().stream().map(Node::weight).collect(Collectors.toList()));
+        System.out.println(root.all().stream().map(n -> n.label.toUpperCase()).collect(Collectors.joining("|")));
+
+        Source<Node> face = root;
+        System.out.println(face.all().size() + " " + face.count());
+
+        // The RESULT stays erased — a type variable pinned only by a lambda's
+        // own result is the documented `stricter_return_variable_pinned_only_by_a_lambda`
+        // — so it is printed rather than dereferenced.
+        System.out.println(produce(() -> 5) + " " + produce(() -> "text"));
+        show(s -> s.length());
+        show(String::toUpperCase);
+    }
+}
+"#
+);
+
 // `Arrays.binarySearch(a, key, comparator)` — the array is sorted by that
 // comparator, so the SEARCH has to use it too; a null one means the elements'
 // own order, exactly as `sort(a, null)` does. The overload was missing

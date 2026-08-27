@@ -8850,6 +8850,44 @@ exactly as `sort(a, null)` does.
 Pinned by `an_optional_map_keeps_its_element` and
 `diff_binary_search_takes_a_comparator`.
 
+### Generics as a program writes them (2026-08-27)
+
+A fourth mixed fuzz — a tree of nodes behind an abstract class, a generic
+source interface, a hand-written `Iterator`, boxing identity, bit and char
+arithmetic, exception chaining — found three generics shapes that ordinary code
+uses and caturra refused outright.
+
+**A generic interface implemented by a class that fixes its argument.**
+`interface Source<T> { List<T> all(); }` implemented by
+`public List<Node> all()` — the override check compared the two return types
+and found `List<TypeVar>` unequal to `List<Node>`, so the class "cannot
+implement" its own interface. A type-variable ELEMENT accepts any element now,
+the way the erased wildcard beside it already did: after erasure they are one
+type.
+
+**A generic method whose functional parameter names its own type variable.**
+`<R> R produce(Supplier<R> s)` — the synthesized lambda declares a local of
+that variable's ERASURE, and a bare erasure sentinel had no resolution at all,
+so the whole method was refused as "a functional interface parameterized on a
+method's own type variable is not supported". The sentinel IS a type — the
+variable's bound, or `Object` — and resolving it that way is all the shape
+needed. (The RESULT of such a call stays erased, which is the separate,
+already-enumerated `stricter_return_variable_pinned_only_by_a_lambda`.)
+
+**A lambda over a collection ANOTHER object's method returned.** Only the class
+being walked had its own methods consulted, so `b.all().stream().map(…)` — with
+`all()` declared on `b`'s class — had no element type and the lambda was
+refused for having no functional-interface position, though the same call
+inside that class compiled.
+
+**One shape is left, and it is the deeper one:** a lambda whose parameter is
+typed by a USER interface's own type variable — `default <R> List<R> mapped(
+Function<T, R> f)` called as `source.mapped(s -> s.length())`. The parameter
+would take its type from the receiver's type ARGUMENT, which is the same walk
+`inherited_type_var` makes for returns, in a pass that does not have it.
+
+Pinned by `diff_generics_as_a_program_writes_them`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

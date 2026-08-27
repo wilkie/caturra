@@ -4485,6 +4485,27 @@ fn library_static_type(class: &str, method: &str, argc: usize) -> Option<TypeRef
     Some(answer)
 }
 
+/// The user CLASS an expression's declared type names — a local, a `this`
+/// field, a `new`, or `this` itself. Enough to look up that class's own method
+/// shapes; the sibling above answers the same question for a FUNCTIONAL
+/// receiver, where the name is aliased to a bundled interface.
+fn declared_class_name(owner: &Expr, ctx: &Ctx) -> Option<String> {
+    let ty = match owner {
+        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
+        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+            ctx.lookup(name)?
+        }
+        Expr::NewObject { class, .. } => TypeRef::Named(class.clone()),
+        Expr::This { .. } => TypeRef::Named(ctx.current_class?.to_owned()),
+        _ => return None,
+    };
+    match ty {
+        TypeRef::Named(name) => Some(name),
+        TypeRef::Generic { base, .. } => Some(base),
+        _ => None,
+    }
+}
+
 /// The ENUM an expression names, when it names one: `Kind.values()`'s owner.
 fn enum_owner_name(owner: &Expr, ctx: &Ctx) -> Option<String> {
     let Expr::Name { path, .. } = owner else {
@@ -4741,6 +4762,26 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         && matches!(owner.as_deref(), None | Some(Expr::This { .. }))
         && let Some(class) = ctx.current_class
         && let Some(shapes) = ctx.shapes.get(class)
+        && let Some(shape) = shapes
+            .iter()
+            .find(|shape| shape.name == *method && shape.arity == args.len())
+        && let Some(elem) = element_of_declared(&shape.return_type)
+    {
+        return Some(elem);
+    }
+    // A user method called on a TYPED receiver: `b.all()` where `b` is a
+    // `Branch` and `Branch.all()` returns a `List<Node>`. Only the class being
+    // WALKED had its shapes consulted, so the identical call on another
+    // object's method had no element and the lambda after it was refused for
+    // having no functional-interface position.
+    if let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        ..
+    } = receiver
+        && let Some(class) = declared_class_name(owner, ctx)
+        && let Some(shapes) = ctx.shapes.get(&class)
         && let Some(shape) = shapes
             .iter()
             .find(|shape| shape.name == *method && shape.arity == args.len())
