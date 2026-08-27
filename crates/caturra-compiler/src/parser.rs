@@ -5612,6 +5612,35 @@ fn erase_in_type_arg(
         *ty = TypeRef::Named(typevar_sentinel(*index));
         return;
     }
+    // `? extends T` — a wildcard whose BOUND is the method's own type
+    // variable. The parser encodes the bound as written, so this arrives as
+    // the name `T`, which is no class: the element read out as `Object`, and
+    // `<T extends Comparable<T>> T max(List<? extends T> items)` — a generic
+    // method as ordinary as they come — could not assign `items.get(0)` to a
+    // `T`. The wildcard takes T's own ERASURE instead.
+    if let TypeRef::Named(name) = ty
+        && let Some((variance, bound)) = crate::ast::wildcard_parts(name)
+        && matches!(variance, '+' | '-')
+        && (to_object.contains_key(bound) || tracked.contains_key(bound))
+    {
+        let erased = to_object
+            .get(bound)
+            .map_or(String::new(), wildcard_bound_name);
+        let erased = if erased == "Object" {
+            String::new()
+        } else {
+            erased
+        };
+        // `? extends T` READS as T's bound; `? super T` still reads as Object,
+        // so it keeps its own variance.
+        let replacement = if variance == '+' {
+            crate::ast::wildcard_type_name('=', &erased)
+        } else {
+            crate::ast::wildcard_type_name('-', &erased)
+        };
+        *ty = TypeRef::Named(replacement);
+        return;
+    }
     if let TypeRef::Named(name) = ty
         && (to_object.contains_key(name) || tracked.contains_key(name))
     {

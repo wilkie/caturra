@@ -8695,6 +8695,41 @@ newline as a line of its own and answered an empty one.
 Pinned by `diff_distinct_hashes_before_it_compares` and
 `diff_a_failed_scan_leaves_the_cursor_where_a_jdk_leaves_it`.
 
+### A type argument a subclass fixed (2026-08-26)
+
+Generated class hierarchies — an interface with a default and a static, an
+abstract base, two levels of subclass, field shadowing, `super` calls,
+anonymous implementations, polymorphic lists — agreed with a real JDK on 140
+programs at the first run. The hand-written half that followed, aimed at the
+corners a generator does not reach, found two generics defects.
+
+**A subclass that FIXES a supertype's type argument.** `class IntBox extends
+Box<Integer>` reads what it inherits as `Integer`: `get()` through a variable,
+`get()` inside its own body, and `get()` after widening back to
+`Box<Integer>`. caturra answered the erased type in the first two — the
+receiver carries no arguments THERE, because the subclass wrote them on its
+`extends` clause — so `new IntBox(5).get() + 1` was "bad operand types" for a
+program that runs. The walk up the chain supplies them now, in the emit path,
+the implicit-`this` path and `type_of` alike; the three had to be fixed
+together, because a call typed one way and emitted another is the
+`type_of`-versus-emit divergence this codebase keeps re-learning.
+
+**A wildcard bounded by a type VARIABLE.** `<T extends Comparable<T>> T
+max(List<? extends T> items)` — the shape every "write a generic max" exercise
+uses — could not assign `items.get(0)` to a `T`: the parser records a
+wildcard's bound as written, so `? extends T` arrived naming `T`, which is no
+class, and the element read as `Object`. It takes T's own erasure now.
+
+**One shape is knowingly left.** A class type parameter with a BOUND
+(`class Box<T extends Comparable<T>>`) erases to that bound and loses its
+POSITION, so a `Box<String>` does not read `get()` as a `String` — where the
+unbounded `class Box<T>` does. The erasure is deliberate: it is what makes a
+bounded `T`'s own methods resolve inside the class body (`value.compareTo(x)`).
+Carrying both would mean a type variable that remembers its bound, which is a
+change to the type representation rather than an addition to it.
+
+Pinned by `diff_a_fixed_type_argument_is_inherited`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also

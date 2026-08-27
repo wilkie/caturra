@@ -29838,6 +29838,77 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// A subclass that FIXES a generic supertype's argument reads the methods it
+// inherits as that argument: `class IntBox extends Box<Integer>` sees `T get()`
+// as an `Integer`, through a variable, inside its own body, and after widening
+// back to `Box<Integer>`. caturra answered the erased type — `Object + 1` was
+// "bad operand types" for a program that runs. The other half is the wildcard:
+// `List<? extends T>` in a generic method carries T's own erasure, so
+// `<T extends Comparable<T>> T max(List<? extends T>)` can assign `get(0)` to a
+// `T`.
+differential_test!(
+    diff_a_fixed_type_argument_is_inherited,
+    "Fixed",
+    r#"
+import java.util.*;
+
+public class Fixed {
+    static class Box<T> {
+        private final T value;
+        Box(T value) { this.value = value; }
+        T get() { return value; }
+        @Override public String toString() { return "Box(" + value + ")"; }
+    }
+
+    static class IntBox extends Box<Integer> {
+        IntBox(Integer value) { super(value); }
+        int doubled() { return get() * 2; }
+    }
+
+    static class Pair<K, V> {
+        private final K key;
+        private final V value;
+        Pair(K key, V value) { this.key = key; this.value = value; }
+        K key() { return key; }
+        V value() { return value; }
+    }
+
+    static class Counted extends Pair<String, Integer> {
+        Counted(String key, Integer value) { super(key, value); }
+        String describe() { return key().toUpperCase() + "=" + (value() + 1); }
+    }
+
+    static <T extends Comparable<T>> T maxOf(List<? extends T> items) {
+        T best = items.get(0);
+        for (T item : items) {
+            if (item.compareTo(best) > 0) {
+                best = item;
+            }
+        }
+        return best;
+    }
+
+    static double sum(List<? extends Number> numbers) {
+        double total = 0;
+        for (Number n : numbers) {
+            total += n.doubleValue();
+        }
+        return total;
+    }
+
+    public static void main(String[] args) {
+        IntBox boxed = new IntBox(21);
+        System.out.println(boxed.doubled() + " " + (boxed.get() + 1) + " " + boxed);
+        Box<Integer> widened = boxed;
+        System.out.println(widened.get() + 2);
+        System.out.println(new Counted("k", 4).describe());
+        System.out.println(maxOf(List.of(3, 9, 2)) + " " + maxOf(List.of("a", "c")));
+        System.out.println(sum(List.of(1, 2.5)) + " " + sum(new ArrayList<Integer>(List.of(4))));
+    }
+}
+"#
+);
+
 // `distinct()` is a `HashSet`, not an equals scan. A class with `equals` and
 // no `hashCode` — the classic mistake, and the one a lesson is built around —
 // gives every instance a different hash, so a JDK's `distinct()` removes

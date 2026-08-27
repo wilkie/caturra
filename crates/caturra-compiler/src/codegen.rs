@@ -2504,6 +2504,43 @@ impl MethodTable {
             .join(",")
     }
 
+    /// What an inherited method's TYPE-VARIABLE return is, for a receiver of
+    /// class `from`: `class IntBox extends Box<Integer>` reads `Box`'s
+    /// `T get()` as an `Integer`. The receiver's own type carries no arguments
+    /// here — the subclass FIXED them, and they are written on its `extends`
+    /// clause — so the walk up the chain is what supplies them. Without this,
+    /// `new IntBox(5).get() + 1` was `Object + int`.
+    fn inherited_type_var(&self, from: ClassId, method: &str, ret: JType) -> JType {
+        if !matches!(ret, JType::TypeVar(_)) {
+            return ret;
+        }
+        let mut stack = vec![(from, Vec::new())];
+        let mut steps = 0usize;
+        while let Some((id, subst)) = stack.pop() {
+            steps += 1;
+            if steps > self.class_names.len() * 4 {
+                break;
+            }
+            let Some(info) = self.info_by_id(id) else {
+                continue;
+            };
+            // The class that DECLARES the method is where its return's type
+            // variable belongs, so that is where the walk stops.
+            if info.methods.iter().any(|m| m.name == method) && !subst.is_empty() {
+                return Self::substitute_type_var(ret, &subst);
+            }
+            for parent in info
+                .superclass
+                .into_iter()
+                .chain(info.interfaces.iter().copied())
+            {
+                let args = self.written_supertype_args(info, parent, &subst);
+                stack.push((parent, args));
+            }
+        }
+        ret
+    }
+
     /// A type argument written on `parent` by `info`, resolved and itself run
     /// through `subst` — so `class C extends Mid<String>` where
     /// `Mid<T> implements B<T>` reaches `B`'s methods with `T` as `String`.
@@ -20416,7 +20453,10 @@ impl BodyGen<'_> {
                 return None;
             }
         };
-        self.emit_virtual_call_on_stacked_receiver(class_id, method, args, span)
+        let result = self.emit_virtual_call_on_stacked_receiver(class_id, method, args, span)?;
+        // A subclass that FIXED a generic supertype's argument reads an
+        // inherited type-variable return as that argument.
+        Some(result.map(|ret| self.table.inherited_type_var(class_id, method, ret)))
     }
 
     /// The return type of a builtin instance call, for `type_of`. Mirrors the
@@ -22837,12 +22877,18 @@ impl BodyGen<'_> {
             .is_some()
         {
             self.code.push_op(op::ALOAD_0, 1);
-            return self.emit_virtual_call_on_stacked_receiver(
+            let result = self.emit_virtual_call_on_stacked_receiver(
                 self.current_class_id,
                 method,
                 args,
                 span,
-            );
+            )?;
+            // An implicit-`this` call to a method inherited from a generic
+            // supertype: `class IntBox extends Box<Integer>` reads `get()`
+            // inside its own body as an `Integer`, exactly as it does through
+            // a variable.
+            let owner = self.current_class_id;
+            return Some(result.map(|ret| self.table.inherited_type_var(owner, method, ret)));
         }
         // Unqualified call to a `import static X.*` member (JUnit
         // `assertTrue(...)` → `Assertions.assertTrue(...)`).
@@ -22901,12 +22947,12 @@ impl BodyGen<'_> {
                 return None;
             }
             self.code.push_op(op::ALOAD_0, 1);
-            return self.emit_virtual_call_on_stacked_receiver(
-                self.current_class_id,
-                method,
-                args,
-                span,
-            );
+            let owner = self.current_class_id;
+            let result = self.emit_virtual_call_on_stacked_receiver(owner, method, args, span)?;
+            // The same substitution an explicit receiver gets: a subclass that
+            // FIXED a generic supertype's argument reads what it inherits as
+            // that argument, inside its own body too.
+            return Some(result.map(|ret| self.table.inherited_type_var(owner, method, ret)));
         }
         // A bare call to an enclosing instance method, from inside a lambda or
         // inner class — walking the WHOLE `__caturraOuter` chain, so a
@@ -26149,7 +26195,18 @@ impl BodyGen<'_> {
                     // enclosing overload resolution saw `Object` and silently
                     // picked `p(Object)` where javac picks `p(Integer)`.
                     Resolution::Found(sig) => {
-                        inferred_return(sig, &arg_types).unwrap_or(JType::Error)
+                        let ret = inferred_return(sig, &arg_types).unwrap_or(JType::Error);
+                        // The same substitution the emit path makes: a
+                        // subclass that FIXED a generic supertype's argument
+                        // (`class IntBox extends Box<Integer>`) reads an
+                        // inherited `T get()` as that argument. Answering the
+                        // erased type here is the `type_of`-versus-emit
+                        // divergence again — `new IntBox(5).get() + 1` was
+                        // "bad operand types" for a program that emits fine.
+                        match table.class_id(&class) {
+                            Some(id) => table.inherited_type_var(id, method, ret),
+                            None => ret,
+                        }
                     }
                     _ => {
                         // Inherited Throwable members, resolved against the
