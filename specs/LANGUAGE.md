@@ -9544,3 +9544,34 @@ as the concrete mismatch instead, which is what the program can act on.
 
 Pinned by `the_diagnostics_say_what_javac_says` and
 `a_type_variable_is_named_in_a_diagnostic`.
+
+### The fuzz toolkit is checked in (2026-08-27)
+
+Six generated sweeps found this week's defects, and every one of them lived in
+`/tmp`. Two are general enough to re-run unchanged, so they are in the tree now
+as `scripts/fuzz/`:
+
+**`programs.py`** writes typed random programs — it tracks the type of every
+variable it declares and only builds an expression where its type fits, which
+is what keeps javac's rejection rate at zero and makes each case a real
+comparison rather than a syntax check. The statement mix is what a student
+program is made of, plus the shapes that have historically broken: a generic
+class, a map walked by its entries, method references, nested lambdas, a
+`subList` handed to an algorithm. 300 programs over the newest engine: no
+divergence.
+
+**`positions.py`** writes the same expression in twelve syntactic positions,
+each printing the same thing — the MIRROR sweep, which is how the
+anonymous-class scope bug was found.
+
+**`run.py`** compiles and runs each case on both engines. Two things it does
+that a hand-rolled loop forgets, both of which cost an hour this week: it
+compiles each case ON ITS OWN (a batch compile writes no class files when one
+program fails, so a single syntax error reads as "everything diverged"), and it
+compares the FAILURE as well as the output (a program that throws identically
+on both engines is not a divergence).
+
+The narrower generators — the receiver × operation matrix, "one behaviour
+written five ways", the Scanner input matrix, one ordinary MISTAKE per program
+against javac's wording — stay written-fresh: they are a few dozen lines each,
+and the entries above record what each found.
