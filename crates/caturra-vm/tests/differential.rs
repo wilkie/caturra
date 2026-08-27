@@ -24536,14 +24536,15 @@ public class DeepNested {
 "
 );
 
-// A `map` ERASES its result element, in an `Optional` and in a `Stream` alike,
-// so a chain cannot go on to call a method of the mapped-to type:
-// `opt.map(String::toUpperCase).get().length()` does not compile here. The
-// element would have to be inferred from the function's own result, which this
-// syntactic pass does not compute. Stricter than javac — a refusal, not a
-// wrong answer — and recorded because a program that maps usually keeps going.
-stricter_than_javac!(
-    stricter_map_erases_its_element,
+// A `map` KEEPS its result element, in an `Optional` as well as in a `Stream`:
+// the lambda pass types the body and leaves the answer on the synthesized
+// class, which is the only thing that still knows it downstream. This was a
+// pinned STRICTNESS ("the element would have to be inferred from the function's
+// own result, which this syntactic pass does not compute") — the stream half
+// was closed first, and the pin is what reported that the Optional half had
+// been left behind.
+differential_test!(
+    an_optional_map_keeps_its_element,
     "MapErases",
     r#"
 import java.util.Optional;
@@ -24551,6 +24552,11 @@ import java.util.Optional;
 public class MapErases {
     public static void main(String[] args) {
         System.out.println(Optional.of("ab").map(String::toUpperCase).get().length());
+        System.out.println(Optional.of("value").map(String::toUpperCase)
+            .filter(s -> s.length() > 3).orElse("-"));
+        Optional<String> kept = Optional.of("v").map(s -> s + s);
+        System.out.println(kept.get() + " " + kept.map(String::length).orElse(0));
+        System.out.println(Optional.of(3).map(n -> n * 2).map(Object::toString).orElse("-"));
     }
 }
 "#
@@ -29838,6 +29844,37 @@ public class FmtObj {
 // method outright, from an ordinary expression. Found by a cross-product of
 // nineteen operators over seventeen types, which is also why the `Integer`
 // count and the compound form are here: they take different paths.
+// `Arrays.binarySearch(a, key, comparator)` — the array is sorted by that
+// comparator, so the SEARCH has to use it too; a null one means the elements'
+// own order, exactly as `sort(a, null)` does. The overload was missing
+// outright, which a fuzz that sorts before it searches finds at once.
+differential_test!(
+    diff_binary_search_takes_a_comparator,
+    "Searching",
+    r#"
+import java.util.*;
+
+public class Searching {
+    public static void main(String[] args) {
+        String[] words = {"pear", "fig", "apple"};
+        Arrays.sort(words, Comparator.comparingInt(String::length));
+        System.out.println(Arrays.toString(words));
+        System.out.println(Arrays.binarySearch(words, "pear", Comparator.comparingInt(String::length)));
+        System.out.println(Arrays.binarySearch(words, "zzzz", Comparator.comparingInt(String::length)));
+
+        Integer[] numbers = {5, 1, 3};
+        Arrays.sort(numbers, Comparator.reverseOrder());
+        System.out.println(Arrays.toString(numbers)
+            + " " + Arrays.binarySearch(numbers, 3, Comparator.reverseOrder())
+            + " " + Arrays.binarySearch(numbers, 4, Comparator.reverseOrder()));
+
+        String[] natural = {"a", "b", "c"};
+        System.out.println(Arrays.binarySearch(natural, "b", null));
+    }
+}
+"#
+);
+
 // Four more pairings, from a mixed fuzz shaped like a LAB program: a custom
 // exception, an `Iterable` over rows of a 2-D array, an inner class, a
 // memoized recursion, a try-with-resources. A 2-D array handed to a varargs

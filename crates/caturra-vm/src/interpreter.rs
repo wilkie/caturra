@@ -5616,14 +5616,28 @@ impl<'run> Interpreter<'run> {
                 let target = source(args)?;
                 let length = self.array_length(target).unwrap_or(0);
                 Some(JValue::Int(
-                    self.array_binary_search(target, 0, length, *key)?,
+                    self.array_binary_search(target, 0, length, *key, None)?,
                 ))
+            }
+            // `binarySearch(a, key, comparator)` — the array is sorted by that
+            // comparator, so the search must use it too. A null one means the
+            // elements' own order, exactly as `sort(a, null)` does.
+            ("binarySearch", [_, key, JValue::Ref(comparator)]) => {
+                let target = source(args)?;
+                let length = self.array_length(target).unwrap_or(0);
+                Some(JValue::Int(self.array_binary_search(
+                    target,
+                    0,
+                    length,
+                    *key,
+                    *comparator,
+                )?))
             }
             ("binarySearch", [_, JValue::Int(from), JValue::Int(to), key]) => {
                 let target = source(args)?;
                 let (from, to) = self.array_range(target, *from, *to)?;
                 Some(JValue::Int(
-                    self.array_binary_search(target, from, to, *key)?,
+                    self.array_binary_search(target, from, to, *key, None)?,
                 ))
             }
             _ => return Ok(None),
@@ -5741,6 +5755,7 @@ impl<'run> Interpreter<'run> {
         from: usize,
         to: usize,
         key: JValue,
+        comparator: Option<HeapRef>,
     ) -> Result<i32, VmError> {
         // The JDK's own loop, exactly: a CLOSED range with `high = to - 1` and
         // `mid = (low + high) >>> 1`. A half-open loop finds a different one of
@@ -5753,7 +5768,17 @@ impl<'run> Interpreter<'run> {
         while low <= high {
             let mid = (low + high) >> 1;
             let at = usize::try_from(mid).unwrap_or(0);
-            match self.array_compare_at(target, at, key)?.cmp(&0) {
+            let ordering = match comparator {
+                Some(_) => {
+                    let element = match self.heap.get(target) {
+                        Some(crate::value::HeapObject::RefArray(_, values)) => values[at],
+                        _ => JValue::NULL,
+                    };
+                    self.compare_with(element, key, comparator)?
+                }
+                None => self.array_compare_at(target, at, key)?,
+            };
+            match ordering.cmp(&0) {
                 std::cmp::Ordering::Less => low = mid + 1,
                 std::cmp::Ordering::Greater => high = mid - 1,
                 std::cmp::Ordering::Equal => return Ok(i32::try_from(mid).unwrap_or(i32::MAX)),

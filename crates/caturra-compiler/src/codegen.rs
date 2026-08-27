@@ -13976,7 +13976,7 @@ fn refine_builtin_return(
     // the body and left the answer on the synthesized class, which is the only
     // thing that still knows it here.
     if matches!(method, "map" | "mapToObj")
-        && matches!(ret, Some(JType::Stream(_)))
+        && matches!(ret, Some(JType::Stream(_) | JType::Optional(_)))
         && let [JType::Object(lambda)] = arg_types
         && let Some((_, produces)) =
             table.field(table.class_name(*lambda), crate::lambda::PRODUCES_FIELD)
@@ -13986,7 +13986,13 @@ fn refine_builtin_return(
         // the element it becomes is the wrapper (JLS §5.1.7 — the lambda's
         // result is boxed to fit the erased `Function`).
         let elem = Prim::of(elem).map_or(elem, ElemType::Wrapper);
-        return Some(JType::Stream(elem));
+        // `Optional.map` answers the same reading — its element used to erase
+        // here while a stream's kept its type, so the `filter` after it and
+        // the assignment to an `Optional<String>` were both refused.
+        return Some(match ret {
+            Some(JType::Optional(_)) => JType::Optional(elem),
+            _ => JType::Stream(elem),
+        });
     }
     ret
 }
@@ -24952,6 +24958,7 @@ impl BodyGen<'_> {
     /// and `binarySearch(a[, from, to], key)`. Arity alone tells the ranged
     /// overloads apart, as it does in Java.
     #[allow(clippy::option_option)] // call-dispatch return shape
+    #[allow(clippy::too_many_lines)] // one arm per Arrays overload shape
     fn emit_arrays_array_call(
         &mut self,
         method: &str,
@@ -24962,7 +24969,10 @@ impl BodyGen<'_> {
         let arity_ok = match method {
             "copyOf" => args.len() == 2,
             "copyOfRange" => args.len() == 3,
-            "fill" | "binarySearch" => args.len() == 2 || ranged,
+            // `binarySearch(a, key, comparator)` — the array is sorted by that
+            // comparator, so the search takes it too.
+            "binarySearch" => args.len() == 2 || ranged || args.len() == 3,
+            "fill" => args.len() == 2 || ranged,
             _ => false,
         };
         let source_ty = args.first().map_or(JType::Error, |a| self.type_of(a));
@@ -25031,6 +25041,19 @@ impl BodyGen<'_> {
                 (
                     format!("({source_descriptor}II){source_descriptor}"),
                     Some(source_ty),
+                )
+            }
+            "binarySearch"
+                if args.len() == 3
+                    && matches!(self.type_of(&args[2]), JType::Object(_) | JType::Null)
+                    && elem.base_type().is_reference() =>
+            {
+                emit_value(self, &args[1]);
+                self.expr(&args[2]);
+                args_width += element_ty.width() + 1;
+                (
+                    format!("({source_descriptor}{element_descriptor}Ljava/util/Comparator;)I"),
+                    Some(JType::Int),
                 )
             }
             "fill" | "binarySearch" => {

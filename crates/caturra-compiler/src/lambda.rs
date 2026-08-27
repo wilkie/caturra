@@ -4572,9 +4572,17 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             // Optional.filter: same element. (A STREAM's filter resolves to
             // None here — its chain never bottoms out in an Optional.)
             "filter" => optional_elem_type(prev, ctx),
-            // Optional.map and flatMap erase their element, exactly like a
-            // stream's map — but only when the receiver IS an Optional.
-            "map" | "flatMap" => {
+            // `Optional.map` answers what its LAMBDA answers, the same reading
+            // a stream's `map` gets — `Optional.of(s).map(String::toUpperCase)`
+            // is an `Optional<String>`, and erasing it to `Object` refused the
+            // `filter` after it and the assignment to an `Optional<String>`.
+            // `flatMap` answers an Optional, whose own element this does not
+            // chase, so it stays erased.
+            "map" => optional_elem_type(prev, ctx).map(|_| {
+                mapped_element_type(args, ctx)
+                    .unwrap_or_else(|| TypeRef::Named(String::from("Object")))
+            }),
+            "flatMap" => {
                 optional_elem_type(prev, ctx).map(|_| TypeRef::Named(String::from("Object")))
             }
             "findFirst" | "findAny" | "max" | "min" => stream_elem_type(prev, ctx),

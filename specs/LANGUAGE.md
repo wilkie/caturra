@@ -8825,6 +8825,31 @@ The check is on all four (`compute`, `computeIfAbsent`, `computeIfPresent`,
 
 Pinned by `diff_a_lab_program_crosses_its_features`.
 
+### A map that keeps what it made (2026-08-27)
+
+A third mixed fuzz — a checked exception, a generic repository interface with a
+default and a static, user varargs, a string `switch`, labeled loops, char
+arithmetic — found two gaps, and closing the first RETIRED a divergence.
+
+**`Optional.map` erased its element.** A stream's `map` learned to keep it
+(the lambda pass types the body and leaves the answer on the synthesized class,
+which is the only thing that still knows it downstream); the `Optional` half
+was left behind, so `Optional.of("v").map(String::toUpperCase)` was an
+`Optional<Object>` — the `filter` after it was refused, and so was the
+assignment to an `Optional<String>`. It reads the same field now.
+
+That was a PINNED strictness, and the pin is what reported it: converting it
+from `stricter_than_javac!` to an ordinary differential test was the first
+thing the change broke. The bullet is gone from the list below.
+
+**`Arrays.binarySearch(a, key, comparator)` was missing.** An array sorted by a
+comparator has to be SEARCHED by the same one — a fuzz that sorts before it
+searches finds that at once. A null comparator means the elements' own order,
+exactly as `sort(a, null)` does.
+
+Pinned by `an_optional_map_keeps_its_element` and
+`diff_binary_search_takes_a_comparator`.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -8875,9 +8900,6 @@ entries after it was written down.
 - `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
   and it answers 0. (`strict_frequency_demands_the_lists_element_type`)
 - `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`. (`strict_contains_all_demands_the_lists_element_type`)
-- `opt.map(String::toUpperCase).get().length()` — a `map` erases its result
-  element (in an `Optional` and a `Stream` alike), so a chain cannot go on to
-  call a method of the mapped-to type. (`stricter_map_erases_its_element`)
 - `Vector<Integer> v;` and the rest of the unmodeled library — a scope
   limit, reported by name wherever written rather than as a missing symbol.
   This bullet used to name `LinkedList`, `HashSet`, `TreeMap` and `TreeSet`
