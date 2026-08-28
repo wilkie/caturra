@@ -904,7 +904,7 @@ pub fn invoke_virtual(
             Ok(Some(JValue::Int(i32::from(equal))))
         }
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
-        (HeapObject::Path(_), _) => path_method(heap, receiver, method),
+        (HeapObject::Path(_), _) => path_method(heap, receiver, method, args),
         // A `Charset` is its NAME: `toString`, `name` and `displayName` all
         // answer it, and two charsets are equal when they name the same one.
         (HeapObject::Charset(name), "toString" | "name" | "displayName") => {
@@ -5440,18 +5440,10 @@ fn matcher_method(
             ops: Vec::new(),
         }))))),
         // A JDK's `Matcher.toString` prints its own state — pattern, region
-        // and last match — and a program that prints a matcher sees it.
+        // and last match — and a program that prints a matcher sees it,
+        // whether it prints one directly or a collection of them.
         "toString" => {
-            let matched = match spans.as_ref().and_then(|groups| groups.first().copied().flatten()) {
-                Some((start, end)) => String::from_utf16_lossy(&input[start..end]),
-                None => String::new(),
-            };
-            let text = format!(
-                "java.util.regex.Matcher[pattern={} region={},{} lastmatch={matched}]",
-                String::from_utf16_lossy(&source),
-                state.region.0,
-                state.region.1,
-            );
+            let text = matcher_text(heap, receiver).unwrap_or_default();
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
         }
         _ => Err(VmError::UnknownIntrinsic(format!("Matcher.{method}"))),
@@ -5552,6 +5544,27 @@ pub(crate) fn matcher_reset(heap: &mut Heap, receiver: HeapRef) {
         *hit_end = false;
         *require_end = false;
     }
+}
+
+/// What a `Matcher` prints: its pattern, its region and its last match, in the
+/// JDK's own layout. Shared by `toString` and by the renderer a COLLECTION of
+/// matchers goes through — printed one way and not the other, the two drifted.
+pub(crate) fn matcher_text(heap: &Heap, receiver: HeapRef) -> Option<String> {
+    let state = matcher_state(heap, receiver).ok()?;
+    let source = match heap.get(state.pattern) {
+        Some(HeapObject::Pattern { source, flags }) => fold_regex_flags(source, *flags),
+        _ => return None,
+    };
+    let matched = match state.last.and_then(|groups| groups.first().copied().flatten()) {
+        Some((start, end)) => String::from_utf16_lossy(&state.input[start..end]),
+        None => String::new(),
+    };
+    Some(format!(
+        "java.util.regex.Matcher[pattern={} region={},{} lastmatch={matched}]",
+        String::from_utf16_lossy(&source),
+        state.region.0,
+        state.region.1,
+    ))
 }
 
 /// A matcher's own state, read out in one go.
@@ -5733,27 +5746,222 @@ fn charset_argument(heap: &Heap, value: Option<&JValue>) -> Result<String, VmErr
     }
 }
 
+/// The NAME ELEMENTS of a path — what `getNameCount` counts and `getName`
+/// indexes. A leading `/` is the ROOT, not an element, and an empty path has
+/// one element (the empty name), which is what a JDK's `Path.of("")` reports.
+fn path_names(path: &str) -> Vec<&str> {
+    let body = path.strip_prefix('/').unwrap_or(path);
+    if body.is_empty() {
+        // An absolute path with nothing after the root has NO name elements;
+        // a relative empty one has a single empty name.
+        return if path.starts_with('/') {
+            Vec::new()
+        } else {
+            vec![""]
+        };
+    }
+    body.split('/').collect()
+}
+
+/// A path built from name elements, keeping the root if there was one.
+fn path_from(absolute: bool, names: &[&str]) -> String {
+    let joined = names.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per Path method
 fn path_method(
     heap: &mut Heap,
     receiver: HeapRef,
     method: &str,
+    args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
     let path = match heap.get(receiver) {
         Some(HeapObject::Path(path)) => path.clone(),
         _ => unreachable!("receiver kind checked by caller"),
     };
+    let absolute = path.starts_with('/');
+    let names = path_names(&path);
+    // A `Path` argument, or a `String` that names one — every method that
+    // takes a path takes both, and a JDK converts the string the same way
+    // `Path.of` would.
+    let other = |heap: &Heap, value: Option<&JValue>| -> Result<String, VmError> {
+        match value {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::Path(text)) => Ok(text.clone()),
+                Some(HeapObject::JavaString(units)) => Ok(String::from_utf16_lossy(units)),
+                _ => Err(throw("java.lang.ClassCastException: not a Path")),
+            },
+            _ => Err(throw("java.lang.NullPointerException")),
+        }
+    };
+    let path_value = |heap: &mut Heap, text: String| {
+        Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Path(text))))))
+    };
+    let index = |args: &[JValue], at: usize| -> i32 {
+        match args.get(at) {
+            Some(JValue::Int(value)) => *value,
+            _ => 0,
+        }
+    };
     match method {
         "toString" => Ok(Some(JValue::Ref(Some(heap.alloc_string(&path))))),
-        "getFileName" => {
-            let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
-            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Path(name))))))
-        }
-        "getParent" => match path.rsplit_once('/') {
-            Some((parent, _)) if !parent.is_empty() => Ok(Some(JValue::Ref(Some(
-                heap.alloc(HeapObject::Path(parent.to_owned())),
-            )))),
-            _ => Ok(Some(JValue::Ref(None))),
+        "getFileName" => match names.last() {
+            Some(last) => path_value(heap, (*last).to_owned()),
+            None => Ok(Some(JValue::NULL)),
         },
+        "getParent" => {
+            if names.len() < 2 {
+                // A single name has no parent unless there is a root above it.
+                return if absolute && names.len() == 1 {
+                    path_value(heap, String::from("/"))
+                } else {
+                    Ok(Some(JValue::NULL))
+                };
+            }
+            path_value(heap, path_from(absolute, &names[..names.len() - 1]))
+        }
+        "getRoot" => {
+            if absolute {
+                path_value(heap, String::from("/"))
+            } else {
+                Ok(Some(JValue::NULL))
+            }
+        }
+        "getNameCount" => Ok(Some(JValue::Int(i32::try_from(names.len()).unwrap_or(0)))),
+        "getName" => {
+            let at = index(args, 0);
+            let Some(name) = usize::try_from(at).ok().and_then(|at| names.get(at)) else {
+                return Err(throw(format!(
+                    "java.lang.IllegalArgumentException: Invalid index: {at}"
+                )));
+            };
+            path_value(heap, (*name).to_owned())
+        }
+        "isAbsolute" => Ok(Some(JValue::Int(i32::from(absolute)))),
+        // `.` drops out and `..` cancels the name before it — but only when
+        // there IS one to cancel, and never past a root.
+        "normalize" => {
+            let mut kept: Vec<&str> = Vec::new();
+            for name in &names {
+                match *name {
+                    "." => {}
+                    ".." => {
+                        if matches!(kept.last(), Some(last) if *last != "..") {
+                            kept.pop();
+                        } else if !absolute {
+                            kept.push("..");
+                        }
+                    }
+                    other => kept.push(other),
+                }
+            }
+            path_value(heap, path_from(absolute, &kept))
+        }
+        // `resolve` against an ABSOLUTE (or empty) argument answers the
+        // argument itself, which is the JDK's rule.
+        "resolve" | "resolveSibling" => {
+            let other = other(heap, args.first())?;
+            let base = if method == "resolve" {
+                path.clone()
+            } else if names.len() > 1 || absolute {
+                path_from(absolute, &names[..names.len().saturating_sub(1)])
+            } else {
+                String::new()
+            };
+            if other.starts_with('/') || base.is_empty() {
+                return path_value(heap, other);
+            }
+            if other.is_empty() {
+                return path_value(heap, base);
+            }
+            path_value(heap, format!("{}/{other}", base.trim_end_matches('/')))
+        }
+        // `a/b`.relativize(`a/b/c`) is `c` — the walk from one to the other.
+        "relativize" => {
+            let other_text = other(heap, args.first())?;
+            let other_absolute = other_text.starts_with('/');
+            if other_absolute != absolute {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: 'other' is different type of Path",
+                ));
+            }
+            let other_names = path_names(&other_text);
+            let shared = names
+                .iter()
+                .zip(other_names.iter())
+                .take_while(|(a, b)| a == b)
+                .count();
+            let mut walk: Vec<&str> = vec![".."; names.len() - shared];
+            walk.extend(other_names[shared..].iter().copied());
+            path_value(heap, walk.join("/"))
+        }
+        // `startsWith`/`endsWith` compare whole NAME ELEMENTS: `a/bc` does not
+        // start with `a/b`, though the text does.
+        "startsWith" | "endsWith" => {
+            let other_text = other(heap, args.first())?;
+            let other_absolute = other_text.starts_with('/');
+            let other_names = path_names(&other_text);
+            let matches = if method == "startsWith" {
+                other_absolute == absolute
+                    && other_names.len() <= names.len()
+                    && names[..other_names.len()] == other_names[..]
+            } else {
+                // An ABSOLUTE argument must match the whole path, root and all.
+                (!other_absolute || (absolute && other_names.len() == names.len()))
+                    && other_names.len() <= names.len()
+                    && names[names.len() - other_names.len()..] == other_names[..]
+            };
+            Ok(Some(JValue::Int(i32::from(matches))))
+        }
+        "subpath" => {
+            let (from, to) = (index(args, 0), index(args, 1));
+            let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
+                return Err(throw("java.lang.IllegalArgumentException"));
+            };
+            if from >= to || to > names.len() {
+                return Err(throw("java.lang.IllegalArgumentException"));
+            }
+            path_value(heap, names[from..to].join("/"))
+        }
+        // caturra's filesystem has no working directory beyond the root, so an
+        // absolute path is itself and a relative one hangs off `/`.
+        "toAbsolutePath" => {
+            if absolute {
+                path_value(heap, path)
+            } else {
+                path_value(heap, format!("/{path}"))
+            }
+        }
+        "toFile" => Ok(Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::File(path.clone())),
+        )))),
+        "compareTo" => {
+            let other = other(heap, args.first())?;
+            Ok(Some(JValue::Int(match path.cmp(&other) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })))
+        }
+        // Two paths are equal when their TEXT is, which is what a JDK's
+        // UnixPath compares; `hashCode` follows it.
+        "equals" => {
+            let equal = match args.first() {
+                Some(JValue::Ref(Some(reference))) => {
+                    matches!(heap.get(*reference), Some(HeapObject::Path(text)) if *text == path)
+                }
+                _ => false,
+            };
+            Ok(Some(JValue::Int(i32::from(equal))))
+        }
+        // A JDK's UnixPath hashes its BYTES, which for the paths a program
+        // writes is the string hash.
+        "hashCode" => Ok(Some(JValue::Int(java_string_hash(&path)))),
         _ => Err(VmError::UnknownIntrinsic(format!("Path.{method}"))),
     }
 }
@@ -6394,8 +6602,31 @@ pub fn invoke_static(
         },
         "java/lang/String" => string_static(heap, method, descriptor, args),
         // `Path.of` / `Paths.get` — wrap a path string as a Path.
+        // `Path.of(first, more...)` / `Paths.get(first, more...)`: the
+        // segments are JOINED with the separator, and an empty one contributes
+        // nothing — `Path.of("a", "", "b")` is `a/b`, and so is
+        // `Path.of("a/", "b")`.
         "java/nio/file/Path" | "java/nio/file/Paths" => {
-            let text = arg_string(heap, &args[0])?;
+            let first = arg_string(heap, &args[0])?;
+            let mut segments: Vec<String> = vec![first];
+            if let Some(JValue::Ref(Some(rest))) = args.get(1)
+                && let Some(HeapObject::RefArray(_, values)) = heap.get(*rest)
+            {
+                let values = values.clone();
+                for value in &values {
+                    segments.push(arg_string(heap, value)?);
+                }
+            }
+            let leading = segments.first().is_some_and(|s| s.starts_with('/'));
+            let parts: Vec<&str> = segments
+                .iter()
+                .flat_map(|segment| segment.split('/'))
+                .filter(|part| !part.is_empty())
+                .collect();
+            let mut text = parts.join("/");
+            if leading {
+                text.insert(0, '/');
+            }
             Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Path(text))))))
         }
         "java/nio/file/Files" => files_static(heap, vfs, method, args),
@@ -8793,6 +9024,24 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::Stream { .. }) => {
                 format!("java.util.stream.ReferencePipeline${reference:x}")
             }
+            // The library objects that print as a VALUE. A collection renders
+            // its elements through here, and every one of these printed as
+            // `object@2a` inside a list while printing the same object
+            // directly said `x` — one toString written twice, and only one of
+            // them reached from a collection.
+            Some(HeapObject::Path(text) | HeapObject::Charset(text) | HeapObject::File(text)) => {
+                text.clone()
+            }
+            Some(HeapObject::Pattern { source, flags }) => {
+                String::from_utf16_lossy(&fold_regex_flags(source, *flags))
+            }
+            Some(HeapObject::Matcher { .. }) => {
+                matcher_text(heap, reference).unwrap_or_else(|| format!("object@{reference:x}"))
+            }
+            Some(HeapObject::MatchResult { .. }) => format!(
+                "java.util.regex.Matcher$ImmutableMatchResult@{:x}",
+                identity_hash(reference)
+            ),
             _ => format!("object@{reference:x}"),
         },
         other => format!("{other:?}"),

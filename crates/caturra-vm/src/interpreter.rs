@@ -18867,6 +18867,16 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         "java/util/regex/Matcher" | "java/util/regex/Matcher$ImmutableMatchResult" => {
             &["java/util/regex/MatchResult"]
         }
+        // A path and a charset are IMPLEMENTATION classes; what a program
+        // names is the interface (or the abstract class) above them.
+        "sun/nio/fs/UnixPath" => &[
+            "java/nio/file/Path",
+            "java/lang/Comparable",
+            "java/lang/Iterable",
+        ],
+        _ if class.starts_with("sun/nio/cs/") => {
+            &["java/nio/charset/Charset", "java/lang/Comparable"]
+        }
         _ => &[],
     }
 }
@@ -18905,6 +18915,7 @@ fn is_comparable(target: &str) -> bool {
 /// The binary (dotted) name of a heap object's class, for diagnostics that
 /// name a value's type. Arrays render as their descriptor with dots
 /// (`[Ljava.lang.Integer;`), as `Class.getName` does.
+#[allow(clippy::too_many_lines)] // one arm per heap object kind
 pub(crate) fn object_class_name_of(
     heap: &Heap,
     view_class: Option<&HashMap<HeapRef, &'static str>>,
@@ -18966,6 +18977,13 @@ pub(crate) fn object_class_name_of(
         Some(HeapObject::Writer { .. }) => String::from("java/io/PrintWriter"),
         Some(HeapObject::StackFrame { .. }) => String::from("java/lang/StackTraceElement"),
         Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),
+        // A path is the platform's implementation class — caturra's
+        // filesystem is the Unix-shaped one whose separator it already prints.
+        Some(HeapObject::Path(_)) => String::from("sun/nio/fs/UnixPath"),
+        // A charset is a class PER CHARSET in a JDK, named after the canonical
+        // name with its dashes as underscores.
+        Some(HeapObject::Charset(name)) => format!("sun/nio/cs/{}", name.replace('-', "_")),
+        Some(HeapObject::SummaryStats { .. }) => String::from("java/util/IntSummaryStatistics"),
         // The regex trio. A frozen match is an INNER class of Matcher in a
         // JDK, and that name is what `getClass()` and a default `toString`
         // show, so it is the name here too.

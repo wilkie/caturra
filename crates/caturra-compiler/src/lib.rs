@@ -95,6 +95,18 @@ const ARRAYS_LIB: &str = include_str!("stdlib/arrays.java");
 /// `Modifier.` (the access-flag decoder used by reflection validators).
 const REFLECT_LIB: &str = include_str!("stdlib/reflect.java");
 
+/// The JDK binary name of a bundled class that stands for a real one. Only
+/// the classes a program can hold an INSTANCE of are listed: a class name is
+/// observable through `getClass()` and the default `toString`, and the
+/// static-only helpers (`Collections`, `Arrays`) are never instances.
+fn jdk_binary_name(simple: &str) -> Option<&'static str> {
+    match simple {
+        "Random" => Some("java/util/Random"),
+        "StringJoiner" => Some("java/util/StringJoiner"),
+        _ => None,
+    }
+}
+
 /// Bundled `java.util` helpers (`Random`, `Collections`), injected when a
 /// source references `Random`/`Collections`.
 const UTIL_LIB: &str = include_str!("stdlib/util.java");
@@ -579,8 +591,18 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         })
     {
         let (tokens, _) = lexer::lex("<util>", UTIL_LIB);
-        let (unit, mut errs) = parser::parse("<util>", tokens);
+        let (mut unit, mut errs) = parser::parse("<util>", tokens);
         compilation.diagnostics.append(&mut errs);
+        // These two STAND FOR JDK classes, so they carry the JDK's binary
+        // names: `new Random(1).getClass().getName()` is `java.util.Random`,
+        // and a default `toString` prints it. Only the injected ones are
+        // renamed — a program may declare its own `Random`, and that one is
+        // its own class (this library is not injected beside it).
+        for class in &mut unit.classes {
+            if let Some(binary) = jdk_binary_name(&class.name) {
+                class.binary_name = Some(String::from(binary));
+            }
+        }
         units.push((String::from("<util>"), unit));
         // The bundled `Random` builds its stream factories out of LAMBDAS, so
         // the functional interfaces they desugar to have to come with it. The

@@ -4521,6 +4521,15 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                     // for a limit that the nested mechanism had already lifted.
                     .or_else(|| {
                         let inner = table.resolve_type(&TypeRef::Named(other.to_owned()))?;
+                        // A type with an element kind OF ITS OWN takes it —
+                        // the same answer `value_elem_of` gives a VALUE of
+                        // that type. Interning it instead made the two
+                        // spellings of one type argument different types:
+                        // `List<Class> classes = List.of(x.getClass())` was
+                        // "List<Class> cannot be converted to List<Class>".
+                        if let Some(elem) = collection_elem_of(inner) {
+                            return Some(elem);
+                        }
                         (!matches!(
                             inner,
                             JType::Object(_) | JType::Error | JType::Unsupported | JType::Null
@@ -4555,6 +4564,13 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 .map(ElemType::Object)
         }
         TypeRef::Generic { .. } => match table.resolve_type(arg) {
+            // `List<Class<?>>` — the arguments of a type that ERASES to one
+            // with an element kind of its own drop away, and the element is
+            // that kind. Interning it made the parameterized spelling a
+            // different element from the raw one, and from the VALUE: `List<
+            // Class<?>> l = List.of(x.getClass())` was "List<Class> cannot be
+            // converted to List<Class>".
+            Some(inner) if collection_elem_of(inner).is_some() => collection_elem_of(inner),
             Some(inner) if !matches!(inner, JType::Object(_)) => Some(ElemType::Nested {
                 inner: table.intern_nested(inner),
                 read: table.object_id,
@@ -4714,6 +4730,39 @@ fn array_spread_elem(ty: JType, table: &MethodTable) -> Option<ElemType> {
     }
 }
 
+/// Whether a modelled generic library type was written RAW — its arguments
+/// carry the marker the resolver leaves for `List`, `Optional`, `Map` and the
+/// rest. The type argument of a raw type is unchecked, which is what makes the
+/// conversion to and from a parameterized one legal.
+fn is_raw_library_type(ty: JType) -> bool {
+    let raw = |elem: ElemType| {
+        matches!(
+            elem,
+            ElemType::Wildcard {
+                bound: WildcardBound::Raw,
+                ..
+            }
+        )
+    };
+    match ty {
+        JType::List { elem, .. }
+        | JType::Set { elem, .. }
+        | JType::Collection(elem)
+        | JType::Stack(elem)
+        | JType::TreeSet(elem, _)
+        | JType::LinkedList { elem, .. }
+        | JType::Optional(elem)
+        | JType::Stream(elem)
+        | JType::Iterator(elem)
+        | JType::ListIterator(elem) => raw(elem),
+        JType::Map { key, value, .. }
+        | JType::TreeMap { key, value, .. }
+        | JType::MapEntry { key, value }
+        | JType::EntrySet { key, value } => raw(key) || raw(value),
+        _ => false,
+    }
+}
+
 fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
     if arg == param {
         return true;
@@ -4752,6 +4801,25 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
         _ => false,
     };
     if erases_alike(arg, param) || erases_alike(param, arg) {
+        return true;
+    }
+    // The same, for a LIBRARY generic written raw: `List<Optional> l =
+    // List.of(Optional.of("v"))` is the unchecked conversion javac allows,
+    // where a user class's raw form already was. Both must be the same KIND —
+    // an `Optional<String>` is still not an `Optional<Integer>` — and one of
+    // them must really be raw, which is a marker the resolver leaves.
+    let raw_library_alike = |left: ElemType, right: ElemType| match (left, right) {
+        (
+            ElemType::Nested { inner: one, .. },
+            ElemType::Nested { inner: other, .. },
+        ) => {
+            let (one, other) = (table.nested_type(one), table.nested_type(other));
+            std::mem::discriminant(&one) == std::mem::discriminant(&other)
+                && (is_raw_library_type(one) || is_raw_library_type(other))
+        }
+        _ => false,
+    };
+    if raw_library_alike(arg, param) {
         return true;
     }
     // The UNCHECKED conversion runs both ways: a raw collection is assignable
@@ -5073,8 +5141,11 @@ fn source_type_name(described: &str) -> String {
     for ch in described.chars() {
         if ch.is_alphanumeric() || ch == '_' {
             token.push(ch);
-        } else if ch == '$' {
-            // Everything before the `$` is the ENCLOSING class's name.
+        } else if ch == '$' || ch == '/' {
+            // Everything before the `$` is the ENCLOSING class's name — and
+            // everything before a `/` is the PACKAGE of a bundled class that
+            // carries a JDK binary name (`java/util/Random`), which javac
+            // prints by its simple name when the program imported it.
             token.clear();
         } else {
             out.push_str(source_interface_name(&token));
@@ -7056,6 +7127,11 @@ impl JType {
                 | JType::Iterator(_)
                 | JType::ListIterator(_)
                 | JType::EntryIterator { .. }
+                // A summary is an object too — it assigns to an `Object`, and
+                // was the one modelled library type left out of this list, so
+                // `Object o = stats;` was "IntSummaryStatistics cannot be
+                // converted to Object".
+                | JType::IntSummaryStats
         )
     }
 
@@ -8312,6 +8388,21 @@ fn method_descriptor(
             TypeRef::Byte => out.push('B'),
             TypeRef::Char => out.push('C'),
             TypeRef::Array(inner) => {
+                // An array of anything whose element type the RESOLVER
+                // interns — a `Scanner[]` parameter, a `List<String>[]` one —
+                // must carry the descriptor every CALL SITE builds, and a call
+                // site builds it from the resolved type. Written out here by
+                // recursion instead, the two disagreed: the class file
+                // declared `rows([Ljava/util/ArrayList;)` and every call asked
+                // for `rows([Ljava/lang/Object;)`, so the method could not be
+                // found at all ("malformed class: no static method").
+                if let Some(resolved) = table
+                    .resolve_type(ty)
+                    .filter(|ty| !matches!(ty, JType::Error | JType::Unsupported))
+                {
+                    out.push_str(&resolved.descriptor(table));
+                    return;
+                }
                 out.push('[');
                 // A wrapper array (`Integer[]`) is a reference array: its
                 // descriptor names the wrapper class, distinct from `[I`.
@@ -8534,6 +8625,19 @@ fn method_descriptor(
                         args,
                     };
                     push_type(path, diagnostics, table, out, &raw, span);
+                } else if let Some(resolved) = table
+                    .resolve_type(&TypeRef::Named(String::from(simple)))
+                    .filter(|ty| !matches!(ty, JType::Error | JType::Unsupported))
+                {
+                    // Any OTHER modelled library type — a `Charset`, a
+                    // `Pattern`, the `MatchResult` a helper hands back. The
+                    // arms above are a hand-written list, and every type added
+                    // since has had to be written into it a second time: a
+                    // `Pattern` could be held in a local (which `resolve_type`
+                    // answers for) and not be a parameter or a return, which
+                    // is where this list is asked. Asking the same resolver
+                    // means the two cannot drift again.
+                    out.push_str(&resolved.descriptor(table));
                 } else {
                     let message = if name.contains('.') {
                         crate::imports::unknown_qualified_message(name)
@@ -8621,6 +8725,8 @@ enum BParam {
     Charset,
     /// A `java.util.regex.Pattern` (`matcher.usePattern(p)`).
     Pattern,
+    /// A `java.nio.file.Path` (`path.resolve(other)`).
+    Path,
     /// `java.lang.Class` (`Class.isAssignableFrom(Class)`).
     Class,
     /// Any reference array (`getConstructor(Class[])`, `newInstance(Object[])`).
@@ -8811,6 +8917,8 @@ enum BRet {
     SelfList,
     /// `java.nio.file.Path` (`Path.of`, `path.getFileName()`).
     Path,
+    /// `java.io.File` (`path.toFile()`).
+    File,
     /// A `java.nio.charset.Charset` — what `forName` and `defaultCharset`
     /// answer.
     Charset,
@@ -9561,10 +9669,86 @@ const READER_METHODS: &[BuiltinMethod] = &[
     bm("close", &[], BRet::Void, "()V"),
 ];
 
+/// `java.nio.file.Path` — the name a program builds and takes apart. Every
+/// method here works on the NAME ELEMENTS, not the text: `a/bc` does not start
+/// with `a/b`, and `getParent` of a single name is null.
 const PATH_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getFileName", &[], BRet::Path, "()Ljava/nio/file/Path;"),
     bm("getParent", &[], BRet::Path, "()Ljava/nio/file/Path;"),
+    bm("getRoot", &[], BRet::Path, "()Ljava/nio/file/Path;"),
+    bm("getNameCount", &[], BRet::Int, "()I"),
+    bm("getName", &[BParam::Int], BRet::Path, "(I)Ljava/nio/file/Path;"),
+    bm("isAbsolute", &[], BRet::Boolean, "()Z"),
+    bm("normalize", &[], BRet::Path, "()Ljava/nio/file/Path;"),
+    bm("toAbsolutePath", &[], BRet::Path, "()Ljava/nio/file/Path;"),
+    bm("toFile", &[], BRet::File, "()Ljava/io/File;"),
+    // The four that take another path — and a `String` naming one, which a
+    // JDK converts exactly as `Path.of` would.
+    bm(
+        "resolve",
+        &[BParam::Path],
+        BRet::Path,
+        "(Ljava/nio/file/Path;)Ljava/nio/file/Path;",
+    ),
+    bm(
+        "resolve",
+        &[BParam::Str],
+        BRet::Path,
+        "(Ljava/lang/String;)Ljava/nio/file/Path;",
+    ),
+    bm(
+        "resolveSibling",
+        &[BParam::Path],
+        BRet::Path,
+        "(Ljava/nio/file/Path;)Ljava/nio/file/Path;",
+    ),
+    bm(
+        "resolveSibling",
+        &[BParam::Str],
+        BRet::Path,
+        "(Ljava/lang/String;)Ljava/nio/file/Path;",
+    ),
+    bm(
+        "relativize",
+        &[BParam::Path],
+        BRet::Path,
+        "(Ljava/nio/file/Path;)Ljava/nio/file/Path;",
+    ),
+    bm(
+        "startsWith",
+        &[BParam::Path],
+        BRet::Boolean,
+        "(Ljava/nio/file/Path;)Z",
+    ),
+    bm(
+        "startsWith",
+        &[BParam::Str],
+        BRet::Boolean,
+        "(Ljava/lang/String;)Z",
+    ),
+    bm(
+        "endsWith",
+        &[BParam::Path],
+        BRet::Boolean,
+        "(Ljava/nio/file/Path;)Z",
+    ),
+    bm(
+        "endsWith",
+        &[BParam::Str],
+        BRet::Boolean,
+        "(Ljava/lang/String;)Z",
+    ),
+    bm("subpath", &[BParam::Int, BParam::Int], BRet::Path, "(II)Ljava/nio/file/Path;"),
+    bm(
+        "compareTo",
+        &[BParam::Path],
+        BRet::Int,
+        "(Ljava/nio/file/Path;)I",
+    ),
+    bm("equals", &[BParam::Probe], BRet::Boolean, "(Ljava/lang/Object;)Z"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
 ];
 
 const LIST_METHODS: &[BuiltinMethod] = &[
@@ -13677,6 +13861,29 @@ fn renders_as_text(ty: JType) -> bool {
     !matches!(ty, JType::Scanner | JType::Writer | JType::Reader)
 }
 
+/// Whether a library type is modelled as ONE class — no interface/concrete
+/// pair for a cast or an `instanceof` to choose between, and a class the VM
+/// names its objects by. Both the cast rule and `instanceof` ask this, so the
+/// two answer the same question: a checkcast to a name the VM does not know
+/// throws, and accepting one here would turn a refusal into a wrong answer.
+fn is_single_class_library_type(ty: JType) -> bool {
+    matches!(
+        ty,
+        JType::Scanner
+            | JType::File
+            | JType::Writer
+            | JType::Reader
+            | JType::Path
+            | JType::Charset
+            | JType::Pattern
+            | JType::Matcher
+            | JType::MatchResult
+            | JType::Class
+            | JType::StackFrame
+            | JType::IntSummaryStats
+    )
+}
+
 /// The intrinsic method table and JVM class for a receiver type.
 fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match ty {
@@ -14600,6 +14807,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Class => JType::Class,
         BParam::Charset => JType::Charset,
         BParam::Pattern => JType::Pattern,
+        BParam::Path => JType::Path,
         BParam::RefArray => JType::Error,
         // `BiConsumer` never reaches here: `bparam_matches` answers it
         // directly, because only the method table knows the target class.
@@ -14948,6 +15156,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Charset => Some(JType::Charset),
         BRet::Pattern => Some(JType::Pattern),
         BRet::Matcher => Some(JType::Matcher),
+        BRet::File => Some(JType::File),
         BRet::MatchResult => Some(JType::MatchResult),
         BRet::MatchResultStream => Some(JType::Stream(ElemType::MatchResult)),
         BRet::Predicate => table.class_id("__Predicate").map(JType::Object),
@@ -22804,6 +23013,14 @@ impl BodyGen<'_> {
             self.no_suitable_library_method(class, method, args, span);
             return None;
         };
+        // `Path.of(first, more...)` / `Paths.get(first, more...)` are VARARGS:
+        // the plan above describes the one-segment form, and the rest pack
+        // into the `String[]` a JDK's signature declares. Without this a
+        // two-segment path — the ordinary way to build one — was "no suitable
+        // method found for of(String,String)".
+        if matches!((class, method), ("Path", "of") | ("Paths", "get")) && args.len() != 1 {
+            return self.emit_path_of(internal, method, args, span);
+        }
         // The CHARSET overloads: `Files.readAllLines(path, UTF_8)` and the
         // four beside it take a trailing charset. caturra's virtual filesystem
         // stores TEXT, so the charset picks no bytes here — what it does pick
@@ -22864,6 +23081,61 @@ impl BodyGen<'_> {
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
         self.code.drop_stack(descriptor_arg_width(&descriptor));
         Some(ret_ty)
+    }
+
+    /// `Path.of(first, more...)`: the first segment, then the rest as the
+    /// `String[]` a JDK's varargs signature declares. The VM joins them with
+    /// the separator, dropping empty segments as a JDK does.
+    #[allow(clippy::option_option)] // the call-dispatch return shape
+    fn emit_path_of(
+        &mut self,
+        internal: &str,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let owner = if internal.ends_with("Paths") { "Paths" } else { "Path" };
+        if args.is_empty() {
+            self.no_suitable_library_method(owner, method, args, span);
+            return None;
+        }
+        let string_arg = |emitter: &mut Self, arg: &Expr| -> bool {
+            let got = emitter.expr(arg);
+            if got == JType::Error {
+                emitter.error_bail(arg.span(), "argument");
+                return false;
+            }
+            if got != JType::Str {
+                emitter.error(
+                    arg.span(),
+                    format!(
+                        "incompatible types: {} cannot be converted to String",
+                        got.describe(emitter.table)
+                    ),
+                );
+                return false;
+            }
+            true
+        };
+        if !string_arg(self, &args[0]) {
+            return None;
+        }
+        let rest = &args[1..];
+        self.push_int(i32::try_from(rest.len()).unwrap_or(0));
+        self.emit_new_1d(ElemType::Str);
+        for (position, arg) in rest.iter().enumerate() {
+            self.code.push_op(op::DUP, 1);
+            self.push_int(i32::try_from(position).unwrap_or(0));
+            if !string_arg(self, arg) {
+                return None;
+            }
+            self.xastore(JType::Str);
+        }
+        let descriptor = "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;";
+        let method_ref = intern_method_ref(self.pool, internal, method, descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(2);
+        Some(Some(JType::Path))
     }
 
     /// `String.valueOf(x)`: the JDK's most specific overload for a NULL-typed
@@ -25341,8 +25613,13 @@ impl BodyGen<'_> {
                     let ty = self.expr(random);
                     // The two-argument form takes a `java.util.Random`, and
                     // nothing else: a seeded one replays the JDK's permutation.
-                    let is_random =
-                        matches!(ty, JType::Object(id) if self.table.class_name(id) == "Random");
+                    // The bundled `Random` carries the JDK's BINARY name, so
+                    // that `getClass()` and a default `toString` say
+                    // `java.util.Random`; a program that declares its own
+                    // `Random` keeps the simple one, and neither is a match
+                    // for the other.
+                    let is_random = matches!(ty, JType::Object(id)
+                        if self.table.class_name(id) == "java/util/Random");
                     if !is_random && ty != JType::Error {
                         self.error(
                             random.span(),
@@ -25353,7 +25630,7 @@ impl BodyGen<'_> {
                         );
                     }
                     width += 1;
-                    (String::from("(Ljava/util/ArrayList;LRandom;)V"), None)
+                    (String::from("(Ljava/util/ArrayList;Ljava/util/Random;)V"), None)
                 } else {
                     (String::from("(Ljava/util/ArrayList;)V"), None)
                 }
@@ -28163,11 +28440,13 @@ impl BodyGen<'_> {
             // `e instanceof RuntimeException` — a library throwable. The VM
             // climbs the shared exception hierarchy, so a subclass answers true.
             JType::Exception(id) => exception_internal(id).to_owned(),
-            // `o instanceof Pattern` / `Matcher` / `MatchResult` — the three
-            // regex objects, each modelled as ONE class (no interface/concrete
-            // pair to choose between), so their own method table names it.
-            JType::Pattern | JType::Matcher | JType::MatchResult => builtin_instance_table(target)
-                .expect("the regex types have a method table")
+            // `o instanceof Scanner` / `Path` / `Matcher` — a library type
+            // modelled as ONE class (no interface/concrete pair to choose
+            // between), so its own method table names it. The VM answers for
+            // the implementation class behind an interface (a `Path` object is
+            // a `sun.nio.fs.UnixPath`, and knows it).
+            other if is_single_class_library_type(other) => builtin_instance_table(other)
+                .expect("checked by the guard")
                 .0
                 .to_owned(),
             // `o instanceof int[]` / `String[]` / `int[][]` — the constant-pool
@@ -29727,23 +30006,20 @@ impl BodyGen<'_> {
             }
             return target;
         }
-        // Casting a reference (commonly an erased `Object`) down to a regex
-        // object: `(Pattern) o`, and — the shape that noticed — the
-        // `(MatchResult) param` a lambda over `matcher.results()` is
-        // desugared into. The class to check is the one the type's own method
-        // table is keyed by, so there is no second list to keep in step, and
-        // it is a class the VM's namer knows: a checkcast to a name it does
-        // not know throws, so this arm covers only the three it does.
+        // Casting a reference (commonly an erased `Object`) down to one of the
+        // library types caturra models as a SINGLE class: `(Scanner) o`,
+        // `(Path) o`, and — the shape that noticed — the `(MatchResult) param`
+        // a lambda over `matcher.results()` is desugared into. The class to
+        // check is the one the type's own method table is keyed by, so there
+        // is no second list to keep in step.
         //
-        // Without it these were "incompatible types: Object cannot be
-        // converted to MatchResult", and worse, the cast fell through to the
-        // UNBOXING arm below, which emitted `intValue()` on the object.
+        // Without it every one of these was "incompatible types: Object cannot
+        // be converted to Scanner" — the ordinary store-in-an-Object and cast
+        // back — and, worse, the cast fell through to the UNBOXING arm below,
+        // which emitted `intValue()` on the object.
         if source.is_reference()
             && source != JType::Null
-            && matches!(
-                target,
-                JType::Pattern | JType::Matcher | JType::MatchResult
-            )
+            && is_single_class_library_type(target)
             && let Some((internal, _)) = builtin_instance_table(target)
         {
             if source != target {

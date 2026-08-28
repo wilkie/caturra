@@ -45,6 +45,11 @@ const JAVA_UTIL: &[&str] = &[
     "Optional",
     "OptionalInt",
     "OptionalDouble",
+    "OptionalLong",
+    // What `IntStream.summaryStatistics()` answers. The TYPE was modelled and
+    // the name was not importable, so a program could chain through one and
+    // never name it: "cannot find symbol: class IntSummaryStatistics".
+    "IntSummaryStatistics",
     "Arrays",
     "Objects",
     "Random",

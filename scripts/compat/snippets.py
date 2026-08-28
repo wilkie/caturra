@@ -1920,6 +1920,18 @@ GRAMMAR = [
                       '        System.out.println(Pattern.compile("^a").asPredicate().test("abc"));',
                       '', 'import java.util.regex.MatchResult;\nimport java.util.regex.Matcher;\n'
                       'import java.util.regex.Pattern;\nimport java.util.stream.Collectors;')),
+    dict(id="g-nio-path", category="Library", title="Path: building and taking apart a filename",
+         summary="java.nio.file.Path — Path.of joins its segments, and every method works on the NAME ELEMENTS, not the text.",
+         main="G",
+         source=_prog('Path p = Path.of("home", "wilkie", "notes.txt");\n'
+                      '        System.out.println(p + " " + p.getNameCount() + " " + p.getFileName());\n'
+                      '        System.out.println(p.getParent() + " " + p.getName(0) + " " + p.isAbsolute());\n'
+                      '        System.out.println(Path.of("a/./b/../c").normalize());\n'
+                      '        System.out.println(p.resolveSibling("other.txt"));\n'
+                      '        System.out.println(Path.of("a", "b").relativize(Path.of("a", "b", "c")));\n'
+                      '        System.out.println(p.startsWith("home") + " " + Path.of("a", "bc").startsWith("a/b"));\n'
+                      '        System.out.println(List.of(Path.of("x"), Path.of("y")));',
+                      '', 'import java.nio.file.Path;\nimport java.util.List;')),
     dict(id="g-fail-fast", category="Collections", title="Fail-fast iterators (ConcurrentModificationException)",
          summary="Modifying a collection while iterating it throws, as on a real JVM — including the quirk where removing the second-to-last element does not.",
          main="G",

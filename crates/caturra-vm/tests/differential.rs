@@ -39671,3 +39671,240 @@ public class Malformed {
 }
 "#
 );
+
+// A modelled library type wherever a program can PUT one: a parameter, a
+// return, a field, an array, a collection element, a type argument, and the
+// cast back from `Object`. Every one of these was a separate hand-written
+// list, and a type added since had to be written into each: a `Pattern` could
+// be held in a local and not be a parameter ("unknown type 'Pattern'"), and
+// casting any of them back from `Object` was "incompatible types".
+differential_test!(
+    a_library_type_in_every_position,
+    "Positions",
+    r#"
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Positions {
+    static Pattern shared;
+    Charset own;
+
+    static Pattern make() { return Pattern.compile("\\d+"); }
+
+    static String use(Matcher matcher) { return String.valueOf(matcher.find()); }
+
+    static String name(Path path, Charset charset, Scanner scanner) {
+        return path + "|" + charset + "|" + scanner.next();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(use(make().matcher("a1")));
+        shared = make();
+        Positions it = new Positions();
+        it.own = StandardCharsets.UTF_8;
+        System.out.println(name(Path.of("a", "b"), it.own, new Scanner("hi there")));
+        System.out.println(shared.pattern());
+
+        Pattern[] many = new Pattern[2];
+        many[0] = make();
+        System.out.println(many[0].pattern() + many.length);
+        List<Charset> sets = new ArrayList<>();
+        sets.add(StandardCharsets.US_ASCII);
+        System.out.println(sets.get(0) + " " + sets.size());
+        List<Path> paths = List.of(Path.of("x"), Path.of("y"));
+        System.out.println(paths);
+
+        // Stored as an Object and cast back — and asked about.
+        Object erased = make();
+        Pattern back = (Pattern) erased;
+        System.out.println(back == shared);
+        System.out.println(erased instanceof Pattern);
+        Object charset = StandardCharsets.UTF_8;
+        System.out.println(((Charset) charset).toString() + (charset instanceof Charset));
+        Object where = Path.of("p");
+        System.out.println(((Path) where) + " " + (where instanceof Path));
+        Object reader = new Scanner("s");
+        System.out.println(((Scanner) reader).next() + (reader instanceof Scanner));
+        System.out.println(where.getClass().getName() + " " + charset.getClass().getName());
+    }
+}
+"#
+);
+
+// `java.nio.file.Path` in full: every method works on the NAME ELEMENTS, not
+// on the text — `a/bc` does not start with `a/b`, `getParent` of a single name
+// is null, and `Path.of` is VARARGS, joining its segments and dropping the
+// empty ones.
+differential_test!(
+    the_path_surface,
+    "PathParts",
+    r#"
+import java.nio.file.Path;
+
+public class PathParts {
+    static void show(String label, Object value) { System.out.println(label + " = " + value); }
+
+    public static void main(String[] args) {
+        show("of", Path.of("a", "b"));
+        show("empties", Path.of("a", "", "b"));
+        show("trailing", Path.of("a/", "b"));
+        show("absolute", Path.of("/a", "b", "c"));
+        show("get", java.nio.file.Paths.get("x", "y"));
+        Path p = Path.of("home", "wilkie", "notes.txt");
+        show("toString", p);
+        show("getFileName", p.getFileName());
+        show("getParent", p.getParent());
+        show("getNameCount", p.getNameCount());
+        show("getName", p.getName(0) + "/" + p.getName(2));
+        show("getRoot", p.getRoot());
+        show("isAbsolute", p.isAbsolute());
+        show("normalize", Path.of("a/./b/../c").normalize());
+        show("resolveStr", p.resolve("more"));
+        show("resolvePath", Path.of("a").resolve(Path.of("b")));
+        show("resolveSibling", p.resolveSibling("other.txt"));
+        show("relativize", Path.of("a", "b").relativize(Path.of("a", "b", "c")));
+        show("startsWith", p.startsWith("home") + " " + Path.of("a", "bc").startsWith("a/b"));
+        show("endsWith", p.endsWith("notes.txt"));
+        show("subpath", p.subpath(0, 2));
+        show("toAbsolutePath", Path.of("/x/y").toAbsolutePath());
+        show("toFile", p.toFile().getName());
+        show("compareTo", Path.of("a").compareTo(Path.of("b")));
+        show("equals", Path.of("a", "b").equals(Path.of("a/b")));
+        show("hashCode", Path.of("a").hashCode() == Path.of("a").hashCode());
+        Path abs = Path.of("/r", "s");
+        show("absRoot", abs.getRoot());
+        show("absParent", abs.getParent());
+    }
+}
+"#
+);
+
+// A bundled class that STANDS FOR a JDK one carries the JDK's binary name, so
+// `getClass().getName()` and a default `toString` say `java.util.Random` —
+// while a program's OWN class of that name stays its own.
+differential_test!(
+    a_bundled_class_reports_its_jdk_name,
+    "Names",
+    r#"
+import java.util.Random;
+import java.util.StringJoiner;
+
+public class Names {
+    public static void main(String[] args) {
+        Random r = new Random(1);
+        System.out.println(r.getClass().getName() + " " + r.getClass().getSimpleName());
+        System.out.println(r.toString().startsWith("java.util.Random@"));
+        StringJoiner j = new StringJoiner(",");
+        j.add("a").add("b");
+        System.out.println(j.getClass().getName() + " " + j);
+        Object o = r;
+        System.out.println((o instanceof Random) + " " + (j instanceof StringJoiner));
+    }
+}
+"#
+);
+
+// An ARRAY of a type whose element the resolver INTERNS — a `Scanner[]`
+// parameter, a `List<String>[]` one, a varargs of either. The declaration's
+// descriptor is built by one path and every call site's by another, and the
+// two disagreed: the class file declared `rows([Ljava/util/ArrayList;)` and
+// the call asked for `rows([Ljava/lang/Object;)`, so the method could not be
+// found at all.
+differential_test!(
+    an_array_of_a_library_type_in_a_signature,
+    "Arrays2",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+import java.util.regex.Pattern;
+
+public class Arrays2 {
+    static int rows(List<String>[] grid) { return grid.length; }
+    static int cells(ArrayList<Integer>[] grid) { return grid.length; }
+    @SafeVarargs static int count(Scanner... values) { return values.length; }
+    static Pattern[] pair() { return new Pattern[] { Pattern.compile("a"), Pattern.compile("b") }; }
+
+    public static void main(String[] args) {
+        List<String>[] grid = new List[2];
+        grid[0] = new ArrayList<>();
+        System.out.println(rows(grid));
+        System.out.println(cells(new ArrayList[1]));
+        Scanner one = new Scanner("hi");
+        System.out.println(count(one, one) + " " + count());
+        System.out.println(pair().length + pair()[1].pattern());
+    }
+}
+"#
+);
+
+// One element KIND per type. A type argument and a VALUE of the same type must
+// agree, or the two spellings of one type are different types: `List<Class>`
+// (and `List<Class<?>>`) could not hold what `x.getClass()` answers —
+// "incompatible types: List<Class> cannot be converted to List<Class>". And a
+// library generic written RAW converts to a parameterized one, the unchecked
+// conversion javac allows, exactly as a user class's raw form already did.
+differential_test!(
+    one_element_kind_per_type,
+    "Elements",
+    r#"
+import java.util.List;
+import java.util.Optional;
+
+public class Elements {
+    public static void main(String[] args) {
+        List<Class> classes = List.of("x".getClass());
+        System.out.println(classes.get(0).getSimpleName());
+        List<Class<?>> wild = List.of("y".getClass());
+        System.out.println(wild.size());
+        List<Optional> raw = List.of(Optional.of("val"));
+        System.out.println(raw.size());
+        List<Optional<String>> typed = List.of(Optional.of("v"));
+        System.out.println(typed.get(0).get());
+        List<StackTraceElement> frames = List.of(new Throwable().getStackTrace()[0]);
+        System.out.println(frames.get(0).getMethodName());
+    }
+}
+"#
+);
+
+// A library object inside a COLLECTION prints as itself. A collection renders
+// its elements through the display path, and every value-like library object
+// went through it as `object@2a` while printing the same object directly said
+// `x` — one `toString` written twice, and only one of them reachable from a
+// list.
+differential_test!(
+    a_library_object_inside_a_collection,
+    "Printed",
+    r#"
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Printed {
+    public static void main(String[] args) {
+        System.out.println(List.of(Path.of("x"), Path.of("y")));
+        System.out.println(List.of(StandardCharsets.UTF_8));
+        System.out.println(List.of(new File("a/b.txt")));
+        System.out.println(List.of(Pattern.compile("\\d+")));
+        Matcher m = Pattern.compile("a").matcher("aa");
+        System.out.println(List.of(m));
+        m.find();
+        System.out.println(List.of(m));
+        System.out.println("" + Path.of("z") + StandardCharsets.UTF_8 + new File("f"));
+        Object[] arr = { Path.of("r"), StandardCharsets.US_ASCII };
+        System.out.println(java.util.Arrays.toString(arr));
+        System.out.println(java.util.Map.of("k", Path.of("v")));
+    }
+}
+"#
+);

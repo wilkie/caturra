@@ -9779,3 +9779,68 @@ Pinned by `a_matchers_region_and_bounds`, `the_append_and_tail_loop`,
 `a_frozen_match_and_the_results_stream`, `a_patterns_own_predicates`,
 `the_computed_replacements`, `what_the_last_attempt_learned`,
 `a_pattern_syntax_exception_reports_where` and `a_malformed_pattern_says_where`.
+
+### A library type, wherever a program puts one (2026-08-27)
+
+A `Pattern` could be held in a local and not be a method's PARAMETER —
+"unknown type 'Pattern'" about a type that had worked a line earlier. The
+descriptor for a signature was built by a hand-written chain of `else if`s that
+every new library type had to be written into a second time, and five had not
+been. It asks the resolver now, which is the same answer every other position
+gets, so the two cannot drift again.
+
+That was one of eight defects a cross-product found: sixteen modelled library
+types (a `Scanner`, a `Path`, a `Charset`, the regex trio, a `Random`, a
+summary) against every position a program can put one in — parameter, return,
+field, array, collection element, type argument, varargs, ternary, `var`,
+lambda parameter, cast back from `Object`, `instanceof`. 26 of the first 64
+programs diverged; all 100 agree now.
+
+- **The cast back was refused for every one of them**, and worse, it fell
+  through to the UNBOXING arm and emitted `intValue()` on the object. Both the
+  cast rule and `instanceof` now ask ONE question — is this a library type
+  modelled as a single class? — so neither can accept what the other refuses,
+  and a checkcast is only emitted to a class the VM's namer knows.
+- **An ARRAY of an interned element in a signature** never worked at all: the
+  declaration said `rows([Ljava/util/ArrayList;)` and every call site asked for
+  `rows([Ljava/lang/Object;)`, so the method could not be found. A
+  `List<String>[]` parameter and a `Scanner...` varargs are the same bug.
+- **One element kind per type.** A type ARGUMENT and a VALUE of the same type
+  disagreed: `List<Class> l = List.of(x.getClass())` was "incompatible types:
+  List<Class> cannot be converted to List<Class>", the tell of one fact in two
+  shapes. And a library generic written RAW now converts to a parameterized one
+  (`List<Optional> l = List.of(Optional.of("v"))`), the unchecked conversion
+  javac allows and a user class's raw form already got.
+- **A library object inside a COLLECTION printed as `object@2a`** while the
+  same object printed directly said `x`. One `toString` written twice, and only
+  one of them reachable from a list.
+- **A bundled class that stands for a JDK one now carries the JDK's binary
+  name**: `new Random(1).getClass().getName()` is `java.util.Random`, and a
+  default `toString` prints it — while a program's own `Random` stays its own,
+  since the library is not injected beside one. The diagnostics follow: javac
+  prints the SIMPLE name for an imported class, so the message renderer strips
+  a package the way it already stripped an enclosing class.
+- **The VM names three more kinds**: a `Path` is a `sun.nio.fs.UnixPath` (the
+  Unix-shaped filesystem whose separator caturra already prints), a `Charset` is
+  a class per charset (`sun.nio.cs.UTF_8`), and a summary is a
+  `java.util.IntSummaryStatistics` — which was also not importable, so a program
+  could chain through one and never name it.
+
+`java.nio.file.Path` gained its surface in the same pass, since the sweep could
+not put one anywhere until it had one: `Path.of` is VARARGS (joining its
+segments, dropping the empty ones), and `getRoot`/`getName`/`getNameCount`/
+`isAbsolute`/`normalize`/`resolve`/`resolveSibling`/`relativize`/`startsWith`/
+`endsWith`/`subpath`/`toAbsolutePath`/`toFile`/`compareTo`/`equals`/`hashCode`
+all work on the NAME ELEMENTS rather than the text — `a/bc` does not start with
+`a/b`, and `getParent` of a single name is null.
+
+Known gaps, both honest refusals: a `Path` is `Iterable` in a JDK and
+`for (Path part : p)` says so rather than iterating; and `new
+IntSummaryStatistics()` cannot be constructed directly (only
+`IntStream.summaryStatistics()` makes one).
+
+Pinned by `a_library_type_in_every_position`, `the_path_surface`,
+`a_bundled_class_reports_its_jdk_name`, `an_array_of_a_library_type_in_a_signature`,
+`one_element_kind_per_type` and `a_library_object_inside_a_collection`; the
+compatibility page gained a "Path" claim (89 supported / 5 unsupported /
+3 beyond-11).
