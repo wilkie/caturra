@@ -91,7 +91,12 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         // anyway, so only the derived bucket order is skipped.
         "java/util/LinkedHashMap" => Some(HeapObject::HashMap(JavaHashMap::linked())),
         "java/util/LinkedHashSet" => Some(HeapObject::HashSet(JavaHashMap::linked())),
-        "java/util/TreeSet" => Some(HeapObject::TreeSet {
+        // The enum-keyed collections ARE the sorted ones underneath: an enum's
+        // natural ordering is its ordinal, which is the order a JDK's
+        // EnumMap/EnumSet iterate. What they do not share is the class they
+        // report and their tolerance of a null probe, and the interpreter
+        // records both when it builds one.
+        "java/util/TreeSet" | "java/util/EnumSet" => Some(HeapObject::TreeSet {
             values: Vec::new(),
             comparator: None,
         }),
@@ -99,7 +104,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             heap: Vec::new(),
             comparator: None,
         }),
-        "java/util/TreeMap" => Some(HeapObject::TreeMap {
+        "java/util/TreeMap" | "java/util/EnumMap" => Some(HeapObject::TreeMap {
             entries: Vec::new(),
             comparator: None,
         }),

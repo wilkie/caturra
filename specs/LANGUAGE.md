@@ -8952,10 +8952,9 @@ entries after it was written down.
 - `Vector<Integer> v;` and the rest of the unmodeled library — a scope
   limit, reported by name wherever written rather than as a missing symbol.
   This bullet used to name `LinkedList`, `HashSet`, `TreeMap` and `TreeSet`
-  as well; all four are modeled now. What is left is `Vector`/`Hashtable`, the
-  `Abstract*` skeletons, and the enum-keyed `EnumMap`/`EnumSet` — for which a
-  `TreeMap`/`TreeSet` keyed by the enum iterates in the very same order, an
-  enum's natural ordering being its ordinal. (`strict_vector_is_refused_by_name`)
+  as well; all four are modeled now, and so are `EnumMap`/`EnumSet`. What is
+  left is `Vector`/`Hashtable` and the `Abstract*` skeletons.
+  (`strict_vector_is_refused_by_name`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -9946,3 +9945,36 @@ Pinned by `the_type_of_a_conditional`, `a_conditional_adopts_its_target`,
 `stricter_a_conditional_as_an_argument_needs_one_shared_type`; the
 compatibility page gained a "The type of a conditional" claim (91 supported /
 5 unsupported / 3 beyond-11).
+
+### The enum-keyed collections (2026-08-27)
+
+Enums themselves came back clean over eight probes — constants with fields and
+constructors, constant-specific bodies, an enum implementing an interface, a
+static initializer, `values()` handing back a FRESH array each call,
+`valueOf`'s exception, `ordinal`/`name`/`compareTo`, an enum as a `HashMap` key
+and in a `TreeSet`, an overridden `toString`, and the empty enum. The one hole
+was the pair that exists FOR enums, and which caturra refused by name:
+`EnumMap` and `EnumSet`.
+
+They are the sorted collections underneath. An enum's natural ordering is its
+ordinal, so a `TreeMap` keyed by one already iterates in exactly the order a
+JDK's `EnumMap` does — which is what the old refusal said, as an argument for
+not modelling them. What it left out is that a program can SEE the difference
+three ways, and each is small: the class the object reports (`java.util.EnumMap`,
+`java.util.RegularEnumSet`), the null PROBE an enum collection tolerates
+(`get(null)` is null and `contains(null)` false, where a TreeMap's compare
+throws — only a null KEY still throws), and the METHODS: an EnumMap is a plain
+`Map`, so `firstKey`/`headMap` must NOT be offered. Modelling the type as a
+`Map`/`Set` and the object as the sorted one gives all three.
+
+`EnumSet`'s factories need the enum's UNIVERSE — every constant, in order — and
+the compiler is where that is known, so each call emits the enum's own
+`values()` as its first argument. The VM walks those constants and keeps the
+ones the call selects, which is why `noneOf` remembers nothing and
+`complementOf` needs no reflection: `allOf`, `noneOf`, `of`, `range`
+(inclusive), `complementOf` and `copyOf` are one loop over the universe with a
+different test.
+
+Pinned by `the_enum_keyed_collections`; the compatibility page gained an
+"EnumMap and EnumSet" claim (92 supported / 5 unsupported / 3 beyond-11), and
+the divergence list lost the bullet that named them.

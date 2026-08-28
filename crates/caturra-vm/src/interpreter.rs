@@ -3361,9 +3361,19 @@ impl<'run> Interpreter<'run> {
                 return Ok(None);
             }
         }
+        // `new EnumMap<>(Day.class)` — the key type, which caturra does not
+        // need: the order an EnumMap iterates in is its keys' natural one,
+        // which is what the sorted map underneath already gives. The COPY
+        // constructor sorts like a TreeMap's, below.
+        if target_class == "java/util/EnumMap" {
+            self.mark_enum_collection(receiver);
+            if descriptor == "(Ljava/lang/Class;)V" {
+                return Ok(None);
+            }
+        }
         // `new TreeMap<>(comparator)` stores the comparator; `new TreeMap<>(m)`
         // copies and sorts a map. Both compare keys with user code.
-        if target_class == "java/util/TreeMap" {
+        if matches!(target_class, "java/util/TreeMap" | "java/util/EnumMap") {
             use crate::value::HeapObject;
             if descriptor == "(Ljava/util/Comparator;)V" {
                 let comparator = match args[0] {
@@ -5118,6 +5128,9 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(JValue::Ref(Some(comparator)));
             return Ok(true);
         }
+        if matches!(class_name, "EnumSet" | "java/util/EnumSet") {
+            return self.enum_set_factory(frame, method_name, args);
+        }
         if class_name != "Comparator" && class_name != "java/util/Comparator" {
             return Ok(false);
         }
@@ -5154,6 +5167,72 @@ impl<'run> Interpreter<'run> {
         };
         let comparator = self.heap.alloc(HeapObject::Comparator(spec));
         frame.stack.push(JValue::Ref(Some(comparator)));
+        Ok(true)
+    }
+
+    /// `EnumSet`'s factories. The compiler hands each one the enum's UNIVERSE
+    /// — its `values()` array — so the set is built by walking the constants
+    /// in order and keeping the ones the call selects. That order IS the set's
+    /// iteration order, which is why an enum set needs no comparisons at all.
+    fn enum_set_factory(
+        &mut self,
+        frame: &mut Frame<'run>,
+        method_name: &str,
+        args: &[JValue],
+    ) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        let Some(JValue::Ref(Some(universe))) = args.first() else {
+            return Ok(false);
+        };
+        let constants = match self.heap.get(*universe) {
+            Some(HeapObject::RefArray(_, values)) => values.clone(),
+            _ => return Ok(false),
+        };
+        // Which constants this call keeps, as a test over the universe.
+        let chosen: Vec<JValue> = match (method_name, &args[1..]) {
+            ("allOf", []) => constants,
+            ("noneOf", []) => Vec::new(),
+            ("of", [JValue::Ref(Some(picked))]) => {
+                let picked = match self.heap.get(*picked) {
+                    Some(HeapObject::RefArray(_, values)) => values.clone(),
+                    _ => return Ok(false),
+                };
+                constants
+                    .into_iter()
+                    .filter(|c| picked.contains(c))
+                    .collect()
+            }
+            // `range(from, to)` is INCLUSIVE of both ends, by ordinal.
+            ("range", [JValue::Ref(Some(from)), JValue::Ref(Some(to))]) => {
+                let start = constants.iter().position(|c| *c == JValue::Ref(Some(*from)));
+                let end = constants.iter().position(|c| *c == JValue::Ref(Some(*to)));
+                match (start, end) {
+                    (Some(start), Some(end)) if start <= end => {
+                        constants[start..=end].to_vec()
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.IllegalArgumentException: from > to",
+                        )));
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            ("complementOf" | "copyOf", [JValue::Ref(Some(source))]) => {
+                let held = self.collection_elements(*source);
+                constants
+                    .into_iter()
+                    .filter(|c| held.contains(c) == (method_name == "copyOf"))
+                    .collect()
+            }
+            _ => return Ok(false),
+        };
+        let set = self.heap.alloc(HeapObject::TreeSet {
+            values: chosen,
+            comparator: None,
+        });
+        self.mark_enum_collection(set);
+        frame.stack.push(JValue::Ref(Some(set)));
         Ok(true)
     }
 
@@ -7261,6 +7340,13 @@ impl<'run> Interpreter<'run> {
             let inner = *inner;
             return self.map_find(inner, key);
         }
+        // An ENUM-keyed map knows that null is not one of its keys, so a null
+        // PROBE answers absent instead of comparing (which is what a JDK's
+        // EnumMap does, and why `get(null)` is null there where a TreeMap's
+        // throws). Only the probe: `put(null, v)` still throws.
+        if key == JValue::NULL && self.is_enum_collection(map) {
+            return Ok(None);
+        }
         // A TreeMap locates a key by comparison, not hashing — and so does a
         // VIEW of one, whose `map_entries` are the slice the bounds resolve
         // to. Without this an entry taken from `subMap(…).entrySet()` looked
@@ -8361,6 +8447,12 @@ impl<'run> Interpreter<'run> {
 
     /// The index of the element equal to `probe` (`compare == 0`), if present.
     fn tree_set_index_of(&mut self, set: HeapRef, probe: JValue) -> Result<Option<usize>, VmError> {
+        // An ENUM set knows null is not one of its constants, so a null probe
+        // answers absent instead of comparing — `contains(null)` is false on a
+        // JDK's EnumSet where a TreeSet's throws.
+        if probe == JValue::NULL && self.is_enum_collection(set) {
+            return Ok(None);
+        }
         let comparator = self.tree_set_comparator(set);
         for (index, existing) in self.tree_set_values(set).into_iter().enumerate() {
             if self.compare_with(probe, existing, comparator)? == 0 {
@@ -10619,6 +10711,29 @@ impl<'run> Interpreter<'run> {
             method,
             descriptor,
             &[],
+        )
+    }
+
+    /// Mark a sorted collection as an ENUM-keyed one: it reports a JDK's
+    /// `EnumMap`/`RegularEnumSet` from `getClass`, and — unlike the `TreeMap`
+    /// and `TreeSet` it is built from — it tolerates a null PROBE
+    /// (`get(null)` is null, `contains(null)` is false), because an enum
+    /// collection knows null is not one of its keys instead of comparing it.
+    fn mark_enum_collection(&mut self, reference: HeapRef) {
+        use crate::value::HeapObject;
+        let name = match self.heap.get(reference) {
+            Some(HeapObject::TreeMap { .. }) => "java/util/EnumMap",
+            Some(HeapObject::TreeSet { .. }) => "java/util/RegularEnumSet",
+            _ => return,
+        };
+        self.view_class.insert(reference, name);
+    }
+
+    /// Whether this collection was built as an enum-keyed one.
+    fn is_enum_collection(&self, reference: HeapRef) -> bool {
+        matches!(
+            self.view_class.get(&reference),
+            Some(&"java/util/EnumMap" | &"java/util/RegularEnumSet")
         )
     }
 
@@ -19099,6 +19214,10 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         }
         // A path and a charset are IMPLEMENTATION classes; what a program
         // names is the interface (or the abstract class) above them.
+        // An EnumMap is a Map and an EnumSet a Set, like the sorted
+        // collections they are made of here.
+        "java/util/EnumMap" => &["java/util/Map"],
+        "java/util/RegularEnumSet" => &["java/util/Set", "java/util/Collection"],
         "sun/nio/fs/UnixPath" => &[
             "java/nio/file/Path",
             "java/lang/Comparable",
@@ -19181,8 +19300,21 @@ pub(crate) fn object_class_name_of(
         } else {
             "java/util/HashMap"
         }),
-        Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
-        Some(HeapObject::TreeMap { .. }) => String::from("java/util/TreeMap"),
+        // A sorted collection is what an ENUM-keyed one is made of, so which
+        // class it reports was recorded when it was built — the same way a
+        // wrapped collection's is.
+        Some(HeapObject::TreeSet { .. }) => String::from(
+            view_class
+                .and_then(|classes| classes.get(&receiver))
+                .copied()
+                .unwrap_or("java/util/TreeSet"),
+        ),
+        Some(HeapObject::TreeMap { .. }) => String::from(
+            view_class
+                .and_then(|classes| classes.get(&receiver))
+                .copied()
+                .unwrap_or("java/util/TreeMap"),
+        ),
         Some(HeapObject::PriorityQueue { .. }) => String::from("java/util/PriorityQueue"),
         Some(HeapObject::Optional { kind, .. }) => {
             format!("java/util/{}", kind.prefix())

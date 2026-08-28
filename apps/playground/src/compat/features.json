@@ -488,7 +488,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-gbbb86vi/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-se4wmdth/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -499,7 +499,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-up_zrlg3/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-__kuvtsr/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -510,7 +510,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-n5bkezrg/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-adikatn9/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -951,6 +951,16 @@
     "source": "import java.util.ArrayList;\nimport java.util.LinkedList;\nimport java.util.List;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nboolean flag = args.length == 0;\n        System.out.println((int) (flag ? 'a' : 98));\n        System.out.println(flag ? 1 : 2.0);\n        System.out.println(flag ? 1L : 2);\n        Integer boxed = 3;\n        System.out.println(flag ? boxed : 4);\n        Object either = flag ? Integer.valueOf(1) : Double.valueOf(2);\n        System.out.println(either + \" \" + either.getClass().getSimpleName());\n        List<String> list = flag ? new ArrayList<>() : new LinkedList<>();\n        System.out.println(list.size());\n        CharSequence text = flag ? new StringBuilder(\"sb\") : \"str\";\n        System.out.println(text.length());\n    }\n}\n",
     "status": "supported",
     "expected": "97\n1.0\n1\n3\n1.0 Double\n0\n2\n"
+  },
+  {
+    "id": "g-enum-collections",
+    "category": "Collections",
+    "title": "EnumMap and EnumSet",
+    "summary": "The enum-keyed collections iterate in their constants' own order, and an EnumSet is built from the enum's universe rather than by hashing.",
+    "main": "G",
+    "source": "import java.util.EnumMap;\nimport java.util.EnumSet;\npublic class G {\n    enum Day { MON, TUE, WED, THU, FRI }\n\n    public static void main(String[] args) throws Exception {\nEnumMap<Day, Integer> hours = new EnumMap<>(Day.class);\n        hours.put(Day.WED, 3);\n        hours.put(Day.MON, 1);\n        System.out.println(hours + \" \" + hours.get(Day.MON));\n        System.out.println(hours.keySet() + \" \" + hours.getClass().getName());\n        System.out.println(hours.get(null));\n        EnumSet<Day> some = EnumSet.of(Day.FRI, Day.MON);\n        System.out.println(some + \" \" + some.contains(null));\n        System.out.println(EnumSet.allOf(Day.class));\n        System.out.println(EnumSet.range(Day.TUE, Day.THU));\n        System.out.println(EnumSet.complementOf(some));\n    }\n}\n",
+    "status": "supported",
+    "expected": "{MON=1, WED=3} 1\n[MON, WED] java.util.EnumMap\nnull\n[MON, FRI] false\n[MON, TUE, WED, THU, FRI]\n[TUE, WED, THU]\n[TUE, WED, THU]\n"
   },
   {
     "id": "g-fail-fast",

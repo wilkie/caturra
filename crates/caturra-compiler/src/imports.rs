@@ -53,6 +53,11 @@ const JAVA_UTIL: &[&str] = &[
     "Arrays",
     "Objects",
     "Random",
+    // The enum-keyed collections. Their ITERATION ORDER is the constants'
+    // declaration order, which is an enum's natural ordering — so they are the
+    // sorted collections underneath and a plain Map/Set on the surface.
+    "EnumMap",
+    "EnumSet",
     "Collections",
     "StringJoiner",
     "InputMismatchException",
@@ -241,13 +246,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // and `Collections.list` are its only real uses today, and neither is
     // modelled.
     ("java.util", &["Enumeration"]),
-    // The enum-keyed collections. Their ITERATION ORDER is the constants'
-    // declaration order, which a `TreeMap`/`TreeSet` keyed by the enum
-    // reproduces exactly (an enum's natural ordering IS its ordinal) — so the
-    // refusal names the substitute rather than pretending the class is
-    // unknown. Modelling them properly means a distinct kind, if only so
-    // `getClass()` stays honest.
-    ("java.util", &["EnumMap", "EnumSet"]),
     // `Runtime` reports free/total/max memory and runs external processes.
     // caturra collects on its own schedule inside one WASM instance, so every
     // number it could answer would be fiction about a heap the program cannot
@@ -314,6 +312,8 @@ const REQUIRES_IMPORT: &[&str] = &[
     "TreeSet",
     "SortedSet",
     "NavigableSet",
+    "EnumMap",
+    "EnumSet",
     "LinkedList",
     "Queue",
     "Deque",

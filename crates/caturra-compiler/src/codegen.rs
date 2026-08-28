@@ -3135,11 +3135,18 @@ impl MethodTable {
                 // `Map<K, V>` is the interface form of the HashMap caturra models.
                 // A `LinkedHashMap` is the same TYPE — the two differ only in
                 // iteration order, which the object carries, not the type.
-                if matches!(simple, "Map" | "LinkedHashMap") && !self.has_class(simple) {
+                // An `EnumMap` is a Map too: what makes it an EnumMap is the
+                // ORDER it iterates (the constants' own), which the object
+                // carries — and the METHODS it does not add, which is what
+                // keeps it a plain map here rather than a sorted one.
+                if matches!(simple, "Map" | "LinkedHashMap" | "EnumMap") && !self.has_class(simple)
+                {
                     simple = "HashMap";
                 }
                 // `HashSet<E>` is the concrete form of the Set caturra models.
-                if matches!(simple, "HashSet" | "LinkedHashSet") && !self.has_class(simple) {
+                if matches!(simple, "HashSet" | "LinkedHashSet" | "EnumSet")
+                    && !self.has_class(simple)
+                {
                     simple = "Set";
                 }
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
@@ -8426,7 +8433,8 @@ fn method_descriptor(
                 if simple == "List" && !table.has_class("List") {
                     simple = "ArrayList";
                 }
-                if matches!(simple, "Map" | "LinkedHashMap") && !table.has_class(simple) {
+                if matches!(simple, "Map" | "LinkedHashMap" | "EnumMap") && !table.has_class(simple)
+                {
                     simple = "HashMap";
                 }
                 if matches!(simple, "HashSet" | "LinkedHashSet") && !table.has_class(simple) {
@@ -19596,7 +19604,7 @@ impl BodyGen<'_> {
             // ones — only the object's iteration order differs — and the
             // emission path remaps them. This table did not, so `new
             // LinkedHashMap<>()` typed as an error while it emitted a map.
-            "HashMap" | "Map" | "LinkedHashMap" => {
+            "HashMap" | "Map" | "LinkedHashMap" | "EnumMap" => {
                 let (key, value) = if let [key, value] = type_args {
                     (
                         elem_from_type_arg(key, self.table),
@@ -19924,6 +19932,12 @@ impl BodyGen<'_> {
                 }
                 "LinkedHashMap" => {
                     return self.new_hash_map("java/util/LinkedHashMap", type_args, args, span);
+                }
+                // An `EnumMap` is built like any other map — what differs is
+                // the ORDER it iterates (its keys' own) and the class it
+                // reports, both of which the object carries.
+                "EnumMap" => {
+                    return self.new_hash_map("java/util/EnumMap", type_args, args, span);
                 }
                 "HashSet" => {
                     return self.new_hash_set("java/util/HashSet", type_args, args, span);
@@ -20983,6 +20997,11 @@ impl BodyGen<'_> {
                         entry = Some((key, value));
                     }
                     "(Ljava/util/Map;)V"
+                } else if source_ty == JType::Class {
+                    // `new EnumMap<>(Day.class)` — the key type, which caturra
+                    // does not need (the ORDER is the keys' own either way).
+                    // Evaluated all the same, so its own failure stands.
+                    "(Ljava/lang/Class;)V"
                 } else {
                     if !widens(source_ty, JType::Int, self.table) {
                         self.error(span, "new HashMap(...) takes a Map or an int capacity");
@@ -23187,6 +23206,121 @@ impl BodyGen<'_> {
         Some(ret_ty)
     }
 
+    /// `EnumSet.of/noneOf/allOf/range/complementOf/copyOf`. Every one of them
+    /// is the enum's UNIVERSE (its `values()`, emitted here) plus whatever the
+    /// call selects from it, so the VM builds the set by ordinal without ever
+    /// asking a class for its constants.
+    #[allow(clippy::option_option)] // the call-dispatch return shape
+    fn emit_enum_set_call(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        // Which enum: named by a class literal (`noneOf(Day.class)`), or the
+        // element type of the arguments.
+        let enum_id = match (method, args) {
+            // `Day.class` — a field access on a type name, which is how a
+            // class literal is written.
+            (
+                "noneOf" | "allOf",
+                [
+                    Expr::Field {
+                        object,
+                        name,
+                        ..
+                    },
+                ],
+            ) if name == "class" => match object.as_ref() {
+                Expr::Name { path, .. } => self
+                    .table
+                    .class_id(path.last().map_or("", String::as_str)),
+                _ => None,
+            },
+            (_, [first, ..]) => match self.type_of(first) {
+                JType::Object(id) => Some(id),
+                JType::Set { elem, .. } | JType::List { elem, .. } | JType::Collection(elem) => {
+                    match elem {
+                        ElemType::Object(id) => Some(id),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(enum_id) = enum_id.filter(|id| {
+            self.table
+                .info_by_id(*id)
+                .is_some_and(|info| info.is_enum)
+        }) else {
+            self.error(
+                span,
+                format!("EnumSet.{method}(...) needs an enum type — caturra could not read one"),
+            );
+            return None;
+        };
+        let enum_name = self.table.class_name(enum_id).to_owned();
+        // The universe: `Day.values()`, an array of every constant in order.
+        let values = intern_method_ref(
+            self.pool,
+            &enum_name,
+            "values",
+            &format!("()[L{enum_name};"),
+        );
+        self.code.push_op_u16(op::INVOKESTATIC, values, 1);
+        let elem = ElemType::Object(enum_id);
+        let set = JType::Set {
+            elem,
+            face: CollFace::Concrete,
+        };
+        // What the call selects from it.
+        let descriptor = match (method, args.len()) {
+            ("noneOf" | "allOf", 1) => {
+                // The class literal is not needed beyond naming the enum, and
+                // it has no side effect to keep.
+                String::from("([Ljava/lang/Object;)Ljava/util/Set;")
+            }
+            ("complementOf" | "copyOf", 1) => {
+                let source = self.expr(&args[0]);
+                if source == JType::Error {
+                    return None;
+                }
+                String::from("([Ljava/lang/Object;Ljava/util/Collection;)Ljava/util/Set;")
+            }
+            ("range", 2) => {
+                for arg in args {
+                    self.expr(arg);
+                }
+                String::from(
+                    "([Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;",
+                )
+            }
+            ("of", 1..=10) => {
+                // The chosen constants, packed as the varargs array a JDK's
+                // `of` overloads collapse to.
+                self.push_int(i32::try_from(args.len()).unwrap_or(0));
+                self.emit_new_1d(elem);
+                for (position, arg) in args.iter().enumerate() {
+                    self.code.push_op(op::DUP, 1);
+                    self.push_int(i32::try_from(position).unwrap_or(0));
+                    let got = self.expr(arg);
+                    self.convert_for_assignment(got, JType::Object(enum_id), arg.span());
+                    self.xastore(JType::Object(enum_id));
+                }
+                String::from("([Ljava/lang/Object;[Ljava/lang/Object;)Ljava/util/Set;")
+            }
+            _ => {
+                self.no_suitable_library_method("EnumSet", method, args, span);
+                return None;
+            }
+        };
+        let method_ref = intern_method_ref(self.pool, "java/util/EnumSet", method, &descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(descriptor_arg_width(&descriptor));
+        Some(Some(set))
+    }
+
     /// `Path.of(first, more...)`: the first segment, then the rest as the
     /// `String[]` a JDK's varargs signature declares. The VM joins them with
     /// the separator, dropping empty segments as a JDK does.
@@ -24495,6 +24629,8 @@ impl BodyGen<'_> {
                         // `java.nio.file` ones — none a bundled class nor in a
                         // fixed static table (their returns are handled inline).
                         || matches!(single, "Optional" | "Path" | "Paths" | "Files" | "Objects")
+                        // `EnumSet` is nothing BUT static factories.
+                        || single == "EnumSet"
                         // `List`/`Set`/`Map` hold Java 9's immutable `of`
                         // factories — the only statics those interfaces have.
                         || matches!(single, "List" | "Set" | "Map")
@@ -24805,6 +24941,13 @@ impl BodyGen<'_> {
         }
         if !self.table.has_class(class) && builtin_static_table(class).is_some() {
             return self.builtin_static_call(class, method, args, span);
+        }
+        // `EnumSet`'s factories. Each needs the enum's UNIVERSE — every
+        // constant, in order — and the compiler is where that is known: the
+        // enum's own `values()` is emitted as the first argument, so the VM
+        // never has to reflect on a class to find them.
+        if class == "EnumSet" && !self.table.has_class(class) {
+            return self.emit_enum_set_call(method, args, span);
         }
         // `java.nio.file`: `Path.of` / `Paths.get` build a Path, `Files.*`
         // reads/writes it through the virtual filesystem.
@@ -27411,14 +27554,47 @@ impl BodyGen<'_> {
                         if {
                             let short = self.strip_package_prefix(path);
                             let effective = short.as_deref().unwrap_or(path);
+                            let key = static_receiver_key(effective);
                             self.lookup(&effective[0]).is_none()
-                                && builtin_static_table(&static_receiver_key(effective)).is_some()
+                                && (builtin_static_table(&key).is_some()
+                                    // `EnumSet` is nothing but static
+                                    // factories, and none of them is in a
+                                    // table: each is built by its own emitter,
+                                    // which this mirrors below.
+                                    || (key == "EnumSet" && !self.table.has_class("EnumSet")))
                         } =>
                     {
                         let short = self.strip_package_prefix(path);
                         let path = short.as_deref().unwrap_or(path);
                         let key = static_receiver_key(path);
                         let path = std::slice::from_ref(&key);
+                        // `EnumSet`'s factories all answer a `Set<E>` of the
+                        // enum — mirror `emit_enum_set_call`, which is where
+                        // the enum is read from the class literal or from the
+                        // arguments. They have no static TABLE, and the arm
+                        // this sits in ends by demanding one.
+                        if path[0] == "EnumSet" {
+                            let elem = match args.first() {
+                                Some(Expr::Field { object, name, .. }) if name == "class" => {
+                                    match object.as_ref() {
+                                        Expr::Name { path, .. } => self
+                                            .table
+                                            .class_id(path.last().map_or("", String::as_str))
+                                            .map(ElemType::Object),
+                                        _ => None,
+                                    }
+                                }
+                                Some(other) => match self.type_of(other) {
+                                    JType::Object(id) => Some(ElemType::Object(id)),
+                                    other => collection_elem_of(other),
+                                },
+                                None => None,
+                            };
+                            return elem.map_or(JType::Error, |elem| JType::Set {
+                                elem,
+                                face: CollFace::Concrete,
+                            });
+                        }
                         // `String.format` is variadic and special-cased in the
                         // emission path (not in the static table); it returns
                         // String. Mirror that here so it can be an argument.

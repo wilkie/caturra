@@ -1976,6 +1976,21 @@ GRAMMAR = [
                       '        CharSequence text = flag ? new StringBuilder("sb") : "str";\n'
                       '        System.out.println(text.length());',
                       '', 'import java.util.ArrayList;\nimport java.util.LinkedList;\nimport java.util.List;')),
+    dict(id="g-enum-collections", category="Collections", title="EnumMap and EnumSet",
+         summary="The enum-keyed collections iterate in their constants' own order, and an EnumSet is built from the enum's universe rather than by hashing.",
+         main="G",
+         source=_prog('EnumMap<Day, Integer> hours = new EnumMap<>(Day.class);\n'
+                      '        hours.put(Day.WED, 3);\n        hours.put(Day.MON, 1);\n'
+                      '        System.out.println(hours + " " + hours.get(Day.MON));\n'
+                      '        System.out.println(hours.keySet() + " " + hours.getClass().getName());\n'
+                      '        System.out.println(hours.get(null));\n'
+                      '        EnumSet<Day> some = EnumSet.of(Day.FRI, Day.MON);\n'
+                      '        System.out.println(some + " " + some.contains(null));\n'
+                      '        System.out.println(EnumSet.allOf(Day.class));\n'
+                      '        System.out.println(EnumSet.range(Day.TUE, Day.THU));\n'
+                      '        System.out.println(EnumSet.complementOf(some));',
+                      '    enum Day { MON, TUE, WED, THU, FRI }\n',
+                      'import java.util.EnumMap;\nimport java.util.EnumSet;')),
     dict(id="g-fail-fast", category="Collections", title="Fail-fast iterators (ConcurrentModificationException)",
          summary="Modifying a collection while iterating it throws, as on a real JVM — including the quirk where removing the second-to-last element does not.",
          main="G",

@@ -40321,3 +40321,74 @@ stricter_than_javac!(
     "StrictConditionalArg",
     "public class StrictConditionalArg {\n  interface Shape {}\n  interface Drawable {}\n  static class Sq implements Shape, Drawable {}\n  static class Ci implements Shape, Drawable {}\n  static String d(Drawable x) { return \"d\"; }\n  static String r() { return d(true ? new Sq() : new Ci()); }\n}"
 );
+
+// The enum-keyed collections. An `EnumMap` and an `EnumSet` iterate in their
+// constants' own order, which IS an enum's natural ordering — so they are the
+// sorted collections underneath and a plain `Map`/`Set` on the surface, with
+// two differences a program can see: the class they report, and their
+// tolerance of a null PROBE (a JDK's `EnumMap.get(null)` is null where a
+// TreeMap's throws).
+differential_test!(
+    the_enum_keyed_collections,
+    "EnumKeyed",
+    r#"
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+public class EnumKeyed {
+    enum Day { MON, TUE, WED, THU, FRI }
+
+    static int total(Map<Day, Integer> counts) {
+        int sum = 0;
+        for (Map.Entry<Day, Integer> e : counts.entrySet()) { sum += e.getValue(); }
+        return sum;
+    }
+
+    public static void main(String[] args) {
+        EnumMap<Day, Integer> m = new EnumMap<>(Day.class);
+        m.put(Day.WED, 3);
+        m.put(Day.MON, 1);
+        System.out.println(m + " " + m.size() + " " + m.get(Day.MON) + " " + total(m));
+        System.out.println(m.keySet() + " " + m.values() + " " + m.entrySet());
+        System.out.println(m.containsKey(Day.TUE) + " " + m.getOrDefault(Day.TUE, 0));
+        System.out.println(m.getClass().getName() + " " + (m instanceof Map));
+        System.out.println(m.equals(new HashMap<>(m)) + " " + new HashMap<>(m).equals(m));
+        // A null PROBE is absent, not a comparison; only a null KEY throws.
+        System.out.println(m.get(null) + " " + m.containsKey(null));
+        try { m.put(null, 1); } catch (NullPointerException e) { System.out.println("put null NPE"); }
+        m.remove(Day.MON);
+        System.out.println(m + " " + m.isEmpty() + " " + new EnumMap<>(m));
+        m.merge(Day.WED, 5, Integer::sum);
+        m.computeIfAbsent(Day.FRI, k -> 9);
+        m.forEach((k, v) -> System.out.println(k + "->" + v));
+        System.out.println(m.keySet().stream().map(Day::name).collect(Collectors.toList()));
+
+        EnumSet<Day> none = EnumSet.noneOf(Day.class);
+        System.out.println(none + " " + none.size() + " " + none.isEmpty());
+        EnumSet<Day> some = EnumSet.of(Day.FRI, Day.MON);
+        System.out.println(some + " " + some.contains(Day.MON) + " " + some.contains(null));
+        System.out.println(EnumSet.allOf(Day.class));
+        System.out.println(EnumSet.range(Day.TUE, Day.THU));
+        System.out.println(EnumSet.complementOf(some));
+        System.out.println(EnumSet.copyOf(some) + " " + some.getClass().getName());
+        some.add(Day.WED);
+        some.remove(Day.MON);
+        System.out.println(some);
+        Set<Day> asSet = new HashSet<>(some);
+        System.out.println(some.equals(asSet) + " " + asSet.equals(some));
+        for (Day d : EnumSet.allOf(Day.class)) { System.out.print(d.ordinal()); }
+        System.out.println();
+        System.out.println(EnumSet.allOf(Day.class).stream().map(Enum::name).count());
+        List<Day> listed = new ArrayList<>(EnumSet.range(Day.MON, Day.TUE));
+        System.out.println(listed + " " + EnumSet.copyOf(listed));
+    }
+}
+"#
+);

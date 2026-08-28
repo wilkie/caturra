@@ -1379,6 +1379,34 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             args,
             ..
         } => {
+            // `EnumSet`'s factories answer a `Set<E>` of the enum they name —
+            // by a class literal (`allOf(Day.class)`), by the constants
+            // passed, or by the collection copied. Without it a stream over
+            // one had no element and every lambda after it was refused.
+            if names_library_class(owner, "EnumSet")
+                && matches!(
+                    method.as_str(),
+                    "noneOf" | "allOf" | "of" | "range" | "complementOf" | "copyOf"
+                )
+            {
+                let elem = args.first().and_then(|arg| match arg {
+                    Expr::Field { object, name, .. } if name == "class" => match object.as_ref() {
+                        Expr::Name { path, .. } => path.last().cloned().map(TypeRef::Named),
+                        _ => None,
+                    },
+                    other => match static_type_of(other, ctx) {
+                        Some(TypeRef::Generic { args, .. }) => args.first().cloned(),
+                        Some(named @ TypeRef::Named(_)) => Some(named),
+                        _ => None,
+                    },
+                });
+                if let Some(elem) = elem {
+                    return Some(TypeRef::Generic {
+                        base: String::from("Set"),
+                        args: vec![elem],
+                    });
+                }
+            }
             // The regex objects, whose types this pass can name. A stream op
             // is written straight onto them
             // (`Pattern.compile(p).matcher(s).results().map(…)`), and inline
@@ -3632,7 +3660,7 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
     };
     if !matches!(
         simple_base(base.as_str()),
-        "Map" | "HashMap" | "TreeMap" | "SortedMap" | "NavigableMap"
+        "Map" | "HashMap" | "TreeMap" | "SortedMap" | "NavigableMap" | "EnumMap"
     ) || args.len() != 2
     {
         return None;
@@ -4574,6 +4602,8 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             | "Map"
             | "HashMap"
             | "TreeMap"
+            | "EnumMap"
+            | "EnumSet"
             | "Collection"
     );
     match (base, method, argc) {
@@ -5325,6 +5355,8 @@ fn is_collection_class(simple: &str) -> bool {
             | "Deque"
             | "PriorityQueue"
             | "Collection"
+            // An `EnumSet<E>` is a set of its enum, like any other.
+            | "EnumSet"
             // A cursor declared `Iterator<E>` walks `E`s, for
             // `forEachRemaining`.
             | "Iterator"
@@ -5484,7 +5516,8 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     {
         let read = match (simple_base(&base), method.as_str(), written.len()) {
             (
-                "Map" | "HashMap" | "LinkedHashMap" | "TreeMap" | "SortedMap" | "NavigableMap",
+                "Map" | "HashMap" | "LinkedHashMap" | "TreeMap" | "SortedMap" | "NavigableMap"
+                | "EnumMap",
                 "get" | "getOrDefault" | "remove" | "put" | "putIfAbsent" | "computeIfAbsent"
                 | "compute" | "computeIfPresent" | "merge" | "replace",
                 2,
