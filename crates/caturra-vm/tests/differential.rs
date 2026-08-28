@@ -40392,3 +40392,233 @@ public class EnumKeyed {
 }
 "#
 );
+
+// `java.lang.StringBuilder`, method by method: the appends of every overload,
+// insert/delete/replace/reverse, `setLength` (which PADS with NULs), the
+// searches, and the index errors each one throws.
+differential_test!(
+    the_string_builder_surface,
+    "Builders",
+    r#"
+public class Builders {
+    public static void main(String[] args) {
+        StringBuilder sb = new StringBuilder("hello");
+        System.out.println(sb.length() + " " + sb.charAt(1) + " " + sb.indexOf("ll"));
+        sb.append(" world").append(42).append('!').append(3.5).append(true).append((Object) null);
+        System.out.println(sb);
+        sb.insert(0, ">> ").insert(3, 'X').insert(4, 7);
+        System.out.println(sb);
+        sb.setCharAt(0, '#');
+        sb.deleteCharAt(0);
+        sb.delete(0, 4);
+        sb.replace(0, 5, "HELLO");
+        System.out.println(sb);
+        System.out.println(sb.substring(0, 5) + "|" + sb.substring(5));
+        System.out.println(sb.reverse());
+        sb.setLength(3);
+        System.out.println(sb + " " + sb.length());
+        // `setLength` beyond the content pads with NUL, which is a control
+        // character a program really can print.
+        sb.setLength(6);
+        System.out.println("[" + sb + "] " + sb.length());
+
+        StringBuilder find = new StringBuilder("abcabc");
+        System.out.println(find.indexOf("c") + " " + find.indexOf("c", 3) + " "
+            + find.lastIndexOf("c") + " " + find.indexOf("zz") + " " + find.lastIndexOf("a", 2));
+        System.out.println(find.compareTo(new StringBuilder("abd")));
+        System.out.println(find.chars().count() + " " + find.chars().filter(c -> c == 'a').count());
+        System.out.println(find.codePointAt(0) + " " + find.codePointCount(0, 3));
+
+        StringBuilder other = new StringBuilder();
+        other.append(new char[] {'x', 'y', 'z'});
+        other.append(new char[] {'p', 'q', 'r'}, 1, 2);
+        other.append("abcdef", 2, 4);
+        other.appendCodePoint(65);
+        System.out.println(other + " " + other.length());
+        CharSequence cs = new StringBuilder("seq");
+        System.out.println(cs.length() + " " + cs.charAt(0) + " " + cs.subSequence(1, 3));
+
+        StringBuilder self = new StringBuilder("ab");
+        self.append(self);
+        self.insert(2, self);
+        System.out.println(self);
+        StringBuilder uni = new StringBuilder("a😀b");
+        System.out.println(uni.length() + " " + uni.codePointCount(0, uni.length()));
+        System.out.println(uni.reverse());
+
+        StringBuilder bad = new StringBuilder("abc");
+        try { bad.charAt(5); } catch (StringIndexOutOfBoundsException e) {
+            System.out.println("charAt: " + e.getMessage());
+        }
+        try { bad.deleteCharAt(9); } catch (StringIndexOutOfBoundsException e) {
+            System.out.println("deleteCharAt: " + e.getMessage());
+        }
+        try { bad.insert(9, "x"); } catch (StringIndexOutOfBoundsException e) {
+            System.out.println("insert: " + e.getMessage());
+        }
+        try { bad.setLength(-1); } catch (StringIndexOutOfBoundsException e) {
+            System.out.println("setLength: " + e.getMessage());
+        }
+        try { bad.substring(2, 1); } catch (StringIndexOutOfBoundsException e) {
+            System.out.println("substring: " + e.getMessage());
+        }
+        System.out.println(bad.delete(1, 99) + " done");
+        StringBuilder nulls = new StringBuilder();
+        nulls.append((String) null).append((Object) null);
+        System.out.println(nulls + " " + nulls.length());
+    }
+}
+"#
+);
+
+// WHEN a class is initialized, and in what order its parts run: a constant is
+// inlined and initializes nothing, a static field read triggers the class, the
+// static field initializers and blocks run in SOURCE order, the instance ones
+// run before the constructor body — and a superclass constructor calling an
+// overridden method sees the subclass's fields still at their defaults.
+differential_test!(
+    when_a_class_is_initialized,
+    "Initialized",
+    r#"
+public class Initialized {
+    static class Holder {
+        static { System.out.println("Holder <clinit>"); }
+        static final int CONST = 7;
+        static int counter = init("counter");
+        static int init(String what) { System.out.println("init " + what); return 1; }
+    }
+    static class Lazy {
+        static { System.out.println("Lazy <clinit>"); }
+        static int value = 5;
+        static void ping() { System.out.println("ping"); }
+    }
+    static class Base {
+        static { System.out.println("Base <clinit>"); }
+        Base() { System.out.println("Base ctor"); show(); }
+        void show() { System.out.println("Base show"); }
+    }
+    static class Derived extends Base {
+        static { System.out.println("Derived <clinit>"); }
+        int field = 5;
+        Derived() { super(); System.out.println("Derived ctor field=" + field); }
+        @Override void show() { System.out.println("Derived show field=" + field); }
+    }
+    interface WithConst {
+        int SIZE = compute();
+        static int compute() { System.out.println("interface const"); return 3; }
+    }
+
+    static int a = report("a", 1);
+    static { System.out.println("block 1, a=" + a); }
+    static int b = report("b", 2);
+    static { System.out.println("block 2, b=" + b); }
+    static int report(String name, int value) {
+        System.out.println("assign " + name);
+        return value;
+    }
+    int x = report("x", 10);
+    { System.out.println("instance block, x=" + x); }
+    int y = report("y", 20);
+    Initialized() { System.out.println("ctor, y=" + y); }
+    Initialized(int ignored) { this(); System.out.println("ctor(int)"); }
+
+    public static void main(String[] args) {
+        System.out.println("start");
+        System.out.println(Holder.CONST);
+        System.out.println("---");
+        System.out.println(Holder.counter);
+        System.out.println("---");
+        Lazy.ping();
+        System.out.println(Lazy.value);
+        System.out.println("---");
+        new Initialized(3);
+        System.out.println("---");
+        new Derived();
+        Base b = new Derived();
+        b.show();
+        System.out.println(WithConst.SIZE);
+    }
+}
+"#
+);
+
+// A program may print any character, including a CONTROL one — `setLength`
+// pads with NUL, and `(char) 7` is an ordinary value. The differential harness
+// compares what a JDK printed with what caturra printed, and `compatrun` hands
+// its output over as JSON: an unescaped control character made that JSON
+// unparseable, so every reader of it (the fuzz runner, the compatibility
+// recorder) reported "printed no JSON" — a program that could not be compared
+// at all, rather than one that differed.
+differential_test!(
+    a_program_may_print_a_control_character,
+    "Controls",
+    r#"
+public class Controls {
+    public static void main(String[] args) {
+        StringBuilder padded = new StringBuilder("ab");
+        padded.setLength(5);
+        System.out.println(padded.length() + " [" + padded + "]");
+        System.out.println("bell:" + (char) 7 + " del:" + (char) 127 + " nul:" + (char) 0);
+        char[] raw = { 'a', (char) 1, (char) 31, 'b' };
+        System.out.println(new String(raw).length());
+        System.out.println("tab\tnewline-follows");
+        System.out.println((int) " ".charAt(0));
+    }
+}
+"#
+);
+
+// Arrays of arrays, and the covariance every reference array has: a jagged
+// array's missing rows are null, `clone` is SHALLOW (the rows are shared),
+// `deepToString`/`deepEquals` see through, and storing the wrong type in a
+// covariant reference array is an `ArrayStoreException` naming the class.
+differential_test!(
+    arrays_of_arrays_and_covariance,
+    "Grids",
+    r#"
+import java.util.Arrays;
+
+public class Grids {
+    public static void main(String[] args) {
+        int[][] grid = new int[3][4];
+        grid[1][2] = 7;
+        System.out.println(grid.length + " " + grid[0].length + " " + grid[1][2]);
+        System.out.println(Arrays.deepToString(grid));
+        int[][] jagged = new int[3][];
+        jagged[0] = new int[] {1};
+        jagged[1] = new int[] {1, 2};
+        System.out.println(Arrays.deepToString(jagged) + " " + (jagged[2] == null));
+        int[][] literal = {{1, 2}, {3}};
+        for (int[] row : literal) { System.out.print(Arrays.toString(row)); }
+        System.out.println();
+        System.out.println(Arrays.deepToString(new String[2][2]));
+        int[][] copy = literal.clone();
+        copy[0][0] = 99;
+        System.out.println(Arrays.deepToString(literal) + " " + (copy[0] == literal[0]));
+        System.out.println(Arrays.deepEquals(literal, copy) + " " + Arrays.equals(literal, copy));
+        int[][][] cube = new int[2][3][4];
+        System.out.println(cube.length + cube[0].length + cube[0][0].length);
+        System.out.println(Arrays.deepToString(new int[0][0]));
+
+        Object[] objects = new String[2];
+        try {
+            objects[0] = Integer.valueOf(1);
+        } catch (ArrayStoreException e) {
+            System.out.println("ASE " + e.getMessage());
+        }
+        objects[1] = "ok";
+        System.out.println(Arrays.toString(objects) + " " + objects.getClass().getName());
+        Number[] numbers = new Integer[] {1, 2};
+        System.out.println(Arrays.toString(numbers));
+        int[] src = {1, 2, 3, 4, 5};
+        int[] dst = new int[5];
+        System.arraycopy(src, 1, dst, 0, 3);
+        System.out.println(Arrays.toString(dst) + Arrays.toString(Arrays.copyOf(src, 7))
+            + Arrays.toString(Arrays.copyOfRange(src, 1, 3)));
+        char[] chars = {'a', 'b'};
+        System.out.println(chars.length + " " + new String(chars) + " " + String.valueOf(chars));
+        System.out.println(Arrays.toString(new boolean[2]) + Arrays.toString(new double[2]));
+    }
+}
+"#
+);

@@ -19,6 +19,16 @@ fn escape(text: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            // Every other CONTROL character has to be escaped too, or the
+            // JSON is unparseable: a program that prints one — `setLength`
+            // pads with NULs, and a `(char) 1` is an ordinary value — made
+            // this output unreadable, which every reader of it (the compat
+            // recorder, the fuzz runner) reported as "printed no JSON"
+            // instead of as a difference.
+            other if (other as u32) < 0x20 || other == '\u{7f}' => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04x}", other as u32);
+            }
             other => out.push(other),
         }
     }

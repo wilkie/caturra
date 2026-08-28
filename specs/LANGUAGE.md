@@ -9978,3 +9978,37 @@ different test.
 Pinned by `the_enum_keyed_collections`; the compatibility page gained an
 "EnumMap and EnumSet" claim (92 supported / 5 unsupported / 3 beyond-11), and
 the divergence list lost the bullet that named them.
+
+### Four dimensions, and the escape that hid one (2026-08-28)
+
+A sweep that found nothing is worth as much as one that finds something, but
+only if it really ran. This one nearly did not.
+
+`StringBuilder`, method by method — every `append` overload, `insert` in all
+seven forms, `delete`/`deleteCharAt`/`replace`/`reverse`/`setCharAt`, the
+searches, `compareTo`, `chars`, `codePointAt`, `subSequence`, appending a
+builder TO ITSELF, a surrogate pair reversed, and the index error each method
+throws — agreed with a real JDK everywhere. So did **initialization order**
+(a constant is inlined and initializes nothing; a static field read triggers the
+class; the static initializers and blocks run in source order; the instance ones
+run before the constructor body; a superclass constructor calling an overridden
+method sees the subclass's fields at their defaults; an interface's constant
+initializes the interface and not its implementor; and a forward reference is
+refused as javac refuses it), **deep recursion** (`StackOverflowError`, caught
+and recovered from), and **arrays of arrays** (jagged rows are null, `clone` is
+shallow, `deepToString`/`deepEquals`, and the `ArrayStoreException` a covariant
+array throws, message included).
+
+What the first of those found instead was a hole in the HARNESS. A program may
+print any character, including a control one — `setLength` pads with NUL, and
+`(char) 7` is an ordinary value — and `compatrun` hands its output to the
+differential runner as JSON through a hand-written escaper that knew only
+`"`, `\`, `\n`, `\r` and `\t`. An unescaped control character made that JSON
+unparseable, so every reader of it reported "printed no JSON": a program that
+could not be compared AT ALL, reported as neither a match nor a difference. The
+playground was never affected (the WASM boundary serializes properly); the
+thing that checks caturra against a JDK was.
+
+Pinned by `the_string_builder_surface`, `when_a_class_is_initialized`,
+`arrays_of_arrays_and_covariance` and `a_program_may_print_a_control_character`
+— the last one being a program that could not have been pinned before.
