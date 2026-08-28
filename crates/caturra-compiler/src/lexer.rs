@@ -605,7 +605,12 @@ impl Lexer<'_> {
                         },
                     });
                 }
-                Err(_) => self.error(format!("integer literal '{digits}' is out of range"), start),
+                // javac's own wording, which names no number: the caret it
+                // prints under the literal is what points at it.
+                Err(_) => {
+                    let _ = &digits;
+                    self.error(String::from("integer number too large"), start);
+                }
             }
         } else if is_double {
             match digits.parse::<f64>() {
@@ -616,9 +621,13 @@ impl Lexer<'_> {
                 Err(_) => self.error(format!("invalid floating-point literal '{digits}'"), start),
             }
         } else {
-            match digits.parse::<i64>() {
-                Ok(value) => self.push(TokenKind::IntLiteral(value), start),
-                Err(_) => self.error(format!("integer literal '{digits}' is out of range"), start),
+            // javac's own wording for a literal its type cannot hold, which
+            // names no number: the caret it prints under the literal is what
+            // points at it.
+            if let Ok(value) = digits.parse::<i64>() {
+                self.push(TokenKind::IntLiteral(value), start);
+            } else {
+                self.error(String::from("integer number too large"), start);
             }
         }
     }

@@ -1,0 +1,5 @@
+hello world!
+[mid]
+7 and seven
+pi=3.14
+tail

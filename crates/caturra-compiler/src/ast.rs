@@ -364,6 +364,10 @@ pub enum Stmt {
     ForEach {
         ty: TypeRef,
         name: String,
+        /// `for (final String s : xs)` — the loop variable may be declared
+        /// final (JLS §14.14.2), and then assigning it is an error. Dropping
+        /// the modifier let a program javac rejects run here.
+        is_final: bool,
         iterable: Expr,
         body: Box<Stmt>,
         span: SourceSpan,

@@ -36433,10 +36433,10 @@ public class DiamondResolution {
 differential_reject!(
     a_reabstracted_method_must_be_implemented,
     "ReabstractedMissing",
-    r"
+    r#"
 interface A {
     default String tag() {
-        return 'A';
+        return "A";
     }
 }
 
@@ -36451,23 +36451,23 @@ public class ReabstractedMissing {
         System.out.println(new Impl().tag());
     }
 }
-"
+"#
 );
 
 // …and two UNRELATED defaults with nothing more specific are still a conflict.
 differential_reject!(
     unrelated_defaults_still_conflict,
     "UnrelatedDefaults",
-    r"
+    r#"
 interface A {
     default String tag() {
-        return 'A';
+        return "A";
     }
 }
 
 interface B {
     default String tag() {
-        return 'B';
+        return "B";
     }
 }
 
@@ -36478,7 +36478,7 @@ public class UnrelatedDefaults {
         System.out.println(new Impl().tag());
     }
 }
-"
+"#
 );
 
 // EXCEPTION selection and control flow, cross-producted: eleven throw kinds
@@ -40621,4 +40621,21 @@ public class Grids {
     }
 }
 "#
+);
+
+// Assigning to a FINAL variable — javac has four different messages for it,
+// one per kind of variable, and caturra had one for all of them. The for-each
+// case was not an error at all: `for (final String s : xs) { s = "x"; }`
+// compiled here and fails on a JDK, which is the direction that must never be
+// wrong. (The parser was dropping the modifier.)
+differential_reject!(
+    a_final_for_each_variable_cannot_be_assigned,
+    "FinalForEach",
+    "public class FinalForEach {\n  static void f(String[] xs) { for (final String s : xs) { s = \"x\"; } }\n}"
+);
+
+differential_reject!(
+    a_final_parameter_cannot_be_assigned,
+    "FinalParam",
+    "public class FinalParam {\n  static void f(final int p) { p = 2; }\n}"
 );

@@ -10012,3 +10012,49 @@ thing that checks caturra against a JDK was.
 Pinned by `the_string_builder_surface`, `when_a_class_is_initialized`,
 `arrays_of_arrays_and_covariance` and `a_program_may_print_a_control_character`
 — the last one being a program that could not have been pinned before.
+
+### Auditing the refusals (2026-08-28)
+
+The last unit found a harness hole that made programs unverifiable; this one
+asks the same question of the pins themselves. All 694 `differential_test!`
+programs were extracted, compiled with javac and RUN: every one compiles, and
+every one prints something — no pin passes by comparing nothing. Then the 268
+`differential_reject!` programs, which assert only that BOTH engines refuse:
+javac's first error was captured for each and set beside caturra's.
+
+Two of them were passing for the wrong reason. `a_reabstracted_method_must_be_
+implemented` and `unrelated_defaults_still_conflict` each wrote `return 'A';`
+where the method returns `String`, so javac stopped at the TYPO and never
+reached the rule the test is named for — the pin would have held even if javac
+had no such rule. Both are fixed, and javac now refuses them for the rule.
+
+Comparing the two engines' wording across the rest (171 of 268 were already
+byte-identical) found four messages that name the wrong cause, and one that
+was not an error at all:
+
+- **`List<int>`** was "cannot find symbol: class List" — about a class the
+  program used correctly. javac: "unexpected type / required: reference /
+  found: int".
+- **A private field of a superclass**, read or assigned by simple name or
+  through a receiver, was "cannot find symbol: variable secret". The field IS
+  there; what the program cannot do is SEE it, which is what javac says:
+  "secret has private access in Base".
+- **`s++` on a String** was caturra's own "++/-- needs a numeric variable";
+  javac names the operand type and the operator: "bad operand type String for
+  unary operator '++'".
+- **An integer literal too large** was "integer literal '9223372036854775808'
+  is out of range"; javac says "integer number too large" and lets its caret
+  point at the literal.
+- **Assigning a FINAL variable** has four javac messages, one per kind — a
+  local ("cannot assign a value to final variable x"), a parameter ("final
+  parameter p may not be assigned"), a multi-catch parameter ("multi-catch
+  parameter e may not be assigned") and a for-each variable ("variable s might
+  already have been assigned"). caturra had one wording for all of them, and
+  **the for-each case was not an error at all**: the parser dropped the `final`
+  from `for (final String s : xs)`, so assigning it compiled here and fails on
+  a JDK. That is the direction that must never be wrong, and it was found by
+  asking what javac says rather than what caturra does.
+
+Pinned by `a_final_for_each_variable_cannot_be_assigned` and
+`a_final_parameter_cannot_be_assigned`; 176 of the 268 reject pins now match
+javac's first message byte for byte.

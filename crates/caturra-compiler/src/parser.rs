@@ -2833,7 +2833,7 @@ impl Parser<'_> {
         // variable may be declared `final` (JLS §14.14.2), which is common in
         // code that hands it to a lambda.
         if self.header_contains_top_level_colon() {
-            let _ = self.eat_keyword(Keyword::Final);
+            let is_final = self.eat_keyword(Keyword::Final);
             let ty = if self.eat_keyword(Keyword::Var) {
                 TypeRef::Var
             } else {
@@ -2847,6 +2847,7 @@ impl Parser<'_> {
             return Ok(Stmt::ForEach {
                 ty,
                 name,
+                is_final,
                 iterable,
                 body,
                 span: start,
@@ -4918,6 +4919,7 @@ fn desugar_enum(
         let for_each = Stmt::ForEach {
             ty: enum_ty.clone(),
             name: String::from("__e"),
+            is_final: false,
             iterable: Expr::Call {
                 receiver: None,
                 method: String::from("values"),

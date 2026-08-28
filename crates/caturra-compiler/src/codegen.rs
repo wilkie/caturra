@@ -3428,6 +3428,36 @@ impl MethodTable {
 
     /// Look up a field in a class or its ancestors, returning the
     /// owning class alongside.
+    /// The class an INHERITED field of this name is declared private in, if a
+    /// lookup failed only because of that. javac says "secret has private
+    /// access in Base"; the plain "cannot find symbol" that stood here reads
+    /// as if the field did not exist, when the program's mistake is that it
+    /// cannot be SEEN.
+    fn private_field_owner(&self, class: &str, name: &str) -> Option<ClassId> {
+        let start = self.info(class).map(|i| i.id)?;
+        let mut stack = vec![start];
+        let mut steps = 0usize;
+        while let Some(id) = stack.pop() {
+            steps += 1;
+            if steps > self.class_names.len() * 4 + 4 {
+                return None;
+            }
+            let Some(info) = self.info_by_id(id) else {
+                continue;
+            };
+            if id != start && info.fields.iter().any(|f| f.name == name && f.is_private) {
+                return Some(id);
+            }
+            if let Some(parent) = info.superclass {
+                stack.push(parent);
+            }
+            for iface in &info.interfaces {
+                stack.push(*iface);
+            }
+        }
+        None
+    }
+
     fn field(&self, class: &str, name: &str) -> Option<(ClassId, &FieldSig)> {
         // Superclass chain first, then implemented interfaces — an interface's
         // `public static final` constants ARE inherited by an implementing
@@ -4309,6 +4339,33 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable, in_class: &str) ->
                 );
             }
         }
+    }
+    // A PRIMITIVE as a type argument: `List<int>`. javac names the mistake
+    // exactly — a type argument must be a reference — where the fallback
+    // blamed `List`, a class the program used correctly and which the message
+    // then claimed did not exist.
+    if let TypeRef::Generic { args, .. } = ty
+        && let Some(primitive) = args.iter().find_map(|arg| match arg {
+            TypeRef::Named(name)
+                if matches!(
+                    name.as_str(),
+                    "int" | "long" | "double" | "float" | "short" | "byte" | "char" | "boolean"
+                ) =>
+            {
+                Some(name.clone())
+            }
+            TypeRef::Int => Some(String::from("int")),
+            TypeRef::Long => Some(String::from("long")),
+            TypeRef::Double => Some(String::from("double")),
+            TypeRef::Float => Some(String::from("float")),
+            TypeRef::Short => Some(String::from("short")),
+            TypeRef::Byte => Some(String::from("byte")),
+            TypeRef::Char => Some(String::from("char")),
+            TypeRef::Boolean => Some(String::from("boolean")),
+            _ => None,
+        })
+    {
+        return format!("unexpected type\n  required: reference\n  found:    {primitive}");
     }
     // A type that resolves perfectly WITHOUT arguments, written WITH them:
     // `String<Integer>`. javac names the mistake exactly — "type String does
@@ -8096,10 +8153,39 @@ fn statement_span(stmt: &Stmt) -> Option<SourceSpan> {
     }
 }
 
+/// What a local variable IS, for the four different messages javac gives an
+/// assignment to a final one: a plain local ("cannot assign a value to final
+/// variable x"), a parameter ("final parameter p may not be assigned"), a
+/// multi-catch parameter ("multi-catch parameter e may not be assigned") and a
+/// for-each variable ("variable s might already have been assigned").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum VarKind {
+    #[default]
+    Local,
+    Parameter,
+    MultiCatch,
+    ForEach,
+}
+
+impl VarKind {
+    /// javac's message for assigning to a FINAL variable of this kind.
+    fn final_assignment_error(self, name: &str) -> String {
+        match self {
+            VarKind::Local => format!("cannot assign a value to final variable {name}"),
+            VarKind::Parameter => format!("final parameter {name} may not be assigned"),
+            VarKind::MultiCatch => format!("multi-catch parameter {name} may not be assigned"),
+            // javac words this one as a DEFINITE-ASSIGNMENT complaint: the
+            // loop already assigned it once, on this iteration.
+            VarKind::ForEach => format!("variable {name} might already have been assigned"),
+        }
+    }
+}
+
 struct LocalVar {
     slot: u16,
     ty: JType,
     is_final: bool,
+    kind: VarKind,
     assigned: bool,
     /// The compile-time constant this variable denotes, when it is a *constant
     /// variable* (JLS §4.12.4: `final`, of primitive or `String` type, with a
@@ -8172,6 +8258,7 @@ fn emit_method(
                 // modifier without honouring it would let through a program javac
                 // rejects, which is the direction never to be wrong in.
                 is_final: param.is_final,
+                kind: VarKind::Parameter,
                 assigned: true,
                 // A parameter's value is not a compile-time constant.
                 const_val: None,
@@ -16211,10 +16298,11 @@ impl BodyGen<'_> {
             Stmt::ForEach {
                 ty,
                 name,
+                is_final,
                 iterable,
                 body,
                 span,
-            } => self.for_each(ty, name, iterable, body, *span),
+            } => self.for_each(ty, name, *is_final, iterable, body, *span),
             Stmt::Expr(expr) => self.expression_statement(expr),
             Stmt::If {
                 cond, then, els, ..
@@ -16800,6 +16888,7 @@ impl BodyGen<'_> {
                         slot,
                         ty,
                         is_final: clause.types.len() > 1,
+                        kind: VarKind::MultiCatch,
                         assigned: true,
                         const_val: None,
                     },
@@ -16876,6 +16965,7 @@ impl BodyGen<'_> {
                     // parameter e may not be assigned". A single-type catch
                     // parameter is only effectively final and may be assigned.
                     is_final: clause.types.len() > 1,
+                    kind: VarKind::MultiCatch,
                     assigned: true,
                     const_val: None,
                 },
@@ -17718,6 +17808,7 @@ impl BodyGen<'_> {
                         slot,
                         ty: var_ty,
                         is_final,
+                        kind: VarKind::Local,
                         assigned,
                         const_val,
                     },
@@ -17880,6 +17971,7 @@ impl BodyGen<'_> {
                     slot,
                     ty: var_ty,
                     is_final,
+                    kind: VarKind::Local,
                     assigned: true,
                     const_val,
                 },
@@ -17960,6 +18052,15 @@ impl BodyGen<'_> {
             }
         }
         let Some(var) = self.lookup(name) else {
+            // Assigning a field that IS there and cannot be seen: the same
+            // message javac gives a READ of one.
+            if let Some(hidden) = self.table.private_field_owner(self.current_class, name) {
+                let owner = JType::Object(hidden).describe(self.table);
+                self.error(span, format!("{name} has private access in {owner}"));
+                self.expr(value);
+                self.code.discard();
+                return;
+            }
             self.error(
                 span,
                 cannot_find_symbol(
@@ -17973,12 +18074,13 @@ impl BodyGen<'_> {
             self.code.discard();
             return;
         };
-        let (slot, var_ty, is_final, assigned) = (var.slot, var.ty, var.is_final, var.assigned);
+        let (slot, var_ty, is_final, assigned, kind) =
+            (var.slot, var.ty, var.is_final, var.assigned, var.kind);
 
         match op {
             None => {
                 if is_final && assigned {
-                    self.error(span, format!("cannot assign to final variable '{name}'"));
+                    self.error(span, kind.final_assignment_error(name));
                 // A LABELED BLOCK is on the same stack as the loops (it needs a
                 // break target), but it runs at most once — so a blank final
                 // assigned inside one is assigned exactly once, and refusing it
@@ -17999,7 +18101,7 @@ impl BodyGen<'_> {
             }
             Some(op) => {
                 if is_final {
-                    self.error(span, format!("cannot assign to final variable '{name}'"));
+                    self.error(span, kind.final_assignment_error(name));
                 }
                 if !assigned {
                     self.error(
@@ -19103,9 +19205,12 @@ impl BodyGen<'_> {
                 let JType::Object(id) = object_ty else {
                     self.error(
                         span,
+                        // javac names the OPERAND's type and the operator:
+                        // "bad operand type String for unary operator '++'".
                         format!(
-                            "++/-- needs a numeric variable, got {}",
-                            object_ty.describe(self.table)
+                            "bad operand type {} for unary operator '{}'",
+                            object_ty.describe(self.table),
+                            if increment { "++" } else { "--" }
                         ),
                     );
                     return JType::Error;
@@ -19163,8 +19268,9 @@ impl BodyGen<'_> {
             self.error(
                 span,
                 format!(
-                    "++/-- needs a numeric variable, got {}",
-                    ty.describe(self.table)
+                    "bad operand type {} for unary operator '{}'",
+                    ty.describe(self.table),
+                    if increment { "++" } else { "--" }
                 ),
             );
             return JType::Error;
@@ -19343,6 +19449,13 @@ impl BodyGen<'_> {
         }
         let class_name = self.table.class_name(class_id).to_owned();
         let Some((owner, field)) = self.table.field(&class_name, name) else {
+            // A field that IS there and cannot be seen: javac names the class
+            // that hides it rather than claiming the field does not exist.
+            if let Some(hidden) = self.table.private_field_owner(&class_name, name) {
+                let owner = JType::Object(hidden).describe(self.table);
+                self.error(span, format!("{name} has private access in {owner}"));
+                return None;
+            }
             // `describe`, not the raw name: the top type is stored under its
             // internal `java/lang/Object`, which must not reach a diagnostic.
             let described = JType::Object(class_id).describe(self.table);
@@ -24058,6 +24171,7 @@ impl BodyGen<'_> {
         &mut self,
         ty: &TypeRef,
         name: &str,
+        is_final: bool,
         iterable: &Expr,
         body: &Stmt,
         span: SourceSpan,
@@ -24085,7 +24199,7 @@ impl BodyGen<'_> {
             _ => None,
         };
         if let Some((accessor, element)) = indexed {
-            self.for_each_indexed(ty, name, iterable_ty, accessor, element, body, span);
+            self.for_each_indexed(ty, name, is_final, iterable_ty, accessor, element, body, span);
             return;
         }
         // A USER `Iterable` is driven the way Java drives one: ask it for a
@@ -24099,7 +24213,7 @@ impl BodyGen<'_> {
                 .class_id("Iterable")
                 .is_some_and(|id| self.table.is_subtype(class, id))
         {
-            self.for_each_cursor(ty, name, iterable_ty, class, body, span);
+            self.for_each_cursor(ty, name, is_final, iterable_ty, class, body, span);
             return;
         }
         // A one-dimensional array's element resolves through the table when it
@@ -24155,7 +24269,10 @@ impl BodyGen<'_> {
             LocalVar {
                 slot: var_slot,
                 ty: var_ty,
-                is_final: false,
+                // `for (final String s : xs)` — assigning it is an error, and
+                // javac words that one as a definite-assignment complaint.
+                is_final,
+                kind: VarKind::ForEach,
                 assigned: true,
                 const_val: None,
             },
@@ -24209,10 +24326,12 @@ impl BodyGen<'_> {
     /// dispatches them on the receiver's actual class — so a user `Iterator`
     /// answers them, and a builtin cursor (what `iterator()` returns when the
     /// class delegates to a collection) answers them too.
+    #[allow(clippy::too_many_arguments)] // the loop's parts, each needed once
     fn for_each_cursor(
         &mut self,
         ty: &TypeRef,
         name: &str,
+        is_final: bool,
         iterable_ty: JType,
         class: ClassId,
         body: &Stmt,
@@ -24297,7 +24416,10 @@ impl BodyGen<'_> {
             LocalVar {
                 slot: var_slot,
                 ty: var_ty,
-                is_final: false,
+                // `for (final String s : xs)` — assigning it is an error, and
+                // javac words that one as a definite-assignment complaint.
+                is_final,
+                kind: VarKind::ForEach,
                 assigned: true,
                 const_val: None,
             },
@@ -24349,6 +24471,7 @@ impl BodyGen<'_> {
         &mut self,
         ty: &TypeRef,
         name: &str,
+        is_final: bool,
         iterable_ty: JType,
         accessor: &str,
         element: JType,
@@ -24388,7 +24511,10 @@ impl BodyGen<'_> {
             LocalVar {
                 slot: var_slot,
                 ty: var_ty,
-                is_final: false,
+                // `for (final String s : xs)` — assigning it is an error, and
+                // javac words that one as a definite-assignment complaint.
+                is_final,
+                kind: VarKind::ForEach,
                 assigned: true,
                 const_val: None,
             },
@@ -29401,10 +29527,9 @@ impl BodyGen<'_> {
             }
             Literal::Int(value) => {
                 let Ok(value) = i32::try_from(*value) else {
-                    self.error(
-                        span,
-                        format!("integer literal {value} is out of range for int"),
-                    );
+                    // javac's wording for a literal too big for its type.
+                    let _ = value;
+                    self.error(span, "integer number too large");
                     return JType::Error;
                 };
                 self.push_int(value);
@@ -29723,6 +29848,18 @@ impl BodyGen<'_> {
                         "non-static variable {name} cannot be referenced from a static context"
                     ),
                 );
+                return JType::Error;
+            }
+            // A field that IS there and cannot be seen from here: javac names
+            // the class that hides it ("secret has private access in Base")
+            // rather than claiming the field does not exist, which is a
+            // message about the wrong mistake.
+            if let Some(hidden) = self
+                .table
+                .private_field_owner(self.current_class, name)
+            {
+                let owner = JType::Object(hidden).describe(self.table);
+                self.error(span, format!("{name} has private access in {owner}"));
                 return JType::Error;
             }
             self.error(
@@ -31115,8 +31252,9 @@ impl BodyGen<'_> {
                     self.error(
                         span,
                         format!(
-                            "++/-- needs a numeric variable, got {}",
-                            ty.describe(self.table)
+                            "bad operand type {} for unary operator '{}'",
+                            ty.describe(self.table),
+                            if increment { "++" } else { "--" }
                         ),
                     );
                     return JType::Error;
@@ -31158,7 +31296,14 @@ impl BodyGen<'_> {
                 };
                 let view = numeric_view(elem_ty);
                 if !view.is_numeric() {
-                    self.error(span, "++/-- needs a numeric element");
+                    self.error(
+                        span,
+                        format!(
+                            "bad operand type {} for unary operator '{}'",
+                            elem_ty.describe(self.table),
+                            if increment { "++" } else { "--" }
+                        ),
+                    );
                     return JType::Error;
                 }
                 let index_ty = self.expr(index);
@@ -33151,10 +33296,12 @@ mod tests {
     #[test]
     fn final_variables_reject_reassignment() {
         let errors = generate_errors("class T { static void f() { final int x = 1; x = 2; } }");
+        // javac's own wording, which differs by WHAT is final — a local, a
+        // parameter, a multi-catch parameter, a for-each variable.
         assert!(
             errors[0]
                 .message
-                .contains("cannot assign to final variable")
+                .contains("cannot assign a value to final variable x")
         );
     }
 
