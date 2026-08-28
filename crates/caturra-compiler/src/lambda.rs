@@ -5455,6 +5455,20 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     {
         return Some(elem);
     }
+    // A USER type that implements `Iterable<E>` or `Iterator<E>`: the
+    // `forEach`/`forEachRemaining` it inherits is a DEFAULT method of the
+    // library interface, and the element its callback takes is the argument
+    // the class writes on that interface. Without this a lambda over one had
+    // no target type at all — "a lambda is only allowed where a
+    // functional-interface type is expected", for the ordinary
+    // `for`-loop-in-a-callback a JDK gives every Iterable.
+    for owner in ["Iterable", "Iterator"] {
+        if let Some(args) = receiver_class_arguments(receiver, owner, ctx)
+            && let [elem] = args.as_slice()
+        {
+            return Some(elem.clone());
+        }
+    }
     // A library READ whose type is written on the RECEIVER: `map.get(k)` is
     // the map's value type, `list.get(i)` / `queue.poll()` / `opt.orElse(d)`
     // its element. Without it a collection stored INSIDE another collection

@@ -39908,3 +39908,220 @@ public class Printed {
 }
 "#
 );
+
+// A DEFAULT method that implements a library interface's own: `interface Shape
+// extends Comparable<Shape>` whose `compareTo(Shape)` is a default. javac puts
+// the erased `compareTo(Object)` bridge on the INTERFACE (an interface may
+// carry one since Java 8); caturra synthesizes `Comparable` straight into its
+// method table rather than parsing it, so the bridge pass could not see the
+// signature to bridge — and nothing on the class answered `compareTo(Object)`,
+// so sorting one threw `ClassCastException: … cannot be cast to
+// java.lang.Comparable`.
+differential_test!(
+    a_default_method_implements_a_library_interface,
+    "Defaults",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public class Defaults {
+    interface Shape extends Comparable<Shape> {
+        double area();
+        default int compareTo(Shape other) { return Double.compare(area(), other.area()); }
+        default String describe() { return getClass().getSimpleName() + ":" + area(); }
+    }
+    static class Sq implements Shape {
+        final double s;
+        Sq(double s) { this.s = s; }
+        public double area() { return s * s; }
+        public String toString() { return "Sq" + area(); }
+    }
+    static class Ci implements Shape {
+        public double area() { return 3.0; }
+        public String describe() { return "circle"; }
+        public String toString() { return "Ci"; }
+    }
+
+    interface Weighted extends java.util.Comparator<String> {
+        int weight(String s);
+        default int compare(String a, String b) { return weight(a) - weight(b); }
+    }
+    static class ByLength implements Weighted {
+        public int weight(String s) { return s.length(); }
+    }
+
+    public static void main(String[] args) {
+        List<Shape> shapes = new ArrayList<>(List.of(new Sq(3), new Ci(), new Sq(1)));
+        Collections.sort(shapes);
+        System.out.println(shapes);
+        for (Shape s : shapes) { System.out.println(s.describe()); }
+        System.out.println(shapes.get(0).compareTo(shapes.get(2)));
+        System.out.println(shapes.get(0) instanceof Comparable);
+        System.out.println(new TreeSet<>(shapes));
+        TreeMap<Shape, String> keyed = new TreeMap<>();
+        keyed.put(new Sq(2), "four");
+        keyed.put(new Sq(1), "one");
+        System.out.println(keyed.firstKey() + " " + keyed);
+
+        List<String> words = new ArrayList<>(List.of("ccc", "a", "bb"));
+        words.sort(new ByLength());
+        System.out.println(words);
+        // The combinators a Comparator inherits, on a user one reached through
+        // an interface that EXTENDS Comparator.
+        words.sort(new ByLength().reversed());
+        System.out.println(words);
+        System.out.println(new ByLength().thenComparing(java.util.Comparator.naturalOrder())
+            .compare("ab", "cd"));
+    }
+}
+"#
+);
+
+// The default methods a USER type inherits from a library interface that
+// caturra synthesizes rather than parses: `Iterable.forEach`,
+// `Iterator.forEachRemaining`, and `Iterator.remove`, whose default THROWS. A
+// lambda over one had no target type at all ("only allowed where a
+// functional-interface type is expected"), and the call itself no symbol.
+differential_test!(
+    the_defaults_a_user_type_inherits,
+    "Inherited",
+    r#"
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+public class Inherited {
+    static class Bag implements Iterable<String> {
+        final List<String> items = new ArrayList<>();
+        Bag add(String s) { items.add(s); return this; }
+        public Iterator<String> iterator() { return items.iterator(); }
+    }
+    interface Sized extends Iterable<String> {
+        default int count() {
+            int n = 0;
+            for (String ignored : this) { n++; }
+            return n;
+        }
+    }
+    static class SizedBag extends Bag implements Sized {}
+
+    static class Counter implements Iterator<Integer> {
+        int at = 0;
+        public boolean hasNext() { return at < 3; }
+        public Integer next() { return at++; }
+    }
+
+    public static void main(String[] args) {
+        Bag b = new Bag().add("x").add("y");
+        b.forEach(s -> System.out.println("lambda " + s));
+        b.forEach(System.out::println);
+        Iterable<String> as_iterable = b;
+        as_iterable.forEach(s -> System.out.println("iface " + s));
+
+        SizedBag sized = new SizedBag();
+        sized.add("a").add("b").add("c");
+        System.out.println(sized.count());
+        List<String> copy = new ArrayList<>();
+        sized.forEach(copy::add);
+        System.out.println(copy);
+
+        Counter c = new Counter();
+        System.out.println(c.next());
+        c.forEachRemaining(n -> System.out.println("left " + n));
+        Iterator<Integer> cursor = new Counter();
+        List<Integer> seen = new ArrayList<>();
+        cursor.forEachRemaining(seen::add);
+        System.out.println(seen);
+        try {
+            new Counter().remove();
+        } catch (UnsupportedOperationException e) {
+            System.out.println("remove: " + e.getClass().getSimpleName());
+        }
+    }
+}
+"#
+);
+
+// A default method reached through the PARAMETERIZED face of its interface:
+// `Visitor<String> v = u; v.visit("x")` asks for `(String)Object` and the
+// default is declared `(String)String`. The class chain already matched a
+// covariant override that way; the interface search demanded the descriptor
+// exactly, so the call found nothing at all.
+differential_test!(
+    a_default_through_a_parameterized_face,
+    "Faces",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Predicate;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+public class Faces {
+    interface Visitor<R> { R visit(String s); }
+    interface Upper extends Visitor<String> {
+        default String visit(String s) { return s.toUpperCase(); }
+        default List<String> all(List<String> in) {
+            List<String> out = new ArrayList<>();
+            for (String s : in) { out.add(visit(s)); }
+            return out;
+        }
+    }
+    static class U implements Upper {}
+
+    public static void main(String[] args) {
+        Upper u = new U();
+        System.out.println(u.visit("hi") + u.all(List.of("a", "b")));
+        Visitor<String> v = u;
+        System.out.println(v.visit("x"));
+        Object erased = u;
+        System.out.println(((Visitor) erased).visit("y"));
+
+        // A Pattern's own predicate is not a user instance either, and it
+        // inherits Predicate's combinators like any other.
+        Predicate<String> p = Pattern.compile("a").asPredicate();
+        System.out.println(p.negate().test("a") + " " + p.negate().test("b"));
+        System.out.println(p.and(s -> s.length() > 1).test("ab"));
+        System.out.println(p.or(s -> s.isEmpty()).test(""));
+        System.out.println(List.of("a", "bb", "ab").stream().filter(p.negate())
+            .collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// What a natural-order comparison ANSWERS, not merely which way it points.
+// `Comparator.<String>naturalOrder().compare("ab", "cd")` is
+// `"ab".compareTo("cd")` — the difference between the first units that differ,
+// which is -2 — and `Character`/`Byte`/`Short` subtract likewise. A sort reads
+// only the sign, so a comparator normalized to -1/0/1 sorted correctly and
+// answered wrongly to any program that printed the comparison.
+differential_test!(
+    a_natural_comparison_answers_the_difference,
+    "Ordering",
+    r#"
+import java.util.Comparator;
+
+public class Ordering {
+    public static void main(String[] args) {
+        System.out.println("ab".compareTo("cd"));
+        System.out.println(Comparator.<String>naturalOrder().compare("ab", "cd"));
+        System.out.println(Comparator.<String>naturalOrder().compare("apple", "app"));
+        System.out.println(Comparator.<String>reverseOrder().compare("ab", "cd"));
+        System.out.println(Comparator.<Integer>naturalOrder().compare(2, 9));
+        System.out.println(Comparator.<Character>naturalOrder().compare('a', 'd'));
+        System.out.println(Character.compare('a', 'd'));
+        System.out.println(Comparator.<Double>naturalOrder().compare(1.5, 9.5));
+        System.out.println(Comparator.comparing(String::length).compare("aaa", "b"));
+        System.out.println(Comparator.comparing((String s) -> s).compare("ab", "cd"));
+        System.out.println(String.CASE_INSENSITIVE_ORDER.compare("AB", "cd"));
+        System.out.println(Integer.valueOf(3).compareTo(9));
+        System.out.println(Byte.compare((byte) 3, (byte) 9) + " " + Short.compare((short) 3, (short) 9));
+        System.out.println(Comparator.<String>naturalOrder().reversed().compare("app", "apple"));
+    }
+}
+"#
+);

@@ -3545,29 +3545,35 @@ impl<'run> Interpreter<'run> {
     /// the class overrides — what a `super.hashCode()` means.
     /// Whether this class (or an ancestor) declares `interface_name` among its
     /// implemented interfaces — how `Object.clone()` asks about `Cloneable`.
+    /// Whether `class_name` implements `interface_name` — through its
+    /// superclasses AND through the interfaces its interfaces extend. Only the
+    /// DIRECT interfaces of each class were checked, so a
+    /// `class ByLength implements Weighted` where `interface Weighted extends
+    /// Comparator<String>` was not a `Comparator`: its inherited `reversed()`
+    /// was "unknown native member", for a default method every comparator has.
     fn class_implements(&self, class_name: &str, interface_name: &str) -> bool {
-        let mut current = Some(class_name.to_owned());
+        let mut queue: Vec<String> = vec![class_name.to_owned()];
         let mut steps = 0usize;
-        while let Some(name) = current {
+        while let Some(name) = queue.pop() {
             steps += 1;
-            if steps > self.classes.len() + 1 {
+            if steps > self.classes.len() * 2 + 2 {
                 return false;
             }
             let Some(class) = self.classes.get(&name) else {
-                return false;
+                continue;
             };
-            if class.interfaces.iter().any(|index| {
-                class
-                    .constant_pool
-                    .get_class_name(*index)
-                    .is_some_and(|iface| simple_class_name(iface) == interface_name)
-            }) {
-                return true;
+            for index in &class.interfaces {
+                let Some(iface) = class.constant_pool.get_class_name(*index) else {
+                    continue;
+                };
+                if simple_class_name(iface) == interface_name {
+                    return true;
+                }
+                queue.push(iface.to_owned());
             }
-            current = class
-                .constant_pool
-                .get_class_name(class.super_class)
-                .map(str::to_owned);
+            if let Some(parent) = class.constant_pool.get_class_name(class.super_class) {
+                queue.push(parent.to_owned());
+            }
         }
         false
     }
@@ -10537,6 +10543,131 @@ impl<'run> Interpreter<'run> {
         Ok(JValue::Ref(Some(self.heap.alloc_string(&text))))
     }
 
+    /// The body of `Iterable.forEach` / `Iterator.forEachRemaining` for a user
+    /// object: walk the cursor the object itself provides, handing each
+    /// element to the consumer. `from_iterable` says whether the receiver IS
+    /// the cursor or has to be asked for one.
+    fn run_for_each(
+        &mut self,
+        receiver: HeapRef,
+        consumer: HeapRef,
+        from_iterable: bool,
+    ) -> Result<(), VmError> {
+        let cursor = if from_iterable {
+            let answered = self.call_zero_arg(receiver, "iterator", "()Ljava/util/Iterator;")?;
+            match answered {
+                Some(JValue::Ref(Some(cursor))) => cursor,
+                _ => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                }
+            }
+        } else {
+            receiver
+        };
+        let mut steps = 0u64;
+        loop {
+            steps += 1;
+            if steps > 100_000_000 {
+                return Err(VmError::UnknownIntrinsic(String::from(
+                    "forEach ran without end",
+                )));
+            }
+            let has_next = self.call_zero_arg(cursor, "hasNext", "()Z")?;
+            if !matches!(has_next, Some(JValue::Int(flag)) if flag != 0) {
+                return Ok(());
+            }
+            let element = self
+                .call_zero_arg(cursor, "next", "()Ljava/lang/Object;")?
+                .unwrap_or(JValue::NULL);
+            self.call_functional(consumer, "accept", "(Ljava/lang/Object;)V", element)?;
+        }
+    }
+
+    /// Call a no-argument method on an object, whether the object is a user
+    /// instance or one of caturra's own (a library cursor is not a user
+    /// class, and a user `Iterable` may well hand one back).
+    fn call_zero_arg(
+        &mut self,
+        receiver: HeapRef,
+        method: &str,
+        descriptor: &str,
+    ) -> Result<Option<JValue>, VmError> {
+        if matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::Instance { .. })
+        ) {
+            let class_name = match self.heap.get(receiver) {
+                Some(crate::value::HeapObject::Instance { class_name, .. }) => class_name.clone(),
+                _ => unreachable!("checked above"),
+            };
+            let dispatched =
+                self.user_virtual_dispatch(receiver, &class_name, method, descriptor, &[])?;
+            return Ok(match dispatched {
+                UserDispatch::Call(frame) => self.run_nested(frame)?,
+                UserDispatch::Value(value) => value,
+            });
+        }
+        let class = self.object_class_name(receiver);
+        intrinsics::invoke_virtual(
+            &mut self.heap,
+            self.console,
+            self.vfs,
+            receiver,
+            &class,
+            method,
+            descriptor,
+            &[],
+        )
+    }
+
+    /// `predicate.negate()` / `and(other)` / `or(other)` for a predicate that
+    /// is not a user instance — the one a `Pattern` answers. The result is an
+    /// instance of the bundled composition class, exactly what the interface's
+    /// own default method would have returned, so a composed predicate walks
+    /// the same path as every other one.
+    fn compose_predicate(
+        &mut self,
+        receiver: HeapRef,
+        method: &str,
+        args: &[JValue],
+    ) -> Result<Option<JValue>, VmError> {
+        use crate::value::HeapObject;
+        if !matches!(self.heap.get(receiver), Some(HeapObject::RegexPredicate { .. })) {
+            return Ok(None);
+        }
+        let (class, fields): (&str, Vec<(&str, JValue)>) = match (method, args) {
+            ("negate", []) => ("__Negate", vec![("inner", JValue::Ref(Some(receiver)))]),
+            ("and" | "or", [other @ JValue::Ref(Some(_))]) => (
+                if method == "and" { "__And" } else { "__Or" },
+                vec![
+                    ("left", JValue::Ref(Some(receiver))),
+                    ("right", *other),
+                ],
+            ),
+            ("and" | "or", [JValue::Ref(None)]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
+            _ => return Ok(None),
+        };
+        if !self.classes.contains_key(class) {
+            return Ok(None);
+        }
+        let mut object = self.new_instance(class);
+        for (name, value) in fields {
+            // A field key names its DECLARING class, since a subclass may hide
+            // one of the same name.
+            let Some(slot) = object.field_mut(&instance_field_key(class, name)) else {
+                return Ok(None);
+            };
+            *slot = value;
+        }
+        Ok(Some(JValue::Ref(Some(self.heap.alloc(object)))))
+    }
+
     /// `predicate.test(element)`.
     fn call_test(&mut self, predicate: HeapRef, element: JValue) -> Result<bool, VmError> {
         let result = self.call_functional(predicate, "test", "(Ljava/lang/Object;)Z", element)?;
@@ -12170,6 +12301,46 @@ impl<'run> Interpreter<'run> {
                 };
                 let reference = self.heap.alloc_string(&text);
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
+            }
+            // `iterable.forEach(consumer)` / `iterator.forEachRemaining(c)`:
+            // both are DEFAULT methods of a library interface caturra
+            // synthesizes rather than parses, so the class declares neither.
+            // The loop runs through the object's OWN
+            // `iterator()`/`hasNext()`/`next()`, which is what the JDK's
+            // default body does.
+            // The descriptor is whichever the CALL SITE wrote: a receiver
+            // typed as the interface goes through the library method table
+            // (`(Ljava/lang/Object;)V`), and one typed as the user class
+            // through the synthesized default above.
+            if matches!(method_name, "forEach" | "forEachRemaining")
+                && matches!(
+                    descriptor,
+                    "(Ljava/util/function/Consumer;)V" | "(Ljava/lang/Object;)V"
+                )
+                && let [JValue::Ref(consumer)] = args[..]
+                && (self.class_implements(instance_class, "Iterable")
+                    || self.class_implements(instance_class, "Iterator"))
+            {
+                let Some(consumer) = consumer else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                self.run_for_each(receiver, consumer, method_name == "forEach")?;
+                return Ok(UserDispatch::Value(None));
+            }
+            // `Iterator.remove()`'s default body THROWS — a cursor that does
+            // not support removal says so, and a user one that does not
+            // override it must say the same rather than dying as an unknown
+            // member.
+            if method_name == "remove"
+                && descriptor == "()V"
+                && args.is_empty()
+                && self.class_implements(instance_class, "Iterator")
+            {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.UnsupportedOperationException: remove",
+                )));
             }
             // A user `Comparator` inherits the JDK's DEFAULT combinators
             // (`reversed`, `thenComparing`), which are not methods it declares.
@@ -14638,6 +14809,15 @@ impl<'run> Interpreter<'run> {
             return Ok(None);
         }
 
+        // A `Pattern`'s own predicate inherits `Predicate`'s default
+        // combinators. It is a NATIVE object rather than a user instance, so
+        // the bundled `__Negate`/`__And`/`__Or` are built here — the same
+        // objects the interface's default methods would have returned.
+        if let Some(built) = self.compose_predicate(receiver, method_name, &args)? {
+            frame.stack.push(built);
+            return Ok(None);
+        }
+
         // `matcher.replaceAll(mr -> …)` (Java 9) — the replacement is COMPUTED
         // from each match, so the loop has to call user code, which the
         // intrinsic layer cannot do. Everything else a Matcher answers is
@@ -15156,11 +15336,61 @@ impl<'run> Interpreter<'run> {
                 ));
             }
         }
+        // The MAGNITUDE is observable: `Comparator.<String>naturalOrder()
+        // .compare("ab", "cd")` is `"ab".compareTo("cd")`, which is -2 — the
+        // difference between the first characters that differ, not its sign.
+        // A sort only reads the sign, so this showed only when a program
+        // printed the comparison itself.
+        if let Some(exact) = self.exact_natural_order(a, b) {
+            return Ok(exact);
+        }
         Ok(match self.compare_values(&a, &b) {
             std::cmp::Ordering::Less => -1,
             std::cmp::Ordering::Equal => 0,
             std::cmp::Ordering::Greater => 1,
         })
+    }
+
+    /// The exact value `compareTo` answers for the types whose difference is
+    /// not merely a sign: `String` (its first differing unit, or the length
+    /// difference), and `Character`/`Byte`/`Short`, whose `compare` subtracts.
+    /// `None` for everything else, which really does answer -1/0/1.
+    fn exact_natural_order(&self, a: JValue, b: JValue) -> Option<i32> {
+        use crate::value::HeapObject;
+        let (JValue::Ref(Some(left)), JValue::Ref(Some(right))) = (a, b) else {
+            return None;
+        };
+        match (self.heap.get(left)?, self.heap.get(right)?) {
+            (HeapObject::JavaString(one), HeapObject::JavaString(other)) => {
+                for (x, y) in one.iter().zip(other.iter()) {
+                    if x != y {
+                        return Some(i32::from(*x) - i32::from(*y));
+                    }
+                }
+                Some(
+                    i32::try_from(one.len()).unwrap_or(i32::MAX)
+                        - i32::try_from(other.len()).unwrap_or(i32::MAX),
+                )
+            }
+            (
+                HeapObject::Boxed {
+                    class_name: one,
+                    value: JValue::Int(x),
+                },
+                HeapObject::Boxed {
+                    class_name: other,
+                    value: JValue::Int(y),
+                },
+            ) if one == other
+                && matches!(
+                    one.as_ref(),
+                    "java/lang/Character" | "java/lang/Byte" | "java/lang/Short"
+                ) =>
+            {
+                Some(x - y)
+            }
+            _ => None,
+        }
     }
 
     /// Evaluate a factory-built [`crate::value::ComparatorSpec`] on two values.
@@ -19578,15 +19808,38 @@ fn resolve_virtual<'run>(
             if seen > classes.len() * 2 + 2 {
                 break;
             }
-            if let Some(method) = iface.methods.iter().find(|m| {
+            let usable = |m: &&MethodInfo| {
                 !m.access_flags
                     .contains(caturra_classfile::MethodAccessFlags::STATIC)
                     && !m
                         .access_flags
                         .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
                     && iface.constant_pool.get_utf8(m.name_index) == Some(method_name)
-                    && iface.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
-            }) {
+            };
+            if let Some(method) = iface
+                .methods
+                .iter()
+                .find(|m| {
+                    usable(m) && iface.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+                })
+                // A default method whose RETURN is the interface's own type
+                // variable answers a call made through the PARAMETERIZED face:
+                // `Visitor<String> v = u; v.visit("x")` asks for
+                // `(Ljava/lang/String;)Ljava/lang/Object;` and the default is
+                // declared `(…)Ljava/lang/String;`. The class chain already
+                // matched a covariant override this way; the interface search
+                // demanded the descriptor exactly, so the call found nothing.
+                .or_else(|| {
+                    iface.methods.iter().find(|m| {
+                        usable(m)
+                            && iface
+                                .constant_pool
+                                .get_utf8(m.descriptor_index)
+                                .zip(descriptor.find(')').map(|end| &descriptor[..=end]))
+                                .is_some_and(|(have, want)| have.starts_with(want))
+                    })
+                })
+            {
                 // The same interface can be reached along two paths of the
                 // diamond — one candidacy each.
                 if !candidates

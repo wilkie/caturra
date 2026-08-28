@@ -1932,6 +1932,34 @@ GRAMMAR = [
                       '        System.out.println(p.startsWith("home") + " " + Path.of("a", "bc").startsWith("a/b"));\n'
                       '        System.out.println(List.of(Path.of("x"), Path.of("y")));',
                       '', 'import java.nio.file.Path;\nimport java.util.List;')),
+    dict(id="g-default-methods", category="Classes", title="Interfaces: default methods a class inherits",
+         summary="A default method can implement a library interface's own (Comparable, Comparator, Iterable), and the class inherits it — including the erased bridge a JDK synthesizes.",
+         main="G",
+         source=_prog('List<Shape> shapes = new ArrayList<>(List.of(new Sq(3), new Sq(1)));\n'
+                      '        Collections.sort(shapes);\n'
+                      '        System.out.println(shapes);\n'
+                      '        System.out.println(shapes.get(0) instanceof Comparable);\n'
+                      '        Bag bag = new Bag();\n'
+                      '        bag.add("x");\n        bag.add("y");\n'
+                      '        bag.forEach(System.out::println);\n'
+                      '        System.out.println(Comparator.<String>naturalOrder().compare("ab", "cd"));',
+                      '    interface Shape extends Comparable<Shape> {\n'
+                      '        double area();\n'
+                      '        default int compareTo(Shape other) { return Double.compare(area(), other.area()); }\n'
+                      '    }\n'
+                      '    static class Sq implements Shape {\n'
+                      '        final double s;\n'
+                      '        Sq(double s) { this.s = s; }\n'
+                      '        public double area() { return s * s; }\n'
+                      '        public String toString() { return "Sq" + area(); }\n'
+                      '    }\n'
+                      '    static class Bag implements Iterable<String> {\n'
+                      '        final List<String> items = new ArrayList<>();\n'
+                      '        void add(String s) { items.add(s); }\n'
+                      '        public Iterator<String> iterator() { return items.iterator(); }\n'
+                      '    }\n',
+                      'import java.util.ArrayList;\nimport java.util.Collections;\n'
+                      'import java.util.Comparator;\nimport java.util.Iterator;\nimport java.util.List;')),
     dict(id="g-fail-fast", category="Collections", title="Fail-fast iterators (ConcurrentModificationException)",
          summary="Modifying a collection while iterating it throws, as on a real JVM — including the quirk where removing the second-to-last element does not.",
          main="G",

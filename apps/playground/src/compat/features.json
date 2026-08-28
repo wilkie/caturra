@@ -488,7 +488,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-nq9yzm8m/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-b74_2u34/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -499,7 +499,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-v4_uhma2/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-k7d_u8z3/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -510,7 +510,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-_kon_rhk/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-ih_q9pf9/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -931,6 +931,16 @@
     "source": "import java.nio.file.Path;\nimport java.util.List;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nPath p = Path.of(\"home\", \"wilkie\", \"notes.txt\");\n        System.out.println(p + \" \" + p.getNameCount() + \" \" + p.getFileName());\n        System.out.println(p.getParent() + \" \" + p.getName(0) + \" \" + p.isAbsolute());\n        System.out.println(Path.of(\"a/./b/../c\").normalize());\n        System.out.println(p.resolveSibling(\"other.txt\"));\n        System.out.println(Path.of(\"a\", \"b\").relativize(Path.of(\"a\", \"b\", \"c\")));\n        System.out.println(p.startsWith(\"home\") + \" \" + Path.of(\"a\", \"bc\").startsWith(\"a/b\"));\n        System.out.println(List.of(Path.of(\"x\"), Path.of(\"y\")));\n    }\n}\n",
     "status": "supported",
     "expected": "home/wilkie/notes.txt 3 notes.txt\nhome/wilkie home false\na/c\nhome/wilkie/other.txt\nc\ntrue false\n[x, y]\n"
+  },
+  {
+    "id": "g-default-methods",
+    "category": "Classes",
+    "title": "Interfaces: default methods a class inherits",
+    "summary": "A default method can implement a library interface's own (Comparable, Comparator, Iterable), and the class inherits it \u2014 including the erased bridge a JDK synthesizes.",
+    "main": "G",
+    "source": "import java.util.ArrayList;\nimport java.util.Collections;\nimport java.util.Comparator;\nimport java.util.Iterator;\nimport java.util.List;\npublic class G {\n    interface Shape extends Comparable<Shape> {\n        double area();\n        default int compareTo(Shape other) { return Double.compare(area(), other.area()); }\n    }\n    static class Sq implements Shape {\n        final double s;\n        Sq(double s) { this.s = s; }\n        public double area() { return s * s; }\n        public String toString() { return \"Sq\" + area(); }\n    }\n    static class Bag implements Iterable<String> {\n        final List<String> items = new ArrayList<>();\n        void add(String s) { items.add(s); }\n        public Iterator<String> iterator() { return items.iterator(); }\n    }\n\n    public static void main(String[] args) throws Exception {\nList<Shape> shapes = new ArrayList<>(List.of(new Sq(3), new Sq(1)));\n        Collections.sort(shapes);\n        System.out.println(shapes);\n        System.out.println(shapes.get(0) instanceof Comparable);\n        Bag bag = new Bag();\n        bag.add(\"x\");\n        bag.add(\"y\");\n        bag.forEach(System.out::println);\n        System.out.println(Comparator.<String>naturalOrder().compare(\"ab\", \"cd\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": "[Sq1.0, Sq9.0]\ntrue\nx\ny\n-2\n"
   },
   {
     "id": "g-fail-fast",

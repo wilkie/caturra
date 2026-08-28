@@ -21173,6 +21173,36 @@ impl BodyGen<'_> {
         collection_elem_of(produced)
     }
 
+    /// `iterable.forEach(consumer)` / `iterator.forEachRemaining(consumer)` on
+    /// a user type: the receiver is already on the stack, and the VM runs the
+    /// loop through the object's own `iterator()`/`hasNext()`/`next()`.
+    #[allow(clippy::option_option)] // the call-dispatch return shape
+    fn emit_iterable_for_each(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let [consumer] = args else {
+            self.error(span, format!("{method} takes one argument"));
+            return None;
+        };
+        let consumer_ty = self.expr(consumer);
+        if consumer_ty == JType::Error {
+            self.error_bail(span, "argument");
+            return None;
+        }
+        let (owner, descriptor) = if method == "forEach" {
+            ("java/lang/Iterable", "(Ljava/util/function/Consumer;)V")
+        } else {
+            ("java/util/Iterator", "(Ljava/util/function/Consumer;)V")
+        };
+        let method_ref = intern_method_ref(self.pool, owner, method, descriptor);
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 0);
+        self.code.drop_stack(2);
+        Some(None)
+    }
+
     /// `comparator.reversed()` / `.thenComparing(...)` — build a derived
     /// comparator. The receiver comparator is already on the stack.
     #[allow(clippy::option_option)]
@@ -21797,6 +21827,22 @@ impl BodyGen<'_> {
         ) && self.is_comparator_type(receiver_ty)
         {
             return self.emit_comparator_combinator(method, args, span);
+        }
+        // `Iterable.forEach(consumer)` / `Iterator.forEachRemaining(consumer)`
+        // on a USER type that implements one. Both are DEFAULT methods of the
+        // library interface, which caturra synthesizes rather than parses, so
+        // nothing on the class declares them — a lambda over a user `Iterable`
+        // was "cannot find symbol: method forEach(lambda expression)", for the
+        // callback a JDK gives every Iterable.
+        if matches!(method, "forEach" | "forEachRemaining")
+            && args.len() == 1
+            && let JType::Object(id) | JType::Generic { class: id, .. } = receiver_ty
+            && let Some(iterable) = self
+                .table
+                .class_id(if method == "forEach" { "Iterable" } else { "Iterator" })
+            && self.table.is_subtype(id, iterable)
+        {
+            return self.emit_iterable_for_each(method, args, span);
         }
         let class_id = match receiver_ty {
             JType::Object(id) => id,
@@ -24000,7 +24046,21 @@ impl BodyGen<'_> {
         };
         let element = match cursor_ty {
             JType::Iterator(elem) | JType::ListIterator(elem) => {
-                boxed_or_nested(Some(elem), self.table)
+                // A class that FIXES the argument — `interface Sized extends
+                // Iterable<String>`, `class Bag implements Iterable<String>` —
+                // leaves `iterator()` answering `Iterator<T>` with nothing to
+                // substitute it from, since the receiver names no argument of
+                // its own. The argument it writes on `Iterable` is that
+                // substitution, and without it the loop variable was refused:
+                // "incompatible types: T cannot be converted to String".
+                let fixed = matches!(elem, ElemType::TypeVar(_))
+                    .then(|| {
+                        self.table
+                            .class_id("Iterable")
+                            .and_then(|iterable| self.table.generic_supertype_arg(class, iterable))
+                    })
+                    .flatten();
+                boxed_or_nested(Some(fixed.unwrap_or(elem)), self.table)
             }
             _ => JType::Object(self.table.object_id),
         };

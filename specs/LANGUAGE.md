@@ -9844,3 +9844,55 @@ Pinned by `a_library_type_in_every_position`, `the_path_surface`,
 `one_element_kind_per_type` and `a_library_object_inside_a_collection`; the
 compatibility page gained a "Path" claim (89 supported / 5 unsupported /
 3 beyond-11).
+
+### The default methods a class inherits (2026-08-27)
+
+A default method that implements a LIBRARY interface's own — `interface Shape
+extends Comparable<Shape>` whose `compareTo(Shape)` is a default — left nothing
+on the class answering `compareTo(Object)`, so sorting one threw
+`ClassCastException: Sq cannot be cast to java.lang.Comparable`. javac puts
+that erased bridge on the INTERFACE (an interface may carry one since Java 8);
+caturra's bridge pass could not see the signature to bridge, because
+`Comparable` and `Comparator` are synthesized straight into the method table
+rather than parsed. It knows their two erased signatures now, and the bridge
+lands where javac puts it.
+
+That was the first of five findings from sweeping INTERFACES as a dimension —
+defaults, statics, constants, diamonds, `Iface.super`, private interface
+methods, an interface redeclaring `Object`'s methods, an enum implementing one,
+a generic default, an abstract class implementing one.
+
+- **A transitive interface was not implemented.** The check walked a class's
+  superclasses and their DIRECT interfaces only, so a
+  `class ByLength implements Weighted` where `interface Weighted extends
+  Comparator<String>` was not a `Comparator`: its inherited `reversed()` was an
+  unknown native member, for a default method every comparator has.
+- **A default reached through the PARAMETERIZED face** of its interface —
+  `Visitor<String> v = u; v.visit("x")` asks for `(String)Object` where the
+  default is declared `(String)String` — found nothing. The class chain already
+  matched a covariant override that way; the interface search demanded the
+  descriptor exactly.
+- **The defaults a user type inherits from an interface caturra synthesizes**
+  rather than parses: `Iterable.forEach`, `Iterator.forEachRemaining`, and
+  `Iterator.remove`, whose default THROWS `UnsupportedOperationException`. A
+  lambda over a user `Iterable` had no target type ("only allowed where a
+  functional-interface type is expected") and the call itself no symbol. The
+  loop runs through the object's own `iterator()`/`hasNext()`/`next()`, which
+  is what the JDK's default body does. A `Pattern`'s own predicate is not a
+  user instance either, and it composes with `negate`/`and`/`or` now — the
+  bundled composition classes, which is what the interface's defaults build.
+- **A class that FIXES its `Iterable` argument** (`interface Sized extends
+  Iterable<String>`) left `iterator()` answering `Iterator<T>` with nothing to
+  substitute from, so a for-each over `this` was "incompatible types: T cannot
+  be converted to String".
+- **A natural comparison answered the SIGN, not the difference.**
+  `Comparator.<String>naturalOrder().compare("ab", "cd")` is
+  `"ab".compareTo("cd")`, which is -2; `Character`, `Byte` and `Short` subtract
+  likewise. A sort reads only the sign, so this sorted correctly and answered
+  wrongly to any program that printed the comparison.
+
+Pinned by `a_default_method_implements_a_library_interface`,
+`the_defaults_a_user_type_inherits`, `a_default_through_a_parameterized_face`
+and `a_natural_comparison_answers_the_difference`; the compatibility page
+gained an "Interfaces: default methods" claim (90 supported / 5 unsupported /
+3 beyond-11).

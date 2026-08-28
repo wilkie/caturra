@@ -43,8 +43,8 @@ fn bridges_for(class: &ClassDecl, classes: &HashMap<String, ClassDecl>) -> Vec<M
         if method.is_static || method.is_constructor || method.is_abstract {
             continue;
         }
-        let Some(inherited) =
-            inherited_signature(class, &method.name, method.params.len(), classes)
+        let Some(inherited) = inherited_signature(class, &method.name, method.params.len(), classes)
+            .or_else(|| library_erased_signature(class, method, classes))
         else {
             continue;
         };
@@ -80,6 +80,75 @@ fn bridges_for(class: &ClassDecl, classes: &HashMap<String, ClassDecl>) -> Vec<M
         bridges.push(build_bridge(method, &inherited));
     }
     bridges
+}
+
+/// The erased signature a LIBRARY generic interface declares, for a method
+/// that implements one. caturra synthesizes `Comparable` and `Comparator`
+/// straight into the method table rather than parsing them, so the walk below
+/// cannot find their signatures at all — and a `Shape extends
+/// Comparable<Shape>` whose `compareTo(Shape)` is a DEFAULT got no bridge, so
+/// nothing on the class answered `compareTo(Object)` and sorting one threw
+/// `ClassCastException: … cannot be cast to java.lang.Comparable`.
+///
+/// javac puts that bridge on the INTERFACE (an interface may carry one since
+/// Java 8), which is where this one goes too.
+fn library_erased_signature(
+    class: &ClassDecl,
+    method: &MethodDecl,
+    classes: &HashMap<String, ClassDecl>,
+) -> Option<MethodDecl> {
+    let params = match (method.name.as_str(), method.params.len()) {
+        ("compareTo", 1) => 1,
+        ("compare", 2) => 2,
+        _ => return None,
+    };
+    let wanted = if params == 1 { "Comparable" } else { "Comparator" };
+    if !implements_library_interface(class, wanted, classes) {
+        return None;
+    }
+    // The interface's own declaration is `int compareTo(T)`, and it is the
+    // TYPE VARIABLE that makes this an override rather than an overload — the
+    // same sentinel a parsed generic supertype would carry, since plain
+    // `Object` deliberately does not count (it would hijack ordinary
+    // overloads).
+    let object = |index: usize| Param {
+        ty: TypeRef::Named(crate::parser::typevar_sentinel(0)),
+        name: format!("__erased{index}"),
+        is_varargs: false,
+        is_final: false,
+    };
+    let mut erased = method.clone();
+    erased.params = (0..params).map(object).collect();
+    erased.return_type = TypeRef::Int;
+    erased.body = Vec::new();
+    Some(erased)
+}
+
+/// Whether `class` implements a library interface of this name, directly or
+/// through the interfaces it extends. The type ARGUMENT does not matter: what
+/// the bridge stands for is the erasure, which is `Object` either way.
+fn implements_library_interface(
+    class: &ClassDecl,
+    wanted: &str,
+    classes: &HashMap<String, ClassDecl>,
+) -> bool {
+    let mut queue: Vec<String> = class.interfaces.clone();
+    let mut steps = 0usize;
+    while let Some(name) = queue.pop() {
+        steps += 1;
+        if steps > classes.len() * 2 + 2 {
+            return false;
+        }
+        let simple = name.split('<').next().unwrap_or(&name);
+        let simple = simple.rsplit('.').next().unwrap_or(simple);
+        if simple == wanted && !classes.contains_key(simple) {
+            return true;
+        }
+        if let Some(parent) = classes.get(simple) {
+            queue.extend(parent.interfaces.iter().cloned());
+        }
+    }
+    false
 }
 
 /// The nearest inherited method of this name and arity: up the extends chain,
