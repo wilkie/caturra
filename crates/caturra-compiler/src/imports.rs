@@ -314,6 +314,22 @@ const REQUIRES_IMPORT: &[&str] = &[
     "NavigableSet",
     "EnumMap",
     "EnumSet",
+    // A JTable's model and a JTree's nodes live in `javax.swing.table` and
+    // `javax.swing.tree`, NOT in `javax.swing`: naming one needs its own
+    // import, and `import javax.swing.*` alone does not provide it.
+    "TableModel",
+    "AbstractTableModel",
+    "DefaultTableModel",
+    "TableCellRenderer",
+    "DefaultTableCellRenderer",
+    "TableColumn",
+    "TableColumnModel",
+    "TreeModel",
+    "DefaultTreeModel",
+    "TreeCellRenderer",
+    "DefaultTreeCellRenderer",
+    "DefaultMutableTreeNode",
+    "TreePath",
     "LinkedList",
     "Queue",
     "Deque",
@@ -346,6 +362,85 @@ const REQUIRES_IMPORT: &[&str] = &[
     "NoSuchElementException",
     "IOException",
     "FileNotFoundException",
+    // Every library name that is not in `java.lang` needs an import — the
+    // rule javac enforces, and the one caturra let through: `Arrays.sort(x)`
+    // with no `import java.util.Arrays;` compiled here and fails on a JDK,
+    // which is the direction that must never be wrong. The bundled libraries
+    // (swing, org.code) are gated by INJECTION instead: without the import
+    // their classes do not exist at all.
+    "AbstractMap",
+    "LinkedHashMap",
+    "LinkedHashSet",
+    "Optional",
+    "OptionalInt",
+    "OptionalDouble",
+    "OptionalLong",
+    "Arrays",
+    "Objects",
+    "Random",
+    "Collections",
+    "StringJoiner",
+    "EmptyStackException",
+    "ConcurrentModificationException",
+    "IllegalFormatException",
+    "UnknownFormatConversionException",
+    "MissingFormatArgumentException",
+    "IllegalFormatConversionException",
+    "IllegalFormatCodePointException",
+    "Locale",
+    "IntStream",
+    "LongStream",
+    "DoubleStream",
+    "Collector",
+    "Pattern",
+    "Matcher",
+    "MatchResult",
+    "Closeable",
+    "Charset",
+    "StandardCharsets",
+    "UnsupportedCharsetException",
+    "IllegalCharsetNameException",
+    "Method",
+    "Field",
+    "Constructor",
+    "Modifier",
+    "InvocationTargetException",
+    // The primitive-specialized functional interfaces, for the same reason.
+    "BiPredicate",
+    "IntFunction",
+    "IntPredicate",
+    "IntSupplier",
+    "IntConsumer",
+    "IntUnaryOperator",
+    "IntBinaryOperator",
+    "DoublePredicate",
+    "DoubleSupplier",
+    "DoubleConsumer",
+    "DoubleUnaryOperator",
+    "DoubleBinaryOperator",
+    "LongPredicate",
+    "LongSupplier",
+    "LongConsumer",
+    "LongUnaryOperator",
+    "LongBinaryOperator",
+    "BooleanSupplier",
+    "ToIntFunction",
+    "ToDoubleFunction",
+    "ToLongFunction",
+    "DoubleFunction",
+    "LongFunction",
+    "IntToLongFunction",
+    "IntToDoubleFunction",
+    "LongToIntFunction",
+    "LongToDoubleFunction",
+    "DoubleToIntFunction",
+    "DoubleToLongFunction",
+    "ObjIntConsumer",
+    "ObjLongConsumer",
+    "ObjDoubleConsumer",
+    "ToIntBiFunction",
+    "ToLongBiFunction",
+    "ToDoubleBiFunction",
 ];
 
 /// The nested library types the compiler models, as (enclosing simple name,
@@ -498,6 +593,8 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("javax.swing.event", JAVAX_SWING_EVENT),
     ("javax.swing.border", JAVAX_SWING_BORDER),
     ("javax.swing.text", JAVAX_SWING_TEXT),
+    ("javax.swing.table", JAVAX_SWING_TABLE),
+    ("javax.swing.tree", JAVAX_SWING_TREE),
     ("javax.accessibility", JAVAX_ACCESSIBILITY),
     ("java.awt", JAVA_AWT),
     ("java.awt.event", JAVA_AWT_EVENT),
@@ -569,20 +666,7 @@ static JAVAX_SWING: &[&str] = &[
     "ListCellRenderer",
     "DefaultListCellRenderer",
     "JTree",
-    "DefaultMutableTreeNode",
-    "TreePath",
-    "TreeModel",
-    "DefaultTreeModel",
-    "TreeCellRenderer",
-    "DefaultTreeCellRenderer",
     "JTable",
-    "TableModel",
-    "AbstractTableModel",
-    "DefaultTableModel",
-    "TableCellRenderer",
-    "DefaultTableCellRenderer",
-    "TableColumn",
-    "TableColumnModel",
     "JProgressBar",
     "JSpinner",
     "SpinnerNumberModel",
@@ -671,6 +755,31 @@ static JAVAX_SWING_EVENT: &[&str] = &[
     "DocumentEvent",
 ];
 
+/// `javax.swing.table`: a `JTable`'s MODEL and its renderers. They are not in
+/// `javax.swing` — `import javax.swing.*` does not bring them, which is what
+/// javac enforces and caturra did not: `DefaultTableModel` resolved off the
+/// wildcard alone (a program that compiles here and fails on a JDK), while the
+/// import that really provides it was refused as a package that does not exist.
+static JAVAX_SWING_TABLE: &[&str] = &[
+    "TableModel",
+    "AbstractTableModel",
+    "DefaultTableModel",
+    "TableCellRenderer",
+    "DefaultTableCellRenderer",
+    "TableColumn",
+    "TableColumnModel",
+];
+
+/// `javax.swing.tree`: a `JTree`'s model and nodes, for the same reason.
+static JAVAX_SWING_TREE: &[&str] = &[
+    "TreeModel",
+    "DefaultTreeModel",
+    "TreeCellRenderer",
+    "DefaultTreeCellRenderer",
+    "DefaultMutableTreeNode",
+    "TreePath",
+];
+
 /// `javax.swing.text`: the `Document` handle (getDocument).
 static JAVAX_SWING_TEXT: &[&str] = &["Document", "BadLocationException", "JTextComponent"];
 
@@ -747,6 +856,15 @@ fn validate_import(
         && import.path.get(1).map(String::as_str) == Some("lang")
         && import.path.get(2).map(String::as_str) == Some("reflect")
     {
+        // ...but the names it DOES model are still enabled by it: waving the
+        // import through without them left `Field[] fs = …` reported as a
+        // missing class under the very import that provides it.
+        for name in JAVA_LANG_REFLECT {
+            if REQUIRES_IMPORT.contains(name) && (import.wildcard || import.path.last() == Some(&(*name).to_owned()))
+            {
+                enabled.insert(name);
+            }
+        }
         return;
     }
 
@@ -1014,11 +1132,35 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
         }
     }
 
+    /// A name used as a STATIC RECEIVER — `Arrays.sort(x)`, `Locale.US` — is a
+    /// use of that class, and it needs the same import a type position does.
+    /// Only this shape: a bare name standing alone is a variable read, and a
+    /// local may legitimately be called anything.
+    fn static_receiver(&mut self, receiver: &Expr) {
+        if let Expr::Name { path, span } = receiver
+            && let Some(first) = path.first()
+        {
+            self.name(first, *span);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per expression kind
     fn expr(&mut self, expr: &Expr) {
         match expr {
-            Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
+            Expr::Literal { .. } | Expr::This { .. } | Expr::Super { .. } => {}
+            // A DOTTED name is a static access — `Locale.US`,
+            // `StandardCharsets.UTF_8` — and needs its class's import. A
+            // single-segment name is a variable read, which needs nothing.
+            Expr::Name { path, span } => {
+                if path.len() > 1
+                    && let Some(first) = path.first()
+                {
+                    self.name(first, *span);
+                }
+            }
             Expr::Call { receiver, args, .. } => {
                 if let Some(receiver) = receiver {
+                    self.static_receiver(receiver);
                     self.expr(receiver);
                 }
                 for arg in args {
@@ -1038,7 +1180,10 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                 self.expr(array);
                 self.expr(index);
             }
-            Expr::Field { object, .. } => self.expr(object),
+            Expr::Field { object, .. } => {
+                self.static_receiver(object);
+                self.expr(object);
+            }
             Expr::NewArray {
                 elem, dims, init, ..
             } => {

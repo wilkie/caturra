@@ -10058,3 +10058,46 @@ was not an error at all:
 Pinned by `a_final_for_each_variable_cannot_be_assigned` and
 `a_final_parameter_cannot_be_assigned`; 176 of the 268 reject pins now match
 javac's first message byte for byte.
+
+### The import a program never wrote (2026-08-28)
+
+The audit continued into the OTHER pin family, and this time it found the
+engine, not the pins. All 301 Java sources embedded in `run_programs.rs` — the
+tests that assert caturra's own output with no JDK to check them against — were
+extracted and run on both engines: 201 identical, 4 explained (an unseeded
+`Math.random`, a directory left behind by an earlier run, caturra's smaller
+heap, and the known HashMap treeify gap), 65 that a headless JDK cannot run at
+all (Swing), and 31 javac cannot compile (org.code, JUnit, EasyMock — and one
+placeholder the Rust test substitutes into).
+
+One of those 31 was neither: a Swing program using `DefaultTableModel` under
+`import javax.swing.*`. javac refuses it — the class is in `javax.swing.table`
+— and caturra compiled it. Pulling on that found the general hole.
+
+**Every library name outside `java.lang` needs an import**, and caturra was
+enforcing that for barely half of them:
+
+- The use-check only looked at TYPE positions, so a class used as a STATIC
+  RECEIVER was never checked at all: `Arrays.sort(x)`, `Collections.reverse(l)`,
+  `Objects.equals(a, b)`, `IntStream.of(1)`, and a dotted constant like
+  `Locale.US` or `StandardCharsets.UTF_8` all compiled with no import. This is
+  the most ordinary shape in the whole audit — a student's file that works in
+  the playground and fails on a real JDK.
+- Thirty-seven names were missing from the list that requires an import at all
+  (`Optional`, `Random`, `Pattern`, `Charset`, the reflection types, the format
+  exceptions), and every primitive functional interface (`IntPredicate` and its
+  thirty-four relatives).
+- A BUNDLED class shadowed the rule entirely: `user_classes` — the set that
+  lets a program's own `Scanner` shadow the library one — was built from every
+  compilation unit including the injected libraries, so `Random` and
+  `StringJoiner` counted as the program's own classes and needed no import.
+- `javax.swing.table` and `javax.swing.tree` were folded into `javax.swing`, so
+  the wildcard provided what it must not and the import that really provides
+  them ("package javax.swing.table does not exist") was refused.
+
+Ten of caturra's own Swing tests were written under the wildcard alone. They
+are valid Java now.
+
+Pinned by `a_static_receiver_needs_its_import`, `a_dotted_constant_needs_its_import`,
+`a_bundled_class_needs_its_import_too`, `the_swing_table_package_is_its_own`
+and `the_imports_that_provide_a_name`.

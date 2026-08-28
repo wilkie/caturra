@@ -721,11 +721,22 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
 
     // Import validation and enforcement (after all units parse, since
     // user classes anywhere in the compilation shadow library names).
+    //
+    // Only classes the PROGRAM declares shadow a library name. A bundled
+    // library is lexed under `<name>`, and counting its classes here made
+    // every name it declares exempt from the import rule — so `Random r = new
+    // Random(1)` with no `import java.util.Random` compiled, and a JDK refuses
+    // it. Bundled units are not checked either: they have no imports of their
+    // own, and they are not the program's code.
     let user_classes: std::collections::HashSet<String> = units
         .iter()
+        .filter(|(path, _)| !path.starts_with('<'))
         .flat_map(|(_, unit)| unit.classes.iter().map(|c| c.name.clone()))
         .collect();
     for (path, unit) in &units {
+        if path.starts_with('<') {
+            continue;
+        }
         imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
     }
 

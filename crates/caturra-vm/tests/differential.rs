@@ -40639,3 +40639,78 @@ differential_reject!(
     "FinalParam",
     "public class FinalParam {\n  static void f(final int p) { p = 2; }\n}"
 );
+
+// Every library name outside `java.lang` needs an import — the rule javac
+// enforces at the USE, and the one caturra let through: `Arrays.sort(x)` with
+// no `import java.util.Arrays;` compiled here and fails on a real JDK. It was
+// invisible because the check only looked at TYPE positions, and a class used
+// as a static receiver (`Arrays.sort`, `Locale.US`) appears in neither.
+differential_reject!(
+    a_static_receiver_needs_its_import,
+    "NoArraysImport",
+    "public class NoArraysImport {\n  static void r() { int[] x = {2, 1}; Arrays.sort(x); }\n}"
+);
+
+differential_reject!(
+    a_dotted_constant_needs_its_import,
+    "NoCharsetImport",
+    "public class NoCharsetImport {\n  static String r() { return StandardCharsets.UTF_8.toString(); }\n}"
+);
+
+differential_reject!(
+    a_bundled_class_needs_its_import_too,
+    "NoRandomImport",
+    "public class NoRandomImport {\n  static int r() { return new Random(1).nextInt(9); }\n}"
+);
+
+// `javax.swing.table` and `javax.swing.tree` are their own packages: a JTable's
+// model is not in `javax.swing`, so the wildcard does not provide it — and the
+// import that does was refused as a package that does not exist.
+differential_reject!(
+    the_swing_table_package_is_its_own,
+    "NoTableImport",
+    "import javax.swing.*;\npublic class NoTableImport {\n  static Object r() { return new DefaultTableModel(new Object[][] {{\"a\"}}, new Object[] {\"c\"}); }\n}"
+);
+
+// ...and the imports that DO provide them work, in both spellings.
+differential_test!(
+    the_imports_that_provide_a_name,
+    "Imported",
+    r#"
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Random;
+import java.util.StringJoiner;
+import java.util.function.IntPredicate;
+import java.util.regex.Pattern;
+import java.util.stream.IntStream;
+import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+
+public class Imported {
+    public static void main(String[] args) {
+        int[] x = {2, 1};
+        Arrays.sort(x);
+        System.out.println(Arrays.toString(x));
+        List<String> l = new java.util.ArrayList<>(List.of("a", "b"));
+        Collections.reverse(l);
+        System.out.println(l + " " + Objects.equals("a", "a"));
+        System.out.println(Optional.of("v").get() + new Random(1).nextInt(9));
+        StringJoiner j = new StringJoiner(",");
+        j.add("p").add("q");
+        System.out.println(j);
+        System.out.println(String.format(Locale.US, "%.1f", 1.5));
+        IntPredicate big = n -> n > 1;
+        System.out.println(big.test(2) + " " + IntStream.of(1, 2).sum());
+        System.out.println(Pattern.compile("a+").matcher("aa").matches());
+        System.out.println(StandardCharsets.UTF_8);
+        Field[] fields = "x".getClass().getDeclaredFields();
+        System.out.println(fields.length >= 0);
+    }
+}
+"#
+);

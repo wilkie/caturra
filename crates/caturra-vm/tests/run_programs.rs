@@ -783,6 +783,8 @@ fn swing_default_table_model_updates_rows_on_render() {
     let out = run_swing_scripted(
         r#"
         import javax.swing.*;
+        import javax.swing.table.*;
+
         import java.awt.*;
         public class Main {
             static DefaultTableModel model;
@@ -837,6 +839,7 @@ fn swing_table_cell_edit_updates_the_model() {
     let out = run_swing_scripted(
         r#"
         import javax.swing.*;
+        import javax.swing.table.*;
         import java.awt.*;
         public class Main {
             static JTable table;
@@ -1194,6 +1197,7 @@ fn swing_default_tree_model_fires_tree_model_listener_events() {
     let (result, console) = compile_and_run(
         r#"
         import javax.swing.*;
+        import javax.swing.tree.*;
         import javax.swing.event.*;
         public class Main {
             public static void main(String[] args) {
@@ -1257,6 +1261,7 @@ fn swing_tree_renders_a_custom_tree_model() {
     let tree = run_swing(
         r#"
         import javax.swing.*;
+        import javax.swing.tree.*;
         import java.awt.*;
         import javax.swing.event.*;
         class NumbersModel implements TreeModel {
@@ -1300,6 +1305,7 @@ fn swing_tree_cell_renderer_styles_nodes() {
     let tree = run_swing(
         r#"
         import javax.swing.*;
+        import javax.swing.tree.*;
         import java.awt.*;
         public class Main {
             public static void main(String[] args) {
@@ -1364,6 +1370,7 @@ fn swing_tree_selects_nodes_and_tracks_expansion() {
     let out = run_swing_scripted(
         r#"
         import javax.swing.*;
+        import javax.swing.tree.*;
         import java.awt.*;
         import javax.swing.event.*;
         public class Main {
@@ -1413,6 +1420,7 @@ fn swing_table_sorts_rows_and_converts_view_indices() {
     let out = run_swing_scripted(
         r#"
         import javax.swing.*;
+        import javax.swing.table.*;
         import java.awt.*;
         public class Main {
             static JTable table;
@@ -1466,6 +1474,7 @@ fn swing_table_cell_renderer_styles_a_column() {
     let tree = run_swing(
         r#"
         import javax.swing.*;
+        import javax.swing.table.*;
         import java.awt.*;
         public class Main {
             public static void main(String[] args) {
@@ -1515,6 +1524,7 @@ fn swing_custom_abstract_table_model_subclass() {
     let (result, console) = compile_and_run(
         r#"
         import javax.swing.*;
+        import javax.swing.table.*;
         import javax.swing.event.*;
         class TimesModel extends AbstractTableModel {
             public int getRowCount() { return 3; }
@@ -1558,6 +1568,7 @@ fn swing_table_model_fires_table_model_listener_events() {
     let (result, console) = compile_and_run(
         r#"
         import javax.swing.*;
+        import javax.swing.table.*;
         import javax.swing.event.*;
         public class Main {
             public static void main(String[] args) {
@@ -8927,6 +8938,7 @@ fn swing_table_read_only_via_model_override() {
     let json = run_swing(
         r#"
         import javax.swing.*;
+        import javax.swing.table.*;
         import java.awt.*;
         class ReadOnlyModel extends DefaultTableModel {
             public ReadOnlyModel(Object[][] d, Object[] c) { super(d, c); }
