@@ -1960,6 +1960,22 @@ GRAMMAR = [
                       '    }\n',
                       'import java.util.ArrayList;\nimport java.util.Collections;\n'
                       'import java.util.Comparator;\nimport java.util.Iterator;\nimport java.util.List;')),
+    dict(id="g-conditional", category="Expressions", title="The type of a conditional (?:)",
+         summary="JLS 15.25: a char and a fitting int constant give a char, mixed numbers promote, and two references join at what they share — including a face neither wears.",
+         main="G",
+         source=_prog('boolean flag = args.length == 0;\n'
+                      '        System.out.println((int) (flag ? \'a\' : 98));\n'
+                      '        System.out.println(flag ? 1 : 2.0);\n'
+                      '        System.out.println(flag ? 1L : 2);\n'
+                      '        Integer boxed = 3;\n'
+                      '        System.out.println(flag ? boxed : 4);\n'
+                      '        Object either = flag ? Integer.valueOf(1) : Double.valueOf(2);\n'
+                      '        System.out.println(either + " " + either.getClass().getSimpleName());\n'
+                      '        List<String> list = flag ? new ArrayList<>() : new LinkedList<>();\n'
+                      '        System.out.println(list.size());\n'
+                      '        CharSequence text = flag ? new StringBuilder("sb") : "str";\n'
+                      '        System.out.println(text.length());',
+                      '', 'import java.util.ArrayList;\nimport java.util.LinkedList;\nimport java.util.List;')),
     dict(id="g-fail-fast", category="Collections", title="Fail-fast iterators (ConcurrentModificationException)",
          summary="Modifying a collection while iterating it throws, as on a real JVM — including the quirk where removing the second-to-last element does not.",
          main="G",

@@ -40125,3 +40125,199 @@ public class Ordering {
 }
 "#
 );
+
+// The type of a CONDITIONAL (JLS §15.25). The numeric table — `flag ? 'a' : 98`
+// is a `char` when the int is a constant that fits, `flag ? 1 : 2.0` is a
+// `double`, `flag ? 1 : 'a'` promotes — and the reference rules: `null`
+// branches, unboxing, and the join two references take.
+differential_test!(
+    the_type_of_a_conditional,
+    "Conditional",
+    r#"
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
+
+public class Conditional {
+    static Integer maybe(boolean yes) { return yes ? 7 : null; }
+
+    public static void main(String[] args) {
+        boolean flag = args.length == 0;
+        System.out.println((int) (flag ? 'a' : 98));
+        System.out.println(flag ? 1 : 2.0);
+        System.out.println((int) (flag ? 1 : 'a'));
+        System.out.println(flag ? 1L : 2);
+        System.out.println((flag ? 1 : 2.0) == 1.0);
+        byte b = 5;
+        short sh = 7;
+        System.out.println((flag ? b : sh) + " " + (flag ? b : 200));
+        char c = 'x';
+        System.out.println((flag ? c : 121) + " " + (!flag ? c : 121));
+        System.out.println(flag ? 1.0f : 2);
+
+        Integer boxed = 3;
+        int raw = 4;
+        System.out.println((flag ? boxed : raw) + " " + (flag ? boxed : null));
+        System.out.println(maybe(true) + " " + maybe(false));
+        try {
+            int unboxed = flag ? null : 5;
+            System.out.println(unboxed);
+        } catch (NullPointerException e) {
+            System.out.println("NPE unboxing a null branch");
+        }
+        Object either = flag ? Integer.valueOf(1) : Double.valueOf(2);
+        System.out.println(either + " " + either.getClass().getSimpleName());
+        Number n = flag ? 1 : 2.5;
+        System.out.println(n);
+
+        // Two references join at what they share — including a face neither
+        // of them wears (`Collection`, `CharSequence`).
+        List<String> list = flag ? new ArrayList<>() : new LinkedList<>();
+        list.add("x");
+        System.out.println(list);
+        Collection<String> both = flag ? new ArrayList<String>() : new HashSet<String>();
+        System.out.println(both.size());
+        CharSequence text = flag ? new StringBuilder("sb") : "str";
+        System.out.println(text.length());
+        Comparable<String> cmp = flag ? "a" : "b";
+        System.out.println(cmp.compareTo("a"));
+        Object mixed = flag ? new ArrayList<String>() : "text";
+        System.out.println(mixed instanceof List);
+    }
+}
+"#
+);
+
+// A conditional over two classes that share SEVERAL interfaces. javac's type
+// is the INTERSECTION of everything both branches have in common; caturra's
+// join has to pick ONE, so the conditional ADOPTS its target wherever the
+// target is known — a declaration, an assignment, a return, an array store, a
+// field initializer, and through a NESTED conditional.
+differential_test!(
+    a_conditional_adopts_its_target,
+    "Adopts",
+    r#"
+public class Adopts {
+    interface Shape {}
+    interface Drawable {}
+    static class Sq implements Shape, Drawable { public String toString() { return "Sq"; } }
+    static class Ci implements Shape, Drawable { public String toString() { return "Ci"; } }
+
+    static Drawable pickReturn(boolean flag) { return flag ? new Sq() : new Ci(); }
+    static final Drawable FIELD = true ? new Sq() : new Ci();
+    Drawable instanceField = false ? new Sq() : new Ci();
+
+    public static void main(String[] args) {
+        boolean flag = args.length == 0;
+        System.out.println(pickReturn(flag));
+        System.out.println(FIELD + " " + new Adopts().instanceField);
+        Drawable[] all = new Drawable[2];
+        all[0] = flag ? new Sq() : new Ci();
+        System.out.println(all[0]);
+        Drawable nested = flag ? new Sq() : (flag ? new Ci() : new Sq());
+        System.out.println(nested);
+        Drawable assigned;
+        assigned = flag ? new Sq() : new Ci();
+        System.out.println(assigned);
+        Shape asShape = flag ? new Sq() : new Ci();
+        System.out.println(asShape);
+        System.out.println((flag ? new Sq() : new Ci()) instanceof Drawable);
+    }
+}
+"#
+);
+
+// `switch` — fallthrough, a default that is not last, a constant label, an
+// empty case, a String selector (including the NPE a null one throws), an
+// enum selector, a boxed Integer, and the labelled jumps out of one.
+differential_test!(
+    what_a_switch_does,
+    "Switching",
+    r#"
+public class Switching {
+    enum Color { RED, GREEN, BLUE }
+
+    static String grade(int n) {
+        String out = "";
+        switch (n) {
+            case 1:
+            case 2:
+                out += "low";
+            case 3:
+                out += "mid";
+                break;
+            default:
+                out += "other";
+                break;
+            case 9:
+                out += "high";
+        }
+        return out;
+    }
+
+    static String pick(Color c) {
+        switch (c) {
+            case RED: return "r";
+            case GREEN: return "g";
+            default: return "?";
+        }
+    }
+
+    public static void main(String[] args) {
+        for (int i = 0; i <= 4; i++) { System.out.println(i + ":" + grade(i)); }
+        System.out.println(grade(9));
+        for (Color c : Color.values()) { System.out.println(c + "=" + pick(c)); }
+
+        final int TWO = 2;
+        switch (2) {
+            case TWO: System.out.println("const label"); break;
+            default: System.out.println("no");
+        }
+        String s = "two";
+        switch (s) {
+            case "one": System.out.println(1); break;
+            case "two": System.out.println(2); break;
+            default: System.out.println(0);
+        }
+        try {
+            String nothing = null;
+            switch (nothing) {
+                case "x": System.out.println("x"); break;
+                default: System.out.println("d");
+            }
+        } catch (NullPointerException e) {
+            System.out.println("NPE on a null switch");
+        }
+        Integer boxed = 3;
+        switch (boxed) {
+            case 3: System.out.println("boxed three"); break;
+            default: System.out.println("no");
+        }
+        outer:
+        for (int i = 0; i < 3; i++) {
+            switch (i) {
+                case 0: System.out.println("zero"); continue;
+                case 1:
+                    for (int j = 0; j < 3; j++) {
+                        if (j == 1) continue outer;
+                        System.out.println("inner " + j);
+                    }
+                    break;
+                default:
+                    System.out.println("last");
+                    break outer;
+            }
+            System.out.println("after switch " + i);
+        }
+    }
+}
+"#
+);
+
+stricter_than_javac!(
+    stricter_a_conditional_as_an_argument_needs_one_shared_type,
+    "StrictConditionalArg",
+    "public class StrictConditionalArg {\n  interface Shape {}\n  interface Drawable {}\n  static class Sq implements Shape, Drawable {}\n  static class Ci implements Shape, Drawable {}\n  static String d(Drawable x) { return \"d\"; }\n  static String r() { return d(true ? new Sq() : new Ci()); }\n}"
+);

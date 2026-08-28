@@ -8985,6 +8985,16 @@ entries after it was written down.
   method found for sort(ArrayList<Object>)"), so the bound really is
   unsatisfied. Only the bare literal differs.
   (`stricter_a_null_literal_to_a_bounded_collections_method`)
+- A conditional over two classes that share SEVERAL interfaces, passed as an
+  ARGUMENT: `d(flag ? new Sq() : new Ci())` where `Sq` and `Ci` implement both
+  `Shape` and `Drawable` and `d` takes a `Drawable`. javac's type for a
+  conditional is the INTERSECTION of everything both branches share (JLS
+  §15.25); caturra's join has to pick ONE, and the conditional ADOPTS its
+  target wherever the target is known — a declaration, an assignment, a return,
+  an array store, a field initializer, through a nested conditional. An
+  ARGUMENT is the position where it is not: the type is needed to CHOOSE the
+  overload, before any parameter is known.
+  (`stricter_a_conditional_as_an_argument_needs_one_shared_type`)
 - A local class declared inside a SWITCH arm
   (`case 0: class Helper { … }`). The switch block is one scope and its arms
   hold block statements like any other block, but the arm parser reads
@@ -9896,3 +9906,43 @@ Pinned by `a_default_method_implements_a_library_interface`,
 and `a_natural_comparison_answers_the_difference`; the compatibility page
 gained an "Interfaces: default methods" claim (90 supported / 5 unsupported /
 3 beyond-11).
+
+### The two branching expressions (2026-08-27)
+
+`switch` and `?:`, swept together. `switch` came back clean over every shape
+asked — fallthrough, a `default` that is not last, an empty case, a constant
+label, a `String` selector (including the NPE a null one throws), an `enum`
+selector, a boxed `Integer`, and `continue`/`break` with a label jumping out of
+one. The conditional did not.
+
+Its numeric half was already exact — JLS §15.25's table, where `flag ? 'a' : 98`
+is a `char` because the int is a constant that fits, `flag ? 1 : 2.0` promotes
+to `double`, and unboxing a `null` branch throws. What was wrong was the JOIN
+of two references:
+
+- **Two collections that share no face** — a list and a set — fell all the way
+  to `Object`, where both are a `Collection<E>`; assigning one was then refused.
+- **A `String` and a `StringBuilder`** join at `CharSequence`, an interface
+  neither of them wears as a face here.
+- **Two classes that share SEVERAL interfaces** have no single join at all:
+  javac's type is the INTERSECTION of everything both branches have in common,
+  and caturra's join has to pick one. So `Drawable d = flag ? sq : ci` was
+  "incompatible types: Shape cannot be converted to Drawable", for a program
+  javac compiles.
+
+The last one is not a join that can be computed — the answer depends on where
+the value is going. So a conditional now ADOPTS its target wherever the target
+is known: a local declaration, an assignment, a return, an array store, a field
+initializer, a builtin parameter, and recursively through a NESTED conditional
+(whose own join is the one type the intersection had to give up). The same
+shape a DIAMOND already had, for the same reason.
+
+An ARGUMENT to a user method is the one position left, and it is left
+deliberately: the argument's type is what CHOOSES the overload, so there is no
+parameter to adopt yet. It is written down under **Divergences from javac**.
+
+Pinned by `the_type_of_a_conditional`, `a_conditional_adopts_its_target`,
+`what_a_switch_does` and
+`stricter_a_conditional_as_an_argument_needs_one_shared_type`; the
+compatibility page gained a "The type of a conditional" claim (91 supported /
+5 unsupported / 3 beyond-11).

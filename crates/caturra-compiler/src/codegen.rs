@@ -17203,7 +17203,7 @@ impl BodyGen<'_> {
                 }
             }
             (Some(expected), Some(value)) => {
-                let actual = self.expr(value);
+                let actual = self.expr_toward(value, expected);
                 let value_const = self.const_int(value);
                 self.convert_for_assignment_const(actual, expected, value.span(), value_const);
                 // Enclosing finally blocks run before the method exits, and
@@ -17680,7 +17680,9 @@ impl BodyGen<'_> {
                     // "ArrayList<Square> cannot be converted to
                     // ArrayList<Shape>" — ordinary Java, refused, and only in
                     // the diamond form: writing the type out worked.
-                    let init_ty = if self.diamond_adopts_target(init, init_ty, var_ty) {
+                    let init_ty = if self.diamond_adopts_target(init, init_ty, var_ty)
+                        || self.ternary_adopts_target(init, init_ty, var_ty)
+                    {
                         var_ty
                     } else {
                         init_ty
@@ -17724,6 +17726,62 @@ impl BodyGen<'_> {
     /// The runtime object is the same either way (a collection's elements are
     /// not typed at run time); only the static type differs, so adopting the
     /// target changes what is ACCEPTED and nothing about what is built.
+    /// Emit an expression toward a KNOWN target type, and report the type it
+    /// has in that context: a conditional adopts the target when both of its
+    /// branches reach it (see `ternary_adopts_target`).
+    fn expr_toward(&mut self, expr: &Expr, target: JType) -> JType {
+        let actual = self.expr(expr);
+        if self.ternary_adopts_target(expr, actual, target) {
+            target
+        } else {
+            actual
+        }
+    }
+
+    /// Whether a CONDITIONAL takes its type from the target instead of from
+    /// the join of its branches. javac's rule (JLS §15.25) makes the type an
+    /// INTERSECTION of everything both branches share, and caturra's join has
+    /// to pick ONE type — so two classes that implement `Shape` and `Drawable`
+    /// join at whichever comes first, and the assignment to the other was
+    /// "incompatible types: Shape cannot be converted to Drawable" for a
+    /// program javac compiles. When both branches reach the target, the target
+    /// IS one of the types the intersection has.
+    fn ternary_adopts_target(&mut self, init: &Expr, init_ty: JType, target: JType) -> bool {
+        let Expr::Ternary { then, els, .. } = init else {
+            return false;
+        };
+        // Only a REFERENCE join adopts: a conditional whose branches are
+        // numbers has the primitive type binary promotion gives it, and the
+        // value on the stack is that primitive — claiming the target instead
+        // skipped the boxing the assignment needs and left a raw double where
+        // a reference belongs.
+        if init_ty == target
+            || !target.is_reference()
+            || !init_ty.is_reference()
+            || target == JType::Error
+        {
+            return false;
+        }
+        self.branch_reaches(then, target) && self.branch_reaches(els, target)
+    }
+
+    /// Whether one branch of a conditional reaches the target — directly, or
+    /// (for a NESTED conditional) because both of ITS branches do. Without the
+    /// recursion the inner conditional's own join was asked instead, and that
+    /// is the one type the intersection had to give up.
+    fn branch_reaches(&mut self, branch: &Expr, target: JType) -> bool {
+        let ty = self.type_of(branch);
+        if ty == JType::Null || widens(ty, target, self.table) {
+            return true;
+        }
+        match branch {
+            Expr::Ternary { then, els, .. } => {
+                self.branch_reaches(then, target) && self.branch_reaches(els, target)
+            }
+            _ => false,
+        }
+    }
+
     fn diamond_adopts_target(&self, init: &Expr, init_ty: JType, target: JType) -> bool {
         let Expr::NewObject { type_args, .. } = init else {
             return false;
@@ -17923,7 +17981,7 @@ impl BodyGen<'_> {
                         format!("final variable '{name}' might be assigned in a loop"),
                     );
                 }
-                let value_ty = self.expr(value);
+                let value_ty = self.expr_toward(value, var_ty);
                 let value_const = self.const_int(value);
                 self.convert_for_assignment_const(value_ty, var_ty, value.span(), value_const);
                 self.emit_store(slot, var_ty);
@@ -18318,7 +18376,7 @@ impl BodyGen<'_> {
 
         match op_kind {
             None => {
-                let value_ty = self.expr(value);
+                let value_ty = self.expr_toward(value, field.ty);
                 let value_const = self.const_int(value);
                 self.convert_for_assignment_const(value_ty, field.ty, value.span(), value_const);
                 if keep {
@@ -18559,7 +18617,7 @@ impl BodyGen<'_> {
                 );
             }
         } else {
-            let init_ty = self.expr(init);
+            let init_ty = self.expr_toward(init, ty);
             let init_const = self.const_int(init);
             self.convert_for_assignment_const(init_ty, ty, init.span(), init_const);
         }
@@ -22516,7 +22574,7 @@ impl BodyGen<'_> {
         let mut args_width: u16 = 0;
         for (arg, param) in args.iter().zip(chosen.params) {
             let param_ty = bparam_type(*param, elem, self.table);
-            let actual = self.expr(arg);
+            let actual = self.expr_toward(arg, param_ty);
             if matches!(param_ty, JType::Boxed(_))
                 || param_ty == JType::Object(self.table.object_id)
             {
@@ -23723,7 +23781,7 @@ impl BodyGen<'_> {
 
         match op_kind {
             None => {
-                let value_ty = self.expr(value);
+                let value_ty = self.expr_toward(value, element);
                 let value_const = self.const_int(value);
                 self.convert_for_assignment_const(value_ty, element, value.span(), value_const);
                 self.xastore_keeping(element, keep);
@@ -29029,7 +29087,7 @@ impl BodyGen<'_> {
     fn emit_call_args(&mut self, args: &[Expr], sig: &MethodSig, span: SourceSpan) -> u16 {
         if !sig.is_varargs {
             for (arg, param) in args.iter().zip(&sig.params) {
-                let actual = self.expr(arg);
+                let actual = self.expr_toward(arg, *param);
                 self.convert_for_assignment(actual, *param, arg.span());
             }
             return sig.params.iter().map(|p| p.width()).sum();
@@ -29037,7 +29095,7 @@ impl BodyGen<'_> {
         let fixed = sig.params.len() - 1;
         let array_ty = sig.params[fixed];
         for (arg, param) in args.iter().zip(&sig.params).take(fixed) {
-            let actual = self.expr(arg);
+            let actual = self.expr_toward(arg, *param);
             self.convert_for_assignment(actual, *param, arg.span());
         }
         // Array form: a single trailing argument assignable to the
@@ -30664,6 +30722,24 @@ impl BodyGen<'_> {
             if widens(other, face, self.table) {
                 return face;
             }
+        }
+        // Two COLLECTIONS of the same element that share no face — a list and
+        // a set — are both `Collection<E>`, which is the only thing they have
+        // in common and what javac's lub keeps. Without it the join fell to
+        // `Object` and the assignment after it was refused.
+        if let (Some(one), Some(other)) = (
+            collection_element_type(then_ty, self.table),
+            collection_element_type(els_ty, self.table),
+        )
+            && one == other
+        {
+            return JType::Collection(one);
+        }
+        // A `String` and a `StringBuilder` join at the interface they share,
+        // which is not a face either of them wears: `CharSequence`.
+        let text_like = |ty: JType| matches!(ty, JType::Str | JType::StringBuilder | JType::CharSequence);
+        if text_like(then_ty) && text_like(els_ty) {
+            return JType::CharSequence;
         }
         // Two unrelated CLASSES that share an interface join there — which
         // is what makes `flag ? P::inc : P::dec` an `Op`: each branch is its

@@ -488,7 +488,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-b74_2u34/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-gbbb86vi/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -499,7 +499,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-k7d_u8z3/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-up_zrlg3/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -510,7 +510,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-ih_q9pf9/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-n5bkezrg/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -941,6 +941,16 @@
     "source": "import java.util.ArrayList;\nimport java.util.Collections;\nimport java.util.Comparator;\nimport java.util.Iterator;\nimport java.util.List;\npublic class G {\n    interface Shape extends Comparable<Shape> {\n        double area();\n        default int compareTo(Shape other) { return Double.compare(area(), other.area()); }\n    }\n    static class Sq implements Shape {\n        final double s;\n        Sq(double s) { this.s = s; }\n        public double area() { return s * s; }\n        public String toString() { return \"Sq\" + area(); }\n    }\n    static class Bag implements Iterable<String> {\n        final List<String> items = new ArrayList<>();\n        void add(String s) { items.add(s); }\n        public Iterator<String> iterator() { return items.iterator(); }\n    }\n\n    public static void main(String[] args) throws Exception {\nList<Shape> shapes = new ArrayList<>(List.of(new Sq(3), new Sq(1)));\n        Collections.sort(shapes);\n        System.out.println(shapes);\n        System.out.println(shapes.get(0) instanceof Comparable);\n        Bag bag = new Bag();\n        bag.add(\"x\");\n        bag.add(\"y\");\n        bag.forEach(System.out::println);\n        System.out.println(Comparator.<String>naturalOrder().compare(\"ab\", \"cd\"));\n    }\n}\n",
     "status": "supported",
     "expected": "[Sq1.0, Sq9.0]\ntrue\nx\ny\n-2\n"
+  },
+  {
+    "id": "g-conditional",
+    "category": "Expressions",
+    "title": "The type of a conditional (?:)",
+    "summary": "JLS 15.25: a char and a fitting int constant give a char, mixed numbers promote, and two references join at what they share \u2014 including a face neither wears.",
+    "main": "G",
+    "source": "import java.util.ArrayList;\nimport java.util.LinkedList;\nimport java.util.List;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nboolean flag = args.length == 0;\n        System.out.println((int) (flag ? 'a' : 98));\n        System.out.println(flag ? 1 : 2.0);\n        System.out.println(flag ? 1L : 2);\n        Integer boxed = 3;\n        System.out.println(flag ? boxed : 4);\n        Object either = flag ? Integer.valueOf(1) : Double.valueOf(2);\n        System.out.println(either + \" \" + either.getClass().getSimpleName());\n        List<String> list = flag ? new ArrayList<>() : new LinkedList<>();\n        System.out.println(list.size());\n        CharSequence text = flag ? new StringBuilder(\"sb\") : \"str\";\n        System.out.println(text.length());\n    }\n}\n",
+    "status": "supported",
+    "expected": "97\n1.0\n1\n3\n1.0 Double\n0\n2\n"
   },
   {
     "id": "g-fail-fast",
