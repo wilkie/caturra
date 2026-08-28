@@ -97,7 +97,7 @@ class Arrays {
     for (int i = fromIndex + 1; i < toIndex; i++) {
       double key = a[i];
       int j = i - 1;
-      while (j >= fromIndex && Double.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
+      while (j >= fromIndex && __Double.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }
@@ -124,7 +124,7 @@ class Arrays {
     for (int i = fromIndex + 1; i < toIndex; i++) {
       float key = a[i];
       int j = i - 1;
-      while (j >= fromIndex && Float.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
+      while (j >= fromIndex && __Float.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }
@@ -152,7 +152,7 @@ class Arrays {
     for (int i = 1; i < a.length; i++) {
       double key = a[i];
       int j = i - 1;
-      while (j >= 0 && Double.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
+      while (j >= 0 && __Double.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }
@@ -177,7 +177,7 @@ class Arrays {
     for (int i = 1; i < a.length; i++) {
       float key = a[i];
       int j = i - 1;
-      while (j >= 0 && Float.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
+      while (j >= 0 && __Float.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }
@@ -237,7 +237,7 @@ class Arrays {
     int shared = a.length < b.length ? a.length : b.length;
     // The DOUBLE comparison is `Double.compare`, not `==`: two NaNs match here
     // and 0.0 does not match -0.0, exactly as `Arrays.equals` has it.
-    for (int i = 0; i < shared; i++) if (Double.compare(a[i], b[i]) != 0) return i;
+    for (int i = 0; i < shared; i++) if (__Double.compare(a[i], b[i]) != 0) return i;
     return a.length == b.length ? -1 : shared;
   }
   public static int mismatch(char[] a, char[] b) {
@@ -310,13 +310,13 @@ class Arrays {
   public static boolean equals(double[] a, double[] b) {
     if (a == b) return true;
     if (a == null || b == null || a.length != b.length) return false;
-    for (int i = 0; i < a.length; i++) if (Double.compare(a[i], b[i]) != 0) return false;
+    for (int i = 0; i < a.length; i++) if (__Double.compare(a[i], b[i]) != 0) return false;
     return true;
   }
   public static boolean equals(float[] a, float[] b) {
     if (a == b) return true;
     if (a == null || b == null || a.length != b.length) return false;
-    for (int i = 0; i < a.length; i++) if (Float.compare(a[i], b[i]) != 0) return false;
+    for (int i = 0; i < a.length; i++) if (__Float.compare(a[i], b[i]) != 0) return false;
     return true;
   }
 
@@ -340,7 +340,7 @@ class Arrays {
   public static int hashCode(long[] a) {
     if (a == null) return 0;
     int result = 1;
-    for (int i = 0; i < a.length; i++) result = 31 * result + Long.hashCode(a[i]);
+    for (int i = 0; i < a.length; i++) result = 31 * result + __Long.hashCode(a[i]);
     return result;
   }
   public static int hashCode(short[] a) {
@@ -364,19 +364,19 @@ class Arrays {
   public static int hashCode(boolean[] a) {
     if (a == null) return 0;
     int result = 1;
-    for (int i = 0; i < a.length; i++) result = 31 * result + Boolean.hashCode(a[i]);
+    for (int i = 0; i < a.length; i++) result = 31 * result + __Boolean.hashCode(a[i]);
     return result;
   }
   public static int hashCode(double[] a) {
     if (a == null) return 0;
     int result = 1;
-    for (int i = 0; i < a.length; i++) result = 31 * result + Double.hashCode(a[i]);
+    for (int i = 0; i < a.length; i++) result = 31 * result + __Double.hashCode(a[i]);
     return result;
   }
   public static int hashCode(float[] a) {
     if (a == null) return 0;
     int result = 1;
-    for (int i = 0; i < a.length; i++) result = 31 * result + Float.hashCode(a[i]);
+    for (int i = 0; i < a.length; i++) result = 31 * result + __Float.hashCode(a[i]);
     return result;
   }
 
@@ -408,7 +408,7 @@ class Arrays {
     if (a == null || b == null) return a == null ? -1 : 1;
     int shared = a.length < b.length ? a.length : b.length;
     for (int i = 0; i < shared; i++) {
-      if (a[i] != b[i]) return Integer.compare(a[i], b[i]);
+      if (a[i] != b[i]) return __Integer.compare(a[i], b[i]);
     }
     return a.length - b.length;
   }
@@ -417,7 +417,7 @@ class Arrays {
     if (a == null || b == null) return a == null ? -1 : 1;
     int shared = a.length < b.length ? a.length : b.length;
     for (int i = 0; i < shared; i++) {
-      if (a[i] != b[i]) return Long.compare(a[i], b[i]);
+      if (a[i] != b[i]) return __Long.compare(a[i], b[i]);
     }
     return a.length - b.length;
   }
@@ -426,7 +426,7 @@ class Arrays {
     if (a == null || b == null) return a == null ? -1 : 1;
     int shared = a.length < b.length ? a.length : b.length;
     for (int i = 0; i < shared; i++) {
-      int c = Double.compare(a[i], b[i]);
+      int c = __Double.compare(a[i], b[i]);
       if (c != 0) return c;
     }
     return a.length - b.length;
@@ -436,7 +436,7 @@ class Arrays {
     if (a == null || b == null) return a == null ? -1 : 1;
     int shared = a.length < b.length ? a.length : b.length;
     for (int i = 0; i < shared; i++) {
-      int c = Float.compare(a[i], b[i]);
+      int c = __Float.compare(a[i], b[i]);
       if (c != 0) return c;
     }
     return a.length - b.length;
@@ -446,7 +446,11 @@ class Arrays {
     if (a == null || b == null) return a == null ? -1 : 1;
     int shared = a.length < b.length ? a.length : b.length;
     for (int i = 0; i < shared; i++) {
-      if (a[i] != b[i]) return Character.compare(a[i], b[i]);
+      // Subtracted rather than routed through `Character.compare`: a program
+      // may declare its own class named `Character` (a play's cast, in the
+      // corpus), and a bundled library must not depend on a name a program is
+      // free to take. `Character.compare` IS this subtraction.
+      if (a[i] != b[i]) return a[i] - b[i];
     }
     return a.length - b.length;
   }
@@ -455,7 +459,7 @@ class Arrays {
     if (a == null || b == null) return a == null ? -1 : 1;
     int shared = a.length < b.length ? a.length : b.length;
     for (int i = 0; i < shared; i++) {
-      if (a[i] != b[i]) return Short.compare(a[i], b[i]);
+      if (a[i] != b[i]) return __Short.compare(a[i], b[i]);
     }
     return a.length - b.length;
   }
@@ -464,7 +468,7 @@ class Arrays {
     if (a == null || b == null) return a == null ? -1 : 1;
     int shared = a.length < b.length ? a.length : b.length;
     for (int i = 0; i < shared; i++) {
-      if (a[i] != b[i]) return Byte.compare(a[i], b[i]);
+      if (a[i] != b[i]) return __Byte.compare(a[i], b[i]);
     }
     return a.length - b.length;
   }
@@ -473,7 +477,7 @@ class Arrays {
     if (a == null || b == null) return a == null ? -1 : 1;
     int shared = a.length < b.length ? a.length : b.length;
     for (int i = 0; i < shared; i++) {
-      if (a[i] != b[i]) return Boolean.compare(a[i], b[i]);
+      if (a[i] != b[i]) return __Boolean.compare(a[i], b[i]);
     }
     return a.length - b.length;
   }

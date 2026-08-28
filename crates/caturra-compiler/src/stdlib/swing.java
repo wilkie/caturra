@@ -22,8 +22,8 @@ class Color {
   public int getRGB() { return (255 << 24) | (__r << 16) | (__g << 8) | __b; }
   // A darker/brighter shade, following java.awt.Color's factor-0.7 algorithm.
   public Color darker() {
-    return new Color(Math.max((int) (__r * 0.7), 0), Math.max((int) (__g * 0.7), 0),
-        Math.max((int) (__b * 0.7), 0));
+    return new Color(__Math.max((int) (__r * 0.7), 0), __Math.max((int) (__g * 0.7), 0),
+        __Math.max((int) (__b * 0.7), 0));
   }
   public Color brighter() {
     int r = __r, g = __g, b = __b;
@@ -32,8 +32,8 @@ class Color {
     if (r > 0 && r < i) r = i;
     if (g > 0 && g < i) g = i;
     if (b > 0 && b < i) b = i;
-    return new Color(Math.min((int) (r / 0.7), 255), Math.min((int) (g / 0.7), 255),
-        Math.min((int) (b / 0.7), 255));
+    return new Color(__Math.min((int) (r / 0.7), 255), __Math.min((int) (g / 0.7), 255),
+        __Math.min((int) (b / 0.7), 255));
   }
   public static final Color WHITE = new Color(255, 255, 255);
   public static final Color LIGHT_GRAY = new Color(192, 192, 192);
@@ -762,7 +762,7 @@ class JTabbedPane extends Component {
   public void addChangeListener(ChangeListener l) { __listener = l; __SwingRuntime.__interactive = true; }
 
   boolean __listens() { return __listener != null; }
-  void __setFromHost(String value) { __selected = Integer.parseInt(value); }
+  void __setFromHost(String value) { __selected = __Integer.parseInt(value); }
   void __onEvent() { if (__listener != null) __listener.stateChanged(new ChangeEvent(this)); }
 
   String __json() {
@@ -1027,8 +1027,8 @@ abstract class JTextComponent extends Component {
   void __setCaretFromHost(String value) {
     int comma = value.indexOf(",");
     if (comma < 0) return;
-    __selStart = Integer.parseInt(value.substring(0, comma));
-    __selEnd = Integer.parseInt(value.substring(comma + 1));
+    __selStart = __Integer.parseInt(value.substring(0, comma));
+    __selEnd = __Integer.parseInt(value.substring(comma + 1));
   }
   // Serialized once, then cleared — the host moves the caret and the user's own
   // cursor takes over again.
@@ -1307,7 +1307,7 @@ class JComboBox extends Component {
   void __setFromHost(String value) {
     // Editable: the host sends the text (possibly custom). Otherwise: an index.
     if (__editable) __model.setSelectedItem(value);
-    else setSelectedIndex(Integer.parseInt(value));
+    else setSelectedIndex(__Integer.parseInt(value));
   }
   void __onEvent() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this));
@@ -1589,7 +1589,7 @@ class JList extends Component {
       int comma = value.indexOf(",", start);
       String part = comma < 0 ? value.substring(start) : value.substring(start, comma);
       if (part.length() > 0) {
-        int index = Integer.parseInt(part);
+        int index = __Integer.parseInt(part);
         if (index >= 0) __selected.add(index);
       }
       if (comma < 0) break;
@@ -1647,7 +1647,7 @@ class JSlider extends Component {
   public int getMinimum() { return __min; }
   public int getMaximum() { return __max; }
   public void addChangeListener(ChangeListener l) { __changeListener = l; __SwingRuntime.__interactive = true; }
-  void __setFromHost(String value) { __value = Integer.parseInt(value); }
+  void __setFromHost(String value) { __value = __Integer.parseInt(value); }
   void __onEvent() {
     if (__changeListener != null) __changeListener.stateChanged(new ChangeEvent(this));
   }
@@ -1725,7 +1725,7 @@ class JSpinner extends Component {
   public void setValue(int value) { __model.__value = value; }
   public SpinnerNumberModel getModel() { return __model; }
   public void addChangeListener(ChangeListener l) { __changeListener = l; __SwingRuntime.__interactive = true; }
-  void __setFromHost(String value) { __model.__value = Integer.parseInt(value); }
+  void __setFromHost(String value) { __model.__value = __Integer.parseInt(value); }
   void __onEvent() {
     if (__changeListener != null) __changeListener.stateChanged(new ChangeEvent(this));
   }
@@ -1824,7 +1824,7 @@ abstract class AbstractTableModel implements TableModel {
     for (TableModelListener l : __tableListeners) l.tableChanged(e);
   }
   public void fireTableDataChanged() {
-    __fire(0, Integer.MAX_VALUE, TableModelEvent.ALL_COLUMNS, TableModelEvent.UPDATE);
+    __fire(0, __Integer.MAX_VALUE, TableModelEvent.ALL_COLUMNS, TableModelEvent.UPDATE);
   }
   public void fireTableStructureChanged() {
     __fire(TableModelEvent.HEADER_ROW, TableModelEvent.HEADER_ROW,
@@ -2356,8 +2356,8 @@ class JTable extends Component {
   // Numbers compare numerically ("10" after "9"), everything else as text.
   static int __compareValues(String a, String b) {
     if (__isNumeric(a) && __isNumeric(b)) {
-      double da = Double.parseDouble(a);
-      double db = Double.parseDouble(b);
+      double da = __Double.parseDouble(a);
+      double db = __Double.parseDouble(b);
       if (da < db) return -1;
       return da > db ? 1 : 0;
     }
@@ -2457,13 +2457,13 @@ class JTable extends Component {
       String rest = value.substring(5);
       int c1 = rest.indexOf(",");
       int c2 = rest.indexOf(",", c1 + 1);
-      int row = Integer.parseInt(rest.substring(0, c1));
-      int col = Integer.parseInt(rest.substring(c1 + 1, c2));
+      int row = __Integer.parseInt(rest.substring(0, c1));
+      int col = __Integer.parseInt(rest.substring(c1 + 1, c2));
       setValueAt(rest.substring(c2 + 1), row, col);
     } else if (value.startsWith("sort:")) {
-      __toggleSort(Integer.parseInt(value.substring(5)));
+      __toggleSort(__Integer.parseInt(value.substring(5)));
     } else {
-      __selectedRow = Integer.parseInt(value);
+      __selectedRow = __Integer.parseInt(value);
     }
   }
   void __onEvent() {
@@ -2715,7 +2715,7 @@ class JOptionPane {
   }
   static int __parse(String s) {
     if (s == null) return CLOSED_OPTION;
-    try { return Integer.parseInt(s); } catch (Exception e) { return CLOSED_OPTION; }
+    try { return __Integer.parseInt(s); } catch (Exception e) { return CLOSED_OPTION; }
   }
 }
 
@@ -3321,9 +3321,9 @@ class __SwingRuntime {
         if (c1 < 0) return null;
         int c2 = v.indexOf(",", c1 + 1);
         if (c2 < 0) return null;
-        int type = Integer.parseInt(v.substring(0, c1));
-        int code = Integer.parseInt(v.substring(c1 + 1, c2));
-        int ch = Integer.parseInt(v.substring(c2 + 1));
+        int type = __Integer.parseInt(v.substring(0, c1));
+        int code = __Integer.parseInt(v.substring(c1 + 1, c2));
+        int ch = __Integer.parseInt(v.substring(c2 + 1));
         return new int[]{type, code, ch};
       }
     }
@@ -3341,8 +3341,8 @@ class __SwingRuntime {
         String coords = line.substring(prefix.length());
         int comma = coords.indexOf(",");
         if (comma < 0) return null;
-        int x = Integer.parseInt(coords.substring(0, comma));
-        int y = Integer.parseInt(coords.substring(comma + 1));
+        int x = __Integer.parseInt(coords.substring(0, comma));
+        int y = __Integer.parseInt(coords.substring(comma + 1));
         return new int[]{x, y};
       }
     }

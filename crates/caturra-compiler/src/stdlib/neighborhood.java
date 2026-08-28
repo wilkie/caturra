@@ -91,7 +91,7 @@ class __NbhdSquare {
   String getPrintableDescription() {
     if (!passable) return "x";
     if (color != null) return color;
-    return String.valueOf(paintCount);
+    return __String.valueOf(paintCount);
   }
   boolean hasColor() { return color != null; }
   String getColor() { return color; }
@@ -175,8 +175,8 @@ class __NbhdWorld {
         String[] cells = lines.get(y).split(" ");
         for (int x = 0; x < width; x++) {
           String[] parts = cells[x].split(",");
-          int tileType = Integer.parseInt(parts[0]);
-          int value = parts.length > 1 ? Integer.parseInt(parts[1]) : 0;
+          int tileType = __Integer.parseInt(parts[0]);
+          int value = parts.length > 1 ? __Integer.parseInt(parts[1]) : 0;
           sq[x][y] = new __NbhdSquare(tileType, value);
         }
       }

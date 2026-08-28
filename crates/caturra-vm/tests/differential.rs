@@ -40714,3 +40714,46 @@ public class Imported {
 }
 "#
 );
+
+// A program may declare a class whose name a JDK class already has — the
+// corpus has a `Character` (a play's cast) — and a BUNDLED library must not
+// depend on a name the program is free to take. `Arrays.compare(char[],
+// char[])` called `Character.compare`, which resolved to the program's class
+// and left eight corpus levels failing to compile.
+differential_test!(
+    a_program_may_shadow_a_library_class,
+    "Shadowing",
+    r#"
+import java.util.Arrays;
+import java.util.List;
+
+class Character {
+    private final String name;
+    Character(String name) { this.name = name; }
+    String name() { return name; }
+    public String toString() { return "Character(" + name + ")"; }
+}
+
+class Integer2 { }
+
+public class Shadowing {
+    public static void main(String[] args) {
+        Character lead = new Character("Ada");
+        System.out.println(lead + " " + lead.name());
+        char[] a = {'a', 'b'};
+        char[] b = {'a', 'c'};
+        System.out.println(Arrays.compare(a, b) + " " + Arrays.toString(a));
+        System.out.println(Arrays.equals(a, a.clone()) + " " + Arrays.hashCode(a));
+        int[] xs = {3, 1, 2};
+        Arrays.sort(xs);
+        System.out.println(Arrays.toString(xs) + Arrays.binarySearch(xs, 2));
+        double[] ds = {2.5, 1.5};
+        Arrays.sort(ds);
+        System.out.println(Arrays.toString(ds));
+        List<Character> cast = List.of(lead, new Character("Bob"));
+        System.out.println(cast.size() + " " + cast.get(1).name());
+        System.out.println(java.lang.Character.isLetter('x'));
+    }
+}
+"#
+);

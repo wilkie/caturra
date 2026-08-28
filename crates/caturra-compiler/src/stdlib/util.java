@@ -11,7 +11,7 @@ class Random {
   private double __nextGaussian = 0.0;
   private boolean __haveNextGaussian = false;
 
-  public Random() { setSeed((long) (Math.random() * 281474976710656.0)); }
+  public Random() { setSeed((long) (__Math.random() * 281474976710656.0)); }
   public Random(long seed) { setSeed(seed); }
 
   public void setSeed(long seed) {
@@ -95,7 +95,7 @@ class Random {
     int len = bytes.length;
     while (i < len) {
       int rnd = nextInt();
-      int n = Math.min(len - i, 4);
+      int n = __Math.min(len - i, 4);
       while (n > 0) {
         bytes[i] = (byte) rnd;
         i++;
@@ -118,7 +118,7 @@ class Random {
       v2 = 2 * nextDouble() - 1;
       s = v1 * v1 + v2 * v2;
     } while (s >= 1 || s == 0);
-    double factor = Math.sqrt(-2 * Math.log(s) / s);
+    double factor = __Math.sqrt(-2 * __Math.log(s) / s);
     __nextGaussian = v2 * factor;
     __haveNextGaussian = true;
     return v1 * factor;

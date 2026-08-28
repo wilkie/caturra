@@ -10101,3 +10101,37 @@ are valid Java now.
 Pinned by `a_static_receiver_needs_its_import`, `a_dotted_constant_needs_its_import`,
 `a_bundled_class_needs_its_import_too`, `the_swing_table_package_is_its_own`
 and `the_imports_that_provide_a_name`.
+
+### A name the program is free to take (2026-08-28)
+
+Thirty-three of the 2698 corpus levels do not compile here, and the last unit's
+audit habit says to ask WHY rather than to assume they are the known gaps.
+Eight of them were one bug, and it belongs to caturra: a level whose student
+class is named `Character` — a play's cast, in a unit about constructors —
+failed with "cannot find symbol: method compare(char,char) in class
+Character", about a call the level does not contain.
+
+The call is in caturra's own bundled `Arrays`: `compare(char[], char[])` reads
+`Character.compare(a[i], b[i])`, and the bundled libraries are compiled in the
+same flat namespace as the program, so the program's class captured it. Every
+bundled reference to a wrapper — `Integer.compare`, `Double.compare`,
+`Long.hashCode`, `Math.max`, `String.valueOf` — was the same latent bug waiting
+for a program to take that name.
+
+Writing them fully qualified does not fix it: a qualified receiver is stripped
+to its simple name before the lookup, so `java.lang.Integer.compare` finds the
+program's `Integer` too — which is also a bug in its own right, since javac
+reads a fully-qualified name as the library class whatever else is in scope.
+
+Both are fixed by one reserved spelling. `__Integer`, `__Character`, `__Math`
+and the rest resolve to the library's statics and constants, and the `__`
+prefix is one a program cannot write. The bundled sources use it; and a
+qualified name whose simple form the program has SHADOWED is rewritten to it,
+so `java.lang.Character.isLetter('x')` means what javac says it means even in a
+program with its own `Character`.
+
+Eight corpus levels compile now (41 compile failures to 33), and the corpus
+comparison covers 1761 per-test verdicts with 4 divergences, all four on
+validators that do not pin their own verdict down.
+
+Pinned by `a_program_may_shadow_a_library_class`.

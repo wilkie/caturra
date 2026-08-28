@@ -221,7 +221,7 @@ class Scene {
   private String __c(Color c) { return c.getRed() + " " + c.getGreen() + " " + c.getBlue(); }
   public final void clear(String color) { __cmds.add("clear " + __c(new Color(color))); }
   public final void clear(Color color) { __cmds.add("clear " + __c(color)); }
-  public final void pause(double seconds) { __cmds.add("pause " + Math.max(seconds, 0.1)); }
+  public final void pause(double seconds) { __cmds.add("pause " + __Math.max(seconds, 0.1)); }
   public final void playNote(int note, double seconds) { __cmds.add("note PIANO " + note + " " + seconds); }
   public final void playNote(Instrument inst, int note, double seconds) { __cmds.add("note " + inst + " " + note + " " + seconds); }
   public final void playNoteAndPause(int note, double seconds) { playNote(note, seconds); pause(seconds); }

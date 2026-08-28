@@ -14583,6 +14583,19 @@ fn static_receiver_key(path: &[String]) -> String {
 }
 
 fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinMethod])> {
+    // A BUNDLED library reaches the wrapper statics through a name the program
+    // cannot write. Its own `Integer.compare(a, b)` resolved to a class the
+    // PROGRAM declared — the corpus has a `Character` (a play's cast), and
+    // eight levels failed to compile because `Arrays.compare(char[], char[])`
+    // called `Character.compare` — and a fully-qualified `java.lang.Integer`
+    // does not help, because the qualifier is stripped before the lookup.
+    // `__Integer` cannot be shadowed: the prefix is reserved.
+    if let Some(reserved) = class.strip_prefix("__")
+        && !reserved.is_empty()
+        && !reserved.starts_with('_')
+    {
+        return builtin_static_table(reserved);
+    }
     match class {
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
         "Map.Entry" | "Entry" => Some(("java/util/Map$Entry", MAP_ENTRY_STATIC_METHODS)),
@@ -14649,6 +14662,14 @@ pub(crate) enum BuiltinConstant {
 #[allow(clippy::match_same_arms)] // one arm per documented constant reads clearer
 fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> {
     use BuiltinConstant::{Bool, Char, Double, Int};
+    // The reserved spelling a bundled library (and a shadowed qualified name)
+    // reads these through — see `builtin_static_table`.
+    if let Some(reserved) = class.strip_prefix("__")
+        && !reserved.is_empty()
+        && !reserved.starts_with('_')
+    {
+        return builtin_static_constant(reserved, field);
+    }
     match (class, field) {
         ("Integer", "MAX_VALUE") => Some(Int(i32::MAX)),
         ("Integer", "MIN_VALUE") => Some(Int(i32::MIN)),
@@ -16008,7 +16029,19 @@ impl BodyGen<'_> {
             let dotted = path[..taken].join(".");
             if let Some(simple) = crate::imports::canonical_library_class(&dotted) {
                 let mut short = Vec::with_capacity(path.len() - taken + 1);
-                short.push(simple.to_owned());
+                // A program may DECLARE a class of the same simple name, and
+                // then the stripped name would find that one — where javac
+                // reads a fully-qualified name as the library class whatever
+                // is in scope. The reserved `__` spelling cannot be shadowed,
+                // and only the shadowed case needs it, so an ordinary
+                // diagnostic still names the class the program wrote.
+                let shadowed = self.table.has_class(simple)
+                    && builtin_static_table(simple).is_some();
+                if shadowed {
+                    short.push(format!("__{simple}"));
+                } else {
+                    short.push(simple.to_owned());
+                }
                 short.extend_from_slice(&path[taken..]);
                 return Some(short);
             }
