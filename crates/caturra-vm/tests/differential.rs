@@ -40757,3 +40757,43 @@ public class Shadowing {
 }
 "#
 );
+
+// A CONSTRUCTOR is not inherited (JLS §8.8). A subclass that declares
+// `Sub(int)` has only that one, and `new Sub()` is an error even when the
+// superclass has a no-argument constructor — where caturra found the
+// ancestor's and compiled a program a JDK refuses. It showed first as a
+// DIAGNOSTIC listing a constructor the class does not declare.
+differential_reject!(
+    a_constructor_is_not_inherited,
+    "NotInherited",
+    "class Base { Base() { } }\nclass Sub extends Base {\n  int v;\n  Sub(int v) { this.v = v; }\n}\npublic class NotInherited {\n  static Sub r() { return new Sub(); }\n}"
+);
+
+// ...and the one it DOES declare still resolves, through a subclass chain.
+differential_test!(
+    the_constructors_a_class_declares,
+    "Declared",
+    r#"
+public class Declared {
+    static class Base {
+        final String tag;
+        Base() { this("base"); }
+        Base(String tag) { this.tag = tag; }
+    }
+    static class Sub extends Base {
+        final int v;
+        Sub(int v) { super("sub"); this.v = v; }
+        Sub() { this(0); }
+    }
+    static class Plain extends Base { }
+
+    public static void main(String[] args) {
+        System.out.println(new Base().tag + new Base("x").tag);
+        System.out.println(new Sub(5).tag + new Sub(5).v + " " + new Sub().v);
+        // A class that declares NO constructor gets the default one, and it
+        // calls the superclass's no-argument constructor.
+        System.out.println(new Plain().tag);
+    }
+}
+"#
+);

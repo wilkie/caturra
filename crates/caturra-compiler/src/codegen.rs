@@ -3631,6 +3631,14 @@ impl MethodTable {
                 // find symbol", not a method that resolves and dies at run time.
                 let inherited = Some(id) != start;
                 let skip_inherited = info.is_interface && inherited;
+                // JLS §8.8.: a CONSTRUCTOR is not inherited. A subclass that
+                // declares `Sub(int)` has only that one, and `new Sub()`
+                // is an error even when the superclass has a no-argument
+                // constructor — where caturra found the ancestor's and
+                // compiled a program a JDK refuses.
+                if inherited && name == "<init>" {
+                    continue;
+                }
                 for m in &info.methods {
                     if skip_inherited && m.is_static {
                         continue;
@@ -24982,10 +24990,7 @@ impl BodyGen<'_> {
             if self.in_static {
                 self.error(
                     span,
-                    format!(
-                        "non-static method {method}() cannot be referenced from a static \
-                         context (instance methods need an object)"
-                    ),
+                    format!("non-static method {method}() cannot be referenced from a static context"),
                 );
                 return None;
             }
@@ -25324,10 +25329,10 @@ impl BodyGen<'_> {
         if !sig.is_static {
             self.error(
                 span,
-                format!(
-                    "non-static method {method}() cannot be referenced from a static context \
-                     (instance methods arrive with objects)"
-                ),
+                // javac's wording ends at "context"; the parenthetical was
+                // caturra's own, and a message that differs from the one a
+                // student will meet on a JDK is a message they cannot search.
+                format!("non-static method {method}() cannot be referenced from a static context"),
             );
             return None;
         }

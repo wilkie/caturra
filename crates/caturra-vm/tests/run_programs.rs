@@ -6561,11 +6561,11 @@ fn stage6_compile_errors_match_javac_wording() {
         ),
         (
             "class M { static void f() { Scanner in = new Scanner(System.in); } }",
-            "cannot find symbol: class Scanner",
+            "cannot find symbol\n  symbol:   class Scanner\n  location: class M",
         ),
         (
             "import java.util.Scanner; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); } }",
-            "cannot find symbol: class ArrayList",
+            "cannot find symbol\n  symbol:   class ArrayList\n  location: class M",
         ),
         (
             "import java.util.NotReal; class M { }",

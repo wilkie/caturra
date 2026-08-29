@@ -488,7 +488,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-bisrnn8q/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-s3es1eqa/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -499,7 +499,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-h6xcuiog/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-g_99ft2q/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -510,7 +510,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-vh_jq7xf/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-_eprxx0u/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",

@@ -10135,3 +10135,36 @@ comparison covers 1761 per-test verdicts with 4 divergences, all four on
 validators that do not pin their own verdict down.
 
 Pinned by `a_program_may_shadow_a_library_class`.
+
+### What the corpus cannot compile (2026-08-28)
+
+Thirty-three levels of 2698 fail to compile here, and this asks the same
+question of each: does javac accept it? **javac rejects all thirty-three** —
+they are starter code with the exercise still to do, FRQ excerpts that omit
+their imports, and one file whose public class disagrees with its name. There
+is no compile gap left in the corpus.
+
+So the question becomes whether caturra says the SAME THING about them, and
+comparing the two engines' first message found the last unit's kind of defect
+again — a diagnostic naming a member that does not exist:
+
+> constructor RealEstate.RealEstate() is not applicable
+
+`RealEstate` declares one constructor, taking a `Home[]`. The phantom is the
+SUPERCLASS's, and a constructor is not inherited (JLS §8.8) — which means
+caturra was not merely describing it wrongly: `new Sub()` **compiled** for a
+subclass that declares only `Sub(int)`, whenever the superclass had a
+no-argument constructor. A program that compiles here and fails on a JDK, found
+through the wording of an error about something else.
+
+Three messages were also brought to javac's: the static-context one lost a
+parenthetical caturra had added ("(instance methods arrive with objects)"), and
+the import check — new in the last unit — now uses the three-line
+symbol/location block every other "cannot find symbol" here already used.
+
+Twenty-five of the thirty-three now match javac's first message exactly. The
+eight that remain are the parser's, which is deliberately more explicit
+("expected ';' to end the statement" where javac says "';' expected").
+
+Pinned by `a_constructor_is_not_inherited` and
+`the_constructors_a_class_declares`.

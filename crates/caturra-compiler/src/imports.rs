@@ -939,6 +939,7 @@ fn validate_import(
 struct UseCheck<'a, F: FnMut(String, SourceSpan)> {
     user_classes: &'a HashSet<String>,
     enabled: &'a HashSet<&'static str>,
+    location: String,
     error: F,
 }
 
@@ -951,6 +952,8 @@ fn check_class(
     let mut check = UseCheck {
         user_classes,
         enabled,
+        // The class being walked — javac's "location:" line names it.
+        location: class.name.clone(),
         error,
     };
     for field in &class.fields {
@@ -985,9 +988,16 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
             && !self.user_classes.contains(name)
             && !self.enabled.contains(name)
         {
-            // javac: "cannot find symbol — symbol: class Scanner,
-            // location: class Main".
-            (self.error)(format!("cannot find symbol: class {name}"), span);
+            // javac's three-line block, which every other "cannot find
+            // symbol" here already uses: the headline, what was looked for,
+            // and where it was looked for from.
+            (self.error)(
+                format!(
+                    "cannot find symbol\n  symbol:   class {name}\n  location: class {}",
+                    self.location
+                ),
+                span,
+            );
         }
     }
 
