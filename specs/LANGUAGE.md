@@ -8961,9 +8961,6 @@ entries after it was written down.
   but the refusal has to say so: written in full it gave the honest reason,
   written simply it read as a typo — "unknown type 'Math'", about a class
   every program has used. (`stricter_namespace_class_as_a_variable_type`)
-- `IntFunction<String[]> gen = String[]::new; list.toArray(gen)` — the
-  generator overload is modelled by reducing `String[]::new` to the array it
-  makes, which a VARIABLE holding the same function cannot be. (`stricter_to_array_needs_a_generator_written_out`)
 - `Arrays.stream(array, from, to)` — the RANGE overload; the whole-array form
   is modelled. (`stricter_arrays_stream_takes_no_range`)
 - A factory that ADOPTS its context (`Collections.emptyList()`,
@@ -10634,3 +10631,34 @@ sentence plus the reason it leaves for the following lines ("reference to f is
 ambiguous: both method f(int[]) and method f(Integer[]) match"), or a concrete
 type where javac names an inference variable. Those stay as
 `differential_reject!` — the shape is what they pin.
+
+### What the divergence pins do beyond compiling (2026-08-30)
+
+The other two pin families, asked the same way. `stricter_than_javac!` says
+caturra refuses what javac accepts, and says nothing about what the refusal
+SAYS; `looser_than_javac!` says caturra accepts what javac refuses, compiles
+the program and stops — where what the program then DOES is the part that
+matters.
+
+**Every looser program runs, and prints something sensible.** A permissiveness
+that compiled and then died would be worse than the refusal it replaced; none
+does.
+
+**One strictness was no longer true, and is retired.** `list.toArray(gen)` for
+an `IntFunction<String[]> gen` was refused because the generator overload was
+modelled by REDUCING the written-out `String[]::new` to the array it makes,
+which a variable holding the same function cannot be. It is the JDK's own
+definition that closes it: `toArray(generator)` IS
+`toArray(generator.apply(0))`, so the variable form rewrites the same way the
+inline one always did — and this was the familiar shape of a defect here, a
+program that compiles inline and is refused one line later through a name. The
+pin is now `a_to_array_generator_through_a_variable`, which RUNS it.
+
+The refusals the rest of the strictness list gives were read too. They name the
+reason — "java.util.Vector is not supported by caturra (the class library
+covers the AP CS A subset)", "Arrays.stream(array, from, to) exists in Java,
+but caturra streams a whole array" — except one: a chained
+`Optional.<String>empty().orElse(x)` still ends in "cannot find symbol: method
+length() in class Object", because the empty Optional adopts a context it has
+not got. The strictness is documented above; the message is not what it should
+be, and is written down here so it is not mistaken for a missing method.

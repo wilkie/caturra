@@ -33241,26 +33241,6 @@ public class UnreachableLoop {
 // cases recorded in the prose of later entries that had never been added to
 // either list. These are those five, so the claim is true again.
 
-// `IntFunction` names a variable, but `toArray` does not take one: the
-// generator overload is modelled by reducing `String[]::new` to the array it
-// makes, which a VARIABLE holding the same function cannot be.
-stricter_than_javac!(
-    stricter_to_array_needs_a_generator_written_out,
-    "ToArrayGeneratorVar",
-    r#"
-import java.util.*;
-import java.util.function.*;
-
-public class ToArrayGeneratorVar {
-    public static void main(String[] args) {
-        List<String> list = new ArrayList<>(Arrays.asList("x"));
-        IntFunction<String[]> generator = String[]::new;
-        System.out.println(Arrays.toString(list.toArray(generator)));
-    }
-}
-"#
-);
-
 // A generic method whose RETURN variable is pinned only by what the lambda body
 // gives back — `<T, R> R conv(T v, Function<T, R> f)`. Nothing at the call site
 // names `R`: the lambda's own body is the only thing that says what it is, and
@@ -41773,4 +41753,39 @@ public class EmptyVar {
     }
 }
 "
+);
+
+// `toArray(generator)` is `toArray(generator.apply(0))` — the JDK's own
+// definition of the Java 11 overload. Only the written-out `String[]::new` was
+// recognised, by reducing it to the array it makes, so the identical function
+// held in a VARIABLE was refused: the shape that compiles inline and fails one
+// line later, through a name.
+differential_test!(
+    a_to_array_generator_through_a_variable,
+    "ToArrayGenerator",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class ToArrayGenerator {
+    static String[] collect(Collection<String> items, IntFunction<String[]> generator) {
+        return items.toArray(generator);
+    }
+
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("x", "y"));
+        IntFunction<String[]> generator = String[]::new;
+        System.out.println(Arrays.toString(list.toArray(generator)));
+        System.out.println(Arrays.toString(list.toArray(String[]::new)));
+        System.out.println(Arrays.toString(list.stream().toArray(generator)));
+        System.out.println(Arrays.toString(collect(list, generator)));
+        Set<String> set = new TreeSet<>(list);
+        System.out.println(Arrays.toString(set.toArray(generator)));
+        IntFunction<Integer[]> boxed = Integer[]::new;
+        System.out.println(Arrays.toString(Stream.of(1, 2).toArray(boxed)));
+        System.out.println(list.toArray(generator).length + list.toArray(generator)[0]);
+    }
+}
+"#
 );

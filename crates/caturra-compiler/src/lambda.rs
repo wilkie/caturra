@@ -1959,6 +1959,45 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             *method = String::from("__toArrayTyped");
         }
     }
+    // The same rewrite for a generator held in a VARIABLE. `toArray(gen)` is
+    // `toArray(gen.apply(0))` by the JDK's own definition, and only the
+    // written-out `String[]::new` was recognised — the shape that compiles
+    // inline and is refused one line later, through a name.
+    if let Expr::Call {
+        receiver,
+        method,
+        args,
+        span,
+        ..
+    } = expr
+        && method == "toArray"
+        && let [only] = &args[..]
+        && !matches!(
+            only,
+            Expr::Lambda { .. } | Expr::NewArray { .. } | Expr::MethodRef { .. }
+        )
+        && let Some(TypeRef::Generic { base, args: written }) = static_type_of(only, ctx)
+        && simple_base(&base) == "IntFunction"
+        && matches!(written.first(), Some(TypeRef::Array(_)))
+    {
+        let span = *span;
+        let stream = receiver
+            .as_deref()
+            .is_some_and(|r| stream_elem_type(r, ctx).is_some());
+        args[0] = Expr::Call {
+            receiver: Some(Box::new(only.clone())),
+            method: String::from("apply"),
+            args: vec![Expr::Literal {
+                value: crate::ast::Literal::Int(0),
+                span,
+            }],
+            type_args: Vec::new(),
+            span,
+        };
+        if stream {
+            *method = String::from("__toArrayTyped");
+        }
+    }
     // `BinaryOperator.minBy(cmp)` / `maxBy(cmp)` — a two-argument function that
     // keeps one side, built from the comparator. Like `Predicate.not`, the
     // named CLASS is what the argument lands in, so an inline comparator lambda
