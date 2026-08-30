@@ -4550,23 +4550,131 @@ fn flat_element_type(args: &[Expr], ctx: &Ctx) -> Option<TypeRef> {
     stream_elem_type(answer, ctx)
 }
 
+/// [`body_type`] for a CALL — the shape a lambda body most often ends in, and
+/// the only one that has to ask every table: the program's own methods, the
+/// library's, a static factory that answers a stream.
+fn call_body_type(
+    expr: &Expr,
+    receiver: Option<&Expr>,
+    method: &str,
+    args: &[Expr],
+    bound: &HashMap<String, TypeRef>,
+    ctx: &Ctx,
+) -> Option<TypeRef> {
+    // A method of the program: its declared return, with a generic
+    // one pinned the way any other call to it would be.
+    if let Some(ty) = generic_call_return(expr, ctx) {
+        return Some(ty);
+    }
+    if matches!(receiver, None | Some(Expr::This { .. }))
+        && let Some(class) = ctx.current_class
+        && let Some(shape) = ctx
+            .shapes
+            .get(class)?
+            .iter()
+            .find(|shape| shape.name == method && shape.takes(args.len()))
+    {
+        return Some(shape.return_type.clone());
+    }
+    let receiver = receiver?;
+    // A library STATIC, whose receiver is a class name rather than a
+    // value: `String.valueOf(c)` is a `String`, and reading its type
+    // through the receiver (as an instance call would) answered
+    // nothing — so `mapToObj(c -> String.valueOf(c))` produced an
+    // `Object` element and the `String::concat` after it could not
+    // resolve.
+    if let Expr::Name { path, .. } = receiver
+        && let Some(ty) = library_static_type(path.last()?, method, args.len())
+    {
+        return Some(ty);
+    }
+    // An ENUM's own statics, which have no receiver VALUE to type:
+    // `Kind.values()` is a `Kind[]` and `Kind.valueOf(s)` a `Kind`.
+    if let Some(name) = enum_owner_name(receiver, ctx) {
+        return match (method, args.len()) {
+            ("values", 0) => Some(TypeRef::Array(Box::new(TypeRef::Named(name)))),
+            ("valueOf", 1) => Some(TypeRef::Named(name)),
+            _ => None,
+        };
+    }
+    // A lambda that ANSWERS a stream built from a static factory:
+    // `flatMap(x -> Stream.of(x.first()))` and
+    // `flatMap(row -> Arrays.stream(row))`. Both are typed from an
+    // ARGUMENT, which no receiver-keyed table can see.
+    let stream_of = |elem: TypeRef| TypeRef::Generic {
+        base: String::from("Stream"),
+        args: vec![boxed_element(elem)],
+    };
+    if method == "of"
+        && names_library_class(receiver, "Stream")
+        && let Some(first) = args.first()
+        && let Some(elem) = body_type(first, bound, ctx)
+    {
+        return Some(stream_of(elem));
+    }
+    if method == "stream"
+        && names_library_class(receiver, "Arrays")
+        && let [only] = args
+        && let Some(TypeRef::Array(elem)) = body_type(only, bound, ctx)
+    {
+        return Some(stream_of(*elem));
+    }
+    let on = body_type(receiver, bound, ctx)?;
+    if let Some(ty) = library_return(&on, method, args.len()) {
+        return Some(ty);
+    }
+    // A method of a USER class, on a receiver whose type is known —
+    // the lambda's own parameter, usually. `pets.stream().map(p ->
+    // p.name())` is as ordinary as a stream gets, and the mapped
+    // element was `Object`: the shapes were consulted for an implicit
+    // `this` receiver and for library types, and for nothing else.
+    // Asked AFTER the library table, since caturra's own bundled Java
+    // declares classes of those names and its erased `Optional.get()`
+    // answers an `Object` the real one does not.
+    let (TypeRef::Named(name) | TypeRef::Generic { base: name, .. }) = &on else {
+        return None;
+    };
+    let answered = ctx
+        .shapes
+        .get(name)?
+        .iter()
+        .find(|shape| shape.name == method && shape.takes(args.len()))
+        .map(|shape| shape.return_type.clone())?;
+    // A method that answers its class's own TYPE VARIABLE — `Box<T>`'s
+    // `get()` — answers the RECEIVER's argument. Erasure has already
+    // replaced the variable with its positional sentinel, which is
+    // exactly the index to read: without this
+    // `boxes.stream().map(Box::get)` mapped to `Object`, though
+    // `boxes.get(0).get()` beside it did not.
+    if let TypeRef::Named(sentinel) = &answered
+        && let Some(index) = crate::parser::typevar_index(sentinel)
+        && let TypeRef::Generic { args: written, .. } = &on
+        && let Some(argument) = written.get(usize::from(index))
+    {
+        return Some(argument.clone());
+    }
+    Some(answered)
+
+}
+
+
 /// The reference form of a primitive. An OBJECT stream's element is always a
 /// reference, so a supplier answering `2` makes a `Stream<Integer>` — reading
 /// the element as a bare `int` typed the fold's parameters as primitives and
 /// its result went back unboxed, which is a `VerifyError`, not a diagnostic.
 fn boxed_element(ty: TypeRef) -> TypeRef {
-    let name = match ty {
-        TypeRef::Int => "Integer",
-        TypeRef::Long => "Long",
-        TypeRef::Double => "Double",
-        TypeRef::Float => "Float",
-        TypeRef::Short => "Short",
-        TypeRef::Byte => "Byte",
-        TypeRef::Char => "Character",
-        TypeRef::Boolean => "Boolean",
-        other => return other,
-    };
-    TypeRef::Named(String::from(name))
+let name = match ty {
+    TypeRef::Int => "Integer",
+    TypeRef::Long => "Long",
+    TypeRef::Double => "Double",
+    TypeRef::Float => "Float",
+    TypeRef::Short => "Short",
+    TypeRef::Byte => "Byte",
+    TypeRef::Char => "Character",
+    TypeRef::Boolean => "Boolean",
+    other => return other,
+};
+TypeRef::Named(String::from(name))
 }
 
 /// The type of a lambda BODY, given what its parameter is. Deliberately a
@@ -4575,121 +4683,42 @@ fn boxed_element(ty: TypeRef) -> TypeRef {
 /// Anything unrecognized answers `None`, which leaves the caller exactly where
 /// it was before this existed.
 fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option<TypeRef> {
-    use crate::ast::BinaryOp as B;
-    match expr {
-        Expr::Name { path, .. } if path.len() == 1 => bound
-            .get(&path[0])
-            .cloned()
-            .or_else(|| static_type_of(expr, ctx)),
-        Expr::Cast { ty, .. } => Some(ty.clone()),
-        Expr::Ternary { then, els, .. } => {
-            let then = body_type(then, bound, ctx)?;
-            (then == body_type(els, bound, ctx)?).then_some(then)
-        }
-        Expr::Unary { op, operand, .. } => match op {
-            crate::ast::UnaryOp::Not => Some(TypeRef::Boolean),
-            _ => body_type(operand, bound, ctx),
-        },
-        Expr::Binary { op, lhs, rhs, .. } => match op {
-            B::Lt | B::Le | B::Gt | B::Ge | B::Eq | B::Ne | B::And | B::Or => {
-                Some(TypeRef::Boolean)
-            }
-            _ => {
-                let (l, r) = (body_type(lhs, bound, ctx), body_type(rhs, bound, ctx));
-                let string = TypeRef::Named(String::from("String"));
-                if *op == B::Add && (l.as_ref() == Some(&string) || r.as_ref() == Some(&string)) {
-                    return Some(string);
-                }
-                numeric_join(&l?, &r?)
-            }
-        },
-        Expr::Call {
-            receiver,
-            method,
-            args,
-            ..
-        } => {
-            // A method of the program: its declared return, with a generic
-            // one pinned the way any other call to it would be.
-            if let Some(ty) = generic_call_return(expr, ctx) {
-                return Some(ty);
-            }
-            if matches!(receiver.as_deref(), None | Some(Expr::This { .. }))
-                && let Some(class) = ctx.current_class
-                && let Some(shape) = ctx
-                    .shapes
-                    .get(class)?
-                    .iter()
-                    .find(|shape| shape.name == *method && shape.takes(args.len()))
-            {
-                return Some(shape.return_type.clone());
-            }
-            let receiver = receiver.as_deref()?;
-            // A library STATIC, whose receiver is a class name rather than a
-            // value: `String.valueOf(c)` is a `String`, and reading its type
-            // through the receiver (as an instance call would) answered
-            // nothing — so `mapToObj(c -> String.valueOf(c))` produced an
-            // `Object` element and the `String::concat` after it could not
-            // resolve.
-            if let Expr::Name { path, .. } = receiver
-                && let Some(ty) = library_static_type(path.last()?, method, args.len())
-            {
-                return Some(ty);
-            }
-            // An ENUM's own statics, which have no receiver VALUE to type:
-            // `Kind.values()` is a `Kind[]` and `Kind.valueOf(s)` a `Kind`.
-            if let Some(name) = enum_owner_name(receiver, ctx) {
-                return match (method.as_str(), args.len()) {
-                    ("values", 0) => Some(TypeRef::Array(Box::new(TypeRef::Named(name)))),
-                    ("valueOf", 1) => Some(TypeRef::Named(name)),
-                    _ => None,
-                };
-            }
-            // A lambda that ANSWERS a stream built from a static factory:
-            // `flatMap(x -> Stream.of(x.first()))` and
-            // `flatMap(row -> Arrays.stream(row))`. Both are typed from an
-            // ARGUMENT, which no receiver-keyed table can see.
-            let stream_of = |elem: TypeRef| TypeRef::Generic {
-                base: String::from("Stream"),
-                args: vec![boxed_element(elem)],
-            };
-            if method == "of"
-                && names_library_class(receiver, "Stream")
-                && let Some(first) = args.first()
-                && let Some(elem) = body_type(first, bound, ctx)
-            {
-                return Some(stream_of(elem));
-            }
-            if method == "stream"
-                && names_library_class(receiver, "Arrays")
-                && let [only] = &args[..]
-                && let Some(TypeRef::Array(elem)) = body_type(only, bound, ctx)
-            {
-                return Some(stream_of(*elem));
-            }
-            let on = body_type(receiver, bound, ctx)?;
-            if let Some(ty) = library_return(&on, method, args.len()) {
-                return Some(ty);
-            }
-            // A method of a USER class, on a receiver whose type is known —
-            // the lambda's own parameter, usually. `pets.stream().map(p ->
-            // p.name())` is as ordinary as a stream gets, and the mapped
-            // element was `Object`: the shapes were consulted for an implicit
-            // `this` receiver and for library types, and for nothing else.
-            // Asked AFTER the library table, since caturra's own bundled Java
-            // declares classes of those names and its erased `Optional.get()`
-            // answers an `Object` the real one does not.
-            let (TypeRef::Named(name) | TypeRef::Generic { base: name, .. }) = &on else {
-                return None;
-            };
-            ctx.shapes
-                .get(name)?
-                .iter()
-                .find(|shape| shape.name == *method && shape.takes(args.len()))
-                .map(|shape| shape.return_type.clone())
-        }
-        _ => static_type_of(expr, ctx),
+use crate::ast::BinaryOp as B;
+match expr {
+    Expr::Name { path, .. } if path.len() == 1 => bound
+        .get(&path[0])
+        .cloned()
+        .or_else(|| static_type_of(expr, ctx)),
+    Expr::Cast { ty, .. } => Some(ty.clone()),
+    Expr::Ternary { then, els, .. } => {
+        let then = body_type(then, bound, ctx)?;
+        (then == body_type(els, bound, ctx)?).then_some(then)
     }
+    Expr::Unary { op, operand, .. } => match op {
+        crate::ast::UnaryOp::Not => Some(TypeRef::Boolean),
+        _ => body_type(operand, bound, ctx),
+    },
+    Expr::Binary { op, lhs, rhs, .. } => match op {
+        B::Lt | B::Le | B::Gt | B::Ge | B::Eq | B::Ne | B::And | B::Or => {
+            Some(TypeRef::Boolean)
+        }
+        _ => {
+            let (l, r) = (body_type(lhs, bound, ctx), body_type(rhs, bound, ctx));
+            let string = TypeRef::Named(String::from("String"));
+            if *op == B::Add && (l.as_ref() == Some(&string) || r.as_ref() == Some(&string)) {
+                return Some(string);
+            }
+            numeric_join(&l?, &r?)
+        }
+    },
+    Expr::Call {
+        receiver,
+        method,
+        args,
+        ..
+    } => call_body_type(expr, receiver.as_deref(), method, args, bound, ctx),
+    _ => static_type_of(expr, ctx),
+}
 }
 
 /// The result of the library methods a lambda body commonly ends in. A SUBSET,

@@ -6227,7 +6227,7 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                         rest: to_rest,
                         ..
                     },
-                ) if from_arg != to_arg || from_rest != to_rest
+                ) if !(elem_matches(from_arg, to_arg, table) && from_rest == to_rest)
             ))
         // Any reference (including another type var) stores into a T — and a
         // primitive boxes on the way (`new Box<Integer>(42)`, JLS §5.3: boxing

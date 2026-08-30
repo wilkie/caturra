@@ -10462,3 +10462,29 @@ type of a class on the known-unsupported list now says so. Pinned by
 `strict_a_primitive_stream_cursor`.
 
 Pinned by `what_a_pipeline_answers`.
+
+### A generic class of one's own (2026-08-30)
+
+The same probe shape turned on a generic class the PROGRAM declares — twenty-two
+cells, each calling a method on what the class answers. Three failed, all the
+same fact one layer apart:
+
+**A method that answers its class's own type VARIABLE.** `Box<T>.get()` reads
+as a `T`, and erasure has already replaced that with its positional sentinel —
+which is exactly the index of the receiver's own argument. The lambda pass did
+not make the substitution, so `boxes.stream().map(Box::get)` mapped to `Object`
+while `boxes.get(0).get()` on the line above did not. (Codegen has done this
+substitution all along; the lambda pass, which types what a lambda ANSWERS, had
+its own half of the same rule missing.)
+
+**A collection as a user generic's argument.** `GenBox<List<Tag>> box = new
+GenBox<>(new ArrayList<>(…))` — the value written as the class, the variable
+declared as the interface — was "incompatible types". The arm that keeps two
+DIFFERENT parameterizations of one class apart (which is a real rule:
+`Bag<String> b = bagOfIntegers` is an error, and accepting it once let a
+program run with the wrong static type throughout) compared the two arguments
+for EQUALITY. It asks `elem_matches` now, the same reading the builtin
+collections have always used, so a widening argument passes and a mismatched
+one is still refused — in javac's words, checked both ways.
+
+Pinned by `a_user_generic_answers_its_argument`.

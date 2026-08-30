@@ -41392,3 +41392,67 @@ stricter_than_javac!(
     "StrictPrimitiveCursor",
     "import java.util.*;\nimport java.util.stream.*;\npublic class StrictPrimitiveCursor {\n  static int r() { PrimitiveIterator.OfInt c = IntStream.range(0, 3).iterator(); return c.nextInt(); }\n}"
 );
+
+// A generic class the PROGRAM declares, used the way one is: its own type
+// variable answered through a stream (`boxes.stream().map(Box::get)` mapped to
+// `Object` while `boxes.get(0).get()` beside it did not), and a collection as
+// its argument, written as the class where the variable says the interface.
+differential_test!(
+    a_user_generic_answers_its_argument,
+    "UserGeneric",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class GenTag {
+    private final String text;
+    GenTag(String text) { this.text = text; }
+    String text() { return text; }
+    @Override public String toString() { return text; }
+}
+
+class GenBox<T> {
+    private T value;
+    GenBox(T value) { this.value = value; }
+    T get() { return value; }
+    void set(T value) { this.value = value; }
+    List<T> asList() { return new ArrayList<>(List.of(value)); }
+    static <U> GenBox<U> of(U value) { return new GenBox<>(value); }
+}
+
+class GenPair<K, V> {
+    private final K key;
+    private final V value;
+    GenPair(K key, V value) { this.key = key; this.value = value; }
+    K key() { return key; }
+    V value() { return value; }
+    GenPair<V, K> flip() { return new GenPair<>(value, key); }
+}
+
+public class UserGeneric {
+    public static void main(String[] args) {
+        List<GenBox<GenTag>> boxes = new ArrayList<>(List.of(new GenBox<>(new GenTag("a"))));
+        System.out.println(boxes.get(0).get().text());
+        System.out.println(boxes.stream().map(GenBox::get).findFirst().get().text());
+        System.out.println(boxes.stream().map(b -> b.get()).findFirst().get().text());
+        Function<GenBox<GenTag>, GenTag> unwrap = GenBox::get;
+        System.out.println(unwrap.apply(boxes.get(0)).text());
+
+        List<GenPair<String, GenTag>> pairs =
+            new ArrayList<>(List.of(new GenPair<>("k", new GenTag("b"))));
+        System.out.println(pairs.stream().map(GenPair::value).findFirst().get().text());
+        System.out.println(pairs.get(0).flip().key().text());
+
+        GenBox<List<GenTag>> nested = new GenBox<>(new ArrayList<>(List.of(new GenTag("c"))));
+        System.out.println(nested.get().get(0).text());
+        GenPair<String, List<GenTag>> pair =
+            new GenPair<>("k", new ArrayList<>(List.of(new GenTag("d"))));
+        System.out.println(pair.value().get(0).text());
+        System.out.println(GenBox.of(new GenTag("e")).get().text());
+        System.out.println(GenBox.of(GenBox.of(new GenTag("f"))).get().get().text());
+        System.out.println(boxes.get(0).asList().get(0).text());
+    }
+}
+"#
+);
