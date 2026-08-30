@@ -10662,3 +10662,28 @@ but caturra streams a whole array" — except one: a chained
 length() in class Object", because the empty Optional adopts a context it has
 not got. The strictness is documented above; the message is not what it should
 be, and is written down here so it is not mistaken for a missing method.
+
+### The half of the repo the Rust gate never runs (2026-08-30)
+
+`cargo test --workspace` is what every unit here is gated on, and it does not
+run the TypeScript. `pnpm -r test` — the session layer, the sandbox RPC, the
+compile API the playground calls — had two failing tests, and both were the
+suite drifting rather than the engine:
+
+- One asserted the wording "unterminated string literal", which this session
+  changed to javac's "unclosed string literal" three commits ago. The Rust
+  suite pinned the new wording; the TypeScript one still expected the old.
+- One compiled `"hi".matches("h.")` to prove caturra reports unsupported Java
+  in a friendly way — a program caturra has SUPPORTED since the regex engine
+  landed, so the refusal it asserted stopped happening. The sample is
+  `java.util.Vector` now, which is the scope limit itself rather than a feature
+  that might arrive.
+
+`pnpm lint` was failing too, on `specs/LANGUAGE.md`: prettier reflows every
+bullet's continuation lines and rewrites `*emphasis*` as `_emphasis_`, 300
+lines of churn through hand-wrapped prose. The log is in `.prettierignore` now,
+and the whole of `pnpm lint` passes.
+
+**Run both gates.** The wasm engine is rebuilt from this tree too — the
+freshness check said it was five days behind, which is exactly the trap
+`scripts/check-wasm-fresh.mjs` exists to catch.

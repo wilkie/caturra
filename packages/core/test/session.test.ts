@@ -74,7 +74,7 @@ describe('javac (compile)', () => {
     const [diagnostic] = result.diagnostics;
     expect(diagnostic?.severity).toBe('error');
     expect(diagnostic?.path).toBe('Main.java');
-    expect(diagnostic?.message).toMatch(/unterminated string/);
+    expect(diagnostic?.message).toMatch(/unclosed string literal/);
     expect(diagnostic?.start).toMatchObject({ line: 1, column: 25 });
   });
 
@@ -88,10 +88,13 @@ describe('javac (compile)', () => {
 
   it('gives friendly diagnostics for not-yet-supported Java', async () => {
     const session = await createJvmSession();
+    // The sample has to be something caturra really does not model: this test
+    // used `"hi".matches(…)` until the regex engine landed, and then asserted
+    // a refusal that no longer happened. `Vector` is the scope limit itself.
     const result = session.compile([
       {
         path: 'Main.java',
-        text: 'class Main { static boolean f() { return "hi".matches("h."); } }',
+        text: 'import java.util.Vector;\nclass Main { static int f() { Vector<Integer> v = new Vector<>(); return v.size(); } }',
       },
     ]);
     expect(result.success).toBe(false);

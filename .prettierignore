@@ -9,3 +9,9 @@ e2e/playwright-report/
 # other generated CSA level data IS checked, and generate-csa-levels.py runs
 # prettier over what it emits.
 apps/playground/src/csa-solutions.local.ts
+
+# The engineering log is hand-wrapped prose: prettier reflows every bullet's
+# continuation lines and rewrites `*emphasis*` as `_emphasis_`, which is 300
+# lines of churn through text whose line breaks are deliberate. `pnpm lint`
+# has been failing on it rather than anyone reformatting it.
+specs/LANGUAGE.md
