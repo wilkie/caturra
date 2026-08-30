@@ -10387,6 +10387,14 @@ impl<'run> Interpreter<'run> {
                     ))
                 })?,
             ("orElse", [fallback]) => value.unwrap_or(*fallback),
+            // `stream()` (Java 9) — a stream of the one value, or an empty
+            // one. It is what turns a `Stream<Optional<T>>` into a
+            // `Stream<T>`: `s.flatMap(Optional::stream)`.
+            ("stream", []) => {
+                return Ok(Answered::Value(
+                    self.alloc_stream(value.into_iter().collect()),
+                ));
+            }
             ("ifPresent", [JValue::Ref(Some(consumer))]) => {
                 if let Some(present) = value {
                     self.call_functional(*consumer, "accept", "(Ljava/lang/Object;)V", present)?;

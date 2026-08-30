@@ -4640,8 +4640,48 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
                     _ => None,
                 };
             }
+            // A lambda that ANSWERS a stream built from a static factory:
+            // `flatMap(x -> Stream.of(x.first()))` and
+            // `flatMap(row -> Arrays.stream(row))`. Both are typed from an
+            // ARGUMENT, which no receiver-keyed table can see.
+            let stream_of = |elem: TypeRef| TypeRef::Generic {
+                base: String::from("Stream"),
+                args: vec![boxed_element(elem)],
+            };
+            if method == "of"
+                && names_library_class(receiver, "Stream")
+                && let Some(first) = args.first()
+                && let Some(elem) = body_type(first, bound, ctx)
+            {
+                return Some(stream_of(elem));
+            }
+            if method == "stream"
+                && names_library_class(receiver, "Arrays")
+                && let [only] = &args[..]
+                && let Some(TypeRef::Array(elem)) = body_type(only, bound, ctx)
+            {
+                return Some(stream_of(*elem));
+            }
             let on = body_type(receiver, bound, ctx)?;
-            library_return(&on, method, args.len())
+            if let Some(ty) = library_return(&on, method, args.len()) {
+                return Some(ty);
+            }
+            // A method of a USER class, on a receiver whose type is known —
+            // the lambda's own parameter, usually. `pets.stream().map(p ->
+            // p.name())` is as ordinary as a stream gets, and the mapped
+            // element was `Object`: the shapes were consulted for an implicit
+            // `this` receiver and for library types, and for nothing else.
+            // Asked AFTER the library table, since caturra's own bundled Java
+            // declares classes of those names and its erased `Optional.get()`
+            // answers an `Object` the real one does not.
+            let (TypeRef::Named(name) | TypeRef::Generic { base: name, .. }) = &on else {
+                return None;
+            };
+            ctx.shapes
+                .get(name)?
+                .iter()
+                .find(|shape| shape.name == *method && shape.takes(args.len()))
+                .map(|shape| shape.return_type.clone())
         }
         _ => static_type_of(expr, ctx),
     }
@@ -4712,6 +4752,43 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         ("String", "split", _) => Some(TypeRef::Array(Box::new(string()))),
         ("String", "toCharArray", 0) => Some(TypeRef::Array(Box::new(TypeRef::Char))),
         ("List" | "ArrayList" | "LinkedList", "get", 1) => element_of_declared(receiver),
+        // A collection's own `stream()`, so a lambda that ANSWERS one carries
+        // its element: `flatMap(inner -> inner.stream())` is the whole reason
+        // `flatMap` exists, and codegen reads the answer off this class.
+        (_, "stream", 0) => match receiver {
+            // An `Optional<E>.stream()` is a stream of at most one `E`
+            // (Java 9); a collection's is a stream of its element.
+            TypeRef::Generic { base, args } if simple_base(base) == "Optional" && args.len() == 1 => {
+                Some(TypeRef::Generic {
+                    base: String::from("Stream"),
+                    args: vec![args[0].clone()],
+                })
+            }
+            _ => element_of_declared(receiver).map(|elem| TypeRef::Generic {
+                base: String::from("Stream"),
+                args: vec![elem],
+            }),
+        },
+        // An `Optional<E>` inside a container: `stream.map(Optional::get)` over
+        // a `Stream<Optional<Pet>>` is the shape that noticed — the mapped
+        // element was `Object`, so the `Pet` method after it was "cannot find
+        // symbol". `orElse`/`orElseThrow` answer the same element.
+        ("Optional", "get" | "orElse" | "orElseThrow", _) => match receiver {
+            TypeRef::Generic { args, .. } if args.len() == 1 => Some(args[0].clone()),
+            _ => None,
+        },
+        // A standalone entry's two halves, for the same reason.
+        ("Entry" | "Map.Entry", "getKey", 0) => match receiver {
+            TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[0].clone()),
+            _ => None,
+        },
+        ("Entry" | "Map.Entry", "getValue", 0) => match receiver {
+            TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[1].clone()),
+            _ => None,
+        },
+        ("TreeSet" | "SortedSet" | "NavigableSet", "first" | "last", 0) => {
+            element_of_declared(receiver)
+        }
         ("Map" | "HashMap" | "TreeMap", "get", 1) => match receiver {
             TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[1].clone()),
             _ => None,

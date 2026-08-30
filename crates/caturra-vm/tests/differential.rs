@@ -41172,3 +41172,140 @@ public class IntFunctionResult {
 }
 "#
 );
+
+// A container INSIDE another library type's type argument. An `Optional` could
+// not hold a collection, an array or another `Optional` at all ("Optional.of
+// cannot hold ArrayList<Pet>"), and a `Map.entry` built with one collapsed
+// both halves to `Object` — a whole family of ordinary declarations, refused
+// where a JDK runs them.
+differential_test!(
+    a_container_inside_a_type_argument,
+    "NestedArgument",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class NestedPet {
+    private final String name;
+    NestedPet(String name) { this.name = name; }
+    String name() { return name; }
+    @Override public String toString() { return "Pet:" + name; }
+}
+
+public class NestedArgument {
+    public static void main(String[] args) {
+        Optional<List<NestedPet>> pets = Optional.of(new ArrayList<>(List.of(new NestedPet("a"))));
+        pets.get().add(new NestedPet("b"));
+        System.out.println(pets.get().size() + " " + pets.get().get(1).name());
+        System.out.println(pets.map(List::size).get());
+        System.out.println(pets.filter(l -> !l.isEmpty()).isPresent());
+        pets.ifPresent(l -> System.out.println("saw " + l.size()));
+
+        Optional<Map<String, List<NestedPet>>> nested = Optional.of(new HashMap<>());
+        nested.get().put("k", new ArrayList<>(List.of(new NestedPet("c"))));
+        System.out.println(nested.get().get("k").get(0).name());
+
+        Optional<int[]> numbers = Optional.of(new int[] {1, 2});
+        int[] got = numbers.get();
+        got[0] = 5;
+        System.out.println(got[0] + numbers.get().length);
+        Optional<NestedPet[]> array = Optional.of(new NestedPet[] { new NestedPet("d") });
+        System.out.println(array.get().length + array.get()[0].name());
+        Optional<Optional<NestedPet>> twice = Optional.of(Optional.of(new NestedPet("e")));
+        System.out.println(twice.get().get().name());
+        Optional<List<NestedPet>> missing = Optional.empty();
+        System.out.println(missing.orElse(new ArrayList<>()).size());
+
+        Map.Entry<String, List<NestedPet>> entry =
+            Map.entry("k", new ArrayList<>(List.of(new NestedPet("f"))));
+        System.out.println(entry.getKey() + entry.getValue().get(0).name());
+        Map.Entry<List<String>, String> keyed = Map.entry(Arrays.asList("g"), "v");
+        System.out.println(keyed.getKey().get(0) + keyed.getValue());
+
+        List<Optional<List<NestedPet>>> deep = new ArrayList<>();
+        deep.add(Optional.of(new ArrayList<>(List.of(new NestedPet("h")))));
+        System.out.println(deep.get(0).get().get(0).name());
+        Map<String, Optional<List<NestedPet>>> byKey = new HashMap<>();
+        byKey.put("k", Optional.of(new ArrayList<>(List.of(new NestedPet("i")))));
+        System.out.println(byKey.get("k").get().get(0).name());
+
+        Stream<List<NestedPet>> rows = Stream.of(new ArrayList<>(List.of(new NestedPet("j"))));
+        System.out.println(rows.findFirst().get().get(0).name());
+        Supplier<Optional<List<NestedPet>>> maker =
+            () -> Optional.of(new ArrayList<>(List.of(new NestedPet("k"))));
+        System.out.println(maker.get().get().get(0).name());
+    }
+}
+"#
+);
+
+// What a lambda ANSWERS, when the answer is not a library scalar: an instance
+// method of a USER class (`pets.stream().map(p -> p.name())` — as ordinary as
+// a stream gets, and the mapped element was `Object`), an `Optional`'s value,
+// and the stream a `flatMap` is given. `flatMap` had no element rule at all,
+// so the operation that exists to flatten produced a stream of `Object`.
+differential_test!(
+    what_a_lambda_answers,
+    "LambdaAnswer",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+class AnswerPet {
+    private final String name;
+    AnswerPet(String name) { this.name = name; }
+    String name() { return name; }
+    int age() { return 3; }
+}
+
+public class LambdaAnswer {
+    public static void main(String[] args) {
+        List<AnswerPet> pets = new ArrayList<>(List.of(new AnswerPet("a")));
+        System.out.println(pets.stream().map(p -> p.name()).findFirst().get().length());
+        System.out.println(pets.stream().map(AnswerPet::name).findFirst().get().length());
+        System.out.println(pets.stream().map(p -> p.age()).findFirst().get() + 1);
+        Stream<AnswerPet> stream = pets.stream();
+        System.out.println(stream.map(AnswerPet::name).collect(Collectors.toList()));
+
+        List<Optional<AnswerPet>> maybe = new ArrayList<>(List.of(Optional.of(new AnswerPet("b"))));
+        System.out.println(maybe.stream().map(Optional::get).findFirst().get().name());
+        System.out.println(maybe.stream().map(o -> o.get()).findFirst().get().name());
+        System.out.println(maybe.stream().flatMap(Optional::stream).findFirst().get().name());
+        System.out.println(Optional.of("x").stream().count()
+            + " " + Optional.empty().stream().count());
+
+        List<List<String>> rows = new ArrayList<>(List.of(new ArrayList<>(List.of("c"))));
+        System.out.println(rows.stream().flatMap(inner -> inner.stream()).findFirst().get().length());
+        System.out.println(rows.stream().flatMap(List::stream).collect(Collectors.toList()));
+        System.out.println(rows.stream()
+            .flatMap(inner -> Stream.of(inner.get(0)))
+            .findFirst()
+            .get()
+            .length());
+        List<String[]> arrays = new ArrayList<>();
+        arrays.add(new String[] {"d"});
+        System.out.println(arrays.stream()
+            .flatMap(row -> Arrays.stream(row))
+            .findFirst()
+            .get()
+            .length());
+        int[][] grid = { {1, 2} };
+        System.out.println(Arrays.stream(grid).flatMapToInt(Arrays::stream).sum());
+    }
+}
+"#
+);
+
+// `Optional.empty()` answers an Optional with NO element, which adopts its
+// assignment context — so a chained `Optional.<String>empty().orElse(x)` has
+// nothing to adopt, and the explicit type WITNESS that would say what it holds
+// is not read on this factory (it is on `Collections.<String>emptyList()`,
+// `List.<String>of` and `Arrays.<String>asList`). Refused where javac accepts:
+// stricter, the safe direction, and the shape needs the witness AND no
+// variable to land in.
+stricter_than_javac!(
+    strict_a_witness_on_the_empty_optional,
+    "StrictEmptyWitness",
+    "import java.util.*;\npublic class StrictEmptyWitness {\n  static int r() { return Optional.<String>empty().orElse(\"x\").length(); }\n}"
+);

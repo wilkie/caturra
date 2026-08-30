@@ -10378,3 +10378,55 @@ negative one the `NegativeArraySizeException` with the JDK's message.
 
 Pinned by `an_array_dimension_promotes` and
 `a_primitive_input_function_answers_its_argument`.
+
+### A container inside a type argument (2026-08-30)
+
+A cross-product of forty cells — every parameterized library type, its argument
+read back through a member — found two, and pulling on them opened a family.
+
+**An `Optional` could not hold a collection.** `Optional<List<Pet>> pets =
+Optional.of(new ArrayList<>(…))` was refused outright: "Optional.of cannot hold
+ArrayList<Pet>". So was an array, and so was another `Optional`. The element of
+a library container is read by a function that answers only for FLAT types, and
+a whole container has no flat element — but caturra has held one for years, as
+the interned NESTED type an array of collections already uses. `Map.entry(k, v)`
+had the same hole and collapsed both halves to `Object`. Reading the argument
+back is one helper now, used by the emit path and by `type_of` alike — the two
+were separately wrong, which is how this family stays alive.
+
+**A nested element widens.** The value is written as the CLASS
+(`Optional.of(new ArrayList<>(…))`) and the variable declared as the interface
+(`Optional<List<Pet>>`); javac reads that through inference, and the answer is
+the one the face rule already gives a level up. `Stream` was missing from the
+widening chain entirely, so `Stream<List<Pet>> s = Stream.of(new
+ArrayList<>(…))` was "incompatible types" for the same reason.
+
+**What a lambda ANSWERS**, when the answer is not a library scalar, was three
+separate gaps:
+
+- **An instance method of a USER class.** `pets.stream().map(p -> p.name())` is
+  as ordinary as a stream gets, and the mapped element was `Object` — the
+  method shapes were consulted for an implicit `this` receiver and for library
+  types, and for nothing else. (Asked AFTER the library table: caturra's own
+  bundled `Optional.get()` answers an erased `Object` the real one does not.)
+- **An `Optional`'s value**, so `map(Optional::get)` over a
+  `Stream<Optional<Pet>>` keeps the `Pet`.
+- **The stream a `flatMap` is given.** `flatMap` had no element rule at all in
+  codegen — the operation that exists to flatten produced a stream of `Object`,
+  whether the lambda answered `inner.stream()`, `Stream.of(…)` or
+  `Arrays.stream(row)`. The lambda pass had computed the element correctly all
+  along; nothing carried it across.
+
+`Optional.stream()` (Java 9) is modelled now as well — a stream of at most one
+value, which is what makes `flatMap(Optional::stream)` the idiom it is.
+
+One thing was measured and left open: `Optional.empty()` answers an Optional
+with no element, which adopts its assignment context, so a CHAINED
+`Optional.<String>empty().orElse(x)` has nothing to adopt — and the explicit
+type witness that says what it holds is not read on this factory, though it is
+on `Collections.<String>emptyList()`, `List.<String>of` and
+`Arrays.<String>asList`. Stricter than javac, the safe direction; threading the
+witness through the static-call path is a larger change than the shape
+deserves. Pinned by `strict_a_witness_on_the_empty_optional`.
+
+Pinned by `a_container_inside_a_type_argument` and `what_a_lambda_answers`.

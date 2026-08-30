@@ -4964,6 +4964,17 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
     if raw_library_alike(arg, param) {
         return true;
     }
+    // Two NESTED elements whose types widen: the element of an
+    // `Optional<List<Pet>>` holds a whole `List`, and the value put in it is
+    // usually written as the CLASS (`Optional.of(new ArrayList<>(…))`) while
+    // the variable is declared as the interface. javac reads that through
+    // inference — the diamond becomes `List<Pet>` because the target says so —
+    // and the answer is the same one the face rule gives a level up.
+    if let (ElemType::Nested { inner: from, .. }, ElemType::Nested { inner: to, .. }) = (arg, param)
+        && widens(table.nested_type(from), table.nested_type(to), table)
+    {
+        return true;
+    }
     // The UNCHECKED conversion runs both ways: a raw collection is assignable
     // to any parameterization of it, and any parameterization to the raw type.
     // javac warns about the first and says nothing about the second.
@@ -6137,6 +6148,14 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (from, to),
             (JType::TreeSet(a, from_role), JType::TreeSet(b, to_role))
                 if from_role.offers(to_role) && elem_matches(a, b, table)
+        )
+        // A STREAM's element follows the same rule as a collection's; the
+        // family was missing from this chain entirely, so `Stream<List<Pet>> s
+        // = Stream.of(new ArrayList<>(…))` — the element written as the class,
+        // the variable as the interface — was "incompatible types".
+        || matches!(
+            (from, to),
+            (JType::Stream(a), JType::Stream(b)) if elem_matches(a, b, table)
         )
         || matches!(
             (from, to),
@@ -11314,6 +11333,15 @@ const OPTIONAL_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/util/function/Consumer;)V",
     ),
+    // `stream()` (Java 9) — the one value as a stream, or an empty one. It is
+    // how a `Stream<Optional<T>>` becomes a `Stream<T>`, which is the whole
+    // idiom: `s.flatMap(Optional::stream)`.
+    bm(
+        "stream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     // `filter(predicate)` keeps a present value only if it matches, so the
     // result is an `Optional` of the same element type.
     bm(
@@ -15348,6 +15376,20 @@ fn refine_builtin_return(
             Some(JType::Optional(_)) => JType::Optional(elem),
             _ => JType::Stream(elem),
         });
+    }
+    // `flatMap`'s lambda answers a STREAM, so the flattened element is that
+    // stream's element — one step further in than `map`'s. Left out, a
+    // `flatMap(inner -> inner.stream())` — the whole reason the operation
+    // exists — produced a stream of `Object`, and the method after it was
+    // "cannot find symbol" for a program the JDK runs.
+    if method == "flatMap"
+        && matches!(ret, Some(JType::Stream(_)))
+        && let [JType::Object(lambda)] = arg_types
+        && let Some((_, produces)) =
+            table.field(table.class_name(*lambda), crate::lambda::PRODUCES_FIELD)
+        && let JType::Stream(elem) = produces.ty
+    {
+        return Some(JType::Stream(elem));
     }
     ret
 }
@@ -21168,8 +21210,8 @@ impl BodyGen<'_> {
         let (key, value) = declared.unwrap_or_else(|| {
             let object = ElemType::Object(self.table.object_id);
             (
-                collection_elem_of(key_ty).unwrap_or(object),
-                collection_elem_of(value_ty).unwrap_or(object),
+                self.holdable_elem(key_ty).unwrap_or(object),
+                self.holdable_elem(value_ty).unwrap_or(object),
             )
         });
         JType::MapEntry { key, value }
@@ -25493,7 +25535,7 @@ impl BodyGen<'_> {
             // assignment context.
             return Some(Some(JType::Null));
         }
-        let Some(elem) = collection_elem_of(value_ty) else {
+        let Some(elem) = self.holdable_elem(value_ty) else {
             self.error(
                 value.span(),
                 format!(
@@ -28243,7 +28285,7 @@ impl BodyGen<'_> {
                 if class == "Map" && method == "entry" && !self.table.has_class(&class) {
                     let key = args.first().map_or(JType::Error, |a| self.type_of(a));
                     let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
-                    return match (collection_elem_of(key), collection_elem_of(value)) {
+                    return match (self.holdable_elem(key), self.holdable_elem(value)) {
                         (Some(key), Some(value)) => JType::MapEntry { key, value },
                         _ => JType::Error,
                     };
@@ -28262,7 +28304,7 @@ impl BodyGen<'_> {
                             if arg == JType::Null {
                                 return JType::Null;
                             }
-                            return collection_elem_of(arg).map_or(JType::Error, JType::Optional);
+                            return self.holdable_elem(arg).map_or(JType::Error, JType::Optional);
                         }
                         // An empty Optional adopts its context, typing like `null`.
                         "empty" => return JType::Null,
@@ -30038,6 +30080,21 @@ impl BodyGen<'_> {
         }
         self.emit_load(slot, ty);
         ty
+    }
+
+    /// The element type for holding `ty` inside a library container. Most
+    /// types have a FLAT element; a collection, a map, an array or another
+    /// `Optional` has none, and is held as an interned NESTED type — the same
+    /// way an array of them already is. Without this an `Optional<List<Pet>>`
+    /// was refused ("Optional.of cannot hold `ArrayList<Pet>`") though nesting
+    /// one container in another is ordinary Java.
+    fn holdable_elem(&self, ty: JType) -> Option<ElemType> {
+        collection_elem_of(ty).or_else(|| {
+            ty.is_reference().then(|| ElemType::Nested {
+                inner: self.table.intern_nested(ty),
+                read: self.table.object_id,
+            })
+        })
     }
 
     /// Auto-unbox a wrapper on the stack to its primitive (JLS §5.1.8), for a
