@@ -1410,6 +1410,11 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             base: class.clone(),
             args: type_args.clone(),
         }),
+        // A diamond or argument-less `new T()` still says WHICH class — which
+        // is the whole answer for a supplier: `toCollection(TreeSet::new)`
+        // gathers into a `TreeSet`, and reading the class as nothing made it
+        // the default list.
+        Expr::NewObject { class, .. } => Some(TypeRef::Named(class.clone())),
         // An enum's two synthetic statics: `values()` answers an ARRAY of the
         // enum, `valueOf(String)` one constant. Without them a stream, a list
         // or a `Stream.of` over `Kind.values()` had an `Object` element and
@@ -5039,6 +5044,29 @@ fn desugar_collector(expr: &mut Expr, elem: &TypeRef, ctx: &mut Ctx) {
                 "apply",
                 &object,
                 std::slice::from_ref(elem),
+                None,
+                ctx,
+            );
+            continue;
+        }
+        // `toCollection(ArrayList::new)` — a SUPPLIER, which takes no
+        // element at all. Without this arm the reference was refused as "only
+        // allowed where a functional-interface type is expected".
+        if method == "toCollection" && index == 0 && is_lambda {
+            if matches!(&args[index], Expr::MethodRef { .. }) {
+                let synth = Sam {
+                    method: String::from("get"),
+                    params: Vec::new(),
+                    ret: object.clone(),
+                };
+                args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+            }
+            args[index] = build_erased_lambda(
+                &mut args[index],
+                "__Supplier",
+                "get",
+                &object,
+                &[],
                 None,
                 ctx,
             );

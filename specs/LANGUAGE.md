@@ -10430,3 +10430,35 @@ witness through the static-call path is a larger change than the shape
 deserves. Pinned by `strict_a_witness_on_the_empty_optional`.
 
 Pinned by `a_container_inside_a_type_argument` and `what_a_lambda_answers`.
+
+### What a pipeline answers (2026-08-30)
+
+Thirty-six cells, one per stream operation, each calling a method on what the
+operation ANSWERS so an erased element shows. Four failed, and every one was a
+missing piece rather than a wrong one:
+
+- **`Collectors.toCollection` did not exist.** It is how a stream is gathered
+  into anything but the default `ArrayList`/`HashSet` — a `TreeSet`, a
+  `LinkedList`, an `ArrayDeque` — and the supplier argument was refused as
+  "only allowed where a functional-interface type is expected". Its result type
+  is the collection the SUPPLIER builds, holding the stream's element, so
+  `collect(toCollection(TreeSet::new)).first()` reads as a sorted set. (The
+  gathering needed the one thing a collection's kind is not known at compile
+  time for: an add that dispatches on the object at run time.)
+- **`partitioningBy(predicate, downstream)` was missing** beside a `groupingBy`
+  that has had its two-argument form all along.
+- **`mapping(f, downstream)` handed the downstream the STREAM's element**
+  rather than what `f` answers, so `groupingBy(k, mapping(Word::text,
+  toList()))` read as a map of Words and the `String` method after it was
+  "cannot find symbol".
+- **`Stream.iterator()`** — the terminal that hands a pipeline to a loop — was
+  not modelled at all.
+
+A fifth cell exposed a MESSAGE rather than a gap. `PrimitiveIterator.OfInt` is
+what a primitive stream's `iterator()` answers, and caturra does not model it;
+the qualifier read as a package, so the program was told "package
+PrimitiveIterator does not exist" about a type `java.util` really has. A nested
+type of a class on the known-unsupported list now says so. Pinned by
+`strict_a_primitive_stream_cursor`.
+
+Pinned by `what_a_pipeline_answers`.

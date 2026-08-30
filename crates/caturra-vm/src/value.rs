@@ -138,6 +138,11 @@ pub enum CollectorKind {
         prefix: String,
         suffix: String,
     },
+    /// `Collectors.toCollection(supplier)` — the collection the supplier
+    /// builds, filled in encounter order. It is how a stream is gathered into
+    /// something other than the default `ArrayList`/`HashSet`: a `TreeSet`, a
+    /// `LinkedList`, an `ArrayDeque`.
+    ToCollection(HeapRef),
     /// `Collectors.counting()` — a `Long` of how many elements arrived.
     Counting,
     /// `Collectors.groupingBy(classifier)` — a `HashMap` from each element's
@@ -148,8 +153,12 @@ pub enum CollectorKind {
         downstream: Option<HeapRef>,
     },
     /// `Collectors.partitioningBy(predicate)` — a two-entry map, `false` then
-    /// `true`, each holding the `List` of elements on that side.
-    PartitioningBy(HeapRef),
+    /// `true`, each holding the `List` of elements on that side. `downstream`
+    /// gathers each side when one was given, exactly as `groupingBy`'s does.
+    PartitioningBy {
+        predicate: HeapRef,
+        downstream: Option<HeapRef>,
+    },
     /// `Collectors.toMap(keyFn, valueFn)` — a `HashMap` built from the two
     /// functions. A duplicate key with no merge function is an
     /// `IllegalStateException`, as the JDK's is.
@@ -834,8 +843,20 @@ impl CollectorKind {
                     visit(*downstream);
                 }
             }
-            CollectorKind::PartitioningBy(f) | CollectorKind::Summing { mapper: f, .. } => {
+            CollectorKind::Summing { mapper: f, .. }
+            // The supplier is a live reference: it is called when the
+            // collector finishes, so the GC must keep it until then.
+            | CollectorKind::ToCollection(f) => {
                 visit(*f);
+            }
+            CollectorKind::PartitioningBy {
+                predicate,
+                downstream,
+            } => {
+                visit(*predicate);
+                if let Some(downstream) = downstream {
+                    visit(*downstream);
+                }
             }
             CollectorKind::Mapping { mapper, downstream } => {
                 visit(*mapper);

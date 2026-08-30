@@ -41309,3 +41309,86 @@ stricter_than_javac!(
     "StrictEmptyWitness",
     "import java.util.*;\npublic class StrictEmptyWitness {\n  static int r() { return Optional.<String>empty().orElse(\"x\").length(); }\n}"
 );
+
+// The stream pipeline's own surface, op by op: what each one ANSWERS, with a
+// method called on the answer so an erased element shows. Four of thirty-six
+// cells failed — `Collectors.toCollection` was missing entirely (a stream
+// gathered into anything but the default list or hash set),
+// `partitioningBy(p, downstream)` was missing beside a `groupingBy` that has
+// always had it, `mapping`'s downstream was handed the STREAM's element rather
+// than the mapped one, and `Stream.iterator()` — the terminal that hands a
+// pipeline to a loop — was not modelled.
+differential_test!(
+    what_a_pipeline_answers,
+    "PipelineAnswers",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class PipeWord implements Comparable<PipeWord> {
+    private final String text;
+    PipeWord(String text) { this.text = text; }
+    String text() { return text; }
+    int size() { return text.length(); }
+    public int compareTo(PipeWord o) { return text.compareTo(o.text); }
+    @Override public String toString() { return text; }
+}
+
+public class PipelineAnswers {
+    public static void main(String[] args) {
+        List<PipeWord> words = new ArrayList<>(
+            List.of(new PipeWord("pear"), new PipeWord("fig"), new PipeWord("date")));
+
+        TreeSet<PipeWord> sorted = words.stream().collect(Collectors.toCollection(TreeSet::new));
+        System.out.println(sorted.first().text() + " " + sorted.size());
+        System.out.println(sorted.descendingSet().first().text());
+        LinkedList<PipeWord> queue =
+            words.stream().collect(Collectors.toCollection(LinkedList::new));
+        System.out.println(queue.getFirst().text() + queue.size());
+        Set<PipeWord> unique = words.stream().collect(Collectors.toCollection(HashSet::new));
+        System.out.println(unique.size());
+        ArrayDeque<PipeWord> deque =
+            words.stream().collect(Collectors.toCollection(ArrayDeque::new));
+        System.out.println(deque.peek().text());
+        List<String> texts = words.stream()
+            .map(PipeWord::text)
+            .collect(Collectors.toCollection(() -> new ArrayList<>()));
+        System.out.println(texts.get(0).length());
+
+        Map<Integer, List<String>> byLength = words.stream().collect(
+            Collectors.groupingBy(PipeWord::size, Collectors.mapping(PipeWord::text, Collectors.toList())));
+        System.out.println(byLength.get(3).get(0).toUpperCase());
+        Map<Integer, Set<String>> asSets = words.stream().collect(
+            Collectors.groupingBy(PipeWord::size, Collectors.mapping(PipeWord::text, Collectors.toSet())));
+        System.out.println(asSets.get(4).size());
+        Map<Boolean, Set<String>> parts = words.stream().collect(
+            Collectors.partitioningBy(w -> w.size() > 3,
+                Collectors.mapping(PipeWord::text, Collectors.toSet())));
+        System.out.println(parts.get(false).size() + " " + parts.get(true).size());
+
+        Iterator<String> letters = words.stream().map(PipeWord::text).iterator();
+        while (letters.hasNext()) {
+            System.out.print(letters.next().charAt(0));
+        }
+        System.out.println();
+        Iterator<PipeWord> inOrder = words.stream().sorted().iterator();
+        System.out.println(inOrder.next().text());
+        Iterator<Integer> boxed = IntStream.range(0, 2).boxed().iterator();
+        System.out.println(boxed.next() + 1);
+    }
+}
+"#
+);
+
+// `PrimitiveIterator.OfInt` — what a PRIMITIVE stream's `iterator()` answers —
+// is not modelled. The qualifier read as a PACKAGE, so a program naming it was
+// told "package PrimitiveIterator does not exist" about a type `java.util`
+// really has; it now says what is true. Stricter than javac, the safe
+// direction, and the shape (a primitive stream handed to a manual loop) is
+// rare enough to leave measured rather than modelled.
+stricter_than_javac!(
+    strict_a_primitive_stream_cursor,
+    "StrictPrimitiveCursor",
+    "import java.util.*;\nimport java.util.stream.*;\npublic class StrictPrimitiveCursor {\n  static int r() { PrimitiveIterator.OfInt c = IntStream.range(0, 3).iterator(); return c.nextInt(); }\n}"
+);

@@ -5278,6 +5278,9 @@ impl<'run> Interpreter<'run> {
                 suffix: text(self, suffix),
             },
             ("counting", []) => CollectorKind::Counting,
+            ("toCollection", [JValue::Ref(Some(supplier))]) => {
+                CollectorKind::ToCollection(*supplier)
+            }
             ("groupingBy", [JValue::Ref(Some(classifier))]) => CollectorKind::GroupingBy {
                 classifier: *classifier,
                 downstream: None,
@@ -5289,7 +5292,16 @@ impl<'run> Interpreter<'run> {
                 }
             }
             ("partitioningBy", [JValue::Ref(Some(predicate))]) => {
-                CollectorKind::PartitioningBy(*predicate)
+                CollectorKind::PartitioningBy {
+                    predicate: *predicate,
+                    downstream: None,
+                }
+            }
+            ("partitioningBy", [JValue::Ref(Some(predicate)), JValue::Ref(Some(downstream))]) => {
+                CollectorKind::PartitioningBy {
+                    predicate: *predicate,
+                    downstream: Some(*downstream),
+                }
             }
             ("mapping", [JValue::Ref(Some(mapper)), JValue::Ref(Some(downstream))]) => {
                 CollectorKind::Mapping {
@@ -8296,6 +8308,37 @@ impl<'run> Interpreter<'run> {
     /// `set.add(element)`: store it as a key mapped to a placeholder if absent,
     /// reporting whether the set changed. Java's `HashSet.add` is exactly
     /// `map.put(e, PRESENT) == null`.
+    /// Add to whatever collection `target` is, the way that collection adds.
+    /// `Collectors.toCollection` is the one place a collection's kind is not
+    /// known until run time, so the dispatch every other path does at compile
+    /// time has to happen here.
+    fn add_to_any_collection(&mut self, target: HeapRef, element: JValue) -> Result<(), VmError> {
+        match self.heap.get(target) {
+            Some(crate::value::HeapObject::HashSet(_)) => {
+                self.set_add(target, element)?;
+            }
+            Some(crate::value::HeapObject::TreeSet { .. }) => {
+                self.tree_set_add(target, element)?;
+            }
+            // Every list-shaped collection keeps its elements in one vector,
+            // and appending is what `add` does to all of them.
+            Some(_) => {
+                let Some(values) = self.heap.list_values_mut(target) else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                };
+                values.push(element);
+            }
+            None => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn set_add(&mut self, set: HeapRef, element: JValue) -> Result<bool, VmError> {
         use crate::value::HeapObject;
         let hash = self.java_hash_code(element)?;
@@ -11312,6 +11355,23 @@ impl<'run> Interpreter<'run> {
         // whole pipeline (peeks and all) and post-process.
         let elements = self.stream_materialize(receiver)?;
         let result = match (method, args) {
+            // `iterator()` — the terminal that hands the pipeline to a loop.
+            // The elements are already drained into a list, so the cursor is
+            // the ordinary one over that list.
+            ("iterator", []) => {
+                let backing = self
+                    .heap
+                    .alloc(crate::value::HeapObject::ArrayList(elements.clone()));
+                JValue::Ref(Some(self.heap.alloc(crate::value::HeapObject::Iterator {
+                    source: backing,
+                    index: 0,
+                    last: None,
+                    expected_len: elements.len(),
+                    writes: IteratorWrites::All,
+                    list: false,
+                    descending: false,
+                })))
+            }
             // `sum()` adds in the pipeline's own numeric width — a
             // `DoubleStream`'s is a `double`, and the descriptor is the only
             // thing that still says which.
@@ -11561,6 +11621,21 @@ impl<'run> Interpreter<'run> {
                 }
                 Ok(JValue::Ref(Some(set)))
             }
+            // The supplier builds the container; each element is then added
+            // the way that container adds — a `TreeSet` sorts, a `HashSet`
+            // deduplicates, a list keeps encounter order.
+            CollectorKind::ToCollection(supplier) => {
+                let built = self.call_apply_supplier(supplier)?;
+                let JValue::Ref(Some(target)) = built else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                for element in elements {
+                    self.add_to_any_collection(target, element)?;
+                }
+                Ok(built)
+            }
             CollectorKind::Joining {
                 delimiter,
                 prefix,
@@ -11620,7 +11695,10 @@ impl<'run> Interpreter<'run> {
                 }
                 self.stream_collect(mapped, downstream)
             }
-            CollectorKind::PartitioningBy(predicate) => {
+            CollectorKind::PartitioningBy {
+                predicate,
+                downstream,
+            } => {
                 let map = self
                     .heap
                     .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
@@ -11636,7 +11714,12 @@ impl<'run> Interpreter<'run> {
                 // `true`, even when a side is empty.
                 for (flag, members) in [(false, no), (true, yes)] {
                     let key = self.box_if_primitive(JValue::Int(i32::from(flag)), "Z");
-                    let value = JValue::Ref(Some(self.heap.alloc(HeapObject::ArrayList(members))));
+                    let value = match downstream {
+                        Some(downstream) => self.stream_collect(members, downstream)?,
+                        None => {
+                            JValue::Ref(Some(self.heap.alloc(HeapObject::ArrayList(members))))
+                        }
+                    };
                     self.map_put(map, key, value)?;
                 }
                 Ok(JValue::Ref(Some(map)))

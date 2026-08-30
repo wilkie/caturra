@@ -10779,6 +10779,9 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
 /// a `null`-typed result that adopts the assignment context, like a diamond.
 const STREAM_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // A stream is an `Iterable`'s other half: `iterator()` is the terminal
+    // that hands the pipeline over to a loop.
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     // A stream is an object: `toString`/`hashCode` are Object's and do NOT
     // consume the pipeline.
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -14488,6 +14491,15 @@ const COLLECTORS_METHODS: &[BuiltinMethod] = &[
         BRet::Collector,
         "()Ljava/util/stream/Collector;",
     ),
+    // `toCollection(supplier)` — gather into the container the supplier
+    // builds, which is how a stream becomes a `TreeSet` or a `LinkedList`
+    // rather than the default list or hash set.
+    bm(
+        "toCollection",
+        &[BParam::Supplier],
+        BRet::Collector,
+        "(Ljava/util/function/Supplier;)Ljava/util/stream/Collector;",
+    ),
     // Each of these takes a function or a predicate, which the lambda pass has
     // already erased to a bundled interface by the time it is resolved.
     bm(
@@ -14507,6 +14519,14 @@ const COLLECTORS_METHODS: &[BuiltinMethod] = &[
         &[BParam::Predicate],
         BRet::Collector,
         "(Ljava/util/function/Predicate;)Ljava/util/stream/Collector;",
+    ),
+    // The same, with a DOWNSTREAM collector for each side — `groupingBy`'s
+    // two-argument form has always been here, and its partition twin had not.
+    bm(
+        "partitioningBy",
+        &[BParam::Predicate, BParam::Collector],
+        BRet::Collector,
+        "(Ljava/util/function/Predicate;Ljava/util/stream/Collector;)Ljava/util/stream/Collector;",
     ),
     // `mapping(f, downstream)` — the groupingBy downstream that maps each
     // member before gathering it.
@@ -21489,7 +21509,35 @@ impl BodyGen<'_> {
             "summingDouble" | "averagingInt" | "averagingLong" | "averagingDouble" => {
                 JType::Boxed(ElemType::Double)
             }
-            "mapping" if args.len() == 2 => self.collector_result_type(&args[1], stream_elem),
+            // `mapping(f, downstream)` hands the DOWNSTREAM what `f` answers,
+            // not the stream's own element: `groupingBy(k, mapping(Pet::name,
+            // toList()))` is a map of Strings, and reading it as one of Pets
+            // made the method after it "cannot find symbol".
+            "mapping" if args.len() == 2 => {
+                let mapped = self.collector_key(&args[0]).unwrap_or(stream_elem);
+                self.collector_result_type(&args[1], mapped)
+            }
+            // The collection the SUPPLIER builds, holding the stream's
+            // element: its kind is what the supplier answers.
+            "toCollection" if args.len() == 1 => {
+                match lambda_produces(self.type_of(&args[0]), self.table) {
+                    Some(JType::TreeSet(_, role)) => JType::TreeSet(stream_elem, role),
+                    Some(JType::Set { face, .. }) => JType::Set {
+                        elem: stream_elem,
+                        face,
+                    },
+                    Some(JType::LinkedList { role, .. }) => JType::LinkedList {
+                        elem: stream_elem,
+                        role,
+                    },
+                    Some(JType::Stack(_)) => JType::Stack(stream_elem),
+                    Some(JType::List { face, .. }) => JType::List {
+                        elem: stream_elem,
+                        face,
+                    },
+                    _ => JType::library_list(stream_elem),
+                }
+            }
             "toMap" if args.len() >= 2 => {
                 match (self.collector_key(&args[0]), self.collector_key(&args[1])) {
                     (Some(key), Some(value)) => JType::library_map(key, value),

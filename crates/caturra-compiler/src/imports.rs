@@ -246,6 +246,11 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // and `Collections.list` are its only real uses today, and neither is
     // modelled.
     ("java.util", &["Enumeration"]),
+    // `PrimitiveIterator` (and its `OfInt`/`OfLong`/`OfDouble` members) is what
+    // a PRIMITIVE stream's `iterator()` answers. The object streams' cursor is
+    // modelled; this one is not, and a program that names the type deserves to
+    // be told that rather than "package PrimitiveIterator does not exist".
+    ("java.util", &["PrimitiveIterator", "Spliterator", "Spliterators"]),
     // `Runtime` reports free/total/max memory and runs external processes.
     // caturra collects on its own schedule inside one WASM instance, so every
     // number it could answer would be fiction about a heap the program cannot
@@ -551,6 +556,13 @@ pub(crate) fn unknown_qualified_message(dotted: &str) -> String {
     let Some((package, class)) = dotted.rsplit_once('.') else {
         return format!("unknown type '{dotted}'");
     };
+    // A NESTED type of a class caturra does not model — `PrimitiveIterator.OfInt`,
+    // which is what a primitive stream's `iterator()` answers. The qualifier
+    // reads as a package here, and "package PrimitiveIterator does not exist"
+    // is a wrong answer about a type `java.util` really has.
+    if let Some(reason) = unsupported_class_reason(package) {
+        return reason;
+    }
     if package_classes(package).is_some() {
         if KNOWN_UNSUPPORTED
             .iter()
