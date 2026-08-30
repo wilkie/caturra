@@ -41533,3 +41533,81 @@ public class VarInference {
 }
 "#
 );
+
+// What a METHOD answers, read back through a call on the answer: twenty-five
+// shapes, from a bare object to a `Map<String, List<Leaf>>`. Two failed. A
+// class of the program may declare a `stream()` of its own, and every reader
+// of a stream's element knew only the LIBRARY shapes — so the lambda after
+// `tree.stream()` had no target. And a mapped element may be a whole
+// CONTAINER: `trees.stream().map(Tree::leaves)` is a stream of lists, which
+// erased because the reader that turns a produced type into an element
+// answers only for flat ones.
+differential_test!(
+    what_a_method_answers,
+    "MethodAnswers",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class AnsLeaf {
+    private final String name;
+    AnsLeaf(String name) { this.name = name; }
+    String name() { return name; }
+    @Override public String toString() { return name; }
+}
+
+interface AnsGrower {
+    AnsLeaf grow();
+    default List<AnsLeaf> pair() { return new ArrayList<>(List.of(grow(), grow())); }
+}
+
+class AnsTree implements AnsGrower {
+    private final List<AnsLeaf> leaves = new ArrayList<>(List.of(new AnsLeaf("a")));
+    public AnsLeaf grow() { return new AnsLeaf("g"); }
+    List<AnsLeaf> leaves() { return leaves; }
+    AnsLeaf[] asArray() { return leaves.toArray(new AnsLeaf[0]); }
+    Optional<AnsLeaf> first() { return leaves.stream().findFirst(); }
+    Map<String, List<AnsLeaf>> grouped() {
+        Map<String, List<AnsLeaf>> out = new HashMap<>();
+        out.put("a", leaves);
+        return out;
+    }
+    Stream<AnsLeaf> stream() { return leaves.stream(); }
+    Iterator<AnsLeaf> cursor() { return leaves.iterator(); }
+    Function<AnsLeaf, String> namer() { return AnsLeaf::name; }
+    Supplier<AnsLeaf> maker() { return () -> new AnsLeaf("s"); }
+    AnsLeaf[][] grid() { return new AnsLeaf[][] { { new AnsLeaf("x") } }; }
+    static AnsTree of() { return new AnsTree(); }
+}
+
+class AnsOrchard extends AnsTree {
+    @Override public AnsLeaf grow() { return new AnsLeaf("o"); }
+}
+
+public class MethodAnswers {
+    public static void main(String[] args) {
+        System.out.println(new AnsTree().stream().map(AnsLeaf::name).collect(Collectors.joining()));
+        System.out.println(new AnsTree().stream().filter(l -> !l.name().isEmpty()).count());
+        System.out.println(AnsTree.of().grow().name() + new AnsTree().leaves().get(0).name());
+        System.out.println(new AnsTree().asArray()[0].name() + new AnsTree().grid()[0][0].name());
+        System.out.println(new AnsTree().first().get().name());
+        System.out.println(new AnsTree().grouped().get("a").get(0).name());
+        System.out.println(new AnsTree().cursor().next().name());
+        System.out.println(new AnsTree().namer().apply(new AnsLeaf("n")).length());
+        System.out.println(new AnsTree().maker().get().name());
+
+        AnsGrower grower = new AnsTree();
+        System.out.println(grower.grow().name() + grower.pair().get(0).name());
+        AnsTree overridden = new AnsOrchard();
+        System.out.println(overridden.grow().name() + overridden.leaves().size());
+
+        List<AnsTree> trees = new ArrayList<>(List.of(new AnsTree()));
+        System.out.println(trees.stream().map(AnsTree::grow).findFirst().get().name());
+        System.out.println(trees.stream().flatMap(AnsTree::stream).findFirst().get().name());
+        System.out.println(trees.stream().map(AnsTree::leaves).findFirst().get().get(0).name());
+        System.out.println(trees.stream().map(AnsTree::grouped).findFirst().get().get("a").size());
+    }
+}
+"#
+);

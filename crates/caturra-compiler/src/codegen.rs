@@ -4148,6 +4148,18 @@ fn value_elem_of(ty: JType, table: &MethodTable) -> Option<ElemType> {
     })
 }
 
+/// [`BodyGen::holdable_elem`] as a free function, for the readers that have a
+/// table but no body — `refine_builtin_return`, which types what a `map`
+/// answers, needs the same "a whole container is an element too" rule.
+fn holdable_elem_of(ty: JType, table: &MethodTable) -> Option<ElemType> {
+    collection_elem_of(ty).or_else(|| {
+        ty.is_reference().then(|| ElemType::Nested {
+            inner: table.intern_nested(ty),
+            read: table.object_id,
+        })
+    })
+}
+
 fn collection_elem_of(ty: JType) -> Option<ElemType> {
     let elem = elem_type_of(ty)?;
     Some(match Prim::of(elem) {
@@ -15383,7 +15395,7 @@ fn refine_builtin_return(
         && let [JType::Object(lambda)] = arg_types
         && let Some((_, produces)) =
             table.field(table.class_name(*lambda), crate::lambda::PRODUCES_FIELD)
-        && let Some(elem) = elem_type_of(produces.ty)
+        && let Some(elem) = holdable_elem_of(produces.ty, table)
     {
         // A `Stream<Integer>` holds INTEGERS: the body's type is `int`, and
         // the element it becomes is the wrapper (JLS §5.1.7 — the lambda's
@@ -30137,12 +30149,7 @@ impl BodyGen<'_> {
     /// was refused ("Optional.of cannot hold `ArrayList<Pet>`") though nesting
     /// one container in another is ordinary Java.
     fn holdable_elem(&self, ty: JType) -> Option<ElemType> {
-        collection_elem_of(ty).or_else(|| {
-            ty.is_reference().then(|| ElemType::Nested {
-                inner: self.table.intern_nested(ty),
-                read: self.table.object_id,
-            })
-        })
+        holdable_elem_of(ty, self.table)
     }
 
     /// Auto-unbox a wrapper on the stack to its primitive (JLS §5.1.8), for a

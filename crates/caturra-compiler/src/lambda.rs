@@ -4967,6 +4967,7 @@ fn regex_stream_elem(prev: &Expr, method: &str, ctx: &Ctx) -> Option<TypeRef> {
 /// lambda's parameter. `X.stream()` yields the collection `X`'s element; the
 /// element-preserving ops (`filter`/`sorted`/`distinct`/`limit`/`skip`/`peek`)
 /// recurse into the prior stage; `map` erases it to `Object`.
+#[allow(clippy::too_many_lines)] // one arm per stream source
 fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     let Expr::Call {
         receiver: Some(prev),
@@ -5002,8 +5003,14 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             _ => None,
         };
     };
-    if method == "stream" && args.is_empty() {
-        return list_elem_type(prev, ctx);
+    // A COLLECTION's own `stream()`. A receiver that is not one falls through
+    // — a class of the program may declare a `stream()` of its own, and its
+    // element is in its return type, which the last arm reads.
+    if method == "stream"
+        && args.is_empty()
+        && let Some(elem) = list_elem_type(prev, ctx)
+    {
+        return Some(elem);
     }
     // `Files.lines(path)` — a stream of the file's lines, like `"text".lines()`
     // below. Without this a lambda over one had no element and was refused.
@@ -5110,7 +5117,16 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         "flatMap" => Some(
             flat_element_type(args, ctx).unwrap_or_else(|| TypeRef::Named(String::from("Object"))),
         ),
-        _ => None,
+        // A stream a USER method answers — a class whose `stream()` is
+        // declared `Stream<Leaf>`. Every case above reads a LIBRARY shape, and
+        // a method of the program says its element in its own return type; the
+        // lambda after `tree.stream()` had no target without this.
+        _ => match body_type(receiver, &HashMap::new(), ctx) {
+            Some(TypeRef::Generic { base, args }) if args.len() == 1 => {
+                (base.rsplit('.').next().unwrap_or(&base) == "Stream").then(|| args[0].clone())
+            }
+            _ => None,
+        },
     }
 }
 

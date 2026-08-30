@@ -10513,3 +10513,25 @@ Reading the initializer needed two more shapes the pass could not see:
   written without that rule.
 
 Pinned by `what_var_infers`.
+
+### What a method answers (2026-08-30)
+
+Twenty-five shapes a method may return — a bare object, an array, a
+`Map<String, List<Leaf>>`, a `Stream`, a `Function`, a 2-D array — each read
+back through a call on the answer. Two failed:
+
+**A class of the program may declare a `stream()` of its own.** Every reader of
+a stream's element knew the LIBRARY shapes and nothing else: a collection's
+`stream()`, `Files.lines`, `IntStream.range`, `Stream.of`. A method of the
+program says its element in its own return type, and the lambda after
+`tree.stream()` had no target without it — refused, again, as though the
+position were not a functional-interface one.
+
+**A mapped element may be a whole CONTAINER.**
+`trees.stream().map(Tree::leaves)` is a stream of lists, and the reader that
+turns what a lambda produced into an element answers only for FLAT types — so
+the element erased and `.get(0)` on it was "cannot find symbol". That reader
+is the same one an `Optional` needed a container for, so both sides now share
+it: a whole container is an element too, interned.
+
+Pinned by `what_a_method_answers`.
