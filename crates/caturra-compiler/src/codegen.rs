@@ -315,6 +315,10 @@ fn emit_clinit(
         current_class: table.class_name(class_id),
         current_class_id: class_id,
         in_static: true,
+        member: format!(
+            "static initializer of class {}",
+            source_type_name(table.class_name(class_id))
+        ),
         in_constructor: false,
         in_class_initializer: true,
         return_type: None,
@@ -5396,6 +5400,42 @@ fn source_interface_name(name: &str) -> &str {
 /// of the two it was built to say, and half the time that is a class the
 /// program never mentioned ("String cannot be converted to `ArrayList<Object>`"
 /// about a cast to `List<Object>`).
+/// How javac names the member a body belongs to, for the diagnostics that
+/// mention one: `method go(int)`, `constructor Pet(String)`. The parameter
+/// types are written as the source wrote them, comma-separated with no space,
+/// and a varargs parameter as `int...` rather than `int[]`.
+fn member_label(decl: &MethodDecl, class_name: &str) -> String {
+    // A LAMBDA body is a method the source never wrote — javac attributes it
+    // to the member the lambda appears in (a `() -> {}` inside `go()` reports
+    // "method go()"), which the hoisting loses. Naming the synthesized `run()`
+    // would point a student at a method they cannot find, so this says only
+    // what it knows.
+    if crate::is_lambda_class(class_name) {
+        return String::from("this method");
+    }
+    let params = decl
+        .params
+        .iter()
+        .map(|param| {
+            let written = written_type_name(&param.ty);
+            if param.is_varargs {
+                written
+                    .strip_suffix("[]")
+                    .map_or(written.clone(), |base| format!("{base}..."))
+            } else {
+                written
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let owner = source_type_name(class_name);
+    if decl.is_constructor {
+        format!("constructor {owner}({params})")
+    } else {
+        format!("method {}({params})", decl.name)
+    }
+}
+
 fn written_type_name(ty: &TypeRef) -> String {
     match ty {
         TypeRef::Void => String::from("void"),
@@ -8498,6 +8538,7 @@ fn emit_method(
         current_class: table.class_name(class_id),
         current_class_id: class_id,
         in_static: decl.is_static,
+        member: member_label(decl, table.class_name(class_id)),
         in_constructor: decl.is_constructor,
         in_class_initializer: false,
         return_type,
@@ -16052,6 +16093,11 @@ struct BodyGen<'a> {
     current_class_id: ClassId,
     /// Whether the enclosing method is static (constructors are not).
     in_static: bool,
+    /// The MEMBER this body is, the way javac names it in a diagnostic:
+    /// `method go(int)`, `constructor Pet(String)`, `static initializer of
+    /// class X`. A duplicate local said only "in this method", which is not
+    /// javac's wording and is wrong twice over for an initializer.
+    member: String,
     in_constructor: bool,
     /// Emitting a class's `<clinit>` — a STATIC initializer may assign a
     /// blank `static final` exactly once (JLS §8.3.1.2), as a constructor
@@ -17298,8 +17344,8 @@ impl BodyGen<'_> {
                 self.error(
                     clause.span,
                     format!(
-                        "variable '{}' is already defined in this method",
-                        clause.name
+                        "variable {} is already defined in {}",
+                        clause.name, self.member
                     ),
                 );
             }
@@ -18138,8 +18184,8 @@ impl BodyGen<'_> {
                 self.error(
                     declarator.span,
                     format!(
-                        "variable '{}' is already defined in this method",
-                        declarator.name
+                        "variable {} is already defined in {}",
+                        declarator.name, self.member
                     ),
                 );
                 continue;
@@ -18330,8 +18376,8 @@ impl BodyGen<'_> {
             self.error(
                 declarator.span,
                 format!(
-                    "variable '{}' is already defined in this method",
-                    declarator.name
+                    "variable {} is already defined in {}",
+                    declarator.name, self.member
                 ),
             );
             return;
@@ -18701,6 +18747,27 @@ impl BodyGen<'_> {
 
     /// `p.x = v`, `this.x = v`, `ClassName.staticField = v` (and the
     /// compound forms).
+    /// `this`/`super` as the receiver of a WRITE, in a static context. Reports
+    /// javac's message and answers whether it did. `type_of` gives `Error` for
+    /// a `this` that is not there without saying why, so a caller that reads
+    /// the type rather than emitting the expression gets no diagnostic — or a
+    /// misleading one about the operand.
+    fn reject_this_in_static(&mut self, object: &Expr, span: SourceSpan) -> bool {
+        if !self.in_static {
+            return false;
+        }
+        let word = match object {
+            Expr::This { .. } => "this",
+            Expr::Super { .. } => "super",
+            _ => return false,
+        };
+        self.error(
+            span,
+            format!("non-static variable {word} cannot be referenced from a static context"),
+        );
+        true
+    }
+
     fn assign_field_target(
         &mut self,
         object: &Expr,
@@ -18712,6 +18779,13 @@ impl BodyGen<'_> {
     ) {
         // A field ASSIGNMENT names its receiver the way a read does.
         self.enter_member_access(Some(object));
+        // …and it has no `this` to name in a static context either. The check
+        // lived on the READ path (evaluating `Expr::This`), which an
+        // assignment TARGET never takes: `static void g() { this.v = 1; }`
+        // compiled and ran, writing through a receiver that does not exist.
+        if self.reject_this_in_static(object, span) {
+            return;
+        }
         // `Math.PI = 3.0` and every other intrinsic constant: these are
         // `static final` in the JDK, so the assignment is a compile error. They
         // are folded at their READ sites, so caturra had nothing to assign to
@@ -19589,6 +19663,14 @@ impl BodyGen<'_> {
                 }
             }
             FieldTarget::Qualified(object, name) => {
+                // `static void g() { this.v++; }` — the same hole as the
+                // assignment target, and it surfaced as a confused complaint
+                // about the OPERAND ("bad operand type an unknown type for
+                // unary operator '++'") because `type_of` answers `Error` for
+                // a `this` that is not there.
+                if self.reject_this_in_static(object, span) {
+                    return JType::Error;
+                }
                 let object_ty = self.type_of(object);
                 let JType::Object(id) = object_ty else {
                     self.error(
@@ -23007,11 +23089,15 @@ impl BodyGen<'_> {
             && WRITES_AN_ELEMENT.contains(&method)
             && !writes_null
         {
-            let (class, _) = builtin_instance_table(receiver_ty).expect("collection has a table");
+            // The receiver's TYPE, as the program would write it. This used
+            // to name the internal class from the instance table, so a
+            // student was shown `in java/util/ArrayList` — slashes and all —
+            // for a collection they declared as a `List<? extends Number>`.
+            let described = receiver_ty.describe(self.table);
             self.error(
                 span,
                 format!(
-                    "no suitable method found for {method}(...) in {class}: a \
+                    "no suitable method found for {method}(...) in {described}: a \
                      '? extends' collection cannot be written to (its element \
                      type is an unknown subtype)"
                 ),
@@ -24643,8 +24729,14 @@ impl BodyGen<'_> {
             if iterable_ty != JType::Error {
                 self.error(
                     iterable.span(),
+                    // javac's three lines. The sentence this replaced listed
+                    // what caturra happens to iterate ("an array, an ArrayList,
+                    // or a map view"), which is neither what Java requires nor
+                    // what the program wrote — and a student comparing it with
+                    // a JDK's output saw two different complaints.
                     format!(
-                        "for-each needs an array, an ArrayList, or a map view, but {} found",
+                        "for-each not applicable to expression type\n  required: array \
+                         or java.lang.Iterable\n  found:    {}",
                         iterable_ty.describe(self.table)
                     ),
                 );
@@ -31736,6 +31828,37 @@ impl BodyGen<'_> {
                 increment,
                 span,
             ),
+            // `Outer.this.count++` — a qualified this with a field hanging off
+            // it, which the parser encodes as a path ending in the field name
+            // and holding `this` inside it. It matched no arm here, so it fell
+            // out as "++/-- as an expression works on variables and array
+            // elements" — for a plain STATEMENT, and beside a
+            // `Outer.this.count += 1` that has always worked. Rebuilt as the
+            // field access it is, which the arm above handles.
+            Expr::Name { path, .. }
+                if path
+                    .iter()
+                    .position(|segment| segment == "this")
+                    .is_some_and(|at| at >= 1 && at + 1 < path.len()) =>
+            {
+                let at = path
+                    .iter()
+                    .position(|segment| segment == "this")
+                    .unwrap_or_default();
+                let mut object = Expr::Name {
+                    path: path[..=at].to_vec(),
+                    span,
+                };
+                for name in &path[at + 1..path.len() - 1] {
+                    object = Expr::Field {
+                        object: Box::new(object),
+                        name: name.clone(),
+                        span,
+                    };
+                }
+                let name = path[path.len() - 1].clone();
+                self.increment_field(&FieldTarget::Qualified(&object, name), prefix, increment, span)
+            }
             // `node.size++`, `Counter.total++` — a dotted name, not a field access.
             Expr::Name { path, .. } if path.len() == 2 => {
                 self.increment_field(&FieldTarget::Path(path), prefix, increment, span)

@@ -740,6 +740,18 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
     }
 
+    // Everything from here on ATTRIBUTES the tree, and javac attributes
+    // nothing that did not parse: a file with a syntax error is reported with
+    // its syntax errors alone. caturra's parser recovers and carries on, so a
+    // stray `int y = ;` was followed by whatever the recovered tree then made
+    // of the rest — errors javac never prints, and which a student cannot act
+    // on because the real mistake is the one above them.
+    let parsed_cleanly = !compilation
+        .diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, Severity::Error));
+    let after_parse = compilation.diagnostics.len();
+
     bridges::add_bridge_methods(&mut units);
     inner::bind_inner_classes(&mut units);
     compilation
@@ -750,6 +762,11 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         .extend(capture::resolve_captures(&mut units));
     let (classes, mut codegen_errors) = codegen::generate(&units);
     compilation.diagnostics.append(&mut codegen_errors);
+    if parsed_cleanly {
+        flow::drop_flow_errors_after_other_errors(&mut compilation.diagnostics);
+    } else {
+        compilation.diagnostics.truncate(after_parse);
+    }
 
     if compilation.success() {
         compilation.classes = classes;

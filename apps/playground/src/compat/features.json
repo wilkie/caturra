@@ -507,7 +507,7 @@
     "main": "Rec",
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
-    "reason": "missing return statement",
+    "reason": "unknown type 'record'",
     "javac": "Rec.java:2: error: cannot find symbol"
   },
   {

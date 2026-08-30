@@ -11021,3 +11021,77 @@ Pinned by `reject_a_bounded_container_parameter_given_another_element`,
 `reject_a_bounded_set_parameter_given_another_element`, and — for the direction
 that matters more — `bounded_generics_that_must_still_compile`, which is every
 valid shape the first attempt broke.
+
+### javac's phases, and a write through `this` (2026-08-30)
+
+Every differential pin here compares the FIRST error, and `compatrun` reports
+only that one — so how many errors caturra reports, and in what ORDER, had
+never been measured against a JDK. Ten programs each wrong in three or four
+ordinary ways, compared as a LIST, found that the lists mostly agree and that
+where they do not, the reason is javac's PHASE structure.
+
+**Flow analysis runs only after attribution succeeded.** A program with a type
+error and a missing return is ONE error to javac — the type error — and was two
+here, with the missing return FIRST, which is the one thing a student reads.
+The granularity is the whole compilation, not the method or the class: a type
+error in one nested class hides a missing return in its sibling. All three of
+the flow phase's diagnostics behave that way (`missing return statement`,
+`unreachable statement`, `variable x might not have been initialized`).
+
+**Attribution runs only on a tree that parsed.** javac reports a file with a
+syntax error using its syntax errors alone; caturra's parser recovers and
+carried on, adding errors javac never prints — and which a student cannot act
+on, because the real mistake is the one above them.
+
+Both are now gates in `compile`. Measured on the same ten programs, the lists
+that differed fell from five to two, and both remaining are the parser's
+deliberately friendlier wording (`expected an expression` for `illegal start of
+expression`), which is already recorded above.
+
+**The same sweep found an accepts-invalid.** `static void g() { this.v = 1; }`
+compiled and RAN. The static-context check lived on the READ path — evaluating
+`Expr::This` — which an assignment TARGET never takes, so a write through a
+receiver that does not exist went through. `this.v++` reached it by another
+road and complained about the operand ("bad operand type an unknown type for
+unary operator '++'") because `type_of` answers `Error` for a `this` that is
+not there without saying why. Both say javac's sentence now.
+
+Pulling on the increment path found the mirror gap: `Outer.this.count++`, a
+plain statement, reported "++/-- as an expression works on variables and array
+elements". The parser encodes a qualified `this` as a name path holding `this`,
+and the increment's target dispatch knew paths of one and two segments only —
+so the qualified form fell through to the expression path, beside an
+`Outer.this.count += 1` that had always worked.
+
+**Two message shapes now match javac.** A duplicate local names the MEMBER it
+is in — `method go(String,int...)`, `constructor Pet(int)`, `static initializer
+of class X` — where all three said "in this method"; a lambda body keeps the
+old vague form, since javac attributes it to the member the lambda appears IN
+and the hoisting loses that. And a for-each over something that is not iterable
+gives javac's three lines (`required: array or java.lang.Iterable`), where
+caturra listed what it happens to iterate: "an array, an ArrayList, or a map
+view", which is neither what Java requires nor what the program wrote.
+
+The measurement is checked in as `scripts/fuzz/diaglist.py`, over the new
+`diagnostics` example, and the pin family `differential_error_count!` compares
+the COUNT where the words are deliberately not javac's.
+
+The compatibility page caught the first of these on its own, which is what it
+is for: the Records card recorded caturra's reason as "missing return
+statement" — a flow-phase answer to `record Point(int x, int y) {}`, and
+nonsense to a reader — and now records "unknown type 'record'". One line of
+`features.json` changed, and the browser test that verifies every claim went
+green with it.
+
+One more message stopped naming an internal class: writing to a
+`List<? extends Number>` said "no suitable method found for add(...) in
+java/util/ArrayList" — slashes and all — where the receiver's own type is what
+a program wrote and what it now says.
+
+Pinned by `a_type_error_hides_the_missing_return`,
+`a_type_error_hides_the_missing_return_is_one_error`,
+`a_syntax_error_stops_attribution`,
+`reject_writing_a_field_through_this_in_a_static_method`,
+`reject_incrementing_a_field_through_this_in_a_static_method`,
+`writing_a_field_through_this`, `reject_for_each_over_a_map`, and the three
+`reject_a_duplicate_local_names_*`.

@@ -89,6 +89,39 @@ fn caturra_first_error(class_name: &str, source: &str) -> Option<String> {
         .map(|diagnostic| diagnostic.message.clone())
 }
 
+/// How many errors javac reports for `source`.
+fn javac_error_count(class_name: &str, source: &str) -> usize {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(source, &mut hasher);
+    let fingerprint = std::hash::Hasher::finish(&hasher);
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("count-{class_name}-{fingerprint:x}"));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let java_file = dir.join(format!("{class_name}.java"));
+    std::fs::write(&java_file, source).expect("write source");
+    let compile = javac_in(&dir, &java_file);
+    if compile.status.success() {
+        return 0;
+    }
+    String::from_utf8_lossy(&compile.stderr)
+        .lines()
+        .filter(|line| line.contains(": error: "))
+        .count()
+}
+
+/// How many errors caturra reports for `source`.
+fn caturra_error_count(class_name: &str, source: &str) -> usize {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: format!("{class_name}.java"),
+        text: source.to_owned(),
+    }]);
+    compilation
+        .diagnostics
+        .iter()
+        .filter(|d| format!("{:?}", d.severity) == "Error")
+        .count()
+}
+
 /// Both javac and caturra must refuse `source`.
 ///
 /// A `differential_test!` can only run a program javac accepts, so the suite
@@ -371,6 +404,36 @@ macro_rules! differential_wording {
                 first_line(&javac),
                 first_line(&caturra),
                 "the two engines refuse {} for differently worded reasons",
+                $class
+            );
+        }
+    };
+}
+
+/// A program both engines refuse with the same NUMBER of errors.
+///
+/// Every other pin here compares the FIRST error, so how many caturra reports
+/// went unmeasured — and javac's phases make the count part of the answer: it
+/// runs flow analysis only when attribution produced no errors, and attributes
+/// nothing that failed to parse. A program with a type error and a missing
+/// return is ONE error to javac, and was two here, with the wrong one first.
+/// Use this where the count is the point and `differential_wording!` where the
+/// words are; the parser's messages are deliberately not javac's, so a syntax
+/// case can only be pinned this way.
+macro_rules! differential_error_count {
+    ($name:ident, $class:literal, $source:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            let javac = javac_error_count($class, $source);
+            assert!(javac > 0, "javac ACCEPTS {}", $class);
+            assert_eq!(
+                javac,
+                caturra_error_count($class, $source),
+                "the two engines report a different NUMBER of errors for {}",
                 $class
             );
         }
@@ -42545,4 +42608,168 @@ public class BoundedGenerics {
     }
 }
 "#
+);
+
+// `this` as the receiver of a WRITE, in a static context. The check lived on
+// the READ path — evaluating `Expr::This` — which an assignment TARGET never
+// takes, so `static void g() { this.v = 1; }` compiled and RAN, writing
+// through a receiver that does not exist. `this.v++` reached it by another
+// road and complained about the operand instead ("bad operand type an unknown
+// type for unary operator '++'").
+differential_wording!(
+    reject_writing_a_field_through_this_in_a_static_method,
+    "RejectStaticThisWrite",
+    r"
+public class RejectStaticThisWrite {
+    int v = 1;
+    static void g() { this.v = 1; }
+    public static void main(String[] args) { g(); }
+}
+"
+);
+
+differential_wording!(
+    reject_incrementing_a_field_through_this_in_a_static_method,
+    "RejectStaticThisIncrement",
+    r"
+public class RejectStaticThisIncrement {
+    int v = 1;
+    static void g() { this.v++; }
+    public static void main(String[] args) { g(); }
+}
+"
+);
+
+// ...and every write through `this` that IS legal, including the qualified
+// form. `Outer.this.count++` is a plain statement that reported "++/-- as an
+// expression works on variables and array elements" — the parser encodes a
+// qualified this as a name path holding `this`, and the increment's target
+// dispatch knew paths of one and two segments only.
+differential_test!(
+    writing_a_field_through_this,
+    "ThisWrites",
+    r#"
+public class ThisWrites {
+    int v = 1;
+    static int s = 0;
+
+    ThisWrites() { this.v = 5; }
+    { this.v = 2; }
+
+    void bump() { this.v++; this.v += 3; this.v = this.v * 2; }
+
+    class Inner {
+        int w = 1;
+        void go() {
+            w++;
+            this.w += 2;
+            ThisWrites.this.v++;
+            ThisWrites.this.v += 10;
+        }
+    }
+
+    static void stat() { s++; s = 4; }
+
+    public static void main(String[] args) {
+        ThisWrites outer = new ThisWrites();
+        outer.bump();
+        Inner inner = outer.new Inner();
+        inner.go();
+        stat();
+        System.out.println(outer.v + " " + inner.w + " " + s);
+    }
+}
+"#
+);
+
+// javac's PHASES are visible in what it reports. Flow analysis runs only when
+// attribution produced no errors, so a program with both a type error and a
+// missing return is reported with the type error ALONE — and that is the first
+// error a student is shown. caturra reported the missing return first.
+differential_wording!(
+    a_type_error_hides_the_missing_return,
+    "PhaseFlowAfterAttr",
+    r#"
+public class PhaseFlowAfterAttr {
+    static int f() { }
+    static void g() { int x = "s"; }
+}
+"#
+);
+
+differential_error_count!(
+    a_type_error_hides_the_missing_return_is_one_error,
+    "PhaseFlowCount",
+    r#"
+public class PhaseFlowCount {
+    static int f() { }
+    static void g() { int x = "s"; }
+}
+"#
+);
+
+// The same, one phase earlier: javac attributes nothing that failed to parse,
+// so a file with a syntax error is reported with its syntax errors alone.
+// caturra's parser recovers and carried on, adding errors javac never prints.
+differential_error_count!(
+    a_syntax_error_stops_attribution,
+    "PhaseSyntaxStops",
+    r#"
+public class PhaseSyntaxStops {
+    static void a() { int x = "s"; }
+    static void b() { int y = ; }
+}
+"#
+);
+
+// A for-each over something that is not iterable: javac's three lines, where
+// caturra listed what it happens to iterate ("an array, an ArrayList, or a map
+// view") — neither what Java requires nor what the program wrote.
+differential_wording!(
+    reject_for_each_over_a_map,
+    "RejectForEachMap",
+    r"
+import java.util.HashMap;
+import java.util.Map;
+
+public class RejectForEachMap {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        for (String k : m) System.out.println(k);
+    }
+}
+"
+);
+
+// A duplicate local names the MEMBER it is in, the way javac does — a method
+// with its parameter types, a constructor, a static initializer — where
+// caturra said "in this method" for all three.
+differential_wording!(
+    reject_a_duplicate_local_names_its_method,
+    "RejectDupLocalMethod",
+    r"
+public class RejectDupLocalMethod {
+    static void go(String s, int... rest) { int y = 1; int y = 2; }
+}
+"
+);
+
+differential_wording!(
+    reject_a_duplicate_local_names_its_constructor,
+    "RejectDupLocalCtor",
+    r"
+public class RejectDupLocalCtor {
+    RejectDupLocalCtor(int n) { int y = 1; int y = 2; }
+}
+"
+);
+
+differential_wording!(
+    reject_a_duplicate_local_names_a_static_initializer,
+    "RejectDupLocalStaticInit",
+    r"
+public class RejectDupLocalStaticInit {
+    static { int y = 1; int y = 2; }
+}
+"
 );

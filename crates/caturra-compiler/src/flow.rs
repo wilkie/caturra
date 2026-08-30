@@ -1129,6 +1129,35 @@ fn declares_local_named(statements: &[Stmt], name: &str) -> bool {
     })
 }
 
+/// The four messages the FLOW phase produces. javac runs flow analysis only
+/// after attribution finished without errors, so a program that has both a
+/// type error and a missing return is reported with the type error ALONE —
+/// which is not a detail: it is the FIRST error a student is shown, and
+/// caturra was showing a different one. (`variable x might already have been
+/// assigned` is the blank-final rule, reported by the same phase.)
+fn is_flow_message(message: &str) -> bool {
+    let first = message.lines().next().unwrap_or(message);
+    first == "missing return statement"
+        || first == "unreachable statement"
+        || (first.starts_with("variable ")
+            && (first.ends_with(" might not have been initialized")
+                || first.ends_with(" might already have been assigned")))
+}
+
+/// Drop the flow phase's errors when any OTHER error was reported, whatever
+/// class it came from — javac's granularity is the whole compilation, not the
+/// method or the class (a type error in one nested class hides a missing
+/// return in its sibling).
+pub fn drop_flow_errors_after_other_errors(diagnostics: &mut Vec<Diagnostic>) {
+    let other = diagnostics.iter().any(|d| {
+        matches!(d.severity, crate::Severity::Error) && !is_flow_message(&d.message)
+    });
+    if other {
+        diagnostics
+            .retain(|d| !matches!(d.severity, crate::Severity::Error) || !is_flow_message(&d.message));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{SourceFile, compile};
