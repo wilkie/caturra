@@ -41,9 +41,26 @@ def jdk_failure(stderr):
     return line.split('"main" ', 1)[-1].strip()
 
 
+# The engine, built ONCE. This used to be `cargo run --example compatrun` per
+# case, which pays cargo's freshness check and links a DEBUG binary: about two
+# seconds a case, which is most of a long fuzz run and the reason big ones were
+# not run.
+COMPATRUN = os.path.join(REPO, "target/release/examples/compatrun")
+
+
+def build_engine():
+    built = subprocess.run(
+        ["cargo", "build", "--release", "-p", "caturra-vm", "--example", "compatrun"],
+        cwd=REPO,
+    )
+    if built.returncode != 0:
+        sys.exit("the engine did not build")
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
+    build_engine()
     cases = sys.argv[1]
     out = os.path.join(cases, "..", "out")
     os.makedirs(out, exist_ok=True)
@@ -82,12 +99,12 @@ def main():
         expected = normalize(jdk.stdout.decode("utf-8", "replace"))
         if jdk.returncode:
             expected += "!! " + jdk_failure(jdk.stderr.decode("utf-8", "replace")) + "\n"
-        command = ["cargo", "run", "-q", "--example", "compatrun", "--", os.path.abspath(source), name]
+        command = [COMPATRUN, os.path.abspath(source), name]
         command += [os.path.abspath(other) for other in sources if other != source]
         if stdin:
             command.append("--stdin")
         got = subprocess.run(command, input=stdin, capture_output=True, text=True,
-                             cwd=REPO, timeout=300)
+                             cwd=REPO, timeout=300)  # release binary: no cargo
         try:
             answer = json.loads(got.stdout)
         except json.JSONDecodeError:

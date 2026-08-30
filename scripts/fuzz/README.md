@@ -32,6 +32,14 @@ defect in this codebase: one fact read by two paths, updated in one. It is how
 the anonymous-class scope bug was found — a stream pipeline inside an anonymous
 class body was refused while the identical pipeline one line outside compiled.
 
+## Speed
+
+`run.py` builds the engine ONCE and calls the release binary. It used to invoke
+`cargo run --example compatrun` per case, which pays cargo's freshness check and
+runs a DEBUG build: about two seconds a case, which is most of a long run and
+the reason the big ones were never run. 200 generated programs now take about
+four minutes, and the 299-case position sweep about six.
+
 ## Two things the runner does that a hand-rolled loop forgets
 
 **Compile each case ON ITS OWN.** `javac a.java b.java` writes no class files at
