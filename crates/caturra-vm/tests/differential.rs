@@ -2615,7 +2615,7 @@ public class DiffEnumBody {
 
 // javac 11: an enum with an abstract method whose constant has no body cannot
 // be built (the enum is abstract, and that constant would instantiate it).
-differential_reject!(
+differential_wording!(
     reject_abstract_enum_missing_body,
     "RejectEnumBody",
     r"
@@ -2791,7 +2791,7 @@ public class DiffAssignExpr {
 
 // The other side of the coin: a local mutated by an assignment EXPRESSION is not
 // effectively final, so a lambda capturing it is refused — as javac refuses it.
-differential_reject!(
+differential_wording!(
     reject_capture_mutated_by_assignment_expression,
     "RejectAssignCapture",
     r"
@@ -3526,7 +3526,7 @@ public class DiffConstNarrow {
 
 // JLS §14.11: a case label outside the byte selector's range is a lossy
 // conversion — a compile error, which caturra used to silently accept.
-differential_reject!(
+differential_wording!(
     reject_case_label_out_of_byte_range,
     "RejectCaseByte",
     r"
@@ -3677,7 +3677,7 @@ public class DiffBoolShift {
 
 // A shift count must be integral (JLS §15.19), even in a compound assignment —
 // `x <<= 1.5` is a COMPILE error, not the runtime VerifyError caturra produced.
-differential_reject!(
+differential_wording!(
     reject_compound_shift_double_count,
     "RejectShiftDouble",
     r"
@@ -4755,7 +4755,7 @@ public class DiffRound {
 // The double form returns `long`, so assigning it to an `int` without a cast
 // is a compile error — exactly as javac refuses it. Surfacing round(double)
 // as int had been LOOSER than javac.
-differential_reject!(
+differential_wording!(
     reject_math_round_double_into_int,
     "RejectRoundInt",
     r"
@@ -6645,7 +6645,7 @@ public class DiffNextBytes {
 // catch this: it only ever runs programs javac accepts.
 // ---------------------------------------------------------------------------
 
-differential_reject!(
+differential_wording!(
     reject_post_java_11_math_abs_exact,
     "RejectAbsExact",
     r"
@@ -6657,7 +6657,7 @@ public class RejectAbsExact {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_post_java_11_random_next_int_range,
     "RejectNextIntRange",
     r"
@@ -6671,7 +6671,7 @@ public class RejectNextIntRange {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_shuffle_without_a_random,
     "RejectShuffle",
     r"
@@ -6717,7 +6717,7 @@ public class RejectBooleanSearch {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_deep_to_string_of_a_one_dimensional_primitive_array,
     "RejectDeepToString",
     r"
@@ -6731,7 +6731,7 @@ public class RejectDeepToString {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_array_copy_with_too_few_arguments,
     "RejectArrayCopy",
     r"
@@ -6744,7 +6744,7 @@ public class RejectArrayCopy {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_multiply_full_of_longs,
     "RejectMultiplyFull",
     r"
@@ -6756,7 +6756,7 @@ public class RejectMultiplyFull {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_scalb_with_a_double_scale,
     "RejectScalb",
     r"
@@ -6768,7 +6768,7 @@ public class RejectScalb {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_next_bytes_of_an_int_array,
     "RejectNextBytes",
     r"
@@ -10410,7 +10410,7 @@ public class DiffNested {
 // it "non-static variable ... cannot be referenced from a static context", and
 // caturra must not have become more permissive by learning about enclosing
 // classes.
-differential_reject!(
+differential_wording!(
     reject_nested_class_reading_an_enclosing_instance_field,
     "RejectNested",
     r"
@@ -10490,7 +10490,7 @@ public class DiffLocalClass {
 
 // A local class's source name is scoped to its block: a sibling method cannot
 // see it, exactly as javac says "cannot find symbol".
-differential_reject!(
+differential_wording!(
     reject_local_class_out_of_scope,
     "RejectLocalScope",
     r"
@@ -11019,7 +11019,7 @@ public class DiffFinalCatch {
 // Taking `final` on a parameter is only half the feature: javac REFUSES an
 // assignment to one, and so must caturra. Accepting it would be a program that
 // compiles here and fails on the JDK — the direction never to be wrong in.
-differential_reject!(
+differential_wording!(
     diff_final_parameter_cannot_be_assigned,
     "DiffFinalAssign",
     r"
@@ -11476,7 +11476,7 @@ public class DiffNestAccess {
 // Soundness: the nested element type is a REAL constraint now (it used to
 // erase to Object, silently accepting anything). `grid.add("x")` on a
 // `List<List<Integer>>` is refused — by javac and by caturra.
-differential_reject!(
+differential_wording!(
     reject_nested_element_mismatch,
     "RejectNestElem",
     r#"
@@ -11626,7 +11626,7 @@ public class DiffWild {
 // so a `List<String>` does not pass for `List<? extends Number>` (String is no
 // Number), and an INVARIANT `List<Object>` still rejects a `List<Integer>` —
 // javac refuses both, and so must caturra.
-differential_reject!(
+differential_wording!(
     reject_wildcard_bound_mismatch,
     "RejectWildBound",
     r#"
@@ -11644,7 +11644,7 @@ public class RejectWildBound {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_invariant_list_object,
     "RejectInvariant",
     r"
@@ -11775,7 +11775,7 @@ public class DiffBoxedValid {
 // The narrowing is bounded by the constant's VALUE: 300 does not fit Byte, so
 // `Byte b = 300` stays a compile error, exactly as javac refuses it. (Guards
 // against the fix widening into accepting what it shouldn't.)
-differential_reject!(
+differential_wording!(
     reject_boxed_narrowing_out_of_range,
     "RejectBoxNarrow",
     r"
@@ -11873,7 +11873,7 @@ public class DiffIfaceConst implements Limits {
 // A field initializer that reads a LATER field by simple name is an illegal
 // forward reference (JLS §8.3.3) — javac rejects it, caturra used to accept
 // it and read 0.
-differential_reject!(
+differential_wording!(
     reject_illegal_forward_reference,
     "RejectForwardRef",
     r"
@@ -11926,7 +11926,7 @@ public class DiffArrElem {
 
 // A bare primitive type argument (`List<int>`) is still a compile error, as
 // javac refuses it — the fix admits `int[]`, not `int`.
-differential_reject!(
+differential_wording!(
     reject_primitive_type_argument,
     "RejectPrimTypeArg",
     r"
@@ -11979,7 +11979,7 @@ public class DiffConstInline {
 // field of the enum (the constants are built before it is initialized) —
 // javac: "illegal reference to static field from initializer". caturra used to
 // accept it and read the default.
-differential_reject!(
+differential_wording!(
     reject_enum_ctor_static_reference,
     "RejectEnumStatic",
     r"
@@ -12459,7 +12459,7 @@ public class DiffPatternSyntax {
 // program work in the playground and fail on a real JDK.
 // ---------------------------------------------------------------------------
 
-differential_reject!(
+differential_wording!(
     reject_unreachable_after_return,
     "RejUnreachReturn",
     r#"
@@ -12473,7 +12473,7 @@ public class RejUnreachReturn {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_unreachable_after_break,
     "RejUnreachBreak",
     r"public class RejUnreachBreak {
@@ -12486,7 +12486,7 @@ differential_reject!(
 }"
 );
 
-differential_reject!(
+differential_wording!(
     reject_unreachable_after_throw,
     "RejUnreachThrow",
     r#"
@@ -12504,7 +12504,7 @@ public class RejUnreachThrow {
 
 // The constant-condition rule applies to loops but NOT to `if` — see
 // `accept_if_false_conditional_compilation` below for the other half.
-differential_reject!(
+differential_wording!(
     reject_while_false_body,
     "RejWhileFalse",
     r#"
@@ -12516,7 +12516,7 @@ public class RejWhileFalse {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_unreachable_in_switch_case,
     "RejUnreachCase",
     r#"
@@ -12536,7 +12536,7 @@ public class RejUnreachCase {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_blank_final_field_never_assigned,
     "RejBlankFinal",
     r"public class RejBlankFinal {
@@ -12548,7 +12548,7 @@ differential_reject!(
 }"
 );
 
-differential_reject!(
+differential_wording!(
     reject_blank_final_field_one_branch,
     "RejBlankFinalBranch",
     r"public class RejBlankFinalBranch {
@@ -12560,7 +12560,7 @@ differential_reject!(
 }"
 );
 
-differential_reject!(
+differential_wording!(
     reject_blank_final_field_assigned_twice,
     "RejBlankFinalTwice",
     r"public class RejBlankFinalTwice {
@@ -12572,7 +12572,7 @@ differential_reject!(
 }"
 );
 
-differential_reject!(
+differential_wording!(
     reject_blank_final_field_read_before_assignment,
     "RejBlankFinalRead",
     r"public class RejBlankFinalRead {
@@ -12909,7 +12909,7 @@ public class DiffCasts {
 // A cast performs at most ONE boxing conversion and no numeric conversion
 // alongside it, so every one of these is an error in javac as well. Pinned so
 // the boxing arm cannot quietly grow into a widening-then-boxing conversion.
-differential_reject!(
+differential_wording!(
     reject_boxing_cast_with_numeric_conversion,
     "RejBoxWiden",
     r"public class RejBoxWiden {
@@ -12919,7 +12919,7 @@ differential_reject!(
 }"
 );
 
-differential_reject!(
+differential_wording!(
     reject_boxing_cast_narrowing,
     "RejBoxNarrow",
     r"public class RejBoxNarrow {
@@ -12929,7 +12929,7 @@ differential_reject!(
 }"
 );
 
-differential_reject!(
+differential_wording!(
     reject_boxing_cast_char_from_int,
     "RejBoxChar",
     r"public class RejBoxChar {
@@ -12939,7 +12939,7 @@ differential_reject!(
 }"
 );
 
-differential_reject!(
+differential_wording!(
     reject_cast_string_to_wrapper,
     "RejCastStrWrap",
     r#"
@@ -13130,7 +13130,7 @@ public class DiffPrivateNesting {
 
 // An inner class may not declare static members (JLS 8.1.3) — except constant
 // variables, which are folded and need no class to live in.
-differential_reject!(
+differential_wording!(
     reject_static_field_in_inner_class,
     "RejInnerStatic",
     r"
@@ -13144,7 +13144,7 @@ public class RejInnerStatic {
 );
 
 // Only an INNER class has an enclosing instance to bind.
-differential_reject!(
+differential_wording!(
     reject_qualified_new_of_static_nested,
     "RejQualifiedNew",
     r"
@@ -13233,7 +13233,7 @@ public class DiffBridges {
 
 // The type argument a subclass writes is CHECKED, so a mismatched supertype
 // argument is still refused — the widening is not blind.
-differential_reject!(
+differential_wording!(
     reject_mismatched_supertype_argument,
     "RejBoxMismatch",
     r"
@@ -13303,7 +13303,7 @@ public class CovariantReturn {
 // The other direction must NOT be lost with it: a return type that does not
 // widen to the overridden one is still an error, and a PRIMITIVE return never
 // covaries (`int` does not override `long`, though it widens as a value).
-differential_reject!(
+differential_wording!(
     covariant_return_must_widen,
     "CovariantWiden",
     r#"
@@ -13317,7 +13317,7 @@ public class CovariantWiden {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     covariant_return_not_primitive,
     "CovariantPrim",
     r"
@@ -13383,7 +13383,7 @@ public class DiffTypeVarValues {
 // A type argument in `instanceof` is illegal (JLS 15.20.2): erasure leaves
 // nothing to test. Found TWO places in caturra's own tree relying on this
 // being accepted — the bundled JUnit and a test program.
-differential_reject!(
+differential_wording!(
     reject_instanceof_with_type_argument,
     "RejInstanceofGeneric",
     r#"
@@ -13403,7 +13403,7 @@ public class RejInstanceofGeneric {
 
 // A static member cannot use the class's type parameters (JLS 8.4.1) — there
 // is no instance to have supplied them.
-differential_reject!(
+differential_wording!(
     reject_static_type_variable,
     "RejStaticTypeVar",
     r#"
@@ -13419,7 +13419,7 @@ public class RejStaticTypeVar {
 );
 
 // Two methods of one class may not share an erasure (JLS 8.4.2).
-differential_reject!(
+differential_wording!(
     reject_erasure_clash,
     "RejErasureClash",
     r#"
@@ -13760,7 +13760,7 @@ public class DiffTreeFirstInsert {
 // which only exists when the target is a primitive. For a WRAPPER target the
 // result must already fit, because assignment to it is a boxing conversion and
 // boxing does not narrow. caturra narrowed anyway and printed -14.
-differential_reject!(
+differential_wording!(
     reject_narrowing_compound_assignment_to_wrapper,
     "RejByteCompound",
     r"
@@ -13774,7 +13774,7 @@ public class RejByteCompound {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_double_compound_assignment_to_integer,
     "RejIntegerCompound",
     r"
@@ -13864,7 +13864,7 @@ public class DiffDispatch {
 );
 
 // JLS 8.4.3.3: a final method cannot be overridden.
-differential_reject!(
+differential_wording!(
     reject_override_of_final_method,
     "RejFinalOverride",
     r#"
@@ -13991,7 +13991,7 @@ public class DiffTwr {
 
 // JLS 14.20: the alternatives of one multi-catch may not be related by
 // subclassing, and a multi-catch parameter is implicitly final.
-differential_reject!(
+differential_wording!(
     reject_multi_catch_subclassing,
     "RejMultiCatchSubclass",
     r#"
@@ -14007,7 +14007,7 @@ public class RejMultiCatchSubclass {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_multi_catch_assignment,
     "RejMultiCatchAssign",
     r#"
@@ -14347,7 +14347,7 @@ public class RejSbAppendNull {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_string_builder_equals_string,
     "RejSbEqString",
     r#"
@@ -14419,7 +14419,7 @@ public class DiffEnumBehaviour {
 );
 
 // Enum's final methods may not be overridden (JLS 8.9).
-differential_reject!(
+differential_wording!(
     reject_enum_override_name,
     "RejEnumName",
     r#"
@@ -14432,7 +14432,7 @@ public class RejEnumName {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_enum_override_ordinal,
     "RejEnumOrdinal",
     r"
@@ -14515,7 +14515,7 @@ public class DiffNumber {
 
 // `Number` is not `Boolean`'s or `Character`'s supertype, and nothing unboxes
 // out of it implicitly — javac rejects all three.
-differential_reject!(
+differential_wording!(
     reject_boolean_as_a_number,
     "RejBoolNumber",
     r"
@@ -14528,7 +14528,7 @@ public class RejBoolNumber {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_number_unboxed_to_int,
     "RejNumberUnbox",
     r"
@@ -14570,7 +14570,7 @@ public class DiffWildNumber {
 
 // A `? extends` bound is still checked: a list of Strings is not a list of
 // Numbers, however the elements are spelled.
-differential_reject!(
+differential_wording!(
     reject_string_list_for_a_number_wildcard,
     "RejStrNumWild",
     r#"
@@ -14795,7 +14795,7 @@ public class DiffRaw {
 );
 
 // A raw collection reads out as `Object`, not its erstwhile element type.
-differential_reject!(
+differential_wording!(
     reject_raw_element_without_a_cast,
     "RejRawElem",
     r#"
@@ -14921,7 +14921,7 @@ public class DiffEnumCompare {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_cross_enum_equality,
     "RejCrossEnumEq",
     r"
@@ -14935,7 +14935,7 @@ public class RejCrossEnumEq {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_enum_equals_string,
     "RejEnumEqStr",
     r#"
@@ -14953,7 +14953,7 @@ public class RejEnumEqStr {
 // is overridden by it, not overloaded — offering both made every argument
 // applicable, so a cross-enum compare ran and a String argument reached the
 // enum body and died on a missing field.
-differential_reject!(
+differential_wording!(
     reject_cross_enum_compare_to,
     "RejCrossEnumCmp",
     r"
@@ -14967,7 +14967,7 @@ public class RejCrossEnumCmp {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_comparable_compare_to_wrong_type,
     "RejCmpWrongType",
     r"
@@ -14988,7 +14988,7 @@ public class RejCmpWrongType {
 // SELECTOR's enum. caturra emitted a `getstatic` for whatever was written, so
 // a constant of another enum, a qualified name, or a typo aborted at class
 // load with "unknown static field" instead of being a compile error.
-differential_reject!(
+differential_wording!(
     reject_case_label_from_another_enum,
     "RejCaseOtherEnum",
     r#"
@@ -15006,7 +15006,7 @@ public class RejCaseOtherEnum {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_qualified_enum_case_label,
     "RejCaseQualified",
     r#"
@@ -15570,7 +15570,7 @@ public class DiffCharSeq {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_char_sequence_back_to_string,
     "RejCharSeqNarrow",
     r#"
@@ -15649,7 +15649,7 @@ public class DiffConstTernary {
 );
 
 // A NON-constant condition stays a plain int conditional and must not narrow.
-differential_reject!(
+differential_wording!(
     reject_nonconstant_conditional_narrowing,
     "RejVarTernary",
     r"
@@ -15706,7 +15706,7 @@ public class DiffLongMin {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_long_max_plus_one_literal,
     "RejLongOverflow",
     r"
@@ -15719,7 +15719,7 @@ public class RejLongOverflow {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_long_min_as_subtraction,
     "RejLongMinBinary",
     r"
@@ -16035,7 +16035,7 @@ public class DiffBoxedBoundaries {
 
 // JLS 11.2: checked exceptions must be caught or declared. Five audit rounds
 // never probed this; caturra enforced nothing.
-differential_reject!(
+differential_wording!(
     reject_unreported_throw,
     "RejUnrepThrow",
     r#"
@@ -16050,7 +16050,7 @@ public class RejUnrepThrow {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_unreported_call,
     "RejUnrepCall",
     r#"
@@ -16068,7 +16068,7 @@ public class RejUnrepCall {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_unreported_user_exception,
     "RejUnrepUser",
     r#"
@@ -16085,7 +16085,7 @@ public class RejUnrepUser {
 );
 
 // JLS 11.2.3: a catch of a checked exception the try body cannot throw.
-differential_reject!(
+differential_wording!(
     reject_catch_never_thrown,
     "RejNeverThrown",
     r#"
@@ -16104,7 +16104,7 @@ public class RejNeverThrown {
 );
 
 // Unreported checked exceptions escaping a ctor and a static initializer.
-differential_reject!(
+differential_wording!(
     reject_unreported_in_constructor,
     "RejUnrepCtor",
     r#"
@@ -16414,7 +16414,7 @@ public class RejOvThrows {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_override_annotation_without_override,
     "RejOvAnno",
     r#"
@@ -16543,7 +16543,7 @@ public class DiffMechLang {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_unary_plus_char_narrowing,
     "RejPlusChar",
     r"
@@ -16557,7 +16557,7 @@ public class RejPlusChar {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_duplicate_nested_label,
     "RejDupLabel",
     r#"
@@ -16799,7 +16799,7 @@ public class DiffMapLambdaShapes {
 
 // A pre-built remapper variable is checked against the map's V at the call
 // site: merge wants (V, V) -> V, and this BiFunction sees the KEY.
-differential_reject!(
+differential_wording!(
     reject_merge_mistyped_bifunction,
     "RejMergeBiFn",
     r#"
@@ -16842,7 +16842,7 @@ public class DiffMapFnVars {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_compute_if_absent_mistyped_function,
     "RejCiaFn",
     r#"
@@ -17019,7 +17019,7 @@ public class DiffFuncObjMethods {
 
 // ...but an interface with TWO real abstract methods is still not functional,
 // however many Object-method redeclarations it also carries.
-differential_reject!(
+differential_wording!(
     reject_two_abstract_not_functional,
     "RejTwoAbstract",
     r#"
@@ -17183,7 +17183,7 @@ public class DiffSwitchScope {
 // reading a variable declared in an earlier group without assignment is a
 // definite-assignment error (v IS in scope — the message used to claim it
 // did not exist).
-differential_reject!(
+differential_wording!(
     reject_switch_duplicate_folded_label,
     "RejSwitchDupFold",
     r#"
@@ -17198,7 +17198,7 @@ public class RejSwitchDupFold {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_switch_nonconstant_label,
     "RejSwitchNonConst",
     r#"
@@ -17228,7 +17228,7 @@ public class RejSwitchRedecl {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_switch_cross_group_definite_assignment,
     "RejSwitchDA",
     r"
@@ -17991,7 +17991,7 @@ public class DiffUnicodeEscapes {
 
 // The escapes that make a program ILLEGAL once translated: a quote closes
 // the literal early, and a line terminator unclosees a string or char.
-differential_reject!(
+differential_wording!(
     reject_unicode_escape_quote_closes_literal,
     "RejEscapeQuote",
     r#"
@@ -18004,7 +18004,7 @@ public class RejEscapeQuote {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_unicode_escape_newline_in_string,
     "RejEscapeNewlineStr",
     r#"
@@ -18018,7 +18018,7 @@ b";
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_unicode_escape_newline_in_char,
     "RejEscapeNewlineChar",
     r"
@@ -18220,7 +18220,7 @@ public class RejRefArity {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_method_ref_checked_exception,
     "RejRefThrows",
     r"
@@ -18235,7 +18235,7 @@ public class RejRefThrows {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_enum_constructor_reference,
     "RejRefEnumNew",
     r"
@@ -18361,7 +18361,7 @@ public class DiffIntersectionCast {
 );
 
 // JLS §15.10.1: an array of a type VARIABLE is not reifiable.
-differential_reject!(
+differential_wording!(
     reject_generic_array_creation,
     "RejGenericArray",
     r"
@@ -18441,7 +18441,7 @@ public class DiffEnumDelegate {
 );
 
 // The declarations JLS §8.9 forbids.
-differential_reject!(
+differential_wording!(
     reject_enum_final_modifier,
     "RejEnumFinal",
     r"
@@ -18452,7 +18452,7 @@ public class RejEnumFinal {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_enum_public_constructor,
     "RejEnumPublicCtor",
     r"
@@ -18467,7 +18467,7 @@ public class RejEnumPublicCtor {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_enum_redeclares_values,
     "RejEnumValues",
     r"
@@ -18481,7 +18481,7 @@ public class RejEnumValues {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_enum_redeclares_value_of,
     "RejEnumValueOf",
     r#"
@@ -18512,7 +18512,7 @@ public class RejEnumConstStatic {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_enum_instantiation,
     "RejEnumNew",
     r"
@@ -18592,7 +18592,7 @@ public class DiffQualifiedThis {
 // `Outer.this` needs an enclosing INSTANCE: a static method has none (it
 // used to load local slot 0, which in `main` is the args array), and a
 // static nested class has no outer link.
-differential_reject!(
+differential_wording!(
     reject_qualified_this_in_static_method,
     "RejThisStatic",
     r"
@@ -18606,7 +18606,7 @@ public class RejThisStatic {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_qualified_this_in_static_nested,
     "RejThisNested",
     r"
@@ -18620,7 +18620,7 @@ public class RejThisNested {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_outer_instance_field_from_static_nested,
     "RejFieldNested",
     r"
@@ -18769,7 +18769,7 @@ public class RejIfaceCtor {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_private_interface_static_from_outside,
     "RejIfacePrivate",
     r"
@@ -18783,7 +18783,7 @@ public class RejIfacePrivate {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_private_static_of_another_class,
     "RejPrivateStatic",
     r"
@@ -18972,7 +18972,7 @@ public class DiffNumericEdges {
 );
 
 // JLS §3.10.1: `2147483648` exists only as the DIRECT operand of unary minus.
-differential_reject!(
+differential_wording!(
     reject_parenthesized_min_value_literal,
     "RejParenMin",
     r"
@@ -18985,7 +18985,7 @@ public class RejParenMin {
 );
 
 // An underscore may appear only between digits.
-differential_reject!(
+differential_wording!(
     reject_trailing_underscore_literal,
     "RejUnderscoreTrail",
     r"
@@ -18998,7 +18998,7 @@ public class RejUnderscoreTrail {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_underscore_after_radix_prefix,
     "RejUnderscorePrefix",
     r"
@@ -19010,7 +19010,7 @@ public class RejUnderscorePrefix {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_underscore_before_suffix,
     "RejUnderscoreSuffix",
     r"
@@ -19318,7 +19318,7 @@ public class DiffInitCapture {
 // The compile-time rules an initializer used to escape entirely. Each is a
 // program javac refuses, so caturra must refuse it too — the accepts-invalid
 // direction, where a program that cannot exist on a real JDK ran here.
-differential_reject!(
+differential_wording!(
     reject_return_in_instance_initializer,
     "RejInitReturn",
     r"
@@ -19330,7 +19330,7 @@ public class RejInitReturn {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_initializer_that_cannot_complete,
     "RejInitAbrupt",
     r"
@@ -19341,7 +19341,7 @@ public class RejInitAbrupt {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_forward_reference_in_initializer_block,
     "RejInitForward",
     r"
@@ -19353,7 +19353,7 @@ public class RejInitForward {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_blank_final_assigned_by_initializer_and_constructor,
     "RejInitBlankTwice",
     r"
@@ -19366,7 +19366,7 @@ public class RejInitBlankTwice {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_blank_final_read_in_initializer,
     "RejInitBlankRead",
     r"
@@ -19378,7 +19378,7 @@ public class RejInitBlankRead {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_checked_exception_in_instance_initializer,
     "RejInitChecked",
     r"
@@ -19390,7 +19390,7 @@ public class RejInitChecked {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_this_in_super_constructor_arguments,
     "RejInitSuperThis",
     r"
@@ -19405,7 +19405,7 @@ public class RejInitSuperThis extends SupInit {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_recursive_constructor_invocation,
     "RejInitRecursiveCtor",
     r"
@@ -19844,7 +19844,7 @@ public class RejFinalObjectMethod {
 // `@Override equals(SubType)` overrides nothing — the classic bug the
 // annotation exists to catch, which caturra's erasure-tolerant matcher let
 // through because `Object.equals`'s parameter really is `Object`.
-differential_reject!(
+differential_wording!(
     reject_override_annotation_on_equals_overload,
     "RejEqualsOverload",
     r"
@@ -19861,7 +19861,7 @@ public class RejEqualsOverload {
 
 // JLS §15.20.2: `instanceof` between two unrelated FINAL types can never be
 // true, so it is a compile error rather than an answer of `false`.
-differential_reject!(
+differential_wording!(
     reject_impossible_instanceof,
     "RejImpossibleInstanceof",
     r#"
@@ -20014,7 +20014,7 @@ public class RejDuplicateLocal {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_capturing_reassigned_foreach_variable,
     "RejForEachCapture",
     r#"
@@ -20043,7 +20043,7 @@ public class RejLocalStatic {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_constructor_parameter_in_field_initializer,
     "RejParamInInitializer",
     r"
@@ -20058,7 +20058,7 @@ public class RejParamInInitializer {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_private_superclass_field_by_simple_name,
     "RejPrivateInherited",
     r"
@@ -20210,7 +20210,7 @@ public class DiffLabelFlow {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_assignment_hidden_by_short_circuit,
     "RejShortCircuitDA",
     r"
@@ -20225,7 +20225,7 @@ public class RejShortCircuitDA {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_assignment_hidden_by_labeled_break,
     "RejLabeledBreakDA",
     r"
@@ -20242,7 +20242,7 @@ public class RejLabeledBreakDA {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_constant_condition_unreachable,
     "RejConstantLoop",
     r"
@@ -20259,7 +20259,7 @@ public class RejConstantLoop {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_labeled_local_declaration,
     "RejLabeledDecl",
     r"
@@ -20272,7 +20272,7 @@ public class RejLabeledDecl {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_assignment_to_math_constant,
     "RejMathConstant",
     r"
@@ -20285,7 +20285,7 @@ public class RejMathConstant {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_increment_on_a_string,
     "RejStringIncrement",
     r#"
@@ -20910,7 +20910,7 @@ public class DiffConstExpr {
 
 // javac: a `while` over a false constant makes its body unreachable — including
 // a constant declared in ANOTHER class, which the flow pass could not see.
-differential_reject!(
+differential_wording!(
     reject_unreachable_over_other_class_constant,
     "RejectUnreachableConst",
     r#"
@@ -20929,7 +20929,7 @@ public class RejectUnreachableConst {
 
 // javac: a case label of the wrong TYPE is a type error naming both types, not
 // a complaint about constness.
-differential_reject!(
+differential_wording!(
     reject_case_label_type_mismatch,
     "RejectLabelType",
     r#"
@@ -21180,7 +21180,7 @@ public class DiffMultiCatch {
 // javac: precise rethrow requires an effectively final catch parameter. Assigned,
 // `throw e` throws the parameter's DECLARED type, which this method does not
 // report.
-differential_reject!(
+differential_wording!(
     reject_rethrow_of_assigned_parameter,
     "RejectRethrow",
     r#"
@@ -21202,7 +21202,7 @@ public class RejectRethrow {
 );
 
 // javac: every name in a `throws` clause must be a Throwable.
-differential_reject!(
+differential_wording!(
     reject_throws_non_throwable,
     "RejectThrows",
     r#"
@@ -21215,7 +21215,7 @@ public class RejectThrows {
 
 // javac: a generic class may not extend Throwable — a catch clause could not
 // check its type argument.
-differential_reject!(
+differential_wording!(
     reject_generic_throwable,
     "RejectGenericEx",
     r#"
@@ -21228,7 +21228,7 @@ public class RejectGenericEx {
 
 // javac: a `catch` of a real type that is not a Throwable is a type error naming
 // it, not a missing symbol.
-differential_reject!(
+differential_wording!(
     reject_catch_non_throwable,
     "RejectCatchType",
     r#"
@@ -21962,7 +21962,7 @@ public class DiffInertModifiers {
 );
 
 // javac: a `final` class has no subclasses.
-differential_reject!(
+differential_wording!(
     reject_extends_final_class,
     "RejectExtendsFinal",
     r"
@@ -21976,7 +21976,7 @@ public class RejectExtendsFinal {
 
 // javac: an abstract method has no body, and cannot be final, static or
 // private — each says it cannot be overridden, which is what it exists to ask.
-differential_reject!(
+differential_wording!(
     reject_abstract_method_body,
     "RejectAbstractBody",
     r"
@@ -21989,7 +21989,7 @@ public class RejectAbstractBody {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_abstract_final_method,
     "RejectAbstractFinal",
     r"
@@ -22002,7 +22002,7 @@ public class RejectAbstractFinal {
 "
 );
 
-differential_reject!(
+differential_wording!(
     reject_abstract_static_method,
     "RejectAbstractStatic",
     r"
@@ -22016,7 +22016,7 @@ public class RejectAbstractStatic {
 );
 
 // javac: a class cannot be both abstract and final.
-differential_reject!(
+differential_wording!(
     reject_abstract_final_class,
     "RejectAbstractFinalClass",
     r"
@@ -22028,7 +22028,7 @@ public final abstract class RejectAbstractFinalClass {
 
 // javac: an interface field is implicitly public — no other access modifier
 // may be written.
-differential_reject!(
+differential_wording!(
     reject_private_interface_field,
     "RejectPrivateIfaceField",
     r"
@@ -22043,7 +22043,7 @@ public class RejectPrivateIfaceField {
 
 // javac: a blank `static final` assigned in two static initializers is
 // assigned twice — the initializers are one program in source order.
-differential_reject!(
+differential_wording!(
     reject_static_blank_final_twice,
     "RejectStaticBlankFinal",
     r"
@@ -22186,7 +22186,7 @@ public class StreamKinds {
 // javac: a `DoubleStream` has neither `asDoubleStream` nor `asLongStream` —
 // the three primitive pipelines share one method table here, which alone
 // would have offered every conversion to every receiver.
-differential_reject!(
+differential_wording!(
     reject_double_stream_as_double,
     "BadConv",
     r"
@@ -22202,7 +22202,7 @@ public class BadConv {
 
 // javac: with exactly one candidate of this name and arity, the ARGUMENT is
 // what is blamed — not the absence of an overload.
-differential_reject!(
+differential_wording!(
     reject_lossy_argument_to_builtin,
     "CharAtLong",
     r#"
@@ -22217,7 +22217,7 @@ public class CharAtLong {
 
 // javac: EVERY narrowing primitive conversion is "possible lossy conversion",
 // including the ones between the small integral types.
-differential_reject!(
+differential_wording!(
     reject_narrowing_long_to_byte,
     "NarrowOne",
     r"
@@ -22845,7 +22845,7 @@ public class ArrayWidening {
 // A PRIMITIVE array is not an `Object[]` — the rule is about reference
 // elements, and asking the element rather than listing kinds must not lose
 // that.
-differential_reject!(
+differential_wording!(
     a_primitive_array_is_not_an_object_array,
     "PrimArrayWiden",
     r"
@@ -23511,7 +23511,7 @@ public class RawElementStore {
 
 // The unchecked conversion is between arrays of the SAME container kind. An
 // array of lists is no array of maps, and no array of strings.
-differential_reject!(
+differential_wording!(
     an_array_of_lists_is_not_an_array_of_maps,
     "ArrayKindMismatch",
     r"
@@ -23527,7 +23527,7 @@ public class ArrayKindMismatch {
 "
 );
 
-differential_reject!(
+differential_wording!(
     an_array_of_lists_is_not_an_array_of_strings,
     "ArrayNotStrings",
     r"
@@ -23597,7 +23597,7 @@ public class SuperWildcard {
 // The bound still has to be a SUPERTYPE of what the wildcard names: a
 // `List<String>` is no `List<? super Integer>`, and `Character` does not
 // widen to `Number` the way the numeric wrappers do.
-differential_reject!(
+differential_wording!(
     a_lower_bound_is_not_any_element,
     "SuperMismatch",
     r"
@@ -23616,7 +23616,7 @@ public class SuperMismatch {
 "
 );
 
-differential_reject!(
+differential_wording!(
     a_char_is_not_a_number,
     "CharNotNumber",
     r"
@@ -23871,7 +23871,7 @@ public class StoredLambdas {
 // Handing the element type down must not make every argument a
 // functional-interface position: a lambda still needs one, and its arity still
 // has to match.
-differential_reject!(
+differential_wording!(
     a_lambda_is_not_a_string_element,
     "LambdaNotString",
     r#"
@@ -23888,7 +23888,7 @@ public class LambdaNotString {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     a_stored_lambda_keeps_its_arity,
     "StoredArity",
     r"
@@ -24217,7 +24217,7 @@ public class PrimitiveFunctions {
 
 // The five calls the shared-interface design would have accepted. Each is a
 // javac error: a specialization's method name belongs to it alone.
-differential_reject!(
+differential_wording!(
     a_function_has_no_apply_as_int,
     "NoApplyAsInt",
     r#"
@@ -24232,7 +24232,7 @@ public class NoApplyAsInt {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     a_supplier_has_no_get_as_int,
     "NoGetAsInt",
     r"
@@ -24247,7 +24247,7 @@ public class NoGetAsInt {
 "
 );
 
-differential_reject!(
+differential_wording!(
     a_bifunction_has_no_test,
     "NoBiTest",
     r"
@@ -24262,7 +24262,7 @@ public class NoBiTest {
 "
 );
 
-differential_reject!(
+differential_wording!(
     an_int_supplier_has_no_get,
     "NoPlainGet",
     r"
@@ -24277,7 +24277,7 @@ public class NoPlainGet {
 "
 );
 
-differential_reject!(
+differential_wording!(
     an_int_unary_operator_has_no_apply,
     "NoPlainApply",
     r"
@@ -24944,7 +24944,7 @@ public class PairFaces {
 // javac: a parameterization must write as many arguments as the class
 // declares. Caturra resolved a mismatched one to the RAW type, so
 // `Pair<String>` compiled and ran with the wrong static types throughout.
-differential_reject!(
+differential_wording!(
     reject_wrong_type_argument_count,
     "PairArity",
     r#"
@@ -24967,7 +24967,7 @@ public class PairArity {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     reject_wrong_type_argument_count_at_new,
     "PairArityNew",
     r#"
@@ -26334,7 +26334,7 @@ public class QualNames {
 // a field access on an `int`, which both compilers refuse. The prefix
 // stripping tested only for a variable literally named `java`; it now looks
 // up whichever package prefix it is about to collapse.
-differential_reject!(
+differential_wording!(
     a_variable_obscures_its_package_name,
     "Obscured",
     r"
@@ -26428,7 +26428,7 @@ public class IterableType {
 // the program ran with the wrong static type throughout. The accepts-invalid
 // direction, and the builtin collections were checked all along; only a user
 // generic class fell through.
-differential_reject!(
+differential_wording!(
     a_parameterization_is_not_assignable_to_another,
     "WrongArg",
     r"
@@ -27466,7 +27466,7 @@ public class QueueHalves {
 // A lambda's arity must match the SAM's. Zipping them silently dropped the
 // extra parameter, so `Function<String, Integer> f = (a, b) -> 1;` compiled
 // here and is a compile error on a real JDK.
-differential_reject!(
+differential_wording!(
     a_lambda_must_match_the_sam_arity,
     "LambdaArity",
     r"
@@ -27525,7 +27525,7 @@ public class QualifiedLambdas {
 // caturra emitted no handler when the try body could not throw — correct for
 // codegen, but it skipped the body entirely, so every error inside such a
 // catch was invisible and the program ran.
-differential_reject!(
+differential_wording!(
     an_unreachable_catch_body_is_still_checked,
     "DeadCatch",
     r#"
@@ -27543,7 +27543,7 @@ public class DeadCatch {
 
 // A modifier may appear at most once (JLS §8.1.1). Setting the flag twice made
 // `public public void f()` compile.
-differential_reject!(
+differential_wording!(
     a_modifier_may_not_repeat,
     "RepeatedModifier",
     r"
@@ -27596,7 +27596,7 @@ public class StillFine {
 // An interface body has no initializer blocks (JLS §9.1.4) — there is no
 // instance to initialise and its fields are constants. Accepting one let a
 // block of statements sit inside an interface and never run.
-differential_reject!(
+differential_wording!(
     an_interface_has_no_initializer_block,
     "InterfaceInit",
     r"
@@ -27668,7 +27668,7 @@ public class NoReceiver {
 // A constructor takes an access modifier and nothing else (JLS §8.8.3): it is
 // neither abstract (it has a body) nor static (it makes an instance). Both
 // were accepted and then ignored.
-differential_reject!(
+differential_wording!(
     a_constructor_takes_no_abstract_modifier,
     "AbstractCtor",
     r"
@@ -27837,7 +27837,7 @@ public class Combinators {
 // A written type ARGUMENT must satisfy its parameter's bound (JLS §4.5).
 // `Box<String>` for a `Box<T extends Number>` is an error javac reports, and
 // it compiled here — the table recorded the parameter COUNT but not its bound.
-differential_reject!(
+differential_wording!(
     a_type_argument_must_satisfy_its_bound,
     "OutOfBounds",
     r"
@@ -27905,7 +27905,7 @@ public class InBounds {
 // is a compile error — no subtype could ever satisfy both, so the cast is
 // provably impossible. caturra used to compile it and throw ClassCastException
 // at run time, which is the accepts-invalid direction.
-differential_reject!(
+differential_wording!(
     a_final_class_cannot_cast_to_a_foreign_interface,
     "ImpossibleCast",
     r"
@@ -27971,7 +27971,7 @@ public class PossibleCasts {
 // merely something named `unwrap`. Every type-variable parameter used to match
 // any reference at all; that is the erasure bridge, and it is right only while
 // the type argument is unknown.
-differential_reject!(
+differential_wording!(
     an_implementor_owes_the_substituted_signature,
     "WrongSignature",
     r"
@@ -28138,7 +28138,7 @@ public class InterfaceMembers {
 // ...and the rejections that keep those members private: a `private` interface
 // method reached from outside, and a `static` one read through an implementor
 // (it is NOT inherited).
-differential_reject!(
+differential_wording!(
     a_private_interface_method_is_not_callable_from_outside,
     "HiddenMember",
     r#"
@@ -28159,7 +28159,7 @@ public class HiddenMember {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     a_static_interface_method_is_not_inherited,
     "NotInherited",
     r"
@@ -31881,7 +31881,7 @@ public class WholeFunctionPackage {
 // and `ToLongFunction.applyAsInt(...)` are javac errors and must stay errors
 // here. Folding the families onto shared SAMs would be fewer lines and would
 // make both compile.
-differential_reject!(
+differential_wording!(
     a_specialization_does_not_answer_another_ones_method,
     "WrongSamMethod",
     r"
@@ -33217,7 +33217,7 @@ public class ConstantCondition {
 // A loop whose condition is a constant EXPRESSION over constant variables —
 // not a literal — makes its body unreachable, which javac rejects and caturra
 // accepted, because the reachability analysis folded literals only.
-differential_reject!(
+differential_wording!(
     a_constant_expression_loop_body_is_unreachable,
     "UnreachableLoop",
     r"
@@ -34182,7 +34182,7 @@ public class ConstructedElements {
 // first was refused, so `new List<String>[2]` compiled here and is javac's
 // "generic array creation". An array whose store check cannot exist is the
 // whole reason the rule is there.
-differential_reject!(
+differential_wording!(
     an_array_of_a_parameterized_type,
     "GenericArray",
     r"
@@ -34197,7 +34197,7 @@ public class GenericArray {
 "
 );
 
-differential_reject!(
+differential_wording!(
     an_array_of_a_bounded_wildcard,
     "BoundedWildcardArray",
     r"
@@ -34248,7 +34248,7 @@ public class ReifiableArrays {
 // symbol". The rule was in place for an interface's private methods and for a
 // field looked up ACROSS top-level classes, and missing for the ordinary case —
 // so `f()` in a subclass silently called the superclass's private one.
-differential_reject!(
+differential_wording!(
     a_private_method_is_not_inherited,
     "PrivateMethod",
     r"
@@ -34272,7 +34272,7 @@ public class PrivateMethod {
 "
 );
 
-differential_reject!(
+differential_wording!(
     a_private_field_is_not_inherited,
     "PrivateField",
     r"
@@ -34332,7 +34332,7 @@ public class PrivateThroughOwner {
 // javac's "int cannot be dereferenced" — and no method call on one is legal,
 // not even a wrapper method the boxed value would answer. caturra autoboxed
 // the receiver and refused only what the WRAPPER lacked.
-differential_reject!(
+differential_wording!(
     a_primitive_cannot_be_dereferenced,
     "DerefPrimitive",
     r"
@@ -34345,7 +34345,7 @@ public class DerefPrimitive {
 "
 );
 
-differential_reject!(
+differential_wording!(
     a_primitive_double_cannot_be_dereferenced,
     "DerefDouble",
     r"
@@ -34360,7 +34360,7 @@ public class DerefDouble {
 
 // Two parameters cannot share a name (JLS §8.4.1): the body would have no way
 // to say which it means, and javac refuses the DECLARATION rather than the use.
-differential_reject!(
+differential_wording!(
     two_parameters_with_one_name,
     "DuplicateParam",
     r"
@@ -34783,7 +34783,7 @@ fn the_throwable_hierarchy_is_the_jdks() {
 // interface's own method declares, which the synthesized method now carries:
 // a user interface written `void go() throws Exception` permits it, and the
 // bundled ones (which declare nothing) do not.
-differential_reject!(
+differential_wording!(
     a_checked_exception_escaping_a_lambda,
     "LambdaThrows",
     r#"
@@ -34798,7 +34798,7 @@ public class LambdaThrows {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     a_checked_exception_escaping_an_anonymous_class,
     "AnonThrows",
     r#"
@@ -34893,7 +34893,7 @@ public class LambdaThrowsOk {
 // javac's own words for a rule about PARAMETERS. Breaking out of the parameter
 // list at a varargs parameter left the `,` that followed it, and the closing
 // `)` then failed to match — so the message blamed the punctuation.
-differential_reject!(
+differential_wording!(
     a_varargs_parameter_that_is_not_last,
     "VarargsFirst",
     r"
@@ -34915,7 +34915,7 @@ public class VarargsFirst {
 // converted to Long", describing a type the program never wrote: the
 // conversion unboxes the wrapper before failing, and the diagnostic followed
 // it down.
-differential_reject!(
+differential_wording!(
     a_container_with_the_wrong_number_of_arguments,
     "ArgCount",
     r"
@@ -34930,7 +34930,7 @@ public class ArgCount {
 "
 );
 
-differential_reject!(
+differential_wording!(
     a_wrapper_that_does_not_convert,
     "WrapperConvert",
     r"
@@ -36483,7 +36483,7 @@ public class DiamondResolution {
 // A RE-ABSTRACTED method must actually be implemented: the default it overrode
 // no longer counts, and a class that implements nothing is not abstract and
 // does not override it.
-differential_reject!(
+differential_wording!(
     a_reabstracted_method_must_be_implemented,
     "ReabstractedMissing",
     r#"
@@ -37048,7 +37048,7 @@ public class NestedThis {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     a_lambda_in_an_anonymous_class_cannot_reach_out_through_this,
     "ThisReach",
     r"
@@ -37564,7 +37564,7 @@ public class NavUserOrder {
 // what makes `headSet(E)` — which answers a `SortedSet` — unpollable, while
 // `headSet(E, boolean)` — which answers a `NavigableSet` — can be polled. Each
 // of these compiled here until the faces existed.
-differential_reject!(
+differential_wording!(
     a_sorted_face_has_no_navigation,
     "NoFloor",
     r"
@@ -37579,7 +37579,7 @@ public class NoFloor {
 "
 );
 
-differential_reject!(
+differential_wording!(
     a_one_argument_head_set_answers_a_sorted_set,
     "NoPollThroughHead",
     r"
@@ -37594,7 +37594,7 @@ public class NoPollThroughHead {
 "
 );
 
-differential_reject!(
+differential_wording!(
     a_sorted_map_face_has_no_entry_navigation,
     "NoPollEntry",
     r#"
@@ -37610,7 +37610,7 @@ public class NoPollEntry {
 "#
 );
 
-differential_reject!(
+differential_wording!(
     a_narrow_face_does_not_widen_inward,
     "NoNarrowing",
     r"
@@ -38076,7 +38076,7 @@ public class DiamondToInteger {
 "
 );
 
-differential_reject!(
+differential_wording!(
     a_raw_collection_is_not_assignable_to_anything,
     "RawToString",
     r"
@@ -38212,7 +38212,7 @@ public class Overriding {
 // to tolerate an ancestor's `Object` parameter as if it were always an erased
 // type variable, so this compiled and dispatched to the base method — which is
 // exactly the mistake the annotation exists to report.
-differential_reject!(
+differential_wording!(
     an_override_annotation_needs_the_same_signature,
     "OverloadNotOverride",
     r#"
@@ -38499,7 +38499,7 @@ public class GenericUse {
 // parameterization. While every `new` answered the raw class, this was
 // accepted — the unchecked conversion a RAW type gets, applied to a type the
 // program had parameterized in front of it.
-differential_reject!(
+differential_wording!(
     a_parameterized_new_is_not_another_parameterization,
     "NewArgumentChecked",
     r"
@@ -39053,7 +39053,7 @@ public class Hierarchy {
 // ...and what a type variable must still REFUSE: its bound is what it is
 // assignable to, and nothing else. Resolution is lenient (it has no way to
 // know which variable this is), so the check has to be the conversion's.
-differential_reject!(
+differential_wording!(
     a_type_variable_is_only_its_bound,
     "TypeVarBound",
     r"
@@ -39285,7 +39285,7 @@ public class CharsetFiles {
 // A method reference to a member that no charset name can rescue: the checked
 // exception is REQUIRED where the charset is named as text, exactly as javac
 // requires it.
-differential_reject!(
+differential_wording!(
     naming_a_charset_as_text_is_checked,
     "CharsetChecked",
     r#"

@@ -843,7 +843,11 @@ impl Lexer<'_> {
         loop {
             match self.peek() {
                 None | Some('\n') => {
-                    self.error("unterminated string literal", start);
+                    // javac's word is "unclosed", and its four literal
+                    // messages are four DIFFERENT sentences: an unclosed
+                    // string, an unclosed character, an EMPTY character, and a
+                    // newline inside one. A student searches the sentence.
+                    self.error("unclosed string literal", start);
                     return;
                 }
                 Some('"') => {
@@ -865,9 +869,16 @@ impl Lexer<'_> {
     fn char_literal(&mut self, start: SourcePosition) {
         self.bump();
         let value: Option<u32> = match self.peek() {
-            None | Some('\n' | '\'') => {
+            // `''` is EMPTY; a newline (or the end of the file) inside one is
+            // an illegal line end. javac tells them apart, and so must this.
+            Some('\'') => {
                 self.bump();
-                self.error("empty or unterminated character literal", start);
+                self.error("empty character literal", start);
+                return;
+            }
+            None | Some('\n') => {
+                self.bump();
+                self.error("illegal line end in character literal", start);
                 return;
             }
             Some('\\') => {
@@ -885,7 +896,7 @@ impl Lexer<'_> {
                 );
             }
         } else {
-            self.error("unterminated character literal (expected closing ')", start);
+            self.error("unclosed character literal", start);
         }
     }
 

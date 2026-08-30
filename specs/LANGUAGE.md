@@ -10601,3 +10601,36 @@ stated on the types alone, and the types cannot tell an inference site from an
 assignment. The looseness cannot lose type safety (both sides erase to one
 class, and every read through the target still answers the target's element).
 Pinned by `loose_a_nested_argument_widens_between_variables`.
+
+### What the refusals SAY (2026-08-30)
+
+`differential_reject!` asserts that both engines refuse a program. It has never
+asserted WHY. With `differential_wording!` in hand, every one of the 236 pins
+in that family was asked: does caturra refuse it in javac's words?
+
+**179 already did.** Those are tightened to `differential_wording!` now — a
+message that drifts is a failing test rather than something noticed later. Of
+the 57 that differed, five were caturra's own wording being wrong rather than
+merely fuller, and are fixed:
+
+- **The lexer's four literal messages were two.** javac distinguishes an
+  unclosed string, an unclosed character literal, an EMPTY one (`''`) and a
+  newline inside one ("illegal line end in character literal"); caturra had
+  "unterminated string literal" and "empty or unterminated character literal"
+  for all four. A student searches the sentence.
+- **An array of collections described itself as `Object[]`**, so a mismatch
+  between two of them read "incompatible types: Object[] cannot be converted to
+  Object[]" — a type that cannot convert to itself, which is the same
+  no-information shape a nested ELEMENT was fixed out of once already. The
+  element describes as what it is (raw, as javac prints an array's element),
+  and the message is javac's: "List[] cannot be converted to Map[]".
+- **A field on a PRIMITIVE** said "cannot find field 'lang' on int" — but there
+  are no members to miss. javac says the receiver cannot be dereferenced, which
+  is what a student meets when a variable obscures a package name
+  (`int java = 3; java.lang.Math.abs(-4)`).
+
+The remaining 50 are caturra saying MORE than javac, on purpose: javac's
+sentence plus the reason it leaves for the following lines ("reference to f is
+ambiguous: both method f(int[]) and method f(Integer[]) match"), or a concrete
+type where javac names an inference variable. Those stay as
+`differential_reject!` — the shape is what they pin.

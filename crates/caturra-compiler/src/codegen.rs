@@ -7195,7 +7195,22 @@ impl JType {
             JType::Str => String::from("String"),
             JType::Null => String::from("null"),
             JType::Array { elem, dims } => {
-                let mut out = elem.base_type().describe(table);
+                // The ELEMENT describes as what it really is — a `List[]`
+                // whose element is an interned `List` has `Object` for a base
+                // type, which made a mismatch between two arrays of
+                // collections read "Object[] cannot be converted to Object[]":
+                // a type that cannot convert to itself. The raw form is what
+                // javac prints for an array's element, so no type ARGUMENTS
+                // ride along.
+                let mut out = match elem {
+                    ElemType::Nested { inner, .. } => {
+                        let described = table.nested_type(inner).describe(table);
+                        described
+                            .split_once('<')
+                            .map_or(described.clone(), |(base, _)| base.to_owned())
+                    }
+                    other => other.base_type().describe(table),
+                };
                 for _ in 0..dims {
                     out.push_str("[]");
                 }
@@ -29475,6 +29490,17 @@ impl BodyGen<'_> {
                 span,
                 "String.length() is a method — call it with parentheses \
                  (String methods arrive with the class library)",
+            );
+            return JType::Error;
+        }
+        // A field on a PRIMITIVE is not a missing member — there are no
+        // members to miss. javac says the receiver cannot be dereferenced,
+        // which is the sentence a student meets when a variable obscures a
+        // package name (`int java = 3; java.lang.Math.abs(-4)`).
+        if !object_ty.is_reference() && object_ty != JType::Error {
+            self.error(
+                span,
+                format!("{} cannot be dereferenced", object_ty.describe(self.table)),
             );
             return JType::Error;
         }
