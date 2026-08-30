@@ -2000,6 +2000,7 @@ public class Main {
     name: 'Editable table (DefaultTableModel)',
     group: 'Tables',
     starter: `import javax.swing.*;
+import javax.swing.table.*;
 import java.awt.*;
 import javax.swing.event.*;
 
@@ -2089,6 +2090,7 @@ public class Main {
     name: 'Tree (JTree)',
     group: 'Trees',
     starter: `import javax.swing.*;
+import javax.swing.tree.*;
 import java.awt.*;
 import javax.swing.event.*;
 
@@ -2182,6 +2184,7 @@ public class Main {
     name: 'Sortable table',
     group: 'Tables',
     starter: `import javax.swing.*;
+import javax.swing.table.*;
 import java.awt.*;
 import javax.swing.event.*;
 
@@ -2230,6 +2233,7 @@ public class Main {
     name: 'Table cell renderer',
     group: 'Tables',
     starter: `import javax.swing.*;
+import javax.swing.table.*;
 import java.awt.*;
 
 public class Main {
@@ -2275,6 +2279,7 @@ public class Main {
     name: 'Custom table model',
     group: 'Tables',
     starter: `import javax.swing.*;
+import javax.swing.table.*;
 import java.awt.*;
 import java.util.ArrayList;
 import javax.swing.event.*;
@@ -2398,6 +2403,7 @@ public class Main {
     name: 'Edit cells (JTable)',
     group: 'Tables',
     starter: `import javax.swing.*;
+import javax.swing.table.*;
 import java.awt.*;
 
 public class Main {

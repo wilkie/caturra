@@ -45,7 +45,11 @@ def jdk(source, main):
         )
         if compiled.returncode != 0:
             first = (compiled.stderr.strip().splitlines() or [""])[0]
-            return False, False, first
+            # javac prints the FULL path it compiled, which is a fresh temp
+            # directory every run — so re-recording rewrote the line even when
+            # nothing about the answer had changed, and a real change was
+            # invisible in the diff beside three churned paths.
+            return False, False, first.replace(work + os.sep, "")
         ran = subprocess.run(
             ["java", "-cp", work, main],
             capture_output=True, text=True, timeout=120, cwd=work,

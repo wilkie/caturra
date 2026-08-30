@@ -10687,3 +10687,39 @@ and the whole of `pnpm lint` passes.
 **Run both gates.** The wasm engine is rebuilt from this tree too — the
 freshness check said it was five days behind, which is exactly the trap
 `scripts/check-wasm-fresh.mjs` exists to catch.
+
+### What the browser gate found (2026-08-30)
+
+`pnpm test:e2e` — the third gate, a real browser driving the playground — had
+24 failures. Five were message assertions this session's wording work made
+stale, and the rest were older drift, but two were the product being wrong:
+
+**Six Swing demo levels did not compile, and javac agrees.** "Table cell
+renderer", "Sortable table", "Tree (JTree)", "Editable table", "Edit cells" and
+"Custom table model" use `DefaultTableModel`, `DefaultTreeModel` and
+`AbstractTableModel` under `import javax.swing.*` alone — those classes live in
+`javax.swing.table` and `javax.swing.tree`, so the starter a student is handed
+is invalid Java. They have the import they use now.
+
+**A class NAMES its supertype, and the import check never looked there.**
+`class PeopleModel extends AbstractTableModel` compiled here while javac
+refused it — the walk covered fields, parameters, returns and bodies,
+everything but the one position a class is written in. That is why the demo
+shipped broken: caturra accepted what a JDK would not. Pinned by
+`a_supertype_needs_its_import`, in javac's words.
+
+**A watch expression named caturra's own class in its error.** The watch is
+compiled as a synthetic `__CaturraWatch`, and javac's "cannot find symbol"
+block ends with a `location:` line — so a typo in a watch read "location: class
+CaturraWatch", an internal name the student never wrote. The watch keeps the
+first line and the `symbol:` half, which is the useful one.
+
+The last failure was a LEVEL defect rather than an engine one: the AP FRQ
+BoxOfCandy validator assigns `boc.box`, a PRIVATE field of the student's class,
+which javac refuses in exactly the words caturra now uses. The test asserted
+that the level runs; it asserts what a student sees.
+
+125 browser tests pass, `pnpm -r test` is 47/47, `pnpm lint` is clean, and the
+compat manifest is re-recorded — its `javac` line no longer carries the temp
+directory of the run that recorded it, which had been rewriting the file on
+every re-record and hiding real changes in the churn.

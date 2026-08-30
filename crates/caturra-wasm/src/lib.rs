@@ -122,13 +122,29 @@ fn evaluate_watch(
     if !compilation.success() {
         // Report the first diagnostic in the watch itself (javac
         // wording — same messages the editor shows).
+        // Only the first LINE: javac's "cannot find symbol" block continues
+        // with a `location:` line, and the location of a watch expression is
+        // the synthetic class this function just wrote — an internal name the
+        // student never typed, reading as caturra's bug rather than their
+        // typo.
         let message = compilation
             .diagnostics
             .iter()
             .find(|d| d.path == "__CaturraWatch.java")
             .map_or_else(
                 || String::from("the watch expression does not compile"),
-                |d| d.message.clone(),
+                |d| {
+                    let mut lines = d.message.lines();
+                    let head = lines.next().unwrap_or_default().to_owned();
+                    // The `symbol:` line names what is missing, which is the
+                    // useful half; the `location:` line is the synthetic class.
+                    match lines.next() {
+                        Some(symbol) if symbol.trim_start().starts_with("symbol:") => {
+                            format!("{head}: {}", symbol.trim_start().trim_start_matches("symbol:").trim())
+                        }
+                        _ => head,
+                    }
+                },
             );
         return Err(message);
     }

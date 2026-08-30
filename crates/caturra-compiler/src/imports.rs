@@ -955,6 +955,13 @@ struct UseCheck<'a, F: FnMut(String, SourceSpan)> {
     error: F,
 }
 
+/// A supertype as written, without its type ARGUMENTS: `Comparable<Pet>` is a
+/// use of `Comparable`. (The arguments are checked where they are written, as
+/// part of the fields and methods that mention them.)
+fn supertype_simple_name(written: &str) -> &str {
+    written.split('<').next().unwrap_or(written).trim()
+}
+
 fn check_class(
     class: &ClassDecl,
     user_classes: &HashSet<String>,
@@ -968,6 +975,15 @@ fn check_class(
         location: class.name.clone(),
         error,
     };
+    // The SUPERTYPES a class names. `class PeopleModel extends
+    // AbstractTableModel` needs `javax.swing.table.*` exactly as a field of
+    // that type does, and the walk covered fields, parameters, returns and
+    // bodies — everything but the one position a class is written in. javac
+    // refuses it; a playground demo shipped with the wrong import for months
+    // because caturra did not.
+    for name in class.superclass.iter().chain(class.interfaces.iter()) {
+        check.name(supertype_simple_name(name), class.span);
+    }
     for field in &class.fields {
         check.type_ref(&field.ty, field.span);
         if let Some(init) = &field.init {

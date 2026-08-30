@@ -41789,3 +41789,22 @@ public class ToArrayGenerator {
 }
 "#
 );
+
+// A class NAMES its supertype, and that is a use of the name like any other:
+// `class Model extends AbstractTableModel` needs `javax.swing.table.*`. The
+// import check walked fields, parameters, returns and bodies — everything but
+// the position a class is written in — so a program javac refuses compiled
+// here, and six playground demos shipped with the wrong import because of it.
+differential_wording!(
+    a_supertype_needs_its_import,
+    "SupertypeImport",
+    r"
+public class SupertypeImport {
+    static class Sorted extends TreeMap<String, Integer> {}
+
+    public static void main(String[] args) {
+        System.out.println(new Sorted().size());
+    }
+}
+"
+);

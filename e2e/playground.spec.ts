@@ -889,9 +889,12 @@ test.describe('playground', () => {
       );
     });
     await page.getByTestId('test').click();
-    const results = page.getByTestId('test-results');
-    await expect(results).toBeVisible();
-    await expect(results.locator('.test-fail')).toContainText('MoveCandyToFirstRow');
+    // This level cannot run its own validator, and neither engine can make it:
+    // the test class assigns `boc.box`, a PRIVATE field of the student's
+    // class, which javac refuses in exactly these words. (It compiled here
+    // until caturra enforced private access; the level's defect is Code.org's,
+    // and the honest assertion is what a student actually sees.)
+    await expect(page.getByTestId('console')).toContainText('box has private access in BoxOfCandy');
   });
 
   test('runs a JUnit validator via the Test button', async ({ page }) => {
@@ -935,7 +938,7 @@ test.describe('playground', () => {
     await setSource(page, 'class Main { String s = "oops; }');
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText(
-      'Main.java:1:25: error: unterminated string literal',
+      'Main.java:1:25: error: unclosed string literal',
     );
   });
 
@@ -1309,7 +1312,7 @@ test.describe('playground', () => {
       ].join('\n'),
     );
     await page.getByTestId('run').click();
-    await expect(page.getByTestId('console')).toContainText("cannot find variable 'yy'");
+    await expect(page.getByTestId('console')).toContainText('cannot find symbol');
 
     // The squiggle sits on the offending token.
     const squiggle = page.locator('.cm-lintRange-error');
@@ -1318,7 +1321,7 @@ test.describe('playground', () => {
 
     // Hovering shows the compiler message.
     await squiggle.hover();
-    await expect(page.locator('.cm-tooltip-lint')).toContainText("cannot find variable 'yy'");
+    await expect(page.locator('.cm-tooltip-lint')).toContainText('cannot find symbol');
 
     // Fixing the code and re-running clears the squiggle.
     await setSource(
@@ -1374,7 +1377,7 @@ test.describe('playground', () => {
     // A bad watch shows the compiler's message inline.
     await page.getByTestId('watch-input').fill('nosuch + 1');
     await page.getByTestId('watch-add').click();
-    await expect(page.getByTestId('watches')).toContainText("cannot find variable 'nosuch'");
+    await expect(page.getByTestId('watches')).toContainText('cannot find symbol: variable nosuch');
 
     await page.getByTestId('resume').click();
     await page.getByTestId('resume').click();
@@ -1523,15 +1526,16 @@ test.describe('playground', () => {
       [
         'public class Main {',
         '    public static void main(String[] args) {',
-        '        synchronized (args) {',
-        '            System.out.println("hi");',
-        '        }',
+        '        Thread worker = new Thread();',
+        '        System.out.println(worker);',
         '    }',
         '}',
       ].join('\n'),
     );
     await page.getByTestId('run').click();
-    // `synchronized` is valid Java caturra doesn't implement, so we say so.
+    // Valid Java caturra doesn't implement, so we say so. (This was
+    // `synchronized` until caturra implemented it — a sample has to be
+    // something outside the subset, not a feature that might arrive.)
     await expect(page.getByTestId('console')).toContainText('not supported by caturra');
   });
 
