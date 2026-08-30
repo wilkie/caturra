@@ -10324,3 +10324,22 @@ Pinned by `a_simple_name_resolves_in_its_own_class`,
 `an_enclosing_type_variable_in_a_hoisted_body`,
 `a_lambda_target_resolves_in_its_own_class` and
 `a_hoisted_body_inside_an_inner_class`.
+
+### A program is several files (2026-08-30)
+
+Both differential harnesses could only ask about ONE file. `scripts/fuzz/run.py`
+took a case as a single `.java`, and `differential_test_files!` staged DATA
+beside the program but compiled only the program itself — while javac, given a
+directory, finds the rest on its own sourcepath. So every check of what a name
+MEANS was a check inside one file, and the scoping cluster above is precisely
+about a name meaning different things in different places.
+
+Both take several sources now: a fuzz case may be a DIRECTORY named for the
+class holding `main`, and a staged file ending in `.java` is compiled as a
+source rather than written into the virtual filesystem. Nine multi-file
+programs — a top-level `Node` in one file against a nested one in another, two
+nested interfaces of one name in two files, an inner class instantiated across
+a file boundary, mutually recursive statics, a generic interface implemented in
+another file, an anonymous subclass of an abstract class declared elsewhere —
+agree with a real JDK, which is the answer this dimension had never been asked
+for. Pinned by `a_name_means_what_its_own_file_says`.

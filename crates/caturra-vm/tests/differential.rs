@@ -232,10 +232,29 @@ fn run_with_caturra_files(
     stdin: &str,
     files: &[(&str, &str)],
 ) -> String {
-    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+    // A staged `.java` file is another SOURCE, not data: a real program is
+    // several files, and what one file MEANS in another is only checkable with
+    // at least two of them. javac finds them itself (they sit beside the main
+    // one on its sourcepath); caturra is handed them.
+    let mut sources = vec![caturra_compiler::SourceFile {
         path: format!("{class_name}.java"),
         text: source.to_owned(),
-    }]);
+    }];
+    let is_source = |name: &str| {
+        std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("java"))
+    };
+    sources.extend(
+        files
+            .iter()
+            .filter(|(name, _)| is_source(name))
+            .map(|(name, text)| caturra_compiler::SourceFile {
+                path: (*name).to_owned(),
+                text: (*text).to_owned(),
+            }),
+    );
+    let compilation = caturra_compiler::compile(&sources);
     assert!(
         compilation.success(),
         "caturra rejected {class_name}: {:?}",
@@ -243,7 +262,7 @@ fn run_with_caturra_files(
     );
 
     let mut vfs = VirtualFileSystem::new();
-    for (name, contents) in files {
+    for (name, contents) in files.iter().filter(|(name, _)| !is_source(name)) {
         vfs.write_file(name, contents.as_bytes().to_vec())
             .expect("stage data file");
     }
@@ -41012,4 +41031,44 @@ stricter_than_javac!(
     strict_a_qualified_library_name_a_class_shadows,
     "StrictShadowQualified",
     "import java.util.ArrayList;\npublic class StrictShadowQualified {\n  static class List { int size() { return 99; } }\n  static void r() { java.util.List<String> real = new ArrayList<>(); real.add(\"ok\"); }\n}"
+);
+
+// What a name means depends on the FILE it is written in as much as the class:
+// a top-level `Node` in one file, a nested `Node` in another, and each file
+// reads its own. Checked across files because a single-file test cannot see
+// the difference between "resolved in scope" and "resolved first".
+differential_test_files!(
+    a_name_means_what_its_own_file_says,
+    "ScopedFiles",
+    r#"
+public class ScopedFiles {
+    static class Node { String who() { return "ScopedFiles.Node"; } }
+    interface Go { String run(); }
+    static String here() { return new Node().who() + " " + ((Go) () -> "own-lambda").run(); }
+
+    public static void main(String[] args) {
+        System.out.println(here());
+        System.out.println(Other.viaOther());
+        System.out.println(Other.lambdas());
+        System.out.println(new Node().getClass().getName() + " " + new ScopedFiles.Node().who());
+    }
+}
+"#,
+    &[
+        ("Node.java", "class Node { String who() { return \"top-level Node\"; } }\n"),
+        (
+            "Other.java",
+            r#"
+class Other {
+    interface Go { String run(); }
+    static String viaOther() { return new Node().who() + "/" + new ScopedFiles.Node().who(); }
+    static String lambdas() {
+        Go mine = () -> "Other";
+        ScopedFiles.Go theirs = () -> "ScopedFiles";
+        return mine.run() + " " + theirs.run();
+    }
+}
+"#,
+        ),
+    ]
 );

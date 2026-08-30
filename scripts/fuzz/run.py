@@ -2,7 +2,9 @@
 """Run a directory of generated Java programs through BOTH engines and diff.
 
 Each case is one `.java` file whose class name matches its file name, with an
-optional `.stdin` beside it. Every case is compiled ON ITS OWN (a batch compile
+optional `.stdin` beside it — or a DIRECTORY of `.java` files named for the one
+holding `main` (`Pair/Pair.java` + `Pair/Helper.java`), which is how a real
+program is written and the only way to probe what one file means in another. Every case is compiled ON ITS OWN (a batch compile
 that fails writes no class files for the programs that were fine, which reads
 as "every program diverged"), run on a real JDK, then run through caturra's
 `compatrun`, and the two outputs are compared byte for byte.
@@ -45,13 +47,28 @@ def main():
     cases = sys.argv[1]
     out = os.path.join(cases, "..", "out")
     os.makedirs(out, exist_ok=True)
+    # A case is either one `.java` file or a DIRECTORY of them named for the
+    # class holding `main` — a real program is several files, and the
+    # interesting bugs (a name that means one class here and another there,
+    # access across a file boundary) need at least two.
     names = sorted(f[:-5] for f in os.listdir(cases) if f.endswith(".java"))
+    names += sorted(d for d in os.listdir(cases)
+                    if os.path.isdir(os.path.join(cases, d)) and d != "out"
+                    and os.path.exists(os.path.join(cases, d, d + ".java")))
     rejected, diffs = [], []
-    for name in names:
-        source = os.path.join(cases, name + ".java")
-        stdin_path = os.path.join(cases, name + ".stdin")
+    for name in sorted(names):
+        directory = os.path.join(cases, name)
+        if os.path.isdir(directory):
+            sources = sorted(os.path.join(directory, f) for f in os.listdir(directory)
+                             if f.endswith(".java"))
+            source = os.path.join(directory, name + ".java")
+            stdin_path = os.path.join(directory, name + ".stdin")
+        else:
+            source = os.path.join(cases, name + ".java")
+            sources = [source]
+            stdin_path = os.path.join(cases, name + ".stdin")
         stdin = open(stdin_path).read() if os.path.exists(stdin_path) else ""
-        javac = subprocess.run(["javac", "-d", out, source], capture_output=True, text=True)
+        javac = subprocess.run(["javac", "-d", out] + sources, capture_output=True, text=True)
         if javac.returncode:
             first = javac.stderr.splitlines()[0] if javac.stderr else "?"
             rejected.append((name, first))
@@ -66,6 +83,7 @@ def main():
         if jdk.returncode:
             expected += "!! " + jdk_failure(jdk.stderr.decode("utf-8", "replace")) + "\n"
         command = ["cargo", "run", "-q", "--example", "compatrun", "--", os.path.abspath(source), name]
+        command += [os.path.abspath(other) for other in sources if other != source]
         if stdin:
             command.append("--stdin")
         got = subprocess.run(command, input=stdin, capture_output=True, text=True,
