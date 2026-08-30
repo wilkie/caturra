@@ -200,6 +200,26 @@
     "expected": "[grace(29), ada(31), alan(35)]\n[ada(31), alan(35), grace(29)]\n[3, 2, 1] max=3\n"
   },
   {
+    "id": "nested-containers",
+    "category": "Collections",
+    "title": "A collection inside another type's argument",
+    "summary": "An Optional, a Map.Entry or a Stream holds a whole collection \u2014 and reads it back as one.",
+    "main": "Nested",
+    "source": "import java.util.ArrayList;\nimport java.util.HashMap;\nimport java.util.List;\nimport java.util.Map;\nimport java.util.Optional;\n\npublic class Nested {\n    public static void main(String[] args) {\n        Optional<List<String>> names = Optional.of(new ArrayList<>(List.of(\"ada\")));\n        names.get().add(\"grace\");\n        System.out.println(names.get().size() + \" \" + names.get().get(1));\n        System.out.println(names.map(List::size).get());\n\n        Map.Entry<String, List<String>> entry = Map.entry(\"team\", names.get());\n        System.out.println(entry.getKey() + \" \" + entry.getValue().get(0));\n\n        Map<String, List<String>> byTeam = new HashMap<>();\n        byTeam.put(\"red\", new ArrayList<>(List.of(\"alan\")));\n        System.out.println(byTeam.get(\"red\").get(0).length());\n\n        Optional<int[]> scores = Optional.of(new int[] {3, 4});\n        System.out.println(scores.get().length + scores.get()[1]);\n    }\n}\n",
+    "status": "supported",
+    "expected": "2 grace\n2\nteam ada\n4\n6\n"
+  },
+  {
+    "id": "stream-gathering",
+    "category": "Library",
+    "title": "Gathering a stream into any collection",
+    "summary": "toCollection builds the container you name; flatMap flattens a stream of collections; a stream hands itself to a loop.",
+    "main": "Gather",
+    "source": "import java.util.ArrayList;\nimport java.util.Iterator;\nimport java.util.List;\nimport java.util.TreeSet;\nimport java.util.stream.Collectors;\n\npublic class Gather {\n    public static void main(String[] args) {\n        List<String> names = new ArrayList<>(List.of(\"grace\", \"ada\", \"alan\"));\n\n        TreeSet<String> sorted = names.stream().collect(Collectors.toCollection(TreeSet::new));\n        System.out.println(sorted.first() + \" \" + sorted.last());\n\n        List<List<String>> teams = new ArrayList<>();\n        teams.add(new ArrayList<>(List.of(\"ada\")));\n        teams.add(new ArrayList<>(List.of(\"alan\", \"grace\")));\n        System.out.println(teams.stream().flatMap(List::stream).collect(Collectors.toList()));\n\n        Iterator<String> cursor = names.stream().sorted().iterator();\n        while (cursor.hasNext()) {\n            System.out.print(cursor.next().charAt(0));\n        }\n        System.out.println();\n\n        String[] copy = names.toArray(String[]::new);\n        System.out.println(copy.length + copy[0]);\n    }\n}\n",
+    "status": "supported",
+    "expected": "ada grace\n[ada, alan, grace]\naag\n3grace\n"
+  },
+  {
     "id": "streams",
     "category": "Library",
     "title": "Streams and Optional",

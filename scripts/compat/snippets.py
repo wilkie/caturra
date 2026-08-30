@@ -665,6 +665,76 @@ public class Sorting {
 ''',
     ),
     dict(
+        id="nested-containers",
+        category="Collections",
+        title="A collection inside another type's argument",
+        summary="An Optional, a Map.Entry or a Stream holds a whole collection — and reads it back as one.",
+        main="Nested",
+        source="""
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+public class Nested {
+    public static void main(String[] args) {
+        Optional<List<String>> names = Optional.of(new ArrayList<>(List.of("ada")));
+        names.get().add("grace");
+        System.out.println(names.get().size() + " " + names.get().get(1));
+        System.out.println(names.map(List::size).get());
+
+        Map.Entry<String, List<String>> entry = Map.entry("team", names.get());
+        System.out.println(entry.getKey() + " " + entry.getValue().get(0));
+
+        Map<String, List<String>> byTeam = new HashMap<>();
+        byTeam.put("red", new ArrayList<>(List.of("alan")));
+        System.out.println(byTeam.get("red").get(0).length());
+
+        Optional<int[]> scores = Optional.of(new int[] {3, 4});
+        System.out.println(scores.get().length + scores.get()[1]);
+    }
+}
+""",
+    ),
+    dict(
+        id="stream-gathering",
+        category="Library",
+        title="Gathering a stream into any collection",
+        summary="toCollection builds the container you name; flatMap flattens a stream of collections; a stream hands itself to a loop.",
+        main="Gather",
+        source="""
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+
+public class Gather {
+    public static void main(String[] args) {
+        List<String> names = new ArrayList<>(List.of("grace", "ada", "alan"));
+
+        TreeSet<String> sorted = names.stream().collect(Collectors.toCollection(TreeSet::new));
+        System.out.println(sorted.first() + " " + sorted.last());
+
+        List<List<String>> teams = new ArrayList<>();
+        teams.add(new ArrayList<>(List.of("ada")));
+        teams.add(new ArrayList<>(List.of("alan", "grace")));
+        System.out.println(teams.stream().flatMap(List::stream).collect(Collectors.toList()));
+
+        Iterator<String> cursor = names.stream().sorted().iterator();
+        while (cursor.hasNext()) {
+            System.out.print(cursor.next().charAt(0));
+        }
+        System.out.println();
+
+        String[] copy = names.toArray(String[]::new);
+        System.out.println(copy.length + copy[0]);
+    }
+}
+""",
+    ),
+    dict(
         id="streams",
         category="Library",
         title="Streams and Optional",

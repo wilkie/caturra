@@ -10723,3 +10723,20 @@ that the level runs; it asserts what a student sees.
 compat manifest is re-recorded — its `javac` line no longer carries the temp
 directory of the run that recorded it, which had been rewriting the file on
 every re-record and hiding real changes in the churn.
+
+### Publishing what now works (2026-08-30)
+
+The compatibility page is where a capability becomes a claim someone can check,
+and this session's work was not on it. Two features added, each a program the
+recorder ran on a real JDK and on caturra and found byte-identical, and each
+re-checked by `tests/compat_manifest.rs` and by the browser on every run:
+
+- **A collection inside another type's argument** — an `Optional<List<String>>`
+  read back as a list, a `Map.Entry<String, List<String>>`, a
+  `Map<String, List<String>>`, an `Optional<int[]>`. All of it was refused
+  outright a day ago.
+- **Gathering a stream into any collection** —
+  `collect(toCollection(TreeSet::new))`, `flatMap(List::stream)`,
+  `stream().iterator()` driving a `while` loop, and `toArray(String[]::new)`.
+
+94 supported features now, 5 gaps, 3 beyond Java 11.
