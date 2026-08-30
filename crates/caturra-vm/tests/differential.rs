@@ -9961,10 +9961,47 @@ stricter_than_javac!(
     "import java.util.Arrays;\npublic class StrictFillObjArr { static void r() { Arrays.fill(new String[1], 5); } }"
 );
 
-stricter_than_javac!(
-    strict_array_sort_demands_a_comparable_element,
-    "StrictSortPlainArr",
-    "import java.util.Arrays;\nclass StrictPlainA {}\npublic class StrictSortPlainArr { static void r() { Arrays.sort(new StrictPlainA[2]); } }"
+// `Arrays.sort(Plain[])` used to be a documented STRICTNESS: caturra refused
+// it, because the bundled `sort` took a `Comparable[]`. A JDK declares
+// `sort(Object[])` and casts as it compares, so the program compiles and fails
+// at RUN time — with an NPE for an array of nulls, and a ClassCastException for
+// elements that are not Comparable. (`Collections.sort` is the other rule: it
+// really is declared over `T extends Comparable<? super T>`, and its
+// compile-time refusal stands.)
+differential_test!(
+    sorting_an_array_of_a_class_with_no_order,
+    "SortPlainArray",
+    r#"
+import java.util.Arrays;
+
+public class SortPlainArray {
+    static class Plain { }
+
+    public static void main(String[] args) {
+        String[] words = { "pear", "fig", "apple" };
+        Arrays.sort(words);
+        System.out.println(Arrays.toString(words));
+        Integer[] nums = { 3, 1, 2 };
+        Arrays.sort(nums, 0, 2);
+        System.out.println(Arrays.toString(nums));
+        // One element never compares, so the cast never happens.
+        Plain[] alone = { new Plain() };
+        Arrays.sort(alone);
+        System.out.println(alone.length);
+        try {
+            Arrays.sort(new Plain[] { new Plain(), new Plain() });
+        } catch (ClassCastException e) {
+            System.out.println("cce");
+        }
+        try {
+            // Two nulls: the cast succeeds and the compare is what fails.
+            Arrays.sort(new Plain[2]);
+        } catch (NullPointerException e) {
+            System.out.println("npe");
+        }
+    }
+}
+"#
 );
 
 stricter_than_javac!(
@@ -42374,6 +42411,52 @@ public class ClassFacts implements Comparable<ClassFacts>, Cloneable {
         show(Comparable.class);
         show(Runnable.class);
         show(Iterable.class);
+    }
+}
+"#
+);
+
+// A naturally-ordered PriorityQueue casts its element to `Comparable` when it
+// is offered, not when it is first compared — a JDK's `siftUpComparable` does
+// the cast before it looks for a parent. caturra only ever compared, so a
+// one-element queue of a class with no order was built and printed happily.
+// The neighbours it must NOT fire on are here too: a queue built FROM a
+// one-element collection heapifies without comparing (so no cast), a
+// comparator-ordered queue never casts, and `null` is the queue's own NPE.
+differential_test!(
+    a_priority_queue_casts_when_it_is_offered,
+    "QueueOrder",
+    r#"
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.PriorityQueue;
+
+public class QueueOrder {
+    static class Plain { public String toString() { return "P"; } }
+
+    public static void main(String[] args) {
+        List<Plain> one = new ArrayList<>(List.of(new Plain()));
+        System.out.println(new PriorityQueue<>(one).size());
+
+        PriorityQueue<Plain> byText = new PriorityQueue<>(Comparator.comparing(Object::toString));
+        byText.add(new Plain());
+        System.out.println(byText.size());
+
+        PriorityQueue<String> words = new PriorityQueue<>();
+        try {
+            words.add(null);
+        } catch (NullPointerException e) {
+            System.out.println("npe");
+        }
+        words.add("a");
+        System.out.println(words.peek());
+
+        try {
+            new PriorityQueue<Plain>().add(new Plain());
+        } catch (ClassCastException e) {
+            System.out.println("cce");
+        }
     }
 }
 "#

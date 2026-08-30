@@ -8944,8 +8944,6 @@ entries after it was written down.
 
 - `Arrays.fill(new String[1], 5)` — javac erases to `fill(Object[], Object)`
   and throws `ArrayStoreException` at run time. (`strict_fill_checks_the_element_type_of_a_reference_array`)
-- `Arrays.sort(new Plain[2])` where `Plain` is not `Comparable` — javac
-  throws `ClassCastException` at run time. (`strict_array_sort_demands_a_comparable_element`)
 - `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
   and it answers 0. (`strict_frequency_demands_the_lists_element_type`)
 - `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`. (`strict_contains_all_demands_the_lists_element_type`)
@@ -9041,9 +9039,10 @@ Until 2026-07-09 it held three: `Collections.sort`, `max`/`min` and
 caturra accepted and failed on at run time with `ClassCastException`.
 Those four methods are declared over `T extends Comparable<? super T>`,
 so the bound is now checked at compile time, and `ArrayList<Object>` is
-refused with it. `Arrays.sort` always refused a non-`Comparable` element,
-because it is bundled Java whose parameter is `Comparable[]`; only the
-native `Collections` had to be taught to ask. The bound reaches exactly
+refused with it. `Arrays.sort` used to refuse one too, because its bundled
+parameter was `Comparable[]` — a strictness that outlived its reason and was
+corrected on 2026-08-30: a JDK declares `sort(Object[])`, so that program
+compiles and throws at RUN time. The bound reaches exactly
 the four methods that declare one — `reverse`, `shuffle`, `swap`,
 `frequency` and `nCopies` still take any element type, as javac's do.
 The last runtime-only permissiveness (`Scanner.close`) and the last
@@ -10927,3 +10926,54 @@ Pinned by `what_a_class_object_says_about_a_type`, which asks all nine
 questions of fifteen types: the program's own class, interface, abstract class,
 subclass and enum, and the library's `String`, `Integer`, `Object`, `int`,
 `int[]`, `ArrayList`, `Map`, `Comparable`, `Runnable` and `Iterable`.
+
+### Where a JDK checks the `Comparable` bound (2026-08-30)
+
+Sorting a list of a class that forgot `implements Comparable` is textbook CSA
+code. Asking, of every collection that orders by nature, whether caturra
+refuses and throws exactly where a JDK does found two answers that were wrong
+in opposite directions.
+
+**`Arrays.sort` refused a program javac accepts.** The bundled `sort` took a
+`Comparable[]`, so an array of a class with no order was a compile error. A JDK
+declares `sort(Object[])` and casts each element as it compares, so that
+program COMPILES and throws at run time — an NPE for an array of nulls (the
+cast of a null succeeds; the compare is what fails) and a ClassCastException
+for two real elements. The parameter is `Object[]` now, with the casts written
+inside, and the strictness pin that recorded this as deliberate becomes an
+ordinary agreement pin. The spec had already claimed the JDK behaviour two
+thousand lines earlier — the claim and the code disagreed, and the code was
+wrong. `Collections.sort`/`max`/`min`/`binarySearch` are the other rule: they
+really are declared over `T extends Comparable<? super T>`, so their
+compile-time refusal stands.
+
+**A `PriorityQueue` accepted an element a JDK rejects.** Its `siftUpComparable`
+casts the new element to `Comparable` BEFORE it looks for a parent to compare
+with, so even the first `add` to a naturally-ordered queue throws. caturra only
+ever compared, so a one-element queue of an unorderable class was built and
+printed. It casts on offer now — and only there: a queue built FROM a
+one-element collection heapifies without comparing (a JDK does not throw
+either), a comparator-ordered queue never casts, and `null` is the queue's own
+NPE. `TreeSet`/`TreeMap` were already right: they compare a key with itself on
+the first insert, which is how a JDK type-checks it.
+
+Pinned by `sorting_an_array_of_a_class_with_no_order` and
+`a_priority_queue_casts_when_it_is_offered`.
+
+**Measured and open: an INFERRED type argument's bound is not checked.** The
+written form is (`Box<String>` for a `Box<T extends Number>` is refused, JLS
+§4.5), and so is a bare parameter (`<T extends Number> void n(T)` with a
+String). What is not is a bound satisfied only through inference:
+
+- `<T extends Comparable<T>> T max(T x, T y)` called `max("a", 1)` — javac
+  unifies the two arguments and reports "inference variable T has incompatible
+  bounds"; caturra checks each against the bound's ERASURE and accepts.
+- `<T extends Comparable<T>> void sort(List<T>)` called with an
+  `ArrayList<Object>` — the same rule the library's `Collections.sort` already
+  applies, which a user's own method does not.
+- `<T> void pair(Map<T, T> m)` called with a `HashMap<String, Integer>` — one
+  variable in two invariant positions.
+
+caturra models a generic method's parameters by ERASURE rather than inferring a
+binding, so all three are accepts-invalid. They are listed here because the
+count of what is known is the point; see the divergence lists.

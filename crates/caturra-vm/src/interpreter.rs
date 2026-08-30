@@ -9552,11 +9552,47 @@ impl<'run> Interpreter<'run> {
         }
     }
 
+    /// The cast `(Comparable) e` a naturally-ordered collection makes before it
+    /// compares anything — the error a JDK reports for an element that cannot
+    /// take part in the ordering at all.
+    fn assert_comparable(&mut self, element: JValue) -> Result<(), VmError> {
+        let JValue::Ref(Some(reference)) = element else {
+            // A primitive on the stack is a boxed wrapper, and every wrapper
+            // is Comparable; a null is the queue's own null check.
+            if element == JValue::NULL {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
+            return Ok(());
+        };
+        let orderable = match self.heap.get(reference) {
+            Some(crate::value::HeapObject::Instance { class_name, .. }) => {
+                let class_name = class_name.clone();
+                self.class_implements(&class_name, "Comparable")
+            }
+            _ => self.natural_class(element).is_some(),
+        };
+        if orderable {
+            return Ok(());
+        }
+        let named = self.object_class_name(reference);
+        Err(class_cast_error(self.classes, &named, "java/lang/Comparable"))
+    }
+
     /// `queue.offer(e)`: append and sift up into heap position. Mirrors Java's
     /// `siftUp` (swap-based, which lands each element where the shift-based JDK
     /// code does), so the resulting heap array is identical.
     fn pq_offer(&mut self, pq: HeapRef, element: JValue) -> Result<(), VmError> {
         let comparator = self.pq_comparator(pq);
+        // A JDK's `siftUpComparable` casts the new element to `Comparable`
+        // BEFORE it looks for a parent to compare with, so even the FIRST
+        // offer to a naturally-ordered queue throws for an element that is not
+        // one. caturra only ever compared, so a single-element queue of a
+        // class with no `compareTo` was built and printed happily.
+        if comparator.is_none() {
+            self.assert_comparable(element)?;
+        }
         let mut heap = self.pq_heap(pq);
         heap.push(element);
         let mut k = heap.len() - 1;

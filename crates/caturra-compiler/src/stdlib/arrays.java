@@ -383,15 +383,21 @@ class Arrays {
   // Natural-ordering sort of a reference array, by each element's compareTo.
   // Insertion sort, so equal elements keep their order — Arrays.sort of a
   // reference array is stable, unlike its primitive overloads.
-  public static void sort(Comparable[] a) {
+  // The parameter is `Object[]`, not `Comparable[]`: a JDK declares
+  // `sort(Object[])` and casts each element as it compares, so sorting an
+  // array of a class that does not implement Comparable COMPILES and throws
+  // ClassCastException — where a `Comparable[]` parameter refused the program
+  // javac accepts. (`Collections.sort` is the other rule: it really is
+  // declared over `T extends Comparable<? super T>`, so its refusal stands.)
+  public static void sort(Object[] a) {
     sort(a, 0, a.length);
   }
-  public static void sort(Comparable[] a, int fromIndex, int toIndex) {
+  public static void sort(Object[] a, int fromIndex, int toIndex) {
     rangeCheck(a.length, fromIndex, toIndex);
     for (int i = fromIndex + 1; i < toIndex; i++) {
-      Comparable key = a[i];
+      Comparable key = (Comparable) a[i];
       int j = i - 1;
-      while (j >= fromIndex && a[j].compareTo(key) > 0) { a[j + 1] = a[j]; j--; }
+      while (j >= fromIndex && ((Comparable) a[j]).compareTo(key) > 0) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }
