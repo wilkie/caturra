@@ -34,6 +34,12 @@ use crate::diagnostics::{Diagnostic, Severity, SourceSpan};
 /// `None` when none of them is, which is when the name was written outside
 /// every class that declares one (javac does not see it there either; caturra
 /// keeps resolving it, as it always has, to whichever registered first).
+/// Whether a written supertype name is `java.lang.Enum` — the one class a
+/// program may not extend or implement itself.
+fn names_enum_class(name: &str) -> bool {
+    matches!(name, "Enum" | "java.lang.Enum")
+}
+
 fn innermost_in_scope<'a>(candidates: &'a [String], scope: &str) -> Option<&'a String> {
     candidates
         .iter()
@@ -147,6 +153,15 @@ fn emit_class(
         });
     }
     for interface in decl.interfaces.iter().chain(anon_interfaces.iter()) {
+        // An enum's two IMPLICIT supertypes are not written in its class file.
+        // A real enum gets `Comparable` from `java.lang.Enum`, which is its
+        // SUPERCLASS, so `E.class.getInterfaces()` lists only what the enum
+        // itself declares — caturra was reporting the desugar's scaffolding as
+        // if the student had written it. The VM knows an enum is `Comparable`
+        // and an `Enum` from its enum-ness instead.
+        if decl.is_enum && matches!(interface.as_str(), "Comparable" | "Enum") {
+            continue;
+        }
         // The ALIASED name, as the method table records it: a source
         // `Comparator` is caturra's bundled `__Comparator`. The class file used
         // to keep the source spelling, so the VM's `instanceof Comparator` (a
@@ -1108,6 +1123,69 @@ impl MethodTable {
                 },
             );
         }
+        // `java.lang.Enum<E>` — the supertype every enum has. It was modelled
+        // as a MECHANISM (the parser synthesizes `name`/`ordinal`/`values`/
+        // `compareTo` onto each enum class) and not as a TYPE, so the name a
+        // program writes — `Enum<?> e = Kind.TWO`, `o instanceof Enum`,
+        // `static <E extends Enum<E>> void f(E[] all)` — resolved to nothing.
+        // Registered as an INTERFACE because that is the shape caturra has for
+        // "a supertype a class may also have" (an enum already carries
+        // `Comparable` the same way); the two things a real CLASS would give
+        // it — `extends Enum` and `implements Enum` — are refused by name
+        // below, with javac's own words.
+        //
+        // As with `Number`, a program that declares its own `Enum` keeps it.
+        if !units
+            .iter()
+            .any(|(_, unit)| unit.classes.iter().any(|class| class.name == "Enum"))
+        {
+            let id = ClassId(u16::try_from(table.class_names.len()).unwrap_or(u16::MAX));
+            table.class_names.push(String::from("Enum"));
+            table.synthesized.insert(String::from("Enum"));
+            let sig = |name: &str, params: Vec<JType>, ret: JType| MethodSig {
+                name: String::from(name),
+                params,
+                ret: Some(ret),
+                is_static: false,
+                is_private: false,
+                is_final: false,
+                is_abstract: true,
+                is_varargs: false,
+                ret_infer: None,
+            };
+            table.classes.insert(
+                String::from("Enum"),
+                ClassInfo {
+                    id,
+                    superclass: Some(object_id),
+                    library_superclass: None,
+                    // `Enum<E> implements Comparable<E>` — an `Enum<?>` is
+                    // sortable, which is how a heterogeneous enum list is
+                    // ordered.
+                    interfaces: vec![comparable_id],
+                    enclosing: None,
+                    is_abstract: true,
+                    is_interface: true,
+                    is_enum: false,
+                    is_final_class: false,
+                    is_inner: false,
+                    type_param_count: 1,
+                    type_param_bounds: vec![None],
+                    is_bundled: true,
+                    supertype_args: Vec::new(),
+                    methods: vec![
+                        sig("name", Vec::new(), JType::Str),
+                        sig("ordinal", Vec::new(), JType::Int),
+                        sig("compareTo", vec![JType::TypeVar(0)], JType::Int),
+                        sig("getDeclaringClass", Vec::new(), JType::Class),
+                        sig("toString", Vec::new(), JType::Str),
+                        sig("hashCode", Vec::new(), JType::Int),
+                        sig("equals", vec![JType::Object(object_id)], JType::Boolean),
+                    ],
+                    fields: Vec::new(),
+                },
+            );
+        }
         for (path, unit) in units {
             // Bundled sources are lexed under `<name>`; a real file never is.
             let bundled = path.starts_with('<');
@@ -1645,6 +1723,34 @@ impl MethodTable {
                         format!("cannot inherit from final {}", self.class_name(sup)),
                         class.span,
                     ));
+                }
+                // `java.lang.Enum` is a CLASS, and a special one: only the
+                // compiler may name it as a supertype. caturra registers it as
+                // an interface (there is no other shape here for a supertype a
+                // class also has), so neither of javac's two refusals would
+                // fire on their own.
+                if !class.is_enum {
+                    if class
+                        .superclass
+                        .as_deref()
+                        .is_some_and(names_enum_class)
+                    {
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            String::from("classes cannot directly extend java.lang.Enum"),
+                            class.span,
+                        ));
+                    }
+                    if class
+                        .interfaces
+                        .iter()
+                        .any(|name| names_enum_class(name)) {
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            String::from("interface expected here"),
+                            class.span,
+                        ));
+                    }
                 }
                 // Shape checks: classes extend classes, implement interfaces.
                 if let Some(sup) = info.superclass
@@ -25357,6 +25463,40 @@ impl BodyGen<'_> {
         if class == "EnumSet" && !self.table.has_class(class) {
             return self.emit_enum_set_call(method, args, span);
         }
+        // `Enum.valueOf(Kind.class, name)` — the reflective spelling of
+        // `Kind.valueOf(name)`, and the only static `java.lang.Enum` has. The
+        // class literal names the enum at COMPILE time (exactly as it does for
+        // `EnumSet.allOf`), so this is that call, with the same lookup failure
+        // and the same message.
+        if names_enum_class(class)
+            && self
+                .table
+                .info(class)
+                .is_some_and(|info| info.is_bundled && info.is_interface)
+        {
+            if method == "valueOf"
+                && let [Expr::Field { object, name, .. }, wanted] = args
+                && name == "class"
+                && let Expr::Name { path, .. } = object.as_ref()
+                && let Some(id) = self.table.class_id(path.last().map_or("", String::as_str))
+                && self.table.info_by_id(id).is_some_and(|info| info.is_enum)
+            {
+                let enum_name = self.table.class_name(id).to_owned();
+                let got = self.expr(wanted);
+                self.convert_for_assignment(got, JType::Str, wanted.span());
+                let method_ref = intern_method_ref(
+                    self.pool,
+                    &enum_name,
+                    "valueOf",
+                    &format!("(Ljava/lang/String;)L{enum_name};"),
+                );
+                self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+                self.code.drop_stack(1);
+                return Some(Some(JType::Object(id)));
+            }
+            self.no_suitable_library_method("Enum", method, args, span);
+            return Some(None);
+        }
         // `java.nio.file`: `Path.of` / `Paths.get` build a Path, `Files.*`
         // reads/writes it through the virtual filesystem.
         if matches!(class, "Path" | "Paths" | "Files") && !self.table.has_class(class) {
@@ -27803,6 +27943,27 @@ impl BodyGen<'_> {
                 if let Some(factory) = self.literal_factory_type(expr) {
                     return factory;
                 }
+                // `Enum.valueOf(Kind.class, s)` — the emitter rewrites it to
+                // `Kind.valueOf(s)`, reading the enum from the class literal.
+                // Mirror that here, ahead of the table: `Enum` IS a class in
+                // the table now, so the ordinary static lookup would go
+                // looking for a `valueOf` on it and find none.
+                if method == "valueOf"
+                    && let Some(Expr::Name { path, .. }) = receiver.as_deref()
+                    && names_enum_class(path.last().map_or("", String::as_str))
+                    && self
+                        .table
+                        .info(path.last().map_or("", String::as_str))
+                        .is_some_and(|info| info.is_bundled && info.is_interface)
+                    && let Some(Expr::Field { object, name, .. }) = args.first()
+                    && name == "class"
+                    && let Expr::Name { path, .. } = object.as_ref()
+                {
+                    return self
+                        .table
+                        .class_id(path.last().map_or("", String::as_str))
+                        .map_or(JType::Error, JType::Object);
+                }
                 // `getMethod`/`getDeclaredMethod`/`getConstructor`/
                 // `getDeclaredConstructor` are VARARGS over `Class...`, which
                 // the emitter packs into a `Class[]` before any table lookup.
@@ -29120,7 +29281,13 @@ impl BodyGen<'_> {
             return JType::Boolean;
         }
         let Some(target) = self.table.resolve_type(ty) else {
-            self.error(span, "unknown type in instanceof");
+            // A type nobody declared. javac reports the ordinary lookup
+            // failure — the same one a variable of that type gets, down to the
+            // `symbol:`/`location:` lines and to the better reason a modelled
+            // namespace or an unsupported class has. "unknown type in
+            // instanceof" named nothing and appears in no JDK.
+            let message = unresolved_type_message(ty, self.table, self.current_class);
+            self.error(span, message);
             return JType::Error;
         };
         let class_name = match target {

@@ -3551,6 +3551,17 @@ impl<'run> Interpreter<'run> {
         Ok(None)
     }
 
+    /// Whether a loaded class is an ENUM. caturra desugars an enum into an
+    /// ordinary class; the marker it keeps is the synthesized `values()`.
+    fn is_enum_class(&self, class_name: &str) -> bool {
+        self.classes.get(class_name).is_some_and(|class| {
+            class
+                .methods
+                .iter()
+                .any(|m| class.constant_pool.get_utf8(m.name_index) == Some("values"))
+        })
+    }
+
     /// `Object`'s own `hashCode`/`toString`/`equals` for an instance, whatever
     /// the class overrides — what a `super.hashCode()` means.
     /// Whether this class (or an ancestor) declares `interface_name` among its
@@ -3562,6 +3573,13 @@ impl<'run> Interpreter<'run> {
     /// Comparator<String>` was not a `Comparator`: its inherited `reversed()`
     /// was "unknown native member", for a default method every comparator has.
     fn class_implements(&self, class_name: &str, interface_name: &str) -> bool {
+        // An enum's implicit supertypes. A real enum is a `java.lang.Enum`,
+        // which is `Comparable`; caturra's class file records neither (they are
+        // not what the student wrote, and `getInterfaces` must not report
+        // them), so the two questions are answered from its enum-ness.
+        if matches!(interface_name, "Comparable" | "Enum") && self.is_enum_class(class_name) {
+            return true;
+        }
         let mut queue: Vec<String> = vec![class_name.to_owned()];
         let mut steps = 0usize;
         while let Some(name) = queue.pop() {
@@ -4053,6 +4071,13 @@ impl<'run> Interpreter<'run> {
 
     fn is_runtime_subtype(&self, sub: &str, sup: &str) -> bool {
         if sub == sup {
+            return true;
+        }
+        // An enum's implicit supertypes — `Enum` itself and the `Comparable`
+        // it gets from it. Neither is in the class file: they are the
+        // desugar's scaffolding, and `getInterfaces()` must not report them as
+        // the student's own. Enum-ness answers for both.
+        if matches!(sup, "Enum" | "Comparable" | "java/lang/Enum") && self.is_enum_class(sub) {
             return true;
         }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
@@ -16171,16 +16196,7 @@ impl<'run> Interpreter<'run> {
                         });
                         Ok(Some(JValue::Int(i32::from(is_interface))))
                     }
-                    "isEnum" => {
-                        // caturra desugars an enum into a class; the marker it
-                        // keeps is the synthesized `values()` method.
-                        let is_enum = self.classes.get(&name).is_some_and(|class| {
-                            class.methods.iter().any(|m| {
-                                class.constant_pool.get_utf8(m.name_index) == Some("values")
-                            })
-                        });
-                        Ok(Some(JValue::Int(i32::from(is_enum))))
-                    }
+                    "isEnum" => Ok(Some(JValue::Int(i32::from(self.is_enum_class(&name))))),
                     "isPrimitive" => Ok(Some(JValue::Int(i32::from(matches!(
                         name.as_str(),
                         "int"
@@ -16334,7 +16350,17 @@ impl<'run> Interpreter<'run> {
                             // parent came back as `null` and the `getName()`
                             // that follows threw NullPointerException on
                             // perfectly legal code.
-                            .or_else(|| library_superclass(&name).map(str::to_owned));
+                            .or_else(|| library_superclass(&name).map(str::to_owned))
+                            // An enum's real superclass is `java.lang.Enum`;
+                            // caturra's desugar leaves the class file saying
+                            // `Object`, which is the one place that shows.
+                            .map(|parent| {
+                                if parent == "java/lang/Object" && self.is_enum_class(&name) {
+                                    String::from("java/lang/Enum")
+                                } else {
+                                    parent
+                                }
+                            });
                         match super_name {
                             Some(super_name) => {
                                 // The FULL internal name, not the simple one:

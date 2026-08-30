@@ -42189,3 +42189,140 @@ public class VarFromLibrary {
 }
 "#
 );
+
+// `java.lang.Enum` as a type a program WRITES. It was modelled as a mechanism
+// — the parser synthesizes `name`/`ordinal`/`values`/`compareTo` onto each
+// enum class — and not as a type, so the supertype every enum has could not be
+// named: `Enum<?> e = Kind.TWO`, `o instanceof Enum`, `Enum::name`,
+// `<E extends Enum<E>>` and `Enum.valueOf(Kind.class, s)` were all
+// "cannot find symbol".
+differential_test!(
+    enum_is_a_type_a_program_can_name,
+    "EnumType",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class EnumType {
+    interface Marker {}
+    enum Kind implements Marker { ONE, TWO }
+    enum Other { A }
+
+    static String show(Enum<?>... all) {
+        StringBuilder out = new StringBuilder();
+        for (Enum<?> e : all) {
+            out.append(e.getDeclaringClass().getSimpleName()).append(".").append(e).append(" ");
+        }
+        return out.toString().trim();
+    }
+
+    static <E extends Enum<E>> E last(E[] all) { return all[all.length - 1]; }
+
+    public static void main(String[] args) {
+        // A variable, a cast, and the tests that go with them.
+        Object o = Kind.TWO;
+        System.out.println((o instanceof Enum) + " " + (o instanceof Marker)
+                + " " + (o instanceof Comparable));
+        Enum<?> e = (Enum<?>) o;
+        System.out.println(e.name() + " " + e.ordinal() + " " + e);
+        Enum<Kind> typed = Kind.ONE;
+        System.out.println(typed.compareTo(Kind.TWO) + " " + typed.equals(Kind.ONE));
+
+        // A parameter, a type argument, a bound, and a method reference.
+        System.out.println(show(Kind.TWO, Other.A));
+        List<Enum<?>> mixed = new ArrayList<>();
+        mixed.add(Kind.ONE);
+        System.out.println(mixed + " " + mixed.get(0).ordinal());
+        System.out.println(last(Kind.values()).name());
+        List<Kind> all = Arrays.asList(Kind.values());
+        System.out.println(all.stream().map(Enum::name).collect(Collectors.joining("|")));
+        System.out.println(all.stream().mapToInt(Enum::ordinal).sum());
+
+        // The one static `Enum` has — the reflective spelling of Kind.valueOf.
+        System.out.println(Enum.valueOf(Kind.class, "ONE").ordinal());
+        var read = Enum.valueOf(Kind.class, "TWO");
+        System.out.println(read.name().length() + " " + read.compareTo(Kind.ONE));
+        try {
+            Enum.valueOf(Kind.class, "THREE");
+        } catch (IllegalArgumentException bad) {
+            System.out.println(bad.getMessage());
+        }
+    }
+}
+"#
+);
+
+// ...and the supertypes an enum has are the ones a JDK reports. caturra's
+// desugar hangs `Comparable` (and now `Enum`) on the enum class itself, which
+// is scaffolding: a real enum declares neither — it inherits `Comparable` from
+// `java.lang.Enum`, its SUPERCLASS. Both leaked through reflection.
+differential_test!(
+    an_enums_supertypes_are_the_ones_it_declares,
+    "EnumSupertypes",
+    r#"
+import java.util.Arrays;
+
+public class EnumSupertypes {
+    interface Marker {}
+    enum Kind implements Marker { ONE }
+    enum Bare { X }
+
+    public static void main(String[] args) {
+        System.out.println(Arrays.toString(Kind.class.getInterfaces()));
+        System.out.println(Arrays.toString(Bare.class.getInterfaces()));
+        System.out.println(Kind.class.getSuperclass());
+        System.out.println(Bare.class.getSuperclass().getName());
+        System.out.println(Kind.class.isEnum() + " " + Kind.ONE.getClass().isEnum());
+        // The type system still knows what the class file no longer says.
+        Comparable<Bare> c = Bare.X;
+        System.out.println(c.compareTo(Bare.X) + " " + (c instanceof Enum));
+    }
+}
+"#
+);
+
+// `java.lang.Enum` is the one class a program may not name as a supertype:
+// javac has a message of its own for extending it, and refuses to implement it
+// because it is a class. caturra registers it as an interface (there is no
+// other shape for a supertype a class also has), so neither refusal came free.
+differential_wording!(
+    reject_extending_java_lang_enum,
+    "RejectExtendsEnum",
+    r"
+public class RejectExtendsEnum extends Enum {
+    public static void main(String[] args) {
+        System.out.println(1);
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_implementing_java_lang_enum,
+    "RejectImplementsEnum",
+    r"
+public class RejectImplementsEnum implements Enum {
+    public static void main(String[] args) {
+        System.out.println(1);
+    }
+}
+"
+);
+
+// An unknown type in an `instanceof` is the ordinary lookup failure, named.
+// caturra answered "unknown type in instanceof" — a message no JDK has, and
+// one that does not say which name it could not find.
+differential_wording!(
+    reject_instanceof_an_unknown_type,
+    "RejectInstanceOf",
+    r"
+public class RejectInstanceOf {
+    public static void main(String[] args) {
+        Object o = args;
+        System.out.println(o instanceof Nope);
+    }
+}
+"
+);

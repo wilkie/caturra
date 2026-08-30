@@ -4597,6 +4597,14 @@ fn desugar_enum(
     if !interfaces.iter().any(|i| i == "Comparable") {
         interfaces.push(String::from("Comparable"));
     }
+    // And `Enum` itself, so a program may NAME the supertype it has always
+    // had: `Enum<?> e = Kind.TWO`, `o instanceof Enum`, `<E extends Enum<E>>`.
+    // (codegen registers `Enum` as an interface for exactly this; the two
+    // spellings a real class would allow, `extends`/`implements Enum`, are
+    // refused there.)
+    if !interfaces.iter().any(|i| i == "Enum") {
+        interfaces.push(String::from("Enum"));
+    }
     let str_ty = TypeRef::Named(String::from("String"));
     let enum_ty = TypeRef::Named(name.clone());
 

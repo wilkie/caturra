@@ -10849,3 +10849,50 @@ They are now — and a `Stream` takes its argument directly rather than through
 the collection-element reader, which does not know it.
 
 Pinned by `a_var_holding_a_library_call`.
+
+### `java.lang.Enum` as a type a program writes (2026-08-30)
+
+Twenty-four programs over what an enum is asked to do — constant bodies,
+`EnumMap`/`EnumSet`, a `switch`, `values()`, an interface, a per-constant
+`toString`, a stream. All but one agreed with a real JDK, and the one that did
+not failed on a single word: `o instanceof Enum`.
+
+`Enum` was modelled as a MECHANISM. The parser desugars an enum into an
+ordinary class and synthesizes `name`, `ordinal`, `values`, `valueOf`,
+`compareTo` and `getDeclaringClass` onto it, which is why every ordinary use
+already worked. What none of that produced is a TYPE with the name `Enum`, so
+the supertype every enum has could not be named: `Enum<?> e = Kind.TWO`,
+`static <E extends Enum<E>> E last(E[] all)` — the standard way to write a
+helper over any enum — `List<Enum<?>>`, `Enum::name`, and
+`Enum.valueOf(Kind.class, s)` were each "cannot find symbol". This is the same
+shape as `Map.Entry` before it: modelled as what something YIELDS, not as a
+type a program may write down.
+
+`Enum` is registered as an interface (there is no other shape here for a
+supertype a class also has) and the desugar hangs it on every enum beside
+`Comparable`. The two things a real CLASS would give it are refused by name,
+with javac's own words: `extends Enum` is "classes cannot directly extend
+java.lang.Enum", `implements Enum` is "interface expected here".
+`Enum.valueOf(K.class, s)` reads the enum from the class literal at compile
+time and IS `K.valueOf(s)` — the same rewrite `EnumSet.allOf` already does —
+in the emitter and in `type_of`, since `var` asks the second one.
+
+Making the scaffolding nameable exposed that it was VISIBLE. `Kind.class
+.getInterfaces()` reported `[interface Marker, class Comparable]` where a JDK
+reports `[interface Marker]`: an enum inherits `Comparable` from
+`java.lang.Enum`, its SUPERCLASS, and declares neither. `getSuperclass()` said
+`java.lang.Object`. Both are fixed at the source: an enum's class file no
+longer records the two implicit supertypes at all, the VM answers
+`getSuperclass` with `java.lang.Enum` for an enum, and `instanceof Enum` /
+`instanceof Comparable` are answered from the class's enum-ness rather than
+from its interface list.
+
+Along the way, `o instanceof Nope` said "unknown type in instanceof" — a
+message no JDK has, naming nothing. It is the ordinary unresolved-type report
+now, `symbol:`/`location:` lines and all, which also means a namespace-only
+class (`instanceof Math`) gives its honest reason instead.
+
+Pinned by `enum_is_a_type_a_program_can_name`,
+`an_enums_supertypes_are_the_ones_it_declares`,
+`reject_extending_java_lang_enum`, `reject_implementing_java_lang_enum` and
+`reject_instanceof_an_unknown_type`.
