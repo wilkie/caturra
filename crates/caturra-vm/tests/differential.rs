@@ -42461,3 +42461,88 @@ public class QueueOrder {
 }
 "#
 );
+
+// A type variable's BOUND reaches a CONTAINER parameter. `<T extends Number>
+// void total(List<T>)` erases its type argument to a wildcard that accepts any
+// element — which is right for an unbounded variable (`dump(List<T>)` really
+// does take a `List<String>`), and was applied to a bounded one too, so a
+// `List<String>` was passed to a method that can only work on Numbers.
+differential_reject!(
+    reject_a_bounded_container_parameter_given_another_element,
+    "RejectBoundedList",
+    "import java.util.*;\npublic class RejectBoundedList {\n  static <T extends Number> double total(List<T> l) { double s = 0; for (T x : l) s += x.doubleValue(); return s; }\n  static double r() { return total(new ArrayList<String>()); }\n}"
+);
+
+differential_reject!(
+    reject_a_bounded_set_parameter_given_another_element,
+    "RejectBoundedSet",
+    "import java.util.*;\npublic class RejectBoundedSet {\n  static <T extends Number> void n(Set<T> s) { }\n  static void r() { n(new HashSet<String>()); }\n}"
+);
+
+// ...and the valid bounded generics it must not touch. Every one of these was
+// refused by a first attempt at the rule above: an element that NOTHING pinned
+// erases to `Object` (or to an erased type-variable wildcard), and refusing
+// those refuses `biggest(listOf(3, 9, 2), 0)` — a call whose element really is
+// Integer, typed loosely only because the varargs factory's own variable was
+// never pinned.
+differential_test!(
+    bounded_generics_that_must_still_compile,
+    "BoundedGenerics",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
+
+public class BoundedGenerics {
+    interface Named { String name(); }
+    static class Pet implements Named, Comparable<Pet> {
+        final String n;
+        Pet(String n) { this.n = n; }
+        public String name() { return n; }
+        public int compareTo(Pet other) { return n.compareTo(other.n); }
+    }
+
+    static <T extends Comparable<T>> T biggest(List<? extends T> items, T floor) {
+        T best = floor;
+        for (T item : items) {
+            if (item.compareTo(best) > 0) best = item;
+        }
+        return best;
+    }
+
+    @SafeVarargs
+    static <T> List<T> listOf(T... items) { return new ArrayList<>(Arrays.asList(items)); }
+
+    static <T extends Number> double total(List<T> l) {
+        double sum = 0;
+        for (T x : l) sum += x.doubleValue();
+        return sum;
+    }
+
+    static <T extends Named> String first(List<T> l) { return l.get(0).name(); }
+
+    static <T extends Comparable<T>> List<T> sorted(Collection<T> c) {
+        List<T> out = new ArrayList<>(c);
+        Collections.sort(out);
+        return out;
+    }
+
+    static <T> void dump(List<T> l) { System.out.println(l); }
+
+    public static void main(String[] args) {
+        // The element is pinned by nothing here, and the call is still legal.
+        System.out.println(biggest(listOf(3, 9, 2), 0));
+        System.out.println(biggest(listOf("a", "z"), ""));
+        System.out.println(total(new ArrayList<>(List.of(1, 2))));
+        System.out.println(total(new ArrayList<>(List.of(1.5, 2.5))));
+        List<Pet> pets = new ArrayList<>(List.of(new Pet("zoe"), new Pet("al")));
+        System.out.println(first(sorted(pets)));
+        System.out.println(sorted(Set.of(3, 1, 2)));
+        dump(List.of("plain"));
+    }
+}
+"#
+);

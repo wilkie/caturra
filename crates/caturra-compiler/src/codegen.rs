@@ -4863,9 +4863,10 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
     // `<T extends Number> T first(List<T>)` can return `list.get(0)`.
     if variance == '=' {
         let canonical = crate::imports::canonical_library_class(bound).unwrap_or(bound);
+        let erasure = table.class_id(canonical).unwrap_or(object);
         return ElemType::Wildcard {
-            read: table.class_id(canonical).unwrap_or(object),
-            bound: WildcardBound::TypeVar,
+            read: erasure,
+            bound: WildcardBound::TypeVar(erasure),
         };
     }
     // `? super T` for a type VARIABLE, whose erasure is `Object`: it stays a
@@ -5112,7 +5113,31 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
 /// so `List<argElem>` may be passed for a `List<? …>` parameter.
 fn wildcard_accepts(arg: ElemType, bound: WildcardBound, table: &MethodTable) -> bool {
     match bound {
-        WildcardBound::Unbounded | WildcardBound::TypeVar | WildcardBound::Raw => true,
+        WildcardBound::Unbounded | WildcardBound::Raw => true,
+        // The variable's own bound, which is `Object` for an unbounded one —
+        // and `elem_widens_to_class` answers `true` for every element there,
+        // so the unbounded case keeps taking anything.
+        //
+        // An argument whose element is the TOP TYPE is accepted whatever the
+        // bound: `Object` is what an element that nothing pinned erases to, so
+        // refusing it refuses `biggest(listOf(3, 9, 2), 0)` — a call whose
+        // element really is `Integer`, typed `List<Object>` only because the
+        // varargs factory's own variable was never pinned. That leaves
+        // `sort(new ArrayList<Object>())` — where the program MEANT `Object` —
+        // accepted where javac refuses it; a false refusal of valid code is
+        // the worse of the two, and this is the direction the erasure model
+        // can be honest about.
+        WildcardBound::TypeVar(class) => {
+            let erased = match arg {
+                ElemType::Object(id) => id == table.object_id,
+                ElemType::Wildcard { bound, .. } => matches!(
+                    bound,
+                    WildcardBound::TypeVar(_) | WildcardBound::Unbounded | WildcardBound::Raw
+                ),
+                _ => false,
+            };
+            erased || elem_widens_to_class(arg, class, table)
+        }
         WildcardBound::Upper(class) => elem_widens_to_class(arg, class, table),
         // `? super C`: the argument element is a supertype of `C` (only a user
         // class arg is checkable; a wrapper/String supertype of a class is
@@ -5698,7 +5723,7 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) ->
             ElemType::Object(_)
                 | ElemType::TypeVar(_)
                 | ElemType::Wildcard {
-                    bound: WildcardBound::TypeVar,
+                    bound: WildcardBound::TypeVar(_),
                     ..
                 }
         )
@@ -6607,10 +6632,14 @@ enum WildcardBound {
     /// never says about a raw type.
     Raw,
     /// A TYPE VARIABLE argument (`List<T>` in `<T> void dump(List<T>)`), after
-    /// erasure. Like `Unbounded` for applicability — a `List<anything>` may be
-    /// passed — but a real type, not a capture, so the collection may still be
-    /// written to.
-    TypeVar,
+    /// erasure, carrying the variable's own BOUND (`Object` for an unbounded
+    /// one). A `List<anything>` may be passed for an unbounded variable, and a
+    /// bounded one still constrains its elements — a
+    /// `<T extends Comparable<T>> void sort(List<T>)` does not take a
+    /// `List<Object>`, which javac reports as the method not being applicable.
+    /// Unlike `? extends` it is a real type, not a capture, so the collection
+    /// may still be written to.
+    TypeVar(ClassId),
 }
 
 impl ElemType {
@@ -6679,7 +6708,9 @@ impl ElemType {
             }
             // A raw or type-variable element has no written form of its own;
             // `parameterized` drops a raw one before it gets here.
-            WildcardBound::Raw | WildcardBound::TypeVar => JType::Object(read).describe(table),
+            WildcardBound::Raw | WildcardBound::TypeVar(_) => {
+                JType::Object(read).describe(table)
+            }
         }
     }
 

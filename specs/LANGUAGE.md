@@ -9066,7 +9066,9 @@ given types` or reports converting the argument; caturra says
   student needs (`Arrays.fill(int[], String)`, `Collections.addAll`,
   `Collections.binarySearch(List<Integer>, String)`).
 - `Arrays.copyOf(String[], 2)` assigned to `int[]`: javac explains its
-  generic inference; caturra names the two array types.
+  generic inference; caturra names the two array types. Same for a bounded
+  type variable in a container parameter (`total(new ArrayList<String>())`
+  for a `<T extends Number> double total(List<T>)`).
 - `int[] c = {1,,2}`: javac says `illegal start of expression`, caturra
   `expected an expression` — a parser message, not a library one.
 
@@ -10962,8 +10964,9 @@ Pinned by `sorting_an_array_of_a_class_with_no_order` and
 
 **Measured and open: an INFERRED type argument's bound is not checked.** The
 written form is (`Box<String>` for a `Box<T extends Number>` is refused, JLS
-§4.5), and so is a bare parameter (`<T extends Number> void n(T)` with a
-String). What is not is a bound satisfied only through inference:
+§4.5), a bare parameter is (`<T extends Number> void n(T)` with a String), and
+a CONTAINER parameter is as of the entry below. What is not is a bound
+satisfied only through inference:
 
 - `<T extends Comparable<T>> T max(T x, T y)` called `max("a", 1)` — javac
   unifies the two arguments and reports "inference variable T has incompatible
@@ -10977,3 +10980,44 @@ String). What is not is a bound satisfied only through inference:
 caturra models a generic method's parameters by ERASURE rather than inferring a
 binding, so all three are accepts-invalid. They are listed here because the
 count of what is known is the point; see the divergence lists.
+
+### A bound reaches a container parameter (2026-08-30)
+
+The entry above listed three shapes where a type variable's bound went
+unchecked. One of them is closed, and closing it is a lesson about which
+direction to be wrong in.
+
+`<T extends Number> double total(List<T> items)` erases its type argument to a
+wildcard that accepts ANY element. That is right for an UNBOUNDED variable —
+`<T> void dump(List<T>)` really does take a `List<String>`, and erasing the
+argument to `Object` would make every generic method over a collection
+unreachable — and the same wildcard was used for a bounded one, so
+`total(new ArrayList<String>())` compiled. The erasure already carried the
+bound (a `List<T>` READS its elements as `Number`, which is how the method's
+own body types); only applicability ignored it. It does not now.
+
+The first attempt refused valid code, which is the thing that must not happen:
+
+    biggest(listOf(3, 9, 2), 0)   // <T extends Comparable<T>> T biggest(List<? extends T>, T)
+
+`listOf` is `<T> List<T> listOf(T...)`, whose own variable nothing pins, so its
+answer types as a list of the TOP TYPE — and an `Object` element does not widen
+to `Comparable`. The call is perfectly legal Java: its element really is
+`Integer`. So an element that is the top type, or is itself an erased
+type-variable wildcard, satisfies any bound: an erasure that lost the element
+cannot be evidence that the element is wrong. What that leaves accepted is
+`sort(new ArrayList<Object>())`, where the program MEANT `Object` — javac
+refuses it, and caturra cannot tell the two `Object`s apart. A false refusal of
+valid code is the worse of the two, and this is the direction the erasure model
+can be honest about.
+
+The wording is javac's for the ordinary case and not for this one: where a type
+variable is involved javac reports overload resolution failing ("method total
+in class T cannot be applied to given types; … reason: inference variable T has
+incompatible bounds") and caturra names the two collection types, as it already
+does for `Arrays.copyOf` assigned to the wrong array type.
+
+Pinned by `reject_a_bounded_container_parameter_given_another_element`,
+`reject_a_bounded_set_parameter_given_another_element`, and — for the direction
+that matters more — `bounded_generics_that_must_still_compile`, which is every
+valid shape the first attempt broke.
