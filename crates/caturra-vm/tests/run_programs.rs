@@ -4655,7 +4655,7 @@ fn junit_validation_runner_reports_pass_and_fail() {
         "__VPLAN\tstarts at zero\n\
          __VPLAN\tincrements by one\n\
          __VTEST\tPASS\tstarts at zero\t\n\
-         __VTEST\tFAIL\tincrements by one\texpected 1 but was 2\n"
+         __VTEST\tFAIL\tincrements by one\texpected: <1> but was: <2>\n"
     );
 }
 
@@ -4678,7 +4678,7 @@ fn junit_validator_static_import_and_assertions() {
                 try {
                     assertEquals(9, b.n);
                     System.out.println("no throw");
-                } catch (RuntimeException e) {
+                } catch (AssertionError e) {
                     System.out.println("caught: " + e.getMessage());
                 }
             }
@@ -4686,7 +4686,7 @@ fn junit_validator_static_import_and_assertions() {
         "#,
         "Main",
     );
-    assert_eq!(out, "assertions passed\ncaught: expected 9 but was 3\n");
+    assert_eq!(out, "assertions passed\ncaught: expected: <9> but was: <3>\n");
 }
 
 #[test]
@@ -13249,14 +13249,14 @@ fn junit_assert_equals_honours_a_delta() {
                 try {
                     Assertions.assertEquals(0.02, 0.03, 0.0001, "too far apart");
                     System.out.println("no throw");
-                } catch (RuntimeException e) {
+                } catch (AssertionError e) {
                     System.out.println("threw: " + e.getMessage());
                 }
                 try {
                     Assertions.assertArrayEquals(
                         new double[] {1.0, 2.0}, new double[] {1.0, 2.5}, 0.001, "array");
                     System.out.println("no throw");
-                } catch (RuntimeException e) {
+                } catch (AssertionError e) {
                     System.out.println("threw: " + e.getMessage());
                 }
             }

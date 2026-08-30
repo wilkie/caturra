@@ -80,6 +80,25 @@ def verdicts(lines):
     return out
 
 
+def messages(lines):
+    """The same lines -> {name: (verdict, message)}.
+
+    The verdict is what a student is GRADED on; the message is what they READ,
+    and for a long time this comparison ignored it — so an assertion that
+    failed for the same reason but said something else went unnoticed. It is
+    where the JUnit failures being modelled as a RuntimeException showed up: a
+    validator's `catch (Exception e)` swallowed them, and the student read
+    "Exception while calling m(): …" where the real grader reports the
+    assertion.
+    """
+    out = {}
+    for line in lines:
+        fields = line.split("\t")
+        if len(fields) > 2:
+            out[fields[2]] = (fields[1], fields[3] if len(fields) > 3 else "")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("reference")
@@ -106,6 +125,9 @@ def main():
     stats = collections.Counter()
     same = 0
     divergent = []
+    text_same = 0
+    text_random = 0
+    text_divergent = []
     for name, ref in reference.items():
         # Levels belonging to the other half of the corpus.
         if ref["status"] in ("ORGCODE", "NOTORGCODE"):
@@ -118,6 +140,18 @@ def main():
             stats[f"caturra {cat['status'] if cat else 'MISSING'} (ref OK)"] += 1
             continue
         stats["both ran"] += 1
+        # The MESSAGE each engine prints for a test both of them failed.
+        ref_m, cat_m = messages(ref["tests"]), messages(cat["tests"])
+        for test in set(ref_m) & set(cat_m):
+            (ref_verdict, ref_text), (cat_verdict, cat_text) = ref_m[test], cat_m[test]
+            if ref_verdict != cat_verdict or ref_verdict != "FAIL":
+                continue
+            if " ".join(ref_text.split()) == " ".join(cat_text.split()):
+                text_same += 1
+            elif name in coin_flips:
+                text_random += 1
+            else:
+                text_divergent.append((name, test, ref_text, cat_text))
         ref_v, cat_v = verdicts(ref["tests"]), verdicts(cat["tests"])
         if ref_v == cat_v:
             same += 1
@@ -138,6 +172,15 @@ def main():
     print("=== per-test verdicts, on levels both engines ran ===")
     print(f"  IDENTICAL:  {same}")
     print(f"  DIVERGENT:  {len(divergent)}")
+    print()
+    print("=== per-test FAIL messages, where both engines failed the test ===")
+    print(f"  IDENTICAL:  {text_same}")
+    print(f"  unseeded:   {text_random}")
+    print(f"  DIVERGENT:  {len(text_divergent)}")
+    for name, test, ref_text, cat_text in text_divergent:
+        print(f"\n  {name}: {test[:70]}")
+        print(f"      reference: {ref_text.strip()[:150]!r}")
+        print(f"      caturra:   {cat_text.strip()[:150]!r}")
     print()
     kinds = collections.Counter()
     for _, flipped, only_ref, only_cat in divergent:

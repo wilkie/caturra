@@ -10168,3 +10168,41 @@ eight that remain are the parser's, which is deliberately more explicit
 
 Pinned by `a_constructor_is_not_inherited` and
 `the_constructors_a_class_declares`.
+
+### What the grader says, not just what it decides (2026-08-29)
+
+The corpus sweep compares VERDICTS. Its own README has said for months that
+this is half the check — "it has MISSED bugs the hand-written tests caught,
+because it only compares verdicts and not message text" — and both sides record
+the message. So this unit compared them: 88 tests that both engines FAIL, and
+25 messages that differ. Twenty-three are the levels whose validators use
+unseeded `Math.random()`, where the reference disagrees with itself between
+runs. Two were real, and they were the same bug:
+
+> Exception while calling hasWatchedMinimum(): Should return true for 31
+> seconds ==> expected: `<true>` but was: `<false>`
+
+Code.org's validators wrap their assertions in
+`try { … } catch (Exception e) { fail("Exception while calling m(): " + …); }`.
+On real JUnit that catch does NOT run: `AssertionFailedError` extends
+`java.lang.AssertionError` extends **`Error`**. caturra's bundled assertions
+threw a `RuntimeException`, so the wrapper swallowed every assertion failure
+and re-reported it as an exception. The verdict was the same either way, which
+is exactly why comparing verdicts alone could not see it — but the student read
+a different sentence, and a validator that recovers from a caught exception
+could have read a different VERDICT.
+
+`java.lang.AssertionError` is a modelled throwable now (under `Error`), the
+eighty-five assertion throws raise it, and comparing the wording against real
+JUnit found four more: the plain `assertEquals` overloads said "expected 1 but
+was 2" where JUnit says "expected: `<1>` but was: `<2>`", `assertNotEquals`
+likewise, and a `char` pair widened to `int` — "expected: `<97>`" for `'a'`
+— because JUnit's `char` overload was missing.
+
+The sweep compares messages from now on: `compare.py` prints a
+`per-test FAIL messages` section beside the verdicts, with the same
+unseeded-random adjudication. It reads **65 identical, 23 unseeded, 0
+divergent** on the JUnit half and **12 / 8 / 0** on the org.code half.
+
+Pinned by `diff_junit_assertion_failure_is_an_error`, which runs the same
+validator on real JUnit 5.

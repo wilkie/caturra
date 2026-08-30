@@ -803,3 +803,63 @@ public class ArraysTest {
 }
 "#
 );
+
+// An assertion failure is an ERROR, not an Exception: JUnit's
+// `AssertionFailedError` extends `java.lang.AssertionError` extends `Error`,
+// so a validator's `catch (Exception e)` around its assertions does NOT catch
+// it. Code.org's validators wrap assertions in exactly that, and modelling the
+// failure as a `RuntimeException` let the wrapper swallow it — two corpus
+// levels reported "Exception while calling m(): …" where the real grader
+// reports the assertion. The MESSAGE each assertion carries is pinned here
+// too: the plain overloads said "expected 1 but was 2" where JUnit says
+// "expected: <1> but was: <2>", and a `char` pair widened to int.
+validation_differential_test!(
+    diff_junit_assertion_failure_is_an_error,
+    "AssertKindTest",
+    r#"
+import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class AssertKindTest {
+    @Test
+    @Order(1)
+    @DisplayName("an assertion escapes catch (Exception) =>")
+    public void escapesExceptionCatch() {
+        try {
+            assertTrue(false, "the reason");
+        } catch (Exception e) {
+            fail("swallowed: " + e.getMessage());
+        }
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("the plain overloads say what JUnit says =>")
+    public void plainWording() {
+        assertEquals(1, 2);
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("a char pair prints characters =>")
+    public void charWording() {
+        assertEquals('a', 'b');
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("and a String pair =>")
+    public void stringWording() {
+        assertEquals("a", "b");
+    }
+
+    @Test
+    @Order(5)
+    @DisplayName("not-equal, null and array =>")
+    public void others() {
+        assertNotEquals(1, 1);
+    }
+}
+"#
+);

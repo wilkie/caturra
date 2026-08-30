@@ -114,6 +114,14 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/lang/NumberFormatException",
         "java/lang/IllegalArgumentException",
     ),
+    // An assertion failure is an ERROR, not an Exception — JUnit's
+    // `AssertionFailedError` extends `java.lang.AssertionError` extends
+    // `Error` — so a `catch (Exception e)` around an assertion does NOT catch
+    // it. Code.org's validators wrap their assertions in exactly that, and
+    // modelling the failure as a RuntimeException let the wrapper swallow it:
+    // the student read "Exception while calling m(): expected: <true>…" where
+    // the real grader reports the assertion itself.
+    ("java/lang/AssertionError", "java/lang/Error"),
     // The VM-condition errors sit under VirtualMachineError, as the JDK's do —
     // `catch (VirtualMachineError e)` catches both on a real JVM.
     ("java/lang/VirtualMachineError", "java/lang/Error"),
