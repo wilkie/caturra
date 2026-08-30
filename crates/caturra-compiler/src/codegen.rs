@@ -1495,6 +1495,9 @@ impl MethodTable {
             ("__Supplier", "get"),
             ("__UnaryOperator", "apply"),
             ("__BiFunction", "apply"),
+            ("__IntFunction", "apply"),
+            ("__LongFunction", "apply"),
+            ("__DoubleFunction", "apply"),
         ] {
             if let Some(info) = self.classes.get_mut(interface)
                 && let Some(sig) = info
@@ -5378,7 +5381,18 @@ fn library_supertype_alias(name: &str, known: bool) -> &str {
 fn functional_result_arg(simple: &str) -> bool {
     matches!(
         simple,
-        "Supplier" | "UnaryOperator" | "Function" | "BiFunction" | "BinaryOperator"
+        "Supplier"
+            | "UnaryOperator"
+            | "Function"
+            | "BiFunction"
+            | "BinaryOperator"
+            // The primitive-INPUT specializations answer their type argument
+            // too: `IntFunction<String[]>` is what `String[]::new` is written
+            // as, and dropping its result made `maker.apply(3).length` "cannot
+            // find symbol" for the one shape the interface exists for.
+            | "IntFunction"
+            | "LongFunction"
+            | "DoubleFunction"
     )
 }
 
@@ -29386,7 +29400,15 @@ impl BodyGen<'_> {
         let sized: Vec<&Expr> = dims.iter().map_while(Option::as_ref).collect();
         for size in &sized {
             let size_ty = self.expr(size);
-            if !matches!(size_ty, JType::Int | JType::Char | JType::Error) {
+            // A dimension undergoes unary numeric promotion (JLS §15.10.1),
+            // which UNBOXES: `new String[count]` for an `Integer count` — or
+            // for a `list.get(0)` — is ordinary Java, and was refused. A
+            // `byte`/`short` promotes to `int` the same way.
+            let size_ty = self.unbox_wrapper(size_ty);
+            if !matches!(
+                size_ty,
+                JType::Int | JType::Char | JType::Short | JType::Byte | JType::Error
+            ) {
                 self.error(
                     size.span(),
                     format!(

@@ -10343,3 +10343,38 @@ a file boundary, mutually recursive statics, a generic interface implemented in
 another file, an anonymous subclass of an abstract class declared elsewhere —
 agree with a real JDK, which is the answer this dimension had never been asked
 for. Pinned by `a_name_means_what_its_own_file_says`.
+
+### The array a function makes (2026-08-30)
+
+Walking the method-reference taxonomy — static, bound, unbound, constructor,
+array-constructor, `super::`, a reference to a varargs method — found one
+member of it that did not work, and pulling on it found a rule underneath.
+
+**`IntFunction<String[]>` did not answer its type argument.** It is what
+`String[]::new` is written as; the interface exists for almost nothing else. A
+functional interface's result is its LAST type argument, and the list of which
+interfaces have one covered `Supplier`, `Function`, `BiFunction`,
+`UnaryOperator` and `BinaryOperator` but not the primitive-INPUT
+specializations — so `maker.apply(3).length` was "cannot find symbol: variable
+length" while `Function<Integer, String[]>` one line above worked.
+`IntFunction`, `LongFunction` and `DoubleFunction` answer their argument now.
+
+**The multi-dimensional array-constructor reference built the wrong shape.**
+`String[][]::new` is `n -> new String[n][]`, and the desugar wrote it by
+NESTING the element (`elem: String[]`, one dimension) where every reader of an
+array creation expects the base element and one entry per dimension, the
+leading one sized. The same array, written a way nothing downstream reads: the
+result typed as `Object[]`, so assigning it to a `String[][]` was refused. The
+lambda form of the very same expression compiled, which is what made it look
+like a rule about references.
+
+**And an array DIMENSION did not unbox.** `new String[count]` for an
+`Integer count` — or for a `list.get(0)`, or a `map.get(k)` — is ordinary Java
+(JLS §15.10.1: the dimension undergoes unary numeric promotion) and was refused
+outright, as were `byte` and `short` dimensions. This is the wider rule the
+`IntFunction` probe walked into: the check asked for `int` or `char` and
+nothing else. A `null` dimension now throws the NPE the unboxing implies, and a
+negative one the `NegativeArraySizeException` with the JDK's message.
+
+Pinned by `an_array_dimension_promotes` and
+`a_primitive_input_function_answers_its_argument`.

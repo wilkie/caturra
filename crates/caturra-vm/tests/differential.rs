@@ -41072,3 +41072,103 @@ class Other {
         ),
     ]
 );
+
+// An array DIMENSION undergoes unary numeric promotion (JLS §15.10.1), which
+// unboxes: `new String[count]` for an `Integer count` — or for a `list.get(0)`
+// — is ordinary Java and was refused outright, and a `byte`/`short` dimension
+// with it. What a wrong dimension DOES (negative, null) is checked here too,
+// since the unboxing is where a null becomes an NPE.
+differential_test!(
+    an_array_dimension_promotes,
+    "ArrayDimension",
+    r#"
+import java.util.*;
+public class ArrayDimension {
+    static Integer three() { return 3; }
+    public static void main(String[] args) {
+        Integer n = 3;
+        System.out.println(new String[n].length);
+        int[][] grid = new int[n][n];
+        System.out.println(grid.length + " " + grid[0].length);
+        List<Integer> sizes = new ArrayList<>(Arrays.asList(2, 4));
+        System.out.println(new double[sizes.get(1)].length);
+        Map<String, Integer> counts = new HashMap<>();
+        counts.put("n", 4);
+        System.out.println(new boolean[counts.get("n")].length);
+        Character c = 'a';
+        System.out.println(new char[c].length);
+        byte b = 3;
+        short s = 4;
+        System.out.println(new int[b].length + " " + new int[s].length);
+        Byte boxedByte = 2;
+        Short boxedShort = 5;
+        System.out.println(new int[boxedByte].length + " " + new int[boxedShort].length);
+        System.out.println(new String[three()].length);
+        int[][] partial = new int[n][];
+        System.out.println(partial.length + " " + (partial[0] == null));
+        Integer negative = -1;
+        try {
+            System.out.println(new int[negative].length);
+        } catch (NegativeArraySizeException e) {
+            System.out.println("negative " + e.getMessage());
+        }
+        Integer missing = null;
+        try {
+            System.out.println(new int[missing].length);
+        } catch (NullPointerException e) {
+            System.out.println("null dimension");
+        }
+    }
+}
+"#
+);
+
+// `IntFunction<String[]>` is what `String[]::new` is written as, and the
+// interface's result type argument was not read — so `maker.apply(3).length`
+// was "cannot find symbol" for the one shape the interface exists for. Its
+// `Long`/`Double` siblings answer their argument the same way. The
+// MULTI-dimensional reference had a second bug: the desugar nested the element
+// (`elem: String[]`, one dimension) where every reader expects the base
+// element and one entry per dimension, so `String[][]::new` produced an
+// `Object[]`.
+differential_test!(
+    a_primitive_input_function_answers_its_argument,
+    "IntFunctionResult",
+    r#"
+import java.util.*;
+import java.util.function.*;
+public class IntFunctionResult {
+    static String[] build(IntFunction<String[]> maker, int n) { return maker.apply(n); }
+    static <T> T[] fill(IntFunction<T[]> maker, T value) {
+        T[] out = maker.apply(2);
+        Arrays.fill(out, value);
+        return out;
+    }
+    public static void main(String[] args) {
+        IntFunction<String[]> maker = String[]::new;
+        String[] made = maker.apply(3);
+        made[0] = "x";
+        System.out.println(made.length + " " + Arrays.toString(made));
+        System.out.println(build(String[]::new, 3).length);
+        System.out.println(Arrays.toString(fill(String[]::new, "x")));
+
+        IntFunction<int[]> ints = int[]::new;
+        System.out.println(ints.apply(4).length);
+        IntFunction<String[][]> grid = String[][]::new;
+        System.out.println(grid.apply(2).length + " " + (grid.apply(2)[0] == null));
+        IntFunction<int[][]> ints2 = int[][]::new;
+        System.out.println(ints2.apply(3).length);
+        Function<Integer, double[]> boxed = double[]::new;
+        System.out.println(boxed.apply(3).length);
+
+        IntFunction<String> text = n -> "x" + n;
+        System.out.println(text.apply(3).length());
+        IntFunction<List<String>> lists = n -> new ArrayList<>(Collections.nCopies(n, "z"));
+        System.out.println(lists.apply(2).size() + lists.apply(1).get(0));
+        DoubleFunction<String> fromDouble = v -> "d" + v;
+        LongFunction<String> fromLong = v -> "l" + v;
+        System.out.println(fromDouble.apply(1.5).length() + fromLong.apply(2L).length());
+    }
+}
+"#
+);

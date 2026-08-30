@@ -1804,7 +1804,7 @@ impl Parser<'_> {
             start: start.start,
             end: self.here().start,
         };
-        let mut ty = match element {
+        let ty = match element {
             "int" => TypeRef::Int,
             "long" => TypeRef::Long,
             "double" => TypeRef::Double,
@@ -1815,10 +1815,17 @@ impl Parser<'_> {
             "boolean" => TypeRef::Boolean,
             other => TypeRef::Named(other.to_owned()),
         };
-        for _ in 1..dims {
-            ty = TypeRef::Array(Box::new(ty));
-        }
         let length = String::from("__caturraLen");
+        // `String[][]::new` is `n -> new String[n][]`: the element is the BASE
+        // type and every dimension has an entry, the leading one sized. Nesting
+        // the element instead (`elem: String[]`, one dimension) is the same
+        // array written a way nothing downstream reads, and the result typed
+        // as `Object[]`.
+        let mut sizes = vec![Some(Expr::Name {
+            path: vec![length.clone()],
+            span,
+        })];
+        sizes.extend(std::iter::repeat_n(None, dims.saturating_sub(1)));
         Expr::Lambda {
             params: vec![LambdaParam {
                 name: length.clone(),
@@ -1826,10 +1833,7 @@ impl Parser<'_> {
             }],
             body: LambdaBody::Expr(Box::new(Expr::NewArray {
                 elem: ty,
-                dims: vec![Some(Expr::Name {
-                    path: vec![length],
-                    span,
-                })],
+                dims: sizes,
                 init: None,
                 span,
             })),
