@@ -10896,3 +10896,34 @@ Pinned by `enum_is_a_type_a_program_can_name`,
 `an_enums_supertypes_are_the_ones_it_declares`,
 `reject_extending_java_lang_enum`, `reject_implementing_java_lang_enum` and
 `reject_instanceof_an_unknown_type`.
+
+### What a `Class` object says about a type (2026-08-30)
+
+The `Enum` unit left one thing open: a synthesized library interface, seen as a
+`Class`, lied about itself. Pulling on it found that every question a `Class`
+answers was read out of the class FILE — so a LIBRARY name, which has none,
+got the default answer to all of them.
+
+- `String.class.getInterfaces()` was `[]`. A JDK says
+  `[Serializable, Comparable, CharSequence]`. Empty is a confident wrong
+  answer — "implements nothing" — not a missing one, which is the same reason
+  `library_superclass` exists. There is a table now, recorded from a real JDK
+  11, of the interfaces each modelled library class DECLARES. That is not the
+  question `library_faces` answers (which is transitive, and about what a value
+  IS): a `PriorityQueue` declares only `Serializable`, and a `Stack` declares
+  nothing at all — it gets its whole face from the `Vector` it extends.
+- `Comparable.class.isInterface()` was false, and `System.out.println(
+  Runnable.class)` printed `class java.lang.Runnable`. Three places computed
+  interface-ness from the access flags and none had a fallback; they are one
+  method now, which asks what is recorded when there is no class file.
+- `getSuperclass()` on an INTERFACE answered `java.lang.Object`. A JDK answers
+  `null`, and did for both halves — a program's own interface and a library's.
+- A program's own class reported the COMPILER's spelling of what it implements:
+  `class Comparable` rather than `interface java.lang.Comparable`, and
+  `interface __Runnable` — an internal alias — for a plain `implements
+  Runnable`. `getInterfaces` qualifies and un-aliases each name on the way out.
+
+Pinned by `what_a_class_object_says_about_a_type`, which asks all nine
+questions of fifteen types: the program's own class, interface, abstract class,
+subclass and enum, and the library's `String`, `Integer`, `Object`, `int`,
+`int[]`, `ArrayList`, `Map`, `Comparable`, `Runnable` and `Iterable`.

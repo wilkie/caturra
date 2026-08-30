@@ -3551,6 +3551,22 @@ impl<'run> Interpreter<'run> {
         Ok(None)
     }
 
+    /// Whether a class is an INTERFACE — the flag its class file carries, or,
+    /// for a library name (which has no class file), what is recorded for it.
+    /// Three places asked the first half and none asked the second, so every
+    /// library interface said it was a class: `Comparable.class.isInterface()`
+    /// was false, and `System.out.println(Runnable.class)` said "class".
+    fn class_is_interface(&self, name: &str) -> bool {
+        self.classes.get(name).map_or_else(
+            || library_is_interface(qualified_face(name)),
+            |class| {
+                class
+                    .access_flags
+                    .contains(caturra_classfile::ClassAccessFlags::INTERFACE)
+            },
+        )
+    }
+
     /// Whether a loaded class is an ENUM. caturra desugars an enum into an
     /// ordinary class; the marker it keeps is the synthesized `values()`.
     fn is_enum_class(&self, class_name: &str) -> bool {
@@ -4367,11 +4383,7 @@ impl<'run> Interpreter<'run> {
         // display path always says "class").
         if let Some(HeapObject::Class { name }) = self.heap.get(reference) {
             let name = name.clone();
-            let is_interface = self.classes.get(&name).is_some_and(|class| {
-                class
-                    .access_flags
-                    .contains(caturra_classfile::ClassAccessFlags::INTERFACE)
-            });
+            let is_interface = self.class_is_interface(&name);
             return Ok(class_to_string(&name, is_interface));
         }
         // Copy out what we need before calling back into Java, which may
@@ -16190,11 +16202,7 @@ impl<'run> Interpreter<'run> {
                     // The kind predicates: facts the class file already
                     // records (its access flags), or the name's own shape.
                     "isInterface" => {
-                        let is_interface = self.classes.get(&name).is_some_and(|class| {
-                            class.access_flags.0 & caturra_classfile::ClassAccessFlags::INTERFACE
-                                != 0
-                        });
-                        Ok(Some(JValue::Int(i32::from(is_interface))))
+                        Ok(Some(JValue::Int(i32::from(self.class_is_interface(&name)))))
                     }
                     "isEnum" => Ok(Some(JValue::Int(i32::from(self.is_enum_class(&name))))),
                     "isPrimitive" => Ok(Some(JValue::Int(i32::from(matches!(
@@ -16255,11 +16263,7 @@ impl<'run> Interpreter<'run> {
                     // `Class.toString()` is "class <name>" (used when a Class is
                     // concatenated, e.g. a reflect type argument).
                     "toString" => {
-                        let is_interface = self.classes.get(&name).is_some_and(|class| {
-                            class
-                                .access_flags
-                                .contains(caturra_classfile::ClassAccessFlags::INTERFACE)
-                        });
+                        let is_interface = self.class_is_interface(&name);
                         let text = class_to_string(&name, is_interface);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
@@ -16311,22 +16315,33 @@ impl<'run> Interpreter<'run> {
                             ));
                             return Ok(Some(JValue::Ref(Some(array))));
                         }
-                        let names: Vec<String> = self
-                            .classes
-                            .get(&name)
-                            .map(|class| {
+                        let names: Vec<String> = self.classes.get(&name).map_or_else(
+                            // A LIBRARY class has no class file to read, and
+                            // answered "implements nothing" for every one of
+                            // them — `String.class.getInterfaces()` was empty.
+                            || {
+                                library_direct_interfaces(&name)
+                                    .iter()
+                                    .map(|each| (*each).to_owned())
+                                    .collect()
+                            },
+                            |class| {
                                 class
                                     .interfaces
                                     .iter()
                                     .filter_map(|index| {
-                                        class
-                                            .constant_pool
-                                            .get_class_name(*index)
-                                            .map(str::to_owned)
+                                        class.constant_pool.get_class_name(*index).map(|iface| {
+                                            // The name a JDK would print: the
+                                            // compiler records a synthesized
+                                            // library interface under its bare
+                                            // name, and two of them under an
+                                            // ALIAS (`__Runnable`).
+                                            qualified_face(iface).to_owned()
+                                        })
                                     })
                                     .collect()
-                            })
-                            .unwrap_or_default();
+                            },
+                        );
                         let elements: Vec<JValue> = names
                             .into_iter()
                             .map(|each| JValue::Ref(Some(self.intern_class(each))))
@@ -16338,6 +16353,12 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getSuperclass" => {
+                        // An INTERFACE has no superclass (JLS: `getSuperclass`
+                        // returns null for one), though its class file names
+                        // `Object` like every other. Both halves said Object.
+                        if self.class_is_interface(&name) {
+                            return Ok(Some(JValue::NULL));
+                        }
                         let super_name = self
                             .classes
                             .get(&name)
@@ -19203,8 +19224,140 @@ fn qualified_face(target: &str) -> &str {
         "Cloneable" => "java/lang/Cloneable",
         "AutoCloseable" => "java/lang/AutoCloseable",
         "Closeable" => "java/io/Closeable",
+        "Iterable" => "java/lang/Iterable",
+        "Iterator" => "java/util/Iterator",
+        "CharSequence" => "java/lang/CharSequence",
+        "Number" => "java/lang/Number",
+        "Enum" => "java/lang/Enum",
+        // The two the compiler ALIASES: a source `Comparator` is caturra's
+        // bundled `__Comparator`, and a `Runnable` its `__Runnable`. The
+        // alias is an implementation detail that reached a student through
+        // `getInterfaces()`, which printed `interface __Runnable`.
+        "Runnable" | "__Runnable" => "java/lang/Runnable",
+        "Comparator" | "__Comparator" => "java/util/Comparator",
         other => other,
     }
+}
+
+/// The interfaces a LIBRARY class DECLARES — what `getInterfaces()` answers,
+/// which is not the same question as `library_faces` (that one is transitive,
+/// and is about what a value IS). Recorded from a real JDK 11: an empty answer
+/// for a class that plainly implements something is a confident wrong answer,
+/// the same reason `library_superclass` exists.
+#[allow(clippy::match_same_arms)] // one row per class, as recorded
+fn library_direct_interfaces(internal: &str) -> &'static [&'static str] {
+    const COMPARABLE: &[&str] = &["java/lang/Comparable"];
+    const SERIALIZABLE_COMPARABLE: &[&str] =
+        &["java/io/Serializable", "java/lang/Comparable"];
+    const TEXT: &[&str] = &[
+        "java/io/Serializable",
+        "java/lang/Comparable",
+        "java/lang/CharSequence",
+    ];
+    const SERIALIZABLE: &[&str] = &["java/io/Serializable"];
+    const COLLECTION: &[&str] = &["java/util/Collection"];
+    const SET_COPYABLE: &[&str] = &[
+        "java/util/Set",
+        "java/lang/Cloneable",
+        "java/io/Serializable",
+    ];
+    match internal {
+        "java/lang/String" | "java/lang/StringBuilder" => TEXT,
+        "java/lang/Integer" | "java/lang/Double" | "java/lang/Long" | "java/lang/Short"
+        | "java/lang/Byte" | "java/lang/Float" => COMPARABLE,
+        "java/lang/Boolean" | "java/lang/Character" | "java/io/File" => {
+            SERIALIZABLE_COMPARABLE
+        }
+        "java/lang/Number" | "java/util/Random" | "java/util/PriorityQueue" => SERIALIZABLE,
+        "java/lang/Enum" => &["java/lang/Comparable", "java/io/Serializable"],
+        "java/io/Closeable" => &["java/lang/AutoCloseable"],
+        "java/util/List" | "java/util/Set" | "java/util/Queue" => COLLECTION,
+        "java/util/Collection" => &["java/lang/Iterable"],
+        "java/util/SortedSet" => &["java/util/Set"],
+        "java/util/NavigableSet" => &["java/util/SortedSet"],
+        "java/util/SortedMap" => &["java/util/Map"],
+        "java/util/NavigableMap" => &["java/util/SortedMap"],
+        "java/util/Deque" => &["java/util/Queue"],
+        "java/util/ArrayList" | "java/util/Vector" => &[
+            "java/util/List",
+            "java/util/RandomAccess",
+            "java/lang/Cloneable",
+            "java/io/Serializable",
+        ],
+        "java/util/LinkedList" => &[
+            "java/util/List",
+            "java/util/Deque",
+            "java/lang/Cloneable",
+            "java/io/Serializable",
+        ],
+        "java/util/HashSet" | "java/util/LinkedHashSet" => SET_COPYABLE,
+        "java/util/TreeSet" => &[
+            "java/util/NavigableSet",
+            "java/lang/Cloneable",
+            "java/io/Serializable",
+        ],
+        "java/util/HashMap" => &[
+            "java/util/Map",
+            "java/lang/Cloneable",
+            "java/io/Serializable",
+        ],
+        "java/util/LinkedHashMap" => &["java/util/Map"],
+        "java/util/TreeMap" => &[
+            "java/util/NavigableMap",
+            "java/lang/Cloneable",
+            "java/io/Serializable",
+        ],
+        "java/util/ArrayDeque" => &[
+            "java/util/Deque",
+            "java/lang/Cloneable",
+            "java/io/Serializable",
+        ],
+        "java/util/EnumMap" => &["java/io/Serializable", "java/lang/Cloneable"],
+        "java/util/EnumSet" => &["java/lang/Cloneable", "java/io/Serializable"],
+        "java/util/Scanner" => &["java/util/Iterator", "java/io/Closeable"],
+        "java/util/stream/Stream" => &["java/util/stream/BaseStream"],
+        "java/util/AbstractList" => &["java/util/List"],
+        "java/util/AbstractCollection" => COLLECTION,
+        "java/util/AbstractSet" => &["java/util/Set"],
+        "java/util/AbstractMap" => &["java/util/Map"],
+        "java/util/AbstractQueue" => &["java/util/Queue"],
+        // `Stack` and `Vector` differ: a Stack declares nothing, and gets its
+        // whole face from the Vector it extends.
+        _ => &[],
+    }
+}
+
+/// Whether a library name is an INTERFACE. There is no class file to read the
+/// flag from, so `isInterface()` answered `false` for every one of them —
+/// including the `Comparable` a program's own class implements.
+fn library_is_interface(internal: &str) -> bool {
+    matches!(
+        internal,
+        "java/lang/Comparable"
+            | "java/lang/Iterable"
+            | "java/lang/Runnable"
+            | "java/lang/Cloneable"
+            | "java/lang/AutoCloseable"
+            | "java/lang/CharSequence"
+            | "java/io/Closeable"
+            | "java/io/Serializable"
+            | "java/util/List"
+            | "java/util/Collection"
+            | "java/util/Set"
+            | "java/util/SortedSet"
+            | "java/util/NavigableSet"
+            | "java/util/Map"
+            | "java/util/Map$Entry"
+            | "java/util/SortedMap"
+            | "java/util/NavigableMap"
+            | "java/util/Queue"
+            | "java/util/Deque"
+            | "java/util/Iterator"
+            | "java/util/Comparator"
+            | "java/util/RandomAccess"
+            | "java/util/stream/Stream"
+            | "java/util/stream/BaseStream"
+    )
 }
 
 #[allow(clippy::too_many_lines)] // one row per library class

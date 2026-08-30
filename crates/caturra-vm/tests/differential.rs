@@ -42326,3 +42326,55 @@ public class RejectInstanceOf {
 }
 "
 );
+
+// What a `Class` object says about the type it names. Every question was
+// answered from the class FILE, so a library name — which has none — answered
+// the default for all of them: `String.class.getInterfaces()` was empty,
+// `Comparable.class.isInterface()` was false, `Runnable.class` printed "class",
+// and a program's own class reported the compiler's spelling of the interfaces
+// it implements (`class Comparable`, `interface __Runnable`).
+differential_test!(
+    what_a_class_object_says_about_a_type,
+    "ClassFacts",
+    r#"
+import java.util.Arrays;
+
+public class ClassFacts implements Comparable<ClassFacts>, Cloneable {
+    interface Shape { double area(); }
+    static abstract class Base implements Shape, Runnable {}
+    static class Circle extends Base {
+        public double area() { return 1; }
+        public void run() { }
+    }
+    enum Kind implements Shape { ONE { public double area() { return 2; } } }
+
+    public int compareTo(ClassFacts other) { return 0; }
+
+    static void show(Class<?> c) {
+        System.out.println(c + " | " + c.getName() + " | " + c.getSimpleName()
+                + " | " + c.isInterface() + c.isEnum() + c.isArray() + c.isPrimitive()
+                + " | " + c.getSuperclass() + " | " + Arrays.toString(c.getInterfaces()));
+    }
+
+    public static void main(String[] args) {
+        // The program's own types, including the interfaces it implements.
+        show(ClassFacts.class);
+        show(Shape.class);
+        show(Base.class);
+        show(Circle.class);
+        show(Kind.class);
+        // The library's, which have no class file to read any of this from.
+        show(String.class);
+        show(Integer.class);
+        show(Object.class);
+        show(int.class);
+        show(int[].class);
+        show(java.util.ArrayList.class);
+        show(java.util.Map.class);
+        show(Comparable.class);
+        show(Runnable.class);
+        show(Iterable.class);
+    }
+}
+"#
+);
