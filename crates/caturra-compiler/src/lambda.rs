@@ -1397,6 +1397,38 @@ fn substitute_vars(
     }
 }
 
+/// What a `Scanner`'s reader answers, by name. `hasNext…` is the question and
+/// `next…` the value, which is the whole of the class a corpus program uses.
+fn scanner_answer(read: &str) -> Option<TypeRef> {
+    if read.starts_with("hasNext") {
+        return Some(TypeRef::Boolean);
+    }
+    Some(match read {
+        "nextLine" | "next" => TypeRef::Named(String::from("String")),
+        "nextInt" => TypeRef::Int,
+        "nextLong" => TypeRef::Long,
+        "nextDouble" | "nextFloat" => TypeRef::Double,
+        "nextBoolean" => TypeRef::Boolean,
+        _ => return None,
+    })
+}
+
+/// What a LIBRARY call answers: the factories that are typed from their
+/// ARGUMENT (`Optional.of(x)`), and everything else from the receiver's own
+/// type, which is the reading [`library_return`] already holds.
+fn library_call_type(owner: &Expr, method: &str, args: &[Expr], ctx: &Ctx) -> Option<TypeRef> {
+    if matches!(method, "of" | "ofNullable")
+        && args.len() == 1
+        && names_library_class(owner, "Optional")
+    {
+        return Some(TypeRef::Generic {
+            base: String::from("Optional"),
+            args: vec![boxed_element(static_type_of(&args[0], ctx)?)],
+        });
+    }
+    library_return(&static_type_of(owner, ctx)?, method, args.len())
+}
+
 /// What a method of the PROGRAM answers, on a receiver whose class the pass can
 /// name. The declared return as written — a type VARIABLE is left alone here,
 /// since the receiver's own argument is what would replace it and that is
@@ -1578,6 +1610,19 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             ..
         } if user_method_return(owner, method, args.len(), ctx).is_some() => {
             user_method_return(owner, method, args.len(), ctx)
+        }
+        // A LIBRARY call whose answer is written on its receiver —
+        // `line.split(",")` is a `String[]`, `text.toUpperCase()` a String.
+        // A `var` holding one had no type, so the stream over it had no
+        // element: the same gap as the user-method one, on the other half of
+        // the world.
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } if library_call_type(owner, method, args, ctx).is_some() => {
+            library_call_type(owner, method, args, ctx)
         }
         // An enum's two synthetic statics: `values()` answers an ARRAY of the
         // enum, `valueOf(String)` one constant. Without them a stream, a list
@@ -5003,6 +5048,10 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             | "Collection"
     );
     match (base, method, argc) {
+        // A SCANNER's accessors, all of them at once. A `var` holding
+        // `in.nextLine()` — the first line of half the corpus's programs — had
+        // no type, so the split or the stream after it had no element.
+        ("Scanner", read, _) if scanner_answer(read).is_some() => scanner_answer(read),
         ("String", "charAt", 1) | ("Character", "charValue", 0) => Some(TypeRef::Char),
         (
             "String",

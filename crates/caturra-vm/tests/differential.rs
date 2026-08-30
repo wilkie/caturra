@@ -42098,3 +42098,40 @@ public class HandsBack {
 }
 "#
 );
+
+// Programs that READ, which is what a corpus level does — a `Scanner` over
+// stdin, `var` for every local, and the collections and streams the session
+// taught to carry their element. Two failed: a `var` holding a LIBRARY call
+// (`in.nextLine().split(",")`) had no type at all, because the reader that
+// types an initializer had just learned the program's own methods and not the
+// library's, and a Scanner's own accessors were in no table.
+differential_test_stdin!(
+    a_program_that_reads_its_input,
+    "ReadsInput",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class ReadsInput {
+    public static void main(String[] args) {
+        var in = new Scanner(System.in);
+        var name = in.nextLine();
+        System.out.println("hi " + name.toUpperCase());
+
+        var numbers = in.nextLine().split(",");
+        System.out.println(Arrays.stream(numbers).mapToInt(Integer::parseInt).sum());
+
+        var first = Optional.of(in.next());
+        System.out.println(first.map(String::length).get());
+
+        var counts = new TreeMap<String, Integer>();
+        while (in.hasNext()) {
+            counts.merge(in.next(), 1, Integer::sum);
+        }
+        counts.forEach((word, count) -> System.out.println(word + "=" + count));
+    }
+}
+"#,
+    "ada\n1,2,3\nhello a b a\n"
+);

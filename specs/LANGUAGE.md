@@ -10814,3 +10814,23 @@ reaches the program's own method only through an implicit `this`.**
 Each is now answered by one helper — what a method of the program returns, on a
 receiver that is either a value whose class can be named or the class itself.
 Pinned by `what_a_class_hands_back`.
+
+### A program that reads its input (2026-08-30)
+
+Ten programs in the shape a level actually takes — a `Scanner` over stdin,
+`var` for every local, and the collections and streams the rest of this session
+taught to carry their element. Two failed, and both were the other half of the
+reading just added:
+
+**A `var` holding a LIBRARY call.** `var numbers = in.nextLine().split(",")`
+had no type at all: the reader that types an initializer had just learned the
+PROGRAM's own methods, and a library call's answer is written on its receiver —
+which is a reading the pass already held for lambda bodies and had never used
+here.
+
+**A `Scanner`'s own accessors were in no table.** `in.nextLine()` is the first
+line of half the corpus's programs, and nothing said it answers a `String`. The
+readers and the questions are one function now (`hasNext…` is a boolean,
+`next…` the value).
+
+Pinned by `a_program_that_reads_its_input`.
