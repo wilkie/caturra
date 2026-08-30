@@ -41456,3 +41456,80 @@ public class UserGeneric {
 }
 "#
 );
+
+// `var` says nothing on its own — the INITIALIZER does — and the pass that
+// types lambdas kept the placeholder, so `var items = new ArrayList<>(
+// List.of(item))` had no element and the lambda in `items.stream().map(…)` was
+// refused as though the position were not a functional-interface one. Thirty
+// initializer shapes, each read back through a method on what `var` inferred.
+differential_test!(
+    what_var_infers,
+    "VarInference",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class VarItem implements Comparable<VarItem> {
+    private final String name;
+    VarItem(String name) { this.name = name; }
+    String name() { return name; }
+    public int compareTo(VarItem o) { return name.compareTo(o.name); }
+    @Override public String toString() { return name; }
+}
+
+public class VarInference {
+    public static void main(String[] args) {
+        var items = new ArrayList<>(List.of(new VarItem("k")));
+        var names = items.stream().map(VarItem::name).collect(Collectors.toList());
+        System.out.println(names.get(0).length() + " " + names);
+        var lengths = items.stream().map(i -> i.name().length()).collect(Collectors.toList());
+        System.out.println(lengths.get(0) + 1);
+
+        var copied = new ArrayList<>(Arrays.asList(new VarItem("a")));
+        System.out.println(copied.get(0).name());
+        var set = new HashSet<>(List.of(new VarItem("b")));
+        System.out.println(set.iterator().next().name());
+        var sorted = new TreeSet<>(List.of(new VarItem("c")));
+        System.out.println(sorted.first().name());
+        var byKey = new HashMap<>(Map.of("k", new VarItem("d")));
+        System.out.println(byKey.get("k").name());
+
+        var array = new VarItem[] { new VarItem("e") };
+        System.out.println(array[0].name());
+        var grid = new int[2][3];
+        System.out.println(grid.length + grid[0].length);
+        var maybe = Optional.of(new VarItem("f"));
+        System.out.println(maybe.get().name());
+        var stream = Stream.of(new VarItem("g"));
+        System.out.println(stream.findFirst().get().name());
+        var entry = Map.entry("k", new VarItem("h"));
+        System.out.println(entry.getValue().name());
+        var cursor = List.of(new VarItem("i")).iterator();
+        System.out.println(cursor.next().name());
+        var nested = new ArrayList<List<VarItem>>();
+        nested.add(new ArrayList<>(List.of(new VarItem("j"))));
+        System.out.println(nested.get(0).get(0).name());
+
+        var total = 0;
+        for (var i = 0; i < 3; i++) {
+            total += i;
+        }
+        System.out.println(total);
+        for (var one : items) {
+            System.out.println(one.name());
+        }
+        var builder = new StringBuilder("x");
+        builder.append("y");
+        System.out.println(builder.toString().length());
+        var text = "abc";
+        var letter = 'x';
+        var number = 1.5;
+        var flag = true;
+        System.out.println(text.length() + " " + (int) letter + " " + number * 2 + " " + flag);
+        var spread = Arrays.asList(array);
+        System.out.println(spread.get(0).name() + spread.size());
+    }
+}
+"#
+);

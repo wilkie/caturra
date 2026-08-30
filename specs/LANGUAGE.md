@@ -10488,3 +10488,28 @@ collections have always used, so a widening argument passes and a mismatched
 one is still refused — in javac's words, checked both ways.
 
 Pinned by `a_user_generic_answers_its_argument`.
+
+### What `var` infers (2026-08-30)
+
+Thirty initializer shapes, each declared with `var` and then read back through
+a method on what it inferred. One failed, and it took three readings to close.
+
+**`var` says nothing on its own; the initializer does** — and the pass that
+types lambdas kept the placeholder. So `var items = new ArrayList<>(…)`
+recorded a local of type `var`, and the lambda in `items.stream().map(…)` had
+no element to be typed against: refused as though the position were not a
+functional-interface one, in a program whose every other line compiled.
+
+Reading the initializer needed two more shapes the pass could not see:
+
+- **A DIAMOND takes its argument from what it copies.** `new
+  ArrayList<>(List.of(item))` is an `ArrayList<Item>`, and the pass read only
+  the class.
+- **The literal collection factories.** `List.of`, `Set.of` and
+  `Arrays.asList` are how a collection is written inline. A LONE reference
+  array SPREADS there — `Arrays.asList(Kind.values())` is a list of the
+  constants, not a one-element list holding the array — and a primitive one
+  does not, which the pinned enum test caught the moment the spread was
+  written without that rule.
+
+Pinned by `what_var_infers`.

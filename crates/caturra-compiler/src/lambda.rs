@@ -1372,8 +1372,59 @@ fn substitute_vars(
     }
 }
 
+/// The type of a literal collection factory — `List.of(…)`, `Set.of(…)`,
+/// `Arrays.asList(…)`. They are how a collection is written inline, so without
+/// them `var items = new ArrayList<>(List.of(item))` had no element and the
+/// lambda in the stream after it had no target.
+fn literal_collection_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        ..
+    } = expr
+    else {
+        return None;
+    };
+    let Expr::Name { path, .. } = owner.as_ref() else {
+        return None;
+    };
+    let owner = path.last().map(String::as_str)?;
+    if args.is_empty() || !matches!((owner, method.as_str()), ("List" | "Set", "of") | ("Arrays", "asList")) {
+        return None;
+    }
+    let first = static_type_of(&args[0], ctx)?;
+    // A LONE reference array SPREADS: `Arrays.asList(Kind.values())` is a list
+    // of the constants, not a one-element list holding the array. (A primitive
+    // array does not — `List.of(new int[2])` is a `List<int[]>` — which is why
+    // the component's kind decides.)
+    let elem = match (&first, args.len()) {
+        (TypeRef::Array(component), 1)
+            if !matches!(
+                **component,
+                TypeRef::Int
+                    | TypeRef::Long
+                    | TypeRef::Double
+                    | TypeRef::Float
+                    | TypeRef::Short
+                    | TypeRef::Byte
+                    | TypeRef::Char
+                    | TypeRef::Boolean
+            ) =>
+        {
+            (**component).clone()
+        }
+        _ => boxed_element(first),
+    };
+    Some(TypeRef::Generic {
+        base: String::from(if owner == "Set" { "Set" } else { "List" }),
+        args: vec![elem],
+    })
+}
+
 /// The declared type of an expression, for the shapes this pass can see. Used
 /// to pin a type variable from an argument at a call.
+#[allow(clippy::too_many_lines)] // one arm per expression shape
 fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     use crate::ast::Literal;
     match expr {
@@ -1410,11 +1461,39 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             base: class.clone(),
             args: type_args.clone(),
         }),
+        // A DIAMOND over a collection — `new ArrayList<>(List.of(item))` —
+        // takes its argument from the collection it copies. Written out this
+        // is what `var` needs: the declaration says nothing, so the
+        // initializer is the only thing that can say what the element is, and
+        // without it the lambda in `items.stream().map(…)` had no target.
+        Expr::NewObject {
+            class,
+            type_args,
+            args,
+            ..
+        } if type_args.is_empty() && args.len() == 1 => {
+            let source = static_type_of(&args[0], ctx);
+            match source {
+                Some(TypeRef::Generic { args: from, .. }) if !from.is_empty() => {
+                    Some(TypeRef::Generic {
+                        base: class.clone(),
+                        args: from,
+                    })
+                }
+                _ => Some(TypeRef::Named(class.clone())),
+            }
+        }
         // A diamond or argument-less `new T()` still says WHICH class — which
         // is the whole answer for a supplier: `toCollection(TreeSet::new)`
         // gathers into a `TreeSet`, and reading the class as nothing made it
         // the default list.
         Expr::NewObject { class, .. } => Some(TypeRef::Named(class.clone())),
+        // The literal collection factories, read by a helper: they are how a
+        // collection is written inline, and the spread rule is a paragraph of
+        // its own.
+        Expr::Call { .. } if literal_collection_type(expr, ctx).is_some() => {
+            literal_collection_type(expr, ctx)
+        }
         // An enum's two synthetic statics: `values()` answers an ARRAY of the
         // enum, `valueOf(String)` one constant. Without them a stream, a list
         // or a `Stream.of` over `Kind.values()` had an `Object` element and
@@ -1551,8 +1630,21 @@ fn desugar_stmt(stmt: &mut Stmt, ctx: &mut Ctx) {
                 if let Some(init) = &mut d.init {
                     desugar_expr(init, Some(ty), ctx);
                 }
+                // `var` says nothing on its own: the INITIALIZER does.
+                // Recording the placeholder left `var items = new
+                // ArrayList<>(…)` with no element, so the lambda in
+                // `items.stream().map(…)` had no target and was refused as
+                // though the position were not a functional-interface one.
+                let declared = if matches!(ty, TypeRef::Var) {
+                    d.init
+                        .as_ref()
+                        .and_then(|init| static_type_of(init, ctx))
+                        .unwrap_or(TypeRef::Var)
+                } else {
+                    ty.clone()
+                };
                 if let Some(frame) = ctx.scope.last_mut() {
-                    frame.insert(d.name.clone(), ty.clone());
+                    frame.insert(d.name.clone(), declared);
                 }
             }
         }
