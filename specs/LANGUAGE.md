@@ -10834,3 +10834,18 @@ readers and the questions are one function now (`hasNext…` is a boolean,
 `next…` the value).
 
 Pinned by `a_program_that_reads_its_input`.
+
+### `var` holding a library call (2026-08-30)
+
+Eighteen cells: `var` holding each ordinary library call, then a use that needs
+the type. Four failed, and the reason is in the table's history — the reader
+that says what a library call answers grew for LAMBDA BODIES, where the answer
+is usually a scalar (`s.length()`, `map.get(k)`). `var` asks the same table
+about the VIEWS: a `subList`, a `keySet`, a `values`, a `toArray`, a stream's
+`findFirst`. Each of those answers a container whose element is the receiver's,
+and none of them was written down.
+
+They are now — and a `Stream` takes its argument directly rather than through
+the collection-element reader, which does not know it.
+
+Pinned by `a_var_holding_a_library_call`.

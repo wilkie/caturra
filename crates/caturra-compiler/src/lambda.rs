@@ -5024,6 +5024,7 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
 /// The result of the library methods a lambda body commonly ends in. A SUBSET,
 /// kept here only to type a mapped element: a method missing from it leaves the
 /// element `Object`, which is where every one of them stood before.
+#[allow(clippy::too_many_lines)] // one arm per library shape
 fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeRef> {
     let base = match receiver {
         TypeRef::Named(name) => name.rsplit('.').next().unwrap_or(name),
@@ -5131,6 +5132,49 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[1].clone()),
             _ => None,
         },
+        // The VIEWS and derived containers, whose element is the receiver's.
+        // `var` reads this table now, so a local holding one of them — a
+        // `subList`, a `keySet`, a `toArray`, a stream's `findFirst` — had no
+        // type, though the same expression inline had always worked.
+        (_, "subList", 2) if collection => Some(receiver.clone()),
+        (_, "keySet", 0) => map_half(receiver, 0).map(|key| TypeRef::Generic {
+            base: String::from("Set"),
+            args: vec![key],
+        }),
+        (_, "values", 0) => map_half(receiver, 1).map(|value| TypeRef::Generic {
+            base: String::from("Collection"),
+            args: vec![value],
+        }),
+        (_, "toArray", _) => element_of_declared(receiver).map(|e| TypeRef::Array(Box::new(e))),
+        ("Stream", "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek", _) => {
+            Some(receiver.clone())
+        }
+        // A `Stream` is not in the collection set (its element is not read the
+        // same way), so its single argument is taken directly.
+        ("Stream", "findFirst" | "findAny", 0) => match receiver {
+            TypeRef::Generic { args, .. } if args.len() == 1 => Some(TypeRef::Generic {
+                base: String::from("Optional"),
+                args: vec![args[0].clone()],
+            }),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The KEY (0) or VALUE (1) of a written map type.
+fn map_half(receiver: &TypeRef, at: usize) -> Option<TypeRef> {
+    match receiver {
+        TypeRef::Generic { base, args }
+            if args.len() == 2
+                && matches!(
+                    simple_base(base),
+                    "Map" | "HashMap" | "LinkedHashMap" | "TreeMap" | "SortedMap"
+                        | "NavigableMap" | "EnumMap"
+                ) =>
+        {
+            args.get(at).cloned()
+        }
         _ => None,
     }
 }

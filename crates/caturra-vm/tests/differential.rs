@@ -42135,3 +42135,57 @@ public class ReadsInput {
 "#,
     "ada\n1,2,3\nhello a b a\n"
 );
+
+// `var` holding each ordinary LIBRARY call, then a use that needs the type.
+// Four of eighteen failed: the table that says what a library call answers had
+// grown for LAMBDA BODIES, where a scalar is usually the answer, and `var`
+// asks it about the VIEWS too — a `subList`, a `keySet`, a `toArray`, a
+// stream's `findFirst`.
+differential_test!(
+    a_var_holding_a_library_call,
+    "VarFromLibrary",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class VarFromLibrary {
+    public static void main(String[] args) {
+        List<String> names = new ArrayList<>(List.of("ada", "bo"));
+        Map<String, Integer> ages = new TreeMap<>();
+        ages.put("ada", 36);
+        String text = "a,b,c";
+        StringBuilder builder = new StringBuilder("xy");
+
+        var parts = text.split(",");
+        System.out.println(Arrays.stream(parts).map(String::toUpperCase).collect(Collectors.toList()));
+        var shout = text.toUpperCase();
+        System.out.println(shout.length() + shout.substring(0, 1));
+        var count = names.size();
+        System.out.println(count + 1);
+        var age = ages.get("ada");
+        System.out.println(age + 1);
+        var cursor = names.iterator();
+        System.out.println(cursor.next().length());
+        var slice = names.subList(0, 1);
+        System.out.println(slice.stream().map(String::length).collect(Collectors.toList()));
+        var array = names.toArray(new String[0]);
+        System.out.println(Arrays.stream(array).map(String::toUpperCase).collect(Collectors.toList()));
+        var maybe = names.stream().findFirst();
+        System.out.println(maybe.map(String::length).get());
+        var stream = names.stream();
+        System.out.println(stream.map(String::toUpperCase).collect(Collectors.joining()));
+        var joined = String.join("-", names);
+        System.out.println(joined.split("-").length);
+        var keys = ages.keySet();
+        System.out.println(keys.stream().map(String::toUpperCase).collect(Collectors.toList()));
+        var entry = ages.entrySet().iterator().next();
+        System.out.println(entry.getKey().length() + entry.getValue());
+        var built = builder.toString();
+        System.out.println(built.length() + built.toUpperCase());
+        var letters = text.toCharArray();
+        System.out.println(letters.length + " " + letters[0]);
+    }
+}
+"#
+);
