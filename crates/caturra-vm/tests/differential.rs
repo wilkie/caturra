@@ -343,6 +343,40 @@ macro_rules! differential_reject {
     };
 }
 
+/// A program BOTH engines refuse, in the SAME WORDS — the first line of
+/// javac's first error, against caturra's.
+///
+/// `differential_reject!` asserts only the shape: both said no. A pin family
+/// that cannot check the REASON passes for the wrong one, which an audit of
+/// these caught twice; where the message is the point, this is the pin. Only
+/// the first line is compared, since javac's second line is a caret diagram
+/// (or, for `var`, a parenthetical reason). Both sides are cut to their first
+/// line, so the wording that names the mistake is what is compared.
+macro_rules! differential_wording {
+    ($name:ident, $class:literal, $source:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            let javac = javac_first_error($class, $source)
+                .unwrap_or_else(|| panic!("javac ACCEPTS {}", $class));
+            let caturra = caturra_first_error($class, $source)
+                .unwrap_or_else(|| panic!("caturra ACCEPTS {}", $class));
+            let first_line = |text: &str| {
+                text.lines().next().unwrap_or_default().trim().to_owned()
+            };
+            assert_eq!(
+                first_line(&javac),
+                first_line(&caturra),
+                "the two engines refuse {} for differently worded reasons",
+                $class
+            );
+        }
+    };
+}
+
 /// A program javac accepts and caturra refuses. caturra is deliberately
 /// stricter in a handful of places — always where javac's parameter is
 /// `Object` or an erased `Collection`, and the mismatch would only surface as
@@ -41679,4 +41713,64 @@ public class FieldContents {
     }
 }
 "#
+);
+
+// Generics are INVARIANT: `Optional<ArrayList<Pet>>` is not an
+// `Optional<List<Pet>>`, and javac refuses the assignment between two declared
+// variables. caturra accepts it, because the rule it needs — the value written
+// as the CLASS where the variable says the interface, which javac reaches by
+// INFERENCE at the `Optional.of(…)` call — is stated on the types alone, and
+// the types cannot tell an inference site from an assignment. Looser than
+// javac in a corner where the looseness cannot lose type safety: both sides
+// erase to the same class, and every READ through the target still answers the
+// target's element.
+looser_than_javac!(
+    loose_a_nested_argument_widens_between_variables,
+    "LooseNestedWiden",
+    "import java.util.*;\npublic class LooseNestedWiden {\n  static void r() {\n    Optional<ArrayList<String>> src = Optional.of(new ArrayList<>());\n    Optional<List<String>> dst = src;\n    System.out.println(dst.isPresent());\n  }\n}"
+);
+
+// The wording of the two paths this session touched, checked against javac's
+// on the programs that meet them. An array DIMENSION has two javac sentences —
+// a lossy conversion for a numeric one, an incompatible type for anything else
+// — and a BOXED value names the wrapper, since unboxing then narrowing is not
+// an assignment conversion. `var` with nothing to infer from names the
+// VARIABLE and gives the reason on a second, parenthesized line.
+differential_wording!(
+    a_dimension_that_is_not_an_int,
+    "BadDimension",
+    r"
+public class BadDimension {
+    public static void main(String[] args) {
+        String[] lossy = new String[1.5];
+        System.out.println(lossy.length);
+    }
+}
+"
+);
+
+differential_wording!(
+    a_dimension_that_is_a_string,
+    "TextDimension",
+    r#"
+public class TextDimension {
+    public static void main(String[] args) {
+        String[] wrong = new String["two"];
+        System.out.println(wrong.length);
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_var_with_nothing_to_infer_from,
+    "EmptyVar",
+    r"
+public class EmptyVar {
+    public static void main(String[] args) {
+        var nothing;
+        System.out.println(nothing);
+    }
+}
+"
 );

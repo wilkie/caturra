@@ -17781,17 +17781,57 @@ impl BodyGen<'_> {
                 self.error(span, "'var' declares exactly one variable");
                 return;
             };
+            // javac names the VARIABLE and puts the reason on a second line,
+            // parenthesized — the same shape for every one of these, and the
+            // reason is what tells a student which rule they met.
+            let cannot_infer = |name: &str, why: &str| {
+                format!("cannot infer type for local variable {name}\n  ({why})")
+            };
             let Some(init) = &declarator.init else {
-                self.error(span, "cannot infer type for 'var' without an initializer");
+                self.error(
+                    span,
+                    cannot_infer(
+                        &declarator.name,
+                        "cannot use 'var' on variable without initializer",
+                    ),
+                );
                 return;
             };
-            if matches!(
-                init,
-                Expr::ArrayLiteral { .. } | Expr::Lambda { .. } | Expr::MethodRef { .. }
-            ) {
+            if let Expr::Literal {
+                value: Literal::Null,
+                ..
+            } = init
+            {
                 self.error(
-                    init.span(),
-                    "cannot infer type for 'var' from this initializer",
+                    span,
+                    cannot_infer(&declarator.name, "variable initializer is 'null'"),
+                );
+                return;
+            }
+            if matches!(init, Expr::Lambda { .. }) {
+                self.error(
+                    span,
+                    cannot_infer(
+                        &declarator.name,
+                        "lambda expression needs an explicit target-type",
+                    ),
+                );
+                return;
+            }
+            if matches!(init, Expr::MethodRef { .. }) {
+                self.error(
+                    span,
+                    cannot_infer(
+                        &declarator.name,
+                        "method reference needs an explicit target-type",
+                    ),
+                );
+                return;
+            }
+            if matches!(init, Expr::ArrayLiteral { .. }) {
+                self.error(
+                    span,
+                    cannot_infer(&declarator.name, "array initializer needs an explicit target-type"),
                 );
                 return;
             }
@@ -17909,8 +17949,8 @@ impl BodyGen<'_> {
             }
             if matches!(inferred, JType::Null | JType::Error) {
                 self.error(
-                    init.span(),
-                    "cannot infer type for 'var' from this initializer",
+                    span,
+                    cannot_infer(&declarator.name, "variable initializer is 'null'"),
                 );
                 return;
             }
@@ -29506,18 +29546,35 @@ impl BodyGen<'_> {
             // which UNBOXES: `new String[count]` for an `Integer count` — or
             // for a `list.get(0)` — is ordinary Java, and was refused. A
             // `byte`/`short` promotes to `int` the same way.
-            let size_ty = self.unbox_wrapper(size_ty);
+            let promoted = self.unbox_wrapper(size_ty);
             if !matches!(
-                size_ty,
+                promoted,
                 JType::Int | JType::Char | JType::Short | JType::Byte | JType::Error
             ) {
-                self.error(
-                    size.span(),
+                // javac's two sentences: a NUMERIC dimension that does not fit
+                // is a lossy conversion, anything else an incompatible type —
+                // and it names the type as WRITTEN, so an `Integer` reads as
+                // `Integer` and not as the `int` it unboxes to. The
+                // parenthetical "(array size)" caturra added was its own.
+                // A BOXED value that unboxes to a too-wide primitive is not a
+                // lossy conversion in javac's telling — it names the WRAPPER
+                // and says the conversion does not exist (`Long cannot be
+                // converted to int`), because unboxing then narrowing is not
+                // an assignment conversion.
+                let message = if !matches!(size_ty, JType::Boxed(_))
+                    && matches!(promoted, JType::Long | JType::Double | JType::Float)
+                {
                     format!(
-                        "incompatible types: {} cannot be converted to int (array size)",
+                        "incompatible types: possible lossy conversion from {} to int",
+                        promoted.describe(self.table)
+                    )
+                } else {
+                    format!(
+                        "incompatible types: {} cannot be converted to int",
                         size_ty.describe(self.table)
-                    ),
-                );
+                    )
+                };
+                self.error(size.span(), message);
             }
         }
 

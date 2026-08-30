@@ -10557,3 +10557,47 @@ receiver.
   pass's scope; only the parameter map knows what `d` is.
 
 Pinned by `what_a_field_holds`.
+
+### The other direction (2026-08-30)
+
+Every unit above WIDENED what caturra accepts. Twenty programs that must still
+be REFUSED — a wrong element inside a container's type argument, a collector
+handed a String, an array constructor reference of the wrong component, an
+array dimension that is a `double` or a `String`, a `var` with nothing to infer
+from — were run against both engines. **All twenty are refused by both**, which
+is what the loosening had to leave standing.
+
+Seven now say what javac says, up from one. What was fixed is the wording of
+the paths this session touched:
+
+- An array DIMENSION reported "cannot be converted to int (array size)", a
+  parenthetical of caturra's own. javac has two sentences here: a numeric
+  dimension that does not fit is "possible lossy conversion from double to
+  int", anything else "X cannot be converted to int" — and a BOXED value names
+  the WRAPPER (`Long cannot be converted to int`), because unboxing followed by
+  narrowing is not an assignment conversion at all.
+- `var` with nothing to infer from said "cannot infer type for 'var' from this
+  initializer". javac names the VARIABLE and puts the reason on a second,
+  parenthesized line — a different reason for each rule met: no initializer,
+  a `null` initializer, a lambda or method reference that needs a target type.
+
+The rest are javac's INFERENCE messages ("inference variable T has incompatible
+bounds"), which caturra does not model; it names the two concrete types
+instead, which locates the same mistake.
+
+The suite gained the pin family this needed. `differential_reject!` asserts
+only the SHAPE — both engines said no — and a pin that cannot check the reason
+passes for the wrong one, which an audit of these caught twice.
+`differential_wording!` compares the first line of javac's first error against
+caturra's, so a message that drifts is a failing test rather than a thing
+someone notices later. The three programs above are pinned with it.
+
+**One thing this session made looser than javac.** Generics are invariant:
+`Optional<ArrayList<Pet>>` is not an `Optional<List<Pet>>`, and javac refuses
+the assignment between two declared variables. caturra accepts it, because the
+rule it needs — the value written as the CLASS where the variable says the
+interface, which javac reaches by inference at the `Optional.of(…)` call — is
+stated on the types alone, and the types cannot tell an inference site from an
+assignment. The looseness cannot lose type safety (both sides erase to one
+class, and every read through the target still answers the target's element).
+Pinned by `loose_a_nested_argument_widens_between_variables`.
