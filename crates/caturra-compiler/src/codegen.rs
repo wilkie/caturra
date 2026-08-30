@@ -29,6 +29,23 @@ use crate::ast::{
 };
 use crate::diagnostics::{Diagnostic, Severity, SourceSpan};
 
+/// The candidate nested class whose ENCLOSING class most closely encloses
+/// `scope` — the innermost declaration of that simple name that is in scope.
+/// `None` when none of them is, which is when the name was written outside
+/// every class that declares one (javac does not see it there either; caturra
+/// keeps resolving it, as it always has, to whichever registered first).
+fn innermost_in_scope<'a>(candidates: &'a [String], scope: &str) -> Option<&'a String> {
+    candidates
+        .iter()
+        .filter(|binary| {
+            let Some((enclosing, _)) = binary.rsplit_once('$') else {
+                return false;
+            };
+            scope == enclosing || scope.starts_with(&format!("{enclosing}$"))
+        })
+        .max_by_key(|binary| binary.len())
+}
+
 /// Generate class files for every class across all parsed units.
 /// Method calls resolve against every class in the compilation, so the
 /// signature table is built first. Diagnostics and classes are both
@@ -42,6 +59,7 @@ pub fn generate(units: &[(String, CompilationUnit)]) -> (Vec<CompiledClass>, Vec
     let mut classes = Vec::new();
     for (path, unit) in units {
         for class in &unit.classes {
+            table.enter(class);
             check_enum_static_references(class, path, &mut diagnostics);
             crate::flow::check(class, path, &table, &mut diagnostics);
             crate::thrown::check(class, path, &table, &mut diagnostics);
@@ -555,6 +573,18 @@ pub(crate) struct MethodTable {
     /// name is also what lets `Holder.Node` coexist with a top-level `Node`,
     /// which used to be "class 'Node' is already defined".
     by_source: std::collections::HashMap<String, String>,
+    /// Every nested class answering to a given SIMPLE name, by binary name.
+    /// Two enclosing classes may each declare a `Node`, and `by_source` — one
+    /// entry per spelling — can only hold the first: the second class's own
+    /// `new Node()` then built the FIRST one's, silently, with no diagnostic.
+    /// A simple name is resolved in the scope it is written in (JLS §6.5.5.1),
+    /// which is what `scope` below records.
+    same_simple_name: std::collections::HashMap<String, Vec<String>>,
+    /// The BINARY name of the class whose members are being resolved, for the
+    /// scoped lookup above. Set once per class by each pass that walks them;
+    /// empty outside any class body, where a nested simple name is not in
+    /// scope at all.
+    scope: std::cell::RefCell<String>,
     /// `throws` clauses by (class, method-or-`<init>`, arity), for JLS §11.2
     /// checked-exception enforcement. A side table (not a `MethodSig` field)
     /// so the many synthetic-signature literals stay untouched; empty clauses
@@ -723,6 +753,8 @@ impl MethodTable {
             static_imports,
             nested: std::cell::RefCell::default(),
             by_source: std::collections::HashMap::new(),
+            same_simple_name: std::collections::HashMap::new(),
+            scope: std::cell::RefCell::default(),
             throws_clauses: std::collections::HashMap::new(),
             method_access: std::collections::HashMap::new(),
             synthesized: std::collections::HashSet::new(),
@@ -1111,6 +1143,11 @@ impl MethodTable {
                         .by_source
                         .entry(class.name.clone())
                         .or_insert_with(|| binary.clone());
+                    table
+                        .same_simple_name
+                        .entry(class.name.clone())
+                        .or_default()
+                        .push(binary.clone());
                     // Every dotted SUFFIX of the binary name is a legal source
                     // spelling: `Main$H$Inner` is written `Main.H.Inner` or
                     // `H.Inner`, and from outside the enclosing class javac
@@ -1181,6 +1218,9 @@ impl MethodTable {
         // list.
         for (path, unit) in units {
             for class in &unit.classes {
+                // Members resolve in this class's own scope, so a simple
+                // name it declares (`Node`) beats another class's.
+                table.enter(class);
                 let mut methods = Vec::new();
                 let mut fields = Vec::new();
 
@@ -2833,13 +2873,40 @@ impl MethodTable {
     /// Reads that start from a `ClassId` come back as the binary name, so both
     /// have to land on the same entry.
     fn info(&self, name: &str) -> Option<&ClassInfo> {
-        match self.classes.get(name) {
-            Some(info) => Some(info),
-            None => self
-                .by_source
-                .get(name)
-                .and_then(|binary| self.classes.get(binary)),
+        // A simple name belongs to whichever class declaring it is in SCOPE
+        // (JLS §6.5.5.1): inside `B`, `Node` is `B$Node` even where `A$Node`
+        // registered first, and a MEMBER type shadows a top-level class of the
+        // same name — which is why this is asked before the direct lookup.
+        if let Some(candidates) = self.same_simple_name.get(name)
+            && let Some(binary) = innermost_in_scope(candidates, &self.scope.borrow())
+        {
+            return self.classes.get(binary);
         }
+        if let Some(info) = self.classes.get(name) {
+            return Some(info);
+        }
+        self.by_source
+            .get(name)
+            .and_then(|binary| self.classes.get(binary))
+    }
+
+    /// Set the class whose body is being resolved, for [`Table::info`]'s
+    /// scoped lookup. Every pass that walks the declarations announces the one
+    /// it is on; a pass that does not simply resolves as it always did.
+    ///
+    /// A SYNTHESIZED class — a lambda, a method reference, an anonymous body —
+    /// has no binary name of its own, and the code in it was written inside
+    /// the class that made it: that is the scope its names resolve in. Giving
+    /// it its own hoisted name instead made a lambda implement a DIFFERENT
+    /// interface from the one its target resolved to, when two enclosing
+    /// classes each declared one of that name.
+    fn enter(&self, class: &ClassDecl) {
+        let scope = match (&class.binary_name, &class.enclosing) {
+            (Some(binary), _) => binary.clone(),
+            (None, Some(enclosing)) => enclosing.clone(),
+            (None, None) => class.name.clone(),
+        };
+        self.scope.replace(scope);
     }
 
     /// Re-argument a resolved collection type with the RAW marker. The type is
@@ -24852,15 +24919,21 @@ impl BodyGen<'_> {
                     Some(CallTarget::Static(format!("{enclosing}.{nested}")))
                 }
                 // `Outer.Nested.staticMethod()` — a nested TYPE named
-                // through its enclosing one. Nested types are flattened to
-                // their simple names, so the qualifier carries nothing and
-                // the call is an ordinary static call on the last segment.
+                // through its enclosing one. The qualifier is what tells
+                // `A.Node` from `B.Node`, so the pair resolves to the ONE
+                // class it names, by binary name; dropping it and calling the
+                // simple name ran whichever class registered first.
                 [enclosing, nested]
                     if self.lookup(enclosing).is_none()
                         && self.table.has_class(enclosing)
                         && self.table.has_class(nested) =>
                 {
-                    Some(CallTarget::Static((*nested).to_owned()))
+                    let dotted = format!("{enclosing}.{nested}");
+                    let named = self
+                        .table
+                        .qualified_nested_class(&dotted)
+                        .map_or_else(|| (*nested).to_owned(), |id| self.table.class_name(id).to_owned());
+                    Some(CallTarget::Static(named))
                 }
                 // Dotted receivers (p.pos.move()) are general
                 // expressions; name() knows how to read them.
@@ -27712,7 +27785,10 @@ impl BodyGen<'_> {
                             && self.table.has_class(&path[0])
                             && self.table.has_class(&path[1]) =>
                     {
-                        path[1].clone()
+                        let dotted = path.join(".");
+                        self.table
+                            .qualified_nested_class(&dotted)
+                            .map_or_else(|| path[1].clone(), |id| self.table.class_name(id).to_owned())
                     }
                     Some(Expr::Name { path, .. })
                         if {
@@ -29619,8 +29695,21 @@ impl BodyGen<'_> {
         {
             return None;
         }
-        (self.table.has_class(&path[0]) && self.table.has_class(&path[1]))
-            .then(|| path[1..].to_vec())
+        // The qualifier is not DROPPED — it is what tells `A.Node` from
+        // `B.Node`, and dropping it left the simple name to find whichever
+        // class registered first: `A.Node.K + B.Node.K` printed the same
+        // constant twice, with no diagnostic. The longest dotted prefix that
+        // names a class becomes that class's BINARY name, which resolves to
+        // exactly one class however many others share its simple name.
+        for taken in (2..path.len()).rev() {
+            let dotted = path[..taken].join(".");
+            if let Some(id) = self.table.qualified_nested_class(&dotted) {
+                let mut short = vec![self.table.class_name(id).to_owned()];
+                short.extend_from_slice(&path[taken..]);
+                return Some(short);
+            }
+        }
+        None
     }
 
     #[allow(clippy::too_many_lines)] // one resolution ladder, clearest linear

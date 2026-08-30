@@ -36,6 +36,7 @@ pub fn desugar_lambdas(
 ) -> Vec<crate::diagnostics::Diagnostic> {
     let mut diags = Vec::new();
     let sams = functional_interfaces(units);
+    let sam_owners = functional_interface_owners(units);
     // Signatures for single-candidate method-argument target typing.
     let methods = method_signatures(units);
     let methods_in_class = method_signatures_by_class(units);
@@ -165,6 +166,7 @@ pub fn desugar_lambdas(
                     .collect();
                 let mut ctx = Ctx {
                     sams: &sams,
+                    sam_owners: &sam_owners,
                     methods: &methods,
                     methods_in_class: &methods_in_class,
                     generics: &generics,
@@ -204,6 +206,7 @@ pub fn desugar_lambdas(
             for block in &mut class.init_blocks {
                 let mut ctx = Ctx {
                     sams: &sams,
+                    sam_owners: &sam_owners,
                     methods: &methods,
                     methods_in_class: &methods_in_class,
                     generics: &generics,
@@ -241,6 +244,7 @@ pub fn desugar_lambdas(
                 if let Some(init) = &mut field.init {
                     let mut ctx = Ctx {
                         sams: &sams,
+                        sam_owners: &sam_owners,
                         methods: &methods,
                         methods_in_class: &methods_in_class,
                         generics: &generics,
@@ -325,6 +329,9 @@ struct Ctx<'a> {
     /// part — a method's own name, `new` for a constructor or instance
     /// initializer, `static` for a static one.
     frame_owner: (&'a str, &'a str),
+    /// Which interface each [`Ctx::sams`] key names — see
+    /// [`functional_interface_owners`].
+    sam_owners: &'a HashMap<String, String>,
     /// Where that member starts in the source, and a counter of the lambdas
     /// synthesized so far in this class. javac numbers a class's lambdas in
     /// SOURCE order of the members, and within one, innermost FIRST (it
@@ -383,6 +390,40 @@ fn is_object_method_redeclaration(m: &MethodDecl) -> bool {
         ),
         _ => false,
     }
+}
+
+/// The interface each [`functional_interfaces`] key belongs to, by BINARY
+/// name. Two nested interfaces may share a simple name, and the map holds one
+/// SAM per SPELLING — this is what says whether two spellings are the same
+/// interface, which is the difference between a scoped lookup that must
+/// override the written name and one that must leave it alone.
+fn functional_interface_owners(units: &[(String, CompilationUnit)]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for (_, unit) in units {
+        for class in &unit.classes {
+            if !class.is_interface {
+                continue;
+            }
+            let binary = class
+                .binary_name
+                .clone()
+                .unwrap_or_else(|| class.name.clone());
+            if let Some(dotted) = class.binary_name.as_deref().map(|b| b.replace('$', ".")) {
+                let mut rest = dotted.as_str();
+                loop {
+                    out.insert(String::from(rest), binary.clone());
+                    match rest.split_once('.') {
+                        Some((_, tail)) if tail.contains('.') => rest = tail,
+                        _ => break,
+                    }
+                }
+                out.entry(class.name.clone()).or_insert_with(|| binary.clone());
+            } else {
+                out.insert(class.name.clone(), binary);
+            }
+        }
+    }
+    out
 }
 
 /// The functional interfaces in the program: interface name -> its SAM.
@@ -3228,6 +3269,32 @@ fn interface_name(ty: &TypeRef) -> Option<&str> {
 /// resolve.
 fn sam_target(target: &TypeRef, ctx: &Ctx) -> Option<(String, Sam)> {
     let name = interface_name(target)?;
+    // An UNQUALIFIED name is resolved in the SCOPE it was written in. Two
+    // enclosing classes may each declare a `Go`, and this map — one entry per
+    // spelling — can only hold one of them under the simple name, so a lambda
+    // in the other class targeted the wrong interface and was refused as
+    // "cannot be converted". The enclosing chain is walked innermost-first,
+    // the way codegen resolves the same name.
+    if !name.contains('.') {
+        let mut chain = ctx.frame_owner.0.replace('$', ".");
+        loop {
+            let key = format!("{chain}.{name}");
+            if let Some(sam) = ctx.sams.get(&key) {
+                // The name as WRITTEN is returned whenever it names the same
+                // interface: it is the spelling every later pass already
+                // handles, and only the ambiguous case needs the other one.
+                let same_interface = ctx.sam_owners.get(name) == ctx.sam_owners.get(&key);
+                return match ctx.sams.get(name).filter(|_| same_interface) {
+                    Some(plain) => Some((name.to_owned(), plain.clone())),
+                    None => Some((key, sam.clone())),
+                };
+            }
+            match chain.rsplit_once('.') {
+                Some((head, _)) => chain = head.to_owned(),
+                None => break,
+            }
+        }
+    }
     if let Some(sam) = ctx.sams.get(name) {
         return Some((name.to_owned(), sam.clone()));
     }
@@ -6046,6 +6113,7 @@ fn build_erased_lambda(
 
     let mut decl = ClassDecl {
         name: name.clone(),
+        outer_type_params: Vec::new(),
         is_public: false,
         is_nested: false,
         enclosing: None,
@@ -6411,6 +6479,7 @@ fn build_lambda_class(
     };
     ctx.new_classes.push(ClassDecl {
         name: name.clone(),
+        outer_type_params: Vec::new(),
         is_public: false,
         is_nested: false,
         enclosing: None,

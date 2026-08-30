@@ -351,6 +351,18 @@ fn inject_outer_captures(
     created_in: &HashMap<String, Vec<String>>,
     captures: &mut HashMap<String, Vec<(String, TypeRef)>>,
 ) {
+    // A declared INNER class continues the chain: its body reaches the
+    // enclosing instance's members too, so an anonymous class written inside
+    // one reads them through it. Without this the walk stopped at the inner
+    // class — whose own fields are usually none — and a `new Runnable() { …
+    // outerField … }` inside `class Outer { class View { … } }` was refused
+    // with "cannot find symbol", though `View`'s own methods read it.
+    let inner_outer: HashMap<String, String> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .filter(|c| c.is_inner)
+        .filter_map(|c| c.enclosing.clone().map(|outer| (c.name.clone(), outer)))
+        .collect();
     let instance_members: HashMap<String, (HashSet<String>, HashSet<String>)> = units
         .iter()
         .flat_map(|(_, unit)| unit.classes.iter())
@@ -394,7 +406,7 @@ fn inject_outer_captures(
         // the chain, not just in the nearest owner: `field` inside a lambda
         // inside an anonymous class is the top-level class's, reached by one
         // hop per level. Lambda levels declare nothing of their own.
-        let (fields, methods) = enclosing_members(name, owners, &instance_members);
+        let (fields, methods) = enclosing_members(name, owners, &inner_outer, &instance_members);
         let (fields, methods) = (&fields, &methods);
         let needs = if crate::is_lambda_class(name) {
             lambda_needs_outer(body, fields, methods)
@@ -441,13 +453,14 @@ fn inject_outer_captures(
 fn enclosing_members(
     name: &str,
     owners: &HashMap<String, String>,
+    inner_outer: &HashMap<String, String>,
     instance_members: &HashMap<String, (HashSet<String>, HashSet<String>)>,
 ) -> (HashSet<String>, HashSet<String>) {
     let mut fields = HashSet::new();
     let mut methods = HashSet::new();
     let mut current = name.to_owned();
-    for _ in 0..=owners.len() {
-        let Some(owner) = owners.get(&current) else {
+    for _ in 0..=owners.len() + inner_outer.len() {
+        let Some(owner) = owners.get(&current).or_else(|| inner_outer.get(&current)) else {
             break;
         };
         if !crate::is_lambda_class(owner)

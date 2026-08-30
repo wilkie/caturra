@@ -10250,3 +10250,77 @@ UNEXPLAINED count — the same shape `compare.py` settled on. `compatrun` grew
 the argument it needed to be usable for this: a corpus level is several files,
 and passing only the one with `main` reported every other class as "cannot find
 symbol" — a harness failure that reads exactly like an engine failure.
+
+### A name is read where it is written (2026-08-30)
+
+Two probes into ordinary-but-unswept program SHAPES — a generic container with
+its own cursor, two helper classes each with a `Node` — turned up one cluster,
+and its first member is the worst kind of finding: **`new Node()` inside `B`
+built `A`'s `Node`**. No diagnostic, the right class one line away
+(`new B.Node()` was correct), and the program printed `A.Node` twice.
+
+caturra hoists every nested class to one flat namespace and keys the table by
+BINARY name (`Main$B$Node`), with an alias per source spelling. The alias table
+holds one entry per spelling, so the SIMPLE name `Node` could only point at
+whichever class registered first. A simple name is resolved in the scope it is
+written in (JLS §6.5.5.1): the table now records every class answering to a
+simple name, each pass announces the class whose body it is resolving, and the
+lookup takes the candidate whose enclosing class most closely encloses that
+scope. A synthesized class — a lambda, a method reference, an anonymous body —
+announces its ENCLOSING class instead of its own hoisted name, because that is
+where its code was written; giving it its own name made a lambda implement a
+different interface from the one its target resolved to.
+
+The rule cuts the other way too: a MEMBER type shadows a top-level class of
+the same name, so `new Outside()` inside `C` is `C.Outside` — which means the
+scoped lookup has to run BEFORE the direct one, not after it.
+
+Three more members of the same cluster, each the same fact read somewhere
+else:
+
+- **The qualifier was DROPPED.** `A.Node.K` resolved by taking `[A, Node, K]`
+  to `[Node, K]` — "nested types are flattened to their simple names, so the
+  qualifier carries nothing" — which is true only while no two of them share a
+  name. The static-field path and the static-call path each did it, so
+  `A.Node.K + B.Node.K` printed one constant twice and `B.Node.get()` ran `A`'s
+  method. The pair now resolves to the one class it names, by binary name.
+- **The lambda pass keeps its own map**, name to single abstract method, with
+  the same one-entry-per-spelling problem: a lambda inside `B` was typed
+  against `A`'s interface and refused as "cannot be converted to Go". Its
+  target is resolved in its own scope now. The name RETURNED is still the one
+  the program wrote wherever both spellings name the same interface — the
+  spelling every later pass already handles — and only the ambiguous case
+  takes the qualified one.
+- **An anonymous class inside an INNER class could not see the outer
+  instance.** The capture walk stopped at the inner class, whose own fields are
+  usually none, so `new Runnable() { … outerField … }` inside
+  `class Outer { class View { … } }` was "cannot find symbol" — while `View`'s
+  own methods read the same field. The walk continues through a declared inner
+  class now, and codegen's existing multi-hop `__caturraOuter` chain does the
+  rest.
+
+**The other half of the cluster is type variables in a hoisted body.** A class
+or method type parameter is in scope in an anonymous or local class written
+there, and hoisting lost sight of it: `new Comparator<T>() {…}` inside a
+`Box<T>` was "cannot find symbol: class T", `new Iterator<T>() {…}` was
+"incompatible types: T cannot be converted to an unsupported type", and a
+`class Pick { T of(List<T> from) {…} }` inside a generic method was refused the
+same way. Every one of them is an ordinary way to write a container. The
+parser now records the type parameters in scope where the class was WRITTEN,
+and they erase to their bounds in its body — which is exactly what javac
+compiles them to, since the hoisted class holds no type argument of its own.
+
+One thing was measured and left open. A class the program declares under a
+LIBRARY type's name makes the fully qualified spelling unusable:
+`java.util.List` reads as the program's own `List` and is refused. javac
+resolves a qualified name without consulting what is in scope. It is stricter
+than javac — the safe direction — and the library-type resolution consults
+"does the program declare this name?" in a dozen places, so the fix is a
+larger change than the shape deserves. Pinned by
+`strict_a_qualified_library_name_a_class_shadows`.
+
+Pinned by `a_simple_name_resolves_in_its_own_class`,
+`a_qualified_nested_type_names_that_one`,
+`an_enclosing_type_variable_in_a_hoisted_body`,
+`a_lambda_target_resolves_in_its_own_class` and
+`a_hoisted_body_inside_an_inner_class`.

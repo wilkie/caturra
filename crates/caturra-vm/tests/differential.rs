@@ -40797,3 +40797,219 @@ public class Declared {
 }
 "#
 );
+
+// Two enclosing classes may each declare a `Node`, and caturra hoists both to
+// one flat namespace under the same simple name. The alias table keeps one
+// entry per spelling, so `new Node()` inside `B` BUILT `A`'s — a silent wrong
+// answer with no diagnostic, while the qualified `new B.Node()` beside it was
+// right. A simple name resolves in the scope it is written in (JLS §6.5.5.1).
+differential_test!(
+    a_simple_name_resolves_in_its_own_class,
+    "ScopedName",
+    r#"
+class Outside { String who() { return "top-level"; } }
+public class ScopedName {
+    static class A {
+        static class Node { String who() { return "A.Node"; } }
+        static class Leaf extends Node { String who() { return "A.leaf"; } }
+        static String call() { Node n = new Leaf(); return n.who(); }
+    }
+    static class B {
+        static class Node { String who() { return "B.Node"; } }
+        static String call() { Node n = new Node(); return n.who(); }
+    }
+    static class Node { String who() { return "top"; } }
+    static class C {
+        // A MEMBER type shadows the top-level class of the same name.
+        static class Outside { String who() { return "C.Outside"; } }
+        static String call() { return new Outside().who(); }
+    }
+    static String unshadowed() { return new Outside().who(); }
+
+    public static void main(String[] args) {
+        System.out.println(C.call() + " " + unshadowed());
+        System.out.println(A.call() + " " + B.call() + " " + new Node().who());
+        System.out.println(new A.Node().who() + new B.Node().who());
+        System.out.println(new A.Node().getClass().getName());
+    }
+}
+"#
+);
+
+// The QUALIFIER is what tells `A.Item` from `B.Item`, and both the static-call
+// path and the static-field path dropped it and asked for the simple name:
+// `A.Node.K + B.Node.K` printed one constant twice, and `B.Node.get()` ran
+// `A`'s method. Nested enums are the shape a lesson actually writes.
+differential_test!(
+    a_qualified_nested_type_names_that_one,
+    "ScopedQualified",
+    r#"
+public class ScopedQualified {
+    static class A {
+        static class Node { static final String K = "A"; static String get() { return "gA"; } }
+        enum Kind { ONE }
+    }
+    static class B {
+        static class Node { static final String K = "B"; static String get() { return "gB"; } }
+        enum Kind { TWO }
+    }
+    public static void main(String[] args) {
+        System.out.println(A.Node.K + B.Node.K);
+        System.out.println(A.Node.get() + B.Node.get());
+        System.out.println(A.Kind.ONE + " " + B.Kind.TWO);
+        System.out.println(A.Kind.valueOf("ONE") + " " + B.Kind.values().length);
+    }
+}
+"#
+);
+
+// A type parameter of the enclosing class — or of the enclosing METHOD — is in
+// scope in an anonymous class body written there. Hoisting the body to the top
+// level lost sight of it, so `new Comparator<T>() {…}` inside a `Box<T>` was
+// "cannot find symbol: class T", and the same body with `T` only in a LOCAL
+// declaration was refused the same way. It holds no argument of its own, so it
+// erases to its bound, which is what javac compiles it to.
+differential_test!(
+    an_enclosing_type_variable_in_a_hoisted_body,
+    "ScopedTypeVar",
+    r#"
+import java.util.*;
+public class ScopedTypeVar {
+    static class Box<T> {
+        private final List<T> items = new ArrayList<>();
+        void add(T item) { items.add(item); }
+        Comparator<T> byText() {
+            return new Comparator<T>() {
+                public int compare(T a, T b) { return String.valueOf(a).compareTo(String.valueOf(b)); }
+            };
+        }
+        T first() {
+            Runnable probe = new Runnable() {
+                public void run() { T seen = items.get(0); System.out.println("probe " + seen); }
+            };
+            probe.run();
+            return items.get(0);
+        }
+    }
+    static <T extends Comparable<T>> T best(List<T> items) {
+        class Pick { T of(List<T> from) { T top = from.get(0); for (T t : from) if (t.compareTo(top) > 0) top = t; return top; } }
+        Comparator<T> natural = new Comparator<T>() { public int compare(T a, T b) { return a.compareTo(b); } };
+        System.out.println(natural.compare(items.get(0), items.get(0)));
+        return new Pick().of(items);
+    }
+    public static void main(String[] args) {
+        Box<String> box = new Box<>();
+        box.add("pear");
+        box.add("fig");
+        System.out.println(box.byText().compare("a", "b") < 0);
+        System.out.println(box.first());
+        System.out.println(best(new ArrayList<>(Arrays.asList(3, 9, 1))));
+        System.out.println(best(new ArrayList<>(Arrays.asList("a", "z"))));
+    }
+}
+"#
+);
+
+// The lambda pass keeps its own name -> SAM map, with the same one-entry-per-
+// spelling problem: a lambda inside `B` was typed against `A`'s interface of
+// the same name and refused as "cannot be converted". Its target is resolved
+// in the scope it was written in, like every other name.
+differential_test!(
+    a_lambda_target_resolves_in_its_own_class,
+    "ScopedTarget",
+    r#"
+public class ScopedTarget {
+    interface Same { String tag(); }
+    static class A { interface Go { String run(); } static String call() { Go g = () -> "A"; return g.run(); } }
+    static class B { interface Go { String run(); } static String call() { Go g = () -> "B"; return g.run(); } }
+    static class Holder {
+        interface Same { String tag(); }
+        static String inside() { Same s = () -> "holder"; return s.tag(); }
+        static String outer() { ScopedTarget.Same s = () -> "top"; return s.tag(); }
+    }
+    public static void main(String[] args) {
+        System.out.println(A.call() + B.call());
+        A.Go g = () -> "outer-A";
+        System.out.println(g.run());
+        System.out.println(Holder.inside() + " " + Holder.outer());
+    }
+}
+"#
+);
+
+// An anonymous or local class written inside an INNER class reaches the
+// enclosing instance's members through it — `Outer.this.field`, two hops. The
+// capture walk stopped at the inner class, whose own fields are usually none,
+// so the body was refused with "cannot find symbol" though the inner class's
+// own methods read the same field.
+differential_test!(
+    a_hoisted_body_inside_an_inner_class,
+    "ScopedOuterHop",
+    r#"
+import java.util.*;
+public class ScopedOuterHop {
+    int base = 10;
+    String name = "outer";
+    class Mid {
+        int mid = 5;
+        Runnable make() {
+            return new Runnable() {
+                public void run() {
+                    Runnable deeper = new Runnable() {
+                        public void run() { System.out.println(base + mid + ScopedOuterHop.this.base); }
+                    };
+                    deeper.run();
+                }
+            };
+        }
+        String local() {
+            class Here { String go() { return name + "/local"; } }
+            return new Here().go();
+        }
+    }
+    static class Bag<T> {
+        private final List<T> items = new ArrayList<>();
+        Bag<T> put(T item) { items.add(item); return this; }
+        class Cursor {
+            private int at;
+            boolean hasNext() { return at < items.size(); }
+            T next() { return items.get(at++); }
+            Runnable dump() { return new Runnable() { public void run() { System.out.println(items); } }; }
+            Iterator<T> reversed() {
+                return new Iterator<T>() {
+                    private int left = items.size();
+                    public boolean hasNext() { return left > 0; }
+                    public T next() { return items.get(--left); }
+                };
+            }
+        }
+    }
+    public static void main(String[] args) {
+        ScopedOuterHop outer = new ScopedOuterHop();
+        ScopedOuterHop.Mid mid = outer.new Mid();
+        mid.make().run();
+        System.out.println(mid.local());
+        Bag<String> bag = new Bag<String>().put("a").put("b");
+        Bag<String>.Cursor cursor = bag.new Cursor();
+        while (cursor.hasNext()) System.out.print(cursor.next());
+        System.out.println();
+        cursor.dump().run();
+        Iterator<String> back = bag.new Cursor().reversed();
+        while (back.hasNext()) System.out.print(back.next());
+        System.out.println();
+    }
+}
+"#
+);
+
+// A class the PROGRAM declares under a library type's name makes the fully
+// qualified spelling of that library type unusable: `java.util.List` reads as
+// the user's `List` and is refused. javac resolves a qualified name without
+// consulting what is in scope, so this is stricter than javac — the safe
+// direction, and the shape (a class named `List` beside `java.util.List` in
+// one program) is rare enough to leave measured rather than fixed.
+stricter_than_javac!(
+    strict_a_qualified_library_name_a_class_shadows,
+    "StrictShadowQualified",
+    "import java.util.ArrayList;\npublic class StrictShadowQualified {\n  static class List { int size() { return 99; } }\n  static void r() { java.util.List<String> real = new ArrayList<>(); real.add(\"ok\"); }\n}"
+);

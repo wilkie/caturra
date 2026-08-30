@@ -89,6 +89,14 @@ pub struct ClassDecl {
     pub is_inner: bool,
     /// Generic type parameter names (`<T, U>`); erased to `Object`.
     pub type_params: Vec<TypeParam>,
+    /// The type parameters in SCOPE where this class was WRITTEN — the
+    /// enclosing class's, and the enclosing method's. An anonymous or local
+    /// class may use them (`new Comparator<T>() {…}` inside a `Box<T>`), and
+    /// carries no type argument of its own to hold them, so each erases to its
+    /// bound exactly as javac erases it. Empty for every class declared
+    /// anywhere else — a member class inherits its outer's parameters
+    /// positionally instead, which keeps a read through the receiver typed.
+    pub outer_type_params: Vec<TypeParam>,
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<MethodDecl>,
     /// `static { ... }` and instance `{ ... }` initializer blocks.

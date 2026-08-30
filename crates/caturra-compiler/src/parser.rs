@@ -21,6 +21,7 @@ use crate::lexer::{Keyword, Token, TokenKind};
 #[must_use]
 pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic>) {
     let mut parser = Parser {
+        type_param_scope: Vec::new(),
         path,
         tokens,
         pos: 0,
@@ -415,6 +416,13 @@ struct Parser<'a> {
     /// one's body collided and the program was refused.
     resource_counter: usize,
     pending_annotations: Vec<Annotation>,
+    /// The type parameters currently in scope, outermost first: the enclosing
+    /// class's, then the enclosing method's. An anonymous or local class is
+    /// hoisted out of the body it was written in, which loses sight of them —
+    /// `new Comparator<T>() {…}` inside a `Box<T>` was refused with "cannot
+    /// find symbol: class T". Recorded on the hoisted declaration so its body
+    /// can erase them.
+    type_param_scope: Vec<TypeParam>,
 }
 
 /// `(superclass, interfaces, type arguments written on each supertype)`.
@@ -974,7 +982,9 @@ impl Parser<'_> {
             return Err(Abort);
         }
         let (name, name_span) = self.expect_ident("for the class")?;
+        let scope_base = self.type_param_scope.len();
         let type_params = self.parse_type_params()?;
+        self.type_param_scope.extend(type_params.iter().cloned());
 
         let (superclass, interfaces, supertype_args) = self.supertypes(is_interface)?;
 
@@ -999,7 +1009,11 @@ impl Parser<'_> {
             if self.eat_symbol(";") {
                 continue;
             }
-            if let Ok(member) = self.member(&name, is_interface) {
+            // A member's own type parameters leave scope with it.
+            let member_scope = self.type_param_scope.len();
+            let parsed = self.member(&name, is_interface);
+            self.type_param_scope.truncate(member_scope);
+            if let Ok(member) = parsed {
                 match member {
                     Member::Method(method) => methods.push(method),
                     Member::Fields(mut declared) => {
@@ -1045,8 +1059,10 @@ impl Parser<'_> {
             }
         }
 
+        self.type_param_scope.truncate(scope_base);
         Ok(ClassDecl {
             name,
+            outer_type_params: Vec::new(),
             is_public,
             is_nested: false,
             enclosing: None,
@@ -1140,7 +1156,11 @@ impl Parser<'_> {
                 );
                 break;
             }
-            if let Ok(member) = self.member(&name, false) {
+            // A member's own type parameters leave scope with it.
+            let member_scope = self.type_param_scope.len();
+            let parsed = self.member(&name, false);
+            self.type_param_scope.truncate(member_scope);
+            if let Ok(member) = parsed {
                 match member {
                     Member::Method(method) => methods.push(method),
                     Member::Fields(mut declared) => {
@@ -1368,6 +1388,11 @@ impl Parser<'_> {
         // A generic method's or constructor's own type parameters, read
         // before either shape is recognized: `<T> H(T t)` is a constructor.
         let method_type_params = self.parse_type_params()?;
+        // A generic METHOD's variables are in scope in its body too, which is
+        // where an anonymous class that names one is written. The class-body
+        // loop restores the scope after every member.
+        self.type_param_scope
+            .extend(method_type_params.iter().cloned());
 
         // Constructor: `ClassName(...)` with no return type. An INTERFACE
         // has none (JLS §9.1.4) — javac reads the name as a return type and
@@ -2120,6 +2145,10 @@ impl Parser<'_> {
             self.pos += 1;
         }
         let mut decl = self.type_after_modifiers(start, is_abstract, false, false)?;
+        // A local class is hoisted out of the method that declares it, and the
+        // method's — and its class's — type parameters are in scope in its
+        // body just as they are for an anonymous one.
+        decl.outer_type_params.clone_from(&self.type_param_scope);
         // JLS §8.1.3: a local class is an inner class, so it may declare a
         // `static` member only when that member is a CONSTANT VARIABLE —
         // `static final int F = 3;` is fine, `static int f = 1;` is not, and
@@ -4041,7 +4070,11 @@ impl Parser<'_> {
         let mut nested = Vec::new();
         let mut order = 0usize;
         while !self.at_symbol("}") && self.peek().is_some() {
-            if let Ok(member) = self.member(supertype, false) {
+            // A member's own type parameters leave scope with it.
+            let member_scope = self.type_param_scope.len();
+            let parsed = self.member(supertype, false);
+            self.type_param_scope.truncate(member_scope);
+            if let Ok(member) = parsed {
                 match member {
                     Member::Method(m) => methods.push(m),
                     Member::Fields(mut declared) => {
@@ -4090,6 +4123,7 @@ impl Parser<'_> {
         };
         self.anon_classes.push(ClassDecl {
             name: name.clone(),
+            outer_type_params: self.type_param_scope.clone(),
             is_public: false,
             is_nested: false,
             enclosing: None,
@@ -5013,6 +5047,7 @@ fn desugar_enum(
 
     ClassDecl {
         name,
+        outer_type_params: Vec::new(),
         superclass: None,
         interfaces,
         supertype_args: Vec::new(),
@@ -5313,12 +5348,23 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
         .enumerate()
         .filter_map(|(i, tp)| u8::try_from(i).ok().map(|i| (tp.name.clone(), i)))
         .collect();
-    let class_erasures: HashMap<String, TypeRef> = class
-        .type_params
+    // A type parameter in scope where an anonymous or local class was WRITTEN
+    // is in scope in its body, and the class holds no argument for it — so it
+    // erases to its bound, which is what javac compiles it to. Listed first so
+    // a parameter the class declares itself still shadows it.
+    let mut class_erasures: HashMap<String, TypeRef> = class
+        .outer_type_params
         .iter()
         .filter(|tp| !tracked.contains_key(&tp.name))
         .map(|tp| (tp.name.clone(), erasure_target(tp, span, synthesized)))
         .collect();
+    class_erasures.extend(
+        class
+            .type_params
+            .iter()
+            .filter(|tp| !tracked.contains_key(&tp.name))
+            .map(|tp| (tp.name.clone(), erasure_target(tp, span, synthesized))),
+    );
     let scope = |method: &MethodDecl,
                  synthesized: &mut Vec<ClassDecl>|
      -> (HashMap<String, TypeRef>, Tracked) {
@@ -5511,6 +5557,7 @@ fn erasure_target(tp: &TypeParam, span: SourceSpan, synthesized: &mut Vec<ClassD
     let name = format!("{INTERSECTION_PREFIX}{}", bounds.join("$"));
     if !synthesized.iter().any(|class| class.name == name) {
         synthesized.push(ClassDecl {
+            outer_type_params: Vec::new(),
             name: name.clone(),
             enclosing: None,
             trace_name: None,
