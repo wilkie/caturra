@@ -10794,3 +10794,23 @@ Three failed, on two more readings a class hands back:
   method's return asked only "what class is this value?".
 
 Pinned by `a_program_written_across_files`, which is all four in one.
+
+### What a class hands back (2026-08-30)
+
+One method per container a class can return — a `List`, a `Set`, a `Map`, a
+`Map` of lists, an `Optional`, a `Stream`, an `Iterator`, an array, a `Deque` —
+each with a lambda over it. Four of sixteen failed, and all four were the same
+shape one type apart: **every reader of an element walks LIBRARY chains, and
+reaches the program's own method only through an implicit `this`.**
+
+- A **Map** from another object's method: `store.grouped().forEach((k, v) → …)`
+  had no key or value.
+- An **array** from one: `Arrays.stream(store.array())` had no element, while
+  the same array through a variable worked.
+- A **stream whose receiver is a static FACTORY** rather than a value:
+  `Store.of().stream().filter(…)`. The reader types VALUES, so the chain
+  stopped at the class name.
+
+Each is now answered by one helper — what a method of the program returns, on a
+receiver that is either a value whose class can be named or the class itself.
+Pinned by `what_a_class_hands_back`.

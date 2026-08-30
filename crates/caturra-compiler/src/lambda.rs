@@ -3940,6 +3940,16 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
                     .find(|shape| shape.name == *method && shape.arity == args.len())?;
                 shape.return_type.clone()
             }
+            // ...and the same call on ANOTHER object, or on the class itself:
+            // `store.grouped().forEach((k, v) -> …)` and
+            // `Store.of().map().values()`. Only the implicit-`this` form was
+            // read, so a map handed back by another class had no key or value.
+            Expr::Call {
+                receiver: Some(owner),
+                method,
+                args,
+                ..
+            } => user_method_return(owner, method, args.len(), ctx)?,
             _ => return None,
         },
     };
@@ -4835,7 +4845,12 @@ fn call_body_type(
     {
         return Some(stream_of(*elem));
     }
-    let on = body_type(receiver, bound, ctx)?;
+    // A receiver that is a CLASS rather than a value — `Store.of()`, the static
+    // factory. `body_type` types VALUES, so the chain stopped at the class name
+    // and every reading after it was lost.
+    let Some(on) = body_type(receiver, bound, ctx) else {
+        return user_method_return(receiver, method, args.len(), ctx);
+    };
     if let Some(ty) = library_return(&on, method, args.len()) {
         return Some(ty);
     }
@@ -5269,12 +5284,18 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // declared `Stream<Leaf>`. Every case above reads a LIBRARY shape, and
         // a method of the program says its element in its own return type; the
         // lambda after `tree.stream()` had no target without this.
-        _ => match body_type(receiver, &HashMap::new(), ctx) {
-            Some(TypeRef::Generic { base, args }) if args.len() == 1 => {
-                (base.rsplit('.').next().unwrap_or(&base) == "Stream").then(|| args[0].clone())
+        _ => {
+            let answered = body_type(receiver, &HashMap::new(), ctx);
+            if std::env::var("CATURRA_DEBUG_STREAM").is_ok() {
+                eprintln!("stream_elem_type last arm: method={method} answered={answered:?}");
             }
-            _ => None,
-        },
+            match answered {
+                Some(TypeRef::Generic { base, args }) if args.len() == 1 => {
+                    (base.rsplit('.').next().unwrap_or(&base) == "Stream").then(|| args[0].clone())
+                }
+                _ => None,
+            }
+        }
     }
 }
 
@@ -5719,6 +5740,19 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
                 },
             };
         }
+        // An array a method of the PROGRAM hands back —
+        // `Arrays.stream(store.array())`. Every arm above reads a LIBRARY call
+        // or a declaration; a class's own method says the array in its return
+        // type, and without it the inline form was refused while the same
+        // array through a variable compiled.
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } if user_method_return(owner, method, args.len(), ctx).is_some() => {
+            user_method_return(owner, method, args.len(), ctx)?
+        }
         // An array written INLINE — `Arrays.stream(new int[]{1, 2, 3})` — is
         // its own declaration. Only a variable was looked up, so the identical
         // call on a literal array had no element type and the lambda after it
@@ -5884,6 +5918,15 @@ fn declared_array_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
             ctx.lookup(name)
         }
+        // An array a METHOD hands back — `Arrays.stream(store.array())`, where
+        // the array is built inside the class that owns it. Only a variable
+        // and a `this` field were read.
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } => user_method_return(owner, method, args.len(), ctx),
         _ => None,
     }
 }

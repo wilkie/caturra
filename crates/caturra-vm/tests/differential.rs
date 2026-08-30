@@ -41964,7 +41964,7 @@ public class Shelf {
     &[
         (
             "Book.java",
-            r#"
+            r"
 class Book implements Comparable<Book> {
     private final String title;
     private final int pages;
@@ -41974,7 +41974,7 @@ class Book implements Comparable<Book> {
     public int compareTo(Book other) { return Integer.compare(pages, other.pages); }
     @Override public String toString() { return title; }
 }
-"#,
+",
         ),
         (
             "Bookcase.java",
@@ -41996,7 +41996,7 @@ class Bookcase {
         ),
         (
             "Card.java",
-            r#"
+            r"
 class Card {
     private final String suit;
     private final int rank;
@@ -42005,7 +42005,7 @@ class Card {
     int rank() { return rank; }
     @Override public String toString() { return suit + rank; }
 }
-"#,
+",
         ),
         (
             "Deck.java",
@@ -42027,4 +42027,74 @@ class Deck {
 "#,
         ),
     ]
+);
+
+// One method per container a class hands back, each with a lambda over it.
+// Four of sixteen failed, all the same shape one type apart: every reader of
+// an element walked LIBRARY chains and the program's own method was reached
+// only through an implicit `this`. A `Map` from another object's method, an
+// ARRAY from one, and a stream whose receiver is a static FACTORY rather than
+// a value.
+differential_test!(
+    what_a_class_hands_back,
+    "HandsBack",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class HandItem {
+    private final String name;
+    HandItem(String name) { this.name = name; }
+    String name() { return name; }
+    @Override public String toString() { return name; }
+}
+
+class HandStore {
+    private final List<HandItem> items =
+        new ArrayList<>(List.of(new HandItem("a"), new HandItem("b")));
+    List<HandItem> list() { return items; }
+    Set<HandItem> set() { return new LinkedHashSet<>(items); }
+    Map<String, HandItem> map() {
+        Map<String, HandItem> out = new LinkedHashMap<>();
+        for (HandItem item : items) out.put(item.name(), item);
+        return out;
+    }
+    Map<String, List<HandItem>> grouped() {
+        Map<String, List<HandItem>> out = new LinkedHashMap<>();
+        out.put("all", items);
+        return out;
+    }
+    Optional<HandItem> first() { return items.stream().findFirst(); }
+    Stream<HandItem> stream() { return items.stream(); }
+    Iterator<HandItem> cursor() { return items.iterator(); }
+    HandItem[] array() { return items.toArray(new HandItem[0]); }
+    Deque<HandItem> deque() { return new ArrayDeque<>(items); }
+    static HandStore of() { return new HandStore(); }
+}
+
+public class HandsBack {
+    public static void main(String[] args) {
+        HandStore.of().list().forEach(item -> System.out.print(item.name()));
+        System.out.println();
+        System.out.println(HandStore.of().set().stream().map(HandItem::name).collect(Collectors.toList()));
+        HandStore.of().map().forEach((key, value) -> System.out.print(key + value.name()));
+        System.out.println();
+        System.out.println(HandStore.of().map().values().stream().map(HandItem::name).collect(Collectors.joining()));
+        HandStore.of().grouped().forEach((key, value) -> System.out.println(key + value.get(0).name()));
+        System.out.println(HandStore.of().first().map(HandItem::name).orElse("none"));
+        System.out.println(HandStore.of().stream().filter(item -> item.name().equals("a")).count());
+        HandStore.of().cursor().forEachRemaining(item -> System.out.print(item.name()));
+        System.out.println();
+        System.out.println(Arrays.stream(HandStore.of().array()).map(HandItem::name).collect(Collectors.toList()));
+        HandStore.of().deque().forEach(item -> System.out.print(item.name()));
+        System.out.println();
+        System.out.println(HandStore.of().list().stream()
+            .collect(Collectors.groupingBy(HandItem::name))
+            .get("a")
+            .get(0)
+            .name());
+    }
+}
+"#
 );
