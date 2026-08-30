@@ -41927,3 +41927,104 @@ public class CapturedVar {
 }
 "#
 );
+
+// Four programs in the shape a corpus level takes — a `Main` beside its helper
+// classes, each in its own FILE. Three failed, on two readings a class hands
+// back: an `Optional<E>` from its own method (`shelf.longest().map(Book::title)`
+// — how a class says "maybe one"), and a STATIC FACTORY held in a `var`
+// (`var deck = Deck.shuffledFake()`, where the receiver is the class rather
+// than a value).
+differential_test_files!(
+    a_program_written_across_files,
+    "Shelf",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class Shelf {
+    public static void main(String[] args) {
+        var shelf = new Bookcase().add(new Book("Dune", 412)).add(new Book("Emma", 474));
+        System.out.println(shelf.titles());
+        System.out.println(shelf.longest().map(Book::title).orElse("none"));
+        System.out.println(shelf.byLength().get(412).get(0).title());
+        for (var book : shelf.all()) {
+            System.out.printf("%s:%d%n", book.title(), book.pages());
+        }
+
+        var deck = Deck.fixed();
+        var counts = new TreeMap<String, Integer>();
+        deck.cards().forEach(card -> counts.merge(card.suit(), 1, Integer::sum));
+        System.out.println(counts);
+        System.out.println(deck.cards().stream().map(Card::suit).distinct().count());
+        var top = deck.draw();
+        System.out.println(top.get().suit() + top.get().rank());
+    }
+}
+"#,
+    &[
+        (
+            "Book.java",
+            r#"
+class Book implements Comparable<Book> {
+    private final String title;
+    private final int pages;
+    Book(String title, int pages) { this.title = title; this.pages = pages; }
+    String title() { return title; }
+    int pages() { return pages; }
+    public int compareTo(Book other) { return Integer.compare(pages, other.pages); }
+    @Override public String toString() { return title; }
+}
+"#,
+        ),
+        (
+            "Bookcase.java",
+            r#"
+import java.util.*;
+import java.util.stream.*;
+
+class Bookcase {
+    private final List<Book> books = new ArrayList<>();
+    Bookcase add(Book book) { books.add(book); return this; }
+    List<Book> all() { return books; }
+    String titles() { return books.stream().map(Book::title).collect(Collectors.joining(", ")); }
+    Optional<Book> longest() { return books.stream().max(Comparator.naturalOrder()); }
+    Map<Integer, List<Book>> byLength() {
+        return books.stream().collect(Collectors.groupingBy(Book::pages));
+    }
+}
+"#,
+        ),
+        (
+            "Card.java",
+            r#"
+class Card {
+    private final String suit;
+    private final int rank;
+    Card(String suit, int rank) { this.suit = suit; this.rank = rank; }
+    String suit() { return suit; }
+    int rank() { return rank; }
+    @Override public String toString() { return suit + rank; }
+}
+"#,
+        ),
+        (
+            "Deck.java",
+            r#"
+import java.util.*;
+
+class Deck {
+    private final Deque<Card> pile = new ArrayDeque<>();
+    static Deck fixed() {
+        var deck = new Deck();
+        deck.pile.add(new Card("hearts", 3));
+        deck.pile.add(new Card("spades", 7));
+        deck.pile.add(new Card("hearts", 9));
+        return deck;
+    }
+    List<Card> cards() { return new ArrayList<>(pile); }
+    Optional<Card> draw() { return Optional.ofNullable(pile.poll()); }
+}
+"#,
+        ),
+    ]
+);

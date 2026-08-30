@@ -10778,3 +10778,19 @@ initializer SPELLS OUT — a `new`, a cast, an array creation — and leaves
 anything else as it was.
 
 Pinned by `a_lambda_capturing_a_var_local`.
+
+### A program in the shape a level takes (2026-08-30)
+
+Four programs written the way a corpus level is — a `Main` beside its helper
+classes, each in its own FILE, now that both harnesses can hold more than one.
+Three failed, on two more readings a class hands back:
+
+- **An `Optional<E>` from the program's own method.**
+  `shelf.longest().map(Book::title)` is how a class says "maybe one", and every
+  arm of the Optional-element reader walked a LIBRARY chain. The program's own
+  method says its element in its return type.
+- **A STATIC FACTORY held in a `var`.** `var deck = Deck.fixed()` — the
+  receiver is the CLASS rather than a value, and the reader that types a user
+  method's return asked only "what class is this value?".
+
+Pinned by `a_program_written_across_files`, which is all four in one.

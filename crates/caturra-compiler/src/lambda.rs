@@ -1402,7 +1402,19 @@ fn substitute_vars(
 /// since the receiver's own argument is what would replace it and that is
 /// [`call_body_type`]'s reading, with the lambda's bound parameters in hand.
 fn user_method_return(owner: &Expr, method: &str, argc: usize, ctx: &Ctx) -> Option<TypeRef> {
-    let class = declared_class_name(owner, ctx)?;
+    // The receiver is either a VALUE whose class can be named, or the CLASS
+    // itself — `Deck.shuffledFake()`, the static factory a `var` most often
+    // holds. Only the first was read, so the factory form had no type.
+    let class = declared_class_name(owner, ctx).or_else(|| match owner {
+        Expr::Name { path, .. }
+            if path.len() == 1
+                && ctx.lookup(&path[0]).is_none()
+                && ctx.class_names.contains(&path[0]) =>
+        {
+            Some(path[0].clone())
+        }
+        _ => None,
+    })?;
     let answered = ctx
         .shapes
         .get(&class)?
@@ -5787,7 +5799,18 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             // the `map`'s lambda, and was refused for having no
             // functional-interface position.
             "reduce" if args.len() == 1 => stream_elem_type(prev, ctx),
-            _ => None,
+            // A method of the PROGRAM that answers an `Optional<E>` —
+            // `shelf.longest().map(Book::title)`, which is how a class hands
+            // back "maybe one". Every arm above reads a LIBRARY chain; the
+            // program's own method says its element in its return type.
+            _ => match user_method_return(prev, method, args.len(), ctx) {
+                Some(TypeRef::Generic { base, args: written })
+                    if simple_base(&base) == "Optional" && written.len() == 1 =>
+                {
+                    Some(written[0].clone())
+                }
+                _ => None,
+            },
         };
     }
     let ty = match receiver {
