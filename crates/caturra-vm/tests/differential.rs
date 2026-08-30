@@ -41893,3 +41893,37 @@ public class BuilderChain {
 }
 "#
 );
+
+// A lambda that CAPTURES a `var` local. The capture becomes a field of the
+// synthesized class, and `var` is not a type there — so
+// `names.forEach(n -> seen.put(…))` for a `var seen = new TreeMap<>()` was
+// refused with "TreeMap<Double,String> cannot be converted to an unsupported
+// type", about the variable it had just read. The capture pass has no type
+// table, so it reads the shapes an initializer SPELLS OUT.
+differential_test!(
+    a_lambda_capturing_a_var_local,
+    "CapturedVar",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class CapturedVar {
+    public static void main(String[] args) {
+        var seen = new TreeMap<Double, String>();
+        var counted = new ArrayList<String>();
+        var grid = new int[2][2];
+        var shouted = (CharSequence) "hi";
+        List<String> names = new ArrayList<>(List.of("ada", "bo"));
+
+        names.forEach(name -> seen.put((double) name.length(), name));
+        names.forEach(name -> counted.add(name.toUpperCase()));
+        names.forEach(name -> grid[0][0] += name.length());
+
+        System.out.println(seen.firstKey() + " " + seen.lastEntry().getValue());
+        System.out.println(counted + " " + counted.size());
+        System.out.println(grid[0][0] + " " + shouted.length());
+        System.out.println(names.stream().filter(name -> seen.containsValue(name)).count());
+    }
+}
+"#
+);

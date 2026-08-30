@@ -822,6 +822,34 @@ struct Walk<'a> {
     members: &'a MemberTypes,
 }
 
+/// The type an initializer WRITES, for the shapes a `var` capture needs. This
+/// pass has no type table — it only rewrites — so it reads the shapes whose
+/// type is spelled out in the source and leaves the rest to stay `var`, which
+/// is what it always was.
+fn written_type_of(init: &Expr) -> Option<TypeRef> {
+    match init {
+        Expr::NewObject {
+            class, type_args, ..
+        } => Some(if type_args.is_empty() {
+            TypeRef::Named(class.clone())
+        } else {
+            TypeRef::Generic {
+                base: class.clone(),
+                args: type_args.clone(),
+            }
+        }),
+        Expr::Cast { ty, .. } => Some(ty.clone()),
+        Expr::NewArray { elem, dims, .. } => {
+            let mut ty = elem.clone();
+            for _ in 0..dims.len().max(1) {
+                ty = TypeRef::Array(Box::new(ty));
+            }
+            Some(ty)
+        }
+        _ => None,
+    }
+}
+
 fn find_in_stmts(stmts: &[Stmt], scope: &mut Scope, out: &mut Found, walk: &Walk) {
     scope.push(HashMap::new());
     for stmt in stmts {
@@ -842,9 +870,22 @@ fn find_in_stmt(stmt: &Stmt, scope: &mut Scope, out: &mut Found, walk: &Walk) {
                 if let Some(init) = &d.init {
                     find_in_expr(init, scope, out, walk);
                 }
-                // The variable is in scope for later statements.
+                // The variable is in scope for later statements — under the
+                // type its INITIALIZER gives it when it was written `var`. A
+                // capture is declared as a field of the synthesized class, and
+                // `var` is not a type there: a lambda capturing
+                // `var seen = new TreeMap<…>()` was refused with
+                // "TreeMap<Double,String> cannot be converted to an
+                // unsupported type", about the variable it had just read.
+                let declared = match ty {
+                    TypeRef::Var => d.init.as_ref().map_or_else(
+                        || ty.clone(),
+                        |init| written_type_of(init).unwrap_or_else(|| ty.clone()),
+                    ),
+                    other => other.clone(),
+                };
                 if let Some(frame) = scope.last_mut() {
-                    frame.insert(d.name.clone(), ty.clone());
+                    frame.insert(d.name.clone(), declared);
                 }
             }
         }

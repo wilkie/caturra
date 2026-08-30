@@ -10760,3 +10760,21 @@ walk at the `new`.
 Nothing in the twelve was findable from any single feature: each program needed
 two of them to meet. Pinned by `a_var_holding_a_builder_chain`, which is all
 twelve in one.
+
+### A second composition round (2026-08-30)
+
+Twelve more programs, different ingredients — an abstract class and its
+subclasses, a custom exception wrapping a cause, a navigable map keyed by a
+`double`, a collector into a `TreeSet`, an array of arrays built from a
+collection. One failed, and it was the other half of `var`:
+
+**A lambda that CAPTURES a `var` local.** The capture becomes a field of the
+synthesized class, and `var` is not a type there — so
+`names.forEach(n -> seen.put(…))` for a `var seen = new TreeMap<>()` was
+refused with "TreeMap<Double,String> cannot be converted to an unsupported
+type", a message about the variable it had just read correctly. The capture
+pass has no type table (it only rewrites), so it reads the shapes an
+initializer SPELLS OUT — a `new`, a cast, an array creation — and leaves
+anything else as it was.
+
+Pinned by `a_lambda_capturing_a_var_local`.
