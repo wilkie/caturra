@@ -140,6 +140,31 @@ pub fn desugar_lambdas(
                 .iter()
                 .map(|f| (f.name.clone(), f.ty.clone()))
                 .collect();
+            // A field a class INHERITS is in scope by its simple name too, and
+            // only the class's own were collected — so `cards.stream().map(…)`
+            // inside a subclass of the class that declares `cards` had no
+            // element and the lambda was refused, though the identical method
+            // one class up compiled. Walk the chain outward, keeping the
+            // nearest declaration of each name (a subclass field HIDES the
+            // one above it).
+            {
+                let mut above = class.superclass.clone();
+                let mut seen: Vec<String> = Vec::new();
+                while let Some(parent) = above {
+                    if seen.contains(&parent) {
+                        break;
+                    }
+                    for ((owner, name), ty) in &field_types {
+                        if *owner == parent {
+                            fields.entry(name.clone()).or_insert_with(|| ty.clone());
+                        }
+                    }
+                    seen.push(parent.clone());
+                    above = supers
+                        .get(&parent)
+                        .and_then(|parents| parents.first().cloned());
+                }
+            }
             // A hoisted body sees what its `new` site saw: the enclosing
             // class's own fields, then the locals in scope there — each only
             // where the body does not shadow it.
@@ -1454,6 +1479,21 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
             ctx.lookup(name)
         }
+        // A field read through ANOTHER object — `deck.cards` — whose type the
+        // pass can name. Only `this.field` and the bare name were read, so the
+        // identical field reached through a reference had no type and the
+        // lambda after `deck.cards.stream()` was refused for having no
+        // functional-interface position. The parser keeps a dotted read as a
+        // NAME, so both spellings arrive here.
+        Expr::Field { object, name, .. } => field_of_object(object, name, ctx),
+        Expr::Name { path, span } if path.len() == 2 => field_of_object(
+            &Expr::Name {
+                path: vec![path[0].clone()],
+                span: *span,
+            },
+            &path[1],
+            ctx,
+        ),
         Expr::Cast { ty, .. } => Some(ty.clone()),
         Expr::NewObject {
             class, type_args, ..
@@ -4775,41 +4815,65 @@ TypeRef::Named(String::from(name))
 /// Anything unrecognized answers `None`, which leaves the caller exactly where
 /// it was before this existed.
 fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option<TypeRef> {
-use crate::ast::BinaryOp as B;
-match expr {
-    Expr::Name { path, .. } if path.len() == 1 => bound
-        .get(&path[0])
-        .cloned()
-        .or_else(|| static_type_of(expr, ctx)),
-    Expr::Cast { ty, .. } => Some(ty.clone()),
-    Expr::Ternary { then, els, .. } => {
-        let then = body_type(then, bound, ctx)?;
-        (then == body_type(els, bound, ctx)?).then_some(then)
-    }
-    Expr::Unary { op, operand, .. } => match op {
-        crate::ast::UnaryOp::Not => Some(TypeRef::Boolean),
-        _ => body_type(operand, bound, ctx),
-    },
-    Expr::Binary { op, lhs, rhs, .. } => match op {
-        B::Lt | B::Le | B::Gt | B::Ge | B::Eq | B::Ne | B::And | B::Or => {
-            Some(TypeRef::Boolean)
-        }
-        _ => {
-            let (l, r) = (body_type(lhs, bound, ctx), body_type(rhs, bound, ctx));
-            let string = TypeRef::Named(String::from("String"));
-            if *op == B::Add && (l.as_ref() == Some(&string) || r.as_ref() == Some(&string)) {
-                return Some(string);
+    use crate::ast::BinaryOp as B;
+    match expr {
+        Expr::Name { path, .. } if path.len() == 1 => bound
+            .get(&path[0])
+            .cloned()
+            .or_else(|| static_type_of(expr, ctx)),
+        // A field read through the lambda's OWN parameter — `d.cards` inside
+        // `decks.stream().map(d -> d.cards.get(0))`. The general reader knows
+        // the pass's scope; only `bound` knows the parameter. (The parser
+        // keeps a dotted read as a NAME, so both spellings arrive here.)
+        Expr::Name { path, span } if path.len() == 2 => {
+            let object = Expr::Name {
+                path: vec![path[0].clone()],
+                span: *span,
+            };
+            match body_type(&object, bound, ctx)? {
+                TypeRef::Named(class) | TypeRef::Generic { base: class, .. } => {
+                    field_of_class(&class, &path[1], ctx)
+                }
+                _ => None,
             }
-            numeric_join(&l?, &r?)
         }
-    },
-    Expr::Call {
-        receiver,
-        method,
-        args,
-        ..
-    } => call_body_type(expr, receiver.as_deref(), method, args, bound, ctx),
-    _ => static_type_of(expr, ctx),
+        Expr::Field { object, name, .. } if !matches!(**object, Expr::This { .. }) => {
+            match body_type(object, bound, ctx)? {
+                TypeRef::Named(class) | TypeRef::Generic { base: class, .. } => {
+                    field_of_class(&class, name, ctx)
+                }
+                _ => None,
+            }
+        }
+        Expr::Cast { ty, .. } => Some(ty.clone()),
+        Expr::Ternary { then, els, .. } => {
+            let then = body_type(then, bound, ctx)?;
+            (then == body_type(els, bound, ctx)?).then_some(then)
+        }
+        Expr::Unary { op, operand, .. } => match op {
+            crate::ast::UnaryOp::Not => Some(TypeRef::Boolean),
+            _ => body_type(operand, bound, ctx),
+        },
+        Expr::Binary { op, lhs, rhs, .. } => match op {
+            B::Lt | B::Le | B::Gt | B::Ge | B::Eq | B::Ne | B::And | B::Or => {
+                Some(TypeRef::Boolean)
+            }
+            _ => {
+                let (l, r) = (body_type(lhs, bound, ctx), body_type(rhs, bound, ctx));
+                let string = TypeRef::Named(String::from("String"));
+                if *op == B::Add && (l.as_ref() == Some(&string) || r.as_ref() == Some(&string)) {
+                    return Some(string);
+                }
+                numeric_join(&l?, &r?)
+            }
+        },
+        Expr::Call {
+            receiver,
+            method,
+            args,
+            ..
+        } => call_body_type(expr, receiver.as_deref(), method, args, bound, ctx),
+        _ => static_type_of(expr, ctx),
 }
 }
 
@@ -5478,6 +5542,29 @@ fn declared_class_name(owner: &Expr, ctx: &Ctx) -> Option<String> {
     }
 }
 
+/// The declared type of `object.name`, where `object`'s class the pass can
+/// name. Walked OUTWARD, since a field may be inherited.
+fn field_of_object(object: &Expr, name: &str, ctx: &Ctx) -> Option<TypeRef> {
+    field_of_class(&declared_class_name(object, ctx)?, name, ctx)
+}
+
+/// The declared type of a field on `class` or on any class above it — a field
+/// a class INHERITS is read by its simple name like any other.
+fn field_of_class(class: &str, name: &str, ctx: &Ctx) -> Option<TypeRef> {
+    let mut owner = class.to_owned();
+    let mut seen: Vec<String> = Vec::new();
+    loop {
+        if let Some(ty) = ctx.fields.get(&(owner.clone(), name.to_owned())) {
+            return Some(ty.clone());
+        }
+        if seen.contains(&owner) {
+            return None;
+        }
+        seen.push(owner.clone());
+        owner = ctx.supers.get(&owner)?.first()?.clone();
+    }
+}
+
 /// The ENUM an expression names, when it names one: `Kind.values()`'s owner.
 fn enum_owner_name(owner: &Expr, ctx: &Ctx) -> Option<String> {
     let Expr::Name { path, .. } = owner else {
@@ -5968,7 +6055,10 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             base: class.clone(),
             args: type_args.clone(),
         },
-        _ => return None,
+        // Every other shape the general reader can name — a field reached
+        // through ANOTHER object, most of all: `deck.cards.stream()` is as
+        // ordinary as a field gets, and only `this.cards` was read.
+        other => static_type_of(other, ctx)?,
     };
     let TypeRef::Generic { base, args } = ty else {
         return None;

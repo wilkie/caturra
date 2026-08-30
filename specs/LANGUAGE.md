@@ -10535,3 +10535,25 @@ is the same one an `Optional` needed a container for, so both sides now share
 it: a whole container is an element too, interned.
 
 Pinned by `what_a_method_answers`.
+
+### What a field holds (2026-08-30)
+
+The last of the "read it back" surfaces: a field, and a call on what it holds.
+Twenty cells, and three readings were missing — each of them refusing an
+ordinary program with "a lambda is only allowed where a functional-interface
+type is expected", the sentence that means the pass could not type the
+receiver.
+
+- **A field a class INHERITS.** The scope the lambda pass builds held the
+  class's own fields and nothing above them, so `cards.stream().map(…)` inside
+  a subclass of the class that declares `cards` had no element — while the
+  identical method one class up compiled.
+- **A field reached through ANOTHER object.** Only `this.cards` and the bare
+  name were read; `deck.cards.stream()` had no type at all. (The parser keeps
+  a dotted read as a NAME rather than a field access, so both spellings had to
+  be answered.)
+- **A field reached through a lambda's own PARAMETER** —
+  `decks.stream().map(d -> d.cards.get(0))`. The general reader knows the
+  pass's scope; only the parameter map knows what `d` is.
+
+Pinned by `what_a_field_holds`.

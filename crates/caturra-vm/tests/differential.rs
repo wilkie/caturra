@@ -41611,3 +41611,72 @@ public class MethodAnswers {
 }
 "#
 );
+
+// A FIELD, read back through a call on what it holds. Three readings were
+// missing and each refused an ordinary program: a field a class INHERITS (the
+// scope held only the class's own), a field reached through ANOTHER object
+// (`deck.cards.stream()` — only `this.cards` was read), and a field reached
+// through a lambda's own PARAMETER (`decks.stream().map(d -> d.cards.get(0))`,
+// where only the parameter map knows what `d` is).
+differential_test!(
+    what_a_field_holds,
+    "FieldContents",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class FieldCard {
+    private final String face;
+    FieldCard(String face) { this.face = face; }
+    String face() { return face; }
+    @Override public String toString() { return face; }
+}
+
+class FieldDeck {
+    List<FieldCard> cards = new ArrayList<>(List.of(new FieldCard("A")));
+    static List<FieldCard> shared = new ArrayList<>(List.of(new FieldCard("S")));
+    Map<String, List<FieldCard>> grouped =
+        new HashMap<>(Map.of("g", new ArrayList<>(List.of(new FieldCard("G")))));
+    FieldCard[] arr = { new FieldCard("R") };
+    Optional<FieldCard> top = Optional.of(new FieldCard("T"));
+    Function<FieldCard, String> namer = FieldCard::face;
+
+    String viaThis() { return this.cards.stream().map(FieldCard::face).findFirst().get(); }
+    String viaStatic() { return shared.stream().map(FieldCard::face).findFirst().get(); }
+    String viaGrouped() { return grouped.get("g").stream().map(FieldCard::face).findFirst().get(); }
+    String viaArray() { return Arrays.stream(arr).map(FieldCard::face).findFirst().get(); }
+    String viaOptional() { return top.map(FieldCard::face).get(); }
+    String viaField() { return namer.apply(cards.get(0)); }
+}
+
+class FieldHand extends FieldDeck {
+    String inherited() { return cards.stream().map(FieldCard::face).findFirst().get(); }
+    String inheritedThis() { return this.cards.stream().map(c -> c.face()).findFirst().get(); }
+}
+
+public class FieldContents {
+    public static void main(String[] args) {
+        FieldDeck deck = new FieldDeck();
+        System.out.println(deck.viaThis() + deck.viaStatic() + deck.viaGrouped());
+        System.out.println(deck.viaArray() + deck.viaOptional() + deck.viaField());
+        System.out.println(new FieldHand().inherited() + new FieldHand().inheritedThis());
+
+        System.out.println(deck.cards.stream().map(FieldCard::face).findFirst().get());
+        System.out.println(deck.grouped.get("g").stream().map(FieldCard::face).findFirst().get());
+        deck.cards.forEach(c -> System.out.println(c.face()));
+        System.out.println(deck.cards.stream()
+            .collect(Collectors.groupingBy(FieldCard::face))
+            .get("A")
+            .get(0)
+            .face());
+        System.out.println(FieldDeck.shared.get(0).face());
+        System.out.println(deck.namer.apply(new FieldCard("N")).length());
+
+        List<FieldDeck> decks = new ArrayList<>(List.of(deck));
+        System.out.println(decks.stream().map(d -> d.cards.get(0)).findFirst().get().face());
+        System.out.println(decks.stream().map(d -> d.cards).findFirst().get().get(0).face());
+    }
+}
+"#
+);
