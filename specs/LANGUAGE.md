@@ -10740,3 +10740,23 @@ re-checked by `tests/compat_manifest.rs` and by the browser on every run:
   `stream().iterator()` driving a `while` loop, and `toArray(String[]::new)`.
 
 94 supported features now, 5 gaps, 3 beyond Java 11.
+
+### Composing the session's fixes (2026-08-30)
+
+Twelve programs that use several of this session's repairs at once — a `var`
+holding a builder chain, a stream from a user method, a collector into a
+`TreeSet`, an `Optional` holding a list, an inner-class cursor, `toArray` with
+a generator. Four failed, and all four were one missing reading:
+
+**A `var` holding a BUILDER CHAIN.** `new Roster().add(a).add(b)` is a
+`Roster`, and the reader that types a `var`'s initializer knew a `new`, a name
+and a literal factory — not a call. So the chain had no type, and every lambda
+after `roster.stream()` was refused for having no functional-interface
+position, in a program whose declared-variable form compiles. A method of the
+program answers its declared return now, and each link of a chain is named by
+the one before it — recursing on the RECEIVER, which is what terminates the
+walk at the `new`.
+
+Nothing in the twelve was findable from any single feature: each program needed
+two of them to meet. Pinned by `a_var_holding_a_builder_chain`, which is all
+twelve in one.

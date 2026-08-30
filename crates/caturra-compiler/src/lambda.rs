@@ -1397,6 +1397,26 @@ fn substitute_vars(
     }
 }
 
+/// What a method of the PROGRAM answers, on a receiver whose class the pass can
+/// name. The declared return as written — a type VARIABLE is left alone here,
+/// since the receiver's own argument is what would replace it and that is
+/// [`call_body_type`]'s reading, with the lambda's bound parameters in hand.
+fn user_method_return(owner: &Expr, method: &str, argc: usize, ctx: &Ctx) -> Option<TypeRef> {
+    let class = declared_class_name(owner, ctx)?;
+    let answered = ctx
+        .shapes
+        .get(&class)?
+        .iter()
+        .find(|shape| shape.name == method && shape.takes(argc))
+        .map(|shape| shape.return_type.clone())?;
+    // A bare type VARIABLE says nothing without the receiver's argument.
+    match &answered {
+        TypeRef::Named(name) if crate::parser::typevar_index(name).is_some() => None,
+        TypeRef::Void => None,
+        _ => Some(answered),
+    }
+}
+
 /// The type of a literal collection factory — `List.of(…)`, `Set.of(…)`,
 /// `Arrays.asList(…)`. They are how a collection is written inline, so without
 /// them `var items = new ArrayList<>(List.of(item))` had no element and the
@@ -1533,6 +1553,19 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // its own.
         Expr::Call { .. } if literal_collection_type(expr, ctx).is_some() => {
             literal_collection_type(expr, ctx)
+        }
+        // A method of the PROGRAM, on a receiver whose class can be named:
+        // `new Roster().add(s)` answers a `Roster`, which is what a `var`
+        // holding a builder chain needs — and without it the lambda in
+        // `roster.stream().map(…)` had no element, though the same chain
+        // assigned to a DECLARED variable compiled.
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } if user_method_return(owner, method, args.len(), ctx).is_some() => {
+            user_method_return(owner, method, args.len(), ctx)
         }
         // An enum's two synthetic statics: `values()` answers an ARRAY of the
         // enum, `valueOf(String)` one constant. Without them a stream, a list
@@ -5572,6 +5605,15 @@ fn declared_class_name(owner: &Expr, ctx: &Ctx) -> Option<String> {
         }
         Expr::NewObject { class, .. } => TypeRef::Named(class.clone()),
         Expr::This { .. } => TypeRef::Named(ctx.current_class?.to_owned()),
+        // A BUILDER chain: `new Roster().add(x).add(y)` is a `Roster`, and
+        // each link is named by the one before it. Recursing on the receiver
+        // rather than on the call itself is what terminates — at the `new`.
+        Expr::Call {
+            receiver: Some(inner),
+            method,
+            args,
+            ..
+        } => user_method_return(inner, method, args.len(), ctx)?,
         _ => return None,
     };
     match ty {

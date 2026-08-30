@@ -41808,3 +41808,88 @@ public class SupertypeImport {
 }
 "
 );
+
+// Composing the session's fixes found what none of them found alone: a `var`
+// holding a BUILDER CHAIN. `new Roster().add(a).add(b)` is a `Roster`, and the
+// reader that types a `var`'s initializer knew a `new`, a name and a literal
+// factory — not a call, so the chain had no type and every lambda after
+// `roster.stream()` was refused. Each link is named by the one before it.
+differential_test!(
+    a_var_holding_a_builder_chain,
+    "BuilderChain",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class ChainStudent implements Comparable<ChainStudent> {
+    private final String name;
+    private final List<Integer> scores;
+    ChainStudent(String name, List<Integer> scores) { this.name = name; this.scores = scores; }
+    String name() { return name; }
+    List<Integer> scores() { return scores; }
+    int total() { int sum = 0; for (int score : scores) sum += score; return sum; }
+    Optional<Integer> best() { return scores.stream().max(Integer::compare); }
+    public int compareTo(ChainStudent other) { return name.compareTo(other.name); }
+    @Override public String toString() { return name + total(); }
+}
+
+class ChainRoster {
+    private final List<ChainStudent> students = new ArrayList<>();
+    ChainRoster add(ChainStudent student) { students.add(student); return this; }
+    List<ChainStudent> all() { return students; }
+    Stream<ChainStudent> stream() { return students.stream(); }
+    class Cursor implements Iterator<ChainStudent> {
+        private int at;
+        public boolean hasNext() { return at < students.size(); }
+        public ChainStudent next() { return students.get(at++); }
+    }
+}
+
+public class BuilderChain {
+    public static void main(String[] args) {
+        var roster = new ChainRoster()
+            .add(new ChainStudent("ada", new ArrayList<>(List.of(3, 9))))
+            .add(new ChainStudent("bo", new ArrayList<>(List.of(5))));
+
+        System.out.println(roster.stream().map(ChainStudent::name).collect(Collectors.joining(",")));
+        var names = roster.all().stream()
+            .map(ChainStudent::name)
+            .collect(Collectors.toCollection(TreeSet::new));
+        System.out.println(names.first() + names.size());
+        System.out.println(roster.stream()
+            .flatMap(student -> student.scores().stream())
+            .mapToInt(Integer::intValue)
+            .sum());
+        System.out.println(roster.stream()
+            .map(ChainStudent::best)
+            .filter(Optional::isPresent)
+            .map(Optional::get)
+            .collect(Collectors.toList()));
+        Map<Integer, List<String>> byTotal = roster.stream().collect(
+            Collectors.groupingBy(ChainStudent::total,
+                Collectors.mapping(ChainStudent::name, Collectors.toList())));
+        System.out.println(byTotal.get(12).get(0) + byTotal.get(5).get(0));
+
+        var cursor = roster.new Cursor();
+        while (cursor.hasNext()) {
+            System.out.print(cursor.next().name());
+        }
+        System.out.println();
+
+        Optional<List<ChainStudent>> held = Optional.of(roster.all());
+        System.out.println(held.get().get(0).name() + held.map(List::size).get());
+        var array = roster.stream().toArray(ChainStudent[]::new);
+        System.out.println(array.length + array[0].name());
+        IntFunction<String[]> generator = String[]::new;
+        var written = roster.stream().map(ChainStudent::name).toArray(generator);
+        System.out.println(written.length + written[1]);
+        System.out.println(roster.stream()
+            .sorted(Comparator.comparingInt(ChainStudent::total).reversed())
+            .findFirst()
+            .get()
+            .name());
+    }
+}
+"#
+);
