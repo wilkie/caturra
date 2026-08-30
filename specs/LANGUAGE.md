@@ -10206,3 +10206,47 @@ divergent** on the JUnit half and **12 / 8 / 0** on the org.code half.
 
 Pinned by `diff_junit_assertion_failure_is_an_error`, which runs the same
 validator on real JUnit 5.
+
+### What a level PRINTS, at corpus scale (2026-08-30)
+
+The grading sweep asks how a level is GRADED. It has never asked what the
+level's `main` writes to the console — and the console is what a student
+actually reads. A solution that prints the wrong number still passes every test
+that does not look at that number.
+
+So this unit ran the other sweep: all 2698 staged levels, `javac`/`java` beside
+caturra, same stdin (none) and the same data files staged into both, comparing
+the console byte for byte. **A failing level is compared too**, which matters
+more than it sounds: with no keyboard, every `Scanner`-driven level ends in a
+`NoSuchElementException`, and skipping the levels that do not complete would
+have left the single largest category unchecked. The exception line a program
+dies on is console text, so it is compared as console text — and it agreed,
+class and message, on all 71.
+
+The result is **0 unexplained**. Sixty-four levels differ, in two families the
+sweep names rather than counts:
+
+- **29 draw randomness.** `Math.random()` in the SOLUTION, not just in the
+  test — a distinction `compare.py` does not have to make, because a verdict
+  only depends on the validator. One of them (`U6L2-L8d`) indexes a 2-D table
+  with `(int)(Math.random() * (rows * cols))`, so on a JDK it prints a word,
+  or throws `ArrayIndexOutOfBoundsException` at a different index, run to run.
+- **35 print a reflective listing.** `getDeclaredConstructors()` returns the
+  same constructors in a different order. This was already known and is now
+  measured rather than asserted: on OpenJDK 11 a class declaring
+  `[(), (int), (String), (int,int)]` reports them as
+  `[(), (int,int), (int), (String)]`, and methods `[alpha, beta, gamma, delta]`
+  come back as `[delta, alpha, beta, gamma]` — not declaration order, not its
+  reverse, and not constant-pool order either (`javap` shows the pool holds
+  them as written). It is HotSpot's internal method array, ordered by symbol
+  address: stable for a given class on a given build, and reproducible by no
+  rule a compiler could implement. The JDK documents it as "not in any
+  particular order"; caturra returns declaration order and continues to decline
+  to imitate the rest.
+
+The sweep is checked in as `scripts/sweep/stdout.py`, next to the grading one,
+and it adjudicates both families itself so the number a reader watches is the
+UNEXPLAINED count — the same shape `compare.py` settled on. `compatrun` grew
+the argument it needed to be usable for this: a corpus level is several files,
+and passing only the one with `main` reported every other class as "cannot find
+symbol" — a harness failure that reads exactly like an engine failure.

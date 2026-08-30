@@ -39,14 +39,33 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let path = args
         .next()
-        .expect("usage: compatrun <file.java> <MainClass>");
+        .expect("usage: compatrun <file.java> <MainClass> [more.java ...]");
     let main_class = args.next().expect("main class");
     let text = std::fs::read_to_string(&path).expect("read source");
 
-    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+    // A program may be spread over several files — a corpus level is a student
+    // class beside the `Main` that drives it — so any extra paths are compiled
+    // with the first. One file remains the ordinary case.
+    let mut sources = vec![caturra_compiler::SourceFile {
         path: path.clone(),
         text,
-    }]);
+    }];
+    let rest: Vec<String> = args.collect();
+    let mut wants_stdin = false;
+    for extra in &rest {
+        if extra == "--stdin" {
+            wants_stdin = true;
+            continue;
+        }
+        let text = std::fs::read_to_string(extra).expect("read source");
+        let name = std::path::Path::new(extra)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Extra.java")
+            .to_owned();
+        sources.push(caturra_compiler::SourceFile { path: name, text });
+    }
+    let compilation = caturra_compiler::compile(&sources);
     if !compilation.success() {
         let first = compilation
             .diagnostics
@@ -85,7 +104,7 @@ fn main() {
     // shape `BufferedConsole` scripts. A probe that compares a Scanner-driven
     // program needs the same input on both engines.
     let mut stdin_lines: Vec<String> = Vec::new();
-    if args.next().as_deref() == Some("--stdin") {
+    if wants_stdin {
         let mut text = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).expect("read stdin");
         stdin_lines = text.lines().map(ToOwned::to_owned).collect();

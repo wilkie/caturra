@@ -28,7 +28,16 @@ cargo run --release -p caturra-vm --example valsweep -- \
 
 scripts/sweep/compare.py vendor/sweep-reference-junit.json   vendor/sweep-caturra.tsv
 scripts/sweep/compare.py vendor/sweep-reference-orgcode.json vendor/sweep-caturra.tsv
+
+scripts/sweep/stdout.py                       # what each level PRINTS, vs a JDK
 ```
+
+`stdout.py` is the same corpus asked a different question. It needs no recorded
+reference — it runs `javac`/`java` beside caturra, level by level — and it
+compares the console rather than the verdict: the output a completing `main`
+writes, and the exception line a failing one ends on. A level whose solution
+prints the wrong number still passes every test that does not look at that
+number, which is the gap it covers.
 
 ## Where the corpus splits
 
