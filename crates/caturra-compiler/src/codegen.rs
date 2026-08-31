@@ -305,6 +305,7 @@ fn emit_clinit(
         .expect("class registered");
     let mut body = BodyGen {
         receiver_location: None,
+        receiver_end: None,
         receiver_args: None,
         path,
         diagnostics,
@@ -8612,6 +8613,7 @@ fn emit_method(
     };
     let mut body = BodyGen {
         receiver_location: None,
+        receiver_end: None,
         receiver_args: None,
         path,
         diagnostics,
@@ -16208,6 +16210,12 @@ struct BodyGen<'a> {
     current_class_id: ClassId,
     /// Whether the enclosing method is static (constructors are not).
     in_static: bool,
+    /// Where the receiver of the member access being resolved ENDS — the
+    /// position of its dot, which is where javac reports a missing member.
+    /// Set beside `receiver_location`, and restored with it: emitting the
+    /// receiver compiles any NESTED access first, and that one's dot is not
+    /// ours.
+    receiver_end: Option<crate::SourcePosition>,
     /// The MEMBER this body is, the way javac names it in a diagnostic:
     /// `method go(int)`, `constructor Pet(String)`, `static initializer of
     /// class X`. A duplicate local said only "in this method", which is not
@@ -22664,6 +22672,9 @@ impl BodyGen<'_> {
         let location = self.receiver_location.take();
         let receiver_ty = self.expr(receiver);
         self.receiver_location = location;
+        // …and where its DOT is, for the same reason: javac reports a missing
+        // member under the dot, and a nested access has its own.
+        self.receiver_end = Some(receiver.span().end);
         // The try-with-resources desugaring marks ONE of its two `close()`
         // calls, so the resource's type can be checked here where types are
         // known — the statement itself is long gone by now. JLS §14.20.3
@@ -22994,8 +23005,9 @@ impl BodyGen<'_> {
                 // An array has the `Object` methods and nothing else, and
                 // javac reports a call for anything else exactly as it does
                 // for any other missing member.
+                let at = self.member_span(span);
                 self.error(
-                    span,
+                    at,
                     cannot_find_symbol(
                         "method",
                         &format!("{method}()"),
@@ -23092,8 +23104,9 @@ impl BodyGen<'_> {
             for arg in args {
                 self.expr(arg);
             }
+            let at = self.member_span(span);
             self.error(
-                span,
+                at,
                 cannot_find_symbol(
                     "method",
                     &format!("{method}()"),
@@ -23370,8 +23383,9 @@ impl BodyGen<'_> {
                     ),
                 );
             } else {
+                let at = self.member_span(span);
                 self.error(
-                    span,
+                    at,
                     cannot_find_symbol(
                         "method",
                         &format!("{method}({})", describe_types(&arg_types, self.table)),
@@ -24292,8 +24306,9 @@ impl BodyGen<'_> {
                     span,
                 );
             } else {
+                let at = self.member_span(span);
                 self.error(
-                    span,
+                    at,
                     cannot_find_symbol(
                         "method",
                         &format!("{method}({})", describe_types(&arg_types, self.table)),
@@ -24444,8 +24459,9 @@ impl BodyGen<'_> {
                     self.code.drop_stack(1 + args_width);
                     return Some(ret);
                 }
+                let at = self.member_span(span);
                 self.error(
-                    span,
+                    at,
                     cannot_find_symbol(
                         "method",
                         &format!("{method}({})", describe_types(&arg_types, self.table)),
@@ -25376,6 +25392,23 @@ impl BodyGen<'_> {
     /// about to be compiled (see [`Self::receiver_location`]).
     fn enter_member_access(&mut self, receiver: Option<&Expr>) {
         self.receiver_location = self.member_location(receiver);
+        // The dot of THIS access, and none for a bare call — a stale one from
+        // an earlier access would point a later diagnostic into a line it has
+        // nothing to do with.
+        self.receiver_end = receiver.map(|receiver| receiver.span().end);
+    }
+
+    /// The span a MEMBER-lookup failure is reported at: the dot, when the
+    /// receiver is known, and the whole expression when it is not. javac puts
+    /// its caret on the dot — `f.applyAsInt("ab")` is reported under the `.`,
+    /// where caturra reported it under the `f`.
+    fn member_span(&self, span: SourceSpan) -> SourceSpan {
+        self.receiver_end
+            .filter(|start| start.line == span.start.line && *start > span.start)
+            .map_or(span, |start| SourceSpan {
+                start,
+                end: span.end,
+            })
     }
 
     fn member_location(&mut self, receiver: Option<&Expr>) -> Option<String> {
@@ -25995,8 +26028,9 @@ impl BodyGen<'_> {
         let sig = match table.resolve(class, method, &arg_types) {
             Resolution::Found(sig) => sig.clone(),
             Resolution::UnknownName => {
+                let at = self.member_span(span);
                 self.error(
-                    span,
+                    at,
                     cannot_find_symbol(
                         "method",
                         &format!("{method}({})", describe_types(&arg_types, self.table)),
@@ -27065,8 +27099,9 @@ impl BodyGen<'_> {
                 for arg in args {
                     self.expr(arg);
                 }
+                let at = self.member_span(span);
                 self.error(
-                    span,
+                    at,
                     cannot_find_symbol(
                         "method",
                         &format!("{method}({})", describe_types(&arg_types, self.table)),
@@ -29477,10 +29512,12 @@ impl BodyGen<'_> {
                     None => JType::Error,
                     Some(Some(ty)) => ty,
                     Some(None) => {
-                        self.error(
-                            *span,
-                            format!("'{method}' returns void, so it cannot be used as a value"),
-                        );
+                        // javac's wording, which does not name the method:
+                        // the mistake is the POSITION, and it says so.
+                        // (Its other two are for a receiver — "void cannot be
+                        // dereferenced" — and an assignment, which name the
+                        // context this one does not have.)
+                        self.error(*span, "'void' type not allowed here");
                         JType::Error
                     }
                 }
@@ -29574,7 +29611,10 @@ impl BodyGen<'_> {
                 Some(None) => {
                     self.error(
                         *span,
-                        format!("'{method}' returns void, so it cannot be used as a value"),
+                        {
+                                let _ = method;
+                                String::from("'void' type not allowed here")
+                            },
                     );
                     JType::Error
                 }
@@ -29790,8 +29830,9 @@ impl BodyGen<'_> {
             let owner = named.map_or(owner, |id| self.table.class_name(id));
             let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
             let Resolution::Found(sig) = self.table.resolve(owner, method, &arg_types) else {
+                let at = self.member_span(span);
                 self.error(
-                    span,
+                    at,
                     cannot_find_symbol(
                         "method",
                         &format!("{method}({})", describe_types(&arg_types, self.table)),

@@ -11411,4 +11411,33 @@ site holding the receiver, not the emitter holding a field.
 The count is in the tool to be moved, not to gate: it is reported by
 `--columns` and is not part of the comparison.
 
-Pinned by `reject_an_argument_points_at_the_argument`.
+**The dot rule, done the way the note above says.** The receiver's end is
+recorded beside the receiver's LOCATION, in the one place that already knows
+about the clobbering — `instance_call` takes the location, emits the receiver
+(which compiles any nested access), and puts its own back. The dot goes with
+it, and a bare call clears it so no stale one survives.
+
+Getting there needed the spans to be right first: a dotted call's span stopped
+after its NAME, leaving its own arguments outside the expression they belong
+to, so every dot after one in a chain read two columns early. It runs through
+the closing paren now, as the bare-call form already did — which is what an
+editor underlines for a call, and was wrong for every one of them.
+
+Columns agreeing on the reject corpus: 107 → 120 of 202.
+
+Pinned by `reject_an_argument_points_at_the_argument`,
+`reject_a_missing_member_points_at_the_dot` and
+`reject_a_bare_call_points_at_itself`.
+
+Chasing the last mispointed case found a wording rather than a position: a
+void call used as a VALUE. javac has three sentences for it and they depend on
+the position — "void cannot be dereferenced" for a receiver, "incompatible
+types: void cannot be converted to int" for an assignment, and "'void' type
+not allowed here" everywhere else. caturra said one sentence of its own
+invention in all three, which was javac's for none of them; it says the third
+now, which is javac's for the commonest position and for four of the six
+places a void call can appear. The other two need the CONTEXT the call site
+does not have, and are open.
+
+Pinned by `reject_a_void_call_as_an_argument` and
+`reject_a_void_call_as_an_operand`.

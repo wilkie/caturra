@@ -3932,9 +3932,14 @@ impl Parser<'_> {
                 let (segment, segment_span) = self.expect_ident("after '.'")?;
                 if self.at_symbol("(") {
                     let args = self.arguments()?;
+                    // Through the closing `)`, as the bare-call form already
+                    // does: a call's span that stopped after its NAME left the
+                    // arguments outside the expression they belong to, and the
+                    // next `.` in a chain was read as two columns earlier than
+                    // it is.
                     let span = SourceSpan {
                         start: expr.span().start,
-                        end: segment_span.end,
+                        end: self.here().start,
                     };
                     expr = Expr::Call {
                         receiver: Some(Box::new(expr)),

@@ -43601,3 +43601,71 @@ public class BlameArgument {
 }
 "
 );
+
+// javac reports a missing member under the DOT, not under the receiver that
+// was found: `f.applyAsInt("ab")` is pointed at the `.`. Getting there needed
+// the receiver's span to be right in the first place — a dotted call's span
+// stopped after its NAME, leaving its own arguments outside it, so the next
+// dot in a chain read two columns early.
+differential_wording!(
+    reject_a_missing_member_points_at_the_dot,
+    "DotPosition",
+    r"
+import java.util.stream.IntStream;
+
+public class DotPosition {
+    public static void main(String[] args) {
+        System.out.println(IntStream.of(1).asDoubleStream().asDoubleStream().sum());
+    }
+}
+"
+);
+
+// …and a bare call has no dot to point at, so it keeps the call's own
+// position. A stale receiver from an earlier access would put this one on
+// another line entirely.
+differential_wording!(
+    reject_a_bare_call_points_at_itself,
+    "BareCallPosition",
+    r"
+public class BareCallPosition {
+    public static void main(String[] args) {
+        nope();
+    }
+}
+"
+);
+
+// A void call used as a VALUE. javac has three wordings and they depend on the
+// position — "void cannot be dereferenced" for a receiver, "incompatible
+// types: void cannot be converted to int" for an assignment, and this one
+// everywhere else. caturra said one sentence of its own invention in all three
+// ("'go' returns void, so it cannot be used as a value"), which was javac's
+// for none of them.
+differential_wording!(
+    reject_a_void_call_as_an_argument,
+    "VoidArgument",
+    r"
+public class VoidArgument {
+    static void go() { }
+
+    public static void main(String[] args) {
+        System.out.println(go());
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_a_void_call_as_an_operand,
+    "VoidOperand",
+    r"
+public class VoidOperand {
+    static void go() { }
+
+    public static void main(String[] args) {
+        System.out.println(go() == null);
+    }
+}
+"
+);
