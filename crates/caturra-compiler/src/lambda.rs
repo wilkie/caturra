@@ -773,7 +773,13 @@ fn is_library_static(class: &str, method: &str) -> bool {
         "String" => matches!(method, "join" | "format" | "copyValueOf"),
         "Objects" => matches!(
             method,
-            "isNull" | "nonNull" | "requireNonNull" | "requireNonNullElse" | "hash" | "toString"
+            "isNull"
+                | "nonNull"
+                | "requireNonNull"
+                | "requireNonNullElse"
+                | "requireNonNullElseGet"
+                | "hash"
+                | "toString"
         ),
         "Integer" | "Long" | "Short" | "Byte" => matches!(
             method,
@@ -2514,6 +2520,38 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     &object,
                     &[],
                     Some(&elem),
+                    ctx,
+                );
+                return;
+            }
+            // `Objects.requireNonNullElseGet(value, () -> ...)`: a
+            // zero-parameter supplier of the value's own type, asked only when
+            // the value is null. Without this the lambda had no target and the
+            // message blamed the LAMBDA for a method caturra had not modelled.
+            let supplier_argument = matches!(&args[..], [_, Expr::MethodRef { .. }])
+                || matches!(&args[..], [_, Expr::Lambda { params, .. }] if params.is_empty());
+            if method == "requireNonNullElseGet"
+                && supplier_argument
+                && matches!(receiver.as_deref(), Some(Expr::Name { path, .. })
+                        if path.len() == 1 && path[0] == "Objects")
+            {
+                desugar_expr(&mut args[0], None, ctx);
+                let object = TypeRef::Named(String::from("Object"));
+                if matches!(&args[1], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from("get"),
+                        params: Vec::new(),
+                        ret: object.clone(),
+                    };
+                    args[1] = method_ref_to_lambda(&args[1], &synth, ctx);
+                }
+                args[1] = build_erased_lambda(
+                    &mut args[1],
+                    "__Supplier",
+                    "get",
+                    &object,
+                    &[],
+                    None,
                     ctx,
                 );
                 return;
@@ -4714,11 +4752,39 @@ fn mapped_element_type(args: &[Expr], ctx: &Ctx) -> Option<TypeRef> {
     // yields. The class says everything needed: its body opens by unwrapping
     // each erased argument into the parameter's declared type, and ends in the
     // expression whose type is the answer.
-    let [Expr::NewObject { class, .. }] = args else {
+    let [only] = args else {
         return None;
     };
-    let decl = ctx.new_classes.iter().find(|decl| decl.name == *class)?;
-    produced_type(decl, ctx)
+    if let Expr::NewObject { class, .. } = only
+        && let Some(decl) = ctx.new_classes.iter().find(|decl| decl.name == *class)
+    {
+        return produced_type(decl, ctx);
+    }
+    // …or a `Function` the program factored out — a variable, a field, a
+    // method's return. There is no synthesized class to read, and its DECLARED
+    // type says the same thing: a `Function<String, Integer>` produces an
+    // `Integer`. Without this, `stream.map(f)` — the first thing anyone does
+    // after pulling a lambda out into a name — left the element unknown, so
+    // the NEXT operation's lambda had an untyped parameter.
+    declared_functional_result(&body_type(only, &HashMap::new(), ctx)?)
+}
+
+/// The RESULT type argument of a functional interface as written:
+/// `Function<String, Integer>` answers `Integer`, `Supplier<Pet>` a `Pet`.
+/// `None` for an interface whose result is not a type argument at all — a
+/// `Predicate` answers `boolean` and a `Consumer` nothing, so the variable in
+/// their last position is a PARAMETER and says nothing about a result.
+fn declared_functional_result(ty: &TypeRef) -> Option<TypeRef> {
+    let TypeRef::Generic { base, args } = ty else {
+        return None;
+    };
+    let simple = base.rsplit('.').next().unwrap_or(base);
+    let simple = simple.strip_prefix("__").unwrap_or(simple);
+    let arity = crate::ast::functional_result_arity(simple)?;
+    if args.len() != arity {
+        return None;
+    }
+    args.last().cloned()
 }
 
 /// What a synthesized lambda class ANSWERS, read off the class itself: its

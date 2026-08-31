@@ -5677,6 +5677,28 @@ fn lambda_produces(arg: JType, table: &MethodTable) -> Option<JType> {
     Some(produces.ty)
 }
 
+/// What a functional-interface VALUE answers, from the type it was declared
+/// with: a `Function<String, Integer>` produces an `Integer`, whether it is a
+/// variable, a field, or a method's return.
+///
+/// `lambda_produces` reads the answer off a synthesized lambda class, which
+/// only exists when the lambda was written AT the call. A value has no such
+/// class, so `stream.map(f)` — a `Function` factored out into a variable, the
+/// first thing anyone does with one — produced a stream of nothing, and the
+/// operation after it could not be typed.
+fn functional_value_produces(arg: JType, table: &MethodTable) -> Option<JType> {
+    let JType::Generic { class, arg, rest } = arg else {
+        return None;
+    };
+    let name = table.class_name(class);
+    // The interfaces are registered under caturra's `__`-prefixed spellings.
+    let simple = name.strip_prefix("__").unwrap_or(name);
+    let arity = crate::ast::functional_result_arity(simple)?;
+    let last = u8::try_from(arity.saturating_sub(1)).ok()?;
+    let produced = table.type_arg(arg, rest, last)?;
+    Some(elem_value_type(produced, table))
+}
+
 /// Which of a CONSTRUCTOR's parameters pin the class's single type variable,
 /// so a diamond can infer its argument the way javac does: `new Node<>(5)` on
 /// a `class Node<T> { Node(T v) }` is a `Node<Integer>`, not a raw `Node`.
@@ -15608,10 +15630,16 @@ fn refine_builtin_return(
     // thing that still knows it here.
     if matches!(method, "map" | "mapToObj")
         && matches!(ret, Some(JType::Stream(_) | JType::Optional(_)))
-        && let [JType::Object(lambda)] = arg_types
-        && let Some((_, produces)) =
-            table.field(table.class_name(*lambda), crate::lambda::PRODUCES_FIELD)
-        && let Some(elem) = holdable_elem_of(produces.ty, table)
+        && let [only] = arg_types
+        && let Some(produced) = match only {
+            JType::Object(lambda) => table
+                .field(table.class_name(*lambda), crate::lambda::PRODUCES_FIELD)
+                .map(|(_, produces)| produces.ty),
+            // …or a `Function` the program factored out, whose declared type
+            // argument says the same thing.
+            other => functional_value_produces(*other, table),
+        }
+        && let Some(elem) = holdable_elem_of(produced, table)
     {
         // A `Stream<Integer>` holds INTEGERS: the body's type is `int`, and
         // the element it becomes is the wrapper (JLS §5.1.7 — the lambda's
@@ -26896,6 +26924,25 @@ impl BodyGen<'_> {
                 };
                 Some(Some(self.narrow_object_return(joined)))
             }
+            // `requireNonNullElseGet(value, supplier)` — the lazy half of the
+            // pair above. The supplier is a functional-interface argument, so
+            // it converts the same way every other one does, and the answer is
+            // the value's type when it has one.
+            ("requireNonNullElseGet", [a, supplier]) => {
+                let arg_ty = self.type_of(a);
+                self.emit_object_arg(a);
+                let supplier_ty = self.expr(supplier);
+                if supplier_ty == JType::Error {
+                    return Some(None);
+                }
+                self.invoke_objects(
+                    "requireNonNullElseGet",
+                    "(Ljava/lang/Object;Ljava/util/function/Supplier;)Ljava/lang/Object;",
+                    2,
+                    1,
+                );
+                Some(Some(self.narrow_object_return(arg_ty)))
+            }
             ("requireNonNull", [a, message]) => {
                 let arg_ty = self.type_of(a);
                 self.emit_object_arg(a);
@@ -28295,6 +28342,11 @@ impl BodyGen<'_> {
                             }
                             _ => JType::Error,
                         },
+                        // The lazy half answers the VALUE's type; the supplier
+                        // is a lambda, whose own type says nothing here.
+                        "requireNonNullElseGet" => args
+                            .first()
+                            .map_or(JType::Error, |a| self.type_of(a)),
                         _ => JType::Error,
                     };
                 }

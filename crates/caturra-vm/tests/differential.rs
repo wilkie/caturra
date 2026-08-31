@@ -43163,3 +43163,146 @@ public class CompareToCalls {
 }
 "#
 );
+
+// A functional interface the program FACTORED OUT — into a variable, a field,
+// a method's return — is the first thing anyone does with a lambda, and the
+// element of the stream it maps was unknown afterwards. The answer rides on a
+// synthesized class only when the lambda is written AT the call; a value says
+// the same thing in its DECLARED type, `Function<String, Integer>`.
+differential_test!(
+    a_stream_maps_through_a_function_value,
+    "FunctionValues",
+    r#"
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+
+public class FunctionValues {
+    static Function<String, Integer> lenFn() { return s -> s.length(); }
+    static Function<String, String> upperFn = s -> s.toUpperCase();
+    static Predicate<String> longP() { return s -> s.length() > 1; }
+
+    static List<String> words() {
+        return new ArrayList<>(List.of("bb", "a", "ccc"));
+    }
+
+    public static void main(String[] args) {
+        // Held in a variable, then used twice over — the second lambda's
+        // parameter is what the first one produced.
+        Function<String, Integer> f = lenFn();
+        System.out.println(words().stream().map(f).map(n -> n + 1).collect(Collectors.toList()));
+        // Straight from a method, and from a field.
+        System.out.println(words().stream().map(lenFn()).mapToInt(Integer::intValue).sum());
+        System.out.println(words().stream().map(upperFn).collect(Collectors.toList()));
+        System.out.println(words().stream().map(lenFn()).max(Comparator.naturalOrder()).get() + 1);
+        System.out.println(words().stream().filter(longP()).collect(Collectors.toList()));
+        // …and an Optional reads its element the same way.
+        Optional<String> one = Optional.of("v");
+        System.out.println(one.map(upperFn).get().length());
+    }
+}
+"#
+);
+
+// `Objects.requireNonNullElseGet` — the lazy half of a pair whose eager half
+// was modelled. The supplier is asked ONLY when the value is null, which is
+// the whole point of it; without the method the message blamed the LAMBDA for
+// a position caturra had not modelled.
+differential_test!(
+    require_non_null_else_get_asks_only_when_null,
+    "RequireElseGet",
+    r#"
+import java.util.Objects;
+import java.util.function.Supplier;
+
+public class RequireElseGet {
+    static String make() {
+        System.out.println("called");
+        return "made";
+    }
+
+    public static void main(String[] args) {
+        System.out.println(Objects.requireNonNullElseGet("v", RequireElseGet::make));
+        System.out.println(Objects.requireNonNullElseGet(null, RequireElseGet::make));
+        Supplier<String> supplier = () -> {
+            System.out.println("sup");
+            return "x";
+        };
+        System.out.println(Objects.requireNonNullElseGet(null, supplier));
+        try {
+            Objects.requireNonNullElseGet(null, () -> null);
+        } catch (NullPointerException e) {
+            System.out.println("npe " + e.getMessage());
+        }
+        Integer n = null;
+        System.out.println(Objects.requireNonNullElseGet(n, () -> 7) + 1);
+    }
+}
+"#
+);
+
+// The callback protocol of the map and stream operations that take a lambda:
+// which ones ask at all, and how often. `computeIfAbsent` does not ask for a
+// key that is present, `orElseGet` does not ask when the value is, and a
+// short-circuiting `findFirst` stops the pipeline.
+differential_test!(
+    what_a_library_algorithm_asks_a_lambda,
+    "LambdaCalls",
+    r#"
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public class LambdaCalls {
+    static List<String> words() {
+        return new ArrayList<>(List.of("bb", "a", "ccc"));
+    }
+
+    static Map<String, Integer> map() {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("bb", 2);
+        return m;
+    }
+
+    public static void main(String[] args) {
+        Map<String, Integer> m = map();
+        System.out.println(m.computeIfAbsent("bb", k -> { System.out.println("make " + k); return 9; }));
+        System.out.println(m.computeIfAbsent("zz", k -> { System.out.println("make " + k); return 9; }));
+
+        Map<String, Integer> c = map();
+        c.compute("bb", (k, v) -> { System.out.println("c " + k + " " + v); return v + 1; });
+        c.computeIfPresent("zz", (k, v) -> { System.out.println("never"); return v; });
+        System.out.println(c);
+
+        List<String> l = words();
+        l.removeIf(s -> { System.out.println("test " + s); return s.length() == 1; });
+        l.replaceAll(s -> { System.out.println("rep " + s); return s + "!"; });
+        System.out.println(l);
+
+        System.out.println(Optional.of("v").orElseGet(() -> { System.out.println("never"); return "f"; }));
+        Optional<String> none = Optional.empty();
+        System.out.println(none.orElseGet(() -> { System.out.println("asked"); return "f"; }));
+
+        System.out.println(words().stream()
+                .map(s -> { System.out.println("map " + s); return s; })
+                .filter(s -> { System.out.println("filt " + s); return s.length() > 1; })
+                .findFirst().get());
+
+        System.out.println(Stream.iterate(1, n -> { System.out.println("it " + n); return n + 1; })
+                .limit(3).collect(Collectors.toList()));
+        System.out.println(words().stream().reduce("", (a, b) -> {
+            System.out.println("red " + a + "|" + b);
+            return a + b;
+        }));
+    }
+}
+"#
+);

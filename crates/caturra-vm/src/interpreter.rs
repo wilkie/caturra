@@ -5410,6 +5410,7 @@ impl<'run> Interpreter<'run> {
     /// dispatch a user override (via [`Self::java_equals`]/[`Self::java_hash_code`]),
     /// `toString` renders like `String.valueOf`, and `requireNonNull` throws
     /// the JDK's `NullPointerException` — with the given message or none.
+    #[allow(clippy::too_many_lines)] // one arm per Objects method
     fn objects_static_intrinsic(
         &mut self,
         frame: &mut Frame<'run>,
@@ -5504,6 +5505,28 @@ impl<'run> Interpreter<'run> {
                     return Err(VmError::UncaughtException(String::from(
                         "java.lang.NullPointerException: defaultObj",
                     )));
+                }
+            }
+            // `requireNonNullElseGet(obj, supplier)`: the supplier is asked
+            // ONLY when the value is null, which is the whole point of the
+            // method — and the reason it cannot be the eager
+            // `requireNonNullElse` with a call in front of it.
+            ("requireNonNullElseGet", [o, supplier]) => {
+                if *o == JValue::NULL {
+                    let JValue::Ref(Some(supplier)) = *supplier else {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.NullPointerException: supplier",
+                        )));
+                    };
+                    let produced = self.call_apply_supplier(supplier)?;
+                    if produced == JValue::NULL {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.NullPointerException: supplier.get()",
+                        )));
+                    }
+                    produced
+                } else {
+                    *o
                 }
             }
             ("requireNonNull", [o, message]) => {

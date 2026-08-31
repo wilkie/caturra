@@ -11236,3 +11236,36 @@ Pinned by `what_a_library_algorithm_asks_a_comparator`,
 `a_reversed_comparator_swaps_rather_than_negates` — a comparator that answers
 `Integer.MIN_VALUE`, which is legal (any negative means "less") and which a
 `reversed()` that negates does not reverse.
+
+### What a library algorithm asks a lambda (2026-08-30)
+
+The same probe as the entry above, pointed at the FUNCTIONAL arguments: which
+library operations call the lambda they were given, and how many times.
+Thirteen of fifteen were exact — `computeIfAbsent` does not ask for a key that
+is present, `computeIfPresent` does not ask for one that is absent,
+`orElseGet` does not ask when the value is there, `removeIf` and `replaceAll`
+ask once per element in order, a short-circuiting `findFirst` stops the
+pipeline, `Stream.iterate` asks n-1 times for n elements, and `reduce` folds
+left. The two that were not are gaps, not protocols.
+
+**A functional interface the program factored out had no result type.** Pulling
+a lambda into a variable, a field, or a method is the first thing anyone does
+with one, and `stream.map(f)` then produced a stream of nothing: the answer
+rides on a synthesized class that only exists when the lambda is written AT the
+call. A value says the same thing in its DECLARED type — a
+`Function<String, Integer>` produces an `Integer` — which is now read on both
+sides: the lambda pass, so the NEXT operation's lambda has a typed parameter,
+and codegen, so the element survives into the collector. It is the same "one
+fact, two readers" shape as every other element gap.
+
+**`Objects.requireNonNullElseGet` was missing**, and the message blamed the
+LAMBDA — "a lambda or method reference is only allowed where a
+functional-interface type is expected" — for a position caturra had not
+modelled. Its eager twin `requireNonNullElse` was already there. The supplier
+is asked only when the value is null, which is the whole point of the method
+and the reason it cannot be the eager one with a call in front of it; and a
+supplier that answers `null` is an NPE naming `supplier.get()`, as a JDK's is.
+
+Pinned by `a_stream_maps_through_a_function_value`,
+`require_non_null_else_get_asks_only_when_null` and
+`what_a_library_algorithm_asks_a_lambda`.
