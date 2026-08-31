@@ -43427,3 +43427,58 @@ differential_reject!(
     "RejectForEachFactory",
     "import java.util.*;\npublic class RejectForEachFactory {\n  static <T> List<T> empty() { return new ArrayList<>(); }\n  static void r() { for (String s : empty()) { System.out.println(s); } }\n}"
 );
+
+// A generic method whose return names TWO type variables — `<K, V> Map<K, V>
+// pair(K, V)`, the shape every "make me a little map" helper has. Each is
+// pinned on its own; with only the first, the map's VALUE stayed erased and
+// `pair("k", 3).get("k") + 1` was "bad operand types" about a map whose value
+// type the call plainly gives. A FUNCTIONAL return is the same question asked
+// of its RESULT — the one argument caturra models a `Function` by.
+differential_test!(
+    a_generic_return_that_names_two_variables,
+    "TwoVariables",
+    r#"
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+
+public class TwoVariables {
+    static <K, V> Map<K, V> pair(K key, V value) {
+        Map<K, V> made = new LinkedHashMap<>();
+        made.put(key, value);
+        return made;
+    }
+
+    static <T, R> Function<T, R> constant(R value) { return v -> value; }
+
+    static <T> List<T> listOf(T one) {
+        List<T> made = new ArrayList<>();
+        made.add(one);
+        return made;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(pair("k", 3).get("k") + 1);
+        int direct = pair("k", 3).get("k");
+        System.out.println(direct);
+        System.out.println(pair("k", 3).get("k").intValue());
+        var held = pair("k", 3);
+        System.out.println(held.get("k").intValue());
+        Map<String, Integer> declared = pair("k", 3);
+        System.out.println(declared.get("k") + 1);
+        for (Map.Entry<String, Integer> e : pair("k", 3).entrySet()) {
+            System.out.println(e.getKey().length() + e.getValue());
+        }
+        // A value that is itself a container, so both positions are read.
+        System.out.println(pair("k", listOf("v")).get("k").get(0).length());
+
+        // The functional half: R is pinned by the argument, T by nothing.
+        Function<String, Integer> seven = constant(7);
+        System.out.println(seven.apply("x") + 1);
+        System.out.println(listOf("bb").stream().map(constant("z")).findFirst().get().length());
+    }
+}
+"#
+);

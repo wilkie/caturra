@@ -5489,15 +5489,65 @@ fn infer_return_plan(
     // reads back off the declared return's own shape.
     let (ret_var, container) = match &method.return_type {
         TypeRef::Named(name) => (name, false),
-        TypeRef::Generic { args, .. } => match args.as_slice() {
+        TypeRef::Generic { base, args } => match args.as_slice() {
             [TypeRef::Named(name)] => (name, true),
-            _ => return None,
+            // A FUNCTIONAL interface return — `<T, R> Function<T, R>
+            // constant(R value)`. caturra models such a type by its RESULT
+            // alone, so that is the argument the erased return keeps and the
+            // one to pin; the parameter side is not modelled and cannot be.
+            // Without this a factory of functions answered a `Function` of
+            // nothing, and the stream it mapped had no element.
+            args => {
+                let simple = base.rsplit('.').next().unwrap_or(base);
+                match crate::ast::functional_result_arity(simple) {
+                    // A FUNCTIONAL interface: caturra models such a type by
+                    // its RESULT alone, so that is the argument the erased
+                    // return keeps and the one to pin. The parameter side is
+                    // not modelled and cannot be.
+                    Some(arity) if arity == args.len() => match args.last()? {
+                        TypeRef::Named(name) => (name, true),
+                        _ => return None,
+                    },
+                    // Anything else with two arguments — a `Map<K, V>` — is
+                    // pinned a position at a time: the FIRST here, and the
+                    // second in `second` below.
+                    None if args.len() == 2 => match &args[0] {
+                        TypeRef::Named(name) => (name, true),
+                        _ => return None,
+                    },
+                    _ => return None,
+                }
+            }
         },
         _ => return None,
     };
     if !erasures.contains_key(ret_var) {
         return None;
     }
+    // A return that names TWO variables — `<K, V> Map<K, V> pair(K k, V v)`,
+    // the shape every "make me a little map" helper has. Each argument is
+    // pinned on its own, and the second rides beside the first so codegen can
+    // put both back.
+    let second_var = match &method.return_type {
+        TypeRef::Generic { base, args } if args.len() == 2 => {
+            let functional = crate::ast::functional_result_arity(
+                base.rsplit('.').next().unwrap_or(base),
+            )
+            .is_some();
+            match (&args[0], &args[1]) {
+                (TypeRef::Named(first), TypeRef::Named(second))
+                    if !functional
+                        && first == ret_var
+                        && erasures.contains_key(second)
+                        && second != ret_var =>
+                {
+                    Some(second.clone())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
     let sources: Vec<InferSource> = method
         .params
         .iter()
@@ -5529,7 +5579,26 @@ fn infer_return_plan(
             _ => None,
         })
         .collect();
-    (!sources.is_empty()).then_some(crate::ast::ReturnPlan { container, sources })
+    let second: Vec<InferSource> = second_var.map_or_else(Vec::new, |var| {
+        method
+            .params
+            .iter()
+            .enumerate()
+            .filter_map(|(index, p)| match &p.ty {
+                TypeRef::Named(name) if *name == var => Some(InferSource::Direct(index)),
+                TypeRef::Generic { args, .. } => match args.as_slice() {
+                    [TypeRef::Named(name)] if *name == var => Some(InferSource::Element(index)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    });
+    (!sources.is_empty()).then_some(crate::ast::ReturnPlan {
+        container,
+        sources,
+        second,
+    })
 }
 
 /// The simple name of a wildcard's bound (`? extends Number` → `"Number"`),

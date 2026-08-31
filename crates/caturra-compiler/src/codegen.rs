@@ -5745,6 +5745,7 @@ fn constructor_infer_plan(class: &ClassDecl, method: &MethodDecl) -> Option<crat
     (!sources.is_empty()).then_some(crate::ast::ReturnPlan {
         container: false,
         sources,
+        second: Vec::new(),
     })
 }
 
@@ -5761,36 +5762,31 @@ fn constructor_infer_plan(class: &ClassDecl, method: &MethodDecl) -> Option<crat
 /// `Object`/the bound, as before). The emitted bytecode is unchanged: only the
 /// STATIC type reported differs, exactly as an erased read of a type variable
 /// stays cast-free.
-fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) -> Option<JType> {
+/// What one list of [`InferSource`]s pins, as a reference type. `None` when an
+/// argument is missing, cannot be read, or two of them disagree — the caller
+/// then keeps the erased return.
+fn join_sources(
+    sources: &[crate::ast::InferSource],
+    arg_types: &[JType],
+    table: &MethodTable,
+) -> Option<JType> {
     use crate::ast::InferSource;
-    let Some(plan) = &sig.ret_infer else {
-        return sig.ret;
-    };
-    let sources = &plan.sources;
     let mut joined: Option<JType> = None;
     for &source in sources {
         let (InferSource::Direct(index)
         | InferSource::Element(index)
         | InferSource::LambdaResult(index)) = source;
-        let Some(&arg) = arg_types.get(index) else {
-            return sig.ret;
-        };
+        let &arg = arg_types.get(index)?;
         // For a container parameter it is the ELEMENT that pins the variable:
         // `max(List<String>)` returns a String, not a `List<String>`.
         let arg = match source {
             InferSource::Direct(_) => arg,
-            InferSource::Element(_) => match TypeArgs::of(arg).first {
-                Some(elem) => elem.base_type(),
-                None => return sig.ret,
-            },
+            InferSource::Element(_) => TypeArgs::of(arg).first?.base_type(),
             // The lambda's own BODY pins it: the lambda pass typed that body
             // and left the answer on the synthesized class, which is the only
             // thing that still knows it here — the same field a mapped
             // stream's element is read from.
-            InferSource::LambdaResult(_) => match lambda_produces(arg, table) {
-                Some(produced) => produced,
-                None => return sig.ret,
-            },
+            InferSource::LambdaResult(_) => lambda_produces(arg, table)?,
         };
         let reference = match boxable_primitive(arg) {
             Some(elem) => JType::Boxed(elem),
@@ -5801,10 +5797,17 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) ->
             Some(prev) if prev == reference => {}
             // The arguments pin different types; their least upper bound is
             // wider than either, so keep the erased return.
-            Some(_) => return sig.ret,
+            Some(_) => return None,
         }
     }
-    let Some(joined) = joined else {
+    joined
+}
+
+fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) -> Option<JType> {
+    let Some(plan) = &sig.ret_infer else {
+        return sig.ret;
+    };
+    let Some(joined) = join_sources(&plan.sources, arg_types, table) else {
         return sig.ret;
     };
     // A CONTAINER return (`<T> List<T> listOf(T)`) infers its ELEMENT, not
@@ -5874,8 +5877,25 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) ->
             arg: inferred,
             rest: NO_TYPE_ARGS,
         }),
+        // A return that names TWO variables — `<K, V> Map<K, V> pair(K k,
+        // V v)`, the shape every "make me a little map" helper has. Each is
+        // pinned on its own, and both go back: with only the first the map's
+        // VALUE stayed erased, so `pair("k", 3).get("k") + 1` was "bad operand
+        // types" about a map whose value type the call plainly gives.
+        (Some(JType::Map { key, value, face }), Some(inferred))
+            if erased_element(key) && erased_element(value) && !plan.second.is_empty() =>
+        {
+            let second = join_sources(&plan.second, arg_types, table)
+                .and_then(|pinned| value_elem_of(pinned, table));
+            second.map(|second| JType::Map {
+                key: inferred,
+                value: second,
+                face,
+            })
+        }
         _ => None,
     };
+
     // The plan's own answer is the return only when the declared return IS the
     // variable (`<T> T first(List<T>)`). A STRUCTURED return that could not be
     // re-argumented keeps its erased self: replacing it with the element would

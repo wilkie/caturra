@@ -175,6 +175,11 @@ pub struct ReturnPlan {
     /// different shape — `Box.of("hi")` was typed `String`.
     pub container: bool,
     pub sources: Vec<InferSource>,
+    /// Where a SECOND type argument is pinned, for a return that names two —
+    /// `<K, V> Map<K, V> pair(K k, V v)`, the shape every "make me a little
+    /// map" helper has. Empty for a return with one argument, and for one
+    /// whose second argument nothing pins.
+    pub second: Vec<InferSource>,
 }
 
 /// `is_constructor` set, `name` equal to the class name, and a `Void`

@@ -11329,3 +11329,29 @@ worse: it typed as `null` — assignable to any list, as it should be, and
 walkable as none, so `for (Object o : Collections.emptyList())` was "for-each
 not applicable to expression type" about a list. It is a list whose element is
 an erased type variable now, which is both.
+
+### A generic return that names two variables (2026-08-31)
+
+The return-inference plan tracked ONE type variable, so a generic method
+returning a container of two — `<K, V> Map<K, V> pair(K key, V value)`, the
+shape every "make me a little map" helper has — was not inferred at all:
+`pair("k", 3).get("k") + 1` was "bad operand types" about a map whose value
+type the call plainly gives. The plan carries a second source list now, and
+each argument is pinned on its own.
+
+A FUNCTIONAL return is the same question asked of a different position.
+caturra models a `Function<A, B>` by its RESULT alone, so that is the argument
+its erased return keeps and the one to pin — `<T, R> Function<T, R>
+constant(R value)` answers a function of `Integer` for `constant(7)`, where
+before it answered a function of nothing and the stream it mapped had no
+element. (The parameter side is not modelled and cannot be, which is the same
+limit recorded two entries above.)
+
+Still open, and measured: a stream mapped through a generic function FACTORY
+whose result variable nothing pins — `map(same())` for a `<T> Function<T, T>`,
+or `map(lift(s -> s.length()))` where the lambda's own body pins it. The
+element after such a map wants the receiver's element unified with the
+function's parameter, which is the inference direction this engine does not
+have.
+
+Pinned by `a_generic_return_that_names_two_variables`.
