@@ -11561,9 +11561,17 @@ Exactly at 100%: `String`, `Math`, `StringBuilder`, `Double`, `ArrayList`,
 `List`, `Map`, `HashMap`, `LinkedHashMap`, `TreeMap`, `Set`, `Collection`,
 `Queue`, `Deque`, `Iterator`, `Comparator`, `StringJoiner`, `Pattern`,
 `Matcher`, `Stream`, `IntStream`, `Iterable`, `Comparable`. The low ones are
-low for a reason that is usually deliberate rather than a gap: `File` 9/40 and
-`System` 7/25 are filesystem metadata and process/properties surface a browser
-has nothing to answer with, `Class` 28/67 is reflection past what a grading
+low for a reason that is usually — not always — deliberate. `System` 7/25 is a
+boundary: JVM plumbing with no analogue (`loadLibrary`, `SecurityManager`,
+`inheritedChannel`), the properties table, and stream redirection. `File` 9/40
+is only HALF a boundary, and saying otherwise was the loose half of this
+entry. Permission bits, timestamps, device space and `toURI`/`toURL` (which
+need the explicitly-unsupported `java.net`) have nothing behind them — but
+`getAbsolutePath`, `getCanonicalPath`, `getParent`, `isAbsolute`, `compareTo`,
+`list`, `listFiles`, `mkdirs`, `renameTo` and `toPath` are all answerable from
+the `VirtualFileSystem` as it stands, whose `normalize` and `list_dir` the
+`File` method table simply never reaches. That is the most concrete lead this
+measurement produced. `Class` 28/67 is reflection past what a grading
 harness inspects, `Collections` 28/60 and `Stack` 27/46 are the synchronized
 and checked wrappers and `Vector`'s inherited legacy half, `Character` 32/52 is
 the Unicode code-point surface. Run with `--verbose` for the misses per class.
