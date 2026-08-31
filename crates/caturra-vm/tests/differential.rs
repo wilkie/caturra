@@ -43719,3 +43719,108 @@ public class VoidNestedArgument {
 }
 "
 );
+
+// What a collection LOOKS LIKE after a callback threw. `List.replaceAll`
+// writes each element back as it computes it, so an operator that throws half
+// way leaves the elements before it replaced — caturra collected the whole
+// list and stored it at the end, so the same program left the list untouched.
+// A difference only a caught exception can see, and one it plainly does.
+differential_test!(
+    what_a_list_holds_after_a_callback_threw,
+    "AfterCallback",
+    r#"
+import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.List;
+
+public class AfterCallback {
+    static class Boom extends RuntimeException {
+        Boom(String message) { super(message); }
+    }
+
+    static List<String> words() {
+        return new ArrayList<>(List.of("a", "b", "c", "d"));
+    }
+
+    public static void main(String[] args) {
+        List<String> replaced = words();
+        try {
+            replaced.replaceAll(s -> {
+                if (s.equals("c")) throw new Boom("x");
+                return s + "!";
+            });
+        } catch (Boom e) {
+            System.out.println("caught");
+        }
+        System.out.println(replaced);
+
+        // The same through a LinkedList, and through a subList VIEW — which
+        // delegates to the list operation over a copy of its range, and has to
+        // splice that copy back even when the operation threw.
+        List<String> linked = new LinkedList<>(List.of("a", "b", "c"));
+        try {
+            linked.replaceAll(s -> {
+                if (s.equals("b")) throw new Boom("x");
+                return s + "!";
+            });
+        } catch (Boom e) {
+            System.out.println("caught");
+        }
+        System.out.println(linked);
+
+        List<String> backing = words();
+        List<String> view = backing.subList(1, 3);
+        try {
+            view.replaceAll(s -> {
+                if (s.equals("c")) throw new Boom("x");
+                return s + "!";
+            });
+        } catch (Boom e) {
+            System.out.println("caught");
+        }
+        System.out.println(backing + " " + view);
+
+        // A `removeIf` whose predicate throws leaves the list ALONE: a JDK
+        // collects what to drop first, and drops nothing if it never finished.
+        List<String> kept = words();
+        try {
+            kept.removeIf(s -> {
+                if (s.equals("c")) throw new Boom("x");
+                return true;
+            });
+        } catch (Boom e) {
+            System.out.println("caught");
+        }
+        System.out.println(kept);
+    }
+}
+"#
+);
+
+// …and an operator that MUTATES the list it is walking. A JDK's loop stops as
+// soon as the modification count changes, so it runs once and not once per
+// element, and then reports the modification.
+differential_test!(
+    a_replace_all_that_adds_stops_at_once,
+    "ReplaceAllAdds",
+    r#"
+import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
+import java.util.List;
+
+public class ReplaceAllAdds {
+    public static void main(String[] args) {
+        List<String> l = new ArrayList<>(List.of("a", "b"));
+        try {
+            l.replaceAll(s -> {
+                l.add("z");
+                return s;
+            });
+            System.out.println("no exception");
+        } catch (ConcurrentModificationException e) {
+            System.out.println("cme " + l.size());
+        }
+    }
+}
+"#
+);

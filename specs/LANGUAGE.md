@@ -11454,3 +11454,33 @@ Pinned by `reject_a_void_call_as_an_argument`,
 `reject_a_void_call_as_an_operand`, `reject_a_void_call_assigned`,
 `reject_a_void_call_dereferenced` and
 `reject_a_void_call_inside_an_assigned_call`.
+
+### What a collection holds after a callback threw (2026-08-31)
+
+Twelve programs that throw from inside a callback — a `compareTo` during a
+sort, an `equals` during a `contains`, a `hashCode` during a `put`, a lambda
+in `forEach`/`map`/`removeIf` — all propagate exactly as a JDK's do. Asking
+the next question found the gap: not whether the exception escapes, but what
+the collection LOOKS LIKE afterwards.
+
+`List.replaceAll` writes each element back as it computes it, so an operator
+that throws half way leaves the elements before it replaced. caturra collected
+the whole list and stored it at the end, so the same program left the list
+untouched. A subList VIEW had it twice over: a view delegates by copying its
+range, running the operation on the copy, and splicing it back — and it
+propagated the exception before splicing, discarding what the operation had
+managed to do.
+
+The neighbours say why one rule covers all three: for `sort` and `removeIf`
+the scratch copy is UNCHANGED when the callback throws (a JDK sorts into an
+array and writes back at the end; `removeIf` collects what to drop before
+dropping any of it), so splicing on the error path is right for those too.
+
+And an operator that MUTATES the list it is walking: a JDK's loop is
+`for (i = 0; modCount == expected && i < size; i++)`, so it stops as soon as
+the list changed — one call, not one per element — and then reports the
+modification. caturra ran the operator over its snapshot and added an element
+for each.
+
+Pinned by `what_a_list_holds_after_a_callback_threw` and
+`a_replace_all_that_adds_stops_at_once`.

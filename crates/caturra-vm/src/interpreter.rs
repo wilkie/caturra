@@ -6960,8 +6960,15 @@ impl<'run> Interpreter<'run> {
             let scratch = self.heap.alloc(crate::value::HeapObject::ArrayList(
                 self.list_items(receiver),
             ));
-            let answered = self.list_equality_intrinsic(scratch, method, descriptor, args)?;
-            if matches!(answered, Answered::No) {
+            // Spliced back even when the operation THREW: what the scratch
+            // holds is what the operation managed to do, and a JDK's view
+            // shows exactly that — a `replaceAll` whose operator throws half
+            // way leaves the elements before it replaced. Propagating first
+            // discarded the work and left the range untouched. (For `sort` and
+            // `removeIf` the scratch is unchanged on a throw, which is a JDK's
+            // answer for those too, so one rule covers all three.)
+            let answered = self.list_equality_intrinsic(scratch, method, descriptor, args);
+            if matches!(answered, Ok(Answered::No)) {
                 return Ok(Answered::No);
             }
             let replacement = self.list_items(scratch);
@@ -6971,7 +6978,7 @@ impl<'run> Interpreter<'run> {
                 values.splice(from..from + len, replacement);
             }
             resize(self, delta);
-            return Ok(answered);
+            return answered;
         }
         let result = match (method, args) {
             ("size", []) => JValue::Int(i32::try_from(len).unwrap_or(i32::MAX)),
@@ -16009,8 +16016,14 @@ impl<'run> Interpreter<'run> {
             )));
         };
         let class_name = class_name.clone();
-        let mut replaced: Vec<JValue> = Vec::with_capacity(items.len());
-        for element in items {
+        let expected = items.len();
+        for (at, element) in items.into_iter().enumerate() {
+            // A JDK's loop is `for (i = 0; modCount == expected && i < size;
+            // i++)`: it STOPS as soon as the operator has changed the list,
+            // so an operator that adds runs once and not once per element.
+            if self.list_items(receiver).len() != expected {
+                break;
+            }
             let dispatched = self.user_virtual_dispatch(
                 operator,
                 &class_name,
@@ -16033,10 +16046,27 @@ impl<'run> Interpreter<'run> {
                 Some(value) => value,
                 None => JValue::NULL,
             };
-            replaced.push(stored);
+            // Written back ONE AT A TIME, as a JDK's `replaceAll` does: it
+            // walks the array assigning `a[i] = operator.apply(a[i])`, so an
+            // operator that throws half way leaves the elements before it
+            // replaced. Collecting the whole list and storing it at the end
+            // made the same program leave the list untouched — a difference
+            // only a caught exception can see, and one it plainly does.
+            if let Some(list) = self.heap.list_values_mut(receiver)
+                && let Some(slot) = list.get_mut(at)
+            {
+                *slot = stored;
+            }
         }
-        if let Some(list) = self.heap.list_values_mut(receiver) {
-            *list = replaced;
+        // A JDK's `replaceAll` checks its modification count when it finishes:
+        // an operator that ADDS to the list being walked is a
+        // ConcurrentModificationException, not a silent extra element.
+        // (caturra models modCount as the length, so a size change is what
+        // shows — the same reading `List.sort` uses.)
+        if self.list_items(receiver).len() != expected {
+            return Err(VmError::UncaughtException(String::from(
+                "java.util.ConcurrentModificationException",
+            )));
         }
         Ok(())
     }
