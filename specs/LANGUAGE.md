@@ -11355,3 +11355,31 @@ function's parameter, which is the inference direction this engine does not
 have.
 
 Pinned by `a_generic_return_that_names_two_variables`.
+
+### Where a diagnostic points (2026-08-31)
+
+Every comparison so far has been of what a diagnostic SAYS. Where it points
+went unmeasured — and an editor underlines the place, not the sentence.
+`diaglist.py` compares the LINE now, and `differential_wording!` asserts it on
+every pin in the suite.
+
+Across the 236-program reject corpus the two engines agree on the line
+everywhere but once, which is the answer worth recording: the spans are right.
+The exception is a captured local. javac reports it at the REFERENCE — the
+line inside the class body that reads the name — and caturra reported it at
+the `new` that creates the class, so the underline fell on a line whose only
+fault was mentioning it. A lambda already agreed, which is why this went
+unseen for so long: a lambda's reference is usually on the same line as its
+creation. It is asked statement by statement through the same free-name walk
+that decides what is captured, so there is still one answer to the question.
+
+Turning the assertion on found one more: a cycle of constructors was reported
+once per constructor in it, where javac reports a cycle ONCE. It is one error
+now. Which member javac blames is not a rule anyone states — a two-constructor
+cycle is reported at the first, a three-constructor one at the second — so
+that case is pinned as a shape rather than a position.
+
+Pinned by `reject_a_captured_local_points_at_its_use`,
+`reject_a_captured_local_in_a_local_class`,
+`reject_recursive_constructor_invocation` (now a self-cycle, where the
+position is not in doubt) and `reject_a_cycle_through_two_constructors`.

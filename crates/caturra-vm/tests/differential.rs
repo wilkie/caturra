@@ -77,6 +77,43 @@ fn javac_first_error(class_name: &str, source: &str) -> Option<String> {
         .find_map(|line| line.split_once("error: ").map(|(_, rest)| rest.to_owned()))
 }
 
+/// The LINE javac reports its first error on, and the one caturra does.
+///
+/// Every pin here compared what a diagnostic SAYS; where it points went
+/// unmeasured, and an editor underlines the place. They agree across the
+/// reject corpus but for one case — a captured local, reported by javac at the
+/// REFERENCE inside the class body and by caturra at the `new` that created
+/// it.
+fn javac_first_error_line(class_name: &str, source: &str) -> Option<u32> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(source, &mut hasher);
+    let fingerprint = std::hash::Hasher::finish(&hasher);
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("line-{class_name}-{fingerprint:x}"));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let java_file = dir.join(format!("{class_name}.java"));
+    std::fs::write(&java_file, source).expect("write source");
+    let compile = javac_in(&dir, &java_file);
+    String::from_utf8_lossy(&compile.stderr)
+        .lines()
+        .find(|line| line.contains(": error: "))
+        .and_then(|line| {
+            line.split(": error: ").next()?.rsplit(':').next()?.parse().ok()
+        })
+}
+
+fn caturra_first_error_line(class_name: &str, source: &str) -> Option<u32> {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: format!("{class_name}.java"),
+        text: source.to_owned(),
+    }]);
+    compilation
+        .diagnostics
+        .first()
+        .and_then(|diagnostic| diagnostic.span)
+        .map(|span| span.start.line)
+}
+
 /// caturra's first diagnostic. `None` when caturra accepts the program.
 fn caturra_first_error(class_name: &str, source: &str) -> Option<String> {
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
@@ -409,6 +446,15 @@ macro_rules! differential_wording {
             assert!(
                 got.starts_with(&want),
                 "the two engines refuse {} for differently worded reasons\n  jdk: {want}\n  cat: {got}",
+                $class
+            );
+            // …and point at the same LINE. A message can be right about a
+            // mistake and wrong about where it is, which is the half an editor
+            // shows.
+            assert_eq!(
+                javac_first_error_line($class, $source),
+                caturra_first_error_line($class, $source),
+                "the two engines refuse {} at different lines",
                 $class
             );
         }
@@ -19515,11 +19561,20 @@ differential_wording!(
     "RejInitRecursiveCtor",
     r"
 public class RejInitRecursiveCtor {
-    RejInitRecursiveCtor() { this(1); }
-    RejInitRecursiveCtor(int a) { this(); }
+    RejInitRecursiveCtor() { this(); }
     public static void main(String[] args) { new RejInitRecursiveCtor(); }
 }
 "
+);
+
+// A cycle through SEVERAL constructors is one error in both engines, and which
+// member of it javac blames is not a rule anyone states — a two-constructor
+// cycle is reported at the first, a three-constructor one at the second. The
+// shape is what is pinned.
+differential_reject!(
+    reject_a_cycle_through_two_constructors,
+    "RejCycleTwo",
+    "public class RejCycleTwo {\n  RejCycleTwo() { this(1); }\n  RejCycleTwo(int a) { this(); }\n  public static void main(String[] x) { new RejCycleTwo(); }\n}"
 );
 
 // ---------------------------------------------------------------------------
@@ -43478,6 +43533,47 @@ public class TwoVariables {
         Function<String, Integer> seven = constant(7);
         System.out.println(seven.apply("x") + 1);
         System.out.println(listOf("bb").stream().map(constant("z")).findFirst().get().length());
+    }
+}
+"#
+);
+
+// WHERE a diagnostic points, not only what it says. javac reports a captured
+// local at the REFERENCE to it — the line inside the class body that reads the
+// name — and caturra pointed at the `new` that creates the class, so an editor
+// underlined a line whose only fault was mentioning it. A lambda already
+// agreed, which is why this went unseen: its reference is usually on the same
+// line as its creation.
+differential_wording!(
+    reject_a_captured_local_points_at_its_use,
+    "CaptureAnonPoint",
+    r"
+public class CaptureAnonPoint {
+    public static void main(String[] args) {
+        int n = 0;
+        n = 1;
+        Runnable r = new Runnable() {
+            public void run() {
+                System.out.println(n);
+            }
+        };
+        r.run();
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_a_captured_local_in_a_local_class,
+    "CaptureLocalPoint",
+    r#"
+public class CaptureLocalPoint {
+    public static void main(String[] args) {
+        for (String s : new String[] { "a" }) {
+            s = s + "!";
+            class C { String v() { return s; } }
+            System.out.println(new C().v());
+        }
     }
 }
 "#

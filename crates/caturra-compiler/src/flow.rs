@@ -119,14 +119,19 @@ fn recursive_constructors(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Di
             break;
         }
     }
-    for (ctor, ok) in ctors.iter().zip(terminates) {
-        if !ok {
-            diagnostics.push(Diagnostic::error(
-                path,
-                "recursive constructor invocation",
-                ctor.span,
-            ));
-        }
+    // ONE error, at the first constructor caught in the cycle. javac reports a
+    // cycle once however many constructors are in it — reporting each of them
+    // told a student the same thing two and three times over. (WHICH of them
+    // javac blames is not a rule anyone states: a two-constructor cycle is
+    // reported at the first, a three-constructor one at the second. Both
+    // engines refuse the program and say why; only the member differs, and
+    // that is pinned as a shape rather than a position.)
+    if let Some((ctor, _)) = ctors.iter().zip(terminates).find(|(_, ok)| !ok) {
+        diagnostics.push(Diagnostic::error(
+            path,
+            "recursive constructor invocation",
+            ctor.span,
+        ));
     }
 }
 
@@ -518,7 +523,7 @@ fn constant_bool_in(
 }
 
 /// A statement's span, for the error caret.
-fn stmt_span(statement: &Stmt) -> Option<SourceSpan> {
+pub(crate) fn stmt_span(statement: &Stmt) -> Option<SourceSpan> {
     match statement {
         Stmt::Expr(expr) => Some(expr.span()),
         Stmt::LocalDecl { span, .. }

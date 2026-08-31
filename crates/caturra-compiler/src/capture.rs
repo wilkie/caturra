@@ -1033,7 +1033,10 @@ fn find_in_expr(expr: &Expr, scope: &mut Scope, out: &mut Found, walk: &Walk) {
                                 "local variables referenced from {what} must be final or \
                                  effectively final"
                             ),
-                            *span,
+                            // Where the name is USED, as javac reports it; the
+                            // `new` site is the fallback for a body whose use
+                            // this cannot find (a nested class of its own).
+                            first_reference(body, name).unwrap_or(*span),
                         ));
                     }
                 }
@@ -1134,6 +1137,54 @@ fn find_in_expr(expr: &Expr, scope: &mut Scope, out: &mut Found, walk: &Walk) {
         }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
+}
+
+/// Where a captured name is first REFERENCED inside a class body — the place
+/// javac points at, which is not where the class is created.
+///
+/// `new Runnable() { public void run() { print(n); } }` is reported by javac
+/// on the line of `print(n)`, and a local class on the line its method reads
+/// the name; caturra pointed at the `new` instead, so the editor underlined a
+/// line whose only fault was mentioning the class. Asked statement by
+/// statement through the SAME free-name walk that decides what is captured —
+/// a second traversal would be a second answer to one question.
+fn first_reference(body: &ClassDecl, name: &str) -> Option<SourceSpan> {
+    let fields: HashSet<String> = body.fields.iter().map(|f| f.name.clone()).collect();
+    let mut earliest: Option<SourceSpan> = None;
+    let mut consider = |span: Option<SourceSpan>| {
+        if let Some(span) = span
+            && earliest.is_none_or(|best| span.start < best.start)
+        {
+            earliest = Some(span);
+        }
+    };
+    for method in &body.methods {
+        let mut bound = fields.clone();
+        for p in &method.params {
+            bound.insert(p.name.clone());
+        }
+        for stmt in &method.body {
+            let mut free = HashSet::new();
+            let mut scoped = bound.clone();
+            free_in_stmt(stmt, &mut scoped, &mut free);
+            if free.contains(name) {
+                consider(crate::flow::stmt_span(stmt));
+                break;
+            }
+            // A declaration binds its name for the statements after it.
+            bound = scoped;
+        }
+    }
+    for field in &body.fields {
+        if let Some(init) = &field.init {
+            let mut free = HashSet::new();
+            free_in_expr(init, &mut fields.clone(), &mut free);
+            if free.contains(name) {
+                consider(Some(init.span()));
+            }
+        }
+    }
+    earliest
 }
 
 /// The captures of an anonymous class: its free simple names that are

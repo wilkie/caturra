@@ -32,26 +32,35 @@ def build_engine():
 
 
 def javac_errors(path):
+    """javac's errors as `(line, message)`. The LINE is compared too: a
+    message can be right and point at the wrong place, and an editor
+    underlines the place."""
     with tempfile.TemporaryDirectory() as out:
         result = subprocess.run(
             ["javac", "-d", out, path], capture_output=True, text=True, timeout=120
         )
-    return [
-        line.split("error: ", 1)[1].strip()
-        for line in result.stderr.splitlines()
-        if ": error: " in line
-    ]
+    out = []
+    for line in result.stderr.splitlines():
+        if ": error: " not in line:
+            continue
+        where, message = line.split(": error: ", 1)
+        number = where.rsplit(":", 1)[-1]
+        out.append((int(number) if number.isdigit() else 0, message.strip()))
+    return out
 
 
 def caturra_errors(path):
     result = subprocess.run(
         [ENGINE, os.path.abspath(path)], capture_output=True, text=True, cwd=REPO, timeout=120
     )
-    return [
-        line.split("Error: ", 1)[1].strip()
-        for line in result.stdout.splitlines()
-        if line.startswith("Error: ")
-    ]
+    out = []
+    for line in result.stdout.splitlines():
+        if not line.startswith("Error@"):
+            continue
+        where, message = line.split(": ", 1)
+        number = where.split("@", 1)[1]
+        out.append((int(number) if number.isdigit() else 0, message.strip()))
+    return out
 
 
 def agrees(want, got):
@@ -63,7 +72,10 @@ def agrees(want, got):
     is that convention, not a divergence — the wording that names the mistake
     is the same, and the rest is a continuation line moved inline.
     """
-    return len(want) == len(got) and all(c.startswith(j) for j, c in zip(want, got))
+    return len(want) == len(got) and all(
+        want_line == got_line and got_message.startswith(want_message)
+        for (want_line, want_message), (got_line, got_message) in zip(want, got)
+    )
 
 
 def main():
