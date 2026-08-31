@@ -11185,3 +11185,54 @@ Pinned by `reject_a_static_method_as_an_unbound_reference`,
 `reject_an_instance_method_as_a_supplier`,
 `reject_a_reference_to_a_method_that_does_not_exist` and
 `a_redeclared_local_is_still_declared`.
+
+### What a library algorithm asks a comparator (2026-08-30)
+
+A user class whose `compareTo`, `equals`, `hashCode` and `toString` all print,
+run through eighteen library algorithms that call back into it: the ORDER and
+the COUNT of those callbacks, against a real JDK. Thirteen agreed. Two of the
+five that did not were wrong in a way that changes ANSWERS, not only traces.
+
+**`Comparator.reversed()` negated where a JDK swaps.** `c.reversed().compare(a,
+b)` is `c.compare(b, a)` in a JDK, and was `-c.compare(a, b)` here. The two
+agree for a well-behaved comparator and not otherwise: negating
+`Integer.MIN_VALUE` gives `Integer.MIN_VALUE` back, so a comparator that ever
+returns it sorts the wrong way round — and a comparator with a side effect sees
+every pair transposed.
+
+**`Stream.max`/`min` asked in the other order.** A JDK's `max(c)` is
+`reduce(BinaryOperator.maxBy(c))`, and `maxBy` is `c.compare(a, b) >= 0 ? a : b`
+with the ACCUMULATED value first; caturra compared (next, accumulated). For an
+asymmetric comparator — a student's `compare` that returns 1 or 0 and never -1
+is the common shape — that is a different answer, not a different trace.
+`Collections.max` really is the other order (`next.compareTo(candidate)`, JDK
+source), which is why the two now read backwards from each other.
+
+With those two fixed, twelve algorithms ask exactly what a JDK asks:
+`Collections.sort`, `list.sort`, `Arrays.sort(T[], c)`, `stream().sorted`,
+`stream().max/min`, `Collections.max/min`, `PriorityQueue`, `reversed`,
+`thenComparing`, `binarySearch`, and the natural-ordering forms of each.
+
+**Measured, and deliberately not chased:** three algorithms call back the right
+number of times in a different ORDER, and one a different number of times.
+Inserting into a `TreeSet`/`TreeMap` compares against the middle of a sorted
+vector where a JDK descends a red-black tree from its root; `Arrays.sort` of a
+reference array is an insertion sort where a JDK runs TimSort (three
+comparisons against its four, in a different order); `stream().distinct()`
+hashes each element once where a JDK hashes it twice. All four are observable
+only through a callback with a side effect, and matching them would mean
+reimplementing a JDK's data structures rather than its semantics — the same
+call made for `getDeclaredConstructors()` order.
+
+The same question of `equals` and `hashCode`, over twelve more algorithms —
+`contains`, `indexOf`, `lastIndexOf`, `remove`, `containsAll`, `List.equals`,
+`HashMap.get`/`put`/`containsKey`, `HashSet.contains`, a stream filter — is
+exact, callback for callback. The one exception is `Map.merge`, which locates
+the bin once in a JDK and does a get and then a put here: three hashes and two
+equals where a JDK asks for two and one, with the same answer.
+
+Pinned by `what_a_library_algorithm_asks_a_comparator`,
+`what_a_library_algorithm_asks_compare_to`, and
+`a_reversed_comparator_swaps_rather_than_negates` — a comparator that answers
+`Integer.MIN_VALUE`, which is legal (any negative means "less") and which a
+`reversed()` that negates does not reverse.

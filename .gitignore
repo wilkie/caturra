@@ -41,3 +41,9 @@ apps/playground/src/csa-overlay.local.ts
 # Python bytecode caches (a .pyc was committed by accident once)
 __pycache__/
 *.pyc
+
+# A crash of the REFERENCE JDK, not of anything here: running hundreds of
+# `java` processes in parallel for a sweep occasionally trips the host VM's
+# collector, and it drops these in the working directory.
+hs_err_pid*.log
+core.*

@@ -3114,6 +3114,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
 ///
 /// Silent when the qualifier's class is unknown (a library type, a generic
 /// position): the checks must never fire on something caturra cannot see.
+#[allow(clippy::too_many_lines)] // one arm per reference form
 fn validate_method_ref(expr: &Expr, sam: &Sam, ctx: &mut Ctx) {
     let Expr::MethodRef {
         qualifier,

@@ -42997,3 +42997,169 @@ public class RedeclaredLocal {
 }
 "
 );
+
+// Which arguments a library algorithm hands a user comparator, and in which
+// order. It is not only a trace: a comparator that is not symmetric — and a
+// student's often is not — answers differently when the pair arrives
+// transposed. `Comparator.reversed()` was NEGATING its inner comparator's
+// answer where a JDK SWAPS the arguments (negating `Integer.MIN_VALUE` gives
+// it back, so a comparator that returns it sorted the wrong way round), and
+// `Stream.max`/`min` compared (next, accumulated) where a JDK's `maxBy`
+// compares (accumulated, next).
+differential_test!(
+    what_a_library_algorithm_asks_a_comparator,
+    "ComparatorCalls",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.PriorityQueue;
+import java.util.stream.Collectors;
+
+public class ComparatorCalls {
+    static class P {
+        final String n;
+        final int a;
+        P(String n, int a) { this.n = n; this.a = a; }
+        @Override public String toString() { return n; }
+    }
+
+    static Comparator<P> byAge() {
+        return (x, y) -> {
+            System.out.println("[" + x.n + "," + y.n + "]");
+            return Integer.compare(x.a, y.a);
+        };
+    }
+
+    static List<P> pets() {
+        return new ArrayList<>(List.of(new P("z", 3), new P("a", 1), new P("b", 2)));
+    }
+
+    public static void main(String[] args) {
+        System.out.println("-- sort");
+        List<P> l = pets();
+        Collections.sort(l, byAge());
+        System.out.println(l);
+
+        System.out.println("-- reversed");
+        List<P> r = pets();
+        r.sort(byAge().reversed());
+        System.out.println(r);
+
+        System.out.println("-- thenComparing");
+        List<P> t = pets();
+        t.sort(byAge().thenComparing(p -> p.n));
+        System.out.println(t);
+
+        System.out.println("-- array");
+        P[] arr = pets().toArray(new P[0]);
+        Arrays.sort(arr, byAge());
+        System.out.println(Arrays.toString(arr));
+
+        System.out.println("-- queue");
+        PriorityQueue<P> queue = new PriorityQueue<>(byAge());
+        queue.addAll(pets());
+        System.out.println(queue.poll());
+
+        System.out.println("-- stream max/min");
+        System.out.println(pets().stream().max(byAge()).get());
+        System.out.println(pets().stream().min(byAge()).get());
+        System.out.println(pets().stream().min(byAge().reversed()).get());
+        System.out.println(pets().stream().sorted(byAge()).collect(Collectors.toList()));
+
+        System.out.println("-- Collections max/min");
+        System.out.println(Collections.max(pets(), byAge()));
+        System.out.println(Collections.min(pets(), byAge()));
+    }
+}
+"#
+);
+
+// The concrete reason the difference between negating and swapping matters:
+// a comparator may answer any negative number, and `Integer.MIN_VALUE` negated
+// is `Integer.MIN_VALUE` — so a `reversed()` that negates does not reverse.
+differential_test!(
+    a_reversed_comparator_swaps_rather_than_negates,
+    "ReversedMinValue",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+
+public class ReversedMinValue {
+    public static void main(String[] args) {
+        Comparator<String> odd = (x, y) -> x.equals(y)
+                ? 0
+                : (x.compareTo(y) < 0 ? Integer.MIN_VALUE : Integer.MAX_VALUE);
+        List<String> l = new ArrayList<>(List.of("c", "a", "b"));
+        l.sort(odd);
+        System.out.println(l);
+        l.sort(odd.reversed());
+        System.out.println(l);
+        System.out.println(odd.reversed().compare("a", "b"));
+        System.out.println(Collections.max(l, odd) + " " + Collections.min(l, odd));
+    }
+}
+"#
+);
+
+// ...and the same question of `compareTo`, which is the one a CSA class
+// writes. `Collections.max` really is the other order — `next.compareTo(
+// candidate)` — which is why it reads backwards beside `Stream.max`.
+differential_test!(
+    what_a_library_algorithm_asks_compare_to,
+    "CompareToCalls",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class CompareToCalls {
+    static class P implements Comparable<P> {
+        final String n;
+        final int a;
+        P(String n, int a) { this.n = n; this.a = a; }
+        public int compareTo(P other) {
+            System.out.println("[" + n + "," + other.n + "]");
+            return Integer.compare(a, other.a);
+        }
+        @Override public String toString() { return n; }
+    }
+
+    static List<P> pets() {
+        return new ArrayList<>(List.of(new P("z", 3), new P("a", 1), new P("b", 2)));
+    }
+
+    public static void main(String[] args) {
+        System.out.println("-- sort");
+        List<P> l = pets();
+        Collections.sort(l);
+        System.out.println(l);
+
+        System.out.println("-- natural sort");
+        List<P> n = pets();
+        n.sort(null);
+        System.out.println(n);
+
+        System.out.println("-- stream");
+        System.out.println(pets().stream().sorted().collect(Collectors.toList()));
+        System.out.println(pets().stream().max(Comparator.naturalOrder()).get());
+        System.out.println(pets().stream().min(Comparator.naturalOrder()).get());
+
+        System.out.println("-- Collections");
+        System.out.println(Collections.max(pets()));
+        System.out.println(Collections.min(pets()));
+
+        System.out.println("-- binarySearch");
+        List<P> s = pets();
+        Collections.sort(s);
+        System.out.println(Collections.binarySearch(s, s.get(2)));
+    }
+}
+"#
+);

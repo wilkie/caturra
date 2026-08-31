@@ -11576,9 +11576,18 @@ impl<'run> Interpreter<'run> {
                     best = Some(match best {
                         None => element,
                         Some(current) => {
+                            // `Stream.max` is `reduce(BinaryOperator.maxBy(c))`,
+                            // and `maxBy` is `c.compare(a, b) >= 0 ? a : b` with
+                            // the ACCUMULATED value first. Comparing the other
+                            // way round transposes every pair a user comparator
+                            // sees — and answers differently whenever that
+                            // comparator is not symmetric.
+                            // (`Collections.max` really is the other order:
+                            // `next.compareTo(candidate)`, which is why it is
+                            // written the opposite way a few hundred lines up.)
                             let ordering =
-                                self.compare_with(element, current, Some(*comparator))?;
-                            let take = if want_max { ordering > 0 } else { ordering < 0 };
+                                self.compare_with(current, element, Some(*comparator))?;
+                            let take = if want_max { ordering < 0 } else { ordering > 0 };
                             if take { element } else { current }
                         }
                     });
@@ -15721,7 +15730,13 @@ impl<'run> Interpreter<'run> {
                     None => self.compare_for_sort(left, right),
                 }
             }
-            ComparatorSpec::Reversed(inner) => Ok(-self.compare_with(a, b, Some(inner))?),
+            // A JDK's `reverseOrder` SWAPS its arguments — `c.compare(b, a)` —
+            // where this negated the answer. The two agree for a well-behaved
+            // comparator and not otherwise: negating `Integer.MIN_VALUE` gives
+            // `Integer.MIN_VALUE` back, so a comparator that returns it sorts
+            // the wrong way round, and a comparator with a side effect (a
+            // student's `compareTo` that prints) sees the pair transposed.
+            ComparatorSpec::Reversed(inner) => self.compare_with(b, a, Some(inner)),
             ComparatorSpec::Then(first, second) => {
                 let primary = self.compare_with(a, b, Some(first))?;
                 if primary != 0 {
