@@ -43669,3 +43669,53 @@ public class VoidOperand {
 }
 "
 );
+
+// The other two wordings, which need the position: a void call ASSIGNED names
+// both types, and one DEREFERENCED is a different mistake again. caturra said
+// one sentence of its own for all three.
+differential_wording!(
+    reject_a_void_call_assigned,
+    "VoidAssigned",
+    r"
+public class VoidAssigned {
+    static void go() { }
+
+    public static void main(String[] args) {
+        int n = go();
+        System.out.println(n);
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_a_void_call_dereferenced,
+    "VoidDereferenced",
+    r"
+public class VoidDereferenced {
+    static void go() { }
+
+    public static void main(String[] args) {
+        go().toString();
+    }
+}
+"
+);
+
+// …and the positions that must NOT take the assignment's wording: an argument
+// of a call that is itself assigned, and an operand of one.
+differential_wording!(
+    reject_a_void_call_inside_an_assigned_call,
+    "VoidNestedArgument",
+    r"
+public class VoidNestedArgument {
+    static void go() { }
+    static int take(int n) { return n; }
+
+    public static void main(String[] args) {
+        int n = take(go());
+        System.out.println(n);
+    }
+}
+"
+);

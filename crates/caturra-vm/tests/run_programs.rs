@@ -5671,15 +5671,15 @@ fn stage3_compile_errors_match_javac_wording() {
             "static int f() { return 1; } static int f() { return 2; }",
             "method f() is already defined",
         ),
-        // javac has three wordings for a void call used as a value, and they
-        // depend on the POSITION: "void cannot be dereferenced" for a
-        // receiver, "incompatible types: void cannot be converted to int" for
-        // an assignment, and this one everywhere else. caturra says this one
-        // — javac's for the commonest position — wherever it cannot see the
-        // context; the other two are recorded in the spec as open.
+        // javac has three wordings for a void call used as a value and they
+        // depend on the POSITION: this one for an assignment, "void cannot be
+        // dereferenced" for a receiver, and "'void' type not allowed here"
+        // anywhere else. All three are caturra's now; this test had been
+        // pinning a sentence of caturra's own invention as though it were
+        // javac's, which is what a wording test must never do.
         (
             "static void g() { } static void f() { int x = g(); }",
-            "'void' type not allowed here",
+            "incompatible types: void cannot be converted to int",
         ),
     ];
     for (body, expected) in cases {

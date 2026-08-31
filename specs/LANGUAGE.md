@@ -11434,10 +11434,23 @@ void call used as a VALUE. javac has three sentences for it and they depend on
 the position — "void cannot be dereferenced" for a receiver, "incompatible
 types: void cannot be converted to int" for an assignment, and "'void' type
 not allowed here" everywhere else. caturra said one sentence of its own
-invention in all three, which was javac's for none of them; it says the third
-now, which is javac's for the commonest position and for four of the six
-places a void call can appear. The other two need the CONTEXT the call site
-does not have, and are open.
+invention in all three, which was javac's for none of them.
 
-Pinned by `reject_a_void_call_as_an_argument` and
-`reject_a_void_call_as_an_operand`.
+All three are caturra's now, and the position is what tells them apart. The
+context the call site could not see is handed to it: a value being ASSIGNED
+carries its target, a RECEIVER carries a flag, and both are cleared for an
+ARGUMENT — which is a position of its own, and javac words it as one. Each is
+taken and restored around the evaluation that owns it, the discipline the dot
+above needed for the same reason. `int n = take(go())` is the case that keeps
+it honest: the inner call is an argument, though the outer one is assigned.
+
+That path had to be found twice: a call whose argument does not type is
+emitted by a different loop, so the first fix reached only half of them.
+
+A staged test had been pinning caturra's invented sentence as though it were
+javac's, in a file named for matching javac's wording. It pins the real one.
+
+Pinned by `reject_a_void_call_as_an_argument`,
+`reject_a_void_call_as_an_operand`, `reject_a_void_call_assigned`,
+`reject_a_void_call_dereferenced` and
+`reject_a_void_call_inside_an_assigned_call`.

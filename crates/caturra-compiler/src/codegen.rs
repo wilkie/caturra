@@ -305,6 +305,8 @@ fn emit_clinit(
         .expect("class registered");
     let mut body = BodyGen {
         receiver_location: None,
+        void_target: None,
+        void_receiver: false,
         receiver_end: None,
         receiver_args: None,
         path,
@@ -8613,6 +8615,8 @@ fn emit_method(
     };
     let mut body = BodyGen {
         receiver_location: None,
+        void_target: None,
+        void_receiver: false,
         receiver_end: None,
         receiver_args: None,
         path,
@@ -16201,6 +16205,7 @@ struct LoopLabels {
 }
 
 /// Per-method-body emission state.
+#[allow(clippy::struct_excessive_bools)] // one flag per emission context
 struct BodyGen<'a> {
     path: &'a str,
     diagnostics: &'a mut Vec<Diagnostic>,
@@ -16210,6 +16215,15 @@ struct BodyGen<'a> {
     current_class_id: ClassId,
     /// Whether the enclosing method is static (constructors are not).
     in_static: bool,
+    /// The type an expression is being evaluated INTO, when that is a
+    /// declaration or an assignment. javac's wording for a void call depends
+    /// on where it sits: assigned, it names both types. Cleared while a call's
+    /// ARGUMENTS are evaluated — an argument is a different position, and
+    /// javac words it differently.
+    void_target: Option<JType>,
+    /// Whether the expression being evaluated is a RECEIVER. javac's third
+    /// void wording: dereferencing one is a different mistake from passing it.
+    void_receiver: bool,
     /// Where the receiver of the member access being resolved ENDS — the
     /// position of its dot, which is where javac reports a missing member.
     /// Set beside `receiver_location`, and restored with it: emitting the
@@ -18352,7 +18366,7 @@ impl BodyGen<'_> {
                         );
                     }
                 } else {
-                    let init_ty = self.expr(init);
+                    let init_ty = self.expr_assigned_to(init, var_ty);
                     // A DIAMOND takes its type argument from the target, not
                     // from what it copies (JLS §15.9.1: it is a poly
                     // expression). Inferring from the argument made
@@ -18410,6 +18424,39 @@ impl BodyGen<'_> {
     /// Emit an expression toward a KNOWN target type, and report the type it
     /// has in that context: a conditional adopts the target when both of its
     /// branches reach it (see `ternary_adopts_target`).
+    /// javac's sentence for a void call used as a value, which depends on
+    /// where it sits.
+    fn void_message(&self) -> String {
+        if self.void_receiver {
+            return String::from("void cannot be dereferenced");
+        }
+        self.void_target.map_or_else(
+            || String::from("'void' type not allowed here"),
+            |target| {
+                format!(
+                    "incompatible types: void cannot be converted to {}",
+                    target.describe(self.table)
+                )
+            },
+        )
+    }
+
+    /// Evaluate an initializer or assigned value, remembering what it is being
+    /// assigned TO — the one thing javac's void wording needs and the
+    /// expression itself cannot see.
+    fn expr_assigned_to(&mut self, expr: &Expr, target: JType) -> JType {
+        // Only when the value IS the call. An operand of one — `boolean b =
+        // go() == null` — is not being assigned, and javac words that as the
+        // position it is.
+        if !matches!(expr, Expr::Call { .. } | Expr::SuperMethodCall { .. }) {
+            return self.expr(expr);
+        }
+        let outer = self.void_target.replace(target);
+        let actual = self.expr(expr);
+        self.void_target = outer;
+        actual
+    }
+
     fn expr_toward(&mut self, expr: &Expr, target: JType) -> JType {
         let actual = self.expr(expr);
         if self.ternary_adopts_target(expr, actual, target) {
@@ -18570,7 +18617,7 @@ impl BodyGen<'_> {
             .expect("var requires an initializer");
         // No diamond adjustment here: for `var` the inferred type IS the
         // target, so there is nothing to adopt.
-        let init_ty = self.expr(init);
+        let init_ty = self.expr_assigned_to(init, var_ty);
         let init_const = self.const_int(init);
         self.convert_for_assignment_const(init_ty, var_ty, init.span(), init_const);
         self.emit_store(slot, var_ty);
@@ -22670,7 +22717,11 @@ impl BodyGen<'_> {
         // "variable list of type List<Pet>" for a method looked for on the
         // ELEMENT. Ours is the one the dispatcher set, so it is put back.
         let location = self.receiver_location.take();
+        let receiver_void = std::mem::replace(&mut self.void_receiver, true);
+        let assigned = self.void_target.take();
         let receiver_ty = self.expr(receiver);
+        self.void_receiver = receiver_void;
+        self.void_target = assigned;
         self.receiver_location = location;
         // …and where its DOT is, for the same reason: javac reports a missing
         // member under the dot, and a nested access has its own.
@@ -25589,7 +25640,7 @@ impl BodyGen<'_> {
         if arg_types.contains(&JType::Error) {
             let before = self.diagnostics.len();
             for arg in args {
-                self.expr(arg);
+                self.expr_in_argument(arg);
             }
             if self.diagnostics.len() == before {
                 self.error(
@@ -29517,7 +29568,11 @@ impl BodyGen<'_> {
                         // (Its other two are for a receiver — "void cannot be
                         // dereferenced" — and an assignment, which name the
                         // context this one does not have.)
-                        self.error(*span, "'void' type not allowed here");
+                        // javac's wording, which depends on the POSITION: a
+                        // value being ASSIGNED names both types, and anywhere
+                        // else the mistake is the position itself.
+                        let message = self.void_message();
+                        self.error(*span, message);
                         JType::Error
                     }
                 }
@@ -29609,13 +29664,8 @@ impl BodyGen<'_> {
                 None => JType::Error,
                 Some(Some(ty)) => ty,
                 Some(None) => {
-                    self.error(
-                        *span,
-                        {
-                                let _ = method;
-                                String::from("'void' type not allowed here")
-                            },
-                    );
+                    let message = self.void_message();
+                    self.error(*span, message);
                     JType::Error
                 }
             },
@@ -30305,6 +30355,26 @@ impl BodyGen<'_> {
     /// the call already passes an assignable array). Returns the total
     /// stack width of the pushed arguments.
     fn emit_call_args(&mut self, args: &[Expr], sig: &MethodSig, span: SourceSpan) -> u16 {
+        let assigned = self.void_target.take();
+        let receiver = std::mem::replace(&mut self.void_receiver, false);
+        let width = self.emit_call_args_inner(args, sig, span);
+        self.void_target = assigned;
+        self.void_receiver = receiver;
+        width
+    }
+
+    /// Evaluate an ARGUMENT — which is neither an assignment nor a receiver,
+    /// whatever encloses the call, and which javac words as neither.
+    fn expr_in_argument(&mut self, arg: &Expr) -> JType {
+        let assigned = self.void_target.take();
+        let receiver = std::mem::replace(&mut self.void_receiver, false);
+        let ty = self.expr(arg);
+        self.void_target = assigned;
+        self.void_receiver = receiver;
+        ty
+    }
+
+    fn emit_call_args_inner(&mut self, args: &[Expr], sig: &MethodSig, span: SourceSpan) -> u16 {
         if !sig.is_varargs {
             for (arg, param) in args.iter().zip(&sig.params) {
                 let actual = self.expr_toward(arg, *param);
