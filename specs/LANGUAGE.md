@@ -11269,3 +11269,18 @@ supplier that answers `null` is an NPE naming `supplier.get()`, as a JDK's is.
 Pinned by `a_stream_maps_through_a_function_value`,
 `require_non_null_else_get_asks_only_when_null` and
 `what_a_library_algorithm_asks_a_lambda`.
+
+**The fuzzer asks it too, now.** `scripts/fuzz/programs.py` grew a dimension
+that hands a PRINTING comparator (and a printing key extractor) to the
+operations that differ in which pair they pass, how many times, and whether a
+wrapper swaps or negates: `sort`, `sort(reversed)`, `sort(thenComparing)`,
+`Collections.sort/max/min`, `stream().max/min/sorted`, and a `PriorityQueue`.
+A silent comparator hides all of that, which is why the two bugs above survived
+every earlier sweep. 1450 generated programs across three seeds agree with a
+real JDK, callback for callback.
+
+A `TreeSet` built with a traced comparator is left out on purpose, and the
+generator says why: its insertion order is the measured red-black-tree
+difference, so every such program would diverge on the trace while agreeing on
+the answer — and a generator whose baseline is not zero hides the next real
+find.

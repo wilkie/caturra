@@ -44,6 +44,27 @@ public class %s {
     static long fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }
     static long fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }
     static String tag(String s) { return "<" + s + ">"; }
+    // A callback that PRINTS. What a library algorithm asks it, and in what
+    // order, is then part of the output — which is how a `reversed()` that
+    // negated instead of swapping, and a `Stream.max` that compared its pair
+    // the other way round, were caught. A silent comparator hides both.
+    static Comparator<Animal> traced(String tag) {
+        return (x, y) -> {
+            System.out.println(tag + "[" + x.name + "," + y.name + "]");
+            return Integer.compare(x.size, y.size);
+        };
+    }
+    static java.util.function.Function<String, Integer> tracedLength(String tag) {
+        return s -> {
+            System.out.println(tag + "(" + s + ")");
+            return s.length();
+        };
+    }
+    static Animal pqPoll(List<Animal> zoo, Comparator<Animal> by) {
+        PriorityQueue<Animal> queue = new PriorityQueue<>(by);
+        queue.addAll(zoo);
+        return queue.poll();
+    }
     static <T extends Comparable<T>> T biggest(List<T> xs) {
         T best = xs.get(0);
         for (T x : xs) { if (x.compareTo(best) > 0) best = x; }
@@ -162,7 +183,8 @@ class Gen:
         r = self.rng
         kinds = ["decl", "print", "print", "if", "for", "foreach", "while", "assign", "try",
                  "stream", "sort", "generic", "map", "methodref", "arrays", "nested", "sublist",
-                 "switch", "dowhile", "labeled", "format", "builder", "cast", "anon", "recurse"]
+                 "switch", "dowhile", "labeled", "format", "builder", "cast", "anon", "recurse",
+                 "traced", "traced", "traced_fn"]
         kind = r.choice(kinds)
         if kind == "decl": return self.decl()
         if kind == "print":
@@ -392,6 +414,51 @@ class Gen:
             self.lines.append("            Collections.sort(part);")
             self.lines.append(f"            System.out.println(part + \"|\" + {s});")
             self.lines.append("        }")
+            return
+        if kind == "traced":
+            # A printing comparator or function, through the operations that
+            # differ in WHICH pair they hand it: the argument order, the
+            # number of calls, and whether a wrapper swaps or negates.
+            animals = self.name("zoo")
+            self.lines.append(
+                f'        List<Animal> {animals} = new ArrayList<>(List.of('
+                f'new Animal("a", {r.randint(1, 4)}), new Animal("b", {r.randint(1, 4)}), '
+                f'new Animal("c", {r.randint(1, 4)})));'
+            )
+            # A `TreeSet`/`TreeMap` built with a traced comparator is left out
+            # ON PURPOSE: inserting into one compares against the middle of a
+            # sorted vector where a JDK descends a red-black tree from its
+            # root, so every such program would diverge on the TRACE while
+            # agreeing on the answer. That gap is measured and written down;
+            # a generator whose baseline is not zero hides the next one.
+            what = r.choice([
+                f'{animals}.sort(traced("s"))',
+                f'{animals}.sort(traced("r").reversed())',
+                f'{animals}.sort(traced("t").thenComparing(z -> z.name))',
+                f'Collections.sort({animals}, traced("c"))',
+                f'System.out.println({animals}.stream().max(traced("m")).get())',
+                f'System.out.println({animals}.stream().min(traced("n")).get())',
+                f'System.out.println(Collections.max({animals}, traced("C")))',
+                f'System.out.println(Collections.min({animals}, traced("D")))',
+                f'System.out.println({animals}.stream().sorted(traced("o"))'
+                f'.map(z -> z.name).collect(Collectors.toList()))',
+                f'System.out.println(pqPoll({animals}, traced("q")))',
+            ])
+            self.lines.append(f"        {what};")
+            self.lines.append(f"        System.out.println({animals});")
+            return
+        if kind == "traced_fn":
+            src = self.of_type("List<String>")
+            if not src:
+                return self.decl()
+            s = r.choice(src)
+            what = r.choice([
+                f'{s}.stream().map(tracedLength("f")).collect(Collectors.toList())',
+                f'{s}.stream().sorted(Comparator.comparing(tracedLength("k")))'
+                f'.collect(Collectors.toList())',
+                f'{s}.stream().map(tracedLength("g")).max(Comparator.naturalOrder()).get()',
+            ])
+            self.lines.append(f"        System.out.println({what});")
             return
         if kind == "sort":
             src = self.of_type("List<Integer>") + self.of_type("List<String>")
