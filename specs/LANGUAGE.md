@@ -11149,3 +11149,39 @@ transport test resolved two in-flight requests after ONE `setTimeout(0)`, and a
 MessagePort delivery is not guaranteed to land in one turn — about one run in
 three failed with "no gate registered for 2". It waits for the condition now,
 not for a fixed number of turns.
+
+### What a bad method reference says (2026-08-30)
+
+Twelve wrong method references, compared with javac. Three matched. javac has
+exactly two headlines here and the difference between them is real: a NAME it
+cannot resolve is `invalid method reference`, and a name it resolves and cannot
+USE is `incompatible types: invalid method reference` — with the specific
+reason on the indented line underneath, which is the very message caturra had
+been reporting on its own. So
+`BiFunction<String,String,Integer> f = String::length` said "method length in
+class String cannot be applied to given types", true of a call the program
+never wrote, and `Function<Box,Integer> f = Box::twice` said "Box cannot be
+converted to int", which is javac's continuation line promoted to a headline.
+
+A synthesized method-reference class holds nothing but the reference, so every
+error inside one is a failure of that reference: they all carry the headline
+now, and the two-way split follows javac's. Nine of the twelve match; the three
+that do not are a library method used in an unbound position (caturra searched
+for a static and said "cannot find symbol" about a method that plainly exists —
+it cannot enumerate a library class's overloads), `int[]::length`, and an array
+constructor reference.
+
+**A redeclared local is still declared.** Reporting the redeclaration and
+skipping the binding left the name bound to what it SHADOWS — a parameter,
+usually — so every later use was typed against the wrong declaration: an
+`ArrayList<Pet> a` beside a `String[] a` parameter went on to complain that a
+`String[]` is not a `List<Pet>`, about a line whose types are fine. It binds
+now, which also meant making a name lookup take the NEWEST binding within a
+scope as well as across them: two bindings of one name in one scope is not
+legal Java, so that only ever shows in recovery.
+
+Pinned by `reject_a_static_method_as_an_unbound_reference`,
+`reject_a_reference_with_the_wrong_arity`,
+`reject_an_instance_method_as_a_supplier`,
+`reject_a_reference_to_a_method_that_does_not_exist` and
+`a_redeclared_local_is_still_declared`.

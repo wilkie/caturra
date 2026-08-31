@@ -3178,7 +3178,13 @@ fn validate_method_ref(expr: &Expr, sam: &Sam, ctx: &mut Ctx) {
         if !statics.is_empty() && !unbound.is_empty() {
             ctx.diags.push(crate::diagnostics::Diagnostic::error(
                 ctx.path,
-                format!("invalid method reference: reference to {method} is ambiguous"),
+                format!(
+                    // javac's headline for a reference it cannot make sense
+                    // of; what caturra has to add rides after it, the way
+                    // javac's own continuation line does.
+                    "incompatible types: invalid method reference\n  \
+                     reference to {method} is ambiguous"
+                ),
                 *span,
             ));
             return;
@@ -3188,11 +3194,13 @@ fn validate_method_ref(expr: &Expr, sam: &Sam, ctx: &mut Ctx) {
             let instance = named.iter().find(|m| !m.is_static);
             let message = match instance {
                 Some(m) => format!(
-                    "invalid method reference: unexpected instance method {}",
+                    "incompatible types: invalid method reference\n  \
+                     unexpected instance method {}",
                     describe(m)
                 ),
                 None => format!(
-                    "invalid method reference: unexpected static method {}",
+                    "incompatible types: invalid method reference\n  \
+                     unexpected static method {}",
                     named.first().map_or_else(String::new, |m| describe(m))
                 ),
             };
@@ -3210,7 +3218,8 @@ fn validate_method_ref(expr: &Expr, sam: &Sam, ctx: &mut Ctx) {
         ctx.diags.push(crate::diagnostics::Diagnostic::error(
             ctx.path,
             format!(
-                "invalid method reference: unexpected static method {}",
+                "incompatible types: invalid method reference\n  \
+                 unexpected static method {}",
                 named.first().map_or_else(String::new, |m| describe(m))
             ),
             *span,

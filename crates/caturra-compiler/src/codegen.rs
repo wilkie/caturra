@@ -16331,12 +16331,11 @@ impl BodyGen<'_> {
     fn error(&mut self, span: SourceSpan, message: impl Into<String>) {
         let mut message: String = message.into();
         // A failure inside a synthesized METHOD-REFERENCE class is a failure of
-        // the reference the program wrote — its body holds nothing else. javac
-        // says so first ("invalid method reference"), then the symbol block;
-        // without the headline the message read as if the program had written
-        // the call the desugaring invented.
-        if crate::is_method_ref_class(self.current_class) && message.starts_with("cannot find symbol")
-        {
+        // the reference the program wrote — its body holds nothing else — and
+        // javac says so in the headline, with the reason underneath. Without
+        // it the message read as if the program had written the call the
+        // desugaring invented.
+        if crate::is_method_ref_class(self.current_class) {
             // ...and the receiver is the parameter the desugaring invented, so
             // the location has to name the qualifier CLASS, as javac's does —
             // a message about `variable __p0` names something the program
@@ -16347,7 +16346,19 @@ impl BodyGen<'_> {
                 let class = message[at + of_type + " of type ".len()..].trim_end();
                 message = format!("{}location: class {class}", &message[..at]);
             }
-            message = format!("invalid method reference\n  {message}");
+            // javac has two headlines here, and the difference is real: a
+            // NAME it cannot resolve is "invalid method reference", while a
+            // name it resolves and cannot use is "incompatible types: invalid
+            // method reference". The reason it prints underneath is the very
+            // message caturra had been reporting on its own — so a
+            // `BiFunction<String,String,Integer> f = String::length` said
+            // "method length in class String cannot be applied to given
+            // types", true of a call the program never wrote.
+            message = if message.starts_with("cannot find symbol") {
+                format!("invalid method reference\n  {message}")
+            } else {
+                format!("incompatible types: invalid method reference\n  {message}")
+            };
         }
         self.diagnostics
             .push(Diagnostic::error(self.path, message, span));
@@ -16667,10 +16678,15 @@ impl BodyGen<'_> {
     }
 
     fn lookup(&mut self, name: &str) -> Option<&mut LocalVar> {
+        // Newest first WITHIN a scope as well as across them. Two bindings of
+        // one name in one scope is not legal Java, so this only ever shows in
+        // error RECOVERY — where a redeclaration is reported and then bound
+        // anyway, and the rest of the method must see the declaration the
+        // program wrote rather than the parameter it shadows.
         self.scopes
             .iter_mut()
             .rev()
-            .flat_map(|scope| scope.iter_mut())
+            .flat_map(|scope| scope.iter_mut().rev())
             .find(|(n, _)| n == name)
             .map(|(_, var)| var)
     }
@@ -18213,7 +18229,14 @@ impl BodyGen<'_> {
                         declarator.name, self.member
                     ),
                 );
-                continue;
+                // …and then declare it anyway, rather than `continue`. Skipping
+                // it left the name bound to whatever it shadowed — a parameter,
+                // usually — so every later use was typed against the WRONG
+                // declaration: `ArrayList<Pet> a` beside a `String[] a`
+                // parameter went on to report that a `String[]` is not a
+                // `List<Pet>`, about a line whose types are perfectly fine.
+                // javac binds the redeclaration and reports only the
+                // redeclaration.
             }
             let slot = self.take_slots(var_ty.width());
             let assigned = if let Some(init) = &declarator.init {
@@ -18434,7 +18457,11 @@ impl BodyGen<'_> {
                     declarator.name, self.member
                 ),
             );
-            return;
+            // …and then declare it anyway. Returning here left the name bound
+            // to whatever it shadowed — a parameter, usually — so every later
+            // use was typed against the WRONG declaration and reported errors
+            // about a type the program did not write there. javac binds the
+            // redeclaration and reports only the redeclaration.
         }
         let slot = self.take_slots(var_ty.width());
         let init = declarator

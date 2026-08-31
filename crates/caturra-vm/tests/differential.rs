@@ -42918,3 +42918,82 @@ public class NameIfaceImplement {
 }
 "#
 );
+
+// A method reference javac cannot make sense of has ONE headline —
+// "incompatible types: invalid method reference" — with the specific reason on
+// the continuation line underneath. caturra reported the reason as the
+// headline, so `BiFunction<String,String,Integer> f = String::length` said
+// "method length in class String cannot be applied to given types", which is
+// true of a call the program never wrote. (An unresolvable NAME is javac's
+// other headline, "invalid method reference" without the prefix, and caturra
+// already said that.)
+differential_wording!(
+    reject_a_static_method_as_an_unbound_reference,
+    "MrefStaticUnbound",
+    r"
+import java.util.function.Function;
+
+public class MrefStaticUnbound {
+    static class Box { static int twice(int n) { return n * 2; } }
+    static Function<Box, Integer> f() { return Box::twice; }
+}
+"
+);
+
+differential_wording!(
+    reject_a_reference_with_the_wrong_arity,
+    "MrefArity",
+    r"
+import java.util.function.BiFunction;
+
+public class MrefArity {
+    static BiFunction<String, String, Integer> f() { return String::length; }
+}
+"
+);
+
+differential_wording!(
+    reject_an_instance_method_as_a_supplier,
+    "MrefInstanceSupplier",
+    r"
+import java.util.function.Supplier;
+
+public class MrefInstanceSupplier {
+    static class Box { int get() { return 1; } }
+    static Supplier<Integer> f() { return Box::get; }
+}
+"
+);
+
+differential_wording!(
+    reject_a_reference_to_a_method_that_does_not_exist,
+    "MrefMissing",
+    r"
+public class MrefMissing {
+    static class Box { }
+    static Runnable f() { return Box::nope; }
+}
+"
+);
+
+// A redeclared local is still declared. caturra reported the redeclaration and
+// then left the name bound to what it SHADOWS — a parameter, usually — so
+// every later use was typed against the wrong declaration: an
+// `ArrayList<Pet> a` beside a `String[] a` parameter went on to complain that
+// a `String[]` is not a `List<Pet>`, about a line whose types are fine.
+differential_error_count!(
+    a_redeclared_local_is_still_declared,
+    "RedeclaredLocal",
+    r"
+import java.util.ArrayList;
+import java.util.List;
+
+public class RedeclaredLocal {
+    public static void main(String[] args) {
+        ArrayList<String> args = new ArrayList<>();
+        List<String> l = args;
+        System.out.println(l);
+    }
+}
+"
+);
