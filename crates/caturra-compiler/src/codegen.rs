@@ -5060,6 +5060,23 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
     if matches!(param, ElemType::TypeVar(_)) || matches!(arg, ElemType::TypeVar(_)) {
         return true;
     }
+    // The same, for a METHOD's own type variable after erasure — which is the
+    // `=` wildcard, not the class-variable sentinel above. It already accepts
+    // any element as a PARAMETER; as an ARGUMENT it is what a generic factory
+    // answers, and nothing pinned it: `<T> List<T> emptyish()` assigned to a
+    // `List<String>` is the inference javac does at the call, and was
+    // "List<Object> cannot be converted to List<String>" here. A WRITTEN
+    // wildcard is deliberately not this — `? extends Number` is a constraint
+    // the program stated, and it keeps its own arm below.
+    if matches!(
+        arg,
+        ElemType::Wildcard {
+            bound: WildcardBound::TypeVar(_),
+            ..
+        }
+    ) {
+        return true;
+    }
     // A `String` or a `StringBuilder` element where a `CharSequence` one is
     // wanted: the interface they share is not an element KIND, so it rides
     // interned, and the widening has to be spelled out here as it is for every

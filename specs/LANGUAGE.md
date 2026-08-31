@@ -11284,3 +11284,34 @@ generator says why: its insertion order is the measured red-black-tree
 difference, so every such program would diverge on the trace while agreeing on
 the answer — and a generator whose baseline is not zero hides the next real
 find.
+
+### A generic factory takes its target type (2026-08-30)
+
+`<T> List<T> emptyish()` assigned to a `List<String>` is a `List<String>`:
+nothing at the call pins `T`, so javac infers it from the TARGET. caturra
+erased the variable to `Object` and refused the assignment —
+`Collections.emptyList()` written by hand, and the shape every generic helper
+class starts from. The same for `<T> Optional<T> none()`,
+`<T> Supplier<List<T>> maker()`, `<T> Function<T, T> same()`.
+
+The erasure was right and the comparison was not. A method's own type variable
+erases to a type-variable WILDCARD, which already accepts any element as a
+PARAMETER — `<T> void dump(List<T>)` takes a `List<String>` — and the same
+wildcard as an ARGUMENT was compared as though it were `Object`. It accepts
+now, in that direction too. A WRITTEN wildcard deliberately does not: `?
+extends Number` is a constraint the program stated, and keeps its own rule.
+
+The element still flows wherever a variable IS pinned, so `String s =
+pick(listOfIntegers)` is refused as before — the inference that exists is not
+weakened, only the case where there was none to weaken.
+
+**One accepts-invalid follows, and it is the old modelling limit rather than a
+new rule:** `Function<String, Integer> bad = same()` is refused by javac,
+because `T` cannot be both. caturra models a `Function<A, B>` by its RESULT
+alone — a `Function<String,Integer>` and a `Function<Object,Integer>` are one
+type here — so it has nothing to contradict. Five valid programs compile for
+the one invalid one that does; refusing a generic factory is the worse of the
+two for a teaching product.
+
+Pinned by `a_generic_factory_takes_its_target_type` and
+`reject_a_pinned_type_variable_used_as_another`.

@@ -43306,3 +43306,68 @@ public class LambdaCalls {
 }
 "#
 );
+
+// A generic FACTORY — a method whose return mentions a type variable that no
+// parameter pins — is inferred from the target at the call: `<T> List<T>
+// emptyish()` assigned to a `List<String>` is a `List<String>`. caturra erased
+// the variable to `Object` and refused the assignment it should have inferred,
+// which is `Collections.emptyList()` written by hand and the shape every
+// generic helper class starts from.
+differential_test!(
+    a_generic_factory_takes_its_target_type,
+    "GenericFactory",
+    r#"
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+
+public class GenericFactory {
+    static <T> List<T> emptyish() { return new ArrayList<>(); }
+    static <T> Optional<T> none() { return Optional.empty(); }
+    static <T> Supplier<List<T>> maker() { return ArrayList::new; }
+    static <T> Function<T, T> same() { return v -> v; }
+    static <T> Predicate<T> yes() { return v -> true; }
+    static <T> Comparator<T> any() { return (a, b) -> 0; }
+    static <T> T pick(List<T> l) { return l.get(0); }
+
+    public static void main(String[] args) {
+        List<String> words = emptyish();
+        words.add("x");
+        System.out.println(words + " " + pick(words).length());
+
+        // The SAME factory, at a different target, is a different type — which
+        // is what makes this inference and not a cast.
+        List<Integer> numbers = emptyish();
+        numbers.add(3);
+        System.out.println(numbers.get(0) + 1);
+
+        Optional<String> maybe = none();
+        System.out.println(maybe.isPresent());
+
+        Supplier<List<String>> supplier = maker();
+        List<String> made = supplier.get();
+        made.add("y");
+        System.out.println(made);
+
+        Function<String, String> identity = same();
+        System.out.println(identity.apply("hi").length());
+        Predicate<String> always = yes();
+        System.out.println(always.test("x"));
+        Comparator<String> flat = any();
+        System.out.println(flat.compare("a", "b"));
+    }
+}
+"#
+);
+
+// ...and the element still flows where a variable IS pinned, so a wrong use of
+// one is still refused.
+differential_reject!(
+    reject_a_pinned_type_variable_used_as_another,
+    "RejectPinnedVar",
+    "import java.util.*;\npublic class RejectPinnedVar {\n  static <T> T pick(List<T> l) { return l.get(0); }\n  static String r() { List<Integer> n = new ArrayList<>(); n.add(3); return pick(n); }\n}"
+);
