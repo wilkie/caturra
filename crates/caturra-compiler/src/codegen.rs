@@ -1724,7 +1724,10 @@ impl MethodTable {
                 {
                     diagnostics.push(Diagnostic::error(
                         path,
-                        format!("cannot inherit from final {}", self.class_name(sup)),
+                        format!(
+                            "cannot inherit from final {}",
+                            source_type_name(self.class_name(sup))
+                        ),
                         class.span,
                     ));
                 }
@@ -1778,7 +1781,10 @@ impl MethodTable {
                 {
                     diagnostics.push(Diagnostic::error(
                         path,
-                        format!("cannot inherit from final {}", self.class_name(parent)),
+                        format!(
+                            "cannot inherit from final {}",
+                            source_type_name(self.class_name(parent))
+                        ),
                         class.span,
                     ));
                 }
@@ -1834,9 +1840,9 @@ impl MethodTable {
                                 format!(
                                     "{}() in {} {verb} {}() in {}: overriding method is static",
                                     method.name,
-                                    class.name,
+                                    source_interface_name(&class.name),
                                     method.name,
-                                    self.class_name(*iface)
+                                    source_type_name(self.class_name(*iface))
                                 ),
                                 method.span,
                             ));
@@ -1987,7 +1993,12 @@ impl MethodTable {
                                         method.name,
                                         source_interface_name(&class.name),
                                         method.name,
-                                        source_interface_name(&parent_name),
+                                        // The SIMPLE name: overriding a final
+                                        // `Object` method reported "in
+                                        // java.lang.Object", where javac —
+                                        // which never qualifies a name it can
+                                        // resolve — says "in Object".
+                                        source_type_name(&parent_name),
                                     ),
                                     method.span,
                                 ));
@@ -2005,7 +2016,11 @@ impl MethodTable {
                 // a broader `throws` — compiled and then failed at run time
                 // with an internal error, or silently ran the wrong body.
                 for (interface_id, sig) in self.inherited_interface_methods(info.id) {
-                    let interface_name = self.class_name(interface_id).to_owned();
+                    // The SOURCE name: a nested interface is stored under
+                    // `Outer$Inner`, and a message that says
+                    // `g() in Outer$C cannot implement g() in Outer$I` names
+                    // two classes the program never wrote.
+                    let interface_name = source_type_name(self.class_name(interface_id));
                     // caturra SYNTHESIZES the library interfaces (`Iterable`,
                     // `Comparable`, `AutoCloseable`, …) with approximate
                     // signatures — an erased return, no `throws`. Checking an
@@ -2021,7 +2036,7 @@ impl MethodTable {
                     else {
                         continue;
                     };
-                    let owner_name = self.class_name(owner).to_owned();
+                    let owner_name = source_type_name(self.class_name(owner));
                     // An INTERFACE member is implicitly public, whether or not
                     // the word is written; only a class's own declaration can
                     // weaken access.
@@ -2151,9 +2166,14 @@ impl MethodTable {
                         diagnostics.push(Diagnostic::error(
                             path,
                             format!(
-                                "{}() in {} cannot override {}() in java.lang.Object: \
+                                // javac writes `Object`, not the qualified
+                                // name: it never qualifies a name it can
+                                // resolve.
+                                "{}() in {} cannot override {}() in Object: \
                                  overridden method is final",
-                                method.name, class.name, method.name,
+                                method.name,
+                                source_interface_name(&class.name),
+                                method.name,
                             ),
                             method.span,
                         ));
@@ -7347,8 +7367,11 @@ impl JType {
                 parameterized(name, &[elem], table)
             }
             JType::Collection(elem) => parameterized("Collection", &[elem], table),
+            // `Entry`, not `Map.Entry` — the same simple name the arm below
+            // uses, and the one javac writes inside a type argument whatever
+            // the program wrote to reach it.
             JType::EntrySet { key, value } => format!(
-                "Set<Map.Entry<{},{}>>",
+                "Set<Entry<{},{}>>",
                 key.describe_arg(table),
                 value.describe_arg(table)
             ),
@@ -18160,10 +18183,12 @@ impl BodyGen<'_> {
                 span,
                 unresolved_type_message(ty, self.table, self.current_class),
             );
+            self.declare_erroneous(declarators);
             return;
         };
         if let Some(message) = type_arity_error(ty, self.table) {
             self.error(span, message);
+            self.declare_erroneous(declarators);
             return;
         }
 
@@ -18362,6 +18387,35 @@ impl BodyGen<'_> {
                 },
             ) => widens(from_key, to_key) && widens(from_value, to_value),
             _ => false,
+        }
+    }
+
+    /// Declare variables whose TYPE was refused, so that reading them later is
+    /// quiet. javac gives such a variable an error type and says nothing more
+    /// about it; caturra left it undeclared, so `Pair<String> p = ...;` was
+    /// "wrong number of type arguments" AND, on the next line, "cannot find
+    /// symbol: 'p.k'" — a second complaint about a variable that is right
+    /// there, and which the student would have to fix twice.
+    fn declare_erroneous(&mut self, declarators: &[LocalDeclarator]) {
+        for declarator in declarators {
+            if self.lookup(&declarator.name).is_some() {
+                continue;
+            }
+            let slot = self.take_slots(1);
+            self.scopes
+                .last_mut()
+                .expect("scope stack is never empty")
+                .push((
+                    declarator.name.clone(),
+                    LocalVar {
+                        slot,
+                        ty: JType::Error,
+                        is_final: false,
+                        kind: VarKind::Local,
+                        assigned: true,
+                        const_val: None,
+                    },
+                ));
         }
     }
 
@@ -29620,7 +29674,12 @@ impl BodyGen<'_> {
         if sig.is_abstract {
             self.error(
                 span,
-                format!("abstract method {method}() cannot be accessed directly"),
+                // javac names the class the abstract method is declared in:
+                // "abstract method m() in Abs cannot be accessed directly".
+                format!(
+                    "abstract method {method}() in {} cannot be accessed directly",
+                    source_type_name(&super_name)
+                ),
             );
             return None;
         }

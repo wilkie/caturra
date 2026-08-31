@@ -71,7 +71,11 @@ describe('RpcEndpoint', () => {
     });
     const first = editor.request<number>('gated', { n: 1 });
     const second = editor.request<number>('gated', { n: 2 });
-    await flush();
+    // Both requests have to REACH the handler before either gate exists, and a
+    // MessagePort delivery is not guaranteed to land within one turn — a
+    // single `flush()` here failed about one run in three with "no gate
+    // registered for 2".
+    await until(() => gates.size === 2);
     // Resolve out of order: second, then first.
     resolveGate(gates, 2);
     resolveGate(gates, 1);
@@ -85,7 +89,7 @@ describe('RpcEndpoint', () => {
       seen.push(params);
     });
     editor.notify('log', { text: 'hello' });
-    await flush();
+    await until(() => seen.length === 1);
     expect(seen).toEqual([{ text: 'hello' }]);
   });
 
@@ -115,4 +119,14 @@ function resolveGate(gates: Map<number, () => void>, n: number): void {
 /** Let queued MessagePort deliveries and microtasks drain. */
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Drain until `condition` holds, rather than for a fixed number of turns. */
+async function until(condition: () => boolean): Promise<void> {
+  for (let turn = 0; turn < 100 && !condition(); turn += 1) {
+    await flush();
+  }
+  if (!condition()) {
+    throw new Error('the transport never delivered what the test waited for');
+  }
 }

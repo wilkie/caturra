@@ -443,10 +443,26 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
 
     for source in sources {
         let (tokens, mut lex_errors) = lexer::lex(&source.path, &source.text);
-        compilation.diagnostics.append(&mut lex_errors);
         chains.append(&mut qualified_chains(&tokens));
 
         let (unit, mut parse_errors) = parser::parse(&source.path, tokens);
+        // A syntax error AT a lexical one is that lexical one, told twice: the
+        // parser is handed a token the lexer has already complained about and
+        // says what it cannot do with it. javac reports only the first —
+        // `int x = 1_;` is "illegal underscore", not that plus "expected an
+        // expression" pointing at the same `;`. A LATER syntax error is a
+        // separate mistake and stays (javac reports both for `1_;` on one line
+        // and a `int y = ;` on another), so the test is the POSITION, not the
+        // file.
+        let lex_ends: Vec<SourcePosition> = lex_errors
+            .iter()
+            .filter(|d| matches!(d.severity, Severity::Error))
+            .filter_map(|d| d.span.map(|span| span.end))
+            .collect();
+        parse_errors.retain(|d| {
+            d.span.is_none_or(|span| !lex_ends.iter().any(|end| span.start <= *end))
+        });
+        compilation.diagnostics.append(&mut lex_errors);
         compilation.diagnostics.append(&mut parse_errors);
 
         for class in &unit.classes {
@@ -767,6 +783,20 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     } else {
         compilation.diagnostics.truncate(after_parse);
     }
+    // The SAME complaint at the SAME place, twice. javac never prints one
+    // twice, and a desugaring that expands one construct into several — a
+    // try-with-resources becomes a body plus two `close()` calls — checked its
+    // resource in each copy, so a student saw one mistake reported three
+    // times.
+    let mut seen = std::collections::HashSet::new();
+    compilation
+        .diagnostics
+        .retain(|d| {
+            let at = d
+                .span
+                .map(|s| (s.start.line, s.start.column, s.end.line, s.end.column));
+            seen.insert((d.message.clone(), d.path.clone(), at))
+        });
 
     if compilation.success() {
         compilation.classes = classes;

@@ -54,6 +54,18 @@ def caturra_errors(path):
     ]
 
 
+def agrees(want, got):
+    """Whether caturra's list says what javac's does.
+
+    Most of caturra's messages are javac's headline plus the detail javac
+    prints on its indented `symbol:`/`required:` continuation lines, which this
+    only ever sees the first line of. A caturra line that STARTS with javac's
+    is that convention, not a divergence — the wording that names the mistake
+    is the same, and the rest is a continuation line moved inline.
+    """
+    return len(want) == len(got) and all(c.startswith(j) for j, c in zip(want, got))
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -64,7 +76,7 @@ def main():
     for case in cases:
         path = os.path.join(directory, case)
         want, got = javac_errors(path), caturra_errors(path)
-        if want == got:
+        if agrees(want, got):
             continue
         differing += 1
         print(f"--- {case[:-5]}")

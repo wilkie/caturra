@@ -11095,3 +11095,57 @@ Pinned by `a_type_error_hides_the_missing_return`,
 `reject_incrementing_a_field_through_this_in_a_static_method`,
 `writing_a_field_through_this`, `reject_for_each_over_a_map`, and the three
 `reject_a_duplicate_local_names_*`.
+
+### The rest of the diagnostic list (2026-08-30)
+
+The list comparison from the entry above, pointed at the 236-program reject
+corpus. Sixty-nine of them differed. The first thing that told me was about the
+TOOL: nineteen were caturra's documented convention — javac's headline plus the
+detail javac prints on its indented continuation lines, which a first-line
+comparison can only see half of. `diaglist.py` reads a caturra line that starts
+with javac's as agreement now, and so does `differential_wording!`, which was
+asserting equality against a contract the spec already described.
+
+That left fifty, and four mechanical causes account for most of the drop to
+thirty-nine:
+
+- **The same complaint, twice.** A desugaring that expands one construct into
+  several — a try-with-resources becomes a body plus two `close()` calls —
+  checked its resource in every copy, so one mistake was reported three times.
+  Identical message at an identical position is now reported once, which javac
+  never fails to do.
+- **A syntax error AT a lexical one is that lexical one, told twice.** The
+  parser is handed a token the lexer has already complained about and says what
+  it cannot do with it: `int x = 1_;` was "illegal underscore" AND "expected an
+  expression" pointing at the same `;`. A parse error whose span starts at or
+  before a lexical error's end is dropped — but a LATER one is a separate
+  mistake and stays, which javac confirms (`1_;` on one line and `int y = ;` on
+  another is two errors to javac, and is two here).
+- **A variable whose type was refused is still a variable.** javac gives it an
+  error type and says nothing more; caturra left it undeclared, so
+  `Pair<String> p = new Pair<>();` was "wrong number of type arguments" AND, on
+  the next line, "cannot find symbol: 'p.k'" — a second complaint about a
+  variable that is right there.
+- **The names in a message are the names the program wrote.** Four said
+  otherwise: a nested class by its BINARY name (`cannot inherit from final
+  Outer$E`, `g() in Outer$C cannot implement g() in Outer$I`),
+  `java.lang.Object` where javac writes `Object`, an abstract `super` call that
+  named no class at all where javac writes "abstract method m() in Abs", and a
+  map's entry view as `Map.Entry` inside a type argument where javac writes
+  `Entry` — the simple name the arm beside it already used.
+
+What remains is nineteen count differences and twenty wordings, and they are
+not one thing: javac's own cascades where caturra says less (a covariant return
+is reported twice by javac, once here), the generic-inference wording already
+recorded above, and the parser's deliberately friendlier messages.
+
+Pinned by `a_bad_resource_is_reported_once`, `a_lexical_error_is_not_told_twice`,
+`a_later_syntax_error_survives_a_lexical_one`,
+`a_variable_with_a_bad_type_is_still_declared`, and the five
+`reject_*` naming pins.
+
+The TypeScript gate caught something of its own while this ran: the RPC
+transport test resolved two in-flight requests after ONE `setTimeout(0)`, and a
+MessagePort delivery is not guaranteed to land in one turn — about one run in
+three failed with "no gate registered for 2". It waits for the condition now,
+not for a fixed number of turns.

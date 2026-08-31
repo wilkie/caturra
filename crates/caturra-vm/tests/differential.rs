@@ -400,10 +400,15 @@ macro_rules! differential_wording {
             let first_line = |text: &str| {
                 text.lines().next().unwrap_or_default().trim().to_owned()
             };
-            assert_eq!(
-                first_line(&javac),
-                first_line(&caturra),
-                "the two engines refuse {} for differently worded reasons",
+            let (want, got) = (first_line(&javac), first_line(&caturra));
+            // caturra's message is javac's headline plus the detail javac
+            // prints on its indented continuation lines, which this only ever
+            // sees the first line of. A line that STARTS with javac's is that
+            // convention, not a divergence; `scripts/fuzz/diaglist.py` reads
+            // the two lists by the same rule.
+            assert!(
+                got.starts_with(&want),
+                "the two engines refuse {} for differently worded reasons\n  jdk: {want}\n  cat: {got}",
                 $class
             );
         }
@@ -42772,4 +42777,144 @@ public class RejectDupLocalStaticInit {
     static { int y = 1; int y = 2; }
 }
 "
+);
+
+// One mistake, reported once. A desugaring that expands a construct into
+// several — a try-with-resources becomes a body plus two `close()` calls —
+// checked its resource in every copy, so a student saw the same complaint
+// three times. javac never prints one twice at one place.
+differential_error_count!(
+    a_bad_resource_is_reported_once,
+    "OnceResource",
+    r"
+public class OnceResource {
+    static class NotCloseable {
+        public void close() { }
+    }
+    public static void main(String[] args) {
+        try (NotCloseable n = new NotCloseable()) {
+            System.out.println(1);
+        }
+    }
+}
+"
+);
+
+// A syntax error AT a lexical one is that lexical one, told twice: the parser
+// is handed a token the lexer has already complained about. javac reports
+// `int x = 1_;` as "illegal underscore" alone. A LATER syntax error is a
+// separate mistake and is still reported — which is why the test is the
+// POSITION and not the file.
+differential_error_count!(
+    a_lexical_error_is_not_told_twice,
+    "OnceLexical",
+    r"
+public class OnceLexical {
+    static void a() { int x = 1_; }
+}
+"
+);
+
+differential_error_count!(
+    a_later_syntax_error_survives_a_lexical_one,
+    "LexThenSyntax",
+    r"
+public class LexThenSyntax {
+    static void a() { int x = 1_; }
+    static void b() { int y = ; }
+}
+"
+);
+
+// A variable whose TYPE was refused is still a variable. javac gives it an
+// error type and says nothing more; caturra left it undeclared, so the next
+// line reported "cannot find symbol" about a variable that is right there —
+// a second complaint the student would have to fix twice.
+differential_error_count!(
+    a_variable_with_a_bad_type_is_still_declared,
+    "BadTypeStillDeclared",
+    r"
+public class BadTypeStillDeclared {
+    static class Pair<K, V> { K k; V v; }
+    public static void main(String[] args) {
+        Pair<String> p = new Pair<>();
+        System.out.println(p.k);
+    }
+}
+"
+);
+
+// The names in a message are the names the program wrote. Four of these said
+// otherwise: a nested class by its BINARY name (`Outer$C`), `java.lang.Object`
+// where javac writes `Object`, an abstract `super` call that named no class at
+// all, and a map's entry view as `Map.Entry` inside a type argument where
+// javac writes `Entry`.
+differential_wording!(
+    reject_extending_a_final_nested_enum,
+    "NameFinalEnum",
+    r"
+public class NameFinalEnum {
+    enum E { A }
+    static class Sub extends E { }
+}
+"
+);
+
+differential_wording!(
+    reject_overriding_a_final_object_method,
+    "NameObjectFinal",
+    r"
+public class NameObjectFinal {
+    static class Bad {
+        public Class<?> getClass() { return null; }
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_calling_an_abstract_method_through_super,
+    "NameAbstractSuper",
+    r"
+public class NameAbstractSuper {
+    abstract static class Abs { abstract void m(); }
+    static class Sub extends Abs {
+        void m() { super.m(); }
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_an_entry_view_as_a_hash_set,
+    "NameEntryView",
+    r"
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+
+public class NameEntryView {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        HashSet<Map.Entry<String, Integer>> h = m.entrySet();
+        System.out.println(h);
+    }
+}
+"
+);
+
+// Both refuse it, and javac's FIRST error is the one it reports for the class
+// ("C is not abstract and does not override abstract method g() in I") where
+// caturra reports the second — so this is a shape pin, and the NAMES in that
+// message (`in C`, `in I`, not `NameIfaceImplement$C`) are what
+// `scripts/fuzz/diaglist.py` reads.
+differential_reject!(
+    reject_a_covariant_return_through_an_interface,
+    "NameIfaceImplement",
+    r#"
+public class NameIfaceImplement {
+    interface I { String g(); }
+    static class C implements I { public Object g() { return "C"; } }
+}
+"#
 );
