@@ -11528,3 +11528,60 @@ refused `l.addAll(0, List.of())` — an empty list added to a list of strings.
 
 Pinned by `inserting_a_collection_at_an_index` and
 `a_comparator_written_as_a_method_reference`.
+
+## How much of a JDK 11 caturra knows, measured
+
+Every claim about coverage in this document is about a behaviour that was
+probed. There was no number for the SURFACE: how much of the library a program
+can reach at all. `scripts/coverage/measure.py` computes one, from the two
+things that can be counted rather than asserted.
+
+**Classes: 286, read from the compiler's own import table.** `imports.rs` is
+the single list every import is checked against, so counting it counts what a
+program can name — 154 in core `java.*` (48 `java.util`, 43
+`java.util.function`, 33 `java.lang`, 8 `java.io`, 6 `java.util.stream`, …),
+the rest Swing/AWT and the bundled `org.code` course library.
+
+**Method names: 995 of 1213 = 82.0%, over the 45 core classes whose receiver
+can be written as one expression.** The denominator comes from a real JDK by
+reflection (`ApiList.java`), not from a checked-in list, so running the script
+on a different JDK moves the number. For each overload it writes a call with
+that overload's own arity and `null` for every argument, then reads caturra's
+diagnostic: "cannot find symbol" means the name is unknown, and anything else
+— including "no suitable method found" — means the name is known and only
+these arguments are wrong.
+
+This is NAME-level, deliberately: it says `substring` exists, not that both of
+its overloads do. It is the coarsest question with a checkable answer.
+Semantics are measured separately and far more strictly — by the 1098
+differential pins and the 2698-level corpus sweep, which compare what a
+program PRINTS against a real JDK.
+
+Exactly at 100%: `String`, `Math`, `StringBuilder`, `Double`, `ArrayList`,
+`List`, `Map`, `HashMap`, `LinkedHashMap`, `TreeMap`, `Set`, `Collection`,
+`Queue`, `Deque`, `Iterator`, `Comparator`, `StringJoiner`, `Pattern`,
+`Matcher`, `Stream`, `IntStream`, `Iterable`, `Comparable`. The low ones are
+low for a reason that is usually deliberate rather than a gap: `File` 9/40 and
+`System` 7/25 are filesystem metadata and process/properties surface a browser
+has nothing to answer with, `Class` 28/67 is reflection past what a grading
+harness inspects, `Collections` 28/60 and `Stack` 27/46 are the synchronized
+and checked wrappers and `Vector`'s inherited legacy half, `Character` 32/52 is
+the Unicode code-point surface. Run with `--verbose` for the misses per class.
+
+**Measuring found one defect, in the measurement's own oracle.** A name
+`Objects` HAS, called with arguments no overload takes, said "cannot find
+symbol" where javac says "no suitable method found for
+requireNonNull(<null>,<null>,<null>)" — `Objects` is the one library class
+whose statics are matched by shape rather than by a table, so its fall-through
+arm could not tell a wrong call from an absent one. Reading the two messages
+side by side also showed the null TYPE was named bare: javac writes `<null>`,
+in angle brackets, wherever it names it — as an argument type, as the source
+of an incompatible assignment, and as a receiver. And a member ON the null
+literal is not a missing symbol, since there are no members to miss: javac
+blames the receiver, "<null> cannot be dereferenced", for a method and for a
+field alike.
+
+Pinned by `reject_a_known_objects_method_with_the_wrong_arguments`,
+`reject_assigning_the_null_literal_to_an_int`,
+`reject_calling_a_method_on_the_null_literal` and
+`reject_reading_a_field_on_the_null_literal`.

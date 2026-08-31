@@ -7455,7 +7455,11 @@ impl JType {
             JType::Boolean => String::from("boolean"),
             JType::Char => String::from("char"),
             JType::Str => String::from("String"),
-            JType::Null => String::from("null"),
+            // javac names the null type `<null>`, in angle brackets, wherever
+            // it names a type at all ("incompatible types: <null> cannot be
+            // converted to int", "no suitable method found for f(<null>)").
+            // Writing it bare read as the literal, not as its type.
+            JType::Null => String::from("<null>"),
             JType::Array { elem, dims } => {
                 // The ELEMENT describes as what it really is — a `List[]`
                 // whose element is an interned `List` has `Object` for a base
@@ -15497,6 +15501,25 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
 ///
 /// `toString` is NOT here: its text is per-type, and a type whose text caturra
 /// does not model must keep refusing rather than invent one.
+/// The `java.util.Objects` methods caturra models. Kept beside the emitter that
+/// implements them so a call with the wrong ARGUMENTS is told apart from a call
+/// to a method that does not exist — javac words the two differently, and this
+/// is the only class whose statics are matched by shape rather than by table.
+const OBJECTS_METHOD_NAMES: &[&str] = &[
+    "equals",
+    "deepEquals",
+    "hash",
+    "hashCode",
+    "isNull",
+    "nonNull",
+    "toString",
+    "compare",
+    "checkIndex",
+    "requireNonNull",
+    "requireNonNullElse",
+    "requireNonNullElseGet",
+];
+
 const OBJECT_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("hashCode", &[], BRet::Int, "()I"),
@@ -22942,7 +22965,11 @@ impl BodyGen<'_> {
                         (widened, LIST_METHODS)
                     }
                     None => {
-                        self.error(span, "cannot call methods on null");
+                        // javac's sentence for a member on the null literal,
+                        // both for a method and for a field: the null type
+                        // has no members to look for, so it is not a missing
+                        // symbol, it is a receiver that cannot be read.
+                        self.error(span, "<null> cannot be dereferenced");
                         return None;
                     }
                 };
@@ -27146,10 +27173,19 @@ impl BodyGen<'_> {
                 Some(Some(self.narrow_object_return(arg_ty)))
             }
             _ => {
-                let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
                 for arg in args {
                     self.expr(arg);
                 }
+                // A name `Objects` HAS, called with arguments no overload
+                // takes, is not a missing symbol — javac says "no suitable
+                // method found for requireNonNull(<null>,<null>,<null>)" and
+                // this said "cannot find symbol" about a method every program
+                // uses. Only a name it does not have is the other one.
+                if OBJECTS_METHOD_NAMES.contains(&method) {
+                    self.no_suitable_library_method("Objects", method, args, span);
+                    return None;
+                }
+                let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
                 let at = self.member_span(span);
                 self.error(
                     at,
@@ -30144,7 +30180,7 @@ impl BodyGen<'_> {
         // members to miss. javac says the receiver cannot be dereferenced,
         // which is the sentence a student meets when a variable obscures a
         // package name (`int java = 3; java.lang.Math.abs(-4)`).
-        if !object_ty.is_reference() && object_ty != JType::Error {
+        if (!object_ty.is_reference() || object_ty == JType::Null) && object_ty != JType::Error {
             self.error(
                 span,
                 format!("{} cannot be dereferenced", object_ty.describe(self.table)),

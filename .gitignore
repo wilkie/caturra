@@ -9,6 +9,8 @@
 node_modules/
 dist/
 coverage/
+# …but scripts/coverage/ is source: the JDK-11 surface measurement.
+!/scripts/coverage/
 .eslintcache
 
 # Playwright

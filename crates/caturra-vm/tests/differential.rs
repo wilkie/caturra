@@ -43961,3 +43961,67 @@ public class ComparatorRef {
 }
 "#
 );
+
+// Found by the JDK-11 coverage measurement (`scripts/coverage/measure.py`),
+// which calls every modelled method with the wrong arguments and reads what
+// caturra says: a name `Objects` HAS, called with arguments no overload takes,
+// was reported as a missing symbol. `Objects` is the one library class whose
+// statics are matched by SHAPE rather than by a table, so its fall-through arm
+// had no way to tell a wrong call from an absent one.
+differential_wording!(
+    reject_a_known_objects_method_with_the_wrong_arguments,
+    "ObjectsArity",
+    r"
+import java.util.Objects;
+
+public class ObjectsArity {
+    public static void main(String[] args) {
+        Objects.requireNonNull(null, null, null);
+    }
+}
+"
+);
+
+// The null TYPE is `<null>`, in angle brackets, wherever javac names it — as
+// an argument type, as the source of an incompatible assignment, and as a
+// receiver. Written bare it read as the literal rather than as its type.
+differential_wording!(
+    reject_assigning_the_null_literal_to_an_int,
+    "NullToInt",
+    r"
+public class NullToInt {
+    public static void main(String[] args) {
+        int n = null;
+        System.out.println(n);
+    }
+}
+"
+);
+
+// And a member ON the null literal is not a missing symbol: there are no
+// members to miss, so javac blames the receiver.
+differential_wording!(
+    reject_calling_a_method_on_the_null_literal,
+    "NullReceiver",
+    r"
+public class NullReceiver {
+    public static void main(String[] args) {
+        System.out.println(null.toString());
+    }
+}
+"
+);
+
+// A FIELD on the null literal takes the same sentence, which is the half that
+// was reported as a missing field.
+differential_wording!(
+    reject_reading_a_field_on_the_null_literal,
+    "NullField",
+    r"
+public class NullField {
+    public static void main(String[] args) {
+        System.out.println(null.length);
+    }
+}
+"
+);
