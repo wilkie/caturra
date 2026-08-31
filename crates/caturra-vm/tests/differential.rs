@@ -43371,3 +43371,59 @@ differential_reject!(
     "RejectPinnedVar",
     "import java.util.*;\npublic class RejectPinnedVar {\n  static <T> T pick(List<T> l) { return l.get(0); }\n  static String r() { List<Integer> n = new ArrayList<>(); n.add(3); return pick(n); }\n}"
 );
+
+// A for-each is a target context too. The source's element is an erased type
+// VARIABLE when a generic factory produced it, and the loop variable's
+// declared type is what javac infers there — `for (String s : <T>empty())` is
+// a loop over strings, and was "Object cannot be converted to String" about a
+// source whose element the program had just named. `Collections.emptyList()`
+// was worse: it typed as `null`, assignable to any list and walkable as none.
+differential_test!(
+    a_for_each_over_a_generic_factory,
+    "ForEachFactory",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public class ForEachFactory {
+    static <T> List<T> empty() { return new ArrayList<>(); }
+
+    static <T> List<T> of(T one) {
+        List<T> made = new ArrayList<>();
+        made.add(one);
+        return made;
+    }
+
+    public static void main(String[] args) {
+        for (String s : ForEachFactory.<String>empty()) {
+            System.out.println(s.length());
+        }
+        for (Object o : Collections.emptyList()) {
+            System.out.println(o);
+        }
+        for (String s : Collections.<String>emptyList()) {
+            System.out.println(s.length());
+        }
+        // A for-each is NOT a poly context: javac types the source on its
+        // own, so the witness above is required and `for (String s : empty())`
+        // is an error in both engines — pinned separately.
+        // …and one that is not empty, so the element is really read.
+        for (String s : of("ab")) {
+            System.out.println(s.length());
+        }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// The other half of the rule: a for-each is NOT a poly context, so a generic
+// factory with no witness infers `Object` and the loop variable cannot be a
+// String. Both engines refuse it, which is what keeps the arm above honest —
+// it reads the WITNESS, not the loop variable's declared type.
+differential_reject!(
+    reject_a_for_each_over_an_unwitnessed_factory,
+    "RejectForEachFactory",
+    "import java.util.*;\npublic class RejectForEachFactory {\n  static <T> List<T> empty() { return new ArrayList<>(); }\n  static void r() { for (String s : empty()) { System.out.println(s); } }\n}"
+);

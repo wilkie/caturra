@@ -24809,12 +24809,32 @@ impl BodyGen<'_> {
         // has no iterators, so each exposes a positional accessor instead.
         let indexed = match iterable_ty {
             JType::List { elem, .. } | JType::Stack(elem) | JType::LinkedList { elem, .. } => {
+                // An erased type VARIABLE as the element, with an explicit
+                // WITNESS at the call that says what it is:
+                // `for (String s : Collections.<String>emptyList())`. A
+                // for-each is not a poly context — javac types the source on
+                // its own, which is why the witness is REQUIRED there and why
+                // the same loop over a bare `empty()` is an error in both
+                // engines. Without this the witness was dropped and the
+                // element stayed `Object`.
+                if matches!(
+                    elem,
+                    ElemType::Wildcard {
+                        bound: WildcardBound::TypeVar(_),
+                        ..
+                    }
+                ) && let Expr::Call { type_args, .. } = iterable
+                    && let [witness] = type_args.as_slice()
+                    && let Some(pinned) = self.table.resolve_type(witness)
+                {
+                    Some(("__get", pinned))
+                }
                 // A WILDCARD element (`List<?>`) resolves to `Object`, but the
                 // list may store unboxed primitives, so the fetch must BOX (the
                 // unboxed `get` would leave an `int` where the `Object` loop
                 // variable needs a reference — a VerifyError). A concrete
                 // element uses the plain `get` and boxes on assignment if needed.
-                if matches!(elem, ElemType::Wildcard { .. }) {
+                else if matches!(elem, ElemType::Wildcard { .. }) {
                     Some(("__get", boxed_or_nested(Some(elem), self.table)))
                 } else {
                     Some(("get", elem_value_type(elem, self.table)))
@@ -26089,7 +26109,18 @@ impl BodyGen<'_> {
                 "()Ljava/util/ArrayList;",
             );
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
-            return Some(Some(JType::Null));
+            // A list whose element is an erased type VARIABLE: assignable to
+            // any list, as `null` was, and — unlike `null` — a thing a
+            // for-each can walk. `for (Object o : Collections.emptyList())`
+            // was "for-each not applicable to expression type", for a list.
+            let elem = ElemType::Wildcard {
+                read: self.table.object_id,
+                bound: WildcardBound::TypeVar(self.table.object_id),
+            };
+            return Some(Some(JType::List {
+                elem,
+                face: CollFace::Iface,
+            }));
         }
         // `reverseOrder()` / `reverseOrder(cmp)` build a `Comparator` (a reversed
         // one), the same value `Comparator.reverseOrder()`/`reversed()` produce.

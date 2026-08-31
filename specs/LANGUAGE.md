@@ -11315,3 +11315,17 @@ two for a teaching product.
 
 Pinned by `a_generic_factory_takes_its_target_type` and
 `reject_a_pinned_type_variable_used_as_another`.
+
+**A for-each is the one context that is NOT a target.** javac types the source
+of a for-each on its own, so `for (String s : empty())` is an error — the
+factory infers `List<Object>` with nothing to infer from — and the loop is
+written `for (String s : Type.<String>empty())` instead. caturra dropped that
+witness and left the element `Object`, so the form javac requires was the one
+it refused. The witness is read now, and the form javac refuses is still
+refused, which is what keeps the two apart.
+
+`Collections.emptyList()` was a special case of the same thing, one step
+worse: it typed as `null` — assignable to any list, as it should be, and
+walkable as none, so `for (Object o : Collections.emptyList())` was "for-each
+not applicable to expression type" about a list. It is a list whose element is
+an erased type variable now, which is both.
