@@ -7250,7 +7250,27 @@ impl<'run> Interpreter<'run> {
                 )));
             }
             ("removeIf", _, [JValue::Ref(Some(predicate))]) => {
-                let removed = self.list_remove_if(receiver, *predicate)?;
+                // Which lists OVERRIDE `removeIf` with a two-pass scan, and
+                // which inherit `Collection.removeIf` — an iterator walk that
+                // removes each match as it finds it. `ArrayList` and `Vector`
+                // override it; `ArrayDeque` does too (JDK 11 added bulk
+                // removal to it); a `LinkedList` does not. The difference
+                // shows when the predicate THROWS: the overriders are
+                // untouched, and the inheritor has already lost the earlier
+                // matches.
+                let two_pass = matches!(
+                    self.heap.get(receiver),
+                    Some(
+                        crate::value::HeapObject::ArrayList(_)
+                            | crate::value::HeapObject::Stack(_)
+                            | crate::value::HeapObject::ArrayDeque(_)
+                    )
+                );
+                let removed = if two_pass {
+                    self.list_remove_if(receiver, *predicate)?
+                } else {
+                    self.list_remove_if_incrementally(receiver, *predicate)?
+                };
                 return Ok(Answered::Value(JValue::Int(i32::from(removed))));
             }
             ("replaceAll", _, [JValue::Ref(Some(op))]) => {
@@ -8432,37 +8452,38 @@ impl<'run> Interpreter<'run> {
                 "java.lang.NullPointerException",
             )));
         }
-        let mut kept = Vec::new();
-        let mut removed = Vec::new();
+        // Removed AS THE PREDICATE SAYS SO, one element at a time. A set has
+        // no `removeIf` of its own: it inherits `Collection.removeIf`, which
+        // walks an iterator and calls `remove()` on each match — so a
+        // predicate that throws half way leaves the earlier matches GONE.
+        // (`ArrayList` is the one that overrides it with a two-pass scan, and
+        // is the reason the two read differently a few hundred lines apart.)
+        let mut removed_any = false;
         for element in self.collection_elements(receiver) {
-            if self.call_test(predicate, element)? {
-                removed.push(element);
-            } else {
-                kept.push(element);
+            if !self.call_test(predicate, element)? {
+                continue;
             }
-        }
-        if removed.is_empty() {
-            return Ok(false);
-        }
-        match self.heap.get(receiver) {
-            // The kept elements are already in sorted order, so write them back.
-            Some(HeapObject::TreeSet { .. }) => {
-                if let Some(HeapObject::TreeSet { values, .. }) = self.heap.get_mut(receiver) {
-                    *values = kept;
-                }
-            }
-            // Re-find and remove each match (the map re-searches by key each
-            // time, so shifting positions are handled).
-            Some(HeapObject::HashSet(_)) => {
-                for element in removed {
-                    if let Some(at) = self.map_find(receiver, element)? {
-                        self.map_remove_at(receiver, at);
+            match self.heap.get(receiver) {
+                Some(HeapObject::TreeSet { .. }) => {
+                    if let Some(HeapObject::TreeSet { values, .. }) = self.heap.get_mut(receiver)
+                        && let Some(at) = values.iter().position(|held| *held == element)
+                    {
+                        values.remove(at);
+                        removed_any = true;
                     }
                 }
+                // Re-found by value each time, so shifting positions are
+                // handled.
+                Some(HeapObject::HashSet(_)) => {
+                    if let Some(at) = self.map_find(receiver, element)? {
+                        self.map_remove_at(receiver, at);
+                        removed_any = true;
+                    }
+                }
+                _ => return Ok(removed_any),
             }
-            _ => return Ok(false),
         }
-        Ok(true)
+        Ok(removed_any)
     }
 
     fn set_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
@@ -15957,6 +15978,37 @@ impl<'run> Interpreter<'run> {
             UserDispatch::Value(value) => value,
         };
         Ok(matches!(result, Some(JValue::Int(1))))
+    }
+
+    /// `Collection.removeIf`'s default: walk an iterator and remove each match
+    /// as it is found, so a predicate that throws leaves the earlier matches
+    /// gone. Every list but `ArrayList` inherits it.
+    fn list_remove_if_incrementally(
+        &mut self,
+        receiver: HeapRef,
+        predicate: HeapRef,
+    ) -> Result<bool, VmError> {
+        if !matches!(
+            self.heap.get(predicate),
+            Some(crate::value::HeapObject::Instance { .. })
+        ) {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
+        let mut removed_any = false;
+        for element in self.list_items(receiver) {
+            if !self.call_test(predicate, element)? {
+                continue;
+            }
+            if let Some(values) = self.heap.list_values_mut(receiver)
+                && let Some(at) = values.iter().position(|held| *held == element)
+            {
+                values.remove(at);
+                removed_any = true;
+            }
+        }
+        Ok(removed_any)
     }
 
     fn list_remove_if(&mut self, receiver: HeapRef, predicate: HeapRef) -> Result<bool, VmError> {

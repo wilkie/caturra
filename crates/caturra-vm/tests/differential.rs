@@ -43824,3 +43824,59 @@ public class ReplaceAllAdds {
 }
 "#
 );
+
+// `removeIf` is TWO methods wearing one name, and which one a collection has
+// decides what a throwing predicate leaves behind. `ArrayList`, `Vector` and —
+// since JDK 11 — `ArrayDeque` override it with a two-pass scan, so nothing is
+// removed unless the whole scan finishes. Everything else inherits
+// `Collection.removeIf`, which walks an iterator and removes each match as it
+// finds it, so the earlier matches are already gone. caturra had every
+// collection on the two-pass side.
+differential_test!(
+    which_remove_if_a_collection_has,
+    "RemoveIfKinds",
+    r#"
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+
+public class RemoveIfKinds {
+    static class Boom extends RuntimeException {
+        Boom(String message) { super(message); }
+    }
+
+    static void sweep(String what, Collection<String> c) {
+        try {
+            c.removeIf(x -> {
+                if (x.equals("c")) throw new Boom("x");
+                return true;
+            });
+        } catch (Boom e) {
+            System.out.println(what + " caught");
+        }
+        System.out.println(what + " " + c);
+    }
+
+    public static void main(String[] args) {
+        List<String> four = List.of("a", "b", "c", "d");
+        sweep("arraylist", new ArrayList<>(four));
+        sweep("linkedlist", new LinkedList<>(four));
+        sweep("arraydeque", new ArrayDeque<>(four));
+        sweep("linkedhashset", new LinkedHashSet<>(four));
+        sweep("hashset", new HashSet<>(four));
+        sweep("treeset", new TreeSet<>(four));
+
+        // …and with no exception at all, every one of them removes the lot.
+        Set<String> all = new LinkedHashSet<>(four);
+        all.removeIf(x -> true);
+        System.out.println(all + " " + all.isEmpty());
+    }
+}
+"#
+);

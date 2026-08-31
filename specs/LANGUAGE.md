@@ -11484,3 +11484,15 @@ for each.
 
 Pinned by `what_a_list_holds_after_a_callback_threw` and
 `a_replace_all_that_adds_stops_at_once`.
+
+**`removeIf` is two methods wearing one name**, and the same probe says which
+a collection has. `ArrayList`, `Vector` and — since JDK 11 — `ArrayDeque`
+override it with a two-pass scan, so a predicate that throws leaves the
+collection untouched. Everything else — `LinkedList`, `HashSet`,
+`LinkedHashSet`, `TreeSet` — inherits `Collection.removeIf`, which walks an
+iterator and removes each match as it finds it, so the earlier matches are
+already gone. caturra had every collection on the two-pass side, which was
+right for three of them by accident and wrong for four.
+
+The two now read differently a few hundred lines apart, and each says why.
+Pinned by `which_remove_if_a_collection_has`, over six collection kinds.
