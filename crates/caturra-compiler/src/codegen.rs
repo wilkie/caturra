@@ -15948,6 +15948,33 @@ fn ambiguous_message(method: &str, candidates: &[String]) -> String {
     }
 }
 
+/// The message, and WHICH argument it blames — javac points its caret at the
+/// argument whose type is wrong, not at the call. The two answers come from
+/// one walk so they cannot disagree.
+fn inapplicable_report(
+    method: &str,
+    class_description: &str,
+    candidates: &[Vec<JType>],
+    args: &[JType],
+    table: &MethodTable,
+) -> (String, Option<usize>) {
+    let same_arity: Vec<&Vec<JType>> = candidates
+        .iter()
+        .filter(|params| params.len() == args.len())
+        .collect();
+    let blamed = if let [only] = same_arity.as_slice() {
+        only.iter()
+            .zip(args)
+            .position(|(want, actual)| *want != *actual)
+    } else {
+        None
+    };
+    (
+        inapplicable_message(method, class_description, candidates, args, table),
+        blamed,
+    )
+}
+
 /// javac's wording for a call that matched no method, given every candidate's
 /// parameter list. The rule is the one javac's default (`-Xdiags:compact`)
 /// diagnostics use, and it is worth matching because it names the actual
@@ -23320,9 +23347,13 @@ impl BodyGen<'_> {
                     );
                     return None;
                 }
-                self.error(
+                self.inapplicable_error(
+                    method,
+                    &described,
+                    &candidates,
+                    &arg_types,
+                    args,
                     span,
-                    inapplicable_message(method, &described, &candidates, &arg_types, self.table),
                 );
             } else if method == "toString" && !renders_as_text(receiver_ty) {
                 // Every object has `toString`, so "cannot find symbol" is a
@@ -24252,15 +24283,13 @@ impl BodyGen<'_> {
                 // these arguments — and javac lists every overload with the
                 // reason it does not apply, which for a library call is the
                 // only place the reader learns what it DOES take.
-                self.error(
+                self.inapplicable_error(
+                    method,
+                    &format!("class {class}"),
+                    &builtin_overloads(methods, method, self.table),
+                    &arg_types,
+                    args,
                     span,
-                    inapplicable_message(
-                        method,
-                        &format!("class {class}"),
-                        &builtin_overloads(methods, method, self.table),
-                        &arg_types,
-                        self.table,
-                    ),
                 );
             } else {
                 self.error(
@@ -24427,9 +24456,13 @@ impl BodyGen<'_> {
             }
             Resolution::NoneApplicable(candidates) => {
                 let described = format!("class {class_name}");
-                self.error(
+                self.inapplicable_error(
+                    method,
+                    &described,
+                    &candidates,
+                    &arg_types,
+                    args,
                     span,
-                    inapplicable_message(method, &described, &candidates, &arg_types, self.table),
                 );
                 return None;
             }
@@ -25974,9 +26007,13 @@ impl BodyGen<'_> {
             }
             Resolution::NoneApplicable(candidates) => {
                 let described = format!("class {class}");
-                self.error(
+                self.inapplicable_error(
+                    method,
+                    &described,
+                    &candidates,
+                    &arg_types,
+                    args,
                     span,
-                    inapplicable_message(method, &described, &candidates, &arg_types, self.table),
                 );
                 return None;
             }
@@ -27573,6 +27610,31 @@ impl BodyGen<'_> {
 
     /// javac's wording when no overload of a bundled `java.util` helper takes
     /// these arguments.
+    /// Report an inapplicable call where javac points: at the ARGUMENT whose
+    /// type is wrong when exactly one candidate has the right arity, and at
+    /// the call itself otherwise.
+    fn inapplicable_error(
+        &mut self,
+        method: &str,
+        class_description: &str,
+        candidates: &[Vec<JType>],
+        arg_types: &[JType],
+        args: &[Expr],
+        span: SourceSpan,
+    ) {
+        let (message, blamed) = inapplicable_report(
+            method,
+            class_description,
+            candidates,
+            arg_types,
+            self.table,
+        );
+        let at = blamed
+            .and_then(|index| args.get(index))
+            .map_or(span, Expr::span);
+        self.error(at, message);
+    }
+
     fn no_suitable_library_method(
         &mut self,
         class: &str,
@@ -27599,15 +27661,13 @@ impl BodyGen<'_> {
             );
             return;
         }
-        self.error(
+        self.inapplicable_error(
+            method,
+            &format!("class {class}"),
+            &candidates,
+            &arg_types,
+            args,
             span,
-            inapplicable_message(
-                method,
-                &format!("class {class}"),
-                &candidates,
-                &arg_types,
-                self.table,
-            ),
         );
     }
 

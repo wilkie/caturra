@@ -11383,3 +11383,32 @@ Pinned by `reject_a_captured_local_points_at_its_use`,
 `reject_a_captured_local_in_a_local_class`,
 `reject_recursive_constructor_invocation` (now a self-cycle, where the
 position is not in doubt) and `reject_a_cycle_through_two_constructors`.
+
+### Which token a diagnostic sits under (2026-08-31)
+
+The line agrees; the COLUMN is a different question, and it had never been
+asked. javac has a convention per diagnostic for which token its caret sits
+under, and `diaglist.py --columns` counts how often caturra matches: 107 of
+202 on the reject corpus.
+
+One of those conventions is worth matching and is now matched: **javac blames
+the ARGUMENT**. `take(numbers)` where the parameter is a `List<String>` is
+reported under `numbers`, and `list.add(new Node<Integer>(6))` under the
+`new` — where caturra reported the same message at the start of the
+statement, so an editor underlined the whole line. The message and the
+argument it blames come out of one walk now, so the two cannot disagree.
+
+The rest are a long tail of javac's own choices — the dot of a missing member,
+the `<` of a wrong type-argument list, the second declaration of a duplicate
+parameter — and one of them is a trap worth writing down: a first attempt at
+the DOT rule read the receiver's end from a field on the emitter, which an
+INNER member access in the same expression had already overwritten. It moved
+`IntStream.of(1).asDoubleStream().asDoubleStream()` from one wrong column to
+another. A position that is confidently wrong is worse than one that is
+plainly the statement's, so it was reverted; doing it properly means the error
+site holding the receiver, not the emitter holding a field.
+
+The count is in the tool to be moved, not to gate: it is reported by
+`--columns` and is not part of the comparison.
+
+Pinned by `reject_an_argument_points_at_the_argument`.

@@ -35,12 +35,15 @@ fn main() {
         // The FIRST line only: javac's continuation lines (`symbol:`,
         // `required:`) are indented, and this list is compared with the one
         // `javac` prints on its `error:` lines.
-        // The LINE too: javac prints one on every error, and nothing had ever
-        // compared it — a message can be right and point at the wrong place,
-        // which is what an editor underlines.
-        let line = diagnostic.span.map_or(0, |span| span.start.line);
+        // The POSITION too: javac prints a line on every error and a caret
+        // under a column, and nothing had ever compared either — a message can
+        // be right and point at the wrong place, which is what an editor
+        // underlines.
+        let (line, column) = diagnostic
+            .span
+            .map_or((0, 0), |span| (span.start.line, span.start.column));
         println!(
-            "{:?}@{line}: {}",
+            "{:?}@{line},{column}: {}",
             diagnostic.severity,
             diagnostic.message.lines().next().unwrap_or("")
         );

@@ -43578,3 +43578,26 @@ public class CaptureLocalPoint {
 }
 "#
 );
+
+// javac points its caret at the ARGUMENT whose type is wrong, not at the call
+// that contains it — `fill(l)` is reported under the `l`. caturra reported the
+// message correctly and the position at the start of the statement, so an
+// editor underlined the wrong thing. The message and the argument it blames
+// come from one walk now, so they cannot disagree.
+differential_wording!(
+    reject_an_argument_points_at_the_argument,
+    "BlameArgument",
+    r"
+import java.util.ArrayList;
+import java.util.List;
+
+public class BlameArgument {
+    static void take(List<String> words) { }
+
+    public static void main(String[] args) {
+        List<Integer> numbers = new ArrayList<>();
+        take(numbers);
+    }
+}
+"
+);
