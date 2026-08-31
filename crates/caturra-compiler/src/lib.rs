@@ -679,16 +679,21 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // `IntUnaryOperator` and the other primitive specializations spell
             // none of the words above.
             || s.text.contains("Operator")
-            // A comparator lambda in a sorted collection's constructor
+            // A comparator in a sorted collection's constructor
             // (`new PriorityQueue<>((a, b) -> ...)`) needs `__Comparator` too,
-            // without ever naming it — trigger on the pair.
-            || (s.text.contains("->")
+            // without ever naming it — trigger on the pair. A method
+            // REFERENCE is the same comparator with no arrow in it
+            // (`new TreeMap<>(String::compareTo)`), and spelled that way the
+            // bundle was left out: the interface the desugaring targets did
+            // not exist, and the program was refused for a class it never
+            // wrote.
+            || ((s.text.contains("->") || s.text.contains("::"))
                 && (s.text.contains("TreeSet")
                     || s.text.contains("TreeMap")
                     || s.text.contains("PriorityQueue")))
             // …and so does one handed to `Collections.max`/`min`/
             // `binarySearch`, which name neither the interface nor `sort`.
-            || (s.text.contains("->")
+            || ((s.text.contains("->") || s.text.contains("::"))
                 && (s.text.contains(".max(")
                     || s.text.contains(".min(")
                     || s.text.contains(".binarySearch(")))

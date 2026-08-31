@@ -7375,6 +7375,27 @@ impl<'run> Interpreter<'run> {
                 }
                 JValue::Int(i32::from(changed))
             }
+            // `addAll(index, c)` — the INSERT form, which a list has and a
+            // collection does not. It was reaching no arm at all, so the VM
+            // ended the run with "ClassCastException: not a list" for an
+            // ordinary insert. The range check is `AbstractList`'s, which
+            // words its own message ("Index: 5, Size: 1") rather than the
+            // `Objects.checkIndex` one the accessors use.
+            ("addAll", _, [JValue::Int(index), other @ JValue::Ref(Some(_))]) => {
+                let size = self.list_items(receiver).len();
+                let at = usize::try_from(*index).unwrap_or(usize::MAX);
+                if at > size {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: Index: {index}, Size: {size}"
+                    )));
+                }
+                let incoming = self.materialized_elements(collection_argument(*other)?);
+                let changed = !incoming.is_empty();
+                if let Some(values) = self.heap.list_values_mut(receiver) {
+                    values.splice(at..at, incoming);
+                }
+                JValue::Int(i32::from(changed))
+            }
             // `AbstractCollection.containsAll` asks *this* list whether it
             // contains each of the other's elements, so the probe is theirs.
             // The other side may be ANY collection, not only a list.

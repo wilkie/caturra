@@ -3028,13 +3028,25 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             if matches!(
                 simple_base(class.as_str()),
                 "TreeSet" | "TreeMap" | "PriorityQueue"
-            ) && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
+            ) && (matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
+                || matches!(args.last(), Some(Expr::MethodRef { .. })))
                 && let Some(elem) = type_args
                     .first()
                     .cloned()
                     .or_else(|| expected.and_then(sorted_ctor_elem))
             {
                 let last = args.len() - 1;
+                // A method REFERENCE is the same comparator written shorter —
+                // `new TreeMap<>(String::compareTo)` — and was refused as "not
+                // a functional-interface position" beside the lambda that is.
+                if matches!(&args[last], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from("compare"),
+                        params: vec![elem.clone(), elem.clone()],
+                        ret: TypeRef::Int,
+                    };
+                    args[last] = method_ref_to_lambda(&args[last], &synth, ctx);
+                }
                 args[last] = build_erased_lambda(
                     &mut args[last],
                     "__Comparator",
@@ -4088,6 +4100,17 @@ fn sorted_ctor_elem(target: &TypeRef) -> Option<TypeRef> {
             | "SortedMap"
             | "NavigableMap"
             | "PriorityQueue"
+            // …and the INTERFACE faces a sorted collection is usually held by:
+            // `Map<String, Integer> m = new TreeMap<>(cmp)` is how one is
+            // written, and the target said nothing here, so the comparator
+            // lambda had no parameter types and the whole declaration was
+            // refused.
+            | "Map"
+            | "Set"
+            | "Collection"
+            | "Queue"
+            | "Deque"
+            | "List"
     )
     .then(|| args.first().cloned())
     .flatten()

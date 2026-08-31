@@ -31870,6 +31870,18 @@ impl BodyGen<'_> {
     /// `ArrayList<Number>`), which is the drift that having one copy prevents.
     fn joined_literal_elem(&mut self, args: &[Expr]) -> ElemType {
         let object_elem = ElemType::Object(self.table.object_id);
+        // `List.of()` — nothing to join, and nothing to pin its element. It is
+        // a generic factory like any other: javac infers the element from the
+        // target, so the answer is an erased type VARIABLE, which every
+        // element accepts. Answering `Object` refused `l.addAll(0, List.of())`
+        // for a `List<String>`, an empty list being added to a list of
+        // strings.
+        if args.is_empty() {
+            return ElemType::Wildcard {
+                read: self.table.object_id,
+                bound: WildcardBound::TypeVar(self.table.object_id),
+            };
+        }
         // A LONE ARRAY argument is the varargs array itself, and which one it
         // is depends on the element: a REFERENCE array spreads (`T` infers as
         // its element), a PRIMITIVE one cannot (`T` would have to be `int`), so

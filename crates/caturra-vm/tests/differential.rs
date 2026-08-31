@@ -43880,3 +43880,84 @@ public class RemoveIfKinds {
 }
 "#
 );
+
+// `list.addAll(index, collection)` — the INSERT form, which a list has and a
+// collection does not. It reached no arm at all, so an ordinary insert ended
+// the run with "ClassCastException: not a list". Its range check is
+// `AbstractList`'s, which words its own message ("Index: 5, Size: 1") rather
+// than the `Objects.checkIndex` one the accessors use.
+differential_test!(
+    inserting_a_collection_at_an_index,
+    "InsertAll",
+    r#"
+import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.List;
+
+public class InsertAll {
+    public static void main(String[] args) {
+        List<String> l = new ArrayList<>(List.of("a", "d"));
+        System.out.println(l.addAll(1, List.of("b", "c")) + " " + l);
+        System.out.println(l.addAll(0, List.of()) + " " + l);
+        System.out.println(l.addAll(l.size(), List.of("e")) + " " + l);
+
+        List<String> linked = new LinkedList<>(List.of("a", "c"));
+        linked.addAll(1, List.of("b"));
+        System.out.println(linked);
+
+        try {
+            l.addAll(99, List.of("x"));
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println(e.getMessage());
+        }
+        System.out.println(l);
+    }
+}
+"#
+);
+
+// A comparator written as a METHOD REFERENCE, for each sorted collection that
+// takes one. The bundle that provides the interface these desugar to was
+// pulled in by looking for an arrow in the source, so the same comparator
+// spelled `String::compareTo` left it out — and the program was refused for a
+// class it never wrote.
+differential_test!(
+    a_comparator_written_as_a_method_reference,
+    "ComparatorRef",
+    r#"
+import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public class ComparatorRef {
+    public static void main(String[] args) {
+        TreeSet<String> set = new TreeSet<>(String::compareTo);
+        set.add("b");
+        set.add("a");
+        System.out.println(set);
+
+        TreeMap<String, Integer> map = new TreeMap<>(String::compareTo);
+        map.put("b", 1);
+        map.put("a", 2);
+        System.out.println(map);
+
+        PriorityQueue<String> queue = new PriorityQueue<>(String::compareTo);
+        queue.add("b");
+        queue.add("a");
+        System.out.println(queue.poll());
+
+        // …and held by their INTERFACE faces, which is how they are written.
+        Map<String, Integer> byFace = new TreeMap<>((x, y) -> y.compareTo(x));
+        byFace.put("a", 1);
+        byFace.put("b", 2);
+        System.out.println(byFace);
+        Set<String> setFace = new TreeSet<>((x, y) -> y.compareTo(x));
+        setFace.add("a");
+        setFace.add("b");
+        System.out.println(setFace);
+    }
+}
+"#
+);

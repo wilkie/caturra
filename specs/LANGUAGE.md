@@ -11496,3 +11496,35 @@ right for three of them by accident and wrong for four.
 
 The two now read differently a few hundred lines apart, and each says why.
 Pinned by `which_remove_if_a_collection_has`, over six collection kinds.
+
+### The insert, and a comparator with no arrow in it (2026-08-31)
+
+Probing what a half-finished structural operation leaves behind found two
+things that never got as far as leaving anything: both were refused outright.
+
+**`list.addAll(index, collection)`** — the INSERT form, which a list has and a
+collection does not — reached no arm at all, so an ordinary insert ended the
+run with "ClassCastException: not a list". Its range check is `AbstractList`'s,
+and that class words its own message ("Index: 5, Size: 1") rather than the
+`Objects.checkIndex` one the accessors use.
+
+**A comparator written as a METHOD REFERENCE** was refused for every sorted
+collection: `new TreeMap<>(String::compareTo)` was "a lambda or method
+reference is only allowed where a functional-interface type is expected". Two
+causes, one behind the other. The constructor's comparator argument was
+target-typed only when it was written as a lambda, and — once that was fixed —
+the interface it desugars to did not exist, because the bundle that provides it
+is pulled in by looking for an ARROW in the source. A method reference has no
+arrow. It looks for `::` as well now.
+
+The same target-typing looks through a sorted collection's INTERFACE face,
+which is how one is usually written: `Map<String, Integer> m = new
+TreeMap<>(cmp)` said nothing about the comparator's parameters, so the whole
+declaration was refused.
+
+And `List.of()` with no arguments is a generic factory like any other: its
+element is an erased type VARIABLE, which the target pins. Answering `Object`
+refused `l.addAll(0, List.of())` — an empty list added to a list of strings.
+
+Pinned by `inserting_a_collection_at_an_index` and
+`a_comparator_written_as_a_method_reference`.
