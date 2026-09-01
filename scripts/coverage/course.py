@@ -18,9 +18,9 @@ meaning in a browser and no student-facing use.
 has a differential test ever run against the real library? Compiling is not
 behaving — `Pixel.getSourceImage` would have counted as covered by the first
 question the moment it existed, and only the second one proves it hands back
-the same image. This is a text mention of `name(` in the suites, which is a
-heuristic and is labelled as one: it can say a name is UNCOVERED with
-confidence, and "covered" only means some program calls it.
+the same image. This looks for `.name(` in the suites — a CALL, on a
+receiver — which is a heuristic and is labelled as one: it can say a name is
+UNCOVERED with confidence, and "covered" only means some program calls it.
 
 Needs `javac`/`java` on PATH, `vendor/sweep-classes` built
 (`scripts/sweep/build-reference.py`), and a built
@@ -179,13 +179,16 @@ SUITES = (
     "crates/caturra-vm/tests/differential_media.rs",
     "crates/caturra-vm/tests/differential_neighborhood.rs",
     "crates/caturra-vm/tests/differential_validation_orgcode.rs",
+    "crates/caturra-vm/tests/differential_theater.rs",
 )
 
-# What no stdout comparison can reach. `org.code.theater` draws: the real
-# library's output is a GIF written through an AWS content manager, and
-# caturra's is a canvas in the browser. The e2e tests drive that; a differential
-# test cannot.
-UNCOMPARABLE = ("org.code.theater.",)
+# What no comparison can reach. This was `org.code.theater` in full — the real
+# library renders a GIF and caturra draws in the browser, so there is no common
+# pixel surface — until `differential_theater.rs` compared what a Scene RECORDS
+# instead of what it renders. What is left is the playback itself: `Theater
+# .playScenes` hands the drawing to a renderer, and the two renderers are the
+# thing nobody is asking to agree.
+UNCOMPARABLE = ("org.code.theater.Theater.",)
 
 
 def semantic():
@@ -200,12 +203,16 @@ def semantic():
     for class_name in RECEIVERS:
         names = sorted({name for name, _, _ in api.get(class_name, [])})
         names = [n for n in names if (class_name, n) not in EXCLUDED]
-        if class_name.startswith(UNCOMPARABLE):
+        if any(f"{class_name}.{name}".startswith(UNCOMPARABLE) for name in names[:1]):
             skipped += len(names)
             print(f"{class_name:44} {len(names):3} names — not comparable by stdout")
             continue
-        run = [n for n in names if f"{n}(" in text]
-        missing = [n for n in names if f"{n}(" not in text]
+        # A CALL, which is written on a receiver: `scene.drawText(`. Looking
+        # for the bare name counted the STUB declarations a suite writes to
+        # stand in for a class it is not testing — `public final void
+        # playSound(…) {}` made `playSound` read as exercised.
+        run = [n for n in names if f".{n}(" in text]
+        missing = [n for n in names if f".{n}(" not in text]
         covered += len(run)
         uncovered += len(missing)
         print(f"{class_name:44} {len(run):3}/{len(names):3} run against the real library")

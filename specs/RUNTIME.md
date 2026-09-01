@@ -155,3 +155,39 @@ order its constants are in — `values()`, `ordinal()`, `valueOf()`,
 `compareTo()` — which is a differential test, not a count
 (`media_the_font_enums_are_enums`). The playground's renderer maps the two new
 ones to `serif` and to a CSS `italic bold`.
+
+## The theater, compared at last
+
+`org.code.theater` was the one part of the course library nothing compared, and
+the reason was real: the JDK library's `Theater.playScenes` renders a scene into
+a `BufferedImage` and encodes a GIF, while caturra draws in the browser. There
+is no common pixel surface — which is why `scripts/sweep/reference` stubs
+`Scene` outright, and why the coverage measurement filed all 29 theater names as
+unreachable.
+
+But a Scene RECORDS before it renders. The real one builds a
+`List<SceneAction>`; caturra's writes the same drawing to `theater.log` in its
+own vocabulary. Those two are comparable, and they are what a student's program
+actually produces — the pixels after them are the same drawing made by two
+renderers nobody is asking to agree. `differential_theater.rs` compares them
+action by action, through the REAL `org.code.theater` compiled out of the
+vendored checkout (`Scene.getActions()` is package-private, so the probe that
+reads it lives in that package).
+
+**The two record STATE differently, and that is the interesting part.** The
+real library bakes the stroke colour, fill colour and stroke width into each
+shape as it is drawn; caturra emits the state change as its own command. So the
+log is FOLDED before comparing — state applied to each shape as it goes, which
+is the reading a renderer has to take, and a divergence in it is a shape drawn
+in the wrong colour. Every shape, the four pieces of text state, the pause
+clamp, the notes and all 27 named colours agree; so does the refusal of a name
+the table does not have ("grey" is not one — a program asking for it gets
+`IllegalArgumentException: Invalid color grey` on both).
+
+Two of `Scene`'s names are recorded by both and compared by neither.
+`drawImage` and `playSound` carry a REFERENCE to pixels or samples, and the two
+libraries reference them differently: caturra's log names a buffer it handed
+the host, the real action holds the `Image`. Comparing the geometry around them
+would mean teaching the test to expand caturra's `size` into the width and
+height the real action derives — the drawing rule written down twice — so they
+are left alone and counted as not run.
