@@ -209,6 +209,13 @@ pub(crate) struct Interpreter<'run> {
     /// terminal and an intermediate op spend it. Held aside rather than in the
     /// heap object so the twelve places that build one stay unchanged.
     spent_streams: std::collections::HashSet<HeapRef>,
+    /// The streams a program asked for in PARALLEL. caturra runs on one
+    /// thread, and a JDK's `parallelStream()` is documented as being allowed
+    /// to answer a sequential stream — so the pipeline really is sequential
+    /// and this set exists for one reason: `isParallel()` must answer what a
+    /// JDK answers. Kept beside the stream rather than in it, like
+    /// `spent_streams`, so no construction site has to learn a new field.
+    parallel_streams: std::collections::HashSet<HeapRef>,
     /// The collection a stream was opened over, with its length at that moment
     /// — what makes a terminal FAIL FAST when the source is modified while it
     /// runs, as a JDK's spliterator does.
@@ -322,6 +329,7 @@ impl<'run> Interpreter<'run> {
                 .collect(),
             cursor_pending: HashMap::new(),
             spent_streams: std::collections::HashSet::new(),
+            parallel_streams: std::collections::HashSet::new(),
             stream_origins: HashMap::new(),
         }
     }
@@ -1212,6 +1220,7 @@ impl<'run> Interpreter<'run> {
         self.heap.retain_format_text(alive);
         self.cursor_pending.retain(|reference, _| alive(reference));
         self.spent_streams.retain(alive);
+        self.parallel_streams.retain(alive);
         self.stream_origins
             .retain(|stream, (origin, _)| alive(stream) && alive(origin));
     }
@@ -9894,6 +9903,13 @@ impl<'run> Interpreter<'run> {
         let result = match (method_name, args) {
             ("size", []) => JValue::Int(i32::try_from(len).unwrap_or(i32::MAX)),
             ("isEmpty", []) => JValue::Int(i32::from(len == 0)),
+            // The ordering the queue was built with, or null for the natural
+            // one — the same question a sorted SET has always answered, about
+            // the same kind of object.
+            ("comparator", []) => match self.pq_comparator(receiver) {
+                Some(comparator) => JValue::Ref(Some(comparator)),
+                None => JValue::NULL,
+            },
             // A PriorityQueue's iterator walks the HEAP ARRAY, in no
             // particular order — the JDK says exactly that, and caturra keeps
             // the array in the JDK's own sift order, so a for-each over one
@@ -10092,7 +10108,15 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<Answered, VmError> {
         use crate::value::HeapObject;
-        if method == "stream" && args.is_empty() && self.is_streamable(receiver) {
+        // `parallelStream()` builds the SAME pipeline. A JDK's own contract
+        // says so — "it is allowable for this method to return a sequential
+        // stream" — and on one thread there is nothing else it could honestly
+        // be, the reading `synchronized` already gets. Only `isParallel()`
+        // can tell, and the mark below is what makes it answer as a JDK does.
+        if matches!(method, "stream" | "parallelStream")
+            && args.is_empty()
+            && self.is_streamable(receiver)
+        {
             // An `entrySet()` streams whole ENTRIES, which `collection_elements`
             // cannot build (it does not allocate) — it hands back the keys, and
             // the pipeline's lambda got a String where it expected a
@@ -10105,6 +10129,9 @@ impl<'run> Interpreter<'run> {
                 ops: Vec::new(),
             });
             self.stream_origins.insert(stream, (receiver, length));
+            if method == "parallelStream" {
+                self.parallel_streams.insert(stream);
+            }
             return Ok(Answered::Value(JValue::Ref(Some(stream))));
         }
         if matches!(self.heap.get(receiver), Some(HeapObject::Stream { .. })) {
@@ -10215,6 +10242,14 @@ impl<'run> Interpreter<'run> {
         if let (Some(origin), JValue::Ref(Some(derived))) = (self.stream_origins.get(&from), to) {
             let origin = *origin;
             self.stream_origins.insert(derived, origin);
+        }
+        // An op on a parallel stream answers a parallel one — `list
+        // .parallelStream().map(f).isParallel()` is true in a JDK, and the
+        // flag has to travel the pipeline for that to hold.
+        if let JValue::Ref(Some(derived)) = to
+            && self.parallel_streams.contains(&from)
+        {
+            self.parallel_streams.insert(derived);
         }
         to
     }
@@ -10626,6 +10661,26 @@ impl<'run> Interpreter<'run> {
             Some(crate::value::HeapObject::Optional { value, .. }) => *value,
             _ => return Ok(Answered::No),
         };
+        // A null callback throws at the call here too, for the same reason it
+        // does on a stream: the JDK's `requireNonNull` runs before the
+        // Optional is even asked whether it holds anything, so an EMPTY
+        // Optional given a null mapper throws rather than answering empty.
+        if matches!(
+            method,
+            "map"
+                | "flatMap"
+                | "filter"
+                | "ifPresent"
+                | "ifPresentOrElse"
+                | "or"
+                | "orElseGet"
+                | "orElseThrow"
+        ) && args.contains(&JValue::NULL)
+        {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
         let result = match (method, args) {
             ("isPresent", []) => JValue::Int(i32::from(value.is_some())),
             ("isEmpty", []) => JValue::Int(i32::from(value.is_none())),
@@ -11196,6 +11251,32 @@ impl<'run> Interpreter<'run> {
 
     /// `supplier.get()` (a zero-argument lambda), unboxing a primitive result —
     /// backs `Optional.orElseGet`.
+    /// `consumer.accept(a, b)` — a `BiConsumer`, which answers nothing. The
+    /// `apply` twin beside it is a `BiFunction`, and calling that name on a
+    /// consumer finds no such method.
+    fn call_accept_two(&mut self, target: HeapRef, a: JValue, b: JValue) -> Result<(), VmError> {
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(target)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        match self.user_virtual_dispatch(
+            target,
+            &class_name,
+            "accept",
+            "(Ljava/lang/Object;Ljava/lang/Object;)V",
+            &[a, b],
+        )? {
+            UserDispatch::Call(frame) => {
+                self.run_nested(frame)?;
+            }
+            UserDispatch::Value(_) => {}
+        }
+        Ok(())
+    }
+
     /// `runnable.run()` — the one functional shape that takes nothing and
     /// answers nothing (`Optional.ifPresentOrElse`'s empty arm).
     fn call_run(&mut self, runnable: HeapRef) -> Result<(), VmError> {
@@ -11372,6 +11453,76 @@ impl<'run> Interpreter<'run> {
             return Err(VmError::UncaughtException(String::from(
                 "java.lang.IllegalStateException: stream has already been operated upon or closed",
             )));
+        }
+        // A null CALLBACK is a null pointer at the call. Every op below
+        // matches `Ref(Some(f))` and a null simply missed the pattern, so the
+        // VM reported "not yet implemented" about a method it implements —
+        // for `map`, `filter`, `collect` and every other op a JDK guards with
+        // `Objects.requireNonNull` before it builds anything.
+        if matches!(
+            method,
+            "map"
+                | "mapToInt"
+                | "mapToObj"
+                | "mapToLong"
+                | "mapToDouble"
+                | "flatMap"
+                | "flatMapToInt"
+                | "flatMapToLong"
+                | "flatMapToDouble"
+                | "filter"
+                | "takeWhile"
+                | "dropWhile"
+                | "peek"
+                | "forEach"
+                | "forEachOrdered"
+                | "collect"
+                | "anyMatch"
+                | "allMatch"
+                | "noneMatch"
+                | "reduce"
+                | "sorted"
+                | "max"
+                | "min"
+                | "toArray"
+        ) && args.contains(&JValue::NULL)
+        {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
+        // The parallel toggles. Every pipeline here runs on one thread, so
+        // these change nothing about WHAT the stream answers — they carry the
+        // flag `isParallel()` reports, and hand back a fresh stream so the
+        // receiver's single-use rule is not spent by asking.
+        if matches!(method, "parallel" | "sequential" | "unordered") && args.is_empty() {
+            self.spent_streams.remove(&receiver);
+            let (source, ops) = self.stream_pipeline(receiver);
+            let derived = self
+                .heap
+                .alloc(crate::value::HeapObject::Stream { source, ops });
+            let was_parallel = self.parallel_streams.contains(&receiver);
+            let now_parallel = match method {
+                "parallel" => true,
+                "sequential" => false,
+                _ => was_parallel,
+            };
+            self.spent_streams.insert(receiver);
+            let value = self.inherit_stream_origin(receiver, JValue::Ref(Some(derived)));
+            if now_parallel {
+                self.parallel_streams.insert(derived);
+            } else {
+                self.parallel_streams.remove(&derived);
+            }
+            return Ok(Answered::Value(value));
+        }
+        if method == "isParallel" && args.is_empty() {
+            // Asking does not CONSUME the stream: `s.isParallel()` and then
+            // `s.count()` is two calls on one pipeline, which a JDK allows
+            // because only a terminal or an intermediate op spends it.
+            self.spent_streams.remove(&receiver);
+            let parallel = self.parallel_streams.contains(&receiver);
+            return Ok(Answered::Value(JValue::Int(i32::from(parallel))));
         }
         // INTERMEDIATE operations just append to the pending-op list; nothing
         // is evaluated until a terminal pulls. `sorted` is the exception — it
@@ -11859,6 +12010,27 @@ impl<'run> Interpreter<'run> {
             }
             ("collect", [JValue::Ref(Some(collector))]) => {
                 self.stream_collect(elements, *collector)?
+            }
+            // `collect(supplier, accumulator, combiner)` — the form with no
+            // `Collector` in it. The supplier makes one container and the
+            // accumulator is handed it with each element in turn; the combiner
+            // merges two containers, which a sequential run never has, so it
+            // is evaluated and never called — exactly what a JDK does on one
+            // thread.
+            (
+                "collect",
+                [
+                    JValue::Ref(Some(supplier)),
+                    JValue::Ref(Some(accumulator)),
+                    JValue::Ref(Some(_combiner)),
+                ],
+            ) => {
+                let (supplier, accumulator) = (*supplier, *accumulator);
+                let container = self.call_apply_supplier(supplier)?;
+                for element in elements {
+                    self.call_accept_two(accumulator, container, element)?;
+                }
+                container
             }
             // A stream overrides none of `Object`'s methods, so `equals` is
             // identity — and must not CONSUME the pipeline, the same reason
@@ -13361,6 +13533,19 @@ impl<'run> Interpreter<'run> {
             // The two INFINITE sources: their elements do not exist until a
             // terminal pulls them, so they are recorded as the rule for making
             // the next one rather than as a vector.
+            // A null RULE is a null pointer at the call, not later: the JDK's
+            // `Objects.requireNonNull` runs before the stream is built, so
+            // `Stream.generate(null)` throws where it is written. Left out,
+            // the pattern below simply did not match and the VM reported an
+            // unimplemented member about a method it implements.
+            if matches!(
+                (method_name, args),
+                ("generate", [JValue::Ref(None)]) | ("iterate", [_, JValue::Ref(None)])
+            ) {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
             let generated = match (method_name, args) {
                 ("iterate", [seed, JValue::Ref(Some(step))]) => {
                     Some(crate::value::StreamSource::Iterate {

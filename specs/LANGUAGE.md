@@ -11542,7 +11542,7 @@ program can name — 154 in core `java.*` (48 `java.util`, 43
 `java.util.function`, 33 `java.lang`, 8 `java.io`, 6 `java.util.stream`, …),
 the rest Swing/AWT and the bundled `org.code` course library.
 
-**Method names: 1020 of 1213 = 84.1%, over the 45 core classes whose receiver
+**Method names: 1030 of 1213 = 84.9%, over the 45 core classes whose receiver
 can be written as one expression.** The denominator comes from a real JDK by
 reflection (`ApiList.java`), not from a checked-in list, so running the script
 on a different JDK moves the number. For each overload it writes a call with
@@ -11552,7 +11552,10 @@ diagnostic: "cannot find symbol" means the name is unknown, and anything else
 these arguments are wrong.
 
 This is NAME-level, deliberately: it says `substring` exists, not that both of
-its overloads do. It is the coarsest question with a checkable answer.
+its overloads do. It is the coarsest question with a checkable answer. A probe
+that CRASHES the engine is a measurement failure rather than a result — a
+panicking compiler prints no diagnostics, which reads exactly like a clean
+compile, and every method in that probe would count as known.
 Semantics are measured separately and far more strictly — by the 1098
 differential pins and the 2698-level corpus sweep, which compare what a
 program PRINTS against a real JDK.
@@ -11719,3 +11722,65 @@ Pinned by `the_collectors_that_wrap_another_collector`,
 `the_wrapping_collectors_under_a_grouping`,
 `each_primitive_stream_has_its_own_summary` and
 `an_optionals_two_armed_forms`.
+
+## The methods that were missing only on some receivers
+
+Reading the coverage misses down the collection classes showed one shape
+repeated: a method that every `Collection` declares, present on the list and
+set tables and on no other. `deque.removeAll(...)` was "cannot find symbol"
+while the identical call on an `ArrayList` worked — and the VM had been
+answering all three bulk operations from the shared element vector the whole
+time, so nothing but the table was missing. `containsAll`/`removeAll`/
+`retainAll` are on every collection now; `sort` and `replaceAll` are on
+`LinkedList` (it is a `List`); `comparator()` is on `PriorityQueue` (the
+question a sorted set has always answered, about the same kind of object); and
+`IntStream` has the `iterator`/`forEachOrdered`/`flatMap` its object twin
+declared. A primitive stream's `iterator()` is a `PrimitiveIterator.OfInt`,
+which IS an `Iterator<Integer>` — its `next()` hands back a reference, so the
+element boxes.
+
+**`parallelStream()` runs now, rather than being refused.** It was in the
+honest-refusal table with the reason "caturra runs on one thread, so a parallel
+stream would only be a sequential one under another name". That reason is
+sound and the conclusion was wrong: a JDK's own contract for
+`Collection.parallelStream()` says "it is allowable for this method to return a
+sequential stream", so a sequential answer is not an approximation of the
+method — it IS one of its permitted answers, the same reading `synchronized`
+already gets here. `parallel()`, `sequential()`, `unordered()` and
+`isParallel()` come with it. The pipeline really is sequential; the only thing
+a program can see is `isParallel()`, which answers what a JDK answers because
+the flag is tracked beside the stream and travels its ops.
+
+**`collect(supplier, accumulator, combiner)`** — the form that gathers with no
+`Collector` at all — is on both streams. Its combiner is evaluated and never
+called, since one thread never splits the work. Typing it needed the CONTAINER,
+which a constructor reference states outright: `ArrayList::add` is an unbound
+reference on that very type, so an `Object` container makes the reference
+impossible rather than merely imprecise.
+
+**A null callback throws where it is written.** Every stream op matched
+`Ref(Some(f))` and a null simply missed the pattern, so the VM reported "not
+yet implemented" about a method it implements. A JDK guards each one with
+`Objects.requireNonNull` before it builds anything — including on an EMPTY
+`Optional`, which throws for a null mapper rather than answering empty.
+`sort(null)` is the exception that proves it: that one means the natural
+ordering.
+
+**And the compiler PANICKED on `Stream.generate(null)`.** `build_erased_lambda`
+ends in `unreachable!("guarded by caller")`, and the `generate` arm did not
+guard. The panic is the worst part of this entry: it took every other
+diagnostic in the file with it, so a program with that call and two ordinary
+mistakes reported NOTHING — not a wrong message, no message. An argument that
+is not a lambda is already a value (a variable, a field, `null`); there is
+nothing to erase, only to walk, so that is what the fall-through does now.
+
+**The measurement was reading its own crash as a pass.** A panicking probe
+prints no diagnostics, which is exactly what a clean compile prints, so every
+method in it counted as known: `Stream` scored 44/44 while the same calls one
+at a time were "cannot find symbol". `scripts/coverage/measure.py` treats a
+non-zero exit as a measurement failure now, and the honest figure — which is
+lower than what was written here before — is **1030 of 1213 = 84.9%**.
+
+Pinned by `the_bulk_operations_every_collection_declares`,
+`a_parallel_stream_is_a_stream_here`, `the_stream_ops_only_one_stream_had` and
+`a_null_callback_throws_where_it_is_written`.

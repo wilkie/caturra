@@ -9354,6 +9354,11 @@ enum BRet {
     /// `Stream<E>` of the receiver's element BOXED — `IntStream.boxed()` is a
     /// `Stream<Integer>`, a `DoubleStream`'s a `Stream<Double>`.
     StreamBoxedElem,
+    /// `Iterator<E>` of the receiver's element BOXED. An `IntStream`'s
+    /// `iterator()` is a `PrimitiveIterator.OfInt`, which IS an
+    /// `Iterator<Integer>` — its `next()` hands back a reference, so an
+    /// `Iterator<int>` is not a type the assignment beside it accepts.
+    IteratorBoxedElem,
     /// `int[]` — `IntStream.toArray()`.
     IntArray,
     /// `double[]` — the samples of a preloaded sound.
@@ -10076,7 +10081,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Class", "getModifiers", "caturra does not model a class's access flags"),
     ("Class", "getPackage", "caturra does not model java.lang.Package"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
-    ("ArrayList", "parallelStream", "caturra runs on one thread, so a parallel stream would only be a sequential one under another name"),
     ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
     ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
     ("Scanner", "skip", "caturra's Scanner reads whole tokens and cannot skip by pattern"),
@@ -10370,6 +10374,14 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         SortedRole::Concrete,
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
+    // sequential stream, and on one thread that is the only honest answer.
+    bm(
+        "parallelStream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     // `descendingIterator()` — the same cursor walked from the END.
     bm(
@@ -10571,6 +10583,14 @@ const STACK_METHODS: &[BuiltinMethod] = &[
     ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
+    // sequential stream, and on one thread that is the only honest answer.
+    bm(
+        "parallelStream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm(
         "push",
@@ -10706,6 +10726,38 @@ const STACK_METHODS: &[BuiltinMethod] = &[
 /// `poll`/`peek` return the boxed element so their empty-collection `null` is
 /// representable; `remove()`/`element()` throw on empty instead.
 const QUEUE_METHODS: &[BuiltinMethod] = &[
+    // The bulk operations every `Collection` declares. They were on the list
+    // and set tables and on no other, so `deque.removeAll(...)` — a method
+    // the interface itself promises — was "cannot find symbol" while the
+    // identical call on an `ArrayList` worked. The VM answers all three from
+    // the shared element vector already.
+    bm(
+        "containsAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "removeAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "retainAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    // `comparator()` — the order a queue was built with, or null for the
+    // natural one. A sorted SET has always answered it; the queue that is
+    // sorted by the same rule did not.
+    bm(
+        "comparator",
+        &[],
+        BRet::Comparator,
+        "()Ljava/util/Comparator;",
+    ),
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     // `toArray(T[] model)` — the model gives the RUNTIME element type, and
@@ -10742,6 +10794,14 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
     ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
+    // sequential stream, and on one thread that is the only honest answer.
+    bm(
+        "parallelStream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
     // is the only way to remove from the MIDDLE of one.
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
@@ -10804,6 +10864,29 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
 /// `java.util.Deque<E>` — everything a `Queue` has, plus the two-ended and
 /// stack (`push`/`pop`) operations.
 const DEQUE_METHODS: &[BuiltinMethod] = &[
+    // The bulk operations every `Collection` declares. They were on the list
+    // and set tables and on no other, so `deque.removeAll(...)` — a method
+    // the interface itself promises — was "cannot find symbol" while the
+    // identical call on an `ArrayList` worked. The VM answers all three from
+    // the shared element vector already.
+    bm(
+        "containsAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "removeAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "retainAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
     // Every collection can hand back its elements as an `Object[]`.
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     // `toArray(T[] model)` — the model gives the RUNTIME element type, and
@@ -10840,6 +10923,14 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)Z",
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
+    // sequential stream, and on one thread that is the only honest answer.
+    bm(
+        "parallelStream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
     // is the only way to remove from the MIDDLE of one.
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
@@ -10940,6 +11031,32 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    // A `LinkedList` is a `List`, so it takes the List defaults too: the bulk
+    // removals, and `sort`/`replaceAll`, which were on `ArrayList` alone.
+    bm(
+        "removeAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "retainAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "sort",
+        &[BParam::Comparator],
+        BRet::Void,
+        "(Ljava/util/Comparator;)V",
+    ),
+    bm(
+        "replaceAll",
+        &[BParam::UnaryOperator],
+        BRet::Void,
+        "(Ljava/util/function/UnaryOperator;)V",
+    ),
     // `subList(from, to)` is a live VIEW of the range: reads and writes go
     // through to this list, and a structural change made AROUND the view
     // invalidates it, which is `List.subList`'s own contract.
@@ -11022,6 +11139,14 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
         SortedRole::Concrete,
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
+    // sequential stream, and on one thread that is the only honest answer.
+    bm(
+        "parallelStream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
@@ -11158,6 +11283,28 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
 /// the element to `Object` (its output type is not tracked); `collect` returns
 /// a `null`-typed result that adopts the assignment context, like a diamond.
 const STREAM_METHODS: &[BuiltinMethod] = &[
+    // The parallel toggles. Every pipeline here runs on one thread, so these
+    // change nothing about what a stream ANSWERS; `isParallel` reports what a
+    // JDK would report, which is the only part a program can see.
+    bm("isParallel", &[], BRet::Boolean, "()Z"),
+    bm(
+        "parallel",
+        &[],
+        BRet::SameStream,
+        "()Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "sequential",
+        &[],
+        BRet::SameStream,
+        "()Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "unordered",
+        &[],
+        BRet::SameStream,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // A stream is an `Iterable`'s other half: `iterator()` is the terminal
     // that hands the pipeline over to a loop.
@@ -11330,6 +11477,16 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
         BRet::Nullish,
         "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
     ),
+    // The THREE-argument form, which gathers without a `Collector` at all:
+    // a supplier makes the container, an accumulator puts each element in,
+    // and a combiner merges two — never called here, since one thread never
+    // splits the work.
+    bm(
+        "collect",
+        &[BParam::Supplier, BParam::BiConsumer, BParam::BiConsumer],
+        BRet::Nullish,
+        "(Ljava/util/function/Supplier;Ljava/util/function/BiConsumer;Ljava/util/function/BiConsumer;)Ljava/lang/Object;",
+    ),
     bm("findFirst", &[], BRet::Optional, "()Ljava/util/Optional;"),
     bm("findAny", &[], BRet::Optional, "()Ljava/util/Optional;"),
     bm(
@@ -11354,6 +11511,54 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
 /// model Optional" long after it did — a comment can expire as quietly as a
 /// refusal.)
 const INTSTREAM_METHODS: &[BuiltinMethod] = &[
+    // The object stream declares these and the primitive one did not, though
+    // the VM answers all three the same way for either.
+    bm(
+        "iterator",
+        &[],
+        BRet::IteratorBoxedElem,
+        "()Ljava/util/Iterator;",
+    ),
+    bm(
+        "forEachOrdered",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/util/function/IntConsumer;)V",
+    ),
+    bm(
+        "flatMap",
+        &[BParam::UnaryOperator],
+        BRet::SameStream,
+        "(Ljava/util/function/IntFunction;)Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "collect",
+        &[BParam::Supplier, BParam::BiConsumer, BParam::BiConsumer],
+        BRet::Nullish,
+        "(Ljava/util/function/Supplier;Ljava/util/function/ObjIntConsumer;Ljava/util/function/BiConsumer;)Ljava/lang/Object;",
+    ),
+    // The parallel toggles. Every pipeline here runs on one thread, so these
+    // change nothing about what a stream ANSWERS; `isParallel` reports what a
+    // JDK would report, which is the only part a program can see.
+    bm("isParallel", &[], BRet::Boolean, "()Z"),
+    bm(
+        "parallel",
+        &[],
+        BRet::SameStream,
+        "()Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "sequential",
+        &[],
+        BRet::SameStream,
+        "()Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "unordered",
+        &[],
+        BRet::SameStream,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("hashCode", &[], BRet::Int, "()I"),
@@ -11737,6 +11942,14 @@ const OPTIONAL_METHODS: &[BuiltinMethod] = &[
     // how a `Stream<Optional<T>>` becomes a `Stream<T>`, which is the whole
     // idiom: `s.flatMap(Optional::stream)`.
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
+    // sequential stream, and on one thread that is the only honest answer.
+    bm(
+        "parallelStream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     // `filter(predicate)` keeps a present value only if it matches, so the
     // result is an `Optional` of the same element type.
     bm(
@@ -13921,6 +14134,14 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
         "(Ljava/util/Collection;)Z",
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
+    // sequential stream, and on one thread that is the only honest answer.
+    bm(
+        "parallelStream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     // Every reference type has these. A `keySet()` compares as a Set does and
     // hashes to the sum of its elements; a `values()` view is a bare
     // `Collection`, so it keeps `Object`'s identity equals and hash.
@@ -13966,6 +14187,14 @@ const SET_METHODS: &[BuiltinMethod] = &[
         SortedRole::Concrete,
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
+    // sequential stream, and on one thread that is the only honest answer.
+    bm(
+        "parallelStream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     // `descendingIterator()` — the same cursor walked from the END.
     bm("size", &[], BRet::Int, "()I"),
@@ -14064,6 +14293,14 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
         SortedRole::Concrete,
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
+    // sequential stream, and on one thread that is the only honest answer.
+    bm(
+        "parallelStream",
+        &[],
+        BRet::Stream,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     // `descendingIterator()` — the same cursor walked from the END.
     bm_at(
@@ -14252,6 +14489,12 @@ const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
     // The element of an `entrySet().stream()` is a whole `Map.Entry`.
     bm(
         "stream",
+        &[],
+        BRet::EntryStream,
+        "()Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "parallelStream",
         &[],
         BRet::EntryStream,
         "()Ljava/util/stream/Stream;",
@@ -16056,6 +16299,12 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             args.first
                 .map_or(JType::Error, |elem| JType::Array { elem, dims: 1 }),
         ),
+        BRet::IteratorBoxedElem => Some(args.first.map_or(JType::Error, |elem| {
+            JType::Iterator(match Prim::of(elem) {
+                Some(prim) => ElemType::Wrapper(prim),
+                None => elem,
+            })
+        })),
         BRet::StreamBoxedElem => Some(args.first.map_or(JType::Error, |elem| {
             JType::Stream(match Prim::of(elem) {
                 Some(prim) => ElemType::Wrapper(prim),

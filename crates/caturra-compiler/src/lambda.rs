@@ -2824,6 +2824,82 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `stream.collect(supplier, accumulator, combiner)` — the form
+            // that gathers without a `Collector`. The supplier takes nothing;
+            // both consumers take the CONTAINER and one element, and the
+            // container's type is what the supplier answers.
+            if method == "collect"
+                && args.len() == 3
+                && let Some(stream_receiver) = receiver.as_deref()
+            {
+                let object = TypeRef::Named(String::from("Object"));
+                let elem = stream_elem_type(stream_receiver, ctx).unwrap_or_else(|| object.clone());
+                // The container is what the SUPPLIER makes. A constructor
+                // reference says it outright (`ArrayList::new`), and it has to
+                // be read: the accumulator is an UNBOUND reference on that
+                // very type (`ArrayList::add`), so an `Object` container makes
+                // the reference impossible rather than merely imprecise.
+                let container = match &args[0] {
+                    Expr::MethodRef {
+                        qualifier, method, ..
+                    } if method == "new" => {
+                        let base = qualifier_type_name(qualifier);
+                        if LIBRARY_CONTAINERS.contains(&base.as_str()) {
+                            // A container holds REFERENCES, so a primitive
+                            // stream's element is the wrapper: an
+                            // `ArrayList<int>` is not a type, and the
+                            // accumulator reference on one cannot be made.
+                            TypeRef::Generic {
+                                base,
+                                args: vec![boxed_name(elem.clone())],
+                            }
+                        } else {
+                            TypeRef::Named(base)
+                        }
+                    }
+                    other => mapped_element_type(std::slice::from_ref(other), ctx)
+                        .unwrap_or_else(|| object.clone()),
+                };
+                let shapes: [(&str, Vec<TypeRef>); 3] = [
+                    ("get", Vec::new()),
+                    ("accept", vec![container.clone(), elem.clone()]),
+                    ("accept", vec![container.clone(), container]),
+                ];
+                for (index, (sam, params)) in shapes.into_iter().enumerate() {
+                    if !matches!(&args[index], Expr::Lambda { .. } | Expr::MethodRef { .. }) {
+                        desugar_expr(&mut args[index], None, ctx);
+                        continue;
+                    }
+                    if matches!(&args[index], Expr::MethodRef { .. }) {
+                        let synth = Sam {
+                            method: String::from(sam),
+                            params: params.clone(),
+                            ret: object.clone(),
+                        };
+                        args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+                    }
+                    let interface = if index == 0 {
+                        "__Supplier"
+                    } else {
+                        "__BiConsumer"
+                    };
+                    let ret = if index == 0 {
+                        object.clone()
+                    } else {
+                        TypeRef::Void
+                    };
+                    args[index] = build_erased_lambda(
+                        &mut args[index],
+                        interface,
+                        sam,
+                        &ret,
+                        &params,
+                        None,
+                        ctx,
+                    );
+                }
+                return;
+            }
             // `stream.collect(Collectors.groupingBy(e -> ...))` — a collector's
             // own lambdas see the STREAM's element, which only the enclosing
             // `collect` knows. This is the one place in caturra where a
@@ -5208,8 +5284,10 @@ fn flat_element_type(args: &[Expr], ctx: &Ctx) -> Option<TypeRef> {
         return kind;
     }
     // `x.stream()` / `Arrays.stream(x)` over a parameter whose declared type
-    // carries the element.
-    if method == "stream" {
+    // carries the element. `parallelStream()` is the same source under
+    // another name, and every one of these readings has to know that or the
+    // lambda after it has no element and is refused for having no target.
+    if matches!(method.as_str(), "stream" | "parallelStream") {
         let source = if args.is_empty() {
             body_type(prev, &bound, ctx)?
         } else if names_library_class(prev.as_ref(), "Arrays") && args.len() == 1 {
@@ -5497,7 +5575,7 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         // A collection's own `stream()`, so a lambda that ANSWERS one carries
         // its element: `flatMap(inner -> inner.stream())` is the whole reason
         // `flatMap` exists, and codegen reads the answer off this class.
-        (_, "stream", 0) => match receiver {
+        (_, "stream" | "parallelStream", 0) => match receiver {
             // An `Optional<E>.stream()` is a stream of at most one `E`
             // (Java 9); a collection's is a stream of its element.
             TypeRef::Generic { base, args } if simple_base(base) == "Optional" && args.len() == 1 => {
@@ -5670,7 +5748,7 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // A COLLECTION's own `stream()`. A receiver that is not one falls through
     // — a class of the program may declare a `stream()` of its own, and its
     // element is in its return type, which the last arm reads.
-    if method == "stream"
+    if matches!(method.as_str(), "stream" | "parallelStream")
         && args.is_empty()
         && let Some(elem) = list_elem_type(prev, ctx)
     {
@@ -6929,7 +7007,16 @@ fn build_erased_lambda(
         };
     }
     let Expr::Lambda { params, body, span } = lambda else {
-        unreachable!("guarded by caller");
+        // Every caller is SUPPOSED to check, and one did not: `Stream
+        // .generate(null)` reached here and PANICKED the compiler, which is
+        // the one answer a program may never get — and it took every other
+        // diagnostic in the file with it, so a program with that call and two
+        // ordinary mistakes reported nothing at all. An argument that is not a
+        // lambda is already a VALUE (a variable, a field, `null`): there is
+        // nothing to erase, only to walk, which is what the `Predicate.not`
+        // arm above does with one. Codegen judges whether the value fits.
+        desugar_expr(lambda, None, ctx);
+        return lambda.clone();
     };
     // A WILDCARD element reads out as its bound, or as `Object` — which is
     // what a JDK gives the lambda too. Left as the wildcard, the synthesized

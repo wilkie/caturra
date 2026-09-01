@@ -51,6 +51,16 @@ def measure(class_name, receiver, methods):
         result = subprocess.run(
             [ENGINE, path], capture_output=True, text=True, cwd=REPO, timeout=300
         )
+    # A CRASH reads exactly like a clean compile — no diagnostics — and every
+    # method in the probe would then count as known. `Stream.generate(null)`
+    # panicked the compiler, and this scored `Stream` at 44/44 while the same
+    # calls one at a time were "cannot find symbol". Anything but a clean exit
+    # is a measurement failure, not a result.
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"the engine failed on the {class_name} probe "
+            f"(exit {result.returncode}): {result.stderr.strip()[:400]}"
+        )
     unknown_at = set()
     for line in result.stdout.splitlines():
         if not line.startswith("Error@"):

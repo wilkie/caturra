@@ -44430,3 +44430,168 @@ public class OptionalArms {
 }
 "#
 );
+
+// The methods a collection has because it IS a collection, which were on the
+// list and set tables and on no other: `deque.removeAll(...)` was "cannot find
+// symbol" while the identical call on an `ArrayList` worked, and the VM
+// answered all three from the shared element vector the whole time.
+differential_test!(
+    the_bulk_operations_every_collection_declares,
+    "BulkEverywhere",
+    r#"
+import java.util.*;
+
+public class BulkEverywhere {
+    public static void main(String[] args) {
+        ArrayDeque<String> deque = new ArrayDeque<>(Arrays.asList("a", "b", "c"));
+        System.out.println(deque.containsAll(Arrays.asList("a", "c")));
+        System.out.println(deque.removeAll(Arrays.asList("b")) + " " + deque);
+        System.out.println(deque.retainAll(Arrays.asList("a")) + " " + deque);
+
+        LinkedList<String> list = new LinkedList<>(Arrays.asList("pear", "fig", "apple"));
+        list.sort(Comparator.naturalOrder());
+        System.out.println(list);
+        list.replaceAll(String::toUpperCase);
+        System.out.println(list);
+        System.out.println(list.removeAll(Arrays.asList("FIG")) + " " + list);
+        System.out.println(list.retainAll(Arrays.asList("APPLE")) + " " + list);
+
+        PriorityQueue<String> pq = new PriorityQueue<>(Comparator.reverseOrder());
+        pq.addAll(Arrays.asList("a", "b", "c"));
+        // The ordering a queue was built with, or null — the question a sorted
+        // SET has always answered, about the same kind of object.
+        System.out.println(pq.comparator() != null);
+        System.out.println(pq.containsAll(Arrays.asList("a", "b")));
+        System.out.println(pq.removeAll(Arrays.asList("b")) + " " + pq.peek());
+        System.out.println(pq.retainAll(Arrays.asList("c")) + " " + pq.size());
+        System.out.println(new PriorityQueue<String>().comparator());
+    }
+}
+"#
+);
+
+// `parallelStream()` is the same pipeline: a JDK's own contract says "it is
+// allowable for this method to return a sequential stream", and on one thread
+// there is nothing else it could honestly be. Only `isParallel()` can tell the
+// two apart, and it answers what a JDK answers.
+differential_test!(
+    a_parallel_stream_is_a_stream_here,
+    "ParallelFamily",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class ParallelFamily {
+    public static void main(String[] args) {
+        List<String> words = List.of("pear", "fig", "apple");
+        System.out.println(words.parallelStream().map(String::length)
+                .collect(Collectors.toList()));
+        System.out.println(words.parallelStream().isParallel());
+        System.out.println(words.stream().isParallel());
+        System.out.println(words.stream().parallel().isParallel());
+        System.out.println(words.parallelStream().sequential().isParallel());
+        // The flag travels the pipeline: an op on a parallel stream answers a
+        // parallel one.
+        System.out.println(words.parallelStream().map(String::length).isParallel());
+        System.out.println(words.stream().unordered().count());
+        System.out.println(words.parallelStream().sorted().collect(Collectors.joining(",")));
+        System.out.println(new HashSet<>(words).parallelStream().count());
+        System.out.println(new ArrayDeque<>(List.of(3, 1)).parallelStream().sorted()
+                .collect(Collectors.toList()));
+        System.out.println(new TreeSet<>(words).parallelStream().collect(Collectors.joining("-")));
+        System.out.println(Map.of("k", 1).values().parallelStream().count());
+        System.out.println(Map.of("k", 1).keySet().parallelStream().count());
+        System.out.println(Map.of("k", 1).entrySet().parallelStream().count());
+        System.out.println(IntStream.of(1, 2, 3).parallel().sum());
+        System.out.println(IntStream.of(1, 2, 3).isParallel());
+        int[] counted = new int[1];
+        words.parallelStream().forEachOrdered(w -> counted[0]++);
+        System.out.println(counted[0]);
+    }
+}
+"#
+);
+
+// The ops an object stream declared and the primitive one did not, and the
+// `collect` that gathers with no `Collector` at all — its combiner is
+// evaluated and never called, since one thread never splits the work.
+differential_test!(
+    the_stream_ops_only_one_stream_had,
+    "PrimitiveStreamOps",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class PrimitiveStreamOps {
+    public static void main(String[] args) {
+        System.out.println(IntStream.of(1, 2, 3).flatMap(n -> IntStream.of(n, n * 10)).sum());
+        StringBuilder seen = new StringBuilder();
+        IntStream.of(1, 2, 3).forEachOrdered(n -> seen.append(n));
+        System.out.println(seen);
+        // A primitive stream's iterator is a `PrimitiveIterator.OfInt`, which
+        // IS an `Iterator<Integer>` — its `next()` hands back a reference.
+        Iterator<Integer> it = IntStream.of(4, 5).iterator();
+        System.out.println(it.next() + " " + it.hasNext());
+        List<Integer> got = IntStream.of(1, 2)
+                .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
+        System.out.println(got);
+        List<String> letters = Stream.of("x", "y")
+                .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
+        System.out.println(letters);
+        System.out.println(Stream.of("a", "b").iterator().next());
+        StringBuilder ordered = new StringBuilder();
+        Stream.of("a", "b").forEachOrdered(ordered::append);
+        System.out.println(ordered);
+    }
+}
+"#
+);
+
+// A null CALLBACK is a null pointer at the call, not later — a JDK guards
+// every one of these with `Objects.requireNonNull` before it builds anything.
+// `Stream.generate(null)` PANICKED the compiler, and the panic took every
+// other diagnostic in the file with it: a program with that call and two
+// ordinary mistakes reported nothing at all.
+differential_test!(
+    a_null_callback_throws_where_it_is_written,
+    "NullCallbacks",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class NullCallbacks {
+    public static void main(String[] args) {
+        try { Stream.generate(null); System.out.println("generate ok"); }
+        catch (NullPointerException e) { System.out.println("generate NPE"); }
+        try { Stream.iterate(1, null).limit(2).count(); }
+        catch (NullPointerException e) { System.out.println("iterate NPE"); }
+        List<String> list = new ArrayList<>(List.of("a", "b"));
+        try { list.removeIf(null); }
+        catch (NullPointerException e) { System.out.println("removeIf NPE"); }
+        try { list.forEach(null); }
+        catch (NullPointerException e) { System.out.println("forEach NPE"); }
+        // …but `sort(null)` is the natural ordering, not a mistake.
+        try { list.sort(null); System.out.println("sort ok " + list); }
+        catch (NullPointerException e) { System.out.println("sort NPE"); }
+        try { list.replaceAll(null); }
+        catch (NullPointerException e) { System.out.println("replaceAll NPE"); }
+        try { list.stream().map(null).count(); }
+        catch (NullPointerException e) { System.out.println("map NPE"); }
+        try { list.stream().filter(null).count(); }
+        catch (NullPointerException e) { System.out.println("filter NPE"); }
+        try { list.stream().collect(null); }
+        catch (NullPointerException e) { System.out.println("collect NPE"); }
+        // An EMPTY Optional given a null mapper throws too: the check runs
+        // before the Optional is asked whether it holds anything.
+        try { Optional.of("x").map(null); }
+        catch (NullPointerException e) { System.out.println("opt map NPE"); }
+        try { Optional.<String>empty().map(null); }
+        catch (NullPointerException e) { System.out.println("empty map NPE"); }
+        Supplier<String> supplier = null;
+        try { Stream.generate(supplier).limit(1).count(); }
+        catch (NullPointerException e) { System.out.println("generate var NPE"); }
+    }
+}
+"#
+);
