@@ -3017,6 +3017,23 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     }
                     _ => None,
                 };
+                // `onClose(() -> …)` takes a RUNNABLE: no element, no result.
+                // It is the one stream callback that is not a function of the
+                // element, so it cannot ride the table above.
+                if method == "onClose"
+                    && matches!(&args[0..], [Expr::Lambda { params, .. }] if params.is_empty())
+                {
+                    args[0] = build_erased_lambda(
+                        &mut args[0],
+                        "__Runnable",
+                        "run",
+                        &TypeRef::Void,
+                        &[],
+                        None,
+                        ctx,
+                    );
+                    return;
+                }
                 // `reduce(identity, (a, b) -> ...)` / `reduce((a, b) -> ...)`:
                 // a two-parameter fold over the stream's own element type,
                 // erased to the bundled `__BiFunction` like a map remapper.
@@ -5679,9 +5696,12 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             args: vec![value],
         }),
         (_, "toArray", _) => element_of_declared(receiver).map(|e| TypeRef::Array(Box::new(e))),
-        ("Stream", "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek", _) => {
-            Some(receiver.clone())
-        }
+        (
+            "Stream",
+            "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" | "onClose" | "parallel"
+            | "sequential" | "unordered",
+            _,
+        ) => Some(receiver.clone()),
         // A `Stream` is not in the collection set (its element is not read the
         // same way), so its single argument is taken directly.
         ("Stream", "findFirst" | "findAny", 0) => match receiver {
@@ -5934,7 +5954,11 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" | "boxed"
         // `takeWhile`/`dropWhile` pass the element through unchanged, as
         // `filter` does, so a chain after one keeps its type.
-        | "takeWhile" | "dropWhile" => {
+        | "takeWhile" | "dropWhile"
+        // …and so do the ops that change nothing about the ELEMENTS at all:
+        // the parallel toggles, and registering a close handler. A chained
+        // `onClose(…).onClose(…)` had no element for the second lambda.
+        | "onClose" | "parallel" | "sequential" | "unordered" => {
             stream_elem_type(prev, ctx)
         }
         // `mapToInt` produces an int stream; `mapToObj` an erased one.

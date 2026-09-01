@@ -1729,6 +1729,42 @@ public class Arms {
 """,
     ),
     dict(
+        id="stream-resource",
+        category="Library",
+        title="A stream is a resource",
+        summary="try-with-resources over Files.lines — the documented way to read a file with a stream — plus the close handlers a pipeline carries.",
+        main="Lines",
+        source="""
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public class Lines {
+    public static void main(String[] args) throws IOException {
+        Files.write(Paths.get("notes.txt"), Arrays.asList("alpha", "beta", "gamma"));
+
+        try (Stream<String> lines = Files.lines(Paths.get("notes.txt"))) {
+            System.out.println(lines.filter(line -> line.length() > 4).count());
+        }
+        try (Stream<String> lines = Files.lines(Paths.get("notes.txt"))) {
+            System.out.println(lines.map(String::toUpperCase).collect(Collectors.joining("|")));
+        }
+
+        // A close handler travels the pipeline: one registered before an op
+        // still runs when the stream that op produced is closed.
+        try (Stream<String> counted = Stream.of("x", "y")
+                .onClose(() -> System.out.println("closed"))
+                .map(String::toUpperCase)) {
+            System.out.println(counted.collect(Collectors.toList()));
+        }
+    }
+}
+""",
+    ),
+    dict(
         id="collection-bulk",
         category="Collections",
         title="The bulk operations every collection has",

@@ -216,6 +216,11 @@ pub(crate) struct Interpreter<'run> {
     /// JDK answers. Kept beside the stream rather than in it, like
     /// `spent_streams`, so no construction site has to learn a new field.
     parallel_streams: std::collections::HashSet<HeapRef>,
+    /// The handlers `onClose` registered, per stream. A JDK runs them when the
+    /// pipeline is closed — which try-with-resources does for `Files.lines` —
+    /// and they travel the pipeline, so an op on a stream that has one carries
+    /// it along.
+    stream_close_handlers: HashMap<HeapRef, Vec<HeapRef>>,
     /// The collection a stream was opened over, with its length at that moment
     /// — what makes a terminal FAIL FAST when the source is modified while it
     /// runs, as a JDK's spliterator does.
@@ -330,6 +335,7 @@ impl<'run> Interpreter<'run> {
             cursor_pending: HashMap::new(),
             spent_streams: std::collections::HashSet::new(),
             parallel_streams: std::collections::HashSet::new(),
+            stream_close_handlers: HashMap::new(),
             stream_origins: HashMap::new(),
         }
     }
@@ -1221,6 +1227,8 @@ impl<'run> Interpreter<'run> {
         self.cursor_pending.retain(|reference, _| alive(reference));
         self.spent_streams.retain(alive);
         self.parallel_streams.retain(alive);
+        self.stream_close_handlers
+            .retain(|stream, handlers| alive(stream) && handlers.iter().all(&alive));
         self.stream_origins
             .retain(|stream, (origin, _)| alive(stream) && alive(origin));
     }
@@ -10251,6 +10259,16 @@ impl<'run> Interpreter<'run> {
         {
             self.parallel_streams.insert(derived);
         }
+        // …and so does a close handler: closing the stream a pipeline ends in
+        // runs what was registered anywhere along it.
+        if let JValue::Ref(Some(derived)) = to
+            && let Some(handlers) = self.stream_close_handlers.get(&from).cloned()
+        {
+            self.stream_close_handlers
+                .entry(derived)
+                .or_default()
+                .extend(handlers);
+        }
         to
     }
 
@@ -11446,6 +11464,20 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<Answered, VmError> {
         use crate::value::{OptionalKind, StreamOp};
+        // …but CLOSING one is not an operation on it: a JDK closes a stream
+        // that has already been consumed without complaint, which is exactly
+        // what try-with-resources does to every stream whose body read it.
+        if method == "close" && args.is_empty() {
+            let handlers = self
+                .stream_close_handlers
+                .remove(&receiver)
+                .unwrap_or_default();
+            for handler in handlers {
+                self.call_run(handler)?;
+            }
+            self.spent_streams.insert(receiver);
+            return Ok(Answered::Void);
+        }
         // A stream is SINGLE-USE: once an op has consumed this pipeline, every
         // later one on the same object is an error rather than a second run
         // over the same elements.
@@ -11514,6 +11546,23 @@ impl<'run> Interpreter<'run> {
             } else {
                 self.parallel_streams.remove(&derived);
             }
+            return Ok(Answered::Value(value));
+        }
+        if method == "onClose"
+            && let [JValue::Ref(Some(handler))] = args
+        {
+            let handler = *handler;
+            self.spent_streams.remove(&receiver);
+            let (source, ops) = self.stream_pipeline(receiver);
+            let derived = self
+                .heap
+                .alloc(crate::value::HeapObject::Stream { source, ops });
+            self.spent_streams.insert(receiver);
+            let value = self.inherit_stream_origin(receiver, JValue::Ref(Some(derived)));
+            self.stream_close_handlers
+                .entry(derived)
+                .or_default()
+                .push(handler);
             return Ok(Answered::Value(value));
         }
         if method == "isParallel" && args.is_empty() {

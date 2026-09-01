@@ -11287,6 +11287,18 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
 /// the element to `Object` (its output type is not tracked); `collect` returns
 /// a `null`-typed result that adopts the assignment context, like a diamond.
 const STREAM_METHODS: &[BuiltinMethod] = &[
+    // A stream is an `AutoCloseable`, which is the whole point of
+    // `try (Stream<String> lines = Files.lines(path))` — the documented way to
+    // read a file with a stream. Without `close()` the try-with-resources
+    // desugaring had no method to call and the resource was "cannot find
+    // symbol", about a declaration the program wrote correctly.
+    bm("close", &[], BRet::Void, "()V"),
+    bm(
+        "onClose",
+        &[BParam::Runnable],
+        BRet::Stream,
+        "(Ljava/lang/Runnable;)Ljava/util/stream/Stream;",
+    ),
     // The parallel toggles. Every pipeline here runs on one thread, so these
     // change nothing about what a stream ANSWERS; `isParallel` reports what a
     // JDK would report, which is the only part a program can see.
@@ -11515,6 +11527,13 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
 /// model Optional" long after it did — a comment can expire as quietly as a
 /// refusal.)
 const INTSTREAM_METHODS: &[BuiltinMethod] = &[
+    bm("close", &[], BRet::Void, "()V"),
+    bm(
+        "onClose",
+        &[BParam::Runnable],
+        BRet::SameStream,
+        "(Ljava/lang/Runnable;)Ljava/util/stream/IntStream;",
+    ),
     // The object stream declares these and the primitive one did not, though
     // the VM answers all three the same way for either.
     bm(

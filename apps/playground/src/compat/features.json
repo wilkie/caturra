@@ -510,6 +510,16 @@
     "expected": "found kiwi\nnone\nkiwi\nfallback\n1\nOptional[kept]\n"
   },
   {
+    "id": "stream-resource",
+    "category": "Library",
+    "title": "A stream is a resource",
+    "summary": "try-with-resources over Files.lines \u2014 the documented way to read a file with a stream \u2014 plus the close handlers a pipeline carries.",
+    "main": "Lines",
+    "source": "import java.io.IOException;\nimport java.nio.file.Files;\nimport java.nio.file.Paths;\nimport java.util.Arrays;\nimport java.util.stream.Collectors;\nimport java.util.stream.Stream;\n\npublic class Lines {\n    public static void main(String[] args) throws IOException {\n        Files.write(Paths.get(\"notes.txt\"), Arrays.asList(\"alpha\", \"beta\", \"gamma\"));\n\n        try (Stream<String> lines = Files.lines(Paths.get(\"notes.txt\"))) {\n            System.out.println(lines.filter(line -> line.length() > 4).count());\n        }\n        try (Stream<String> lines = Files.lines(Paths.get(\"notes.txt\"))) {\n            System.out.println(lines.map(String::toUpperCase).collect(Collectors.joining(\"|\")));\n        }\n\n        // A close handler travels the pipeline: one registered before an op\n        // still runs when the stream that op produced is closed.\n        try (Stream<String> counted = Stream.of(\"x\", \"y\")\n                .onClose(() -> System.out.println(\"closed\"))\n                .map(String::toUpperCase)) {\n            System.out.println(counted.collect(Collectors.toList()));\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "2\nALPHA|BETA|GAMMA\n[X, Y]\nclosed\n"
+  },
+  {
     "id": "collection-bulk",
     "category": "Collections",
     "title": "The bulk operations every collection has",

@@ -11983,3 +11983,33 @@ missing, and it is pinned against the REAL library
 The number is checkable rather than asserted, but it is not CI-able: the
 vendored checkout is gitignored — it is not ours to vendor — so this runs where
 the media differential tests do, and says so when the checkout is absent.
+
+## A stream is a resource
+
+`try (Stream<String> lines = Files.lines(path))` is the documented way to read
+a file with a stream, and it did not compile: a stream had no `close()`, so the
+try-with-resources desugaring had no method to call and the RESOURCE was
+"cannot find symbol" — about a declaration the program had written correctly.
+The resource check itself was never the problem; it judges class types and
+leaves a builtin alone.
+
+`close()` and `onClose(Runnable)` are modelled now. The handlers travel the
+pipeline, as a JDK's do — one registered before a `map` still runs when the
+mapped stream is closed — and they run in registration order. **Closing is not
+an OPERATION on the pipeline**: a JDK closes a stream the body already consumed
+without complaint, which is exactly what try-with-resources does to every one
+of them, so the close is answered ahead of the single-use check rather than
+tripping it.
+
+`onClose` is also the one stream callback that is not a function of the
+element — a `Runnable` takes nothing and answers nothing — so it cannot ride
+the table that types the rest, and the ops that change nothing about the
+elements (the parallel toggles, and this) had to be added to the list a chain
+walks to find its element: `onClose(…).onClose(…)` left the second lambda with
+no target.
+
+Pinned by `a_stream_closes_like_a_resource` and
+`a_streams_close_handlers_run_in_order`. `Stream` is 42 of 44 method names now,
+`IntStream` 46 of 48; what is left on both is `builder()` (a nested type
+nothing else needs) and `spliterator()` (a parallel-decomposition handle, which
+is refused with a reason for every collection already).

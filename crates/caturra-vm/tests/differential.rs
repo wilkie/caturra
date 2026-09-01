@@ -44843,3 +44843,73 @@ public class EmptyWitness {
 }
 "#
 );
+
+// A stream is an `AutoCloseable`, and `try (Stream<String> lines =
+// Files.lines(path))` is the documented way to read a file with one. Without
+// `close()` the try-with-resources desugaring had no method to call, so the
+// resource was "cannot find symbol" — about a declaration the program wrote
+// correctly. Closing is NOT an operation on the pipeline: a JDK closes a
+// stream the body already consumed without complaint, which is what
+// try-with-resources does to every one of them.
+differential_test_files!(
+    a_stream_closes_like_a_resource,
+    "StreamCloses",
+    r#"
+import java.io.IOException;
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.*;
+
+public class StreamCloses {
+    public static void main(String[] args) throws IOException {
+        Files.write(Paths.get("notes.txt"), Arrays.asList("alpha", "beta", "gamma"));
+        try (Stream<String> lines = Files.lines(Paths.get("notes.txt"))) {
+            System.out.println(lines.filter(line -> line.length() > 4).count());
+        }
+        try (Stream<String> lines = Files.lines(Paths.get("notes.txt"))) {
+            System.out.println(lines.collect(Collectors.joining("|")));
+        }
+        Stream<String> spent = Stream.of("x");
+        System.out.println(spent.count());
+        spent.close();
+        System.out.println("closed a spent stream");
+    }
+}
+"#,
+    &[]
+);
+
+// `onClose` registers a handler and answers the same pipeline; the handlers
+// travel it, and closing runs them in the order they were registered.
+differential_test!(
+    a_streams_close_handlers_run_in_order,
+    "OnClose",
+    r#"
+import java.util.stream.*;
+
+public class OnClose {
+    public static void main(String[] args) {
+        Stream<Integer> counted = Stream.of(1, 2).onClose(() -> System.out.println("bye"));
+        System.out.println(counted.count());
+        counted.close();
+
+        Stream<String> two = Stream.of("x").onClose(() -> System.out.println("first"))
+                .onClose(() -> System.out.println("second"));
+        two.close();
+
+        try (Stream<String> auto = Stream.of("a", "b")
+                .onClose(() -> System.out.println("auto"))) {
+            System.out.println(auto.map(String::toUpperCase).collect(Collectors.joining()));
+        }
+        // A handler registered before an op still runs: it travels the
+        // pipeline, so the stream the terminal ran on carries it.
+        try (Stream<String> mapped = Stream.of("q")
+                .onClose(() -> System.out.println("registered early"))
+                .map(String::toUpperCase)) {
+            System.out.println(mapped.count());
+        }
+        System.out.println(IntStream.of(1, 2).onClose(() -> System.out.println("ints")).sum());
+    }
+}
+"#
+);
