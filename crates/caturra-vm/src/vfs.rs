@@ -209,6 +209,51 @@ impl VirtualFileSystem {
             .collect())
     }
 
+    /// Move a file or directory, with its whole subtree.
+    ///
+    /// `File.renameTo` on a Unix filesystem OVERWRITES an existing
+    /// destination file rather than failing, which is the surprising half of
+    /// it, and fails if the source is missing.
+    pub fn rename(&mut self, from: &str, to: &str) -> Result<(), VfsError> {
+        let from = Self::normalize(from);
+        let to = Self::normalize(to);
+        if !self.nodes.contains_key(&from) {
+            return Err(VfsError::NotFound(from));
+        }
+        if from == to {
+            return Ok(());
+        }
+        if to.starts_with(&format!("{from}/")) {
+            return Err(VfsError::NotADirectory(to));
+        }
+        if matches!(self.nodes.get(&to), Some(Node::Directory)) {
+            return Err(VfsError::IsDirectory(to));
+        }
+        // A directory moves with everything under it, so the paths to rewrite
+        // are the subtree's, and they have to be collected before the map is
+        // touched.
+        let prefix = format!("{from}/");
+        let moving: Vec<String> = self
+            .nodes
+            .range(from.clone()..)
+            .take_while(|(p, _)| **p == from || p.starts_with(&prefix))
+            .map(|(p, _)| p.clone())
+            .collect();
+        self.mkdir_parents(&to)?;
+        for path in moving {
+            let Some(node) = self.nodes.remove(&path) else {
+                continue;
+            };
+            let moved = if path == from {
+                to.clone()
+            } else {
+                format!("{to}{}", &path[from.len()..])
+            };
+            self.nodes.insert(moved, node);
+        }
+        Ok(())
+    }
+
     /// Delete a file or an empty directory (`File.delete()` semantics).
     pub fn remove(&mut self, path: &str) -> Result<(), VfsError> {
         let path = Self::normalize(path);
@@ -239,6 +284,32 @@ mod tests {
         assert_eq!(VirtualFileSystem::normalize("/a//b/./c/../d"), "/a/b/d");
         assert_eq!(VirtualFileSystem::normalize("../.."), "/");
         assert_eq!(VirtualFileSystem::normalize(""), "/");
+    }
+
+    #[test]
+    fn rename_moves_a_whole_subtree() {
+        let mut vfs = VirtualFileSystem::new();
+        vfs.write_file("/a/deep/one.txt", b"1".to_vec()).unwrap();
+        vfs.write_file("/a/two.txt", b"2".to_vec()).unwrap();
+        vfs.rename("/a", "/b").unwrap();
+        assert!(!vfs.exists("/a"));
+        assert_eq!(vfs.read_file("/b/deep/one.txt").unwrap(), b"1");
+        assert_eq!(vfs.read_file("/b/two.txt").unwrap(), b"2");
+    }
+
+    #[test]
+    fn rename_overwrites_a_file_but_not_a_directory() {
+        let mut vfs = VirtualFileSystem::new();
+        vfs.write_file("/one.txt", b"1".to_vec()).unwrap();
+        vfs.write_file("/two.txt", b"2".to_vec()).unwrap();
+        vfs.mkdir("/dir").unwrap();
+        // A Unix rename replaces an existing FILE silently…
+        vfs.rename("/one.txt", "/two.txt").unwrap();
+        assert_eq!(vfs.read_file("/two.txt").unwrap(), b"1");
+        // …and refuses a directory, a missing source, and a move into itself.
+        assert!(vfs.rename("/two.txt", "/dir").is_err());
+        assert!(vfs.rename("/ghost.txt", "/x.txt").is_err());
+        assert!(vfs.rename("/dir", "/dir/inner").is_err());
     }
 
     #[test]

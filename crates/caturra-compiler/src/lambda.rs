@@ -735,6 +735,11 @@ fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::Hash
         "Pattern",
         "Matcher",
         "MatchResult",
+        // The filesystem objects: `File::getName` is how a program turns a
+        // directory listing into names, and the qualifier has to name a class
+        // here or the reference is not one.
+        "File",
+        "Path",
     ]
     .into_iter()
     .chain(LIBRARY_CONTAINERS)

@@ -233,20 +233,25 @@ fn run_with_jdk_files(
     file.write_all(source.as_bytes()).expect("write source");
     drop(file);
 
-    if !files.is_empty() {
-        // A file-based program WRITES, and this directory is reused between
-        // runs (it is keyed by the source, not by the run), so whatever the
-        // last run left would still be there — an append test accumulated
-        // across runs and the JDK answered differently each time. Only the
-        // program and its staged data may be present.
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            if entry.path() != java_file {
-                let _ = std::fs::remove_file(entry.path());
-            }
+    // A file-based program WRITES, and this directory is reused between runs
+    // (it is keyed by the source, not by the run), so whatever the last run
+    // left would still be there — an append test accumulated across runs and
+    // the JDK answered differently each time. Only the program and its staged
+    // data may be present. DIRECTORIES too: a program calling `mkdirs` finds
+    // its own directory already made on the second run and answers false,
+    // where caturra's filesystem starts empty every time.
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        if entry.path() == java_file {
+            continue;
         }
-        for (name, contents) in files {
-            std::fs::write(dir.join(name), contents).expect("write data file");
+        if entry.path().is_dir() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        } else {
+            let _ = std::fs::remove_file(entry.path());
         }
+    }
+    for (name, contents) in files {
+        std::fs::write(dir.join(name), contents).expect("write data file");
     }
     let compile = javac_in(&dir, &java_file);
     assert!(
@@ -44024,4 +44029,208 @@ public class NullField {
     }
 }
 "
+);
+
+// The path and directory half of `java.io.File`, which the coverage
+// measurement (`scripts/coverage/measure.py`) found the method table never
+// asked the virtual filesystem for: 9 of a JDK's 40 method names answered,
+// while `normalize` and `list_dir` sat unused behind them.
+differential_test_files!(
+    a_files_path_and_directory_methods,
+    "FilePaths",
+    r#"
+import java.io.File;
+import java.util.Arrays;
+
+public class FilePaths {
+    static void show(String label, Object v) {
+        System.out.println(label + " = " + v);
+    }
+
+    public static void main(String[] args) throws Exception {
+        // The abstract pathname: repeated separators collapse and a trailing
+        // one is dropped, but a `.` segment is kept as written.
+        show("path as written", new File("d//a.txt").getPath());
+        show("trailing slash", new File("a/").getPath());
+        show("dot segment", new File("./a.txt").getPath());
+        show("empty", "[" + new File("").getPath() + "]");
+        show("name of root", "[" + new File("/").getName() + "]");
+        show("name of trailing", new File("d/e/").getName());
+
+        show("parent of bare", new File("a.txt").getParent());
+        show("parent of nested", new File("d/e/a.txt").getParent());
+        show("parent of rooted", new File("/a.txt").getParent());
+        show("parent of root", new File("/").getParent());
+        show("parentFile", new File("d/a.txt").getParentFile());
+        show("isAbsolute bare", new File("a.txt").isAbsolute());
+        show("isAbsolute rooted", new File("/a.txt").isAbsolute());
+        show("isHidden", new File(".x").isHidden() + " " + new File("d/.x").isHidden());
+        show("compareTo", new File("a").compareTo(new File("c")));
+        show("compareTo eq", new File("d/a").compareTo(new File("d/a")));
+        show("toPath", new File("d/a.txt").toPath());
+
+        // `mkdir` makes ONE directory and `mkdirs` makes the chain, which is
+        // the difference between the two names.
+        File dir = new File("work/deep");
+        show("mkdirs", dir.mkdirs());
+        show("mkdirs again", dir.mkdirs());
+        show("mkdir missing parent", new File("nope/deep").mkdir());
+
+        new File("work/one.txt").createNewFile();
+        new File("work/two.txt").createNewFile();
+        File work = new File("work");
+        // A listing's ORDER is unspecified in Java ("no particular order"),
+        // so what is comparable is its contents.
+        String[] names = work.list();
+        Arrays.sort(names);
+        show("list", Arrays.toString(names));
+        File[] kids = work.listFiles();
+        Arrays.sort(kids);
+        show("listFiles", Arrays.toString(kids));
+        show("list of a file", Arrays.toString(new File("work/one.txt").list()));
+        show("list of missing", Arrays.toString(new File("ghost").list()));
+
+        // Renaming OVERWRITES an existing destination rather than failing.
+        show("rename", new File("work/one.txt").renameTo(new File("work/moved.txt")));
+        show("renamed exists",
+                new File("work/moved.txt").exists() + " " + new File("work/one.txt").exists());
+        show("rename onto existing",
+                new File("work/moved.txt").renameTo(new File("work/two.txt")));
+        show("rename missing", new File("ghost.txt").renameTo(new File("x.txt")));
+        show("delete non-empty dir", work.delete());
+    }
+}
+"#,
+    &[]
+);
+
+// `new File(parent, child)` is `UnixFileSystem.resolve`, not concatenation:
+// an empty parent is the root, a null one means the child stands alone, and
+// an empty child is the parent — which is why `new File("d", "/")` really is
+// "d/", trailing separator included.
+differential_test!(
+    a_files_two_argument_constructors,
+    "FileResolve",
+    r#"
+import java.io.File;
+
+public class FileResolve {
+    public static void main(String[] args) {
+        System.out.println("[" + new File("", "a.txt").getPath() + "]");
+        System.out.println(new File((String) null, "a.txt").getPath());
+        System.out.println(new File(new File("d"), "a.txt").getPath());
+        System.out.println(new File("/d/", "e//f.txt").getPath());
+        System.out.println(new File("d", "").getPath());
+        System.out.println(new File("d", "/").getPath());
+    }
+}
+"#
+);
+
+// The absolute and canonical forms cannot be compared as TEXT — a JDK reads
+// its working directory and caturra's filesystem is rooted at `/` — but what
+// they promise holds either way, and that is what a program depends on.
+differential_test_files!(
+    a_files_absolute_and_canonical_forms,
+    "FileCanonical",
+    r#"
+import java.io.File;
+import java.util.Arrays;
+
+public class FileCanonical {
+    public static void main(String[] args) throws Exception {
+        File relative = new File("notes/today.txt");
+        System.out.println(relative.getAbsolutePath().endsWith("/notes/today.txt"));
+        System.out.println(new File(relative.getAbsolutePath()).isAbsolute());
+        System.out.println(relative.isAbsolute());
+        // The canonical form resolves `.` and `..`; the absolute one does not.
+        System.out.println(new File("./notes/../notes/today.txt").getCanonicalPath()
+                .equals(relative.getAbsolutePath()));
+        System.out.println(relative.getAbsoluteFile().getName());
+        System.out.println(relative.getCanonicalFile().getParentFile().getName());
+        System.out.println(new File("/a/b/c").getCanonicalPath());
+        System.out.println(new File("/a/../b").getCanonicalPath());
+        System.out.println(new File("/").getCanonicalPath());
+    }
+}
+"#,
+    &[]
+);
+
+// A `File` in the places a program puts one: sorted (it is `Comparable`),
+// looked up by value in a list, a map and a set, and named by a method
+// reference in a stream. Collections ask the VM's own equality rather than
+// calling `equals`, so a File's pathname equality had to be written in both
+// places — `list.contains(new File(...))` was identity and answered false.
+differential_test_files!(
+    a_files_in_collections_and_streams,
+    "FileCollections",
+    r#"
+import java.io.File;
+import java.util.*;
+import java.util.stream.*;
+
+public class FileCollections {
+    public static void main(String[] args) throws Exception {
+        File dir = new File("box");
+        dir.mkdirs();
+        new File(dir, "z.txt").createNewFile();
+        new File(dir, "a.txt").createNewFile();
+        List<File> files = new ArrayList<>(Arrays.asList(dir.listFiles()));
+        Collections.sort(files);
+        System.out.println(files);
+        List<String> names = files.stream().map(File::getName).collect(Collectors.toList());
+        System.out.println(names);
+        Map<String, File> byName = new TreeMap<>();
+        for (File f : files) byName.put(f.getName(), f);
+        System.out.println(byName.get("a.txt").getPath() + " " + byName.size());
+        System.out.println(files.stream().filter(f -> f.getName().endsWith(".txt")).count());
+        File[] back = files.toArray(new File[0]);
+        System.out.println(back.length + " " + back[0].getName());
+        System.out.println(files.contains(new File("box/a.txt")));
+        Set<File> seen = new HashSet<>(files);
+        System.out.println(seen.contains(new File("box/z.txt")) + " " + seen.add(files.get(0)));
+        Map<File, Integer> sizes = new HashMap<>();
+        sizes.put(new File("box/a.txt"), 1);
+        System.out.println(sizes.get(new File("box/a.txt")));
+    }
+}
+"#,
+    &[]
+);
+
+// The hash paired with that equality, which is what a hashed collection
+// really asks: `UnixFileSystem` xors the pathname's hash with a constant, and
+// a `Charset` hashes as its name.
+differential_test!(
+    a_files_and_charsets_hash_as_their_text,
+    "FileHash",
+    r#"
+import java.io.File;
+import java.nio.charset.*;
+
+public class FileHash {
+    public static void main(String[] args) {
+        System.out.println(new File("box/a.txt").hashCode() == ("box/a.txt".hashCode() ^ 1234321));
+        System.out.println(StandardCharsets.UTF_8.hashCode() == "UTF-8".hashCode());
+        System.out.println(new File("x/y").equals(new File("x/y")));
+        System.out.println(new File("x/y").equals(new File("./x/y")));
+    }
+}
+"#
+);
+
+// `getCanonicalPath` declares IOException, like `createNewFile` beside it.
+differential_wording!(
+    reject_an_uncaught_canonical_path,
+    "FileCanonicalThrows",
+    r#"
+import java.io.File;
+
+public class FileCanonicalThrows {
+    public static void main(String[] args) {
+        System.out.println(new File("a").getCanonicalPath());
+    }
+}
+"#
 );

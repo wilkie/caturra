@@ -15631,6 +15631,10 @@ impl<'run> Interpreter<'run> {
             JValue::Float(_) => Some("java.lang.Float"),
             JValue::Ref(Some(reference)) => match self.heap.get(reference) {
                 Some(HeapObject::JavaString(_)) => Some("java.lang.String"),
+                // `File implements Comparable<File>`, ordered by its abstract
+                // pathname — so a list of them sorts, and a `TreeSet` of them
+                // is a set rather than a cast error.
+                Some(HeapObject::File(_)) => Some("java.io.File"),
                 Some(HeapObject::Boxed { class_name, .. }) => Some(match class_name.as_ref() {
                     "java/lang/Integer" => "java.lang.Integer",
                     "java/lang/Long" => "java.lang.Long",
@@ -15731,6 +15735,13 @@ impl<'run> Interpreter<'run> {
                     i32::try_from(one.len()).unwrap_or(i32::MAX)
                         - i32::try_from(other.len()).unwrap_or(i32::MAX),
                 )
+            }
+            // A File's order is its path's, magnitude included: the JDK's
+            // `compareTo` is `String.compareTo` on the pathname.
+            (HeapObject::File(one), HeapObject::File(other)) => {
+                let (one, other): (Vec<u16>, Vec<u16>) =
+                    (one.encode_utf16().collect(), other.encode_utf16().collect());
+                Some(intrinsics::compare_utf16(&one, &other))
             }
             (
                 HeapObject::Boxed {

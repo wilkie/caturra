@@ -3578,6 +3578,7 @@ impl MethodTable {
                     JType::Class => ElemType::Class,
                     JType::StackFrame => ElemType::StackFrame,
                     JType::MatchResult => ElemType::MatchResult,
+                    JType::File => ElemType::File,
                     // A wrapper array (`Integer[]`) is a REFERENCE array of
                     // boxed elements, distinct from the primitive `int[]`.
                     JType::Boxed(elem) => match Prim::of(elem) {
@@ -4367,6 +4368,7 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::Wrapper(prim) => wrapper_internal(prim.elem()),
         ElemType::StackFrame => "java/lang/StackTraceElement",
         ElemType::MatchResult => "java/util/regex/MatchResult",
+        ElemType::File => "java/io/File",
         // A type variable erases to `Object`, like every other reference here.
         ElemType::TypeVar(_)
         | ElemType::Str
@@ -4640,6 +4642,7 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     match elem {
         ElemType::StackFrame => String::from("StackTraceElement"),
         ElemType::MatchResult => String::from("MatchResult"),
+        ElemType::File => String::from("File"),
         ElemType::TypeVar(_) => String::from("Object"),
         ElemType::Builder => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
@@ -5310,6 +5313,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Class => Some(ElemType::Class),
         JType::StackFrame => Some(ElemType::StackFrame),
         JType::MatchResult => Some(ElemType::MatchResult),
+        JType::File => Some(ElemType::File),
         JType::Exception(id) => Some(ElemType::Throwable(id)),
         // A wrapper array element is a boxed REFERENCE (`Integer[]`).
         JType::Boxed(elem) => Prim::of(elem).map(ElemType::Wrapper),
@@ -6643,6 +6647,8 @@ enum ElemType {
     Class,
     /// `java.util.regex.MatchResult` (element of `Matcher.results()`).
     MatchResult,
+    /// `java.io.File` (element of `File.listFiles()`).
+    File,
     /// A throwable element (`Throwable[]` from `getSuppressed()`, or an
     /// array of any exception class), carrying its exception id.
     Throwable(u8),
@@ -6787,6 +6793,7 @@ impl ElemType {
             ElemType::Class => String::from("Ljava/lang/Class;"),
             ElemType::StackFrame => String::from("Ljava/lang/StackTraceElement;"),
             ElemType::MatchResult => String::from("Ljava/util/regex/MatchResult;"),
+            ElemType::File => String::from("Ljava/io/File;"),
             ElemType::Throwable(id) => format!("L{};", exception_internal(id)),
             // A wildcard or nested element erases to its `read` class (Object,
             // unless a wildcard's modelled bound narrows it).
@@ -6856,6 +6863,7 @@ impl ElemType {
             ElemType::Class => JType::Class,
             ElemType::StackFrame => JType::StackFrame,
             ElemType::MatchResult => JType::MatchResult,
+            ElemType::File => JType::File,
             ElemType::Throwable(id) => JType::Exception(id),
             // A wildcard or nested element erases (table-free) to its `read`
             // class; the nesting-aware `elem_value_type` recovers the true
@@ -9227,6 +9235,8 @@ enum BParam {
     Pattern,
     /// A `java.nio.file.Path` (`path.resolve(other)`).
     Path,
+    /// A `java.io.File` (`file.renameTo(other)`, `file.compareTo(other)`).
+    File,
     /// `java.lang.Class` (`Class.isAssignableFrom(Class)`).
     Class,
     /// Any reference array (`getConstructor(Class[])`, `newInstance(Object[])`).
@@ -9381,6 +9391,8 @@ enum BRet {
     Type,
     /// `Object[]` (`ParameterizedType.getActualTypeArguments`, typed loosely).
     ObjectArray,
+    /// `File[]` — `File.listFiles()`.
+    FileArray,
     /// `Throwable[]` (`getSuppressed()`), typed so its elements can be
     /// assigned, read, and iterated as throwables.
     ThrowableArray,
@@ -11796,6 +11808,29 @@ const FILE_METHODS: &[BuiltinMethod] = &[
         descriptor: "()Ljava/lang/String;",
         needs: SortedRole::Sorted,
     },
+    // The path half of `File`, which the VFS could always answer and this
+    // table never asked it to. `getAbsolutePath` hangs a relative path off
+    // `/`, because that is where caturra's filesystem is rooted and there is
+    // no working directory to be anywhere else — the same reading
+    // `Path.toAbsolutePath` already takes. `getCanonicalPath` is that, with
+    // `.` and `..` resolved.
+    bm("getAbsolutePath", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getCanonicalPath", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getParent", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getAbsoluteFile", &[], BRet::File, "()Ljava/io/File;"),
+    bm("getCanonicalFile", &[], BRet::File, "()Ljava/io/File;"),
+    bm("getParentFile", &[], BRet::File, "()Ljava/io/File;"),
+    bm("toPath", &[], BRet::Path, "()Ljava/nio/file/Path;"),
+    bm("isAbsolute", &[], BRet::Boolean, "()Z"),
+    bm("isHidden", &[], BRet::Boolean, "()Z"),
+    bm("mkdirs", &[], BRet::Boolean, "()Z"),
+    bm("renameTo", &[BParam::File], BRet::Boolean, "(Ljava/io/File;)Z"),
+    // `File` is `Comparable<File>`, and its order is its path's.
+    bm("compareTo", &[BParam::File], BRet::Int, "(Ljava/io/File;)I"),
+    // The directory half. `list` answers the NAMES, `listFiles` the files
+    // themselves, both `null` when the receiver is not a directory.
+    bm("list", &[], BRet::StrArray, "()[Ljava/lang/String;"),
+    bm("listFiles", &[], BRet::FileArray, "()[Ljava/io/File;"),
 ];
 
 const WRITER_METHODS: &[BuiltinMethod] = &[
@@ -15358,6 +15393,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Charset => JType::Charset,
         BParam::Pattern => JType::Pattern,
         BParam::Path => JType::Path,
+        BParam::File => JType::File,
         BParam::RefArray => JType::Error,
         // `BiConsumer` never reaches here: `bparam_matches` answers it
         // directly, because only the method table knows the target class.
@@ -15904,6 +15940,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Field => Some(JType::Field),
         BRet::Method => Some(JType::Method),
         BRet::Type => Some(JType::Type),
+        BRet::FileArray => Some(JType::Array {
+            elem: ElemType::File,
+            dims: 1,
+        }),
         BRet::ThrowableArray => Some(JType::Array {
             elem: ElemType::Throwable(0),
             dims: 1,
@@ -21505,7 +21545,38 @@ impl BodyGen<'_> {
                 return JType::File;
             }
         }
-        self.error(span, "File takes one String path: new File(\"data.txt\")");
+        // `new File(directory, name)` — the form a program building a path out
+        // of a listing writes, with the parent either a `File` or its path.
+        if let [parent, child] = args {
+            let parent_ty = self.expr(parent);
+            let child_ty = self.expr(child);
+            if parent_ty == JType::Error || child_ty == JType::Error {
+                self.error_bail(span, "File path");
+                return JType::Error;
+            }
+            let parent_desc = match parent_ty {
+                JType::Str | JType::Null => Some("Ljava/lang/String;"),
+                JType::File => Some("Ljava/io/File;"),
+                _ => None,
+            };
+            if let Some(parent_desc) = parent_desc
+                && child_ty == JType::Str
+            {
+                let init_ref = intern_method_ref(
+                    self.pool,
+                    "java/io/File",
+                    "<init>",
+                    &format!("({parent_desc}Ljava/lang/String;)V"),
+                );
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(3);
+                return JType::File;
+            }
+        }
+        self.error(
+            span,
+            "File takes a String path, or a parent and a name: new File(\"data.txt\"), new File(dir, \"data.txt\")",
+        );
         JType::Error
     }
 
@@ -30335,6 +30406,7 @@ impl BodyGen<'_> {
             ElemType::Constructor => Some(String::from("java/lang/reflect/Constructor")),
             ElemType::Class => Some(String::from("java/lang/Class")),
             ElemType::MatchResult => Some(String::from("java/util/regex/MatchResult")),
+            ElemType::File => Some(String::from("java/io/File")),
             ElemType::StackFrame => Some(String::from("java/lang/StackTraceElement")),
             ElemType::Builder => Some(String::from("java/lang/StringBuilder")),
             ElemType::Throwable(id) => Some(exception_internal(id).to_owned()),
@@ -33276,6 +33348,7 @@ impl BodyGen<'_> {
             | ElemType::Class
             | ElemType::StackFrame
             | ElemType::MatchResult
+            | ElemType::File
             | ElemType::Throwable(_)
             | ElemType::Wildcard { .. }
             | ElemType::Nested { .. }

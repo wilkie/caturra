@@ -11542,7 +11542,7 @@ program can name — 154 in core `java.*` (48 `java.util`, 43
 `java.util.function`, 33 `java.lang`, 8 `java.io`, 6 `java.util.stream`, …),
 the rest Swing/AWT and the bundled `org.code` course library.
 
-**Method names: 995 of 1213 = 82.0%, over the 45 core classes whose receiver
+**Method names: 1009 of 1213 = 83.2%, over the 45 core classes whose receiver
 can be written as one expression.** The denominator comes from a real JDK by
 reflection (`ApiList.java`), not from a checked-in list, so running the script
 on a different JDK moves the number. For each overload it writes a call with
@@ -11563,15 +11563,10 @@ Exactly at 100%: `String`, `Math`, `StringBuilder`, `Double`, `ArrayList`,
 `Matcher`, `Stream`, `IntStream`, `Iterable`, `Comparable`. The low ones are
 low for a reason that is usually — not always — deliberate. `System` 7/25 is a
 boundary: JVM plumbing with no analogue (`loadLibrary`, `SecurityManager`,
-`inheritedChannel`), the properties table, and stream redirection. `File` 9/40
-is only HALF a boundary, and saying otherwise was the loose half of this
-entry. Permission bits, timestamps, device space and `toURI`/`toURL` (which
-need the explicitly-unsupported `java.net`) have nothing behind them — but
-`getAbsolutePath`, `getCanonicalPath`, `getParent`, `isAbsolute`, `compareTo`,
-`list`, `listFiles`, `mkdirs`, `renameTo` and `toPath` are all answerable from
-the `VirtualFileSystem` as it stands, whose `normalize` and `list_dir` the
-`File` method table simply never reaches. That is the most concrete lead this
-measurement produced. `Class` 28/67 is reflection past what a grading
+`inheritedChannel`), the properties table, and stream redirection. `File` was
+9/40 when this was written, and only HALF of that was a boundary; the
+answerable half is the section below, and it is 23/40 now. `Class` 28/67 is
+reflection past what a grading
 harness inspects, `Collections` 28/60 and `Stack` 27/46 are the synchronized
 and checked wrappers and `Vector`'s inherited legacy half, `Character` 32/52 is
 the Unicode code-point surface. Run with `--verbose` for the misses per class.
@@ -11593,3 +11588,68 @@ Pinned by `reject_a_known_objects_method_with_the_wrong_arguments`,
 `reject_assigning_the_null_literal_to_an_int`,
 `reject_calling_a_method_on_the_null_literal` and
 `reject_reading_a_field_on_the_null_literal`.
+
+## The path and directory half of `java.io.File`
+
+The coverage measurement above scored `java.io.File` at 9 of a JDK's 40 method
+names, and the entry filed that under "surface a browser cannot answer". Half
+of it was: permission bits, timestamps, device space and `toURI`/`toURL` (which
+need `java.net`, a package `imports.rs` refuses by name) have nothing behind
+them. The other half was reachable all along — `VirtualFileSystem` has had
+`normalize` and `list_dir` since it was written, and `FILE_METHODS` never
+asked. It answers 23 of 40 now.
+
+**The paths.** `getAbsolutePath` hangs a relative path off `/`, because that is
+where caturra's filesystem is rooted and there is no working directory for it
+to be anywhere else — the reading `Path.toAbsolutePath` already took.
+`getCanonicalPath` is that with `.` and `..` resolved, and declares
+`IOException` like `createNewFile` beside it. `getParent` is `null` both for a
+bare name and for the root, which is the pair that stops a walk up the tree.
+`getAbsoluteFile`, `getCanonicalFile`, `getParentFile` and `toPath` are the
+same answers as objects.
+
+**The abstract pathname.** A `File` keeps what its constructor was given, with
+repeated separators collapsed and a trailing one dropped, but `.` segments
+left alone: `new File("d//a.txt").getPath()` is "d/a.txt" and
+`new File("./a.txt").getPath()` is "./a.txt". `new File(parent, child)` is
+`UnixFileSystem.resolve` rather than concatenation — an empty parent means the
+root, a null one means the child stands alone, an empty child is the parent
+itself, and `new File("d", "/")` really is "d/", trailing separator included.
+
+**The directory.** `list` answers the names, `listFiles` the files, both `null`
+when the receiver is not a directory — including when it does not exist, which
+a program that skips the check meets as a NullPointerException. `mkdir` makes
+ONE directory and answers false when the parent is missing; `mkdirs` makes the
+chain. That distinction needed writing down here, because the VFS creates
+parents implicitly (what a program writing a file wants) and `mkdir` had been
+inheriting it. `renameTo` moves a whole subtree and OVERWRITES an existing
+destination file rather than failing, which is the surprising half of the Unix
+rule.
+
+**A `File` is `Comparable`, and value-based, and both had to be written
+twice.** Its order is its pathname's, magnitude included (`compareTo` is
+`String.compareTo`), so a `List<File>` sorts. Its equality is its pathname's —
+but a direct `a.equals(b)` reaches the intrinsic dispatch while a COLLECTION
+asks the VM's own `native_equals`, which knew only strings: `files.contains(new
+File("box/a.txt"))` was reference identity and answered false where a JDK says
+true. The same two-places rule applies to the hash that has to agree with it
+(`UnixFileSystem` xors the pathname's hash with a constant), and pulling on it
+found `Charset` in the same state — value equality with an identity hash, and
+`charset.hashCode()` not implemented at all.
+
+**A method reference needs its qualifier to name a class.** `File::getName` —
+the ordinary way to turn a listing into names — was "invalid method reference:
+cannot find symbol 'File'", because the desugaring's list of library qualifiers
+did not have it. `Path` was missing for the same reason.
+
+Two things here are deliberately not a JDK's. A listing's ORDER is sorted where
+a JDK's is the filesystem's ("no particular order" — unspecified, like the
+reflective listings elsewhere in this document), and `getAbsolutePath` answers
+from the root rather than from a working directory. The pins compare what does
+not depend on either: sorted contents, and the invariants the absolute and
+canonical forms promise wherever they run.
+
+Pinned by `a_files_path_and_directory_methods`,
+`a_files_two_argument_constructors`, `a_files_absolute_and_canonical_forms`,
+`a_files_in_collections_and_streams`, `a_files_and_charsets_hash_as_their_text`
+and `reject_an_uncaught_canonical_path`.

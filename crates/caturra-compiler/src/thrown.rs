@@ -859,7 +859,9 @@ fn library_kind_throws(
         // a reader's reads, a writer's writes, and `File.createNewFile`.
         (Some("Reader"), "read" | "readLine" | "ready" | "close" | "lines")
         | (Some("Writer"), "write" | "append" | "close" | "flush" | "newLine")
-        | (Some("File"), "createNewFile") => &["java/io/IOException"],
+        | (Some("File"), "createNewFile" | "getCanonicalPath" | "getCanonicalFile") => {
+            &["java/io/IOException"]
+        }
         (
             Some("Class"),
             "getMethod" | "getDeclaredMethod" | "getConstructor" | "getDeclaredConstructor",

@@ -305,6 +305,43 @@ pub fn invoke_special(
             }
             Ok(())
         }
+        // `new File(parent, child)` — the two-argument constructors, whose
+        // rule is `UnixFileSystem.resolve` and is not simple concatenation: an
+        // empty parent means the ROOT, a null one means there is no parent at
+        // all, and an empty child is the parent itself.
+        (
+            "<init>",
+            "(Ljava/lang/String;Ljava/lang/String;)V" | "(Ljava/io/File;Ljava/lang/String;)V",
+        ) if matches!(heap.get(receiver), Some(HeapObject::File(_))) => {
+            let parent = match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::JavaString(units)) => {
+                        Some(abstract_path(&String::from_utf16_lossy(units)))
+                    }
+                    Some(HeapObject::File(path)) => Some(path.clone()),
+                    _ => return Err(throw("java.lang.ClassCastException: not a String")),
+                },
+                Some(JValue::Ref(None)) => None,
+                _ => return Err(throw("java.lang.VerifyError: expected a String argument")),
+            };
+            let child = match args.get(1) {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::JavaString(units)) => {
+                        abstract_path(&String::from_utf16_lossy(units))
+                    }
+                    _ => return Err(throw("java.lang.ClassCastException: not a String")),
+                },
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            let resolved = resolve_file(parent.as_deref(), &child);
+            match heap.get_mut(receiver) {
+                Some(HeapObject::File(path)) => {
+                    *path = resolved;
+                    Ok(())
+                }
+                _ => unreachable!("receiver kind checked by the guard"),
+            }
+        }
         ("<init>", "(Ljava/lang/String;)V") => {
             // A THROWABLE takes a null message — `new RuntimeException(null)`
             // is legal Java, `getMessage()` answers null and `toString()` is
@@ -364,7 +401,7 @@ pub fn invoke_special(
                     Ok(())
                 }
                 Some(HeapObject::File(path)) => {
-                    *path = text;
+                    *path = abstract_path(&text);
                     Ok(())
                 }
                 Some(HeapObject::Scanner { .. }) => {
@@ -896,8 +933,7 @@ pub fn invoke_virtual(
             Ok(Some(JValue::Ref(Some(reference))))
         }
         // Two Files naming one path are equal (the JDK compares the abstract
-        // pathname). Answered here rather than in `file_method`, which reads
-        // no arguments.
+        // pathname).
         (HeapObject::File(path), "equals") => {
             let path = path.clone();
             let equal = match args.first() {
@@ -908,7 +944,7 @@ pub fn invoke_virtual(
             };
             Ok(Some(JValue::Int(i32::from(equal))))
         }
-        (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
+        (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method, args),
         (HeapObject::Path(_), _) => path_method(heap, receiver, method, args),
         // A `Charset` is its NAME: `toString`, `name` and `displayName` all
         // answer it, and two charsets are equal when they name the same one.
@@ -994,6 +1030,12 @@ pub fn invoke_virtual(
             ))))))
         }
         (HeapObject::Matcher { .. }, _) => matcher_method(heap, receiver, method, args),
+        // A `Charset` hashes as its name, the same answer a collection gets
+        // from `native_hash` — written in both places, so a program can ask
+        // either way and a `HashSet<Charset>` holds one of each charset.
+        (HeapObject::Charset(name), "hashCode") => {
+            Ok(Some(JValue::Int(java_string_hash(&name.clone()))))
+        }
         (HeapObject::Charset(name), "equals") => {
             let name = name.clone();
             let equal = match args.first() {
@@ -2734,7 +2776,7 @@ fn index_of(haystack: &[u16], needle: &[u16]) -> i32 {
 
 /// `String.compareTo` semantics: difference of first differing code
 /// unit, else length difference.
-fn compare_utf16(a: &[u16], b: &[u16]) -> i32 {
+pub(crate) fn compare_utf16(a: &[u16], b: &[u16]) -> i32 {
     for (x, y) in a.iter().zip(b.iter()) {
         if x != y {
             return i32::from(*x) - i32::from(*y);
@@ -3968,14 +4010,21 @@ pub(crate) fn native_equals(heap: &Heap, a: JValue, b: JValue) -> bool {
         }
         (JValue::Ref(None), JValue::Ref(None)) => true,
         (JValue::Ref(Some(x)), JValue::Ref(Some(y))) => {
+            // The VALUE-based library objects. A direct `a.equals(b)` reaches
+            // the arms above, but a collection asks HERE — so a `File` whose
+            // own `equals` compares pathnames was still identity-compared by
+            // `contains`, `indexOf`, `remove` and a Set, which is the one
+            // place a program can see the difference.
             x == y
-                || matches!(
-                    (heap.get(x), heap.get(y)),
+                || match (heap.get(x), heap.get(y)) {
                     (
                         Some(HeapObject::JavaString(sx)),
                         Some(HeapObject::JavaString(sy)),
-                    ) if sx == sy
-                )
+                    ) => sx == sy,
+                    (Some(HeapObject::File(sx)), Some(HeapObject::File(sy)))
+                    | (Some(HeapObject::Charset(sx)), Some(HeapObject::Charset(sy))) => sx == sy,
+                    _ => false,
+                }
         }
         _ => false,
     }
@@ -4003,6 +4052,12 @@ pub(crate) fn native_hash(heap: &Heap, value: JValue) -> i32 {
             Some(HeapObject::JavaString(units)) => units.iter().fold(0i32, |hash, unit| {
                 hash.wrapping_mul(31).wrapping_add(i32::from(*unit))
             }),
+            // Paired with the value equality above: two equal objects have to
+            // hash alike or a `HashSet` holds both of them. `UnixFileSystem`
+            // xors the path's hash with a constant; a `Charset` hashes as its
+            // name.
+            Some(HeapObject::File(path)) => java_string_hash(path) ^ 0x0012_d591,
+            Some(HeapObject::Charset(name)) => java_string_hash(name),
             // Identity hash (arbitrary in Java too).
             _ => reference.cast_signed(),
         },
@@ -4887,11 +4942,127 @@ fn list_method(
 }
 
 /// `java.io.File` methods over the virtual filesystem.
+/// `File.list()` and `File.listFiles()` — the NAMES a directory holds, or the
+/// files themselves. Both are `null` when the receiver is not a directory,
+/// including when it does not exist, which is the check a program that skips
+/// one meets as a `NullPointerException`.
+fn file_listing(heap: &mut Heap, vfs: &VirtualFileSystem, path: &str, method: &str) -> JValue {
+    let Ok(children) = vfs.list_dir(path) else {
+        return JValue::Ref(None);
+    };
+    let names = children
+        .iter()
+        .map(|child| child.rsplit('/').next().unwrap_or_default());
+    let (elements, descriptor) = if method == "list" {
+        (
+            names
+                .map(|name| JValue::Ref(Some(heap.alloc_string(name))))
+                .collect::<Vec<_>>(),
+            "[Ljava/lang/String;",
+        )
+    } else {
+        // A listed file is `new File(this, name)` — its path is built from the
+        // receiver's own, so a relative listing stays relative and `getPath`
+        // prints what a JDK prints.
+        let paths: Vec<String> = names
+            .map(|name| {
+                if path.ends_with('/') {
+                    format!("{path}{name}")
+                } else {
+                    format!("{path}/{name}")
+                }
+            })
+            .collect();
+        (
+            paths
+                .into_iter()
+                .map(|child| JValue::Ref(Some(heap.alloc(HeapObject::File(child)))))
+                .collect::<Vec<_>>(),
+            "[Ljava/io/File;",
+        )
+    };
+    let reference = heap.alloc(HeapObject::RefArray(String::from(descriptor), elements));
+    JValue::Ref(Some(reference))
+}
+
+/// The `File` argument of `renameTo`/`compareTo`, as its path.
+fn file_argument(heap: &Heap, value: Option<&JValue>) -> Option<String> {
+    match value {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::File(path)) => Some(path.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A path's directory part, `None` when it has none. The root has no parent
+/// and neither does a bare name, which is what stops a walk up the tree.
+fn parent_path(path: &str) -> Option<String> {
+    if path == "/" {
+        return None;
+    }
+    match path.rfind('/') {
+        None => None,
+        Some(0) => Some(String::from("/")),
+        Some(cut) => Some(path[..cut].to_owned()),
+    }
+}
+
+/// A `File`'s ABSTRACT pathname: what the constructor keeps of the string it
+/// was given. Repeated separators collapse and a trailing one is dropped, but
+/// `.` and `..` are left alone — `new File("./a").getPath()` is "./a", and
+/// only the canonical form resolves it. Every `File` in the heap holds this
+/// form, so `getPath`, `equals` and `compareTo` agree about what it is.
+#[must_use]
+pub fn abstract_path(path: &str) -> String {
+    let rooted = path.starts_with('/');
+    let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() {
+        return if rooted { String::from("/") } else { String::new() };
+    }
+    let joined = parts.join("/");
+    if rooted { format!("/{joined}") } else { joined }
+}
+
+/// `UnixFileSystem.resolve`: how `new File(parent, child)` joins the two.
+/// A null parent is no parent at all (the child stands alone), an EMPTY one
+/// is the root, and an empty child is the parent itself — so
+/// `new File("d", "/")` really is "d/", trailing separator and all.
+#[must_use]
+pub fn resolve_file(parent: Option<&str>, child: &str) -> String {
+    let Some(parent) = parent else {
+        return child.to_owned();
+    };
+    let parent = if parent.is_empty() { "/" } else { parent };
+    if child.is_empty() {
+        return parent.to_owned();
+    }
+    if parent == "/" {
+        return format!("/{}", child.trim_start_matches('/'));
+    }
+    if child.starts_with('/') {
+        return format!("{parent}{child}");
+    }
+    format!("{parent}/{child}")
+}
+
+/// Where a relative path sits: caturra's filesystem is rooted at `/` and has
+/// no working directory, so it hangs off the root.
+fn absolute_path(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    }
+}
+
 fn file_method(
     heap: &mut Heap,
     vfs: &mut VirtualFileSystem,
     receiver: HeapRef,
     method: &str,
+    args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
     let path = match heap.get(receiver) {
         Some(HeapObject::File(path)) => path.clone(),
@@ -4903,7 +5074,15 @@ fn file_method(
         "isFile" => boolean(vfs.is_file(&path)),
         "isDirectory" => boolean(vfs.is_directory(&path)),
         "delete" => boolean(vfs.remove(&path).is_ok()),
-        "mkdir" => boolean(!vfs.exists(&path) && vfs.mkdir(&path).is_ok()),
+        // `mkdir` makes ONE directory: a JDK answers false when the parent is
+        // missing, and the VFS creates parents implicitly (which is what a
+        // program writing a file wants), so the check has to be here.
+        "mkdir" => {
+            let parent = parent_path(&path);
+            let ready = parent.is_none_or(|dir| vfs.is_directory(&dir));
+            boolean(ready && !vfs.exists(&path) && vfs.mkdir(&path).is_ok())
+        }
+        "mkdirs" => boolean(!vfs.exists(&path) && vfs.mkdir(&path).is_ok()),
         "createNewFile" => {
             if vfs.exists(&path) {
                 boolean(false)
@@ -4915,12 +5094,76 @@ fn file_method(
         "length" => Ok(Some(JValue::Int(
             i32::try_from(vfs.len(&path)).unwrap_or(i32::MAX),
         ))),
+        // The last component of the ABSTRACT path, not of the canonical one:
+        // `new File("a/..").getName()` is "..", which resolving the path first
+        // would answer as "".
         "getName" => {
-            let normalized = VirtualFileSystem::normalize(&path);
-            let name = normalized.rsplit('/').next().unwrap_or_default();
+            let name = path.rsplit('/').next().unwrap_or_default();
             let reference = heap.alloc_string(name);
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // caturra's filesystem is rooted at `/` and has no working directory,
+        // so a relative path's absolute form hangs off the root — the reading
+        // `Path.toAbsolutePath` already takes. The canonical form is that with
+        // `.` and `..` resolved, which is what `normalize` does.
+        "getAbsolutePath" | "getCanonicalPath" => {
+            let text = absolute_path(&path);
+            let text = if method == "getCanonicalPath" {
+                VirtualFileSystem::normalize(&text)
+            } else {
+                text
+            };
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        "getAbsoluteFile" | "getCanonicalFile" => {
+            let text = absolute_path(&path);
+            let text = if method == "getCanonicalFile" {
+                VirtualFileSystem::normalize(&text)
+            } else {
+                text
+            };
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::File(text))))))
+        }
+        // `null` when there is no directory part — for a bare name AND for the
+        // root itself, which is the pair a walk up the tree terminates on.
+        "getParent" => match parent_path(&path) {
+            Some(parent) => Ok(Some(JValue::Ref(Some(heap.alloc_string(&parent))))),
+            None => Ok(Some(JValue::Ref(None))),
+        },
+        "getParentFile" => match parent_path(&path) {
+            Some(parent) => Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::File(parent)))))),
+            None => Ok(Some(JValue::Ref(None))),
+        },
+        "toPath" => Ok(Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::Path(path.clone())),
+        )))),
+        "isAbsolute" => boolean(path.starts_with('/')),
+        // A dotfile, the Unix convention the JDK reads it as.
+        "isHidden" => boolean(
+            path.rsplit('/')
+                .next()
+                .is_some_and(|name| name.starts_with('.') && name != "." && name != ".."),
+        ),
+        // Renaming OVERWRITES an existing destination file on a Unix
+        // filesystem rather than failing, which is the surprising half.
+        "renameTo" => {
+            let Some(target) = file_argument(heap, args.first()) else {
+                return boolean(false);
+            };
+            boolean(vfs.rename(&path, &target).is_ok())
+        }
+        "compareTo" => {
+            let Some(target) = file_argument(heap, args.first()) else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let (mine, theirs): (Vec<u16>, Vec<u16>) = (
+                path.encode_utf16().collect(),
+                target.encode_utf16().collect(),
+            );
+            Ok(Some(JValue::Int(compare_utf16(&mine, &theirs))))
+        }
+        "list" | "listFiles" => Ok(Some(file_listing(heap, vfs, &path, method))),
         // getPath / toString return the path as written.
         "getPath" | "toString" => {
             let reference = heap.alloc_string(&path);
@@ -5943,7 +6186,7 @@ fn path_method(
             }
         }
         "toFile" => Ok(Some(JValue::Ref(Some(
-            heap.alloc(HeapObject::File(path.clone())),
+            heap.alloc(HeapObject::File(abstract_path(&path))),
         )))),
         "compareTo" => {
             let other = other(heap, args.first())?;
