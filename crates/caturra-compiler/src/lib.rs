@@ -761,24 +761,30 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         .filter(|(path, _)| !path.starts_with('<'))
         .flat_map(|(_, unit)| unit.classes.iter().map(|c| c.name.clone()))
         .collect();
-    for (path, unit) in &units {
-        if path.starts_with('<') {
-            continue;
-        }
-        imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
-    }
-
     // Everything from here on ATTRIBUTES the tree, and javac attributes
     // nothing that did not parse: a file with a syntax error is reported with
     // its syntax errors alone. caturra's parser recovers and carries on, so a
     // stray `int y = ;` was followed by whatever the recovered tree then made
     // of the rest — errors javac never prints, and which a student cannot act
     // on because the real mistake is the one above them.
+    //
+    // Taken BEFORE the import check, which is attribution too. Reading it
+    // after meant an unimported class — `Pattern p = Pattern.compile("a")`
+    // with no `import java.util.regex.Pattern` — made this false, and every
+    // other mistake in the file was then truncated away: javac reported four
+    // errors for such a program and caturra reported the import's two.
     let parsed_cleanly = !compilation
         .diagnostics
         .iter()
         .any(|d| matches!(d.severity, Severity::Error));
     let after_parse = compilation.diagnostics.len();
+
+    for (path, unit) in &units {
+        if path.starts_with('<') {
+            continue;
+        }
+        imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
+    }
 
     bridges::add_bridge_methods(&mut units);
     inner::bind_inner_classes(&mut units);
@@ -800,6 +806,19 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // try-with-resources becomes a body plus two `close()` calls — checked its
     // resource in each copy, so a student saw one mistake reported three
     // times.
+    // javac attributes a file in SOURCE ORDER, so its errors come out that
+    // way; caturra runs several passes over the whole file, so an import
+    // error (checked first) sorted ahead of an attribution error on an
+    // earlier line. Truncation used to hide that — the import error dropped
+    // everything after it — and with the truncation gone the order shows.
+    // A stable sort by position leaves two complaints about the same place in
+    // the order the phases found them.
+    compilation.diagnostics.sort_by_key(|d| {
+        (
+            d.path.clone(),
+            d.span.map_or((0, 0), |s| (s.start.line, s.start.column)),
+        )
+    });
     let mut seen = std::collections::HashSet::new();
     compilation.diagnostics.retain(|d| {
         let at = d

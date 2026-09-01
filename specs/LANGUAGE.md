@@ -11784,3 +11784,48 @@ lower than what was written here before — is **1030 of 1213 = 84.9%**.
 Pinned by `the_bulk_operations_every_collection_declares`,
 `a_parallel_stream_is_a_stream_here`, `the_stream_ops_only_one_stream_had` and
 `a_null_callback_throws_where_it_is_written`.
+
+## The engine must not crash
+
+A panic is the worst answer a compiler can give, and the reason is not that it
+looks bad: it prints NO diagnostics, which reads exactly like a clean compile.
+The `Stream.generate(null)` panic above took every other error in its file with
+it, and it made the coverage measurement score a whole probe as supported.
+Nothing in the sweep or fuzz tooling was watching for one — they all compare
+what caturra says with what a JDK says, and a crash says nothing.
+
+`scripts/fuzz/panics.py` asks only that the engine exit cleanly. Over the API
+surface the coverage measurement walks, it calls every modelled method with
+each of ten argument SHAPES — a null, a one-parameter lambda, a two-parameter
+one, a supplier, a method reference, a constructor reference, a number, a
+string, an object, an array — and bisects a failing batch to the single call
+that did it. Whether the call is legal is beside the point: an illegal one must
+be REFUSED, not crash.
+
+**Its first run found 15 crashes at one site.** A lambda with FEWER parameters
+than its interface takes — `stream.max(x -> x)`, where a comparator takes two —
+was reported correctly ("incompatible types: incompatible parameter types in
+lambda expression") and then the desugaring carried on and indexed past the end
+of the lambda's own parameter list. Binding the parameters that exist builds a
+class nothing will run (the program is already refused) and reports one mistake
+instead of dying. 450 probes over 45 classes, 0 crashes.
+
+**And an unimported class hid every other mistake in the file.** The snapshot
+that decides "did this parse?" — the one that keeps a file with a syntax error
+from being reported with the nonsense a recovered tree makes of the rest — was
+taken AFTER the import check had pushed its errors. So `Pattern p =
+Pattern.compile("a")` with no import made the whole file read as unparsed, and
+everything attribution found was truncated away: javac reported four errors for
+such a program and caturra reported the import's two. The snapshot is taken
+before the import check now, which is attribution too.
+
+With the truncation gone, the ORDER showed: caturra runs several passes over a
+whole file, so the import check's error sorted ahead of an attribution error on
+an earlier line, where javac attributes in source order and reports that way.
+The diagnostics are sorted by position at the end, stably, so two complaints
+about one place keep the order the phases found them in.
+
+Pinned by `reject_a_lambda_with_too_few_parameters`,
+`reject_a_comparator_that_takes_nothing`,
+`an_import_error_does_not_hide_the_others` and
+`the_first_error_is_the_first_mistake`.

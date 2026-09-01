@@ -63,3 +63,26 @@ Scanner input matrix, one ordinary MISTAKE per program against javac's wording
 — are written fresh each time from the recipe in `specs/LANGUAGE.md`, which
 records what each found. They are a few dozen lines each; the two kept here are
 the two worth re-running unchanged.
+
+## `panics.py` — the engine must not crash
+
+The other tools here compare what caturra SAYS with what a JDK says. A crash
+says nothing, so none of them was watching for one: `Stream.generate(null)`
+ended in `unreachable!("guarded by caller")`, and a panic prints no
+diagnostics — which reads exactly like a clean compile, and made the coverage
+measurement score the whole probe as supported.
+
+`panics.py` asks only that the engine exit cleanly. Over the API surface
+`scripts/coverage/` walks, it calls every modelled method with each of ten
+argument SHAPES — a null, a one-parameter lambda, a two-parameter one, a
+supplier, a method reference, a constructor reference, a number, a string, an
+object, an array — filling every parameter of every overload with the same one.
+Whether the call is legal is beside the point: an illegal one must be refused,
+not crash. A failing batch is bisected line by line so the report names the one
+call that did it.
+
+    scripts/fuzz/panics.py [--verbose]
+
+The first run found 15 crashes at one site: a lambda with FEWER parameters than
+its interface takes (`stream.max(x -> x)`, where a comparator takes two)
+indexed past the end of the lambda's own parameter list.

@@ -44595,3 +44595,71 @@ public class NullCallbacks {
 }
 "#
 );
+
+// A lambda with the WRONG NUMBER of parameters. The arity check reported it
+// and then the desugaring ran anyway, indexing past the end of the lambda's
+// parameter list — `stream.max(x -> x)`, where a comparator takes two, PANICKED
+// the compiler. Found by `scripts/fuzz/panics.py`, which asks only that the
+// engine survive: a program that is wrong must be REFUSED, not crash.
+differential_wording!(
+    reject_a_lambda_with_too_few_parameters,
+    "LambdaArity",
+    r#"
+import java.util.stream.Stream;
+
+public class LambdaArity {
+    public static void main(String[] args) {
+        System.out.println(Stream.of("a").max(x -> x));
+    }
+}
+"#
+);
+
+differential_wording!(
+    reject_a_comparator_that_takes_nothing,
+    "LambdaArityNone",
+    r#"
+import java.util.stream.Stream;
+
+public class LambdaArityNone {
+    public static void main(String[] args) {
+        System.out.println(Stream.of("a").sorted(() -> 1).count());
+    }
+}
+"#
+);
+
+// An unimported class hid every OTHER mistake in the file. The snapshot that
+// decides "did this parse?" was taken after the import check had already
+// pushed its errors, so an import error made the whole file read as unparsed
+// and everything attribution found was truncated away: javac reported four
+// errors for this program and caturra reported the import's two.
+differential_error_count!(
+    an_import_error_does_not_hide_the_others,
+    "ImportHides",
+    r#"
+public class ImportHides {
+    public static void main(String[] args) {
+        System.out.println(nope1);
+        Pattern p = Pattern.compile("a");
+        System.out.println(nope2);
+    }
+}
+"#
+);
+
+// …and the errors come out in SOURCE order, as javac's do. caturra runs
+// several passes over the whole file, so the import check's error sorted ahead
+// of an attribution error on an earlier line; truncation used to hide that.
+differential_wording!(
+    the_first_error_is_the_first_mistake,
+    "ErrorOrder",
+    r#"
+public class ErrorOrder {
+    public static void main(String[] args) {
+        System.out.println(missingFirst);
+        Pattern p = Pattern.compile("a");
+    }
+}
+"#
+);

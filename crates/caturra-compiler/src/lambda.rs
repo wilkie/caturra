@@ -7072,10 +7072,18 @@ fn build_erased_lambda(
         }],
         span,
     };
+    // ZIPPED, not indexed. The arity check above reports a lambda that does
+    // not match its SAM, and then this ran anyway: for a lambda with FEWER
+    // parameters than the interface takes (`stream.max(x -> x)`, where a
+    // comparator takes two) it indexed past the end and PANICKED the
+    // compiler. Binding the parameters that exist builds a class nothing will
+    // run — the program is already refused — and reports one mistake instead
+    // of a crash.
     let mut method_body: Vec<Stmt> = elem_types
         .iter()
+        .zip(params.iter())
         .enumerate()
-        .map(|(i, ty)| unwrap(ty, format!("__caturraArg{i}"), &params[i].name))
+        .map(|(i, (ty, param))| unwrap(ty, format!("__caturraArg{i}"), &param.name))
         .collect();
 
     // The lambda's OWN parameters are in scope for its body. Without them a
