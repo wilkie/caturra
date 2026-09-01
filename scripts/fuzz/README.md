@@ -86,3 +86,28 @@ call that did it.
 The first run found 15 crashes at one site: a lambda with FEWER parameters than
 its interface takes (`stream.max(x -> x)`, where a comparator takes two)
 indexed past the end of the lambda's own parameter list.
+
+## `syntax.py` — break a program in one place
+
+The hand-written syntax sweep behind "Where a parse error points" was eighteen
+programs. This asks the same question of hundreds: take a program that
+compiles, mutate ONE token — delete it, type it twice, transpose it with its
+neighbour, or replace it with a symbol next to it in the grammar — and compare
+what the two engines report.
+
+What is compared is the POSITION of the first error and the NUMBER of errors,
+not the wording: caturra's parser is deliberately more explicit than javac's,
+which `specs/LANGUAGE.md` writes down. Position is what an editor underlines;
+count is what a student reads as "how much did I break".
+
+    scripts/fuzz/syntax.py [cases-dir] [--count N] [--seed N] [--verbose]
+
+A mutation that still compiles is skipped. One that javac ACCEPTS and caturra
+refuses is reported as a refusal, and one that javac REFUSES and caturra
+compiles as an acceptance — the dangerous direction, and the exit code is
+non-zero for either.
+
+At 200 mutations: 172 of 193 put the first error in the same place, 0 in either
+dangerous direction. It found one accepts-invalid on its first run — a `;`
+after a `return` is an unreachable STATEMENT, and caturra dropped empty
+statements at parse time because they do nothing at run time.

@@ -12050,3 +12050,32 @@ Fewer is the safe direction.
 Pinned by `reject_a_statement_missing_its_semicolon` (the LINE, not the
 wording), `an_unfinished_initializer_reports_one_mistake` and
 `an_unfinished_case_label_reports_one_mistake`.
+
+### Breaking a working program in one place
+
+`scripts/fuzz/syntax.py` is the hand-written sweep above, asked of hundreds:
+mutate ONE token of a program that compiles — delete it, type it twice,
+transpose it with its neighbour, replace it with a symbol next to it in the
+grammar — and compare the POSITION of the first error and the NUMBER of errors.
+At 200 mutations, 172 of the 193 that broke something put the first error in
+the same place as javac, and 58 of those say less after it (fewer is the safe
+direction). Nothing was refused that javac accepts.
+
+It found one **accepts-invalid** on its first run, and it is a nice one: `return
+"<" + s + ">"; ;` — an empty statement IS a statement for reachability (JLS
+§14.21), so the `;` after a return is unreachable and javac says so. caturra
+dropped empty statements at parse time, because they do nothing at run time,
+and compiled a program a JDK refuses. They are kept in the tree now
+(`Stmt::Empty`), which costs one arm in each pass that walks statements and
+buys the reachability rule.
+
+It also found the ORDER problem the sort exposed: an unclosed class reported
+"class 'X' is missing its closing '}'" at the class's NAME, which sorts ahead
+of every real mistake in the file — a program with a stray `{` on line 19
+reported the unclosed class first, about line 4, where javac's first error is
+the stray brace. The message still names the class; it points at the end of the
+file now, which is where the brace should have been and where javac's own
+"reached end of file while parsing" points.
+
+Pinned by `reject_an_unreachable_empty_statement` and
+`a_stray_semicolon_is_an_empty_statement`.

@@ -405,7 +405,8 @@ fn thrown_of_stmt(stmt: &Stmt, handlers: &mut Vec<Vec<Exc>>, ctx: &mut Ctx) -> T
             }
             out
         }
-        Stmt::Break { .. } | Stmt::Continue { .. } => ThrownSet::default(),
+        // An empty statement throws nothing, like a break or a continue.
+        Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Empty(_) => ThrownSet::default(),
         Stmt::Try {
             body,
             catches,

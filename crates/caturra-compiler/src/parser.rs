@@ -1061,10 +1061,15 @@ impl Parser<'_> {
         let mut order = 0usize;
         while !self.at_symbol("}") {
             if self.peek().is_none() {
-                self.error_at(
-                    name_span,
-                    format!("class '{name}' is missing its closing '}}'"),
-                );
+                // At the END of the file, where the brace should have been —
+                // not at the class's NAME. The name is where the reader would
+                // start looking, but it sorts ahead of every real mistake in
+                // the file: a program with a stray `{` in the middle reported
+                // the unclosed class FIRST, about line 4, when javac's first
+                // error was the stray brace on line 19. The message still
+                // names the class, which is what the name was for.
+                let at = self.eof_span();
+                self.error_at(at, format!("class '{name}' is missing its closing '}}'"));
                 break;
             }
             // A stray `;` between members is an empty declaration (JLS §8.1.6),
@@ -1213,10 +1218,8 @@ impl Parser<'_> {
         let mut order = 0usize;
         while !self.at_symbol("}") {
             if self.peek().is_none() {
-                self.error_at(
-                    name_span,
-                    format!("enum '{name}' is missing its closing '}}'"),
-                );
+                let at = self.eof_span();
+                self.error_at(at, format!("enum '{name}' is missing its closing '}}'"));
                 break;
             }
             // A member's own type parameters leave scope with it.
@@ -2143,11 +2146,14 @@ impl Parser<'_> {
             let started = self.pos;
             match self.statement() {
                 Ok(Some(stmt)) => statements.push(stmt),
-                // An empty statement (`;`, JLS §14.6) parses to nothing. It
-                // is not a parse error, and must not reach the recovery
-                // below — that skips to the next `;`, which would silently
-                // swallow the statement after it.
-                Ok(None) => {}
+                // An empty statement (`;`, JLS §14.6) is not a parse error,
+                // and must not reach the recovery below — that skips to the
+                // next `;`, which would silently swallow the statement after
+                // it. It is kept as an empty BLOCK rather than dropped: an
+                // empty statement IS a statement for reachability, so
+                // `return x; ;` is an unreachable statement (javac says so)
+                // and dropping it made caturra compile one.
+                Ok(None) => statements.push(Stmt::Empty(self.tokens[started].span)),
                 Err(Abort) => self.recover_to_statement_boundary_from(started),
             }
         }
@@ -2252,7 +2258,9 @@ impl Parser<'_> {
         Ok((name, decl))
     }
 
-    /// Parse one statement. `Ok(None)` means an empty statement (`;`).
+    /// Parse one statement. `Ok(None)` means an empty statement (`;`) in a
+    /// position where nothing can follow it — see the `block_body` arm, which
+    /// keeps one as an empty BLOCK instead.
     #[allow(clippy::too_many_lines)] // one arm per statement form
     fn statement(&mut self) -> Parsed<Option<Stmt>> {
         if self.eat_symbol(";") {
@@ -5935,7 +5943,8 @@ fn erase_in_stmt(
         | Stmt::Throw { value: e, .. }
         | Stmt::Assign { value: e, .. }
         | Stmt::Return { value: Some(e), .. } => erase_in_expr(e, to_object, tracked),
-        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
+        // An empty statement holds nothing, like a bare return or a break.
+        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Empty(_) => {}
         Stmt::If {
             cond, then, els, ..
         } => {
@@ -6174,7 +6183,8 @@ fn rename_class_in_stmt(stmt: &mut Stmt, from: &str, to: &str) {
         | Stmt::Throw { value: e, .. }
         | Stmt::Assign { value: e, .. }
         | Stmt::Return { value: Some(e), .. } => rename_class_in_expr(e, from, to),
-        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
+        // An empty statement holds nothing, like a bare return or a break.
+        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Empty(_) => {}
         Stmt::If {
             cond, then, els, ..
         } => {

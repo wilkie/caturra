@@ -44972,3 +44972,42 @@ public class CaseNoColon {
 }
 "#
 );
+
+// An empty statement IS a statement for reachability (JLS §14.21), so a `;`
+// after a `return` is unreachable and javac says so. caturra dropped the empty
+// statement at parse time — it does nothing at run time — and compiled a
+// program a JDK refuses. Found by `scripts/fuzz/syntax.py`, which breaks a
+// working program in one place and compares what the two engines say.
+differential_wording!(
+    reject_an_unreachable_empty_statement,
+    "DeadSemi",
+    r#"
+public class DeadSemi {
+    static String tag(String s) { return "<" + s + ">"; ; }
+
+    public static void main(String[] args) {
+        System.out.println(tag("x"));
+    }
+}
+"#
+);
+
+// …but a stray `;` that IS reachable is legal, in every position one can sit.
+differential_test!(
+    a_stray_semicolon_is_an_empty_statement,
+    "StraySemi",
+    r#"
+public class StraySemi {
+    public static void main(String[] args) {
+        int x = 1;;
+        System.out.println(x);;
+        for (int i = 0; i < 1; i++);
+        if (x == 1);
+        {
+            ;
+        }
+        System.out.println("done");
+    }
+}
+"#
+);

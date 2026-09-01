@@ -357,6 +357,11 @@ pub fn array_of(ty: TypeRef, dims: usize) -> TypeRef {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Block(Vec<Stmt>),
+    /// `;` on its own (JLS §14.6). It does nothing at run time, and exists in
+    /// the tree for one reason: an empty statement IS a statement for
+    /// REACHABILITY, so `return x; ;` is an unreachable statement — dropping
+    /// it at parse time made caturra compile a program javac refuses.
+    Empty(SourceSpan),
     Expr(Expr),
     /// `int a = 1, b;` — one declared type, one or more declarators.
     LocalDecl {

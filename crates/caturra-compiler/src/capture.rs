@@ -862,6 +862,8 @@ fn find_in_stmts(stmts: &[Stmt], scope: &mut Scope, out: &mut Found, walk: &Walk
 #[allow(clippy::too_many_lines)] // capture walk, one arm per statement kind
 fn find_in_stmt(stmt: &Stmt, scope: &mut Scope, out: &mut Found, walk: &Walk) {
     match stmt {
+        // An empty statement does nothing and holds nothing.
+        Stmt::Empty(_) => {}
         Stmt::Block(body) => find_in_stmts(body, scope, out, walk),
         Stmt::LocalDecl {
             ty, declarators, ..
@@ -1281,6 +1283,8 @@ fn free_names(class: &ClassDecl) -> HashSet<String> {
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]
 fn free_in_stmt(stmt: &Stmt, bound: &mut HashSet<String>, free: &mut HashSet<String>) {
     match stmt {
+        // An empty statement does nothing and holds nothing.
+        Stmt::Empty(_) => {}
         Stmt::Block(body) => {
             let snapshot = bound.clone();
             for s in body {
@@ -1519,6 +1523,8 @@ fn rewrite_stmts(stmts: &mut [Stmt], captures: &HashMap<String, Vec<(String, Typ
 #[allow(clippy::match_same_arms)]
 fn rewrite_stmt(stmt: &mut Stmt, captures: &HashMap<String, Vec<(String, TypeRef)>>) {
     match stmt {
+        // An empty statement does nothing and holds nothing.
+        Stmt::Empty(_) => {}
         Stmt::Block(body) => rewrite_stmts(body, captures),
         Stmt::LocalDecl { declarators, .. } => {
             for d in declarators {
@@ -1762,6 +1768,8 @@ fn mutations_in_stmts(stmts: &[Stmt], out: &mut Mutations) {
 #[allow(clippy::match_same_arms)]
 fn mutations_in_stmt(stmt: &Stmt, out: &mut Mutations) {
     match stmt {
+        // An empty statement does nothing and holds nothing.
+        Stmt::Empty(_) => {}
         Stmt::Block(body) => mutations_in_stmts(body, out),
         Stmt::LocalDecl { declarators, .. } => {
             for d in declarators {
@@ -2054,7 +2062,8 @@ fn stmt_uses_outer(stmt: &Stmt, methods: &HashSet<String>, this_counts: bool) ->
         Stmt::Switch { selector, arms, .. } => {
             e(selector) || arms.iter().any(|a| stmts_use_outer(&a.body, methods))
         }
-        Stmt::Break { .. } | Stmt::Continue { .. } => false,
+        // An empty statement holds nothing, like a break or a continue.
+        Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Empty(_) => false,
     }
 }
 

@@ -1834,7 +1834,8 @@ fn desugar_stmt(stmt: &mut Stmt, ctx: &mut Ctx) {
             let expected = ctx.ret.cloned();
             desugar_expr(e, expected.as_ref(), ctx);
         }
-        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
+        // An empty statement holds nothing, like a bare return or a break.
+        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Empty(_) => {}
         Stmt::If {
             cond, then, els, ..
         } => {

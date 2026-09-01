@@ -1171,7 +1171,8 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                     }
                 }
             }
-            Stmt::Break { .. } | Stmt::Continue { .. } => {}
+            // An empty statement holds nothing, like a break or a continue.
+            Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Empty(_) => {}
             Stmt::Labeled { body, .. } => self.stmt(body),
         }
     }

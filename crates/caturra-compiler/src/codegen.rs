@@ -8190,7 +8190,11 @@ fn enum_check_stmt(
                 }
             }
         }
-        Stmt::Return { value: None, .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
+        // An empty statement holds nothing to check, like a bare return.
+        Stmt::Return { value: None, .. }
+        | Stmt::Break { .. }
+        | Stmt::Continue { .. }
+        | Stmt::Empty(_) => {}
     }
 }
 
@@ -8569,7 +8573,10 @@ fn constant_int_value(expr: &Expr) -> Option<i64> {
 fn statement_span(stmt: &Stmt) -> Option<SourceSpan> {
     match stmt {
         Stmt::Block(_) => None,
-        Stmt::LocalDecl { span, .. }
+        // An empty statement HAS a span: it is what a report about an
+        // unreachable `;` points at.
+        Stmt::Empty(span)
+        | Stmt::LocalDecl { span, .. }
         | Stmt::Assign { span, .. }
         | Stmt::ForEach { span, .. }
         | Stmt::If { span, .. }
@@ -17397,6 +17404,8 @@ impl BodyGen<'_> {
             self.code.mark_line(span.start.line);
         }
         match stmt {
+            // An empty statement does nothing and holds nothing.
+            Stmt::Empty(_) => {}
             Stmt::Block(statements) => {
                 self.enter_scope();
                 for inner in statements {

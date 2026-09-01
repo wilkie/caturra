@@ -526,7 +526,10 @@ fn constant_bool_in(
 pub(crate) fn stmt_span(statement: &Stmt) -> Option<SourceSpan> {
     match statement {
         Stmt::Expr(expr) => Some(expr.span()),
-        Stmt::LocalDecl { span, .. }
+        // An empty statement HAS a span: it is what a report about an
+        // unreachable `;` points at.
+        Stmt::Empty(span)
+        | Stmt::LocalDecl { span, .. }
         | Stmt::Assign { span, .. }
         | Stmt::ForEach { span, .. }
         | Stmt::If { span, .. }
@@ -991,7 +994,8 @@ impl Scan<'_> {
                     self.block(finally_body);
                 }
             }
-            Stmt::Break { .. } | Stmt::Continue { .. } => {}
+            // An empty statement assigns nothing, like a break or continue.
+            Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Empty(_) => {}
         }
     }
 

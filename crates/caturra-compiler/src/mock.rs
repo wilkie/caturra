@@ -482,6 +482,8 @@ fn rewrite_expr(expr: &mut Expr, specs: &mut Vec<MockSpec>) {
 #[allow(clippy::match_same_arms)]
 fn rewrite_stmt(stmt: &mut Stmt, specs: &mut Vec<MockSpec>) {
     match stmt {
+        // An empty statement does nothing and holds nothing.
+        Stmt::Empty(_) => {}
         Stmt::Block(body) => body.iter_mut().for_each(|s| rewrite_stmt(s, specs)),
         Stmt::LocalDecl { declarators, .. } => {
             for d in declarators {
