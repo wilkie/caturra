@@ -1549,6 +1549,216 @@ public class Defaults {
 }
 """,
     ),
+    dict(
+        id="file-paths",
+        category="Library",
+        title="A file's path, and a directory's contents",
+        summary="getParent, getAbsolutePath and getCanonicalPath, mkdirs beside mkdir, list and listFiles, renameTo — the half of java.io.File that is not reading and writing.",
+        main="Paths",
+        source="""
+import java.io.File;
+import java.io.IOException;
+import java.util.Arrays;
+
+public class Paths {
+    public static void main(String[] args) throws IOException {
+        File nested = new File("shelf/deep");
+        System.out.println(nested.mkdirs() + " " + nested.isDirectory());
+        // mkdir makes ONE directory: with the parent missing it answers false.
+        System.out.println(new File("gone/deeper").mkdir());
+
+        new File("shelf/a.txt").createNewFile();
+        new File("shelf/b.txt").createNewFile();
+        File shelf = new File("shelf");
+        String[] names = shelf.list();
+        Arrays.sort(names);
+        System.out.println(Arrays.toString(names));
+        File[] files = shelf.listFiles();
+        Arrays.sort(files);
+        System.out.println(files[0].getPath() + " " + files[0].getName());
+
+        File one = new File("shelf/a.txt");
+        System.out.println(one.getParent() + " " + one.getParentFile().getName());
+        System.out.println(new File("a.txt").getParent());
+        System.out.println(one.isAbsolute() + " " + one.getAbsolutePath().endsWith("/shelf/a.txt"));
+        System.out.println(new File("./shelf/../shelf/a.txt").getCanonicalPath()
+                .equals(one.getAbsolutePath()));
+        System.out.println(one.compareTo(new File("shelf/b.txt")) < 0);
+
+        System.out.println(one.renameTo(new File("shelf/moved.txt")));
+        System.out.println(new File("shelf/moved.txt").exists() + " " + one.exists());
+        System.out.println(new File("ghost").list());
+
+        // Tidy up, so running this a second time starts where the first did:
+        // the page keeps one filesystem for the whole visit, and `mkdirs` on a
+        // directory that is already there answers false.
+        new File("shelf/moved.txt").delete();
+        new File("shelf/b.txt").delete();
+        nested.delete();
+        shelf.delete();
+        System.out.println(shelf.exists());
+    }
+}
+""",
+    ),
+    dict(
+        id="collector-downstream",
+        category="Collections",
+        title="Collectors that wrap another collector",
+        summary="filtering, flatMapping, mapping and collectingAndThen hand elements to the collector below; maxBy/minBy and reducing gather without one. Under a groupingBy, a group that keeps nothing still exists.",
+        main="Gathering",
+        source="""
+import java.util.*;
+import java.util.stream.*;
+
+public class Gathering {
+    public static void main(String[] args) {
+        List<String> words = Arrays.asList("pear", "fig", "apple", "kiwi", "fig");
+
+        System.out.println(words.stream().collect(
+                Collectors.maxBy(Comparator.comparingInt(String::length))));
+        System.out.println(words.stream().collect(Collectors.reducing("", w -> w.substring(0, 1),
+                String::concat)));
+        int size = words.stream().collect(
+                Collectors.collectingAndThen(Collectors.toList(), List::size));
+        System.out.println(size);
+
+        Map<Integer, List<String>> byLength = words.stream().collect(
+                Collectors.groupingBy(String::length,
+                        Collectors.filtering(w -> w.startsWith("f"), Collectors.toList())));
+        System.out.println(new TreeMap<>(byLength));
+
+        Map<Integer, Long> counts = words.stream().collect(
+                Collectors.groupingBy(String::length, Collectors.counting()));
+        System.out.println(new TreeMap<>(counts));
+        System.out.println(words.stream().collect(Collectors.flatMapping(
+                w -> Stream.of(w.charAt(0)), Collectors.toSet())).size());
+        List<String> gathered = words.stream()
+                .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
+        System.out.println(gathered);
+    }
+}
+""",
+    ),
+    dict(
+        id="summary-statistics",
+        category="Collections",
+        title="IntSummaryStatistics and its siblings",
+        summary="One pass gathers count, sum, min, max and average. The three classes differ in the width of what they report and in the identity values an empty summary keeps.",
+        main="Summaries",
+        source="""
+import java.util.*;
+import java.util.stream.*;
+
+public class Summaries {
+    public static void main(String[] args) {
+        List<String> words = Arrays.asList("pear", "fig", "apple");
+
+        IntSummaryStatistics lengths = words.stream()
+                .collect(Collectors.summarizingInt(String::length));
+        System.out.println(lengths);
+        System.out.println(lengths.getCount() + " " + lengths.getSum() + " "
+                + lengths.getMin() + " " + lengths.getMax() + " " + lengths.getAverage());
+
+        System.out.println(words.stream().collect(Collectors.summarizingLong(String::length)));
+        System.out.println(words.stream().collect(Collectors.summarizingDouble(String::length)));
+
+        System.out.println(IntStream.rangeClosed(1, 4).summaryStatistics());
+        System.out.println(DoubleStream.of(1.5, 2.5).summaryStatistics());
+        System.out.println(LongStream.of(10L, 20L).summaryStatistics());
+
+        // An EMPTY summary keeps the identity values its accumulator started from.
+        System.out.println(IntStream.of().summaryStatistics());
+        System.out.println(DoubleStream.of().summaryStatistics());
+    }
+}
+""",
+    ),
+    dict(
+        id="parallel-streams",
+        category="Collections",
+        title="parallelStream, on one thread",
+        summary="caturra runs a single thread, and a JDK is allowed to answer a sequential stream from parallelStream() — so the pipeline is the same one, and isParallel() reports what a JDK reports.",
+        main="Parallel",
+        source="""
+import java.util.*;
+import java.util.stream.*;
+
+public class Parallel {
+    public static void main(String[] args) {
+        List<String> words = List.of("pear", "fig", "apple");
+        System.out.println(words.parallelStream().map(String::length)
+                .collect(Collectors.toList()));
+        System.out.println(words.parallelStream().isParallel() + " "
+                + words.stream().isParallel());
+        System.out.println(words.stream().parallel().isParallel() + " "
+                + words.parallelStream().sequential().isParallel());
+        System.out.println(words.parallelStream().map(String::length).isParallel());
+        System.out.println(new TreeSet<>(words).parallelStream()
+                .collect(Collectors.joining("-")));
+        System.out.println(Map.of("k", 1).values().parallelStream().count());
+        System.out.println(IntStream.of(1, 2, 3).parallel().sum());
+    }
+}
+""",
+    ),
+    dict(
+        id="optional-arms",
+        category="Library",
+        title="Optional's two-armed forms",
+        summary="ifPresentOrElse runs one arm or the other; or() answers this Optional, or the one a supplier makes. Java 9 additions, and the only place a Runnable is a functional parameter here.",
+        main="Arms",
+        source="""
+import java.util.*;
+
+public class Arms {
+    public static void main(String[] args) {
+        List<String> words = Arrays.asList("pear", "fig", "kiwi");
+        Optional<String> found = words.stream().filter(w -> w.startsWith("k")).findFirst();
+        found.ifPresentOrElse(w -> System.out.println("found " + w),
+                () -> System.out.println("none"));
+        Optional.<String>empty().ifPresentOrElse(w -> System.out.println("found " + w),
+                () -> System.out.println("none"));
+
+        System.out.println(found.or(() -> Optional.of("fallback")).get());
+        System.out.println(Optional.<String>empty().or(() -> Optional.of("fallback")).get());
+        System.out.println(Optional.<String>empty().orElse("x").length());
+        System.out.println(Optional.of("kept").or(() -> Optional.of("other")));
+    }
+}
+""",
+    ),
+    dict(
+        id="collection-bulk",
+        category="Collections",
+        title="The bulk operations every collection has",
+        summary="containsAll, removeAll and retainAll on a deque and a queue as much as on a list; sort and replaceAll on a LinkedList; a priority queue's own comparator.",
+        main="Bulk",
+        source="""
+import java.util.*;
+
+public class Bulk {
+    public static void main(String[] args) {
+        ArrayDeque<String> deque = new ArrayDeque<>(Arrays.asList("a", "b", "c"));
+        System.out.println(deque.containsAll(Arrays.asList("a", "c")));
+        System.out.println(deque.removeAll(Arrays.asList("b")) + " " + deque);
+        System.out.println(deque.retainAll(Arrays.asList("a")) + " " + deque);
+
+        LinkedList<String> list = new LinkedList<>(Arrays.asList("pear", "fig", "apple"));
+        list.sort(Comparator.naturalOrder());
+        list.replaceAll(String::toUpperCase);
+        System.out.println(list);
+        System.out.println(list.removeAll(Arrays.asList("FIG")) + " " + list);
+
+        PriorityQueue<String> queue = new PriorityQueue<>(Comparator.reverseOrder());
+        queue.addAll(Arrays.asList("a", "b", "c"));
+        System.out.println((queue.comparator() != null) + " "
+                + queue.containsAll(Arrays.asList("a", "b")));
+        System.out.println(new PriorityQueue<String>().comparator());
+    }
+}
+""",
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what

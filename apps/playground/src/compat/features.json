@@ -460,6 +460,66 @@
     "expected": "hello / HELLO\n"
   },
   {
+    "id": "file-paths",
+    "category": "Library",
+    "title": "A file's path, and a directory's contents",
+    "summary": "getParent, getAbsolutePath and getCanonicalPath, mkdirs beside mkdir, list and listFiles, renameTo \u2014 the half of java.io.File that is not reading and writing.",
+    "main": "Paths",
+    "source": "import java.io.File;\nimport java.io.IOException;\nimport java.util.Arrays;\n\npublic class Paths {\n    public static void main(String[] args) throws IOException {\n        File nested = new File(\"shelf/deep\");\n        System.out.println(nested.mkdirs() + \" \" + nested.isDirectory());\n        // mkdir makes ONE directory: with the parent missing it answers false.\n        System.out.println(new File(\"gone/deeper\").mkdir());\n\n        new File(\"shelf/a.txt\").createNewFile();\n        new File(\"shelf/b.txt\").createNewFile();\n        File shelf = new File(\"shelf\");\n        String[] names = shelf.list();\n        Arrays.sort(names);\n        System.out.println(Arrays.toString(names));\n        File[] files = shelf.listFiles();\n        Arrays.sort(files);\n        System.out.println(files[0].getPath() + \" \" + files[0].getName());\n\n        File one = new File(\"shelf/a.txt\");\n        System.out.println(one.getParent() + \" \" + one.getParentFile().getName());\n        System.out.println(new File(\"a.txt\").getParent());\n        System.out.println(one.isAbsolute() + \" \" + one.getAbsolutePath().endsWith(\"/shelf/a.txt\"));\n        System.out.println(new File(\"./shelf/../shelf/a.txt\").getCanonicalPath()\n                .equals(one.getAbsolutePath()));\n        System.out.println(one.compareTo(new File(\"shelf/b.txt\")) < 0);\n\n        System.out.println(one.renameTo(new File(\"shelf/moved.txt\")));\n        System.out.println(new File(\"shelf/moved.txt\").exists() + \" \" + one.exists());\n        System.out.println(new File(\"ghost\").list());\n\n        // Tidy up, so running this a second time starts where the first did:\n        // the page keeps one filesystem for the whole visit, and `mkdirs` on a\n        // directory that is already there answers false.\n        new File(\"shelf/moved.txt\").delete();\n        new File(\"shelf/b.txt\").delete();\n        nested.delete();\n        shelf.delete();\n        System.out.println(shelf.exists());\n    }\n}\n",
+    "status": "supported",
+    "expected": "true true\nfalse\n[a.txt, b.txt, deep]\nshelf/a.txt a.txt\nshelf shelf\nnull\nfalse true\ntrue\ntrue\ntrue\ntrue false\nnull\nfalse\n"
+  },
+  {
+    "id": "collector-downstream",
+    "category": "Collections",
+    "title": "Collectors that wrap another collector",
+    "summary": "filtering, flatMapping, mapping and collectingAndThen hand elements to the collector below; maxBy/minBy and reducing gather without one. Under a groupingBy, a group that keeps nothing still exists.",
+    "main": "Gathering",
+    "source": "import java.util.*;\nimport java.util.stream.*;\n\npublic class Gathering {\n    public static void main(String[] args) {\n        List<String> words = Arrays.asList(\"pear\", \"fig\", \"apple\", \"kiwi\", \"fig\");\n\n        System.out.println(words.stream().collect(\n                Collectors.maxBy(Comparator.comparingInt(String::length))));\n        System.out.println(words.stream().collect(Collectors.reducing(\"\", w -> w.substring(0, 1),\n                String::concat)));\n        int size = words.stream().collect(\n                Collectors.collectingAndThen(Collectors.toList(), List::size));\n        System.out.println(size);\n\n        Map<Integer, List<String>> byLength = words.stream().collect(\n                Collectors.groupingBy(String::length,\n                        Collectors.filtering(w -> w.startsWith(\"f\"), Collectors.toList())));\n        System.out.println(new TreeMap<>(byLength));\n\n        Map<Integer, Long> counts = words.stream().collect(\n                Collectors.groupingBy(String::length, Collectors.counting()));\n        System.out.println(new TreeMap<>(counts));\n        System.out.println(words.stream().collect(Collectors.flatMapping(\n                w -> Stream.of(w.charAt(0)), Collectors.toSet())).size());\n        List<String> gathered = words.stream()\n                .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);\n        System.out.println(gathered);\n    }\n}\n",
+    "status": "supported",
+    "expected": "Optional[apple]\npfakf\n5\n{3=[fig, fig], 4=[], 5=[]}\n{3=2, 4=2, 5=1}\n4\n[pear, fig, apple, kiwi, fig]\n"
+  },
+  {
+    "id": "summary-statistics",
+    "category": "Collections",
+    "title": "IntSummaryStatistics and its siblings",
+    "summary": "One pass gathers count, sum, min, max and average. The three classes differ in the width of what they report and in the identity values an empty summary keeps.",
+    "main": "Summaries",
+    "source": "import java.util.*;\nimport java.util.stream.*;\n\npublic class Summaries {\n    public static void main(String[] args) {\n        List<String> words = Arrays.asList(\"pear\", \"fig\", \"apple\");\n\n        IntSummaryStatistics lengths = words.stream()\n                .collect(Collectors.summarizingInt(String::length));\n        System.out.println(lengths);\n        System.out.println(lengths.getCount() + \" \" + lengths.getSum() + \" \"\n                + lengths.getMin() + \" \" + lengths.getMax() + \" \" + lengths.getAverage());\n\n        System.out.println(words.stream().collect(Collectors.summarizingLong(String::length)));\n        System.out.println(words.stream().collect(Collectors.summarizingDouble(String::length)));\n\n        System.out.println(IntStream.rangeClosed(1, 4).summaryStatistics());\n        System.out.println(DoubleStream.of(1.5, 2.5).summaryStatistics());\n        System.out.println(LongStream.of(10L, 20L).summaryStatistics());\n\n        // An EMPTY summary keeps the identity values its accumulator started from.\n        System.out.println(IntStream.of().summaryStatistics());\n        System.out.println(DoubleStream.of().summaryStatistics());\n    }\n}\n",
+    "status": "supported",
+    "expected": "IntSummaryStatistics{count=3, sum=12, min=3, average=4.000000, max=5}\n3 12 3 5 4.0\nLongSummaryStatistics{count=3, sum=12, min=3, average=4.000000, max=5}\nDoubleSummaryStatistics{count=3, sum=12.000000, min=3.000000, average=4.000000, max=5.000000}\nIntSummaryStatistics{count=4, sum=10, min=1, average=2.500000, max=4}\nDoubleSummaryStatistics{count=2, sum=4.000000, min=1.500000, average=2.000000, max=2.500000}\nLongSummaryStatistics{count=2, sum=30, min=10, average=15.000000, max=20}\nIntSummaryStatistics{count=0, sum=0, min=2147483647, average=0.000000, max=-2147483648}\nDoubleSummaryStatistics{count=0, sum=0.000000, min=Infinity, average=0.000000, max=-Infinity}\n"
+  },
+  {
+    "id": "parallel-streams",
+    "category": "Collections",
+    "title": "parallelStream, on one thread",
+    "summary": "caturra runs a single thread, and a JDK is allowed to answer a sequential stream from parallelStream() \u2014 so the pipeline is the same one, and isParallel() reports what a JDK reports.",
+    "main": "Parallel",
+    "source": "import java.util.*;\nimport java.util.stream.*;\n\npublic class Parallel {\n    public static void main(String[] args) {\n        List<String> words = List.of(\"pear\", \"fig\", \"apple\");\n        System.out.println(words.parallelStream().map(String::length)\n                .collect(Collectors.toList()));\n        System.out.println(words.parallelStream().isParallel() + \" \"\n                + words.stream().isParallel());\n        System.out.println(words.stream().parallel().isParallel() + \" \"\n                + words.parallelStream().sequential().isParallel());\n        System.out.println(words.parallelStream().map(String::length).isParallel());\n        System.out.println(new TreeSet<>(words).parallelStream()\n                .collect(Collectors.joining(\"-\")));\n        System.out.println(Map.of(\"k\", 1).values().parallelStream().count());\n        System.out.println(IntStream.of(1, 2, 3).parallel().sum());\n    }\n}\n",
+    "status": "supported",
+    "expected": "[4, 3, 5]\ntrue false\ntrue false\ntrue\napple-fig-pear\n1\n6\n"
+  },
+  {
+    "id": "optional-arms",
+    "category": "Library",
+    "title": "Optional's two-armed forms",
+    "summary": "ifPresentOrElse runs one arm or the other; or() answers this Optional, or the one a supplier makes. Java 9 additions, and the only place a Runnable is a functional parameter here.",
+    "main": "Arms",
+    "source": "import java.util.*;\n\npublic class Arms {\n    public static void main(String[] args) {\n        List<String> words = Arrays.asList(\"pear\", \"fig\", \"kiwi\");\n        Optional<String> found = words.stream().filter(w -> w.startsWith(\"k\")).findFirst();\n        found.ifPresentOrElse(w -> System.out.println(\"found \" + w),\n                () -> System.out.println(\"none\"));\n        Optional.<String>empty().ifPresentOrElse(w -> System.out.println(\"found \" + w),\n                () -> System.out.println(\"none\"));\n\n        System.out.println(found.or(() -> Optional.of(\"fallback\")).get());\n        System.out.println(Optional.<String>empty().or(() -> Optional.of(\"fallback\")).get());\n        System.out.println(Optional.<String>empty().orElse(\"x\").length());\n        System.out.println(Optional.of(\"kept\").or(() -> Optional.of(\"other\")));\n    }\n}\n",
+    "status": "supported",
+    "expected": "found kiwi\nnone\nkiwi\nfallback\n1\nOptional[kept]\n"
+  },
+  {
+    "id": "collection-bulk",
+    "category": "Collections",
+    "title": "The bulk operations every collection has",
+    "summary": "containsAll, removeAll and retainAll on a deque and a queue as much as on a list; sort and replaceAll on a LinkedList; a priority queue's own comparator.",
+    "main": "Bulk",
+    "source": "import java.util.*;\n\npublic class Bulk {\n    public static void main(String[] args) {\n        ArrayDeque<String> deque = new ArrayDeque<>(Arrays.asList(\"a\", \"b\", \"c\"));\n        System.out.println(deque.containsAll(Arrays.asList(\"a\", \"c\")));\n        System.out.println(deque.removeAll(Arrays.asList(\"b\")) + \" \" + deque);\n        System.out.println(deque.retainAll(Arrays.asList(\"a\")) + \" \" + deque);\n\n        LinkedList<String> list = new LinkedList<>(Arrays.asList(\"pear\", \"fig\", \"apple\"));\n        list.sort(Comparator.naturalOrder());\n        list.replaceAll(String::toUpperCase);\n        System.out.println(list);\n        System.out.println(list.removeAll(Arrays.asList(\"FIG\")) + \" \" + list);\n\n        PriorityQueue<String> queue = new PriorityQueue<>(Comparator.reverseOrder());\n        queue.addAll(Arrays.asList(\"a\", \"b\", \"c\"));\n        System.out.println((queue.comparator() != null) + \" \"\n                + queue.containsAll(Arrays.asList(\"a\", \"b\")));\n        System.out.println(new PriorityQueue<String>().comparator());\n    }\n}\n",
+    "status": "supported",
+    "expected": "true\ntrue [a, c]\ntrue [a]\n[APPLE, FIG, PEAR]\ntrue [APPLE, PEAR]\ntrue true\nnull\n"
+  },
+  {
     "id": "vector",
     "category": "Collections",
     "title": "Vector, Hashtable, EnumMap, EnumSet",

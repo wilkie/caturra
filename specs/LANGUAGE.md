@@ -11933,3 +11933,27 @@ same expression assigned to an `int` compiled.
 Pinned by `reject_an_or_supplier_that_answers_an_element`,
 `reject_a_lambda_whose_body_answers_the_wrong_type` and
 `a_witness_says_what_an_empty_optional_holds`.
+
+## Publishing what this all added
+
+The compatibility page is where a student finds out what works, and every claim
+on it is a runnable program: `scripts/compat/record.py` asks a real JDK 11 and
+caturra what each one actually does, `tests/compat_manifest.rs` re-asks on every
+CI run, and `e2e/compat.spec.ts` makes the page prove all of them in a browser.
+Everything this session added was reachable and pinned, and none of it was on
+the page — so a visitor had no way to know it was there.
+
+Seven programs now cover it: **a file's path and a directory's contents**
+(`getParent`, the absolute and canonical forms, `mkdirs` beside `mkdir`, `list`
+/`listFiles`, `renameTo`), **the collectors that wrap another collector**
+(`filtering`/`flatMapping`/`collectingAndThen`, `maxBy`, `reducing`, and the
+three-argument `collect`), **the summary statistics** in all three widths with
+their empty-summary identity values, **`parallelStream` on one thread**,
+**`Optional`'s two-armed forms**, and **the bulk operations every collection
+has**. 101 supported features, 5 documented gaps, 3 beyond Java 11.
+
+One of them had to be written to run TWICE. The page keeps one filesystem for
+a whole visit, so a program that makes a directory and leaves it there answers
+`false` the second time it is asked to make it — a legitimate program the page
+would then report as failing. The file program tidies up after itself, and says
+so in its last line.
