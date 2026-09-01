@@ -2603,11 +2603,27 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 && args.len() == 1
                 && matches!(&args[0], Expr::Lambda { params, .. } if params.is_empty())
                 && let Some(r) = receiver.as_deref()
-                && optional_elem_type(r, ctx).is_some()
+                && let Some(elem) = optional_elem_type(r, ctx)
             {
                 let object = TypeRef::Named(String::from("Object"));
-                args[0] =
-                    build_erased_lambda(&mut args[0], "__Supplier", "get", &object, &[], None, ctx);
+                // The supplier must answer another OPTIONAL, not an element —
+                // that is the whole difference from `orElseGet`. Erased with
+                // no result type the check was gone, and `o.or(() -> "x")`
+                // compiled where javac says "bad return type in lambda
+                // expression".
+                let answers = TypeRef::Generic {
+                    base: String::from("Optional"),
+                    args: vec![elem],
+                };
+                args[0] = build_erased_lambda(
+                    &mut args[0],
+                    "__Supplier",
+                    "get",
+                    &object,
+                    &[],
+                    Some(&answers),
+                    ctx,
+                );
                 return;
             }
             // `optional.orElseGet(() -> ...)`: a zero-parameter supplier whose
@@ -5143,6 +5159,13 @@ fn desugar_key_extractor(arg: &mut Expr, ctx: &mut Ctx) -> bool {
 /// The synthetic static field recording what a lambda class answers, so the
 /// element of a mapped stream survives erasure into codegen.
 pub(crate) const PRODUCES_FIELD: &str = "__caturraProduces";
+
+/// The synthesized local a lambda's body is assigned to when its target
+/// declares a RESULT type. It is how that type gets checked at all, and
+/// codegen reads the name to word an error about it as javac does — a bad
+/// return type in a lambda expression, rather than a mismatch in code the
+/// program never wrote.
+pub(crate) const RESULT_LOCAL: &str = "__caturraResult";
 
 /// What a `map`'s lambda ANSWERS, so the mapped stream keeps an element type.
 ///

@@ -10418,14 +10418,14 @@ separate gaps:
 `Optional.stream()` (Java 9) is modelled now as well — a stream of at most one
 value, which is what makes `flatMap(Optional::stream)` the idiom it is.
 
-One thing was measured and left open: `Optional.empty()` answers an Optional
-with no element, which adopts its assignment context, so a CHAINED
-`Optional.<String>empty().orElse(x)` has nothing to adopt — and the explicit
-type witness that says what it holds is not read on this factory, though it is
-on `Collections.<String>emptyList()`, `List.<String>of` and
-`Arrays.<String>asList`. Stricter than javac, the safe direction; threading the
-witness through the static-call path is a larger change than the shape
-deserves. Pinned by `strict_a_witness_on_the_empty_optional`.
+One thing was measured and left open here — `Optional.empty()` answering an
+Optional with no element, so a CHAINED `Optional.<String>empty().orElse(x)` had
+nothing to adopt and the explicit type witness was not read on this factory —
+and it is CLOSED now; see "The negative direction, over the new surface" below.
+The judgement that threading the witness through the static-call path was
+"larger than the shape deserves" was wrong twice over: it is one field carried
+the way `void_target` already is, and the shape turned up in an ordinary
+negative-probe program rather than being hypothetical.
 
 Pinned by `a_container_inside_a_type_argument` and `what_a_lambda_answers`.
 
@@ -11893,3 +11893,43 @@ s.get()...`) now carries its element, read from the declared type.
 
 Pinned by `a_directory_listing_through_the_collectors` and
 `a_collector_whose_finisher_freezes_the_result`.
+
+## The negative direction, over the new surface
+
+Widening what compiles is half a change; the other half is what must still be
+REFUSED, and with which words. Twenty-two programs that misuse this session's
+additions — a `File` method given the wrong type, a collector whose lambda
+answers the wrong thing, a stream op with too few arguments — were compared
+with javac's whole diagnostic list. **Every one is refused by both engines**;
+no accepts-invalid. Most of the wording differences are the standing inference
+family (javac names an inference variable, caturra names the concrete
+mismatch). Three were real defects.
+
+**`Optional.or(supplier)` takes a supplier of another OPTIONAL** — that is the
+whole difference from `orElseGet`, which takes a supplier of the element.
+Erased with no result type the check was gone, so `o.or(() -> "x")` compiled.
+It was hidden behind a second bug: the function bundle is pulled in by a text
+sniff, and neither `.or(` nor `.ifPresentOrElse(` was in it, so the program was
+refused for "cannot find symbol: class __Supplier" — a name it never wrote —
+which looked like the refusal it deserved.
+
+**javac's headline for a lambda whose BODY answers the wrong type names the
+lambda**: "bad return type in lambda expression", with the mismatch on the line
+underneath. caturra reported only that continuation line, which on its own
+reads as a mistake somewhere in code the program never wrote. The synthesized
+result local is where the check happens, and an error there is worded as
+javac's now.
+
+**An explicit WITNESS is the only thing that can say what an empty Optional
+holds** — there is no argument to read it from and no assignment context.
+`Optional.<String>empty().orElse("x").length()` was "cannot find symbol",
+because the empty Optional typed as a bare null and `orElse` answered `Object`.
+Both paths read the witness now, and both read it as a TYPE ARGUMENT rather
+than as a type: `Integer` there is the wrapper element an Optional holds, where
+resolving it as a type and asking for its element gives an interned `Object` —
+so `Optional.<Integer>empty().orElse(7) + 1` was "bad operand types" while the
+same expression assigned to an `int` compiled.
+
+Pinned by `reject_an_or_supplier_that_answers_an_element`,
+`reject_a_lambda_whose_body_answers_the_wrong_type` and
+`a_witness_says_what_an_empty_optional_holds`.

@@ -41484,19 +41484,6 @@ public class LambdaAnswer {
 "#
 );
 
-// `Optional.empty()` answers an Optional with NO element, which adopts its
-// assignment context — so a chained `Optional.<String>empty().orElse(x)` has
-// nothing to adopt, and the explicit type WITNESS that would say what it holds
-// is not read on this factory (it is on `Collections.<String>emptyList()`,
-// `List.<String>of` and `Arrays.<String>asList`). Refused where javac accepts:
-// stricter, the safe direction, and the shape needs the witness AND no
-// variable to land in.
-stricter_than_javac!(
-    strict_a_witness_on_the_empty_optional,
-    "StrictEmptyWitness",
-    "import java.util.*;\npublic class StrictEmptyWitness {\n  static int r() { return Optional.<String>empty().orElse(\"x\").length(); }\n}"
-);
-
 // The stream pipeline's own surface, op by op: what each one ANSWERS, with a
 // method called on the answer so an erased element shows. Four of thirty-six
 // cells failed — `Collectors.toCollection` was missing entirely (a stream
@@ -44791,6 +44778,67 @@ public class MixedFinisher {
         System.out.println(size);
         System.out.println(source.get().collect(Collectors.joining("-")));
         System.out.println(source.get().collect(Collectors.summarizingInt(String::length)));
+    }
+}
+"#
+);
+
+// `Optional.or(supplier)` takes a supplier of another OPTIONAL — that is the
+// whole difference from `orElseGet`, which takes a supplier of the element.
+// Erased with no result type the check was gone and `o.or(() -> "x")`
+// compiled, where javac says "bad return type in lambda expression".
+differential_reject!(
+    reject_an_or_supplier_that_answers_an_element,
+    "OrReturns",
+    r#"
+import java.util.Optional;
+
+public class OrReturns {
+    public static void main(String[] args) {
+        Optional<String> o = Optional.of("x");
+        String s = o.or(() -> "fallback").get();
+        System.out.println(s);
+    }
+}
+"#
+);
+
+// javac's headline for a lambda whose BODY answers the wrong type names the
+// lambda, and puts the mismatch on the line underneath — which is the sentence
+// caturra was reporting on its own, about code the program never wrote.
+differential_wording!(
+    reject_a_lambda_whose_body_answers_the_wrong_type,
+    "BadReturn",
+    r#"
+import java.util.*;
+
+public class BadReturn {
+    public static void main(String[] args) {
+        List<String> words = new ArrayList<>(List.of("x"));
+        words.replaceAll(s -> 1);
+        System.out.println(words);
+    }
+}
+"#
+);
+
+// An explicit WITNESS is the only thing that can say what an empty Optional
+// holds — there is no argument to read it from and no assignment context.
+// Typed as a bare null, `orElse` answered `Object` and the call after it was
+// "cannot find symbol", in a program javac compiles.
+differential_test!(
+    a_witness_says_what_an_empty_optional_holds,
+    "EmptyWitness",
+    r#"
+import java.util.*;
+
+public class EmptyWitness {
+    public static void main(String[] args) {
+        System.out.println(Optional.<String>empty().orElse("x").length());
+        System.out.println(Optional.<String>empty().or(() -> Optional.of("y")).get());
+        Optional<String> named = Optional.empty();
+        System.out.println(named.orElse("z").toUpperCase());
+        System.out.println(Optional.<Integer>empty().orElse(7) + 1);
     }
 }
 "#

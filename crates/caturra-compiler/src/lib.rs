@@ -656,6 +656,14 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // `__UnaryOperator` / `__Supplier`.
             || s.text.contains(".map(")
             || s.text.contains(".orElseGet(")
+            // `optional.or(() -> ...)` and `ifPresentOrElse(x -> …, () -> …)`
+            // (Java 9) desugar to the bundled `__Supplier`/`__Consumer`/
+            // `__Runnable`, and spell none of the words above: without the
+            // bundle the interface the desugaring targets did not exist, and
+            // the program was refused with "cannot find symbol: class
+            // __Supplier" — a name it never wrote.
+            || s.text.contains(".or(")
+            || s.text.contains(".ifPresentOrElse(")
             // A stream pipeline's `filter`/`map`/… lambdas desugar to the
             // bundled functional interfaces.
             || s.text.contains(".stream(")

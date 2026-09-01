@@ -306,6 +306,8 @@ fn emit_clinit(
     let mut body = BodyGen {
         receiver_location: None,
         void_target: None,
+        in_lambda_result: false,
+        call_witness: None,
         void_receiver: false,
         receiver_end: None,
         receiver_args: None,
@@ -8653,6 +8655,8 @@ fn emit_method(
     let mut body = BodyGen {
         receiver_location: None,
         void_target: None,
+        in_lambda_result: false,
+        call_witness: None,
         void_receiver: false,
         receiver_end: None,
         receiver_args: None,
@@ -16758,6 +16762,15 @@ struct BodyGen<'a> {
     /// ARGUMENTS are evaluated — an argument is a different position, and
     /// javac words it differently.
     void_target: Option<JType>,
+    /// The explicit type WITNESS of the call being emitted
+    /// (`Optional.<String>empty()`), for the factories whose result type has
+    /// nothing else to read: with no argument and no assignment context, the
+    /// witness is the only thing that says what the empty thing holds.
+    call_witness: Option<TypeRef>,
+    /// Whether the local being emitted is a lambda's synthesized RESULT — the
+    /// one place an "incompatible types" error is really about the lambda's
+    /// return, which javac says in its headline.
+    in_lambda_result: bool,
     /// Whether the expression being evaluated is a RECEIVER. javac's third
     /// void wording: dereferencing one is a different mistake from passing it.
     void_receiver: bool,
@@ -16986,6 +16999,21 @@ impl BodyGen<'_> {
         // javac says so in the headline, with the reason underneath. Without
         // it the message read as if the program had written the call the
         // desugaring invented.
+        // A lambda whose BODY answers the wrong type: javac's headline names
+        // the lambda ("bad return type in lambda expression") and puts the
+        // mismatch on the continuation line underneath, which is the very
+        // sentence the synthesized `__caturraResult` local produces here. On
+        // its own it reads as a mistake somewhere in the program's own code.
+        if crate::is_lambda_class(self.current_class)
+            && !crate::is_method_ref_class(self.current_class)
+            && self.in_lambda_result
+            && message.starts_with("incompatible types: ")
+        {
+            message = format!(
+                "incompatible types: bad return type in lambda expression\n  {}",
+                &message["incompatible types: ".len()..]
+            );
+        }
         if crate::is_method_ref_class(self.current_class) {
             // ...and the receiver is the parameter the desugaring invented, so
             // the location has to name the qualifier CLASS, as javac's does —
@@ -18652,8 +18680,26 @@ impl BodyGen<'_> {
         }
     }
 
-    #[allow(clippy::too_many_lines)] // declaration + var-inference + declarator loop
     fn local_decl(
+        &mut self,
+        ty: &TypeRef,
+        is_final: bool,
+        declarators: &[LocalDeclarator],
+        span: SourceSpan,
+    ) {
+        // The synthesized local a lambda's body is assigned to, which is how
+        // its declared result type is checked at all. An error here is about
+        // the LAMBDA's return, and javac words it that way.
+        let result_local = declarators
+            .iter()
+            .any(|declarator| declarator.name == crate::lambda::RESULT_LOCAL);
+        let restore = std::mem::replace(&mut self.in_lambda_result, result_local);
+        self.local_decl_inner(ty, is_final, declarators, span);
+        self.in_lambda_result = restore;
+    }
+
+    #[allow(clippy::too_many_lines)] // declaration + var-inference + declarator loop
+    fn local_decl_inner(
         &mut self,
         ty: &TypeRef,
         is_final: bool,
@@ -23591,6 +23637,7 @@ impl BodyGen<'_> {
             receiver: Some(owner),
             method,
             args,
+            type_args,
             ..
         } = receiver
         else {
@@ -23599,8 +23646,21 @@ impl BodyGen<'_> {
         let Expr::Name { path, .. } = owner.as_ref() else {
             return None;
         };
-        if path.len() != 1 {
+        if path.len() != 1 && !(path.len() == 3 && path[0] == "java") {
             return None;
+        }
+        // `Optional.<String>empty()` — the WITNESS is the only thing that says
+        // what the empty Optional holds. The emission path reads it too; this
+        // one is what an OPERAND goes through, and without it
+        // `Optional.<Integer>empty().orElse(7) + 1` was "bad operand types"
+        // while the same expression assigned to an `int` compiled.
+        if path.last().is_some_and(|name| name == "Optional")
+            && method == "empty"
+            && args.is_empty()
+            && let [witness] = type_args.as_slice()
+            && !self.table.has_class("Optional")
+        {
+            return elem_from_type_arg(witness, self.table).map(JType::Optional);
         }
         // The SAME join the emission path uses — `List.of()` with no argument
         // answers a collection of `Object`, and a mixed one joins rather than
@@ -25985,6 +26045,7 @@ impl BodyGen<'_> {
                 method,
                 args,
                 span,
+                type_args,
                 ..
             } => {
                 // The SECOND dispatcher: a call written as a statement never
@@ -25999,7 +26060,11 @@ impl BodyGen<'_> {
                         None
                     }
                     Some(CallTarget::Static(class)) => {
-                        self.static_call(&class, method, args, *span)
+                        let restore =
+                            std::mem::replace(&mut self.call_witness, type_args.first().cloned());
+                        let answer = self.static_call(&class, method, args, *span);
+                        self.call_witness = restore;
+                        answer
                     }
                     Some(CallTarget::Own) => self.own_call(method, args, *span),
                     Some(CallTarget::Instance(object)) => {
@@ -26775,7 +26840,21 @@ impl BodyGen<'_> {
             let method_ref =
                 intern_method_ref(self.pool, "Optional", "empty", "()Ljava/util/Optional;");
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
-            return Some(Some(JType::Null));
+            // A WITNESS says what the empty Optional holds, and it is the only
+            // thing that can: `Optional.<String>empty().orElse("x").length()`
+            // is ordinary Java, and typed as a bare null the `orElse` answered
+            // `Object` and `length()` was "cannot find symbol".
+            // Read the witness as a TYPE ARGUMENT, exactly as a declaration
+            // does: `Integer` there is the WRAPPER element an Optional holds,
+            // where resolving it as a type and asking for its element gives an
+            // interned Object — and `orElse(7) + 1` was then "bad operand
+            // types" in a program a JDK compiles.
+            let witnessed = self
+                .call_witness
+                .clone()
+                .and_then(|witness| elem_from_type_arg(&witness, self.table))
+                .map(JType::Optional);
+            return Some(Some(witnessed.unwrap_or(JType::Null)));
         }
         let [value] = args else {
             self.no_suitable_library_method("Optional", method, args, span);
@@ -30146,6 +30225,7 @@ impl BodyGen<'_> {
                 method,
                 args,
                 span,
+                type_args,
                 ..
             } => {
                 self.enter_member_access(receiver.as_deref());
@@ -30163,7 +30243,11 @@ impl BodyGen<'_> {
                         None
                     }
                     Some(CallTarget::Static(class)) => {
-                        self.static_call(&class, method, args, *span)
+                        let restore =
+                            std::mem::replace(&mut self.call_witness, type_args.first().cloned());
+                        let answer = self.static_call(&class, method, args, *span);
+                        self.call_witness = restore;
+                        answer
                     }
                     Some(CallTarget::Own) => self.own_call(method, args, *span),
                     Some(CallTarget::Instance(object)) => {
