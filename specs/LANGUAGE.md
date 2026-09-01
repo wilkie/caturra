@@ -12113,3 +12113,35 @@ Pinned by `reject_an_empty_type_argument_list`,
 `reject_a_lambda_that_declares_only_some_parameters`,
 `reject_a_qualified_name_whose_package_is_a_typo` and
 `reject_an_empty_type_parameter_list`.
+
+### Three more seeds
+
+Running the mutator on three fresh seeds and reading its counterexamples found
+two more divergences, one in each direction.
+
+**A leading zero is only OCTAL for an INTEGER.** `0574.` and `08.5` are decimal
+floating-point literals — the `.` decides it, and the digits are then read in
+base ten, so `08.5` is legal Java where `08` is not. The lexer committed to
+octal on seeing `0` followed by a digit, read `0574`, and left the `.` for the
+parser to meet as a field access: a literal a JDK compiles was "expected a name
+after '.'". One lookahead past the digit run fixes it, and `017`, `0777L`,
+`0x1F` and `09` all still say what they said.
+
+**An interface member is implicitly public**, so an implementation cannot be
+package-private. The check existed — and looked the access up by the SOURCE
+name while the table is keyed by the BINARY one, so it found nothing for every
+nested class, and nothing defaults to public. A `compareTo` written without
+`public` in a class implementing `Comparable` compiled here and is an error on
+a JDK; that is the shape half the corpus's Comparable lessons have, one
+`public` away.
+
+The message names the PARAMETERS now, as javac's does: `compareTo(B) in B
+cannot implement compareTo(T) in Comparable`. The implementation's are read
+from the class's own declaration — `implementation_of` matches against the
+interface's erased signature, so its parameters come back erased — and the
+interface's are whatever the table holds, which for a synthesized library
+interface is the erasure rather than the type variable javac prints.
+
+Pinned by `a_leading_zero_before_a_decimal_point`,
+`reject_an_implementation_that_weakens_access` and
+`reject_a_package_private_compare_to`.

@@ -2038,11 +2038,23 @@ impl MethodTable {
                     // An INTERFACE member is implicitly public, whether or not
                     // the word is written; only a class's own declaration can
                     // weaken access.
+                    //
+                    // Looked up by the BINARY name, which is what the table is
+                    // keyed by. Asking with the SOURCE name — the one the
+                    // message says — found nothing for every nested class, and
+                    // "nothing" defaults to public: a `compareTo` written
+                    // without `public` in a class implementing `Comparable`
+                    // compiled here and is an error on a JDK, which is the
+                    // shape half the corpus's Comparable lessons have.
                     let level = if self.info_by_id(owner).is_some_and(|info| info.is_interface) {
                         3
                     } else {
                         self.method_access
-                            .get(&(owner_name.clone(), sig.name.clone(), sig.params.len()))
+                            .get(&(
+                                self.class_name(owner).to_owned(),
+                                sig.name.clone(),
+                                sig.params.len(),
+                            ))
                             .copied()
                             .unwrap_or(3)
                     };
@@ -2107,10 +2119,36 @@ impl MethodTable {
                         .iter()
                         .find(|m| m.name == sig.name)
                         .map_or(class.span, |m| m.span);
+                    // javac names the PARAMETERS on both sides — `compareTo(B)
+                    // in B cannot implement compareTo(T) in Comparable`. The
+                    // implementation's are known exactly; the interface's are
+                    // whatever this table holds, which for a SYNTHESIZED
+                    // library interface is the erasure rather than the type
+                    // variable javac prints.
+                    // The implementation's parameters AS THE CLASS WROTE THEM:
+                    // `implementation_of` matched against the interface's
+                    // erased signature, so its own params come back erased —
+                    // and javac names the class's (`compareTo(B)`).
+                    let declared_params: Option<Vec<JType>> = class
+                        .methods
+                        .iter()
+                        .find(|m| m.name == sig.name && m.params.len() == sig.params.len())
+                        .map(|m| {
+                            m.params
+                                .iter()
+                                .filter_map(|p| self.resolve_type(&p.ty))
+                                .collect()
+                        });
+                    let written = describe_types(
+                        declared_params.as_deref().unwrap_or(&implementation.params),
+                        self,
+                    );
+                    let declared = describe_types(&sig.params, self);
                     diagnostics.push(Diagnostic::error(
                         path,
                         format!(
-                            "{}() in {owner_name} cannot implement {}() in {interface_name}{detail}",
+                            "{}({written}) in {owner_name} cannot implement \
+                             {}({declared}) in {interface_name}{detail}",
                             sig.name, sig.name,
                         ),
                         span,

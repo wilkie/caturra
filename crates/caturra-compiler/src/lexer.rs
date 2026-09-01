@@ -447,6 +447,33 @@ impl Lexer<'_> {
                 Some(c) if c.is_ascii_digit() || c == '_' => Some((8, 1)),
                 _ => None,
             };
+            // …but a leading zero is only OCTAL for an INTEGER. `0574.` and
+            // `08.5` are decimal floating-point literals — the `.` (or an
+            // exponent, or an `f`/`d` suffix) decides it, and the digits are
+            // then read in base ten, so `08.5` is legal where `08` is not.
+            // Scanning them as octal read `0574` and left the `.` behind,
+            // which the parser met as a field access: a literal a JDK compiles
+            // was "expected a name after '.'". Falling through to the decimal
+            // scanner below is all it takes.
+            let radix = if radix == Some((8, 1)) {
+                let mut ahead = 1usize;
+                while self
+                    .peek_at(ahead)
+                    .is_some_and(|c| c.is_ascii_digit() || c == '_')
+                {
+                    ahead += 1;
+                }
+                if matches!(
+                    self.peek_at(ahead),
+                    Some('.' | 'e' | 'E' | 'f' | 'F' | 'd' | 'D')
+                ) {
+                    None
+                } else {
+                    radix
+                }
+            } else {
+                radix
+            };
             if let Some((radix, prefix_len)) = radix {
                 for _ in 0..prefix_len {
                     self.bump();

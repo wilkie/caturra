@@ -192,6 +192,12 @@ def main():
                 # compiles is the dangerous direction, mutation or not.
                 if got:
                     refusals.append((name, what, got[0]))
+                    if dump:
+                        stem = f"{name[:-5]}_refused_{len(refusals)}"
+                        with open(os.path.join(dump, f"{stem}.java"), "w") as handle:
+                            handle.write(broken.replace(name[:-5], stem))
+                        with open(os.path.join(dump, f"{stem}.txt"), "w") as handle:
+                            handle.write(f"{what}\njdk []\ncat {got}\n")
                 skipped += 1
                 continue
             checked += 1

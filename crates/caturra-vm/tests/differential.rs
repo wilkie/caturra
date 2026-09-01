@@ -45080,3 +45080,70 @@ public class EmptyParams {
 }
 "#
 );
+
+// A leading zero is only OCTAL for an INTEGER. `0574.` and `08.5` are decimal
+// floating-point literals — the `.` decides it, and the digits are then read in
+// base ten, so `08.5` is legal where `08` is not. Scanned as octal, the digits
+// were read and the `.` left behind for the parser to meet as a field access.
+differential_test!(
+    a_leading_zero_before_a_decimal_point,
+    "OctalLooking",
+    r"
+public class OctalLooking {
+    public static void main(String[] args) {
+        System.out.println(0574.);
+        System.out.println(0574.5);
+        System.out.println(08.5);
+        System.out.println(0574);
+        System.out.println(017);
+        System.out.println(0777L);
+        System.out.println(0e3);
+        System.out.println(0.5);
+        double nested = (true ? (true ? -0574. : -36.2) : 5.248);
+        System.out.println(nested);
+    }
+}
+"
+);
+
+// An interface member is implicitly public, so an implementation cannot be
+// package-private. The check existed and looked the access up by the SOURCE
+// name while the table is keyed by the BINARY one — so it found nothing for
+// every nested class, and nothing defaults to public: a `compareTo` written
+// without `public` compiled here, which is the shape half the corpus's
+// Comparable lessons have.
+differential_wording!(
+    reject_an_implementation_that_weakens_access,
+    "WeakerAccess",
+    r#"
+public class WeakerAccess {
+    interface Named { String name(); }
+
+    static class Thing implements Named {
+        String name() { return "thing"; }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Thing().name());
+    }
+}
+"#
+);
+
+differential_wording!(
+    reject_a_package_private_compare_to,
+    "WeakerCompare",
+    r"
+public class WeakerCompare {
+    static class Animal implements Comparable<Animal> {
+        private final int size;
+        Animal(int size) { this.size = size; }
+        int compareTo(Animal other) { return Integer.compare(size, other.size); }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Animal(1).compareTo(new Animal(2)));
+    }
+}
+"
+);
