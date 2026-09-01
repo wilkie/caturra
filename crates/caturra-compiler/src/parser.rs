@@ -1778,6 +1778,16 @@ impl Parser<'_> {
         }
         self.pos += 1; // '<'
         let mut params = Vec::new();
+        // `class Box<>` — a DECLARATION's type-parameter list cannot be empty
+        // (JLS §8.1.2). The diamond `<>` is an argument list at a `new`, not a
+        // parameter list here, and letting it through left `T` undeclared: one
+        // deleted character reported six errors about a type variable the
+        // program no longer names, where javac reports the empty list itself.
+        if self.at_symbol(">") {
+            self.error_here("expected a name for the type parameter");
+            self.pos += 1;
+            return Ok(params);
+        }
         if !self.at_symbol(">") {
             loop {
                 let (name, _) = self.expect_ident("for the type parameter")?;
@@ -1966,6 +1976,15 @@ impl Parser<'_> {
     fn parse_type_arguments(&mut self, base: String) -> Parsed<TypeRef> {
         self.pos += 1;
         let mut args = Vec::new();
+        // The DIAMOND is an argument list at a `new`, and the `new` path parses
+        // its own; every position that reaches here — a declared type, an
+        // `implements` clause, an explicit witness — needs a real argument.
+        // `class Animal implements Comparable<>` compiled, and javac says
+        // "illegal start of type".
+        if self.at_symbol(">") {
+            self.error_here("expected a type");
+            return Err(Abort);
+        }
         if !self.at_symbol(">") {
             loop {
                 if self.at_symbol("?") {
@@ -3362,6 +3381,16 @@ impl Parser<'_> {
                 }
             }
             self.expect_symbol(")", "to close the lambda parameters")?;
+            // A lambda's parameters are ALL inferred or ALL declared (JLS
+            // §15.27.1) — `(x, y y) -> …` is not a lambda with one of each,
+            // and javac calls it an invalid parameter declaration. Mixing them
+            // compiled here, and the declared one silently took a type from a
+            // name the program meant as a parameter.
+            let declared = params.iter().filter(|p| p.ty.is_some()).count();
+            if declared != 0 && declared != params.len() {
+                self.error_at(start, "invalid lambda parameter declaration");
+                return Err(Abort);
+            }
             self.expect_symbol("->", "in the lambda")?;
             return Ok(Some(self.lambda_body(params, start)?));
         }

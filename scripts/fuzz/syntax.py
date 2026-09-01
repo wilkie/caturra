@@ -8,17 +8,27 @@ compiles, mutate ONE token — delete it, duplicate it, swap it with its
 neighbour, or replace it with a different symbol — and compare what the two
 engines report.
 
-What is compared is the POSITION of the first error and the NUMBER of errors,
-not the wording: caturra's parser is deliberately more explicit than javac's
+What is compared is the LINE of the first error and the NUMBER of errors, not
+the wording: caturra's parser is deliberately more explicit than javac's
 ("expected ';' to end the declaration" where javac says "';' expected"), which
-`specs/LANGUAGE.md` writes down. Position and count are what an editor
-underlines and what a student reads as "how much did I break".
+`specs/LANGUAGE.md` writes down. The line is what a student is told to look at
+and what an editor marks in the gutter.
+
+The COLUMN is counted and reported, but it does not gate: javac has a
+convention per diagnostic for which token its caret sits under — the operator
+of a binary expression, the name of a method that clashes, the token after a
+gap — and caturra matches many but not all. A column difference on the right
+line is a different (and much smaller) thing than blaming the wrong line.
 
 A mutation that still compiles is skipped (both engines agree it is fine, and
 there is nothing to compare); one that javac accepts and caturra refuses is
 reported as a REFUSAL, which is the dangerous direction.
 
     scripts/fuzz/syntax.py [cases-dir] [--count N] [--seed N] [--verbose]
+                           [--dump DIR]
+
+`--dump` keeps the programs whose first error the two engines put in different
+places, so a run's counterexamples can be read rather than guessed at.
 
 With no directory it generates programs with `programs.py` first. Needs
 `javac` on PATH and a built `target/release/examples/diagnostics`.
@@ -133,7 +143,7 @@ def main():
     # …minus the VALUES of the flags, which are positional-looking.
     argv = sys.argv[1:]
     skip = set()
-    for flag in ("--count", "--seed"):
+    for flag in ("--count", "--seed", "--dump"):
         if flag in argv:
             skip.add(argv.index(flag) + 1)
     args = [a for i, a in enumerate(argv) if not a.startswith("--") and i not in skip]
@@ -145,6 +155,10 @@ def main():
     if "--seed" in argv:
         seed = int(argv[argv.index("--seed") + 1])
     rng = random.Random(seed)
+    dump = None
+    if "--dump" in argv:
+        dump = argv[argv.index("--dump") + 1]
+        os.makedirs(dump, exist_ok=True)
 
     directory = args[0] if args else None
     if directory is None:
@@ -158,7 +172,7 @@ def main():
     if not sources:
         sys.exit(f"no .java in {directory}")
 
-    checked = skipped = agreed = 0
+    checked = skipped = agreed = columns = 0
     disagreed, refusals, fewer, accepted = [], [], [], []
     with tempfile.TemporaryDirectory() as work:
         for index in range(count):
@@ -186,9 +200,16 @@ def main():
                 # compiles HERE and fails on a JDK, which is the direction
                 # that matters most.
                 accepted.append((name, what, want[0]))
+                if dump:
+                    stem = f"{name[:-5]}_accepted_{len(accepted)}"
+                    with open(os.path.join(dump, f"{stem}.java"), "w") as handle:
+                        handle.write(broken.replace(name[:-5], stem))
+                    with open(os.path.join(dump, f"{stem}.txt"), "w") as handle:
+                        handle.write(f"{what}\njdk {want}\ncat []\n")
                 continue
-            if want[0] == got[0]:
+            if want[0][0] == got[0][0]:
                 agreed += 1
+                columns += int(want[0][1] == got[0][1])
                 if len(want) != len(got):
                     # The first mistake is in the same PLACE; the engines
                     # differ in how much they say after it. javac recovers and
@@ -198,6 +219,12 @@ def main():
                     fewer.append((name, what, len(want), len(got)))
             else:
                 disagreed.append((name, what, want, got))
+                if dump:
+                    stem = f"{name[:-5]}_{len(disagreed)}"
+                    with open(os.path.join(dump, f"{stem}.java"), "w") as handle:
+                        handle.write(broken.replace(name[:-5], stem))
+                    with open(os.path.join(dump, f"{stem}.txt"), "w") as handle:
+                        handle.write(f"{what}\njdk {want}\ncat {got}\n")
                 if verbose:
                     print(f"--- {name}: {what}\n    jdk: {want}\n    cat: {got}")
 
@@ -210,11 +237,11 @@ def main():
     trailing = sum(1 for _, _, want, got in fewer if got < want)
     print(
         f"\n{checked} broken programs compared ({skipped} still compiled)\n"
-        f"  {agreed} put the FIRST error in the same place "
-        f"({agreed - len(fewer)} with the same error count; "
-        f"{trailing} where caturra says less after it, "
-        f"{len(fewer) - trailing} where it says more)\n"
-        f"  {len(disagreed)} put the first error somewhere else\n"
+        f"  {agreed} put the FIRST error on the same LINE "
+        f"({columns} on the same column too)\n"
+        f"  of those, {agreed - len(fewer)} say the same number of things, "
+        f"{trailing} say less after it and {len(fewer) - trailing} say more\n"
+        f"  {len(disagreed)} put the first error on a different LINE\n"
         f"  {len(accepted)} compiled a program javac refuses\n"
         f"  {len(refusals)} refused a program javac accepts"
     )

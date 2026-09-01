@@ -5653,6 +5653,14 @@ fn functional_result_arg(simple: &str) -> bool {
 }
 
 pub(crate) fn functional_erased(name: &str) -> Option<&'static str> {
+    // A QUALIFIED name has to name a real package's class. Reading the last
+    // segment of ANY dotted name made `javautil.function.Function<String,
+    // Integer>` — one deleted dot — resolve to the same bundled interface and
+    // compile, where javac says the package does not exist. The unqualified
+    // spelling is judged by the name alone, as it always was.
+    if name.contains('.') && crate::imports::canonical_library_class(name).is_none() {
+        return None;
+    }
     let simple = name.rsplit('.').next().unwrap_or(name);
     Some(match simple {
         "Comparator" => "__Comparator",

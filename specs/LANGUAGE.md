@@ -12079,3 +12079,37 @@ file now, which is where the brace should have been and where javac's own
 
 Pinned by `reject_an_unreachable_empty_statement` and
 `a_stray_semicolon_is_an_empty_statement`.
+
+### What the mutations found at a second seed
+
+Running `syntax.py` on a different seed, and reading its counterexamples rather
+than its summary, turned up three programs a JDK refuses and caturra compiled —
+each one token away from a working one, and each the dangerous direction.
+
+**`class Animal implements Comparable<>`** — an empty type ARGUMENT list. The
+diamond is an argument list at a `new`, and the `new` path parses its own; every
+position that reaches the shared parser (a declared type, an `implements`
+clause, an explicit witness) needs a real argument.
+
+**`(x, Integer y) -> x + y`** — a lambda's parameters are ALL inferred or ALL
+declared (JLS §15.27.1). Mixing them compiled, and the declared one silently
+took its type from a name the program meant as a parameter.
+
+**`javautil.function.Function<String, Integer>`** — one deleted dot. The
+functional interfaces are aliased to their bundled erased forms by the LAST
+segment of the name, so any qualifier at all resolved: a typo'd package
+compiled and would fail on a JDK. A qualified name has to name a real package's
+class now; the unqualified spelling is judged by the name alone, as before.
+
+The measurement also stopped counting a column as a wrong ANSWER. javac has a
+convention per diagnostic for which token its caret sits under — the operator
+of a binary expression, the name of a clashing method, the token after a gap —
+and caturra matches many but not all; a column difference on the right line is
+a much smaller thing than blaming the wrong line. The headline is the LINE: at
+200 mutations, 192 of 193 agree, and the one that does not is javac reporting
+two errors in an order neither engine's phases can be talked into matching.
+
+Pinned by `reject_an_empty_type_argument_list`,
+`reject_a_lambda_that_declares_only_some_parameters`,
+`reject_a_qualified_name_whose_package_is_a_typo` and
+`reject_an_empty_type_parameter_list`.

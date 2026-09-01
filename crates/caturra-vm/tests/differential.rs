@@ -45011,3 +45011,72 @@ public class StraySemi {
 }
 "#
 );
+
+// Three programs a JDK refuses and caturra compiled, each one token away from
+// a working one — found by `scripts/fuzz/syntax.py` at a second seed. Every
+// one of them is the dangerous direction: a program that works HERE and fails
+// on a real JDK.
+differential_reject!(
+    reject_an_empty_type_argument_list,
+    "EmptyArgs",
+    r"
+public class EmptyArgs {
+    static class Animal implements Comparable<> {
+        public int compareTo(Animal other) { return 0; }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Animal().compareTo(new Animal()));
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_a_lambda_that_declares_only_some_parameters,
+    "MixedLambda",
+    r"
+import java.util.function.BiFunction;
+
+public class MixedLambda {
+    public static void main(String[] args) {
+        BiFunction<Integer, Integer, Integer> add = (x, Integer y) -> x + y;
+        System.out.println(add.apply(1, 2));
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_a_qualified_name_whose_package_is_a_typo,
+    "TypoPackage",
+    r#"
+public class TypoPackage {
+    public static void main(String[] args) {
+        javautil.function.Function<String, Integer> length = s -> s.length();
+        System.out.println(length.apply("abc"));
+    }
+}
+"#
+);
+
+// …and an empty type PARAMETER list, which left the variable it should have
+// declared undefined: one deleted character reported six errors about a `T`
+// the program no longer names, where javac reports the empty list.
+differential_error_count!(
+    reject_an_empty_type_parameter_list,
+    "EmptyParams",
+    r#"
+public class EmptyParams {
+    static class Box<> {
+        private final T value;
+        Box(T value) { this.value = value; }
+        T get() { return value; }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Box<String>("x").get());
+    }
+}
+"#
+);
