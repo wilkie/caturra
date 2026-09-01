@@ -44913,3 +44913,62 @@ public class OnClose {
 }
 "#
 );
+
+// Where the caret sits for a MISSING token. javac puts it at the END of the
+// token before the gap, not on the token that surprised the parser — and the
+// two are often on different LINES, which is the whole point: a statement
+// missing its semicolon is a mistake on the line the statement is on, and
+// caturra pointed at the line after it. (The parser's WORDING is deliberately
+// more explicit than javac's; where it points should not be.)
+#[test]
+fn reject_a_statement_missing_its_semicolon() {
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    let source = "\npublic class MissingSemi {\n    public static void main(String[] args) {\n\
+                  \x20       int x = 3\n        System.out.println(x);\n    }\n}\n";
+    // The LINE only: the parser's wording is deliberately more explicit than
+    // javac's, and this is about where the caret lands. javac points at the
+    // end of `3`, on the line the statement is on; caturra pointed at
+    // `System` on the line after.
+    assert_eq!(
+        javac_first_error_line("MissingSemi", source),
+        caturra_first_error_line("MissingSemi", source),
+        "the two engines blame different LINES for a missing semicolon"
+    );
+}
+
+// A statement that aborts part way may have opened braces it never closed.
+// Recovering from a depth of zero stopped at the first `}` — which closes the
+// CONSTRUCT, not the block — so the block ended early and every line after it
+// read as a class member: javac reported one error and caturra three, two of
+// them about a class body the program does not have.
+differential_error_count!(
+    an_unfinished_initializer_reports_one_mistake,
+    "HoleInArray",
+    r"
+public class HoleInArray {
+    public static void main(String[] args) {
+        int[] a = {1, 2, 3,,};
+        System.out.println(a.length);
+    }
+}
+"
+);
+
+differential_error_count!(
+    an_unfinished_case_label_reports_one_mistake,
+    "CaseNoColon",
+    r#"
+public class CaseNoColon {
+    public static void main(String[] args) {
+        switch (args.length) {
+            case 0
+                System.out.println("none");
+                break;
+        }
+    }
+}
+"#
+);

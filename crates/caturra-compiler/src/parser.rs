@@ -445,6 +445,22 @@ impl Parser<'_> {
             .map_or_else(|| self.eof_span(), |t| t.span)
     }
 
+    /// Where a MISSING token should have been: just past the last one read.
+    ///
+    /// javac's caret for `';' expected` sits at the END of the token before
+    /// the gap, not on the token that surprised the parser — and the two are
+    /// often on different LINES, which is the whole point: a statement missing
+    /// its semicolon is a mistake on the line the statement is on, and
+    /// caturra pointed at the line after it. The message here is deliberately
+    /// more explicit than javac's; where it POINTS should not be.
+    fn after_previous(&self) -> SourceSpan {
+        let end = match self.pos.checked_sub(1).and_then(|at| self.tokens.get(at)) {
+            Some(token) => token.span.end,
+            None => return self.here(),
+        };
+        SourceSpan { start: end, end }
+    }
+
     fn eof_span(&self) -> SourceSpan {
         let end = self
             .tokens
@@ -505,7 +521,8 @@ impl Parser<'_> {
         if self.eat_symbol(symbol) {
             Ok(())
         } else {
-            self.error_here(format!("expected '{symbol}' {context}"));
+            let at = self.after_previous();
+            self.error_at(at, format!("expected '{symbol}' {context}"));
             Err(Abort)
         }
     }
@@ -537,7 +554,8 @@ impl Parser<'_> {
             let token = self.advance().expect("peeked");
             Ok((String::from("var"), token.span))
         } else {
-            self.error_here(format!("expected a name {context}"));
+            let at = self.after_previous();
+            self.error_at(at, format!("expected a name {context}"));
             Err(Abort)
         }
     }
@@ -555,10 +573,55 @@ impl Parser<'_> {
 
     // ----- recovery -----
 
+    /// Skip to just past the `}` that closes the array initializer being
+    /// parsed, over any nested ones. Used when an element does not parse, so
+    /// the initializer's own brace cannot be mistaken for the block's.
+    fn recover_past_initializer(&mut self) {
+        let mut depth = 0usize;
+        while let Some(kind) = self.peek() {
+            match kind {
+                TokenKind::Symbol("{") => depth += 1,
+                TokenKind::Symbol("}") => {
+                    self.pos += 1;
+                    if depth == 0 {
+                        return;
+                    }
+                    depth -= 1;
+                    continue;
+                }
+                // A `;` before the closing brace means the initializer was
+                // never closed; leave it for the statement recovery.
+                TokenKind::Symbol(";") if depth == 0 => return,
+                _ => {}
+            }
+            self.pos += 1;
+        }
+    }
+
     /// Skip forward until just past a `;` or just before a `}` (or EOF),
     /// skipping over balanced `{ ... }` blocks whole.
     fn recover_to_statement_boundary(&mut self) {
-        let mut depth = 0usize;
+        self.recover_to_statement_boundary_from(self.pos);
+    }
+
+    /// The same, told where the failed statement STARTED.
+    ///
+    /// A statement that aborts part way may have opened braces it never
+    /// closed — a `switch` whose first `case` is missing its colon, an array
+    /// initializer with a hole in it. Recovering with a depth of zero then
+    /// stopped at the first `}`, which closes the CONSTRUCT rather than the
+    /// block, so the block ended early and every line after it read as a
+    /// class member: javac reported one error and caturra three, two of them
+    /// about a class body the program does not have. Counting the braces the
+    /// statement itself opened puts the recovery back at the right level.
+    fn recover_to_statement_boundary_from(&mut self, started: usize) {
+        let mut depth = self.tokens[started..self.pos.min(self.tokens.len())]
+            .iter()
+            .fold(0usize, |depth, token| match token.kind {
+                TokenKind::Symbol("{") => depth + 1,
+                TokenKind::Symbol("}") => depth.saturating_sub(1),
+                _ => depth,
+            });
         while let Some(kind) = self.peek() {
             match kind {
                 TokenKind::Symbol(";") if depth == 0 => {
@@ -2077,6 +2140,7 @@ impl Parser<'_> {
                 }
                 continue;
             }
+            let started = self.pos;
             match self.statement() {
                 Ok(Some(stmt)) => statements.push(stmt),
                 // An empty statement (`;`, JLS §14.6) parses to nothing. It
@@ -2084,7 +2148,7 @@ impl Parser<'_> {
                 // below — that skips to the next `;`, which would silently
                 // swallow the statement after it.
                 Ok(None) => {}
-                Err(Abort) => self.recover_to_statement_boundary(),
+                Err(Abort) => self.recover_to_statement_boundary_from(started),
             }
         }
         self.eat_symbol("}");
@@ -4357,11 +4421,30 @@ impl Parser<'_> {
         // A trailing comma is legal here (JLS §10.6), so stop on `}` both
         // before an element and after a comma: `{1, 2,}` and `{}` both parse.
         while !self.at_symbol("}") {
-            if self.at_symbol("{") {
-                elements.push(self.array_literal()?);
+            let parsed = if self.at_symbol("{") {
+                self.array_literal()
             } else {
-                elements.push(self.expression()?);
-            }
+                self.expression()
+            };
+            // An element that does not parse is reported already. Letting the
+            // abort escape took the whole STATEMENT with it, and the block's
+            // recovery then stopped at this initializer's `}` — thinking it
+            // closed the method — so every line after it read as a class
+            // member: `int[] a = {1, 2, 3,,};` reported three errors where
+            // javac reports one, two of them about a class body the program
+            // does not have. Closing the initializer here keeps the mistake
+            // where it is.
+            let Ok(element) = parsed else {
+                self.recover_past_initializer();
+                return Ok(Expr::ArrayLiteral {
+                    elements,
+                    span: SourceSpan {
+                        start: start.start,
+                        end: self.here().start,
+                    },
+                });
+            };
+            elements.push(element);
             if !self.eat_symbol(",") {
                 break;
             }

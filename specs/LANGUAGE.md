@@ -12013,3 +12013,40 @@ Pinned by `a_stream_closes_like_a_resource` and
 `IntStream` 46 of 48; what is left on both is `builder()` (a nested type
 nothing else needs) and `spliterator()` (a parallel-decomposition handle, which
 is refused with a reason for every collection already).
+
+## Where a parse error points
+
+Eighteen programs, each with one ordinary SYNTAX mistake — a missing
+semicolon, an unbalanced brace, a hole in an array initializer, a `case`
+without its colon — compared with javac's whole diagnostic list. The WORDING
+was never in question: the parser's is deliberately more explicit than javac's
+("expected ';' to end the declaration" where javac says "';' expected"), and
+that is written down above. What was in question is where it POINTS, and how
+much it says.
+
+**javac's caret for a MISSING token sits at the end of the token before the
+gap**, not on the token that surprised the parser — and the two are often on
+different LINES. A statement missing its semicolon is a mistake on the line the
+statement is on, and caturra pointed at the line after it, which is the one
+thing an editor's underline gets wrong in a way a student cannot reason about.
+`expect_symbol` and `expect_ident` report at the end of the previous token now.
+
+**A statement that aborts part way may have opened braces it never closed.**
+Recovering from a depth of zero stopped at the first `}` — which closes the
+CONSTRUCT, not the block — so the block ended early and every line after it
+read as a class member: `int[] a = {1, 2, 3,,};` reported three errors where
+javac reports one, two of them about a class body the program does not have.
+The recovery counts the braces the statement itself opened; an array
+initializer whose element does not parse also closes itself rather than letting
+the abort escape.
+
+Fifteen of the eighteen now agree with javac on every error position, up from
+two. Of the three that do not: an unclosed class blames the class ("class 'S'
+is missing its closing '}'", at the declaration) where javac says "reached end
+of file while parsing" at the last line — more useful, and one error rather
+than one; and two report a single error where javac reports a second after it.
+Fewer is the safe direction.
+
+Pinned by `reject_a_statement_missing_its_semicolon` (the LINE, not the
+wording), `an_unfinished_initializer_reports_one_mistake` and
+`an_unfinished_case_label_reports_one_mistake`.
