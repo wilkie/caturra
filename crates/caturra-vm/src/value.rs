@@ -119,7 +119,10 @@ pub enum StreamOp {
 }
 
 /// What a `Stream.collect(Collectors.…())` gathers its elements into.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Not `Eq`: `Collectors.reducing` carries an identity VALUE, which may be a
+/// double, and a float has no total equality.
+#[derive(Debug, Clone, PartialEq)]
 pub enum CollectorKind {
     /// `Collectors.toList()` — an `ArrayList` of the elements, in order.
     ToList,
@@ -178,6 +181,63 @@ pub enum CollectorKind {
         mapper: HeapRef,
         downstream: HeapRef,
     },
+    /// `Collectors.filtering(p, downstream)` — the elements that pass, then
+    /// the collector below. Not the same as filtering the STREAM when it is a
+    /// `groupingBy` downstream: a group whose every member fails still exists,
+    /// holding nothing, where a filtered stream would not have made the key.
+    Filtering {
+        predicate: HeapRef,
+        downstream: HeapRef,
+    },
+    /// `Collectors.flatMapping(f, downstream)` — each element's stream
+    /// flattened, then the collector below.
+    FlatMapping {
+        mapper: HeapRef,
+        downstream: HeapRef,
+    },
+    /// `Collectors.collectingAndThen(downstream, finisher)` — gather, then
+    /// hand the result to one more function. The way a group is counted, or
+    /// frozen, without a second pass.
+    CollectingAndThen {
+        downstream: HeapRef,
+        finisher: HeapRef,
+    },
+    /// `Collectors.maxBy(cmp)` / `minBy(cmp)` — an `Optional` of the extreme
+    /// element, empty over no elements.
+    Extreme { comparator: HeapRef, max: bool },
+    /// `Collectors.reducing(...)` in its three forms: with an identity (the
+    /// result is a plain value), without one (an `Optional`), and with a
+    /// mapper applied before each combine.
+    Reducing {
+        identity: Option<JValue>,
+        mapper: Option<HeapRef>,
+        operator: HeapRef,
+    },
+    /// `Collectors.summarizingInt/Long/Double(f)` — count, sum, min, max and
+    /// average of the mapped values, in one object.
+    Summarizing { mapper: HeapRef, kind: SummaryKind },
+}
+
+/// Which summary object a stream or a [`CollectorKind::Summarizing`] answers.
+/// The three differ in what they PRINT (`%f` for a double's sum/min/max) and
+/// in the identity values an empty summary keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummaryKind {
+    Int,
+    Long,
+    Double,
+}
+
+impl SummaryKind {
+    /// The class this summary is an instance of.
+    #[must_use]
+    pub fn class(self) -> &'static str {
+        match self {
+            SummaryKind::Int => "java/util/IntSummaryStatistics",
+            SummaryKind::Long => "java/util/LongSummaryStatistics",
+            SummaryKind::Double => "java/util/DoubleSummaryStatistics",
+        }
+    }
 }
 
 /// Which numeric summary a [`CollectorKind::Summing`] produces.
@@ -542,8 +602,21 @@ pub enum HeapObject {
     SummaryStats {
         count: i64,
         sum: i64,
-        min: i32,
-        max: i32,
+        min: i64,
+        max: i64,
+        /// `Int` or `Long` — the two differ only in the identity values an
+        /// EMPTY summary keeps and in the name it prints.
+        kind: SummaryKind,
+    },
+    /// A `java.util.DoubleSummaryStatistics`. Its own variant rather than a
+    /// third `kind`, because every number in it is a double: an empty one
+    /// reports `Infinity` and `-Infinity`, and its `toString` prints the sum
+    /// and bounds with `%f` where the integral ones print them whole.
+    DoubleSummaryStats {
+        count: i64,
+        sum: f64,
+        min: f64,
+        max: f64,
     },
     /// A `java.util.Optional` / `OptionalInt` / `OptionalDouble`: a value that
     /// is present or absent. `kind` is only for `toString` (`Optional[x]` vs
@@ -844,10 +917,42 @@ impl CollectorKind {
                 }
             }
             CollectorKind::Summing { mapper: f, .. }
+            | CollectorKind::Summarizing { mapper: f, .. }
+            | CollectorKind::Extreme { comparator: f, .. }
             // The supplier is a live reference: it is called when the
             // collector finishes, so the GC must keep it until then.
             | CollectorKind::ToCollection(f) => {
                 visit(*f);
+            }
+            // The two-part collectors: the callback AND the collector under
+            // it are both live until the gathering finishes.
+            CollectorKind::Filtering {
+                predicate: first,
+                downstream: second,
+            }
+            | CollectorKind::FlatMapping {
+                mapper: first,
+                downstream: second,
+            }
+            | CollectorKind::CollectingAndThen {
+                downstream: first,
+                finisher: second,
+            } => {
+                visit(*first);
+                visit(*second);
+            }
+            CollectorKind::Reducing {
+                identity,
+                mapper,
+                operator,
+            } => {
+                if let Some(JValue::Ref(Some(seed))) = identity {
+                    visit(*seed);
+                }
+                if let Some(mapper) = mapper {
+                    visit(*mapper);
+                }
+                visit(*operator);
             }
             CollectorKind::PartitioningBy {
                 predicate,
@@ -941,6 +1046,7 @@ impl HeapObject {
             | HeapObject::Scanner { .. }
             | HeapObject::Reader { .. }
             | HeapObject::SummaryStats { .. }
+            | HeapObject::DoubleSummaryStats { .. }
             | HeapObject::InputStream
             | HeapObject::File(_)
             | HeapObject::Path(_)

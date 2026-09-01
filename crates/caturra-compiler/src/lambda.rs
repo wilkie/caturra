@@ -442,7 +442,8 @@ fn functional_interface_owners(units: &[(String, CompilationUnit)]) -> HashMap<S
                         _ => break,
                     }
                 }
-                out.entry(class.name.clone()).or_insert_with(|| binary.clone());
+                out.entry(class.name.clone())
+                    .or_insert_with(|| binary.clone());
             } else {
                 out.insert(class.name.clone(), binary);
             }
@@ -740,6 +741,11 @@ fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::Hash
         // here or the reference is not one.
         "File",
         "Path",
+        // `Collections::unmodifiableSet` and friends — the algorithms class,
+        // which is a method reference's qualifier as readily as any other and
+        // is exactly what a `collectingAndThen` finisher usually names.
+        "Collections",
+        "Objects",
     ]
     .into_iter()
     .chain(LIBRARY_CONTAINERS)
@@ -791,7 +797,29 @@ fn is_library_static(class: &str, method: &str) -> bool {
             "toBinaryString" | "toHexString" | "toOctalString" | "bitCount" | "signum"
         ),
         "Boolean" => matches!(method, "logicalAnd" | "logicalOr" | "logicalXor"),
-        "Collections" => matches!(method, "reverseOrder" | "emptyList" | "emptySet" | "emptyMap"),
+        // The read-only WRAPPERS are here because they are what a
+        // `collectingAndThen` finisher is: `collectingAndThen(toSet(),
+        // Collections::unmodifiableSet)` is how a stream gathers into a set
+        // nobody can change.
+        "Collections" => matches!(
+            method,
+            "reverseOrder"
+                | "emptyList"
+                | "emptySet"
+                | "emptyMap"
+                | "unmodifiableList"
+                | "unmodifiableSet"
+                | "unmodifiableMap"
+                | "unmodifiableCollection"
+                | "unmodifiableSortedSet"
+                | "unmodifiableSortedMap"
+                | "max"
+                | "min"
+                | "nCopies"
+                | "singleton"
+                | "singletonList"
+                | "frequency"
+        ),
         // `Pattern::compile` and `Pattern::quote` are statics; `matcher`,
         // `split` and the predicates beside them are not.
         "Pattern" => matches!(method, "compile" | "quote" | "matches"),
@@ -801,32 +829,32 @@ fn is_library_static(class: &str, method: &str) -> bool {
     by_class
         || matches!(
             method,
-        "parseInt"
-            | "parseLong"
-            | "parseDouble"
-            | "parseFloat"
-            | "parseShort"
-            | "parseByte"
-            | "parseBoolean"
-            | "valueOf"
-            | "abs"
-            | "max"
-            | "min"
-            | "sqrt"
-            | "cbrt"
-            | "pow"
-            | "floor"
-            | "ceil"
-            | "round"
-            | "random"
-            | "signum"
-            | "sum"
-            | "compare"
-            | "sin"
-            | "cos"
-            | "tan"
-            | "log"
-            | "exp"
+            "parseInt"
+                | "parseLong"
+                | "parseDouble"
+                | "parseFloat"
+                | "parseShort"
+                | "parseByte"
+                | "parseBoolean"
+                | "valueOf"
+                | "abs"
+                | "max"
+                | "min"
+                | "sqrt"
+                | "cbrt"
+                | "pow"
+                | "floor"
+                | "ceil"
+                | "round"
+                | "random"
+                | "signum"
+                | "sum"
+                | "compare"
+                | "sin"
+                | "cos"
+                | "tan"
+                | "log"
+                | "exp"
         )
 }
 
@@ -1344,9 +1372,12 @@ fn substitute_partly(
     vars: &[String],
 ) -> TypeRef {
     match (declared, erased) {
-        (TypeRef::Generic { base, args }, TypeRef::Generic { args: erased_args, .. })
-            if args.len() == erased_args.len() && !vars.iter().any(|v| v == base) =>
-        {
+        (
+            TypeRef::Generic { base, args },
+            TypeRef::Generic {
+                args: erased_args, ..
+            },
+        ) if args.len() == erased_args.len() && !vars.iter().any(|v| v == base) => {
             TypeRef::Generic {
                 base: base.clone(),
                 args: args
@@ -1356,9 +1387,9 @@ fn substitute_partly(
                     .collect(),
             }
         }
-        (TypeRef::Array(inner), TypeRef::Array(erased_inner)) => {
-            TypeRef::Array(Box::new(substitute_partly(inner, erased_inner, bound, vars)))
-        }
+        (TypeRef::Array(inner), TypeRef::Array(erased_inner)) => TypeRef::Array(Box::new(
+            substitute_partly(inner, erased_inner, bound, vars),
+        )),
         _ => substitute_vars(declared, bound, vars).unwrap_or_else(|| erased.clone()),
     }
 }
@@ -1490,7 +1521,12 @@ fn literal_collection_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         return None;
     };
     let owner = path.last().map(String::as_str)?;
-    if args.is_empty() || !matches!((owner, method.as_str()), ("List" | "Set", "of") | ("Arrays", "asList")) {
+    if args.is_empty()
+        || !matches!(
+            (owner, method.as_str()),
+            ("List" | "Set", "of") | ("Arrays", "asList")
+        )
+    {
         return None;
     }
     let first = static_type_of(&args[0], ctx)?;
@@ -2077,7 +2113,10 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             only,
             Expr::Lambda { .. } | Expr::NewArray { .. } | Expr::MethodRef { .. }
         )
-        && let Some(TypeRef::Generic { base, args: written }) = static_type_of(only, ctx)
+        && let Some(TypeRef::Generic {
+            base,
+            args: written,
+        }) = static_type_of(only, ctx)
         && simple_base(&base) == "IntFunction"
         && matches!(written.first(), Some(TypeRef::Array(_)))
     {
@@ -2509,6 +2548,68 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 args[0] = build_erased_lambda(&mut args[0], iface, sam, &ret, &[elem], None, ctx);
                 return;
             }
+            // `optional.ifPresentOrElse(action, empty)`: a consumer of the
+            // element and a Runnable that takes nothing — the two arms erase
+            // to different interfaces, which is why this cannot ride the
+            // single-function path above.
+            if method == "ifPresentOrElse"
+                && args.len() == 2
+                && let Some(r) = receiver.as_deref()
+                && let Some(elem) = optional_elem_type(r, ctx)
+            {
+                if matches!(&args[0], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from("accept"),
+                        params: vec![elem.clone()],
+                        ret: TypeRef::Void,
+                    };
+                    args[0] = method_ref_to_lambda(&args[0], &synth, ctx);
+                }
+                if matches!(&args[0], Expr::Lambda { .. }) {
+                    args[0] = build_erased_lambda(
+                        &mut args[0],
+                        "__Consumer",
+                        "accept",
+                        &TypeRef::Void,
+                        &[elem],
+                        None,
+                        ctx,
+                    );
+                }
+                if matches!(&args[1], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from("run"),
+                        params: Vec::new(),
+                        ret: TypeRef::Void,
+                    };
+                    args[1] = method_ref_to_lambda(&args[1], &synth, ctx);
+                }
+                if matches!(&args[1], Expr::Lambda { .. }) {
+                    args[1] = build_erased_lambda(
+                        &mut args[1],
+                        "__Runnable",
+                        "run",
+                        &TypeRef::Void,
+                        &[],
+                        None,
+                        ctx,
+                    );
+                }
+                return;
+            }
+            // `optional.or(() -> ...)`: a supplier of another OPTIONAL, not of
+            // the element — the one place these two are told apart.
+            if method == "or"
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { params, .. } if params.is_empty())
+                && let Some(r) = receiver.as_deref()
+                && optional_elem_type(r, ctx).is_some()
+            {
+                let object = TypeRef::Named(String::from("Object"));
+                args[0] =
+                    build_erased_lambda(&mut args[0], "__Supplier", "get", &object, &[], None, ctx);
+                return;
+            }
             // `optional.orElseGet(() -> ...)`: a zero-parameter supplier whose
             // result is the Optional's element type.
             if method == "orElseGet"
@@ -2550,15 +2651,8 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     };
                     args[1] = method_ref_to_lambda(&args[1], &synth, ctx);
                 }
-                args[1] = build_erased_lambda(
-                    &mut args[1],
-                    "__Supplier",
-                    "get",
-                    &object,
-                    &[],
-                    None,
-                    ctx,
-                );
+                args[1] =
+                    build_erased_lambda(&mut args[1], "__Supplier", "get", &object, &[], None, ctx);
                 return;
             }
             // `Arrays.sort(array, cmp)`: the comparator is over the ARRAY's
@@ -3894,19 +3988,196 @@ fn collector_map_types(collector: &Expr, source: &Expr, ctx: &Ctx) -> Option<(Ty
             boxed_name(mapped_element_type(std::slice::from_ref(value), ctx)?)
         }
         ("toMap", None) => return None,
-        (_, Some(downstream)) => collector_value_type(downstream, source, ctx)?,
+        (_, Some(downstream)) => collector_value_type(downstream, &elem(), ctx)?,
         (_, None) => list_of(elem()),
     };
     Some((key, value))
 }
 
+/// The collector callbacks whose shape is fixed by the FACTORY rather than by
+/// the element: a supplier that takes nothing, a predicate of the element, a
+/// merge of two values, a finisher of what was gathered. `true` when this
+/// argument was one of them and has been erased.
+fn desugar_collector_shape(
+    method: &str,
+    args: &mut [Expr],
+    index: usize,
+    is_lambda: bool,
+    elem: &TypeRef,
+    ctx: &mut Ctx,
+) -> bool {
+    if !is_lambda {
+        return false;
+    }
+    let object = TypeRef::Named(String::from("Object"));
+    // `toCollection(ArrayList::new)` — a SUPPLIER, which takes no
+    // element at all. Without this arm the reference was refused as "only
+    // allowed where a functional-interface type is expected".
+    if method == "toCollection" && index == 0 {
+        if matches!(&args[index], Expr::MethodRef { .. }) {
+            let synth = Sam {
+                method: String::from("get"),
+                params: Vec::new(),
+                ret: object.clone(),
+            };
+            args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+        }
+        args[index] = build_erased_lambda(
+            &mut args[index],
+            "__Supplier",
+            "get",
+            &object,
+            &[],
+            None,
+            ctx,
+        );
+        return true;
+    }
+    // `filtering(p, downstream)` — a predicate of the element, the same
+    // shape `partitioningBy` takes in the same position.
+    if matches!(method, "partitioningBy" | "filtering") && index == 0 {
+        args[index] = build_erased_lambda(
+            &mut args[index],
+            "__Predicate",
+            "test",
+            &TypeRef::Boolean,
+            std::slice::from_ref(elem),
+            None,
+            ctx,
+        );
+        return true;
+    }
+    // `toMap`'s third argument merges two VALUES, whose type this pass
+    // cannot see, so both parameters erase to `Object`.
+    if matches!(method, "toMap" | "toUnmodifiableMap") && index == 2 {
+        args[index] = build_erased_lambda(
+            &mut args[index],
+            "__BiFunction",
+            "apply",
+            &object,
+            &[object.clone(), object.clone()],
+            None,
+            ctx,
+        );
+        return true;
+    }
+    // `collectingAndThen(downstream, finisher)` — the finisher takes what
+    // the collector below GATHERED, not an element, so its parameter
+    // erases to `Object` rather than being typed from the stream.
+    if method == "collectingAndThen" && index == 1 {
+        // …and that is a COLLECTION, not an element: `List::size` has to
+        // see a `List<String>` or the reference cannot be made at all.
+        let gathered = collector_value_type(&args[0], elem, ctx).unwrap_or_else(|| object.clone());
+        if matches!(&args[index], Expr::MethodRef { .. }) {
+            let synth = Sam {
+                method: String::from("apply"),
+                params: vec![gathered.clone()],
+                ret: object.clone(),
+            };
+            args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+        }
+        args[index] = build_erased_lambda(
+            &mut args[index],
+            "__UnaryOperator",
+            "apply",
+            &object,
+            std::slice::from_ref(&gathered),
+            None,
+            ctx,
+        );
+        return true;
+    }
+    false
+}
+
+/// The `maxBy`/`minBy`/`reducing` arguments, which are the collector callbacks
+/// that are NOT one function of one element: a comparator takes two, and a
+/// reduction's operator folds two of whatever the mapper before it answered.
+/// `true` when this argument was one and has been erased.
+fn desugar_extreme_or_reducing(
+    method: &str,
+    args: &mut [Expr],
+    index: usize,
+    is_lambda: bool,
+    elem: &TypeRef,
+    ctx: &mut Ctx,
+) -> bool {
+    if !is_lambda {
+        return false;
+    }
+    let object = TypeRef::Named(String::from("Object"));
+    // `maxBy`/`minBy` take a COMPARATOR of the element, and `reducing`'s
+    // operator two of them; neither is a function of one element.
+    if matches!(method, "maxBy" | "minBy") && index == 0 {
+        args[index] = build_erased_lambda(
+            &mut args[index],
+            "__Comparator",
+            "compare",
+            &TypeRef::Int,
+            &[elem.clone(), elem.clone()],
+            None,
+            ctx,
+        );
+        return true;
+    }
+    // `reducing`'s LAST argument is always the binary operator; the
+    // three-argument form puts a mapper of the element before it.
+    if method == "reducing" && index + 1 == args.len() {
+        // The three-argument form folds what the MAPPER answered, not the
+        // element — and this pass can read that off the mapper.
+        let folded = if args.len() == 3 {
+            mapped_element_type(&args[1..2], ctx).unwrap_or_else(|| elem.clone())
+        } else {
+            elem.clone()
+        };
+        if matches!(&args[index], Expr::MethodRef { .. }) {
+            let synth = Sam {
+                method: String::from("apply"),
+                params: vec![folded.clone(), folded.clone()],
+                ret: object.clone(),
+            };
+            args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+        }
+        args[index] = build_erased_lambda(
+            &mut args[index],
+            "__BiFunction",
+            "apply",
+            &object,
+            &[folded.clone(), folded],
+            None,
+            ctx,
+        );
+        return true;
+    }
+    if method == "reducing" && args.len() == 3 && index == 1 {
+        if matches!(&args[index], Expr::MethodRef { .. }) {
+            let synth = Sam {
+                method: String::from("apply"),
+                params: vec![elem.clone()],
+                ret: object.clone(),
+            };
+            args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+        }
+        args[index] = build_erased_lambda(
+            &mut args[index],
+            "__UnaryOperator",
+            "apply",
+            &object,
+            std::slice::from_ref(elem),
+            None,
+            ctx,
+        );
+        return true;
+    }
+    false
+}
+
 /// What a DOWNSTREAM collector produces, as a written type.
-fn collector_value_type(collector: &Expr, source: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+fn collector_value_type(collector: &Expr, element: &TypeRef, ctx: &Ctx) -> Option<TypeRef> {
     let Expr::Call { method, args, .. } = collector else {
         return None;
     };
-    let object = || TypeRef::Named(String::from("Object"));
-    let elem = || stream_elem_type(source, ctx).unwrap_or_else(object);
+    let elem = || element.clone();
     Some(match method.as_str() {
         "toList" | "toUnmodifiableList" => TypeRef::Generic {
             base: String::from("List"),
@@ -3918,13 +4189,28 @@ fn collector_value_type(collector: &Expr, source: &Expr, ctx: &Ctx) -> Option<Ty
         },
         "joining" => TypeRef::Named(String::from("String")),
         "counting" => TypeRef::Named(String::from("Long")),
+        // `mapping(f, downstream)` produces whatever the DOWNSTREAM does, over
+        // the mapped element — not a list. Answering `List<mapped>` was right
+        // for the usual `mapping(f, toList())` and wrong for every other
+        // downstream, which showed the moment a `collectingAndThen` finisher
+        // had to be typed from one.
         "mapping" if args.len() == 2 => {
             let mapped = boxed_name(mapped_element_type(std::slice::from_ref(&args[0]), ctx)?);
-            TypeRef::Generic {
-                base: String::from("List"),
-                args: vec![mapped],
-            }
+            collector_value_type(&args[1], &mapped, ctx)?
         }
+        // `filtering` keeps the element; the collector under either of these
+        // is what really decides, so ask it.
+        "filtering" if args.len() == 2 => collector_value_type(&args[1], element, ctx)?,
+        "collectingAndThen" if args.len() == 2 => {
+            mapped_element_type(std::slice::from_ref(&args[1]), ctx)?
+        }
+        "maxBy" | "minBy" | "reducing" if args.len() == 1 => TypeRef::Generic {
+            base: String::from("Optional"),
+            args: vec![elem()],
+        },
+        "summarizingInt" => TypeRef::Named(String::from("IntSummaryStatistics")),
+        "summarizingLong" => TypeRef::Named(String::from("LongSummaryStatistics")),
+        "summarizingDouble" => TypeRef::Named(String::from("DoubleSummaryStatistics")),
         _ => return None,
     })
 }
@@ -3932,9 +4218,24 @@ fn collector_value_type(collector: &Expr, source: &Expr, ctx: &Ctx) -> Option<Ty
 /// A primitive answer becomes its WRAPPER: a map holds references, so a
 /// classifier that answers an `int` keys the map by `Integer`.
 fn boxed_name(ty: TypeRef) -> TypeRef {
-    let TypeRef::Named(name) = &ty else {
-        return ty;
+    // A primitive written as its own VARIANT boxes too. Only the `Named`
+    // spelling was handled, so a `mapping(String::length, …)` whose element
+    // this decides answered a `Set<int>` — a type argument that is not a
+    // reference, which the position below it reported as "required:
+    // reference, found: int" about a program that says neither.
+    let name = match &ty {
+        TypeRef::Int => "int",
+        TypeRef::Long => "long",
+        TypeRef::Double => "double",
+        TypeRef::Float => "float",
+        TypeRef::Short => "short",
+        TypeRef::Byte => "byte",
+        TypeRef::Char => "char",
+        TypeRef::Boolean => "boolean",
+        TypeRef::Named(name) => name.as_str(),
+        _ => return ty,
     };
+    let name = &String::from(name);
     TypeRef::Named(String::from(match name.as_str() {
         "int" => "Integer",
         "long" => "Long",
@@ -5034,27 +5335,25 @@ fn call_body_type(
         return Some(argument.clone());
     }
     Some(answered)
-
 }
-
 
 /// The reference form of a primitive. An OBJECT stream's element is always a
 /// reference, so a supplier answering `2` makes a `Stream<Integer>` — reading
 /// the element as a bare `int` typed the fold's parameters as primitives and
 /// its result went back unboxed, which is a `VerifyError`, not a diagnostic.
 fn boxed_element(ty: TypeRef) -> TypeRef {
-let name = match ty {
-    TypeRef::Int => "Integer",
-    TypeRef::Long => "Long",
-    TypeRef::Double => "Double",
-    TypeRef::Float => "Float",
-    TypeRef::Short => "Short",
-    TypeRef::Byte => "Byte",
-    TypeRef::Char => "Character",
-    TypeRef::Boolean => "Boolean",
-    other => return other,
-};
-TypeRef::Named(String::from(name))
+    let name = match ty {
+        TypeRef::Int => "Integer",
+        TypeRef::Long => "Long",
+        TypeRef::Double => "Double",
+        TypeRef::Float => "Float",
+        TypeRef::Short => "Short",
+        TypeRef::Byte => "Byte",
+        TypeRef::Char => "Character",
+        TypeRef::Boolean => "Boolean",
+        other => return other,
+    };
+    TypeRef::Named(String::from(name))
 }
 
 /// The type of a lambda BODY, given what its parameter is. Deliberately a
@@ -5122,7 +5421,7 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
             ..
         } => call_body_type(expr, receiver.as_deref(), method, args, bound, ctx),
         _ => static_type_of(expr, ctx),
-}
+    }
 }
 
 /// The result of the library methods a lambda body commonly ends in. A SUBSET,
@@ -5273,8 +5572,13 @@ fn map_half(receiver: &TypeRef, at: usize) -> Option<TypeRef> {
             if args.len() == 2
                 && matches!(
                     simple_base(base),
-                    "Map" | "HashMap" | "LinkedHashMap" | "TreeMap" | "SortedMap"
-                        | "NavigableMap" | "EnumMap"
+                    "Map"
+                        | "HashMap"
+                        | "LinkedHashMap"
+                        | "TreeMap"
+                        | "SortedMap"
+                        | "NavigableMap"
+                        | "EnumMap"
                 ) =>
         {
             args.get(at).cloned()
@@ -5525,7 +5829,8 @@ fn desugar_collector(expr: &mut Expr, elem: &TypeRef, ctx: &mut Ctx) {
     // How many leading arguments are one-parameter functions OF THE ELEMENT.
     let element_functions = match method.as_str() {
         "groupingBy" | "mapping" | "summingInt" | "summingLong" | "summingDouble"
-        | "averagingInt" | "averagingLong" | "averagingDouble" => 1,
+        | "averagingInt" | "averagingLong" | "averagingDouble" | "flatMapping"
+        | "summarizingInt" | "summarizingLong" | "summarizingDouble" => 1,
         "toMap" | "toUnmodifiableMap" => 2,
         _ => 0,
     };
@@ -5552,53 +5857,10 @@ fn desugar_collector(expr: &mut Expr, elem: &TypeRef, ctx: &mut Ctx) {
             );
             continue;
         }
-        // `toCollection(ArrayList::new)` — a SUPPLIER, which takes no
-        // element at all. Without this arm the reference was refused as "only
-        // allowed where a functional-interface type is expected".
-        if method == "toCollection" && index == 0 && is_lambda {
-            if matches!(&args[index], Expr::MethodRef { .. }) {
-                let synth = Sam {
-                    method: String::from("get"),
-                    params: Vec::new(),
-                    ret: object.clone(),
-                };
-                args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
-            }
-            args[index] = build_erased_lambda(
-                &mut args[index],
-                "__Supplier",
-                "get",
-                &object,
-                &[],
-                None,
-                ctx,
-            );
+        if desugar_collector_shape(method, args, index, is_lambda, elem, ctx) {
             continue;
         }
-        if method == "partitioningBy" && index == 0 && is_lambda {
-            args[index] = build_erased_lambda(
-                &mut args[index],
-                "__Predicate",
-                "test",
-                &TypeRef::Boolean,
-                std::slice::from_ref(elem),
-                None,
-                ctx,
-            );
-            continue;
-        }
-        // `toMap`'s third argument merges two VALUES, whose type this pass
-        // cannot see, so both parameters erase to `Object`.
-        if matches!(method.as_str(), "toMap" | "toUnmodifiableMap") && index == 2 && is_lambda {
-            args[index] = build_erased_lambda(
-                &mut args[index],
-                "__BiFunction",
-                "apply",
-                &object,
-                &[object.clone(), object.clone()],
-                None,
-                ctx,
-            );
+        if desugar_extreme_or_reducing(method, args, index, is_lambda, elem, ctx) {
             continue;
         }
         // A nested collector (`groupingBy(f, counting())`) sees the same
@@ -5923,12 +6185,10 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
                 "toCharArray" => Some(TypeRef::Char),
                 "getBytes" => Some(TypeRef::Byte),
                 // `Arrays.copyOf(source, n)` keeps the SOURCE's element.
-                "copyOf" | "copyOfRange" => {
-                    array_elem_type(args.first()?, ctx).filter(|_| {
-                        matches!(owner.as_ref(), Expr::Name { path, .. }
+                "copyOf" | "copyOfRange" => array_elem_type(args.first()?, ctx).filter(|_| {
+                    matches!(owner.as_ref(), Expr::Name { path, .. }
                             if path.last().is_some_and(|name| name == "Arrays"))
-                    })
-                }
+                }),
                 // `toArray(new String[0])` says its element in the MODEL it is
                 // given; the no-argument form answers `Object[]`.
                 _ => match args.first() {
@@ -6005,6 +6265,17 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         {
             return Some(literal_element_type(args, ctx));
         }
+        // `Optional.<String>empty()` — a WITNESS says the element where there
+        // is no argument to read it from, and an empty Optional is exactly the
+        // receiver a program writes `ifPresentOrElse` on.
+        if method == "empty" && args.is_empty() && names_library_class(prev, "Optional") {
+            if let Expr::Call { type_args, .. } = receiver
+                && let [witness] = &type_args[..]
+            {
+                return Some(witness.clone());
+            }
+            return Some(TypeRef::Named(String::from("Object")));
+        }
         return match method.as_str() {
             // Optional.filter: same element. (A STREAM's filter resolves to
             // None here — its chain never bottoms out in an Optional.)
@@ -6035,9 +6306,10 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             // back "maybe one". Every arm above reads a LIBRARY chain; the
             // program's own method says its element in its return type.
             _ => match user_method_return(prev, method, args.len(), ctx) {
-                Some(TypeRef::Generic { base, args: written })
-                    if simple_base(&base) == "Optional" && written.len() == 1 =>
-                {
+                Some(TypeRef::Generic {
+                    base,
+                    args: written,
+                }) if simple_base(&base) == "Optional" && written.len() == 1 => {
                     Some(written[0].clone())
                 }
                 _ => None,
@@ -6252,7 +6524,10 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         method,
         ..
     } = receiver
-        && let Some(TypeRef::Generic { base, args: written }) = static_type_of(owner, ctx)
+        && let Some(TypeRef::Generic {
+            base,
+            args: written,
+        }) = static_type_of(owner, ctx)
     {
         let read = match (simple_base(&base), method.as_str(), written.len()) {
             (

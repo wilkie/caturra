@@ -19,7 +19,9 @@ use crate::debug::{
     WatchEvaluator,
 };
 use crate::format::ArgNeed;
-use crate::intrinsics::{self, IntrinsicStatics, check_comodification, iterated_len_of, regex_predicate};
+use crate::intrinsics::{
+    self, IntrinsicStatics, check_comodification, iterated_len_of, regex_predicate,
+};
 use crate::io::ConsoleIo;
 use crate::value::{Heap, HeapRef, IteratorWrites, JValue, MapViewKind};
 use crate::vfs::VirtualFileSystem;
@@ -4800,11 +4802,8 @@ impl<'run> Interpreter<'run> {
             // read-only list answered "no items" and returned quietly, ahead
             // of the refusal it owed. Reading the range restores the order.
             .or_else(|| {
-                matches!(
-                    self.heap.get(reference),
-                    Some(HeapObject::SubList { .. })
-                )
-                .then(|| (reference, self.list_items(reference)))
+                matches!(self.heap.get(reference), Some(HeapObject::SubList { .. }))
+                    .then(|| (reference, self.list_items(reference)))
             })
             .or_else(|| {
                 matches!(
@@ -5241,12 +5240,12 @@ impl<'run> Interpreter<'run> {
             }
             // `range(from, to)` is INCLUSIVE of both ends, by ordinal.
             ("range", [JValue::Ref(Some(from)), JValue::Ref(Some(to))]) => {
-                let start = constants.iter().position(|c| *c == JValue::Ref(Some(*from)));
+                let start = constants
+                    .iter()
+                    .position(|c| *c == JValue::Ref(Some(*from)));
                 let end = constants.iter().position(|c| *c == JValue::Ref(Some(*to)));
                 match (start, end) {
-                    (Some(start), Some(end)) if start <= end => {
-                        constants[start..=end].to_vec()
-                    }
+                    (Some(start), Some(end)) if start <= end => constants[start..=end].to_vec(),
                     (Some(_), Some(_)) => {
                         return Err(VmError::UncaughtException(String::from(
                             "java.lang.IllegalArgumentException: from > to",
@@ -5328,12 +5327,10 @@ impl<'run> Interpreter<'run> {
                     downstream: Some(*downstream),
                 }
             }
-            ("partitioningBy", [JValue::Ref(Some(predicate))]) => {
-                CollectorKind::PartitioningBy {
-                    predicate: *predicate,
-                    downstream: None,
-                }
-            }
+            ("partitioningBy", [JValue::Ref(Some(predicate))]) => CollectorKind::PartitioningBy {
+                predicate: *predicate,
+                downstream: None,
+            },
             ("partitioningBy", [JValue::Ref(Some(predicate)), JValue::Ref(Some(downstream))]) => {
                 CollectorKind::PartitioningBy {
                     predicate: *predicate,
@@ -5399,6 +5396,67 @@ impl<'run> Interpreter<'run> {
                     kind: crate::value::SumKind::Averaging,
                 }
             }
+            (
+                "summarizingInt" | "summarizingLong" | "summarizingDouble",
+                [JValue::Ref(Some(mapper))],
+            ) => {
+                use crate::value::SummaryKind;
+                CollectorKind::Summarizing {
+                    mapper: *mapper,
+                    kind: match method_name {
+                        "summarizingLong" => SummaryKind::Long,
+                        "summarizingDouble" => SummaryKind::Double,
+                        _ => SummaryKind::Int,
+                    },
+                }
+            }
+            ("maxBy" | "minBy", [JValue::Ref(Some(comparator))]) => CollectorKind::Extreme {
+                comparator: *comparator,
+                max: method_name == "maxBy",
+            },
+            ("filtering", [JValue::Ref(Some(predicate)), JValue::Ref(Some(downstream))]) => {
+                CollectorKind::Filtering {
+                    predicate: *predicate,
+                    downstream: *downstream,
+                }
+            }
+            ("flatMapping", [JValue::Ref(Some(mapper)), JValue::Ref(Some(downstream))]) => {
+                CollectorKind::FlatMapping {
+                    mapper: *mapper,
+                    downstream: *downstream,
+                }
+            }
+            ("collectingAndThen", [JValue::Ref(Some(downstream)), JValue::Ref(Some(finisher))]) => {
+                CollectorKind::CollectingAndThen {
+                    downstream: *downstream,
+                    finisher: *finisher,
+                }
+            }
+            // `reducing`'s three shapes, told apart by their arguments: one is
+            // the operator alone, two are an identity and an operator, three
+            // put a mapper between them.
+            ("reducing", [JValue::Ref(Some(operator))]) => CollectorKind::Reducing {
+                identity: None,
+                mapper: None,
+                operator: *operator,
+            },
+            ("reducing", [identity, JValue::Ref(Some(operator))]) => CollectorKind::Reducing {
+                identity: Some(*identity),
+                mapper: None,
+                operator: *operator,
+            },
+            (
+                "reducing",
+                [
+                    identity,
+                    JValue::Ref(Some(mapper)),
+                    JValue::Ref(Some(operator)),
+                ],
+            ) => CollectorKind::Reducing {
+                identity: Some(*identity),
+                mapper: Some(*mapper),
+                operator: *operator,
+            },
             _ => return Ok(false),
         };
         let collector = self.heap.alloc(HeapObject::Collector(kind));
@@ -9649,7 +9707,11 @@ impl<'run> Interpreter<'run> {
             return Ok(());
         }
         let named = self.object_class_name(reference);
-        Err(class_cast_error(self.classes, &named, "java/lang/Comparable"))
+        Err(class_cast_error(
+            self.classes,
+            &named,
+            "java/lang/Comparable",
+        ))
     }
 
     /// `queue.offer(e)`: append and sift up into heap position. Mirrors Java's
@@ -10583,6 +10645,28 @@ impl<'run> Interpreter<'run> {
                     self.alloc_stream(value.into_iter().collect()),
                 ));
             }
+            // `ifPresentOrElse(action, empty)` — exactly one of the two runs,
+            // and the empty arm takes no argument.
+            ("ifPresentOrElse", [JValue::Ref(Some(action)), JValue::Ref(Some(empty))]) => {
+                let (action, empty) = (*action, *empty);
+                match value {
+                    Some(present) => {
+                        self.call_functional(action, "accept", "(Ljava/lang/Object;)V", present)?;
+                    }
+                    None => self.call_run(empty)?,
+                }
+                return Ok(Answered::Void);
+            }
+            // `or(supplier)` — this Optional when it holds anything, else the
+            // one the supplier makes. The supplier answers an OPTIONAL, so
+            // what it gives back is the answer as it stands.
+            ("or", [JValue::Ref(Some(supplier))]) => {
+                let supplier = *supplier;
+                return Ok(Answered::Value(match value {
+                    Some(_) => JValue::Ref(Some(receiver)),
+                    None => self.call_apply_supplier(supplier)?,
+                }));
+            }
             ("ifPresent", [JValue::Ref(Some(consumer))]) => {
                 if let Some(present) = value {
                     self.call_functional(*consumer, "accept", "(Ljava/lang/Object;)V", present)?;
@@ -10757,7 +10841,9 @@ impl<'run> Interpreter<'run> {
             return Ok(None);
         }
         let Some(HeapObject::Matcher {
-            input, last: Some(groups), ..
+            input,
+            last: Some(groups),
+            ..
         }) = self.heap.get(matcher)
         else {
             return Ok(None);
@@ -10945,17 +11031,17 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<Option<JValue>, VmError> {
         use crate::value::HeapObject;
-        if !matches!(self.heap.get(receiver), Some(HeapObject::RegexPredicate { .. })) {
+        if !matches!(
+            self.heap.get(receiver),
+            Some(HeapObject::RegexPredicate { .. })
+        ) {
             return Ok(None);
         }
         let (class, fields): (&str, Vec<(&str, JValue)>) = match (method, args) {
             ("negate", []) => ("__Negate", vec![("inner", JValue::Ref(Some(receiver)))]),
             ("and" | "or", [other @ JValue::Ref(Some(_))]) => (
                 if method == "and" { "__And" } else { "__Or" },
-                vec![
-                    ("left", JValue::Ref(Some(receiver))),
-                    ("right", *other),
-                ],
+                vec![("left", JValue::Ref(Some(receiver))), ("right", *other)],
             ),
             ("and" | "or", [JValue::Ref(None)]) => {
                 return Err(VmError::UncaughtException(String::from(
@@ -11110,6 +11196,25 @@ impl<'run> Interpreter<'run> {
 
     /// `supplier.get()` (a zero-argument lambda), unboxing a primitive result —
     /// backs `Optional.orElseGet`.
+    /// `runnable.run()` — the one functional shape that takes nothing and
+    /// answers nothing (`Optional.ifPresentOrElse`'s empty arm).
+    fn call_run(&mut self, runnable: HeapRef) -> Result<(), VmError> {
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(runnable)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        match self.user_virtual_dispatch(runnable, &class_name, "run", "()V", &[])? {
+            UserDispatch::Call(frame) => {
+                self.run_nested(frame)?;
+            }
+            UserDispatch::Value(_) => {}
+        }
+        Ok(())
+    }
+
     fn call_apply_supplier(&mut self, supplier: HeapRef) -> Result<JValue, VmError> {
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(supplier)
         else {
@@ -11173,6 +11278,66 @@ impl<'run> Interpreter<'run> {
             },
             JValue::Ref(None) => 0.0,
         }
+    }
+
+    /// Which summary a `summaryStatistics()` call answers, read from its
+    /// return descriptor — the compiler substitutes the class per primitive
+    /// stream, the same way it substitutes `OptionalInt`.
+    fn summary_kind_of(descriptor: &str) -> crate::value::SummaryKind {
+        use crate::value::SummaryKind;
+        if descriptor.contains("DoubleSummaryStatistics") {
+            SummaryKind::Double
+        } else if descriptor.contains("LongSummaryStatistics") {
+            SummaryKind::Long
+        } else {
+            SummaryKind::Int
+        }
+    }
+
+    /// Gather count/sum/min/max into the summary object the descriptor asks
+    /// for. Shared by `IntStream.summaryStatistics()` and
+    /// `Collectors.summarizing*`, which are the same pass over different
+    /// sources — written twice, they drifted the moment one grew a kind.
+    fn summarize(&mut self, values: &[JValue], kind: crate::value::SummaryKind) -> HeapRef {
+        use crate::value::{HeapObject, SummaryKind};
+        let count = i64::try_from(values.len()).unwrap_or(i64::MAX);
+        if kind == SummaryKind::Double {
+            let (mut sum, mut min, mut max) = (0.0f64, f64::INFINITY, f64::NEG_INFINITY);
+            for value in values {
+                let number = self.numeric_as_double(*value);
+                sum += number;
+                min = min.min(number);
+                max = max.max(number);
+            }
+            return self.heap.alloc(HeapObject::DoubleSummaryStats {
+                count,
+                sum,
+                min,
+                max,
+            });
+        }
+        // An empty INT summary reports `Integer.MAX_VALUE` as its minimum and
+        // `MIN_VALUE` as its maximum, a long one the 64-bit pair — the
+        // identity values the JDK's accumulator starts from, left showing.
+        let (empty_min, empty_max) = if kind == SummaryKind::Long {
+            (i64::MAX, i64::MIN)
+        } else {
+            (i64::from(i32::MAX), i64::from(i32::MIN))
+        };
+        let (mut sum, mut min, mut max) = (0i64, empty_min, empty_max);
+        for value in values {
+            let number = self.numeric_as_long(*value);
+            sum = sum.wrapping_add(number);
+            min = min.min(number);
+            max = max.max(number);
+        }
+        self.heap.alloc(HeapObject::SummaryStats {
+            count,
+            sum,
+            min,
+            max,
+            kind,
+        })
     }
 
     fn numeric_as_long(&self, value: JValue) -> i64 {
@@ -11622,24 +11787,12 @@ impl<'run> Interpreter<'run> {
             // One pass gathering all five numbers. An EMPTY stream reports
             // `Integer.MAX_VALUE` as its minimum and `MIN_VALUE` as its
             // maximum, which is what the JDK's identity values leave behind.
+            // Which of the three summaries this is comes from the DESCRIPTOR,
+            // not from the values: an empty double pipeline has no element to
+            // read a kind off, and its `Infinity` bounds are the whole answer.
             ("summaryStatistics", []) => {
-                let mut sum = 0i64;
-                let mut min = i32::MAX;
-                let mut max = i32::MIN;
-                for element in &elements {
-                    let value = i32::try_from(self.numeric_as_long(*element)).unwrap_or(0);
-                    sum += i64::from(value);
-                    min = min.min(value);
-                    max = max.max(value);
-                }
-                JValue::Ref(Some(self.heap.alloc(
-                    crate::value::HeapObject::SummaryStats {
-                        count: i64::try_from(elements.len()).unwrap_or(i64::MAX),
-                        sum,
-                        min,
-                        max,
-                    },
-                )))
+                let kind = Self::summary_kind_of(descriptor);
+                JValue::Ref(Some(self.summarize(&elements, kind)))
             }
             ("max" | "min", [JValue::Ref(Some(comparator))]) => {
                 let want_max = method == "max";
@@ -11849,6 +12002,103 @@ impl<'run> Interpreter<'run> {
                 }
                 self.stream_collect(mapped, downstream)
             }
+            // `filtering(p, downstream)` is NOT the same as filtering the
+            // stream when it sits under a `groupingBy`: a group whose every
+            // member fails still exists, holding nothing, where a filtered
+            // stream would never have made the key.
+            CollectorKind::Filtering {
+                predicate,
+                downstream,
+            } => {
+                let mut kept = Vec::new();
+                for element in elements {
+                    if self.call_test(predicate, element)? {
+                        kept.push(element);
+                    }
+                }
+                self.stream_collect(kept, downstream)
+            }
+            // `flatMapping(f, downstream)`: each element answers a STREAM, and
+            // what the collector below gathers is everything those streams
+            // hold, in order.
+            CollectorKind::FlatMapping { mapper, downstream } => {
+                let mut flattened = Vec::new();
+                for element in elements {
+                    match self.call_apply(mapper, element)? {
+                        JValue::Ref(Some(inner)) if self.is_stream(inner) => {
+                            flattened.extend(self.stream_materialize(inner)?);
+                        }
+                        // A `null` sub-stream contributes nothing, the same
+                        // reading `flatMap` takes.
+                        JValue::Ref(None) => {}
+                        other => flattened.push(other),
+                    }
+                }
+                self.stream_collect(flattened, downstream)
+            }
+            // `collectingAndThen(downstream, finisher)`: gather, then one more
+            // function over the result. How a group is counted, or frozen,
+            // without a second pass over it.
+            CollectorKind::CollectingAndThen {
+                downstream,
+                finisher,
+            } => {
+                let gathered = self.stream_collect(elements, downstream)?;
+                self.call_apply(finisher, gathered)
+            }
+            // `maxBy`/`minBy` — an `Optional` of the extreme element, empty
+            // over no elements. `BinaryOperator.maxBy` compares with the
+            // ACCUMULATED value first, the order `Stream.max` uses.
+            CollectorKind::Extreme { comparator, max } => {
+                let mut best: Option<JValue> = None;
+                for element in elements {
+                    best = Some(match best {
+                        None => element,
+                        Some(current) => {
+                            let ordering = self.compare_with(current, element, Some(comparator))?;
+                            let keep = if max { ordering >= 0 } else { ordering <= 0 };
+                            if keep { current } else { element }
+                        }
+                    });
+                }
+                Ok(self.alloc_optional(best, crate::value::OptionalKind::Ref))
+            }
+            // `reducing` in its three forms. With an identity the result is a
+            // plain value (the identity itself over no elements); without one
+            // it is an `Optional`, and the FIRST element is the seed rather
+            // than something the operator ever sees on its own.
+            CollectorKind::Reducing {
+                identity,
+                mapper,
+                operator,
+            } => {
+                let mut accumulated = identity;
+                for element in elements {
+                    let value = match mapper {
+                        Some(mapper) => self.call_apply(mapper, element)?,
+                        None => element,
+                    };
+                    accumulated = Some(match accumulated {
+                        None => value,
+                        Some(current) => self.call_apply_two(operator, current, value)?,
+                    });
+                }
+                match identity {
+                    // The identity form answers the value itself…
+                    Some(_) => Ok(accumulated.unwrap_or(JValue::NULL)),
+                    // …and the one without answers an Optional, empty when
+                    // nothing arrived.
+                    None => Ok(self.alloc_optional(accumulated, crate::value::OptionalKind::Ref)),
+                }
+            }
+            CollectorKind::Summarizing { mapper, kind } => {
+                let mut mapped = Vec::with_capacity(elements.len());
+                for element in elements {
+                    mapped.push(self.call_apply(mapper, element)?);
+                }
+                let summary = self.summarize(&mapped, kind);
+                Ok(JValue::Ref(Some(summary)))
+            }
             CollectorKind::PartitioningBy {
                 predicate,
                 downstream,
@@ -11870,9 +12120,7 @@ impl<'run> Interpreter<'run> {
                     let key = self.box_if_primitive(JValue::Int(i32::from(flag)), "Z");
                     let value = match downstream {
                         Some(downstream) => self.stream_collect(members, downstream)?,
-                        None => {
-                            JValue::Ref(Some(self.heap.alloc(HeapObject::ArrayList(members))))
-                        }
+                        None => JValue::Ref(Some(self.heap.alloc(HeapObject::ArrayList(members)))),
                     };
                     self.map_put(map, key, value)?;
                 }
@@ -15198,7 +15446,8 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NullPointerException",
                 )));
             };
-            let value = self.matcher_replace_with(receiver, function, method_name == "replaceAll")?;
+            let value =
+                self.matcher_replace_with(receiver, function, method_name == "replaceAll")?;
             frame.stack.push(value);
             return Ok(None);
         }
@@ -19435,8 +19684,7 @@ fn qualified_face(target: &str) -> &str {
 #[allow(clippy::match_same_arms)] // one row per class, as recorded
 fn library_direct_interfaces(internal: &str) -> &'static [&'static str] {
     const COMPARABLE: &[&str] = &["java/lang/Comparable"];
-    const SERIALIZABLE_COMPARABLE: &[&str] =
-        &["java/io/Serializable", "java/lang/Comparable"];
+    const SERIALIZABLE_COMPARABLE: &[&str] = &["java/io/Serializable", "java/lang/Comparable"];
     const TEXT: &[&str] = &[
         "java/io/Serializable",
         "java/lang/Comparable",
@@ -19453,9 +19701,7 @@ fn library_direct_interfaces(internal: &str) -> &'static [&'static str] {
         "java/lang/String" | "java/lang/StringBuilder" => TEXT,
         "java/lang/Integer" | "java/lang/Double" | "java/lang/Long" | "java/lang/Short"
         | "java/lang/Byte" | "java/lang/Float" => COMPARABLE,
-        "java/lang/Boolean" | "java/lang/Character" | "java/io/File" => {
-            SERIALIZABLE_COMPARABLE
-        }
+        "java/lang/Boolean" | "java/lang/Character" | "java/io/File" => SERIALIZABLE_COMPARABLE,
         "java/lang/Number" | "java/util/Random" | "java/util/PriorityQueue" => SERIALIZABLE,
         "java/lang/Enum" => &["java/lang/Comparable", "java/io/Serializable"],
         "java/io/Closeable" => &["java/lang/AutoCloseable"],
@@ -20410,7 +20656,8 @@ fn resolve_virtual<'run>(
                 .methods
                 .iter()
                 .find(|m| {
-                    usable(m) && iface.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+                    usable(m)
+                        && iface.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
                 })
                 // A default method whose RETURN is the interface's own type
                 // variable answers a call made through the PARAMETERIZED face:

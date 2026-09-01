@@ -211,7 +211,10 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
     ("java/io/UncheckedIOException", "java/lang/RuntimeException"),
     // `getBytes("nope")` throws the CHECKED one; `Charset.forName("nope")`
     // throws the unchecked one — a program catches whichever it wrote.
-    ("java/io/UnsupportedEncodingException", "java/io/IOException"),
+    (
+        "java/io/UnsupportedEncodingException",
+        "java/io/IOException",
+    ),
     (
         "java/nio/charset/UnsupportedCharsetException",
         "java/lang/IllegalArgumentException",

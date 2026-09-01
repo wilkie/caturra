@@ -43,8 +43,9 @@ fn bridges_for(class: &ClassDecl, classes: &HashMap<String, ClassDecl>) -> Vec<M
         if method.is_static || method.is_constructor || method.is_abstract {
             continue;
         }
-        let Some(inherited) = inherited_signature(class, &method.name, method.params.len(), classes)
-            .or_else(|| library_erased_signature(class, method, classes))
+        let Some(inherited) =
+            inherited_signature(class, &method.name, method.params.len(), classes)
+                .or_else(|| library_erased_signature(class, method, classes))
         else {
             continue;
         };
@@ -102,7 +103,11 @@ fn library_erased_signature(
         ("compare", 2) => 2,
         _ => return None,
     };
-    let wanted = if params == 1 { "Comparable" } else { "Comparator" };
+    let wanted = if params == 1 {
+        "Comparable"
+    } else {
+        "Comparator"
+    };
     if !implements_library_interface(class, wanted, classes) {
         return None;
     }

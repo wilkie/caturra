@@ -4686,7 +4686,10 @@ fn junit_validator_static_import_and_assertions() {
         "#,
         "Main",
     );
-    assert_eq!(out, "assertions passed\ncaught: expected: <9> but was: <3>\n");
+    assert_eq!(
+        out,
+        "assertions passed\ncaught: expected: <9> but was: <3>\n"
+    );
 }
 
 #[test]
@@ -13765,7 +13768,10 @@ fn a_type_variable_is_named_in_a_diagnostic() {
 #[test]
 fn only_a_named_charset_is_checked() {
     for (source, compiles) in [
-        ("\"x\".getBytes(java.nio.charset.StandardCharsets.UTF_8);", true),
+        (
+            "\"x\".getBytes(java.nio.charset.StandardCharsets.UTF_8);",
+            true,
+        ),
         (
             "java.nio.charset.Charset cs = java.nio.charset.StandardCharsets.UTF_8; \
              \"x\".getBytes(cs);",
@@ -13777,12 +13783,10 @@ fn only_a_named_charset_is_checked() {
         ),
         ("\"x\".getBytes();", true),
         ("\"x\".getBytes(\"UTF-8\");", false),
-        (
-            "String name = \"UTF-8\"; \"x\".getBytes(name);",
-            false,
-        ),
+        ("String name = \"UTF-8\"; \"x\".getBytes(name);", false),
     ] {
-        let text = format!("public class M {{ public static void main(String[] a) {{ {source} }} }}");
+        let text =
+            format!("public class M {{ public static void main(String[] a) {{ {source} }} }}");
         let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
             path: String::from("M.java"),
             text,

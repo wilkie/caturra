@@ -460,7 +460,8 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             .filter_map(|d| d.span.map(|span| span.end))
             .collect();
         parse_errors.retain(|d| {
-            d.span.is_none_or(|span| !lex_ends.iter().any(|end| span.start <= *end))
+            d.span
+                .is_none_or(|span| !lex_ends.iter().any(|end| span.start <= *end))
         });
         compilation.diagnostics.append(&mut lex_errors);
         compilation.diagnostics.append(&mut parse_errors);
@@ -598,7 +599,13 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // Set when an injected library needs the functional interfaces itself.
     let mut needs_function_lib = false;
     if (sources.iter().any(|s| s.text.contains("Random"))
-        || sources.iter().any(|s| s.text.contains("Collections."))
+        // `Collections::unmodifiableSet` names the class without a dot after
+        // it — the sniff missed the METHOD-REFERENCE spelling entirely, so the
+        // bundle stayed out and the reference was "cannot find symbol", the
+        // same shape the function bundle's `->`/`::` sniff had.
+        || sources
+            .iter()
+            .any(|s| s.text.contains("Collections.") || s.text.contains("Collections::"))
         || sources.iter().any(|s| s.text.contains("StringJoiner")))
         && !units.iter().any(|(_, unit)| {
             unit.classes
@@ -794,14 +801,12 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // resource in each copy, so a student saw one mistake reported three
     // times.
     let mut seen = std::collections::HashSet::new();
-    compilation
-        .diagnostics
-        .retain(|d| {
-            let at = d
-                .span
-                .map(|s| (s.start.line, s.start.column, s.end.line, s.end.column));
-            seen.insert((d.message.clone(), d.path.clone(), at))
-        });
+    compilation.diagnostics.retain(|d| {
+        let at = d
+            .span
+            .map(|s| (s.start.line, s.start.column, s.end.line, s.end.column));
+        seen.insert((d.message.clone(), d.path.clone(), at))
+    });
 
     if compilation.success() {
         compilation.classes = classes;

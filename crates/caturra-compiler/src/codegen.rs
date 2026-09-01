@@ -1740,21 +1740,14 @@ impl MethodTable {
                 // class also has), so neither of javac's two refusals would
                 // fire on their own.
                 if !class.is_enum {
-                    if class
-                        .superclass
-                        .as_deref()
-                        .is_some_and(names_enum_class)
-                    {
+                    if class.superclass.as_deref().is_some_and(names_enum_class) {
                         diagnostics.push(Diagnostic::error(
                             path,
                             String::from("classes cannot directly extend java.lang.Enum"),
                             class.span,
                         ));
                     }
-                    if class
-                        .interfaces
-                        .iter()
-                        .any(|name| names_enum_class(name)) {
+                    if class.interfaces.iter().any(|name| names_enum_class(name)) {
                         diagnostics.push(Diagnostic::error(
                             path,
                             String::from("interface expected here"),
@@ -3292,7 +3285,13 @@ impl MethodTable {
                     "DoubleStream" if !self.has_class(simple) => Some(JType::DoubleStream),
                     "LongStream" if !self.has_class(simple) => Some(JType::LongStream),
                     "IntSummaryStatistics" if !self.has_class(simple) => {
-                        Some(JType::IntSummaryStats)
+                        Some(JType::SummaryStats(SummaryFlavour::Int))
+                    }
+                    "LongSummaryStatistics" if !self.has_class(simple) => {
+                        Some(JType::SummaryStats(SummaryFlavour::Long))
+                    }
+                    "DoubleSummaryStatistics" if !self.has_class(simple) => {
+                        Some(JType::SummaryStats(SummaryFlavour::Double))
                     }
                     "OptionalInt" if !self.has_class(simple) => Some(JType::OptionalInt),
                     "OptionalDouble" if !self.has_class(simple) => Some(JType::OptionalDouble),
@@ -4526,9 +4525,7 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable, in_class: &str) ->
             && table.class_id(simple).is_none()
             && declared != args.len()
         {
-            return format!(
-                "wrong number of type arguments; required {declared}"
-            );
+            return format!("wrong number of type arguments; required {declared}");
         }
     }
     // A type-variable ERASURE sentinel reaching here means a shape caturra
@@ -5117,10 +5114,7 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
     // an `Optional<String>` is still not an `Optional<Integer>` — and one of
     // them must really be raw, which is a marker the resolver leaves.
     let raw_library_alike = |left: ElemType, right: ElemType| match (left, right) {
-        (
-            ElemType::Nested { inner: one, .. },
-            ElemType::Nested { inner: other, .. },
-        ) => {
+        (ElemType::Nested { inner: one, .. }, ElemType::Nested { inner: other, .. }) => {
             let (one, other) = (table.nested_type(one), table.nested_type(other));
             std::mem::discriminant(&one) == std::mem::discriminant(&other)
                 && (is_raw_library_type(one) || is_raw_library_type(other))
@@ -5255,7 +5249,13 @@ fn raw_generic_arity(simple: &str) -> Option<usize> {
         // generics walks a map, and how plenty of ordinary code still does.
         // Only the parameterized form resolved, so the raw one was "unknown
         // type for the for-each variable".
-        "Map" | "HashMap" | "TreeMap" | "SortedMap" | "NavigableMap" | "Map.Entry" | "Entry"
+        "Map"
+        | "HashMap"
+        | "TreeMap"
+        | "SortedMap"
+        | "NavigableMap"
+        | "Map.Entry"
+        | "Entry"
         | "java.util.Map.Entry" => Some(2),
         _ => None,
     }
@@ -5329,9 +5329,17 @@ fn prim_stream_descriptor(
     receiver: JType,
     descriptor: &'static str,
 ) -> std::borrow::Cow<'static, str> {
-    let (letter, optional) = match receiver {
-        JType::DoubleStream => ('D', "java/util/OptionalDouble"),
-        JType::LongStream => ('J', "java/util/OptionalLong"),
+    let (letter, optional, summary) = match receiver {
+        JType::DoubleStream => (
+            'D',
+            "java/util/OptionalDouble",
+            "java/util/DoubleSummaryStatistics",
+        ),
+        JType::LongStream => (
+            'J',
+            "java/util/OptionalLong",
+            "java/util/LongSummaryStatistics",
+        ),
         _ => return std::borrow::Cow::Borrowed(descriptor),
     };
     // The `I`s to rewrite are the int PARAMETERS and returns — not the ones
@@ -5348,7 +5356,15 @@ fn prim_stream_descriptor(
             break;
         };
         let (class, after) = from.split_at(end + 1);
-        out.push_str(&class.replace("java/util/OptionalInt", optional));
+        // The SUMMARY class is substituted the same way the Optional is: a
+        // double pipeline's `summaryStatistics()` answers a
+        // `DoubleSummaryStatistics`, and reading it as the int one truncated
+        // every number in it.
+        out.push_str(
+            &class
+                .replace("java/util/OptionalInt", optional)
+                .replace("java/util/IntSummaryStatistics", summary),
+        );
         rest = after;
     }
     out.push_str(&rest.replace('I', &letter.to_string()));
@@ -5730,7 +5746,10 @@ fn functional_value_produces(arg: JType, table: &MethodTable) -> Option<JType> {
 /// Only single-parameter classes are tracked, and only a parameter written as
 /// the variable itself or as a container OF it counts — the same two shapes a
 /// generic method's return inference reads.
-fn constructor_infer_plan(class: &ClassDecl, method: &MethodDecl) -> Option<crate::ast::ReturnPlan> {
+fn constructor_infer_plan(
+    class: &ClassDecl,
+    method: &MethodDecl,
+) -> Option<crate::ast::ReturnPlan> {
     use crate::ast::InferSource;
     let [param] = class.type_params.as_slice() else {
         return None;
@@ -5912,7 +5931,13 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) ->
     // re-argumented, the erased return stands: handing back the argument would
     // claim the call produces something of an entirely different shape.
     wrapped.map_or_else(
-        || if plan.container { sig.ret } else { Some(joined) },
+        || {
+            if plan.container {
+                sig.ret
+            } else {
+                Some(joined)
+            }
+        },
         Some,
     )
 }
@@ -6837,9 +6862,7 @@ impl ElemType {
             }
             // A raw or type-variable element has no written form of its own;
             // `parameterized` drops a raw one before it gets here.
-            WildcardBound::Raw | WildcardBound::TypeVar(_) => {
-                JType::Object(read).describe(table)
-            }
+            WildcardBound::Raw | WildcardBound::TypeVar(_) => JType::Object(read).describe(table),
         }
     }
 
@@ -7034,9 +7057,11 @@ enum JType {
     /// models it as a `Stream` of unboxed ints). Adds numeric terminals
     /// (`sum`/`toArray`) the object `Stream` lacks.
     IntStream,
-    /// `java.util.IntSummaryStatistics` — the count/sum/min/max/average an
-    /// `IntStream.summaryStatistics()` gathers in one pass.
-    IntSummaryStats,
+    /// `java.util.IntSummaryStatistics` and its `Long`/`Double` siblings — the
+    /// count/sum/min/max/average one pass gathers. One type with three
+    /// flavours: they differ in the width of the numbers they report and in
+    /// the name they print, nothing else.
+    SummaryStats(SummaryFlavour),
     /// `java.util.stream.DoubleStream` / `LongStream` — the same pipeline over
     /// unboxed `double`s / `long`s. Only the numeric terminals differ
     /// (`sum()` is a `double` / a `long`), so they share `IntStream`'s surface
@@ -7413,7 +7438,7 @@ impl JType {
             JType::Stream(elem) => parameterized("Stream", &[elem], table),
             JType::Collector => String::from("Collector"),
             JType::IntStream => String::from("IntStream"),
-            JType::IntSummaryStats => String::from("IntSummaryStatistics"),
+            JType::SummaryStats(flavour) => String::from(flavour.simple_name()),
             JType::DoubleStream => String::from("DoubleStream"),
             JType::LongStream => String::from("LongStream"),
             JType::Iterator(elem) => parameterized("Iterator", &[elem], table),
@@ -7604,7 +7629,7 @@ impl JType {
                 // was the one modelled library type left out of this list, so
                 // `Object o = stats;` was "IntSummaryStatistics cannot be
                 // converted to Object".
-                | JType::IntSummaryStats
+                | JType::SummaryStats(_)
         )
     }
 
@@ -7653,7 +7678,7 @@ impl JType {
             JType::CharSequence => String::from("Ljava/lang/CharSequence;"),
             JType::Collector => String::from("Ljava/util/stream/Collector;"),
             JType::IntStream => String::from("Ljava/util/stream/IntStream;"),
-            JType::IntSummaryStats => String::from("Ljava/util/IntSummaryStatistics;"),
+            JType::SummaryStats(flavour) => format!("L{};", flavour.internal_name()),
             JType::DoubleStream => String::from("Ljava/util/stream/DoubleStream;"),
             JType::LongStream => String::from("Ljava/util/stream/LongStream;"),
             JType::Iterator(_) | JType::ListIterator(_) | JType::EntryIterator { .. } => {
@@ -9237,6 +9262,10 @@ enum BParam {
     Path,
     /// A `java.io.File` (`file.renameTo(other)`, `file.compareTo(other)`).
     File,
+    /// A `java.lang.Runnable` — the EMPTY arm of `Optional.ifPresentOrElse`,
+    /// the one functional parameter here that takes nothing and answers
+    /// nothing.
+    Runnable,
     /// `java.lang.Class` (`Class.isAssignableFrom(Class)`).
     Class,
     /// Any reference array (`getConstructor(Class[])`, `newInstance(Object[])`).
@@ -9301,8 +9330,9 @@ enum BRet {
     EntryStream,
     /// `StackTraceElement[]` — `Throwable.getStackTrace()`.
     StackFrameArray,
-    /// `IntSummaryStatistics` — `IntStream.summaryStatistics()`.
-    IntSummaryStats,
+    /// `IntSummaryStatistics` — or the `Long`/`Double` sibling the receiver
+    /// calls for, which `bret_type` reads from the stream's element.
+    SummaryOfElem,
     /// `DoubleStream` / `LongStream` — primitive pipelines that share the
     /// `IntStream` surface here; only their numeric terminals differ.
     DoubleStream,
@@ -9459,6 +9489,32 @@ struct BuiltinMethod {
     /// sit at [`SortedRole::Sorted`], which every receiver offers, so nothing
     /// else is filtered.
     needs: SortedRole,
+}
+
+/// Which of the three summary-statistics classes a [`JType::SummaryStats`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SummaryFlavour {
+    Int,
+    Long,
+    Double,
+}
+
+impl SummaryFlavour {
+    fn simple_name(self) -> &'static str {
+        match self {
+            SummaryFlavour::Int => "IntSummaryStatistics",
+            SummaryFlavour::Long => "LongSummaryStatistics",
+            SummaryFlavour::Double => "DoubleSummaryStatistics",
+        }
+    }
+
+    fn internal_name(self) -> &'static str {
+        match self {
+            SummaryFlavour::Int => "java/util/IntSummaryStatistics",
+            SummaryFlavour::Long => "java/util/LongSummaryStatistics",
+            SummaryFlavour::Double => "java/util/DoubleSummaryStatistics",
+        }
+    }
 }
 
 /// Compact [`BuiltinMethod`] constructor for the big tables.
@@ -10190,7 +10246,12 @@ const PATH_METHODS: &[BuiltinMethod] = &[
     bm("getParent", &[], BRet::Path, "()Ljava/nio/file/Path;"),
     bm("getRoot", &[], BRet::Path, "()Ljava/nio/file/Path;"),
     bm("getNameCount", &[], BRet::Int, "()I"),
-    bm("getName", &[BParam::Int], BRet::Path, "(I)Ljava/nio/file/Path;"),
+    bm(
+        "getName",
+        &[BParam::Int],
+        BRet::Path,
+        "(I)Ljava/nio/file/Path;",
+    ),
     bm("isAbsolute", &[], BRet::Boolean, "()Z"),
     bm("normalize", &[], BRet::Path, "()Ljava/nio/file/Path;"),
     bm("toAbsolutePath", &[], BRet::Path, "()Ljava/nio/file/Path;"),
@@ -10251,14 +10312,24 @@ const PATH_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/lang/String;)Z",
     ),
-    bm("subpath", &[BParam::Int, BParam::Int], BRet::Path, "(II)Ljava/nio/file/Path;"),
+    bm(
+        "subpath",
+        &[BParam::Int, BParam::Int],
+        BRet::Path,
+        "(II)Ljava/nio/file/Path;",
+    ),
     bm(
         "compareTo",
         &[BParam::Path],
         BRet::Int,
         "(Ljava/nio/file/Path;)I",
     ),
-    bm("equals", &[BParam::Probe], BRet::Boolean, "(Ljava/lang/Object;)Z"),
+    bm(
+        "equals",
+        &[BParam::Probe],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
 ];
@@ -11420,7 +11491,7 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
     bm(
         "summaryStatistics",
         &[],
-        BRet::IntSummaryStats,
+        BRet::SummaryOfElem,
         "()Ljava/util/IntSummaryStatistics;",
     ),
     bm(
@@ -11645,15 +11716,27 @@ const OPTIONAL_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/util/function/Consumer;)V",
     ),
+    // `ifPresentOrElse(action, empty)` (Java 9) — the two-armed form, which is
+    // an `Optional`'s if/else written as one call.
+    bm(
+        "ifPresentOrElse",
+        &[BParam::Consumer, BParam::Runnable],
+        BRet::Void,
+        "(Ljava/util/function/Consumer;Ljava/lang/Runnable;)V",
+    ),
+    // `or(supplier)` (Java 9) — this Optional if it holds anything, otherwise
+    // the one the supplier makes. Its element is the receiver's, since the
+    // supplier must answer an `Optional` of the same thing.
+    bm(
+        "or",
+        &[BParam::Supplier],
+        BRet::Optional,
+        "(Ljava/util/function/Supplier;)Ljava/util/Optional;",
+    ),
     // `stream()` (Java 9) — the one value as a stream, or an empty one. It is
     // how a `Stream<Optional<T>>` becomes a `Stream<T>`, which is the whole
     // idiom: `s.flatMap(Optional::stream)`.
-    bm(
-        "stream",
-        &[],
-        BRet::Stream,
-        "()Ljava/util/stream/Stream;",
-    ),
+    bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `filter(predicate)` keeps a present value only if it matches, so the
     // result is an `Optional` of the same element type.
     bm(
@@ -11824,7 +11907,12 @@ const FILE_METHODS: &[BuiltinMethod] = &[
     bm("isAbsolute", &[], BRet::Boolean, "()Z"),
     bm("isHidden", &[], BRet::Boolean, "()Z"),
     bm("mkdirs", &[], BRet::Boolean, "()Z"),
-    bm("renameTo", &[BParam::File], BRet::Boolean, "(Ljava/io/File;)Z"),
+    bm(
+        "renameTo",
+        &[BParam::File],
+        BRet::Boolean,
+        "(Ljava/io/File;)Z",
+    ),
     // `File` is `Comparable<File>`, and its order is its path's.
     bm("compareTo", &[BParam::File], BRet::Int, "(Ljava/io/File;)I"),
     // The directory half. `list` answers the NAMES, `listFiles` the files
@@ -14427,7 +14515,7 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::MatchResult
             | JType::Class
             | JType::StackFrame
-            | JType::IntSummaryStats
+            | JType::SummaryStats(_)
     )
 }
 
@@ -14470,7 +14558,14 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
         // A double/long pipeline shares the int surface; only the numeric
         // terminals differ, and `bret_type` substitutes those per receiver.
-        JType::IntSummaryStats => Some(("java/util/IntSummaryStatistics", SUMMARY_STATS_METHODS)),
+        JType::SummaryStats(flavour) => Some((
+            flavour.internal_name(),
+            match flavour {
+                SummaryFlavour::Int => SUMMARY_STATS_METHODS,
+                SummaryFlavour::Long => LONG_SUMMARY_METHODS,
+                SummaryFlavour::Double => DOUBLE_SUMMARY_METHODS,
+            },
+        )),
         JType::DoubleStream => Some(("java/util/stream/DoubleStream", INTSTREAM_METHODS)),
         JType::LongStream => Some(("java/util/stream/LongStream", INTSTREAM_METHODS)),
         JType::Iterator(_) => Some(("java/util/Iterator", ITERATOR_METHODS)),
@@ -14774,6 +14869,30 @@ const SUMMARY_STATS_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
+/// `LongSummaryStatistics` — the same five, with `long` bounds.
+const LONG_SUMMARY_METHODS: &[BuiltinMethod] = &[
+    bm("getCount", &[], BRet::Long, "()J"),
+    bm("getSum", &[], BRet::Long, "()J"),
+    bm("getMin", &[], BRet::Long, "()J"),
+    bm("getMax", &[], BRet::Long, "()J"),
+    bm("getAverage", &[], BRet::Double, "()D"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `DoubleSummaryStatistics` — the sum and bounds are `double`s here, which is
+/// the whole reason the three classes exist. Sharing one table typed
+/// `getSum()` as a `long` for all three, and a program that printed a double
+/// summary's sum died in the VM on a value the compiler had promised was
+/// something else.
+const DOUBLE_SUMMARY_METHODS: &[BuiltinMethod] = &[
+    bm("getCount", &[], BRet::Long, "()J"),
+    bm("getSum", &[], BRet::Double, "()D"),
+    bm("getMin", &[], BRet::Double, "()D"),
+    bm("getMax", &[], BRet::Double, "()D"),
+    bm("getAverage", &[], BRet::Double, "()D"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
 const COLLECTORS_METHODS: &[BuiltinMethod] = &[
     bm(
         "toList",
@@ -14867,6 +14986,83 @@ const COLLECTORS_METHODS: &[BuiltinMethod] = &[
         &[BParam::UnaryOperator, BParam::Collector],
         BRet::Collector,
         "(Ljava/util/function/Function;Ljava/util/stream/Collector;)Ljava/util/stream/Collector;",
+    ),
+    // Its siblings: keep only what passes, or flatten what each element
+    // answers, before the collector below gathers. Neither is the same as
+    // doing it to the STREAM when a `groupingBy` sits above — a group that
+    // keeps nothing still exists.
+    bm(
+        "filtering",
+        &[BParam::Predicate, BParam::Collector],
+        BRet::Collector,
+        "(Ljava/util/function/Predicate;Ljava/util/stream/Collector;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "flatMapping",
+        &[BParam::UnaryOperator, BParam::Collector],
+        BRet::Collector,
+        "(Ljava/util/function/Function;Ljava/util/stream/Collector;)Ljava/util/stream/Collector;",
+    ),
+    // `collectingAndThen(downstream, finisher)` — one more function over what
+    // was gathered, which is how a group is counted or frozen in place.
+    bm(
+        "collectingAndThen",
+        &[BParam::Collector, BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/stream/Collector;Ljava/util/function/Function;)Ljava/util/stream/Collector;",
+    ),
+    // `maxBy`/`minBy` — the extreme element as an `Optional`.
+    bm(
+        "maxBy",
+        &[BParam::Comparator],
+        BRet::Collector,
+        "(Ljava/util/Comparator;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "minBy",
+        &[BParam::Comparator],
+        BRet::Collector,
+        "(Ljava/util/Comparator;)Ljava/util/stream/Collector;",
+    ),
+    // `reducing` in its three shapes: an operator alone (an `Optional`), an
+    // identity and an operator, or a mapper between them.
+    bm(
+        "reducing",
+        &[BParam::BiFunction],
+        BRet::Collector,
+        "(Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "reducing",
+        &[BParam::Object, BParam::BiFunction],
+        BRet::Collector,
+        "(Ljava/lang/Object;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "reducing",
+        &[BParam::Object, BParam::UnaryOperator, BParam::BiFunction],
+        BRet::Collector,
+        "(Ljava/lang/Object;Ljava/util/function/Function;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;",
+    ),
+    // `summarizingInt/Long/Double(f)` — every number about the mapped values
+    // in one object, the collector twin of `IntStream.summaryStatistics()`.
+    bm(
+        "summarizingInt",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/ToIntFunction;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "summarizingLong",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/ToLongFunction;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "summarizingDouble",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/ToDoubleFunction;)Ljava/util/stream/Collector;",
     ),
     bm(
         "toMap",
@@ -15394,6 +15590,9 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Pattern => JType::Pattern,
         BParam::Path => JType::Path,
         BParam::File => JType::File,
+        BParam::Runnable => table
+            .class_id("__Runnable")
+            .map_or(JType::Error, JType::Object),
         BParam::RefArray => JType::Error,
         // `BiConsumer` never reaches here: `bparam_matches` answers it
         // directly, because only the method table knows the target class.
@@ -15448,10 +15647,12 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         | BParam::Predicate
         | BParam::UnaryOperator
         | BParam::Supplier
+        | BParam::Runnable
         | BParam::BiFunction => {
             let erased = match param {
                 BParam::BiConsumer => "__BiConsumer",
                 BParam::Consumer => "__Consumer",
+                BParam::Runnable => "__Runnable",
                 BParam::Predicate => "__Predicate",
                 BParam::UnaryOperator => "__UnaryOperator",
                 BParam::Supplier => "__Supplier",
@@ -15489,12 +15690,14 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
             | JType::Set { elem, .. }
             | JType::TreeSet(elem, _)
             | JType::Collection(elem)
-            | JType::LinkedList { elem, .. } => match (nested_map_entry(elem, table), args.first, args.second) {
-                (Some((key, value)), Some(k), Some(v)) => {
-                    elem_matches(key, k, table) && elem_matches(value, v, table)
+            | JType::LinkedList { elem, .. } => {
+                match (nested_map_entry(elem, table), args.first, args.second) {
+                    (Some((key, value)), Some(k), Some(v)) => {
+                        elem_matches(key, k, table) && elem_matches(value, v, table)
+                    }
+                    _ => false,
                 }
-                _ => false,
-            },
+            }
             _ => false,
         },
         BParam::SelfCollection => match (arg, args.first) {
@@ -15504,14 +15707,12 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
             // `List`/`Set` of `Map.Entry`. The view is a collection like any
             // other; its element is the whole entry, which is not what
             // `TypeArgs` answers for it (that is the KEY).
-            (JType::EntrySet { key, value }, Some(want)) => {
-                match nested_map_entry(want, table) {
-                    Some((want_key, want_value)) => {
-                        elem_matches(key, want_key, table) && elem_matches(value, want_value, table)
-                    }
-                    None => matches!(want, ElemType::Wildcard { .. } | ElemType::TypeVar(_)),
+            (JType::EntrySet { key, value }, Some(want)) => match nested_map_entry(want, table) {
+                Some((want_key, want_value)) => {
+                    elem_matches(key, want_key, table) && elem_matches(value, want_value, table)
                 }
-            }
+                None => matches!(want, ElemType::Wildcard { .. } | ElemType::TypeVar(_)),
+            },
             (
                 JType::List { elem, .. }
                 | JType::Set { elem, .. }
@@ -15837,7 +16038,11 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             elem: ElemType::StackFrame,
             dims: 1,
         }),
-        BRet::IntSummaryStats => Some(JType::IntSummaryStats),
+        BRet::SummaryOfElem => Some(JType::SummaryStats(match args.first {
+            Some(ElemType::Double) => SummaryFlavour::Double,
+            Some(ElemType::Long) => SummaryFlavour::Long,
+            _ => SummaryFlavour::Int,
+        })),
         BRet::DoubleStream => Some(JType::DoubleStream),
         BRet::LongStream => Some(JType::LongStream),
         BRet::StreamErased => Some(JType::Stream(ElemType::Object(table.object_id))),
@@ -16607,8 +16812,8 @@ impl BodyGen<'_> {
                 // is in scope. The reserved `__` spelling cannot be shadowed,
                 // and only the shadowed case needs it, so an ordinary
                 // diagnostic still names the class the program wrote.
-                let shadowed = self.table.has_class(simple)
-                    && builtin_static_table(simple).is_some();
+                let shadowed =
+                    self.table.has_class(simple) && builtin_static_table(simple).is_some();
                 if shadowed {
                     short.push(format!("__{simple}"));
                 } else {
@@ -18245,7 +18450,10 @@ impl BodyGen<'_> {
             if matches!(init, Expr::ArrayLiteral { .. }) {
                 self.error(
                     span,
-                    cannot_infer(&declarator.name, "array initializer needs an explicit target-type"),
+                    cannot_infer(
+                        &declarator.name,
+                        "array initializer needs an explicit target-type",
+                    ),
                 );
                 return;
             }
@@ -22125,6 +22333,34 @@ impl BodyGen<'_> {
                 let mapped = self.collector_key(&args[0]).unwrap_or(stream_elem);
                 self.collector_result_type(&args[1], mapped)
             }
+            // `filtering` keeps the element it was given; `flatMapping` hands
+            // the downstream what each element's stream HOLDS, one step in.
+            "filtering" if args.len() == 2 => self.collector_result_type(&args[1], stream_elem),
+            "flatMapping" if args.len() == 2 => {
+                let produced = lambda_produces(self.type_of(&args[0]), self.table);
+                let inner = produced
+                    .and_then(|ty| match ty {
+                        JType::Stream(elem) => Some(elem),
+                        other => collection_elem_of(other),
+                    })
+                    .unwrap_or(stream_elem);
+                self.collector_result_type(&args[1], inner)
+            }
+            // `collectingAndThen` is whatever its FINISHER answers, which is
+            // the only thing the collector below it is visible through.
+            "collectingAndThen" if args.len() == 2 => {
+                lambda_produces(self.type_of(&args[1]), self.table).unwrap_or(JType::Null)
+            }
+            // The extreme element, and `reducing` without an identity, are an
+            // `Optional` of the stream's element; `reducing` WITH one is the
+            // identity's own type.
+            "maxBy" | "minBy" | "reducing" if args.len() == 1 && !erased => {
+                JType::Optional(stream_elem)
+            }
+            "reducing" if args.len() >= 2 => self.type_of(&args[0]),
+            "summarizingInt" => JType::SummaryStats(SummaryFlavour::Int),
+            "summarizingLong" => JType::SummaryStats(SummaryFlavour::Long),
+            "summarizingDouble" => JType::SummaryStats(SummaryFlavour::Double),
             // The collection the SUPPLIER builds, holding the stream's
             // element: its kind is what the supplier answers.
             "toCollection" if args.len() == 1 => {
@@ -22854,9 +23090,11 @@ impl BodyGen<'_> {
         if matches!(method, "forEach" | "forEachRemaining")
             && args.len() == 1
             && let JType::Object(id) | JType::Generic { class: id, .. } = receiver_ty
-            && let Some(iterable) = self
-                .table
-                .class_id(if method == "forEach" { "Iterable" } else { "Iterator" })
+            && let Some(iterable) = self.table.class_id(if method == "forEach" {
+                "Iterable"
+            } else {
+                "Iterator"
+            })
             && self.table.is_subtype(id, iterable)
         {
             return self.emit_iterable_for_each(method, args, span);
@@ -22917,7 +23155,7 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
-            | JType::IntSummaryStats
+            | JType::SummaryStats(_)
             | JType::DoubleStream
             | JType::LongStream
             | JType::Iterator(_)
@@ -23509,14 +23747,7 @@ impl BodyGen<'_> {
                     );
                     return None;
                 }
-                self.inapplicable_error(
-                    method,
-                    &described,
-                    &candidates,
-                    &arg_types,
-                    args,
-                    span,
-                );
+                self.inapplicable_error(method, &described, &candidates, &arg_types, args, span);
             } else if method == "toString" && !renders_as_text(receiver_ty) {
                 // Every object has `toString`, so "cannot find symbol" is a
                 // false statement about a Scanner. What caturra does not model
@@ -24064,7 +24295,10 @@ impl BodyGen<'_> {
             // `deleteIfExists` answers whether it deleted anything — the same
             // shape as the predicates, which is how a program tidies up after
             // itself without a `try`.
-            ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile" | "deleteIfExists") => Some((
+            (
+                "Files",
+                "exists" | "notExists" | "isDirectory" | "isRegularFile" | "deleteIfExists",
+            ) => Some((
                 "java/nio/file/Files",
                 &[(JType::Path, "Ljava/nio/file/Path;")],
                 "Z",
@@ -24177,21 +24411,14 @@ impl BodyGen<'_> {
         let enum_id = match (method, args) {
             // `Day.class` — a field access on a type name, which is how a
             // class literal is written.
-            (
-                "noneOf" | "allOf",
-                [
-                    Expr::Field {
-                        object,
-                        name,
-                        ..
-                    },
-                ],
-            ) if name == "class" => match object.as_ref() {
-                Expr::Name { path, .. } => self
-                    .table
-                    .class_id(path.last().map_or("", String::as_str)),
-                _ => None,
-            },
+            ("noneOf" | "allOf", [Expr::Field { object, name, .. }]) if name == "class" => {
+                match object.as_ref() {
+                    Expr::Name { path, .. } => {
+                        self.table.class_id(path.last().map_or("", String::as_str))
+                    }
+                    _ => None,
+                }
+            }
             (_, [first, ..]) => match self.type_of(first) {
                 JType::Object(id) => Some(id),
                 JType::Set { elem, .. } | JType::List { elem, .. } | JType::Collection(elem) => {
@@ -24204,11 +24431,9 @@ impl BodyGen<'_> {
             },
             _ => None,
         };
-        let Some(enum_id) = enum_id.filter(|id| {
-            self.table
-                .info_by_id(*id)
-                .is_some_and(|info| info.is_enum)
-        }) else {
+        let Some(enum_id) =
+            enum_id.filter(|id| self.table.info_by_id(*id).is_some_and(|info| info.is_enum))
+        else {
             self.error(
                 span,
                 format!("EnumSet.{method}(...) needs an enum type — caturra could not read one"),
@@ -24287,7 +24512,11 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
-        let owner = if internal.ends_with("Paths") { "Paths" } else { "Path" };
+        let owner = if internal.ends_with("Paths") {
+            "Paths"
+        } else {
+            "Path"
+        };
         if args.is_empty() {
             self.no_suitable_library_method(owner, method, args, span);
             return None;
@@ -24621,14 +24850,7 @@ impl BodyGen<'_> {
             }
             Resolution::NoneApplicable(candidates) => {
                 let described = format!("class {class_name}");
-                self.inapplicable_error(
-                    method,
-                    &described,
-                    &candidates,
-                    &arg_types,
-                    args,
-                    span,
-                );
+                self.inapplicable_error(method, &described, &candidates, &arg_types, args, span);
                 return None;
             }
             Resolution::Ambiguous(candidates) => {
@@ -24734,7 +24956,7 @@ impl BodyGen<'_> {
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
-            | JType::IntSummaryStats => match builtin_instance_table(ty) {
+            | JType::SummaryStats(_) => match builtin_instance_table(ty) {
                 Some((class, _)) => class.to_owned(),
                 None => return ty,
             },
@@ -25065,7 +25287,16 @@ impl BodyGen<'_> {
             _ => None,
         };
         if let Some((accessor, element)) = indexed {
-            self.for_each_indexed(ty, name, is_final, iterable_ty, accessor, element, body, span);
+            self.for_each_indexed(
+                ty,
+                name,
+                is_final,
+                iterable_ty,
+                accessor,
+                element,
+                body,
+                span,
+            );
             return;
         }
         // A USER `Iterable` is driven the way Java drives one: ask it for a
@@ -25710,10 +25941,10 @@ impl BodyGen<'_> {
                         && self.table.has_class(nested) =>
                 {
                     let dotted = format!("{enclosing}.{nested}");
-                    let named = self
-                        .table
-                        .qualified_nested_class(&dotted)
-                        .map_or_else(|| (*nested).to_owned(), |id| self.table.class_name(id).to_owned());
+                    let named = self.table.qualified_nested_class(&dotted).map_or_else(
+                        || (*nested).to_owned(),
+                        |id| self.table.class_name(id).to_owned(),
+                    );
                     Some(CallTarget::Static(named))
                 }
                 // Dotted receivers (p.pos.move()) are general
@@ -25844,7 +26075,9 @@ impl BodyGen<'_> {
             if self.in_static {
                 self.error(
                     span,
-                    format!("non-static method {method}() cannot be referenced from a static context"),
+                    format!(
+                        "non-static method {method}() cannot be referenced from a static context"
+                    ),
                 );
                 return None;
             }
@@ -26190,14 +26423,7 @@ impl BodyGen<'_> {
             }
             Resolution::NoneApplicable(candidates) => {
                 let described = format!("class {class}");
-                self.inapplicable_error(
-                    method,
-                    &described,
-                    &candidates,
-                    &arg_types,
-                    args,
-                    span,
-                );
+                self.inapplicable_error(method, &described, &candidates, &arg_types, args, span);
                 return None;
             }
             Resolution::Ambiguous(candidates) => {
@@ -26959,7 +27185,10 @@ impl BodyGen<'_> {
                         );
                     }
                     width += 1;
-                    (String::from("(Ljava/util/ArrayList;Ljava/util/Random;)V"), None)
+                    (
+                        String::from("(Ljava/util/ArrayList;Ljava/util/Random;)V"),
+                        None,
+                    )
                 } else {
                     (String::from("(Ljava/util/ArrayList;)V"), None)
                 }
@@ -27815,13 +28044,8 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) {
-        let (message, blamed) = inapplicable_report(
-            method,
-            class_description,
-            candidates,
-            arg_types,
-            self.table,
-        );
+        let (message, blamed) =
+            inapplicable_report(method, class_description, candidates, arg_types, self.table);
         let at = blamed
             .and_then(|index| args.get(index))
             .map_or(span, Expr::span);
@@ -28196,7 +28420,7 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
-            | JType::IntSummaryStats
+            | JType::SummaryStats(_)
             | JType::DoubleStream
             | JType::LongStream
             | JType::Iterator(_)
@@ -28391,8 +28615,9 @@ impl BodyGen<'_> {
             }
             // `StandardCharsets.UTF_8` and the names beside it — constants of a
             // class whose only role is to hold them.
-            Expr::Name { path, .. }
-                if standard_charset(path, self.table).is_some() => JType::Charset,
+            Expr::Name { path, .. } if standard_charset(path, self.table).is_some() => {
+                JType::Charset
+            }
             Expr::Name { path, .. }
                 if path.len() == 2
                     && !self.table.has_class(&path[0])
@@ -28665,9 +28890,9 @@ impl BodyGen<'_> {
                         },
                         // The lazy half answers the VALUE's type; the supplier
                         // is a lambda, whose own type says nothing here.
-                        "requireNonNullElseGet" => args
-                            .first()
-                            .map_or(JType::Error, |a| self.type_of(a)),
+                        "requireNonNullElseGet" => {
+                            args.first().map_or(JType::Error, |a| self.type_of(a))
+                        }
                         _ => JType::Error,
                     };
                 }
@@ -28695,9 +28920,10 @@ impl BodyGen<'_> {
                             && self.table.has_class(&path[1]) =>
                     {
                         let dotted = path.join(".");
-                        self.table
-                            .qualified_nested_class(&dotted)
-                            .map_or_else(|| path[1].clone(), |id| self.table.class_name(id).to_owned())
+                        self.table.qualified_nested_class(&dotted).map_or_else(
+                            || path[1].clone(),
+                            |id| self.table.class_name(id).to_owned(),
+                        )
                     }
                     Some(Expr::Name { path, .. })
                         if {
@@ -28906,12 +29132,12 @@ impl BodyGen<'_> {
                                         // down to WHICH parameter this is: a
                                         // `Pair<String, Integer>.getValue()`
                                         // returns the second argument.
-                                        Some(JType::TypeVar(index)) => {
-                                            self.table.type_arg(arg, rest, index).map_or(
-                                                JType::Error,
-                                                |a| substituted_read(a, self.table),
-                                            )
-                                        }
+                                        Some(JType::TypeVar(index)) => self
+                                            .table
+                                            .type_arg(arg, rest, index)
+                                            .map_or(JType::Error, |a| {
+                                                substituted_read(a, self.table)
+                                            }),
                                         Some(ret) => {
                                             substitute_member_type(ret, arg, rest, self.table)
                                         }
@@ -29157,7 +29383,9 @@ impl BodyGen<'_> {
                             if arg == JType::Null {
                                 return JType::Null;
                             }
-                            return self.holdable_elem(arg).map_or(JType::Error, JType::Optional);
+                            return self
+                                .holdable_elem(arg)
+                                .map_or(JType::Error, JType::Optional);
                         }
                         // An empty Optional adopts its context, typing like `null`.
                         "empty" => return JType::Null,
@@ -29299,7 +29527,8 @@ impl BodyGen<'_> {
                         if let Resolution::Found(sig) =
                             self.table.resolve(&enc_name, method, &arg_types)
                         {
-                            return inferred_return(sig, &arg_types, self.table).unwrap_or(JType::Error);
+                            return inferred_return(sig, &arg_types, self.table)
+                                .unwrap_or(JType::Error);
                         }
                     }
                     // ...and the lexical chain, which is the only route to an
@@ -29310,7 +29539,8 @@ impl BodyGen<'_> {
                         if let Resolution::Found(sig) =
                             self.table.resolve(&enc_name, method, &arg_types)
                         {
-                            return inferred_return(sig, &arg_types, self.table).unwrap_or(JType::Error);
+                            return inferred_return(sig, &arg_types, self.table)
+                                .unwrap_or(JType::Error);
                         }
                     }
                 }
@@ -29321,7 +29551,8 @@ impl BodyGen<'_> {
                     // enclosing overload resolution saw `Object` and silently
                     // picked `p(Object)` where javac picks `p(Integer)`.
                     Resolution::Found(sig) => {
-                        let ret = inferred_return(sig, &arg_types, self.table).unwrap_or(JType::Error);
+                        let ret =
+                            inferred_return(sig, &arg_types, self.table).unwrap_or(JType::Error);
                         // The same substitution the emit path makes: a
                         // subclass that FIXED a generic supertype's argument
                         // (`class IntBox extends Box<Integer>`) reads an
@@ -30963,10 +31194,7 @@ impl BodyGen<'_> {
             // the class that hides it ("secret has private access in Base")
             // rather than claiming the field does not exist, which is a
             // message about the wrong mistake.
-            if let Some(hidden) = self
-                .table
-                .private_field_owner(self.current_class, name)
-            {
+            if let Some(hidden) = self.table.private_field_owner(self.current_class, name) {
                 let owner = JType::Object(hidden).describe(self.table);
                 self.error(span, format!("{name} has private access in {owner}"));
                 return JType::Error;
@@ -32065,7 +32293,10 @@ impl BodyGen<'_> {
         // `List<CharSequence>` the program declared for it.
         if matches!(
             (left, right),
-            (ElemType::Str | ElemType::Builder, ElemType::Str | ElemType::Builder)
+            (
+                ElemType::Str | ElemType::Builder,
+                ElemType::Str | ElemType::Builder
+            )
         ) {
             return Some(ElemType::Nested {
                 inner: self.table.intern_nested(JType::CharSequence),
@@ -32174,14 +32405,14 @@ impl BodyGen<'_> {
         if let (Some(one), Some(other)) = (
             collection_element_type(then_ty, self.table),
             collection_element_type(els_ty, self.table),
-        )
-            && one == other
+        ) && one == other
         {
             return JType::Collection(one);
         }
         // A `String` and a `StringBuilder` join at the interface they share,
         // which is not a face either of them wears: `CharSequence`.
-        let text_like = |ty: JType| matches!(ty, JType::Str | JType::StringBuilder | JType::CharSequence);
+        let text_like =
+            |ty: JType| matches!(ty, JType::Str | JType::StringBuilder | JType::CharSequence);
         if text_like(then_ty) && text_like(els_ty) {
             return JType::CharSequence;
         }
@@ -32354,7 +32585,12 @@ impl BodyGen<'_> {
                     };
                 }
                 let name = path[path.len() - 1].clone();
-                self.increment_field(&FieldTarget::Qualified(&object, name), prefix, increment, span)
+                self.increment_field(
+                    &FieldTarget::Qualified(&object, name),
+                    prefix,
+                    increment,
+                    span,
+                )
             }
             // `node.size++`, `Counter.total++` — a dotted name, not a field access.
             Expr::Name { path, .. } if path.len() == 2 => {
@@ -33075,7 +33311,7 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
-            | JType::IntSummaryStats
+            | JType::SummaryStats(_)
             | JType::DoubleStream
             | JType::LongStream
             | JType::Iterator(_)

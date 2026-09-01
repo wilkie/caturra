@@ -51,7 +51,10 @@ impl SyntaxError {
         let Ok(index) = usize::try_from(self.index) else {
             return format!("{}\n{}", self.description, self.pattern);
         };
-        let head = format!("{} near index {}\n{}", self.description, index, self.pattern);
+        let head = format!(
+            "{} near index {}\n{}",
+            self.description, index, self.pattern
+        );
         // The caret line only appears when the index points INTO the pattern:
         // a JDK writes no caret for an error at the very end ("a(b" is
         // unclosed at index 3, which is past its last character).
@@ -1289,7 +1292,11 @@ impl<'a> Matcher<'a> {
     }
 
     fn anchor_end(&self) -> usize {
-        if self.anchoring { self.end } else { self.input.len() }
+        if self.anchoring {
+            self.end
+        } else {
+            self.input.len()
+        }
     }
 
     fn anchor_start(&self) -> usize {
@@ -2035,7 +2042,9 @@ impl Regex {
     /// prefix (`"aab".matches("a*b?")` stops after `aa`), and only an anchor
     /// inside the pattern makes the engine give those characters back.
     pub fn matches_whole(&self, input: &[u16]) -> bool {
-        self.matches_in(input, Bounds::whole(input)).matched.is_some()
+        self.matches_in(input, Bounds::whole(input))
+            .matched
+            .is_some()
     }
 }
 

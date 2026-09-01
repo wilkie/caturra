@@ -140,7 +140,10 @@ fn evaluate_watch(
                     // useful half; the `location:` line is the synthetic class.
                     match lines.next() {
                         Some(symbol) if symbol.trim_start().starts_with("symbol:") => {
-                            format!("{head}: {}", symbol.trim_start().trim_start_matches("symbol:").trim())
+                            format!(
+                                "{head}: {}",
+                                symbol.trim_start().trim_start_matches("symbol:").trim()
+                            )
                         }
                         _ => head,
                     }

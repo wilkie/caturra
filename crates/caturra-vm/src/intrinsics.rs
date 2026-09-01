@@ -848,9 +848,52 @@ pub fn invoke_virtual(
             }
             Ok(None)
         }
-        // `IntSummaryStatistics` — five stored numbers, read back.
+        // The summary objects — five stored numbers, read back. The integral
+        // kinds share a variant; only the class name they print and the width
+        // of their accessors differ.
         (
             HeapObject::SummaryStats {
+                count,
+                sum,
+                min,
+                max,
+                kind,
+            },
+            _,
+        ) => {
+            let (count, sum, min, max, kind) = (*count, *sum, *min, *max, *kind);
+            let integral = kind == crate::value::SummaryKind::Long;
+            #[allow(clippy::cast_precision_loss)] // the JDK divides in double too
+            let average = if count == 0 {
+                0.0
+            } else {
+                sum as f64 / count as f64
+            };
+            Ok(Some(match method {
+                "getCount" => JValue::Long(count),
+                // An `IntSummaryStatistics` sums into a long but reports its
+                // bounds as ints, which is the one place the two kinds differ
+                // in more than a name.
+                "getSum" => JValue::Long(sum),
+                "getMin" if integral => JValue::Long(min),
+                "getMax" if integral => JValue::Long(max),
+                "getMin" => JValue::Int(i32::try_from(min).unwrap_or(i32::MAX)),
+                "getMax" => JValue::Int(i32::try_from(max).unwrap_or(i32::MIN)),
+                "getAverage" => JValue::Double(average),
+                "toString" => {
+                    let text = summary_text(count, sum, min, max, kind);
+                    JValue::Ref(Some(heap.alloc_string(&text)))
+                }
+                other => {
+                    return Err(VmError::UnknownIntrinsic(format!(
+                        "{}.{other}",
+                        kind.class()
+                    )));
+                }
+            }))
+        }
+        (
+            HeapObject::DoubleSummaryStats {
                 count,
                 sum,
                 min,
@@ -859,35 +902,24 @@ pub fn invoke_virtual(
             _,
         ) => {
             let (count, sum, min, max) = (*count, *sum, *min, *max);
+            #[allow(clippy::cast_precision_loss)]
+            let average = if count == 0 { 0.0 } else { sum / count as f64 };
             Ok(Some(match method {
                 "getCount" => JValue::Long(count),
-                "getSum" => JValue::Long(sum),
-                "getMin" => JValue::Int(min),
-                "getMax" => JValue::Int(max),
-                #[allow(clippy::cast_precision_loss)] // the JDK divides in double too
-                "getAverage" => JValue::Double(if count == 0 {
-                    0.0
-                } else {
-                    sum as f64 / count as f64
-                }),
+                "getSum" => JValue::Double(sum),
+                "getMin" => JValue::Double(min),
+                "getMax" => JValue::Double(max),
+                "getAverage" => JValue::Double(average),
+                // Every number here prints with `%f` — including the
+                // `Infinity`/`-Infinity` an empty summary keeps, which `%f`
+                // spells out rather than padding with zeros.
                 "toString" => {
-                    #[allow(clippy::cast_precision_loss)]
-                    let average = if count == 0 {
-                        0.0
-                    } else {
-                        sum as f64 / count as f64
-                    };
-                    // The JDK formats this line with `%f` (six decimals) and
-                    // the identity min/max of an empty summary.
-                    let text = format!(
-                        "IntSummaryStatistics{{count={count}, sum={sum}, min={min}, \
-                         average={average:.6}, max={max}}}"
-                    );
+                    let text = double_summary_text(count, sum, min, max);
                     JValue::Ref(Some(heap.alloc_string(&text)))
                 }
                 other => {
                     return Err(VmError::UnknownIntrinsic(format!(
-                        "IntSummaryStatistics.{other}"
+                        "DoubleSummaryStatistics.{other}"
                     )));
                 }
             }))
@@ -991,12 +1023,12 @@ pub fn invoke_virtual(
         }
         // `asPredicate()` tests whether the pattern is FOUND;
         // `asMatchPredicate()` (Java 11) whether it matches the whole input.
-        (HeapObject::Pattern { .. }, "asPredicate" | "asMatchPredicate") => {
-            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::RegexPredicate {
+        (HeapObject::Pattern { .. }, "asPredicate" | "asMatchPredicate") => Ok(Some(JValue::Ref(
+            Some(heap.alloc(HeapObject::RegexPredicate {
                 pattern: receiver,
                 whole: method == "asMatchPredicate",
-            })))))
-        }
+            })),
+        ))),
         // A frozen match answers the same four questions a Matcher does.
         (HeapObject::MatchResult { input, groups }, _) => {
             let (input, groups) = (input.clone(), groups.clone());
@@ -1091,7 +1123,9 @@ pub fn invoke_virtual(
         // so reading them back out of it keeps one source of truth.
         (
             HeapObject::Exception {
-                class_name, message, ..
+                class_name,
+                message,
+                ..
             },
             "getDescription" | "getPattern" | "getIndex",
         ) if class_name == "java.util.regex.PatternSyntaxException" => {
@@ -1099,10 +1133,9 @@ pub fn invoke_virtual(
             let mut lines = message.lines();
             let first = lines.next().unwrap_or_default().to_owned();
             let (description, index) = match first.rsplit_once(" near index ") {
-                Some((description, index)) => (
-                    description.to_owned(),
-                    index.parse::<i32>().unwrap_or(-1),
-                ),
+                Some((description, index)) => {
+                    (description.to_owned(), index.parse::<i32>().unwrap_or(-1))
+                }
                 None => (first, -1),
             };
             match method {
@@ -1297,6 +1330,7 @@ pub(crate) fn uses_identity_equality(object: &HeapObject) -> bool {
             | HeapObject::Comparator(_)
             | HeapObject::Collector(_)
             | HeapObject::SummaryStats { .. }
+            | HeapObject::DoubleSummaryStats { .. }
             | HeapObject::StringBuilder(_)
             | HeapObject::Exception { .. }
             | HeapObject::Iterator { .. }
@@ -4017,10 +4051,9 @@ pub(crate) fn native_equals(heap: &Heap, a: JValue, b: JValue) -> bool {
             // place a program can see the difference.
             x == y
                 || match (heap.get(x), heap.get(y)) {
-                    (
-                        Some(HeapObject::JavaString(sx)),
-                        Some(HeapObject::JavaString(sy)),
-                    ) => sx == sy,
+                    (Some(HeapObject::JavaString(sx)), Some(HeapObject::JavaString(sy))) => {
+                        sx == sy
+                    }
                     (Some(HeapObject::File(sx)), Some(HeapObject::File(sy)))
                     | (Some(HeapObject::Charset(sx)), Some(HeapObject::Charset(sy))) => sx == sy,
                     _ => false,
@@ -5019,7 +5052,11 @@ pub fn abstract_path(path: &str) -> String {
     let rooted = path.starts_with('/');
     let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
     if parts.is_empty() {
-        return if rooted { String::from("/") } else { String::new() };
+        return if rooted {
+            String::from("/")
+        } else {
+            String::new()
+        };
     }
     let joined = parts.join("/");
     if rooted { format!("/{joined}") } else { joined }
@@ -5132,7 +5169,9 @@ fn file_method(
             None => Ok(Some(JValue::Ref(None))),
         },
         "getParentFile" => match parent_path(&path) {
-            Some(parent) => Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::File(parent)))))),
+            Some(parent) => Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::File(parent)),
+            )))),
             None => Ok(Some(JValue::Ref(None))),
         },
         "toPath" => Ok(Some(JValue::Ref(Some(
@@ -5180,6 +5219,58 @@ fn file_method(
 
 /// `java.nio.file.Path` methods. `getFileName`/`getParent` return a `Path`;
 /// `getParent` is null when the path has no directory part.
+/// An `Int`/`Long` summary's `toString`. The JDK writes the average with `%f`
+/// (six decimals) and leaves the identity min/max of an empty summary showing.
+/// Shared with the collection renderer: written twice, a summary inside a map
+/// printed as `object@2a` while the same object printed directly was right.
+#[must_use]
+pub(crate) fn summary_text(
+    count: i64,
+    sum: i64,
+    min: i64,
+    max: i64,
+    kind: crate::value::SummaryKind,
+) -> String {
+    #[allow(clippy::cast_precision_loss)] // the JDK divides in double too
+    let average = if count == 0 {
+        0.0
+    } else {
+        sum as f64 / count as f64
+    };
+    let name = if kind == crate::value::SummaryKind::Long {
+        "LongSummaryStatistics"
+    } else {
+        "IntSummaryStatistics"
+    };
+    format!("{name}{{count={count}, sum={sum}, min={min}, average={average:.6}, max={max}}}")
+}
+
+/// A `DoubleSummaryStatistics`'s `toString`: every number with `%f`, including
+/// the `Infinity`/`-Infinity` an empty summary keeps, which `%f` spells out.
+#[must_use]
+pub(crate) fn double_summary_text(count: i64, sum: f64, min: f64, max: f64) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let average = if count == 0 { 0.0 } else { sum / count as f64 };
+    let show = |value: f64| {
+        if value.is_finite() {
+            format!("{value:.6}")
+        } else if value.is_nan() {
+            String::from("NaN")
+        } else if value > 0.0 {
+            String::from("Infinity")
+        } else {
+            String::from("-Infinity")
+        }
+    };
+    format!(
+        "DoubleSummaryStatistics{{count={count}, sum={}, min={}, average={}, max={}}}",
+        show(sum),
+        show(min),
+        show(average),
+        show(max)
+    )
+}
+
 /// The charsets a program names, in the JDK's canonical spelling. `None` for a
 /// name no JDK would accept either, which is what makes the failure honest.
 #[must_use]
@@ -5354,15 +5445,18 @@ fn matcher_method(
     let spans = state.last.clone();
     let group_span = |index: usize| -> Result<Option<(usize, usize)>, VmError> {
         let spans = spans.clone().ok_or_else(no_match)?;
-        spans
-            .get(index)
-            .copied()
-            .ok_or_else(|| throw(format!("java.lang.IndexOutOfBoundsException: No group {index}")))
+        spans.get(index).copied().ok_or_else(|| {
+            throw(format!(
+                "java.lang.IndexOutOfBoundsException: No group {index}"
+            ))
+        })
     };
     let group_index = |args: &[JValue]| -> Result<usize, VmError> {
         match args.first() {
             Some(JValue::Int(index)) => usize::try_from(*index).map_err(|_| {
-                throw(format!("java.lang.IndexOutOfBoundsException: No group {index}"))
+                throw(format!(
+                    "java.lang.IndexOutOfBoundsException: No group {index}"
+                ))
             }),
             // `group("name")` — the group a `(?<name>…)` stands for. Whether
             // there IS a match is asked FIRST, as a JDK asks it: naming a
@@ -5482,7 +5576,9 @@ fn matcher_method(
         // `usePattern` keeps the position and drops the match, as a JDK's does.
         "usePattern" => {
             let Some(JValue::Ref(Some(pattern))) = args.first() else {
-                return Err(throw("java.lang.IllegalArgumentException: Pattern cannot be null"));
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: Pattern cannot be null",
+                ));
             };
             if !matches!(heap.get(*pattern), Some(HeapObject::Pattern { .. })) {
                 return Err(throw("java.lang.ClassCastException: not a Pattern"));
@@ -5675,10 +5771,12 @@ fn matcher_method(
         // A frozen copy of the current match, which outlives the next `find`.
         "toMatchResult" => {
             let groups = spans.clone().ok_or_else(no_match)?;
-            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::MatchResult {
-                input: input.clone(),
-                groups,
-            })))))
+            Ok(Some(JValue::Ref(Some(heap.alloc(
+                HeapObject::MatchResult {
+                    input: input.clone(),
+                    groups,
+                },
+            )))))
         }
         // `results()` — the matches still ahead, as a LAZY stream over this
         // matcher: each element is one `find`, so the pipeline consumes only
@@ -5709,15 +5807,18 @@ fn match_result_method(
 ) -> Result<Option<JValue>, VmError> {
     let index = match args.first() {
         Some(JValue::Int(index)) => usize::try_from(*index).map_err(|_| {
-            throw(format!("java.lang.IndexOutOfBoundsException: No group {index}"))
+            throw(format!(
+                "java.lang.IndexOutOfBoundsException: No group {index}"
+            ))
         })?,
         _ => 0,
     };
     let span = || -> Result<Option<(usize, usize)>, VmError> {
-        groups
-            .get(index)
-            .copied()
-            .ok_or_else(|| throw(format!("java.lang.IndexOutOfBoundsException: No group {index}")))
+        groups.get(index).copied().ok_or_else(|| {
+            throw(format!(
+                "java.lang.IndexOutOfBoundsException: No group {index}"
+            ))
+        })
     };
     match method {
         "group" => match span()? {
@@ -5803,7 +5904,10 @@ pub(crate) fn matcher_text(heap: &Heap, receiver: HeapRef) -> Option<String> {
         Some(HeapObject::Pattern { source, flags }) => fold_regex_flags(source, *flags),
         _ => return None,
     };
-    let matched = match state.last.and_then(|groups| groups.first().copied().flatten()) {
+    let matched = match state
+        .last
+        .and_then(|groups| groups.first().copied().flatten())
+    {
         Some((start, end)) => String::from_utf16_lossy(&state.input[start..end]),
         None => String::new(),
     };
@@ -5986,9 +6090,9 @@ fn charset_argument(heap: &Heap, value: Option<&JValue>) -> Result<String, VmErr
         Some(HeapObject::Charset(name)) => Ok(name.clone()),
         Some(HeapObject::JavaString(units)) => {
             let written = String::from_utf16_lossy(units);
-            canonical_charset(&written).map(ToOwned::to_owned).ok_or_else(|| {
-                throw(format!("java.io.UnsupportedEncodingException: {written}"))
-            })
+            canonical_charset(&written)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| throw(format!("java.io.UnsupportedEncodingException: {written}")))
         }
         _ => Err(throw("java.lang.NullPointerException")),
     }
@@ -6895,10 +6999,9 @@ pub fn invoke_static(
                 // `find`.
                 check_regex_flags(flags)?;
                 compile_regex(&fold_regex_flags(&source, flags))?;
-                Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Pattern {
-                    source,
-                    flags,
-                })))))
+                Ok(Some(JValue::Ref(Some(
+                    heap.alloc(HeapObject::Pattern { source, flags }),
+                ))))
             }
             "matches" => {
                 let source = string_units(heap, &args[0])?;
@@ -9280,6 +9383,19 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::Path(text) | HeapObject::Charset(text) | HeapObject::File(text)) => {
                 text.clone()
             }
+            Some(HeapObject::SummaryStats {
+                count,
+                sum,
+                min,
+                max,
+                kind,
+            }) => summary_text(*count, *sum, *min, *max, *kind),
+            Some(HeapObject::DoubleSummaryStats {
+                count,
+                sum,
+                min,
+                max,
+            }) => double_summary_text(*count, *sum, *min, *max),
             Some(HeapObject::Pattern { source, flags }) => {
                 String::from_utf16_lossy(&fold_regex_flags(source, *flags))
             }

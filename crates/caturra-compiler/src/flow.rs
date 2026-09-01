@@ -1154,12 +1154,13 @@ fn is_flow_message(message: &str) -> bool {
 /// method or the class (a type error in one nested class hides a missing
 /// return in its sibling).
 pub fn drop_flow_errors_after_other_errors(diagnostics: &mut Vec<Diagnostic>) {
-    let other = diagnostics.iter().any(|d| {
-        matches!(d.severity, crate::Severity::Error) && !is_flow_message(&d.message)
-    });
+    let other = diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, crate::Severity::Error) && !is_flow_message(&d.message));
     if other {
-        diagnostics
-            .retain(|d| !matches!(d.severity, crate::Severity::Error) || !is_flow_message(&d.message));
+        diagnostics.retain(|d| {
+            !matches!(d.severity, crate::Severity::Error) || !is_flow_message(&d.message)
+        });
     }
 }
 

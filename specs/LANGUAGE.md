@@ -11542,7 +11542,7 @@ program can name — 154 in core `java.*` (48 `java.util`, 43
 `java.util.function`, 33 `java.lang`, 8 `java.io`, 6 `java.util.stream`, …),
 the rest Swing/AWT and the bundled `org.code` course library.
 
-**Method names: 1009 of 1213 = 83.2%, over the 45 core classes whose receiver
+**Method names: 1020 of 1213 = 84.1%, over the 45 core classes whose receiver
 can be written as one expression.** The denominator comes from a real JDK by
 reflection (`ApiList.java`), not from a checked-in list, so running the script
 on a different JDK moves the number. For each overload it writes a call with
@@ -11653,3 +11653,69 @@ Pinned by `a_files_path_and_directory_methods`,
 `a_files_two_argument_constructors`, `a_files_absolute_and_canonical_forms`,
 `a_files_in_collections_and_streams`, `a_files_and_charsets_hash_as_their_text`
 and `reject_an_uncaught_canonical_path`.
+
+## The collectors that wrap another collector
+
+The coverage measurement scored `java.util.stream.Collectors` at 18 of 29
+method names. The eleven missing split cleanly: two are the concurrent forms
+(`groupingByConcurrent`, `toConcurrentMap`), which have no meaning where there
+is one thread, and nine are the ones a program reaches for AFTER `toList` —
+now all present, at 27/29.
+
+**Four of them gather nothing themselves.** `filtering(p, downstream)`,
+`flatMapping(f, downstream)`, `mapping(f, downstream)` and
+`collectingAndThen(downstream, finisher)` all pass elements to a collector
+below. `filtering` is not the same as filtering the STREAM, and the difference
+shows exactly where these are used: under a `groupingBy`, a group whose every
+member fails the predicate still exists, holding nothing, where a filtered
+stream would never have made the key.
+
+**`maxBy`/`minBy` answer an `Optional`**, empty over no elements, comparing
+with the accumulated value first (`BinaryOperator.maxBy`'s order, the one
+`Stream.max` already uses). **`reducing` has three shapes**, told apart by
+their arguments: an operator alone (an `Optional`), an identity and an
+operator (a plain value, the identity itself over nothing), and a mapper
+between the two.
+
+**`summarizingInt`/`Long`/`Double` needed the two summary classes caturra had
+never modelled.** `IntSummaryStatistics` was here; its siblings were not, and
+one method table served the type — so a `DoubleStream`'s `summaryStatistics()`
+answered an `IntSummaryStatistics` with every number truncated through a
+`long`, and `getSum()` was typed `()J` for a value the VM produced as a
+double. The three now differ where they really differ: the width of the
+numbers they report, the identity values an empty summary keeps
+(`Integer.MAX_VALUE`/`MIN_VALUE`, the 64-bit pair, `Infinity`/`-Infinity`), and
+the `%f` formatting a double summary gives its sum and bounds. Which one a
+`summaryStatistics()` call answers comes from the RETURN DESCRIPTOR, not from
+the values — an empty double pipeline has no element to read a kind off, and
+its `Infinity` bounds are the whole answer.
+
+**`Optional.ifPresentOrElse` and `or`** finish that class at 16/16. The first
+is the only place a `Runnable` is a functional PARAMETER here (its empty arm
+takes nothing and answers nothing); the second's supplier answers another
+`Optional` rather than an element, which is what tells it from `orElseGet`.
+
+Three defects turned up on the way, each the same shape — one fact written in
+two places, and only one of them updated:
+
+* A summary inside a map printed as `object@2a`. Its `toString` lived in the
+  intrinsic dispatch, and a collection renders its elements through a
+  different function. Both call one writer now.
+* `Collectors.mapping(f, downstream)` was typed as producing a `List` of the
+  mapped element, which is right for the usual `mapping(f, toList())` and
+  wrong for every other downstream. It asks the downstream now.
+* `boxed_name` boxed a primitive written as `TypeRef::Named("int")` but not
+  one written as `TypeRef::Int`, so a mapped element could reach a type
+  argument as a bare `int` — reported as "required: reference, found: int"
+  about a program that says neither.
+
+And two spellings that were not recognised as naming a class:
+`Collections::unmodifiableSet` (the bundle is pulled in by a text sniff for
+`Collections.`, which a method reference does not write) and
+`Optional.<String>empty()` as a receiver (a witness says the element where
+there is no argument to read it from).
+
+Pinned by `the_collectors_that_wrap_another_collector`,
+`the_wrapping_collectors_under_a_grouping`,
+`each_primitive_stream_has_its_own_summary` and
+`an_optionals_two_armed_forms`.

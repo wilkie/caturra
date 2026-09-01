@@ -50,6 +50,8 @@ const JAVA_UTIL: &[&str] = &[
     // the name was not importable, so a program could chain through one and
     // never name it: "cannot find symbol: class IntSummaryStatistics".
     "IntSummaryStatistics",
+    "LongSummaryStatistics",
+    "DoubleSummaryStatistics",
     "Arrays",
     "Objects",
     "Random",
@@ -250,7 +252,10 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // a PRIMITIVE stream's `iterator()` answers. The object streams' cursor is
     // modelled; this one is not, and a program that names the type deserves to
     // be told that rather than "package PrimitiveIterator does not exist".
-    ("java.util", &["PrimitiveIterator", "Spliterator", "Spliterators"]),
+    (
+        "java.util",
+        &["PrimitiveIterator", "Spliterator", "Spliterators"],
+    ),
     // `Runtime` reports free/total/max memory and runs external processes.
     // caturra collects on its own schedule inside one WASM instance, so every
     // number it could answer would be fiction about a heap the program cannot
@@ -872,7 +877,8 @@ fn validate_import(
         // import through without them left `Field[] fs = …` reported as a
         // missing class under the very import that provides it.
         for name in JAVA_LANG_REFLECT {
-            if REQUIRES_IMPORT.contains(name) && (import.wildcard || import.path.last() == Some(&(*name).to_owned()))
+            if REQUIRES_IMPORT.contains(name)
+                && (import.wildcard || import.path.last() == Some(&(*name).to_owned()))
             {
                 enabled.insert(name);
             }

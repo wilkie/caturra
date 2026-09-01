@@ -5535,10 +5535,9 @@ fn infer_return_plan(
     // put both back.
     let second_var = match &method.return_type {
         TypeRef::Generic { base, args } if args.len() == 2 => {
-            let functional = crate::ast::functional_result_arity(
-                base.rsplit('.').next().unwrap_or(base),
-            )
-            .is_some();
+            let functional =
+                crate::ast::functional_result_arity(base.rsplit('.').next().unwrap_or(base))
+                    .is_some();
             match (&args[0], &args[1]) {
                 (TypeRef::Named(first), TypeRef::Named(second))
                     if !functional

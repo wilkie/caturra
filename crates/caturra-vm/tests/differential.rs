@@ -98,7 +98,12 @@ fn javac_first_error_line(class_name: &str, source: &str) -> Option<u32> {
         .lines()
         .find(|line| line.contains(": error: "))
         .and_then(|line| {
-            line.split(": error: ").next()?.rsplit(':').next()?.parse().ok()
+            line.split(": error: ")
+                .next()?
+                .rsplit(':')
+                .next()?
+                .parse()
+                .ok()
         })
 }
 
@@ -41234,7 +41239,10 @@ public class ScopedFiles {
 }
 "#,
     &[
-        ("Node.java", "class Node { String who() { return \"top-level Node\"; } }\n"),
+        (
+            "Node.java",
+            "class Node { String who() { return \"top-level Node\"; } }\n"
+        ),
         (
             "Other.java",
             r#"
@@ -44230,6 +44238,194 @@ import java.io.File;
 public class FileCanonicalThrows {
     public static void main(String[] args) {
         System.out.println(new File("a").getCanonicalPath());
+    }
+}
+"#
+);
+
+// The collectors the coverage measurement found missing, which are the ones a
+// program reaches for AFTER `toList`: the extreme element, the fold, the
+// summary, and the three that wrap another collector rather than gathering
+// anything themselves.
+differential_test!(
+    the_collectors_that_wrap_another_collector,
+    "CollectorsMissing",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class CollectorsMissing {
+    public static void main(String[] args) {
+        List<String> words = Arrays.asList("pear", "fig", "apple", "kiwi", "fig");
+        List<Integer> nums = Arrays.asList(5, 3, 9, 1, 9);
+
+        System.out.println(words.stream().collect(
+                Collectors.maxBy(Comparator.comparing(String::length))));
+        System.out.println(words.stream().collect(
+                Collectors.minBy(Comparator.<String>naturalOrder())));
+        System.out.println(new ArrayList<String>().stream().collect(
+                Collectors.maxBy(Comparator.<String>naturalOrder())));
+
+        int size = words.stream().collect(
+                Collectors.collectingAndThen(Collectors.toList(), List::size));
+        System.out.println(size);
+        Set<String> frozen = words.stream().collect(
+                Collectors.collectingAndThen(Collectors.toSet(), Collections::unmodifiableSet));
+        System.out.println(frozen);
+
+        System.out.println(words.stream().collect(
+                Collectors.filtering(w -> w.length() > 3, Collectors.toList())));
+        System.out.println(words.stream().collect(
+                Collectors.flatMapping(w -> w.chars().mapToObj(c -> (char) c),
+                        Collectors.toList())));
+
+        // `reducing`'s three shapes: an identity, no identity (an Optional),
+        // and a mapper between the two.
+        System.out.println(nums.stream().collect(Collectors.reducing(0, Integer::sum)));
+        System.out.println(nums.stream().collect(Collectors.reducing(Integer::sum)));
+        System.out.println(words.stream().collect(
+                Collectors.reducing("", w -> w.substring(0, 1), String::concat)));
+
+        System.out.println(nums.stream().collect(Collectors.summarizingInt(n -> n)));
+        System.out.println(nums.stream().collect(Collectors.summarizingLong(n -> n)));
+        System.out.println(nums.stream().collect(Collectors.summarizingDouble(n -> n / 2.0)));
+        // An EMPTY summary keeps the identity values its accumulator started
+        // from, which is what makes the three classes tell themselves apart.
+        System.out.println(new ArrayList<Integer>().stream().collect(
+                Collectors.summarizingInt(n -> n)));
+        System.out.println(new ArrayList<Integer>().stream().collect(
+                Collectors.summarizingLong(n -> n)));
+        System.out.println(new ArrayList<Integer>().stream().collect(
+                Collectors.summarizingDouble(n -> n)));
+    }
+}
+"#
+);
+
+// The same collectors as a `groupingBy` DOWNSTREAM, which is the position they
+// exist for. `filtering` differs from filtering the stream exactly here: a
+// group that keeps nothing still exists.
+differential_test!(
+    the_wrapping_collectors_under_a_grouping,
+    "CollectorsDownstream",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class CollectorsDownstream {
+    static class Sale {
+        private final String region;
+        private final int units;
+        private final double price;
+
+        Sale(String region, int units, double price) {
+            this.region = region;
+            this.units = units;
+            this.price = price;
+        }
+
+        String region() { return region; }
+        int units() { return units; }
+        double price() { return price; }
+    }
+
+    public static void main(String[] args) {
+        List<Sale> sales = List.of(
+                new Sale("north", 3, 1.5), new Sale("south", 7, 2.25),
+                new Sale("north", 5, 0.75), new Sale("east", 2, 4.0));
+
+        IntSummaryStatistics units = sales.stream()
+                .collect(Collectors.summarizingInt(Sale::units));
+        System.out.println(units.getCount() + " " + units.getSum() + " " + units.getMin()
+                + " " + units.getMax() + " " + units.getAverage());
+        DoubleSummaryStatistics price = sales.stream()
+                .collect(Collectors.summarizingDouble(Sale::price));
+        System.out.println(price.getCount() + " " + price.getSum() + " " + price.getMin()
+                + " " + price.getMax() + " " + price.getAverage());
+        LongSummaryStatistics wide = sales.stream()
+                .collect(Collectors.summarizingLong(Sale::units));
+        System.out.println(wide);
+
+        Map<String, Optional<Sale>> best = sales.stream().collect(Collectors.groupingBy(
+                Sale::region, Collectors.maxBy(Comparator.comparingInt(Sale::units))));
+        System.out.println(best.get("north").get().units());
+        Map<String, Integer> totals = sales.stream().collect(Collectors.groupingBy(Sale::region,
+                Collectors.reducing(0, Sale::units, Integer::sum)));
+        System.out.println(new TreeMap<>(totals));
+        Map<String, List<String>> kept = sales.stream().collect(Collectors.groupingBy(Sale::region,
+                Collectors.filtering(s -> s.units() > 4, Collectors.mapping(Sale::region,
+                        Collectors.toList()))));
+        System.out.println(new TreeMap<>(kept));
+        Map<String, Set<Integer>> unitsByRegion = sales.stream().collect(
+                Collectors.groupingBy(Sale::region, Collectors.collectingAndThen(
+                        Collectors.mapping(Sale::units, Collectors.toSet()),
+                        Collections::unmodifiableSet)));
+        System.out.println(new TreeMap<>(unitsByRegion));
+        System.out.println(sales.stream().collect(Collectors.groupingBy(Sale::region,
+                Collectors.summarizingInt(Sale::units))).get("north"));
+
+        Optional<Sale> biggest = sales.stream().collect(
+                Collectors.maxBy(Comparator.comparingDouble(Sale::price)));
+        System.out.println(biggest.map(Sale::region).orElse("none"));
+        System.out.println(sales.stream().collect(Collectors.flatMapping(
+                s -> Stream.of(s.region(), s.region().toUpperCase()),
+                Collectors.toSet())).size());
+    }
+}
+"#
+);
+
+// A primitive pipeline's own summary. One table served all three classes, so a
+// `DoubleStream`'s `summaryStatistics()` answered an `IntSummaryStatistics`:
+// every number in it truncated, and `getSum()` promised a `long` the VM never
+// put there.
+differential_test!(
+    each_primitive_stream_has_its_own_summary,
+    "StreamSummaries",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class StreamSummaries {
+    public static void main(String[] args) {
+        System.out.println(IntStream.of(1, 2, 3).summaryStatistics());
+        System.out.println(DoubleStream.of(1.5, 2.5).summaryStatistics());
+        System.out.println(LongStream.of(4L, 6L).summaryStatistics());
+        System.out.println(IntStream.of().summaryStatistics());
+        System.out.println(DoubleStream.of().summaryStatistics());
+        System.out.println(LongStream.of().summaryStatistics());
+        DoubleSummaryStatistics d = DoubleStream.of(1.5, 2.5).summaryStatistics();
+        System.out.println(d.getCount() + " " + d.getSum() + " " + d.getMin()
+                + " " + d.getMax() + " " + d.getAverage());
+        LongSummaryStatistics l = LongStream.rangeClosed(1, 4).summaryStatistics();
+        System.out.println(l.getCount() + " " + l.getSum() + " " + l.getMin()
+                + " " + l.getMax() + " " + l.getAverage());
+    }
+}
+"#
+);
+
+// `Optional`'s two Java 9 methods. `ifPresentOrElse` is the one place a
+// `Runnable` is a functional PARAMETER here, and `or`'s supplier answers
+// another Optional rather than the element — the two are told apart nowhere
+// else.
+differential_test!(
+    an_optionals_two_armed_forms,
+    "OptionalArms",
+    r#"
+import java.util.*;
+
+public class OptionalArms {
+    public static void main(String[] args) {
+        List<String> words = Arrays.asList("pear", "fig", "kiwi");
+        Optional<String> found = words.stream().filter(w -> w.startsWith("k")).findFirst();
+        found.ifPresentOrElse(w -> System.out.println("found " + w),
+                () -> System.out.println("none"));
+        Optional.<String>empty().ifPresentOrElse(w -> System.out.println("found " + w),
+                () -> System.out.println("none"));
+        System.out.println(found.or(() -> Optional.of("fallback")).get());
+        System.out.println(Optional.<String>empty().or(() -> Optional.of("fallback")).get());
+        System.out.println(Optional.of("x").or(() -> Optional.of("y")));
     }
 }
 "#
