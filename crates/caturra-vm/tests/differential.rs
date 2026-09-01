@@ -44663,3 +44663,54 @@ public class ErrorOrder {
 }
 "#
 );
+
+// A `Collector` is a value like any other, and printing one must not be an
+// internal error. `Collectors.toList().toString()` PANICKED the compiler: the
+// receiver has no method table of its own, and the lookup asserted that every
+// library receiver does. `Object`'s methods are the fallback, which is what a
+// JDK gives it — including the class it really builds.
+differential_test!(
+    a_collector_is_an_ordinary_object,
+    "CollectorObject",
+    r#"
+import java.util.stream.Collectors;
+
+public class CollectorObject {
+    public static void main(String[] args) {
+        Object collector = Collectors.toList();
+        System.out.println(collector.getClass().getName());
+        System.out.println(Collectors.toList().toString()
+                .startsWith("java.util.stream.Collectors"));
+        System.out.println(Collectors.counting().equals(Collectors.counting()));
+    }
+}
+"#
+);
+
+// A conditional whose branches BOTH adopt their context — a factory that
+// answers "whatever is wanted here", and the null literal — has no type of its
+// own to convert to. Asking the branch that really makes a list to convert
+// INTO the null type refused a program javac compiles. Found by the
+// expression-position mirror (`scripts/fuzz/positions.py`).
+differential_test!(
+    a_conditional_that_joins_at_null,
+    "TernaryNull",
+    r#"
+import java.util.*;
+
+public class TernaryNull {
+    public static void main(String[] args) {
+        boolean pick = args.length == 0;
+        Object t1 = pick ? Collections.emptyList() : null;
+        Object t2 = pick ? new ArrayList<String>() : null;
+        Object t3 = pick ? null : new ArrayList<String>();
+        List<String> t4 = pick ? new ArrayList<String>() : null;
+        String t5 = pick ? "x" : null;
+        Object t6 = pick ? null : null;
+        System.out.println(t1 + " " + t2 + " " + t3 + " " + t4 + " " + t5 + " " + t6);
+        List<String> joined = pick ? Collections.emptyList() : Arrays.asList("a");
+        System.out.println(joined);
+    }
+}
+"#
+);

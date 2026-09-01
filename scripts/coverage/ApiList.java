@@ -7,8 +7,25 @@ public class ApiList {
     public static void main(String[] args) throws Exception {
         Set<String> objectMethods = new HashSet<>();
         for (Method m : Object.class.getMethods()) objectMethods.add(m.getName());
+        // `--constructors` lists the public constructors instead, as
+        // `class<TAB><init><TAB>false<TAB>arity` — what `scripts/fuzz/panics.py`
+        // needs to write `new X(...)`, which is a code path of its own and one
+        // the method walk never reaches.
+        boolean constructors = false;
+        for (String arg : args) {
+            constructors |= arg.equals("--constructors");
+        }
         for (String name : args) {
+            if (name.startsWith("--")) continue;
             Class<?> c = Class.forName(name);
+            if (constructors) {
+                Set<String> arities = new TreeSet<>();
+                for (Constructor<?> k : c.getConstructors()) {
+                    arities.add("<init>\tfalse\t" + k.getParameterCount());
+                }
+                for (String s : arities) System.out.println(name + "\t" + s);
+                continue;
+            }
             Set<String> seen = new TreeSet<>();
             for (Method m : c.getMethods()) {
                 if (m.isSynthetic() || m.isBridge()) continue;

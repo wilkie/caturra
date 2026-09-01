@@ -64,6 +64,14 @@ def caturra_errors(path):
     result = subprocess.run(
         [ENGINE, os.path.abspath(path)], capture_output=True, text=True, cwd=REPO, timeout=120
     )
+    # A CRASH prints no diagnostics, and a program javac accepts has none
+    # either — so a panic on valid code read as perfect agreement here. The
+    # engine's exit code is the only thing that tells them apart.
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"the engine CRASHED on {path} (exit {result.returncode}): "
+            f"{result.stderr.strip()[:400]}"
+        )
     found = []
     for line in result.stdout.splitlines():
         if not line.startswith("Error@"):

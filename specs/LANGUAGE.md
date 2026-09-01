@@ -11829,3 +11829,35 @@ Pinned by `reject_a_lambda_with_too_few_parameters`,
 `reject_a_comparator_that_takes_nothing`,
 `an_import_error_does_not_hide_the_others` and
 `the_first_error_is_the_first_mistake`.
+
+**The hunt grew two dimensions and found one more.** A crash can hide in what
+the compiler does with a call's RESULT rather than in the call, so each probe
+is now written in one of five POSITIONS — a bare statement, an argument, an
+`Object` local, a `var` local, a receiver for `.toString()` — and the
+CONSTRUCTORS are probed too, since `new X(...)` reaches a different emitter for
+every modelled type. 680 probes, and the new positions found
+`Collectors.toList().toString()`: a `Collector` has no method table of its own,
+and the lookup asserted that every library receiver does. `Object`'s methods
+are the fallback now — which is what a JDK gives it, including the class it
+really builds (`java.util.stream.Collectors$CollectorImpl`). It needed a table
+of its OWN rather than a `toString` added to the shared `Object` one: that
+table is mixed into every other receiver's, so adding a method there overrode
+the honest refusals that name it, and a `Scanner`'s text — which the
+compatibility page documents as not modelled — started compiling and failing at
+run time instead.
+
+**And every tool must notice a crash, not just this one.**
+`scripts/fuzz/diaglist.py` compares diagnostic LISTS, so a panic on a program
+javac ACCEPTS read as perfect agreement — no errors on either side. It fails on
+a non-zero exit now. (`run.py` already caught one, as "caturra printed no
+JSON".)
+
+Running the expression-position mirror through that stricter tool then found a
+real refusal: `Object o = pick ? Collections.emptyList() : null`. Both branches
+adopt their context — the factory answers whatever is wanted, like a diamond
+`new`, and so does the null literal — so the conditional joins at the null type,
+and the branch that really makes a list was asked to convert INTO it. A null
+join is "adopts the context", not a type to convert to.
+
+Pinned by `a_collector_is_an_ordinary_object` and
+`a_conditional_that_joins_at_null`.

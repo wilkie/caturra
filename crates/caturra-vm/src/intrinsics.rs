@@ -964,6 +964,14 @@ pub fn invoke_virtual(
             let reference = heap.alloc_string(&text);
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // A `Collector` is a value a program passes on, and printing one is
+        // usually a mistake — but it must not be an internal error. The JDK
+        // gives it `Object`'s shape, and names the class it really is.
+        (HeapObject::Collector(_), "toString") => {
+            let text = collector_text(receiver);
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         // Two Files naming one path are equal (the JDK compares the abstract
         // pathname).
         (HeapObject::File(path), "equals") => {
@@ -5271,6 +5279,15 @@ pub(crate) fn double_summary_text(count: i64, sum: f64, min: f64, max: f64) -> S
     )
 }
 
+/// What a `Collector` prints: `Object`'s shape, with the class a JDK really
+/// builds. Written once, so the direct call and a collection's rendering agree.
+fn collector_text(reference: HeapRef) -> String {
+    format!(
+        "java.util.stream.Collectors$CollectorImpl@{:x}",
+        identity_hash(reference)
+    )
+}
+
 /// The charsets a program names, in the JDK's canonical spelling. `None` for a
 /// name no JDK would accept either, which is what makes the failure honest.
 #[must_use]
@@ -9383,6 +9400,7 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::Path(text) | HeapObject::Charset(text) | HeapObject::File(text)) => {
                 text.clone()
             }
+            Some(HeapObject::Collector(_)) => collector_text(reference),
             Some(HeapObject::SummaryStats {
                 count,
                 sum,

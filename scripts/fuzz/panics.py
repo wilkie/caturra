@@ -58,12 +58,45 @@ def run(source):
     return done.returncode, done.stdout, done.stderr
 
 
+# The same call written in the positions a program really uses. A crash can
+# hide in what the compiler does with the RESULT — typing it, assigning it,
+# chaining another call onto it — rather than in the call itself, and the
+# statement form reaches none of that.
+POSITIONS = (
+    "{call};",
+    "System.out.println({call});",
+    "Object __v = {call};",
+    "var __w = {call};",
+    "System.out.println(({call}).toString());",
+)
+
+
 def program(calls):
     return (
         "public class Probe {\n    public static void main(String[] args) {\n"
         + "\n".join(f"        {call}" for call in calls)
         + "\n    }\n}\n"
     )
+
+
+def constructors(class_names):
+    """Every public constructor's arity, by reflection — `new X(...)` is a
+    code path of its own (each modelled type has its own emitter) and the
+    method walk never reaches it."""
+    with tempfile.TemporaryDirectory() as directory:
+        source = os.path.join(REPO, "scripts/coverage/ApiList.java")
+        subprocess.run(
+            ["javac", "-d", directory, source], check=True, capture_output=True
+        )
+        listing = subprocess.run(
+            ["java", "-cp", directory, "ApiList", "--constructors", *class_names],
+            check=True, capture_output=True, text=True, timeout=300,
+        ).stdout
+    found = {}
+    for line in listing.splitlines():
+        class_name, _, _, arity = line.split("\t")
+        found.setdefault(class_name, set()).add(int(arity))
+    return found
 
 
 def main():
@@ -80,10 +113,15 @@ def main():
         receiver = receivers[class_name]
         for shape, argument in SHAPES.items():
             calls = []
-            for name, is_static, arity in api.get(class_name, []):
+            for index, (name, is_static, arity) in enumerate(api.get(class_name, [])):
                 target = class_name if is_static else receiver
                 arguments = ", ".join([argument] * arity)
-                calls.append(f"{target}.{name}({arguments});")
+                call = f"{target}.{name}({arguments})"
+                # Rotate through the positions rather than taking the
+                # cross-product: every method reaches every position across the
+                # ten shapes, and the run stays a minute rather than an hour.
+                position = POSITIONS[index % len(POSITIONS)]
+                calls.append(position.replace("__v", f"__v{index}").replace("__w", f"__w{index}").format(call=call))
             if not calls:
                 continue
             checked += 1
@@ -106,6 +144,41 @@ def main():
                     print(f"CRASH {class_name} [{shape}] {call}\n      {reason}")
             if verbose:
                 print(f"  (batch for {class_name} [{shape}] exited {code})")
+    # …and the constructors, whose arguments reach a different emitter for
+    # every modelled type.
+    built = constructors(classes)
+    for class_name in classes:
+        for shape, argument in SHAPES.items():
+            calls = []
+            for index, arity in enumerate(sorted(built.get(class_name, ()))):
+                arguments = ", ".join([argument] * arity)
+                call = f"new {class_name}({arguments})"
+                position = POSITIONS[index % len(POSITIONS)]
+                calls.append(
+                    position.replace("__v", f"__v{index}")
+                    .replace("__w", f"__w{index}")
+                    .format(call=call)
+                )
+            if not calls:
+                continue
+            checked += 1
+            code, _, _ = run(program(calls))
+            if code == 0:
+                continue
+            for call in calls:
+                one_code, _, stderr = run(program([call]))
+                if one_code != 0:
+                    reason = next(
+                        (
+                            line
+                            for line in stderr.splitlines()
+                            if "panicked at" in line or "internal error" in line
+                        ),
+                        stderr.strip().splitlines()[-1] if stderr.strip() else "",
+                    )
+                    crashes.append((class_name, shape, call, reason))
+                    print(f"CRASH {class_name} [{shape}] {call}\n      {reason}")
+
     print(f"\n{checked} probes over {len(classes)} classes, {len(crashes)} crashes")
     return 1 if crashes else 0
 

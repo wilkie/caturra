@@ -14801,6 +14801,12 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
         // A double/long pipeline shares the int surface; only the numeric
         // terminals differ, and `bret_type` substitutes those per receiver.
+        // A `Collector` is a VALUE a program passes on: the only methods it
+        // has are Object's. It needs a table of its own all the same, because
+        // `OBJECT_METHODS` is mixed into every OTHER receiver's — a `toString`
+        // added there would override the honest refusals that name it (a
+        // `Scanner`'s text is one).
+        JType::Collector => Some(("java/util/stream/Collector", COLLECTOR_METHODS)),
         JType::SummaryStats(flavour) => Some((
             flavour.internal_name(),
             match flavour {
@@ -15998,6 +16004,20 @@ const OBJECTS_METHOD_NAMES: &[&str] = &[
     "requireNonNull",
     "requireNonNullElse",
     "requireNonNullElseGet",
+];
+
+/// What a `Collector` answers: `Object`'s methods, and `toString`, which is
+/// the one a program calls on a value it can do nothing else with.
+const COLLECTOR_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
 ];
 
 const OBJECT_METHODS: &[BuiltinMethod] = &[
@@ -23849,8 +23869,12 @@ impl BodyGen<'_> {
             self.code.drop_stack(2);
             return Some(Some(result_ty));
         }
+        // A receiver kind with no table of its own still has `Object`'s
+        // methods: `Collectors.toList().toString()` is ordinary Java, and the
+        // `expect` here PANICKED the compiler on it — the caller checks that
+        // the receiver is a library type, not that it has a table.
         let (class, methods) =
-            builtin_instance_table(receiver_ty).expect("caller checked receiver kind");
+            builtin_instance_table(receiver_ty).unwrap_or(("java/lang/Object", OBJECT_METHODS));
         // A real Java member caturra cannot model: say so before type-checking
         // the arguments, whose own errors would mask it. `map.forEach(...)`
         // should blame the missing lambda support, not the lambda.
@@ -32702,6 +32726,15 @@ impl BodyGen<'_> {
         // primitive into the Object join and passes references through.
         let coerce = |emitter: &mut Self, actual: JType| {
             if actual == target || actual == JType::Error || target == JType::Error {
+                return;
+            }
+            // A NULL join is "adopts the context", not a type to convert to:
+            // `Object o = c ? Collections.emptyList() : null` joins two
+            // branches that both type as null (the factory adopts its target,
+            // like a diamond `new`), and asking the branch that really makes a
+            // list to convert INTO the null type refused a program javac
+            // compiles.
+            if target == JType::Null {
                 return;
             }
             match target {
