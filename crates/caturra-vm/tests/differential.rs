@@ -44714,3 +44714,84 @@ public class TernaryNull {
 }
 "#
 );
+
+// Programs that COMBINE the surface added this session — a directory listing
+// gathered by the new collectors, a comparator factory inside one, a stream a
+// supplier answers. Each feature worked alone; the joins between them are
+// where the element type stopped travelling.
+differential_test_files!(
+    a_directory_listing_through_the_collectors,
+    "MixedListing",
+    r#"
+import java.io.File;
+import java.util.*;
+import java.util.stream.*;
+
+public class MixedListing {
+    public static void main(String[] args) throws Exception {
+        new File("notes/deep").mkdirs();
+        for (String name : new String[] {"a.txt", "bb.txt", "ccc.txt", "d.md"}) {
+            new File("notes/" + name).createNewFile();
+        }
+        File dir = new File("notes");
+        // `listFiles()` is an array a program streams over, like `split`.
+        List<File> files = Arrays.stream(dir.listFiles())
+                .filter(File::isFile)
+                .sorted()
+                .collect(Collectors.toList());
+        System.out.println(files);
+
+        Map<String, List<String>> byExtension = files.stream().collect(Collectors.groupingBy(
+                f -> f.getName().substring(f.getName().lastIndexOf('.') + 1),
+                Collectors.mapping(File::getName, Collectors.toList())));
+        System.out.println(new TreeMap<>(byExtension));
+        System.out.println(files.stream()
+                .collect(Collectors.summarizingInt(f -> f.getName().length())));
+
+        // The comparator is a FACTORY CALL, not a bare lambda: the element has
+        // to travel into it as its target type.
+        Optional<File> longest = files.stream()
+                .collect(Collectors.maxBy(Comparator.comparingInt(f -> f.getName().length())));
+        System.out.println(longest.map(File::getName).orElse("none"));
+        System.out.println(files.parallelStream()
+                .collect(Collectors.filtering(f -> f.getName().endsWith(".txt"),
+                        Collectors.counting())));
+        System.out.println(dir.listFiles().length + " " + new File("notes/deep").isDirectory());
+    }
+}
+"#,
+    &[]
+);
+
+// A gathered list frozen by `Collections::unmodifiableList`, and a stream a
+// `Supplier` answers. The wrappers pass their ARGUMENT's type through, which a
+// table keyed by (class, method) cannot say — it never sees the argument — so
+// the whole `collect` typed as nothing and `.size()` on it was "<null> cannot
+// be dereferenced", while the same collector through a variable worked.
+differential_test!(
+    a_collector_whose_finisher_freezes_the_result,
+    "MixedFinisher",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class MixedFinisher {
+    public static void main(String[] args) {
+        List<String> words = List.of("pear", "fig", "apple");
+        System.out.println(words.stream().collect(Collectors.collectingAndThen(
+                Collectors.toList(), Collections::unmodifiableList)).size());
+        System.out.println(words.stream().collect(Collectors.collectingAndThen(
+                Collectors.toList(), l -> Collections.unmodifiableList(l))).size());
+        System.out.println(Collections.singletonList("x").size());
+
+        Supplier<Stream<String>> source = words::stream;
+        int size = source.get().collect(Collectors.collectingAndThen(
+                Collectors.toList(), List::size));
+        System.out.println(size);
+        System.out.println(source.get().collect(Collectors.joining("-")));
+        System.out.println(source.get().collect(Collectors.summarizingInt(String::length)));
+    }
+}
+"#
+);

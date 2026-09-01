@@ -5337,6 +5337,35 @@ fn call_body_type(
     // nothing — so `mapToObj(c -> String.valueOf(c))` produced an
     // `Object` element and the `String::concat` after it could not
     // resolve.
+    // The `Collections` wrappers pass their ARGUMENT's type through, which a
+    // table keyed by (class, method) cannot say — it never sees the argument.
+    // `collectingAndThen(toList(), Collections::unmodifiableList)` is the
+    // ordinary way to freeze a gathered list, and with no type for the body
+    // the whole `collect` typed as nothing: `.size()` on it was "<null> cannot
+    // be dereferenced", while the same collector through a VARIABLE worked.
+    if let Expr::Name { path, .. } = receiver
+        && path.last().is_some_and(|name| name == "Collections")
+        && let [only] = args
+    {
+        match method {
+            "unmodifiableList"
+            | "unmodifiableSet"
+            | "unmodifiableMap"
+            | "unmodifiableCollection"
+            | "unmodifiableSortedSet"
+            | "unmodifiableSortedMap"
+            | "unmodifiableNavigableSet"
+            | "unmodifiableNavigableMap" => return body_type(only, bound, ctx),
+            "singletonList" | "singleton" => {
+                let elem = body_type(only, bound, ctx)?;
+                return Some(TypeRef::Generic {
+                    base: String::from(if method == "singleton" { "Set" } else { "List" }),
+                    args: vec![boxed_name(elem)],
+                });
+            }
+            _ => {}
+        }
+    }
     if let Expr::Name { path, .. } = receiver
         && let Some(ty) = library_static_type(path.last()?, method, args.len())
     {
@@ -5710,7 +5739,80 @@ fn regex_stream_elem(prev: &Expr, method: &str, ctx: &Ctx) -> Option<TypeRef> {
 /// element-preserving ops (`filter`/`sorted`/`distinct`/`limit`/`skip`/`peek`)
 /// recurse into the prior stage; `map` erases it to `Object`.
 #[allow(clippy::too_many_lines)] // one arm per stream source
+/// The DECLARED type of a variable, parameter or `this` field — the two
+/// shapes every reading here starts from.
+fn declared_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    match expr {
+        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0]),
+        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+            ctx.lookup(name)
+        }
+        _ => None,
+    }
+}
+
+/// The element of a stream a SUPPLIER answers: `Supplier<Stream<Pet>> s =
+/// pets::stream; s.get().collect(...)`. The declared type says it, and reading
+/// it is what lets the collector after it be typed — every other arm walks a
+/// stream-producing CALL, and `get()` is not one.
+fn supplied_stream_elem(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        ..
+    } = receiver
+    else {
+        return None;
+    };
+    if method != "get" || !args.is_empty() {
+        return None;
+    }
+    let TypeRef::Generic { base, args: held } = declared_type_of(owner, ctx)? else {
+        return None;
+    };
+    if base.rsplit('.').next().unwrap_or(&base) != "Supplier" {
+        return None;
+    }
+    let [
+        TypeRef::Generic {
+            base: inner,
+            args: elem,
+        },
+    ] = &held[..]
+    else {
+        return None;
+    };
+    (inner.rsplit('.').next().unwrap_or(inner) == "Stream" && elem.len() == 1)
+        .then(|| elem[0].clone())
+}
+
+/// The element of a stream that has been given a NAME — a variable, a
+/// parameter, a `this` field. Every other reading walks a chain of calls, so a
+/// stream with a name took a lambda nowhere: `Stream<String> s = ...;
+/// s.filter(x -> ...)` was refused though the identical inline chain compiled,
+/// which undercut the point of `Stream<T>` being a nameable type at all.
+fn named_stream_elem(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let declared = declared_type_of(receiver, ctx)?;
+    match &declared {
+        TypeRef::Generic { base, args } if args.len() == 1 => {
+            (base.rsplit('.').next().unwrap_or(base) == "Stream").then(|| args[0].clone())
+        }
+        // The primitive pipelines carry their element in their name.
+        TypeRef::Named(name) => match name.rsplit('.').next().unwrap_or(name) {
+            "IntStream" => Some(TypeRef::Int),
+            "DoubleStream" => Some(TypeRef::Double),
+            "LongStream" => Some(TypeRef::Long),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    if let Some(elem) = supplied_stream_elem(receiver, ctx) {
+        return Some(elem);
+    }
     let Expr::Call {
         receiver: Some(prev),
         method,
@@ -5718,32 +5820,7 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         ..
     } = receiver
     else {
-        // A stream held in a VARIABLE, a parameter or a `this` field. Every
-        // case below walks a chain of calls, so a stream that had been given a
-        // name took a lambda nowhere: `Stream<String> s = ...;
-        // s.filter(x -> ...)` was refused, though the identical inline chain
-        // compiled — which undercut the point of `Stream<T>` being a nameable
-        // type at all.
-        let declared = match receiver {
-            Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
-            Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
-                ctx.lookup(name)?
-            }
-            _ => return None,
-        };
-        return match &declared {
-            TypeRef::Generic { base, args } if args.len() == 1 => {
-                (base.rsplit('.').next().unwrap_or(base) == "Stream").then(|| args[0].clone())
-            }
-            // The primitive pipelines carry their element in their name.
-            TypeRef::Named(name) => match name.rsplit('.').next().unwrap_or(name) {
-                "IntStream" => Some(TypeRef::Int),
-                "DoubleStream" => Some(TypeRef::Double),
-                "LongStream" => Some(TypeRef::Long),
-                _ => None,
-            },
-            _ => None,
-        };
+        return named_stream_elem(receiver, ctx);
     };
     // A COLLECTION's own `stream()`. A receiver that is not one falls through
     // — a class of the program may declare a `stream()` of its own, and its
@@ -5945,6 +6022,20 @@ fn desugar_collector(expr: &mut Expr, elem: &TypeRef, ctx: &mut Ctx) {
         // element as the outer one.
         if is_collectors_call(&args[index]) {
             desugar_collector(&mut args[index], elem, ctx);
+            continue;
+        }
+        // `maxBy(Comparator.comparingInt(f -> …))` — the comparator is not a
+        // lambda but a FACTORY CALL, and the lambda inside it needs the
+        // element as much as a bare one would. The chain reads that from its
+        // target type, so the target has to be handed down: with `None` the
+        // inner lambda had no parameter type and `f.getName()` was "cannot
+        // find symbol", in a collector whose bare-lambda form worked.
+        if matches!(method.as_str(), "maxBy" | "minBy") && index == 0 {
+            let target = TypeRef::Generic {
+                base: String::from("Comparator"),
+                args: vec![elem.clone()],
+            };
+            desugar_expr(&mut args[index], Some(&target), ctx);
             continue;
         }
         desugar_expr(&mut args[index], None, ctx);
@@ -6255,13 +6346,22 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             ..
         } if matches!(
             method.as_str(),
-            "split" | "toCharArray" | "getBytes" | "toArray" | "copyOf" | "copyOfRange"
+            "split"
+                | "toCharArray"
+                | "getBytes"
+                | "toArray"
+                | "copyOf"
+                | "copyOfRange"
+                | "listFiles"
         ) =>
         {
             return match method.as_str() {
                 "split" => Some(TypeRef::Named(String::from("String"))),
                 "toCharArray" => Some(TypeRef::Char),
                 "getBytes" => Some(TypeRef::Byte),
+                // `dir.listFiles()` — the other ordinary way to get an array,
+                // and the one a program streams over to read a directory.
+                "listFiles" => Some(TypeRef::Named(String::from("File"))),
                 // `Arrays.copyOf(source, n)` keeps the SOURCE's element.
                 "copyOf" | "copyOfRange" => array_elem_type(args.first()?, ctx).filter(|_| {
                     matches!(owner.as_ref(), Expr::Name { path, .. }

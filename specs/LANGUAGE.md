@@ -11861,3 +11861,35 @@ join is "adopts the context", not a type to convert to.
 
 Pinned by `a_collector_is_an_ordinary_object` and
 `a_conditional_that_joins_at_null`.
+
+## Where the new surface joins the old
+
+Every feature added this session was probed on its own. Programs that COMBINE
+them found three more defects, all the same shape: the element type stopped
+travelling at a join that had never been crossed before.
+
+**`dir.listFiles()` is an array a program streams over**, like `split` or
+`toCharArray` — and the pass that reads an array's element from a library call
+did not know it, so `Arrays.stream(dir.listFiles()).filter(File::isFile)` had
+no element and the method reference was refused for having no
+functional-interface position.
+
+**A comparator inside a collector is usually a FACTORY CALL, not a bare
+lambda.** `Collectors.maxBy(Comparator.comparingInt(f -> f.getName().length()))`
+— the comparator chain reads its element from its TARGET type, and the
+collector desugaring handed it `None`, so the inner lambda's parameter had no
+type and `f.getName()` was "cannot find symbol". The bare-lambda form of the
+same collector worked, which is the tell.
+
+**The `Collections` wrappers pass their ARGUMENT's type through**, which a
+table keyed by (class, method) cannot say — it never sees the argument.
+`collectingAndThen(toList(), Collections::unmodifiableList)` is the ordinary
+way to freeze a gathered list, and with no type for the finisher's body the
+whole `collect` typed as nothing: `.size()` on it was "<null> cannot be
+dereferenced", while the same collector assigned to a variable worked.
+
+Also: a stream a `Supplier` answers (`Supplier<Stream<Pet>> s = pets::stream;
+s.get()...`) now carries its element, read from the declared type.
+
+Pinned by `a_directory_listing_through_the_collectors` and
+`a_collector_whose_finisher_freezes_the_result`.
