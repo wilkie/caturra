@@ -121,6 +121,10 @@ class Pixel {
   }
   public int getX() { return x; }
   public int getY() { return y; }
+  // The image this pixel belongs to. A student reaches for it to ask the source
+  // its size while walking it — `p.getSourceImage().getWidth()` — and it was the
+  // one student-facing name of the course library caturra did not answer.
+  public Image getSourceImage() { return image; }
   // Straight through the packed pixel, with no hop into Image. `setColor` is
   // then call-free, which is what the VM's frameless fast path requires — and
   // the shift lesson (U5L10-L4d) runs 16M of these, one per pixel per shift.

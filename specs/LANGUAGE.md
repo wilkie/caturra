@@ -11957,3 +11957,29 @@ a whole visit, so a program that makes a directory and leaves it there answers
 `false` the second time it is asked to make it — a legitimate program the page
 would then report as failing. The file program tidies up after itself, and says
 so in its last line.
+
+## How much of the COURSE library can a program call?
+
+The JDK-11 measurement asks how much of `java.*` is reachable. The library that
+matters more to a student here is `org.code` — the one the Code.org curriculum
+is written against — and nothing measured it. `scripts/coverage/course.py` does,
+the same way: the denominator is Code.org's OWN source, by reflection over the
+classes `build-reference.py` compiles from the vendored `javabuilder/` checkout;
+the numerator is what caturra answers for a call to each name.
+
+**118 of 118 method names, over 15 student-facing classes** — `Painter`,
+`Image`, `Color`, `Pixel`, `Font`, `FontStyle`, `Theater`, `Scene`,
+`Instrument`, and the six `org.code.validation` types a grading harness reads.
+Three names are excluded and named rather than counted: `Image
+.getBufferedImage`, `Image.getImageAssetFromFile` and `Color.convertToAWTColor`
+hand back `java.awt` types, which have no meaning in a browser.
+
+The measurement found one real gap: **`Pixel.getSourceImage()`**, the image a
+pixel belongs to — what a program reaches for to ask the source its size while
+walking it. It is the only student-facing name of the course library that was
+missing, and it is pinned against the REAL library
+(`media_a_pixel_knows_its_image`), not just against the model.
+
+The number is checkable rather than asserted, but it is not CI-able: the
+vendored checkout is gitignored — it is not ours to vendor — so this runs where
+the media differential tests do, and says so when the checkout is absent.

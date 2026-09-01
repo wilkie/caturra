@@ -583,3 +583,33 @@ public class MediaMissing {
 }
 "#
 );
+
+// `Pixel.getSourceImage()` — the image a pixel belongs to, which a program
+// reaches for to ask the source its size while walking it. Found by measuring
+// caturra's coverage of the COURSE library against the vendored source
+// (`scripts/coverage/course.py`): it was the one student-facing name of
+// `org.code` that caturra did not answer, and the three beside it need AWT
+// types that have no place in a browser.
+media_differential_test!(
+    media_a_pixel_knows_its_image,
+    "SourceImage",
+    r#"
+import org.code.media.Image;
+import org.code.media.Pixel;
+
+public class SourceImage {
+    public static void main(String[] args) {
+        Image image = new Image(4, 3);
+        Pixel pixel = image.getPixel(1, 2);
+        System.out.println(pixel.getX() + " " + pixel.getY());
+        Image back = pixel.getSourceImage();
+        System.out.println(back.getWidth() + "x" + back.getHeight());
+        System.out.println(back == image);
+        // …and it is the SAME image, so writing through the pixel is visible
+        // through the one it hands back.
+        pixel.setRed(200);
+        System.out.println(back.getPixel(1, 2).getRed());
+    }
+}
+"#
+);
