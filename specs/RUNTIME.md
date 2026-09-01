@@ -141,3 +141,17 @@ Consequences and intent:
 (default 500M) so `while (true) {}` ends with a friendly error instead of a
 frozen tab; the worker host can also hard-terminate (see
 [EXECUTION.md](EXECUTION.md)).
+
+## Two font constants the course library has and caturra did not
+
+`Font` is `MONO, SANS, SERIF` and `FontStyle` is `NORMAL, BOLD, ITALIC,
+BOLD_ITALIC` — Code.org's own enums. caturra declared the first two of each, so
+`scene.setTextStyle(Font.SERIF, FontStyle.BOLD_ITALIC)`, an ordinary call
+against the documented library, was "cannot find symbol" for names that exist.
+
+The coverage measurement could not see this: it counts METHOD names, and an
+enum's constants are fields. What found it was asking the real library what
+order its constants are in — `values()`, `ordinal()`, `valueOf()`,
+`compareTo()` — which is a differential test, not a count
+(`media_the_font_enums_are_enums`). The playground's renderer maps the two new
+ones to `serif` and to a CSS `italic bold`.

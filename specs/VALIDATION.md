@@ -139,3 +139,40 @@ In rough dependency order. Each item is independently useful.
   (recoverable) versus student-facing reflection (rare, per the console survey)?
 - Annotation support in the compiler is a prerequisite (parse-and-retain `@Test`)
   and is the one piece that touches the language front end.
+
+## The validation API a validator actually writes
+
+`scripts/coverage/course.py --semantic` asks which of the course library's
+names a differential test has ever RUN against the real library — compiling is
+not behaving, and the two questions have different answers. It reported 63 of
+89, and the biggest hole was the one that decides marks:
+`org.code.validation`'s own API, 6 of 18 names.
+
+Writing a validator that uses the rest found three divergences, and every one
+of them would have shown up as a validator that does not compile or a student
+graded wrongly:
+
+**`PainterEvent.getDetails()` is a `Map<String, String>`** carrying the whole
+detail of the signal that made the event — `color` for a paint, `direction`
+for a move or a turn, `id` on every one. caturra offered `getColor()` and
+`getDirection()` instead: two methods Code.org's library does not have. A
+validator written against the real API did not compile here, and one written
+against caturra's would not compile on the real grader. (The file's header said
+a parallel-array log "avoids java.util.Map" — true when it was written, and
+`Map` has been modelled since.)
+
+**`PainterLog.getEvents()` answers a `List<PainterEvent>`**, not an array, and
+its constructor takes one. `getEvents().get(0)` did not compile.
+
+**The INITIALIZE_PAINTER signal is not an event.** The real
+`NeighborhoodTracker` creates a painter's tracker on that signal and returns
+BEFORE recording anything, so it is absent from the events list and from the
+counts. caturra recorded it like any other action — so `getEvents().size()` was
+one too many for every painter, and `didActionOnce(INITIALIZE_PAINTER)`
+answered true where the real grader answers false. A validator asking "was
+exactly one painter created" is a plausible one to write.
+
+All three are pinned by `orgcode_the_rest_of_the_validation_api`, which grades
+a program through the whole real stack — real `org.code.validation`, real
+JUnit — and requires the same verdicts. The semantic measurement is 89 of 89
+now; the 29 names it cannot reach are `org.code.theater`'s, which draw.

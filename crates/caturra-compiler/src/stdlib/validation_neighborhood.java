@@ -22,16 +22,23 @@ class NeighborhoodTestRunner {
 
   private static PainterLog buildLog(String id) {
     int n = __NbhdWorld.logCount;
-    int c = 0;
-    for (int i = 0; i < n; i++) if (__NbhdWorld.logId[i].equals(id)) c++;
-    PainterEvent[] events = new PainterEvent[c];
+    java.util.List<PainterEvent> events = new java.util.ArrayList<PainterEvent>();
     int sx = 0, sy = 0, ex = 0, ey = 0, sp = 0, ep = 0, k = 0;
     String sd = "north", ed = "north";
     boolean first = true;
     for (int i = 0; i < n; i++) {
       if (!__NbhdWorld.logId[i].equals(id)) continue;
       NeighborhoodActionType t = fromName(__NbhdWorld.logType[i]);
-      events[k++] = new PainterEvent(t, __NbhdWorld.logColor[i], __NbhdWorld.logDir[i]);
+      // The real `NeighborhoodTracker` CREATES a painter's tracker on the
+      // initialize signal and returns before recording an event, so the
+      // initialize is not in the events list and not in the counts. caturra
+      // recorded it like any other action, so `getEvents().size()` was one
+      // too many for every painter and `didActionOnce(INITIALIZE_PAINTER)`
+      // answered true where the real grader answers false.
+      if (t != NeighborhoodActionType.INITIALIZE_PAINTER) {
+        events.add(new PainterEvent(t, id, __NbhdWorld.logColor[i],
+            __NbhdWorld.logDir[i], null));
+      }
       int x = __NbhdWorld.logX[i], y = __NbhdWorld.logY[i], p = __NbhdWorld.logPaint[i];
       String d = __NbhdWorld.logDir[i];
       if (first) { sx = x; sy = y; sd = d; sp = p; ex = x; ey = y; ed = d; first = false; }

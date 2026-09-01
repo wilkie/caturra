@@ -778,3 +778,59 @@ public class NbhErrors {
 }
 "##
 );
+
+// The nine Painter methods no differential test had ever run against the real
+// library — found by measuring which NAMES the suites mention
+// (`scripts/coverage/course.py` counts what compiles; this is the semantic
+// half). The `facing*` four are the deprecated aliases old curriculum code
+// still uses, and `setPaint` has a rule a program can see: a negative amount
+// PRINTS a complaint and changes nothing. The show/hide pair emits a signal to
+// the display channel rather than to stdout, so what is compared here is that
+// calling them changes nothing else.
+neighborhood_differential_test!(
+    nbh_the_deprecated_compass_and_set_paint,
+    "NbhCompass",
+    SMALL,
+    r#"
+import org.code.neighborhood.*;
+
+public class NbhCompass {
+    static void compass(Painter p) {
+        System.out.println(p.facingNorth() + " " + p.facingEast() + " "
+            + p.facingSouth() + " " + p.facingWest() + " " + p.getDirection());
+    }
+
+    public static void main(String[] args) {
+        Painter p = new Painter(0, 0, "East", 5);
+        compass(p);
+        // …and they agree with the `is` forms they stand for, whichever way it turns.
+        for (int turn = 0; turn < 4; turn++) {
+            System.out.println(p.facingNorth() == p.isFacingNorth());
+            System.out.println(p.facingEast() == p.isFacingEast());
+            System.out.println(p.facingSouth() == p.isFacingSouth());
+            System.out.println(p.facingWest() == p.isFacingWest());
+            p.turnLeft();
+            compass(p);
+        }
+
+        // A negative amount is refused, out loud, and leaves the paint alone.
+        System.out.println(p.getMyPaint());
+        p.setPaint(3);
+        System.out.println(p.getMyPaint() + " " + p.hasPaint());
+        p.setPaint(-1);
+        System.out.println(p.getMyPaint());
+        p.setPaint(0);
+        System.out.println(p.getMyPaint() + " " + p.hasPaint());
+
+        // The display toggles go to the display channel, not to stdout, and
+        // change nothing a program can read back.
+        p.hidePainter();
+        p.showPainter();
+        p.hideBuckets();
+        p.showBuckets();
+        System.out.println(p.getX() + "," + p.getY() + " " + p.getMyPaint() + " "
+            + p.getDirection());
+    }
+}
+"#
+);

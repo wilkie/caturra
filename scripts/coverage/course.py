@@ -12,7 +12,15 @@ Three names are excluded and named below rather than counted as gaps: they
 hand back `java.awt` types (a `BufferedImage`, an AWT `Color`), which have no
 meaning in a browser and no student-facing use.
 
-    scripts/coverage/course.py [--verbose]
+    scripts/coverage/course.py [--verbose] [--semantic]
+
+`--semantic` asks the OTHER question: of the names caturra answers, which ones
+has a differential test ever run against the real library? Compiling is not
+behaving — `Pixel.getSourceImage` would have counted as covered by the first
+question the moment it existed, and only the second one proves it hands back
+the same image. This is a text mention of `name(` in the suites, which is a
+heuristic and is labelled as one: it can say a name is UNCOVERED with
+confidence, and "covered" only means some program calls it.
 
 Needs `javac`/`java` on PATH, `vendor/sweep-classes` built
 (`scripts/sweep/build-reference.py`), and a built
@@ -24,6 +32,15 @@ from collections import defaultdict
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ENGINE = os.path.join(REPO, "target/release/examples/diagnostics")
 CLASSES = os.path.join(REPO, "vendor/sweep-classes")
+
+# `org.code.validation` replays the student's program, so a probe that names it
+# needs one to replay: the bundle's test runner calls `Main.main`.
+MAIN = "class Main { public static void main(String[] args) { } }\n"
+
+# `NeighborhoodTestRunner` reads the neighborhood's action log, so the runner
+# is injected only when that package is reachable too — a probe that imports
+# the validation package alone does not see it.
+VALIDATION_IMPORTS = "import org.code.validation.*;\nimport org.code.neighborhood.*;"
 
 # One expression of each type, and the imports a probe needs to write it.
 # `STATIC` means the class's own name is the receiver.
@@ -44,13 +61,25 @@ RECEIVERS = {
         "STATIC",
         "import org.code.validation.ValidationHelper;",
     ),
-    "org.code.validation.PainterLog": ("new org.code.validation.PainterLog()", ""),
-    "org.code.validation.PainterEvent": ("new org.code.validation.PainterEvent()", ""),
-    "org.code.validation.NeighborhoodLog": ("new org.code.validation.NeighborhoodLog()", ""),
-    "org.code.validation.Position": ("new org.code.validation.Position()", ""),
+    "org.code.validation.NeighborhoodLog": (
+        "NeighborhoodTestRunner.run()",
+        VALIDATION_IMPORTS,
+    ),
+    "org.code.validation.PainterLog": (
+        "NeighborhoodTestRunner.run().getPainterLogs()[0]",
+        VALIDATION_IMPORTS,
+    ),
+    "org.code.validation.PainterEvent": (
+        "NeighborhoodTestRunner.run().getPainterLogs()[0].getEvents().get(0)",
+        VALIDATION_IMPORTS,
+    ),
+    "org.code.validation.Position": (
+        "NeighborhoodTestRunner.run().getPainterLogs()[0].getStartingPosition()",
+        VALIDATION_IMPORTS,
+    ),
     "org.code.validation.NeighborhoodActionType": (
-        "org.code.validation.NeighborhoodActionType.MOVE",
-        "",
+        "NeighborhoodActionType.MOVE",
+        VALIDATION_IMPORTS,
     ),
 }
 
@@ -81,8 +110,36 @@ def inventory():
     return api
 
 
+def check_receiver(class_name, receiver, imports):
+    """The receiver EXPRESSION must compile on its own.
+
+    A receiver that does not is a broken probe, not a missing method: every
+    call written on it fails, and if the failure does not say "cannot find
+    symbol" the whole class reads as fully supported. That is how
+    `PainterEvent` scored 2/2 while `getDetails` did not exist — the receiver
+    named a constructor caturra does not have.
+    """
+    if receiver == "STATIC":
+        return
+    source = (
+        f"{imports}\n{MAIN}public class Probe {{\n    public static void main(String[] args) {{\n"
+        f"        Object __receiver = {receiver};\n    }}\n}}\n"
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "Probe.java")
+        with open(path, "w") as handle:
+            handle.write(source)
+        done = subprocess.run([ENGINE, path], capture_output=True, text=True, cwd=REPO)
+    if done.returncode != 0 or "Error@" in done.stdout:
+        raise RuntimeError(
+            f"the {class_name} probe's receiver does not compile — fix the table, "
+            f"not the engine:\n  {receiver}\n  {done.stdout.strip()[:200]}"
+        )
+
+
 def measure(class_name, receiver, imports, methods):
     """(known, missing) names for one class, read from caturra's diagnostics."""
+    check_receiver(class_name, receiver, imports)
     simple = class_name.rsplit(".", 1)[1]
     lines, order = [], []
     for name, is_static, arity in methods:
@@ -90,7 +147,7 @@ def measure(class_name, receiver, imports, methods):
         lines.append(f"        {target}.{name}({', '.join(['null'] * arity)});")
         order.append(name)
     source = (
-        f"{imports}\npublic class Probe {{\n    public static void main(String[] args) {{\n"
+        f"{imports}\n{MAIN}public class Probe {{\n    public static void main(String[] args) {{\n"
         + "\n".join(lines)
         + "\n    }\n}\n"
     )
@@ -117,8 +174,58 @@ def measure(class_name, receiver, imports, methods):
     return sorted(known), sorted(missing)
 
 
+# The suites that run a program through the REAL library and through caturra.
+SUITES = (
+    "crates/caturra-vm/tests/differential_media.rs",
+    "crates/caturra-vm/tests/differential_neighborhood.rs",
+    "crates/caturra-vm/tests/differential_validation_orgcode.rs",
+)
+
+# What no stdout comparison can reach. `org.code.theater` draws: the real
+# library's output is a GIF written through an AWS content manager, and
+# caturra's is a canvas in the browser. The e2e tests drive that; a differential
+# test cannot.
+UNCOMPARABLE = ("org.code.theater.",)
+
+
+def semantic():
+    """Which answered names a differential suite has ever run."""
+    text = ""
+    for suite in SUITES:
+        path = os.path.join(REPO, suite)
+        if os.path.isfile(path):
+            text += open(path).read()
+    api = inventory()
+    covered = uncovered = skipped = 0
+    for class_name in RECEIVERS:
+        names = sorted({name for name, _, _ in api.get(class_name, [])})
+        names = [n for n in names if (class_name, n) not in EXCLUDED]
+        if class_name.startswith(UNCOMPARABLE):
+            skipped += len(names)
+            print(f"{class_name:44} {len(names):3} names — not comparable by stdout")
+            continue
+        run = [n for n in names if f"{n}(" in text]
+        missing = [n for n in names if f"{n}(" not in text]
+        covered += len(run)
+        uncovered += len(missing)
+        print(f"{class_name:44} {len(run):3}/{len(names):3} run against the real library")
+        if missing:
+            print(f"    never run: {' '.join(missing)}")
+    total = covered + uncovered
+    share = 100.0 * covered / total if total else 0.0
+    print(
+        f"\n{covered}/{total} names ({share:.1f}%) have been run against the real "
+        f"library; {skipped} draw, and no stdout comparison reaches them"
+    )
+    return 0 if uncovered == 0 else 1
+
+
 def main():
     verbose = "--verbose" in sys.argv
+    if "--semantic" in sys.argv:
+        if not os.path.isdir(CLASSES):
+            sys.exit("no vendor/sweep-classes — run scripts/sweep/build-reference.py first")
+        return semantic()
     if not os.path.isdir(CLASSES):
         sys.exit("no vendor/sweep-classes — run scripts/sweep/build-reference.py first")
     api = inventory()

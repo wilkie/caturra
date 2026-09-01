@@ -97,6 +97,11 @@ const MEDIA_SOURCES: &[&str] = &[
     "Color.java",
     "Pixel.java",
     "Image.java",
+    // The two ENUMS a program names when it draws text. They pull in nothing
+    // (an enum of names and a style), and without them a test could not ask
+    // the real library what order its constants are in.
+    "Font.java",
+    "FontStyle.java",
     "support/MediaRuntimeException.java",
     "support/MediaRuntimeExceptionKeys.java",
 ];
@@ -609,6 +614,35 @@ public class SourceImage {
         // through the one it hands back.
         pixel.setRed(200);
         System.out.println(back.getPixel(1, 2).getRed());
+    }
+}
+"#
+);
+
+// The course library's ENUMS are enums: `values()` in declaration order,
+// `ordinal()`, `valueOf()`, `compareTo()` and `name()`. Inherited from
+// `java.lang.Enum` and covered there for the program's own enums — but these
+// come out of the BUNDLE, and nothing had ever asked the real library whether
+// the two agree about their order.
+media_differential_test!(
+    media_the_font_enums_are_enums,
+    "FontEnums",
+    r#"
+import org.code.media.Font;
+import org.code.media.FontStyle;
+
+public class FontEnums {
+    public static void main(String[] args) {
+        System.out.println(Font.values().length + " " + FontStyle.values().length);
+        for (Font font : Font.values()) {
+            System.out.println(font.ordinal() + " " + font.name() + " " + font);
+        }
+        for (FontStyle style : FontStyle.values()) {
+            System.out.println(style.ordinal() + " " + style.name());
+        }
+        System.out.println(Font.valueOf("SANS") == Font.SANS);
+        System.out.println(Font.SANS.compareTo(Font.values()[Font.values().length - 1]) < 0);
+        System.out.println(FontStyle.BOLD.getDeclaringClass().getName());
     }
 }
 "#

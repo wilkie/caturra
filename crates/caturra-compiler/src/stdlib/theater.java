@@ -5,8 +5,12 @@
 // Color values match the real library; the pixel/GIF renderer is Phase 2.
 // Only Scene/Theater/Color/Image/Pixel/Font/FontStyle/Instrument are public.
 
-enum Font { MONO, SANS }
-enum FontStyle { NORMAL, BOLD, ITALIC }
+// The constants Code.org's own enums declare, in its order. SERIF and
+// BOLD_ITALIC were missing, so `scene.setTextStyle(Font.SERIF, FontStyle
+// .BOLD_ITALIC)` — an ordinary call against the documented library — was
+// "cannot find symbol" for a name that exists.
+enum Font { MONO, SANS, SERIF }
+enum FontStyle { NORMAL, BOLD, ITALIC, BOLD_ITALIC }
 enum Instrument { PIANO, BASS }
 
 class Color {

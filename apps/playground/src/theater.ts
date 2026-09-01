@@ -160,8 +160,17 @@ export class TheaterViz {
         this.#textHeight = n(0);
         break;
       case 'textStyle':
-        this.#fontFamily = rest[0] === 'MONO' ? 'monospace' : 'sans-serif';
-        this.#fontStyle = rest[1] === 'BOLD' ? 'bold' : rest[1] === 'ITALIC' ? 'italic' : '';
+        this.#fontFamily =
+          rest[0] === 'MONO' ? 'monospace' : rest[0] === 'SERIF' ? 'serif' : 'sans-serif';
+        // BOLD_ITALIC is both, in the order a CSS font shorthand wants them.
+        this.#fontStyle =
+          rest[1] === 'BOLD'
+            ? 'bold'
+            : rest[1] === 'ITALIC'
+              ? 'italic'
+              : rest[1] === 'BOLD_ITALIC'
+                ? 'italic bold'
+                : '';
         break;
       case 'rectangle':
         this.fillThenStroke(() => {

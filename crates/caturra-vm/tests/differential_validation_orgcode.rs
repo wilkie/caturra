@@ -1099,3 +1099,138 @@ public class DessertTest {
         },
     );
 }
+
+/// The rest of the validation API, which no test had ever run against the real
+/// grader — found by `scripts/coverage/course.py --semantic`, which asks which
+/// answered names a differential suite has ever executed. `NeighborhoodLog`'s
+/// output predicates, `PainterLog`'s counting and starting state, and
+/// `PainterEvent`'s two accessors decide whether a student is marked correct,
+/// and were taken on trust.
+#[test]
+#[allow(clippy::too_many_lines)] // the validator IS the test, and it is Java
+fn orgcode_the_rest_of_the_validation_api() {
+    if !reference_available() {
+        return;
+    }
+    assert_same_verdicts(
+        "Rest",
+        &Level {
+            grid: Some(GRID),
+            sources: &[
+                (
+                    "Main.java",
+                    r#"
+import org.code.neighborhood.*;
+
+public class Main {
+    public static void main(String[] args) {
+        Painter painter = new Painter(0, 0, "east", 3);
+        painter.move();
+        painter.paint("red");
+        painter.move();
+        painter.paint("blue");
+        painter.turnLeft();
+        System.out.println("finished with " + painter.getMyPaint() + " paint");
+    }
+}
+"#,
+                ),
+                (
+                    "MainTest.java",
+                    r#"
+import org.code.validation.*;
+import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class MainTest {
+    NeighborhoodLog log;
+
+    @BeforeEach
+    public void setup() {
+        log = NeighborhoodTestRunner.run();
+    }
+
+    @Test
+    @Order(1)
+    @DisplayName("the log answers questions about what any painter did => ")
+    public void theLogItself() {
+        assertTrue(log.actionHappened(NeighborhoodActionType.PAINT, 2), "painted twice");
+        assertFalse(log.actionHappened(NeighborhoodActionType.PAINT, 3), "not three times");
+        assertTrue(log.onePainterDidAction(NeighborhoodActionType.MOVE, 2), "one moved twice");
+        assertFalse(log.onePainterDidAction(NeighborhoodActionType.MOVE, 3), "not three times");
+        // The final output is the GRID: one cell per square, holding the paint
+        // on it or null.
+        // The grid is indexed [x][y], and the painter walked east along row 0.
+        String[][] grid = log.getFinalOutput();
+        assertEquals(4, grid.length, "four columns");
+        assertEquals("red", grid[1][0], "the first square painted");
+        assertEquals("blue", grid[2][0], "the second");
+        assertNull(grid[0][0], "where it started is bare");
+        boolean[][] painted = {
+            {false, false, false, false},
+            {true, false, false, false},
+            {true, false, false, false},
+            {false, false, false, false},
+        };
+        assertTrue(log.finalOutputContainsPaint(painted), "paint is where it was put");
+        String[][] expected = {
+            {null, null, null, null},
+            {"red", null, null, null},
+            {"blue", null, null, null},
+            {null, null, null, null},
+        };
+        assertTrue(log.finalOutputMatches(expected), "and it is those colours");
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("a painter's log counts its own actions => ")
+    public void thePainterLog() {
+        PainterLog painter = log.getPainterLogs()[0];
+        assertEquals(2, painter.actionCount(NeighborhoodActionType.MOVE), "moved twice");
+        assertTrue(painter.didActionAtLeast(NeighborhoodActionType.PAINT, 2), "painted twice");
+        assertFalse(painter.didActionOnce(NeighborhoodActionType.PAINT), "not exactly once");
+        assertTrue(painter.didActionOnce(NeighborhoodActionType.TURN_LEFT), "turned once");
+        assertEquals(3, painter.getStartingPaintCount(), "started with three");
+        assertEquals(1, painter.getEndingPaintCount(), "ended with one");
+        Position start = painter.getStartingPosition();
+        assertEquals(0, start.getX(), "started at x=0");
+        assertEquals("east", start.getDirection(), "started facing east");
+        assertNotNull(painter.getPainterId(), "a painter has an id");
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("every event says what it was and what it carried => ")
+    public void theEvents() {
+        java.util.List<PainterEvent> events = log.getPainterLogs()[0].getEvents();
+        assertEquals(5, events.size(), "five actions were taken");
+        assertEquals(NeighborhoodActionType.MOVE, events.get(0).getEventType(), "moved first");
+        assertEquals(NeighborhoodActionType.PAINT, events.get(1).getEventType(), "then painted");
+        assertEquals("red", events.get(1).getDetails().get("color"), "with red");
+        assertNotNull(events.get(1).getDetails().get("id"), "every event names its painter");
+        assertEquals("east", events.get(0).getDetails().get("direction"), "moved east");
+        assertEquals(NeighborhoodActionType.TURN_LEFT, events.get(4).getEventType(),
+                "turned last");
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("a claim that does not hold fails, on both engines => ")
+    public void thisOneFails() {
+        String[][] wrong = {
+            {null, null, null, null},
+            {"green", null, null, null},
+            {null, null, null, null},
+            {null, null, null, null},
+        };
+        assertTrue(log.finalOutputMatches(wrong), "it was red, not green");
+    }
+}
+"#,
+                ),
+            ],
+        },
+    );
+}
