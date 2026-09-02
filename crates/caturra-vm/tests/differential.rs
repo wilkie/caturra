@@ -46565,3 +46565,72 @@ public class Leaked {
 }
 "#
 );
+
+// A `HashMap`'s iteration order is its BUCKET order, and caturra models the
+// JDK's exactly — including through every resize. Below the treeify
+// threshold, which is where the modelling stops, the two agree key for key.
+differential_test!(
+    the_bucket_order_of_a_hash_map,
+    "Buckets",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class Buckets {
+    // Strings that all hash alike: "Aa" and "BB" collide, and so does every
+    // concatenation of them.
+    static List<String> colliding(int count) {
+        List<String> out = new ArrayList<>();
+        String[] pair = { "Aa", "BB" };
+        for (int i = 0; i < count; i++) {
+            StringBuilder key = new StringBuilder();
+            for (int bit = 0; bit < 4; bit++) {
+                key.append(pair[(i >> bit) & 1]);
+            }
+            out.add(key.toString());
+        }
+        return out;
+    }
+
+    public static void main(String[] args) {
+        // Ordinary keys, over every resize: 13, 25, 49 entries cross one.
+        for (int count : new int[] { 13, 25, 49, 100 }) {
+            Map<String, Integer> map = new HashMap<>();
+            Set<String> set = new HashSet<>();
+            for (int i = 0; i < count; i++) {
+                map.put("k" + i, i);
+                set.add("k" + i);
+                if (i % 7 == 3) {
+                    map.remove("k" + i);
+                    set.remove("k" + i);
+                }
+            }
+            System.out.println(map.keySet() + " " + map.values());
+            System.out.println(set + " " + map.size() + " " + map.hashCode());
+        }
+
+        // Seven keys in ONE bucket is below the threshold at which a JDK
+        // turns the bin into a tree, so the order is the insertion order of
+        // the chain — and caturra's is the same.
+        Map<String, Integer> chained = new HashMap<>();
+        int index = 0;
+        for (String key : colliding(7)) {
+            chained.put(key, index++);
+        }
+        System.out.println(chained.keySet());
+        // …and with a SMALL table, eight of them still chain: a JDK resizes
+        // rather than treeifying until the table holds 64.
+        Map<String, Integer> small = new HashMap<>();
+        index = 0;
+        for (String key : colliding(8)) {
+            small.put(key, index++);
+        }
+        System.out.println(small.keySet() + " " + small.size());
+    }
+}
+"#
+);

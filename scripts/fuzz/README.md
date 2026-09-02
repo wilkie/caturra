@@ -17,6 +17,16 @@ from its own location.
 
 ## What each one is for
 
+**`collections.py` — a random sequence of operations.** A collection's ORDER
+and its return VALUES are where a reimplementation drifts: which element
+`remove` answers, what `put` gives back, where an insertion lands, what
+`toString` shows. Each program builds one collection and applies random calls,
+printing the answer of EVERY call and the whole collection after it — so a
+divergence lands on the operation that caused it — with each call wrapped, so
+the operations that THROW are compared too. It also walks hash collections
+large enough to resize several times, which is the most detailed claim caturra
+makes about the library. Nine thousand lines over ten seeds, no divergence.
+
 **`regex.py` — the regex engine against a JDK's.**
 `crates/caturra-vm/src/regex.rs` is a hand-written backtracking engine, and its
 input space — quantifiers, classes, groups, alternation, anchors, boundaries,

@@ -12759,3 +12759,42 @@ replicating `java.util.regex`'s backtracking order, which is a different
 project from replicating its semantics.
 
 Pinned by `a_capture_outlives_the_attempt_that_made_it`.
+
+### Fuzzing the collections
+
+Two engines fuzzed, so the third question: the collections, which is where a
+student's program actually spends its time. `scripts/fuzz/collections.py`
+builds one collection and applies a random sequence of calls, printing the
+answer of EVERY call and the whole collection after it — so a divergence lands
+on the operation that caused it rather than ten steps later — with each call
+wrapped, so the operations that THROW are compared too. It also walks hash
+collections through several resizes.
+
+**Nine thousand lines over ten seeds, no divergence** across `ArrayList`,
+`LinkedList`, `HashSet`, `LinkedHashSet`, `TreeSet`, `HashMap`,
+`LinkedHashMap`, `TreeMap`, `ArrayDeque` and `PriorityQueue`: every return
+value, every iteration order, every `toString`, every `hashCode` the interface
+defines, and every exception.
+
+Two things the fuzzer itself had to get right, and they are the same lesson in
+two places. A `Deque`'s and a `Queue`'s `hashCode` is `Object`'s — an identity
+hash, which differs between runs of the same JDK — so printing it compares
+nothing; and an uncaught exception ends the program, which throws away every
+comparison after it. **A fuzzer that compares a value the reference itself does
+not reproduce is measuring noise, and one that stops at the first exception
+measures a prefix.**
+
+**The treeify boundary, measured exactly.** `HashMap` turns a bucket into a
+tree at eight entries in one bin, and only once the table holds 64 — the two
+constants are `TREEIFY_THRESHOLD` and `MIN_TREEIFY_CAPACITY`, and caturra
+models neither. With deliberately colliding keys (`"Aa"` and `"BB"` hash alike,
+and so does every concatenation of them) the boundary is where the JDK says it
+is: **seven colliding keys agree, eight in a 64-entry table do not**, and eight
+in a smaller table agree too, because a JDK resizes rather than treeifying
+until the table is big enough. Below both thresholds the orders are identical
+key for key. It stays open — reaching it needs keys chosen to collide, which no
+program writes by accident, and closing it means a red-black tree bin with the
+JDK's exact ordering rules.
+
+Pinned by `the_bucket_order_of_a_hash_map`, which holds the agreeing side of
+both thresholds.
