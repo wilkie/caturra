@@ -3138,6 +3138,23 @@ impl MethodTable {
         None
     }
 
+    /// Whether `inner` is `outer` or is declared INSIDE it — the nesting a
+    /// binary name spells out (`Outer$Middle$Inner`). Not the same question as
+    /// `is_subtype`: a nested class does not extend the class it sits in.
+    fn lexically_within(&self, inner: ClassId, outer: ClassId) -> bool {
+        if inner == outer {
+            return true;
+        }
+        let mut name = self.class_name(inner);
+        while let Some((prefix, _)) = name.rsplit_once('$') {
+            if self.class_id(prefix) == Some(outer) {
+                return true;
+            }
+            name = prefix;
+        }
+        false
+    }
+
     /// The class that DECLARES a method of this name, walking up from
     /// `class`. javac names it in "cannot be applied to given types", where
     /// naming the RECEIVER's class points at a class that does not declare the
@@ -17722,9 +17739,7 @@ impl BodyGen<'_> {
                         *span,
                         match label {
                             Some(name) => format!("undefined label: {name}"),
-                            None => {
-                                String::from("'break' can only be used inside a loop or switch")
-                            }
+                            None => String::from("break outside switch or loop"),
                         },
                     ),
                 }
@@ -17758,7 +17773,7 @@ impl BodyGen<'_> {
                         self.code.branch(op::GOTO, target, 0);
                     }
                     (None, None) => {
-                        self.error(*span, "'continue' can only be used inside a loop");
+                        self.error(*span, "continue outside of loop");
                     }
                     (None, Some(_)) => {} // already reported above
                 }
@@ -17893,18 +17908,18 @@ impl BodyGen<'_> {
             _ => None,
         };
         if selector_ty != JType::Error && !is_string && !is_int && enum_class.is_none() {
-            // javac's wording for a long selector; other types get the
-            // general incompatibility.
+            // javac says nothing about switch here: a selector is CONVERTED
+            // to `int`, so the message is the ordinary assignment one, lossy
+            // where the type is numeric and plain otherwise. `long` was
+            // special-cased into javac's words and every other type got a
+            // sentence javac does not write.
+            let described = selector_ty.describe(self.table);
             self.error(
                 selector.span(),
-                if selector_ty == JType::Long {
-                    String::from("incompatible types: possible lossy conversion from long to int")
+                if selector_ty.is_numeric() {
+                    format!("incompatible types: possible lossy conversion from {described} to int")
                 } else {
-                    format!(
-                        "incompatible types: {} cannot be converted to int (or String) \
-                         for switch",
-                        selector_ty.describe(self.table)
-                    )
+                    format!("incompatible types: {described} cannot be converted to int")
                 },
             );
         }
@@ -21497,10 +21512,22 @@ impl BodyGen<'_> {
             None
         };
         let Some(bound) = bound else {
-            self.error(
-                span,
-                format!("an enclosing instance that contains {simple} is required"),
-            );
+            // Two different mistakes, and javac has a word for each. Written
+            // INSIDE the enclosing class (or a class nested in it, or a
+            // subclass), the inner class is in scope and what is missing is
+            // the `this` a static context does not have. Written from
+            // somewhere else entirely, what is missing is the instance to
+            // qualify it with. caturra said the second for both.
+            let in_scope = self
+                .table
+                .lexically_within(self.current_class_id, enclosing)
+                || self.table.is_subtype(self.current_class_id, enclosing);
+            let message = if in_scope {
+                String::from("non-static variable this cannot be referenced from a static context")
+            } else {
+                format!("an enclosing instance that contains {simple} is required")
+            };
+            self.error(span, message);
             return JType::Error;
         };
         // JLS §15.9.4: in `p.new Inner(args)` the qualifier is evaluated and

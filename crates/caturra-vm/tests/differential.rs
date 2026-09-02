@@ -45654,3 +45654,179 @@ public class LegalChain {
 }
 "#
 );
+
+// Inside the enclosing class, an inner class is IN SCOPE and what is missing
+// is the `this` a static context does not have. Written from somewhere else
+// entirely, what is missing is the instance to qualify it with. caturra said
+// the second for both.
+differential_wording!(
+    an_inner_class_in_a_static_context,
+    "InnerFromStatic",
+    r"
+public class InnerFromStatic {
+    class Inner { int value = 1; }
+
+    public static void main(String[] args) {
+        System.out.println(new Inner().value);
+    }
+}
+"
+);
+
+differential_wording!(
+    an_inner_class_from_another_class,
+    "InnerFromOutside",
+    r"
+public class InnerFromOutside {
+    public static void main(String[] args) {
+        Holder.Inner inner = new Holder.Inner();
+        System.out.println(inner);
+    }
+}
+
+class Holder {
+    class Inner { }
+}
+"
+);
+
+// A switch selector is CONVERTED to `int`, so javac's message is the ordinary
+// assignment one — lossy where the type is numeric, plain otherwise. `long`
+// was special-cased into javac's words and every other type got a sentence
+// about "int (or String) for switch" that javac does not write.
+differential_wording!(
+    reject_a_double_switch_selector,
+    "DoubleSwitch",
+    r"
+public class DoubleSwitch {
+    public static void main(String[] args) {
+        double measure = 1.0;
+        switch (measure) {
+            case 1:
+                System.out.println(1);
+                break;
+            default:
+                System.out.println(0);
+        }
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_an_object_switch_selector,
+    "ObjectSwitch",
+    r"
+public class ObjectSwitch {
+    public static void main(String[] args) {
+        Object thing = new Object();
+        switch (thing) {
+            case 1:
+                System.out.println(1);
+                break;
+            default:
+                System.out.println(0);
+        }
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_a_break_outside_a_loop,
+    "LooseBreak",
+    r"
+public class LooseBreak {
+    public static void main(String[] args) {
+        for (int i = 0; i < 2; i++) {
+            System.out.println(i);
+        }
+        break;
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_a_continue_outside_a_loop,
+    "LooseContinue",
+    r"
+public class LooseContinue {
+    public static void main(String[] args) {
+        System.out.println(0);
+        continue;
+    }
+}
+"
+);
+
+// The switch a lesson writes, over each type Java 11 allows: an int with
+// fall-through, a char against its numeric twin, a String, an enum by its
+// simple constant name, and a `final` constant as a label.
+differential_test!(
+    the_switches_a_lesson_writes,
+    "SwitchFine",
+    r#"
+public class SwitchFine {
+    enum Kind { ROCK, PAPER }
+
+    static final int ONE = 1;
+
+    static String kindOf(Kind kind) {
+        switch (kind) {
+            case ROCK:
+                return "rock";
+            case PAPER:
+                return "paper";
+            default:
+                return "?";
+        }
+    }
+
+    public static void main(String[] args) {
+        for (int n = 0; n < 3; n++) {
+            switch (n) {
+                case 0:
+                case ONE:
+                    System.out.println("small " + n);
+                    break;
+                default:
+                    System.out.println("big " + n);
+            }
+        }
+        char letter = 'a';
+        switch (letter) {
+            case 'a':
+                System.out.println("letter a");
+                break;
+            case 98:
+                System.out.println("letter b");
+                break;
+            default:
+                break;
+        }
+        String word = "hi";
+        switch (word) {
+            case "hi":
+                System.out.println("greeting");
+                break;
+            default:
+                System.out.println("other");
+        }
+        System.out.println(kindOf(Kind.ROCK) + kindOf(Kind.PAPER));
+        outer:
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                if (j == 1) {
+                    continue outer;
+                }
+                if (i == 2) {
+                    break outer;
+                }
+                System.out.println(i + "," + j);
+            }
+        }
+    }
+}
+"#
+);

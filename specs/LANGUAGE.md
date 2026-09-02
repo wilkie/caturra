@@ -12324,3 +12324,53 @@ Pinned by `reject_a_cycle_in_the_class_hierarchy`, `two_cycles_are_two_errors`,
 `an_inherited_method_names_the_class_that_declares_it`,
 `ambiguous_defaults_name_the_interfaces_as_written` and
 `the_inheritance_chain_a_lesson_writes`.
+
+### Access, and what a `switch` may switch on
+
+Two more probe sets in the same shape, and both dimensions came back nearly
+clean — which is worth writing down as plainly as a haul is.
+
+**Twenty-five access and static-context programs**: a private field read from
+`main`, an instance method called without a receiver, `this` in a static
+method, a private member of a nested class read from the enclosing one (legal
+in Java, and legal here), a private member read from a SUBCLASS (not legal), a
+private static shared with a nested class, `protected` through inheritance, a
+private field of ANOTHER instance of the same class, a captured local, a
+non-effectively-final capture, a private constructor, a static method through
+an instance, an instance field in a static initializer. **Twenty-four of the
+twenty-five already said exactly what javac says.**
+
+The one was a message that had never distinguished two different mistakes.
+Inside the enclosing class, an inner class is IN SCOPE and what is missing is
+the `this` a static context does not have — javac: "non-static variable this
+cannot be referenced from a static context". Written from another class
+entirely, the type is fine and what is missing is the instance to qualify it
+with — javac: "an enclosing instance that contains Holder.Inner is required".
+caturra said the second for both, so the commonest form of it (`new Inner()`
+in `main`) got the rarer message. The two are told apart by whether the class
+doing the writing is the enclosing class, is nested inside it, or extends it.
+
+**Twenty-five `switch`, `enum` and label programs**: a duplicate case label, two
+`default`s, a non-constant label, a selector of every type Java 11 does and does
+not allow, a `case` whose type does not match the selector, an enum constant
+written qualified (`case Kind.A:`, which Java forbids), a constant that is not
+one, a label on a `String` that is `null` at run time, fall-through, an empty
+switch body, a `switch` that is the whole body of a method returning a value,
+`break`/`continue` with and without a label, a `break` outside any loop.
+**Twenty-three agreed to the word**, and nothing was accepted that javac
+refuses.
+
+The two that did not were both wording caturra had written for itself:
+`'break' can only be used inside a loop or switch` (javac: "break outside
+switch or loop"), `'continue' can only be used inside a loop` (javac:
+"continue outside of loop"), and a selector message that explained itself —
+`double cannot be converted to int (or String) for switch`. javac says nothing
+about switch there: a selector is CONVERTED to `int`, so the message is the
+ordinary assignment one, lossy where the type is numeric and plain otherwise.
+`long` had been special-cased into javac's exact words, which is what made the
+general case look right.
+
+Pinned by `an_inner_class_in_a_static_context`,
+`an_inner_class_from_another_class`, `reject_a_double_switch_selector`,
+`reject_an_object_switch_selector`, `reject_a_break_outside_a_loop`,
+`reject_a_continue_outside_a_loop` and `the_switches_a_lesson_writes`.
