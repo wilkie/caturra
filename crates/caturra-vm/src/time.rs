@@ -635,9 +635,19 @@ impl std::fmt::Display for Duration {
         if self.is_zero() {
             return write!(f, "PT0S");
         }
-        let hours = self.seconds / 3600;
-        let minutes = (self.seconds % 3600) / 60;
-        let secs = self.seconds % 60;
+        // A NEGATIVE duration with a fraction is written as one number per
+        // part: -43199.999999999s is `PT-11H-59M-59.999999999S`, so the whole
+        // seconds are counted from `seconds + 1` and the fraction is the
+        // complement. (`java.time` does exactly this, and the shape is what a
+        // program prints.)
+        let effective = if self.seconds < 0 && self.nanos > 0 {
+            self.seconds + 1
+        } else {
+            self.seconds
+        };
+        let hours = effective / 3600;
+        let minutes = (effective % 3600) / 60;
+        let secs = effective % 60;
         let mut out = String::from("PT");
         if hours != 0 {
             let _ = write!(out, "{hours}H");
@@ -648,20 +658,16 @@ impl std::fmt::Display for Duration {
         if secs == 0 && self.nanos == 0 && out.len() > 2 {
             return write!(f, "{out}");
         }
-        // A negative second with a fraction reads as one number, not two:
-        // -0.5s is `PT-0.5S`, so the sign lives on the whole part.
-        if secs < 0 && self.nanos > 0 {
-            if secs == -1 {
-                out.push_str("-0");
-            } else {
-                let _ = write!(out, "{}", secs + 1);
-            }
+        // The sign lives on the whole part, and a value that rounds to zero
+        // still shows it: -0.000000001s is `PT-0.000000001S`.
+        if secs == 0 && self.nanos > 0 && self.seconds < 0 {
+            out.push_str("-0");
         } else {
             let _ = write!(out, "{secs}");
         }
         if self.nanos > 0 {
             let at = out.len();
-            let fraction = if secs < 0 {
+            let fraction = if self.seconds < 0 {
                 2 * NANOS_PER_SECOND - i64::from(self.nanos)
             } else {
                 i64::from(self.nanos) + NANOS_PER_SECOND
@@ -931,20 +937,38 @@ pub fn format_pieces(
             time.unwrap_or(Time { nano_of_day: 0 }),
         );
         match letter {
-            // Two letters of a year is the last two digits; more is the year
-            // itself, padded to the count.
+            // `y` is the year OF THE ERA — always positive, so year -1 is
+            // the year 2 (of the era before this one) — while `u` is the
+            // proleptic year, which carries its sign. Two letters of either
+            // is the last two digits.
             'y' | 'u' => {
-                if count == 2 {
-                    let _ = write!(out, "{:02}", date.year.rem_euclid(100));
+                let value = if letter == 'y' && date.year <= 0 {
+                    1 - date.year
                 } else {
-                    let _ = write!(out, "{:0width$}", date.year, width = count);
+                    date.year
+                };
+                if count == 2 {
+                    let _ = write!(out, "{:02}", value.rem_euclid(100));
+                } else {
+                    // The width counts DIGITS; the sign sits outside it, and
+                    // a number too wide for the pattern is marked with `+`.
+                    let digits = format!("{:0width$}", value.abs(), width = count);
+                    if value < 0 {
+                        out.push('-');
+                    } else if digits.len() > count && count >= 4 {
+                        out.push('+');
+                    }
+                    out.push_str(&digits);
                 }
             }
+            // Five letters is the NARROW form, which is the first letter of
+            // the name — "J" for January, "M" for Monday.
             'M' => match count {
                 1 | 2 => {
                     let _ = write!(out, "{:0width$}", date.month, width = count);
                 }
                 3 => out.push_str(SHORT_MONTHS[usize::from(date.month) - 1]),
+                5 => out.push_str(&title(month_name(date.month))[..1]),
                 _ => out.push_str(&title(month_name(date.month))),
             },
             'd' => {
@@ -957,10 +981,11 @@ pub fn format_pieces(
             // long one.
             'E' => {
                 let day = usize::from(date.day_of_week()) - 1;
-                if count <= 3 {
-                    out.push_str(SHORT_DAYS[day]);
-                } else {
-                    out.push_str(&title(day_name(date.day_of_week())));
+                let long = title(day_name(date.day_of_week()));
+                match count {
+                    1..=3 => out.push_str(SHORT_DAYS[day]),
+                    5 => out.push_str(&long[..1]),
+                    _ => out.push_str(&long),
                 }
             }
             'H' => {
@@ -1016,6 +1041,55 @@ fn match_name(letter: char, text: &str) -> Option<(usize, usize)> {
     })
 }
 
+/// What a pattern's fields resolve TO. `ofPattern` is SMART about it: a day
+/// the month does not have is pulled back to the last one it does (February
+/// 30th is the 29th in a leap year), while a field outside its range at all is
+/// refused — and refused with a REASON rather than an index.
+#[allow(clippy::too_many_arguments)]
+fn resolve_smartly(
+    year: Option<i32>,
+    month: Option<i32>,
+    day: Option<i32>,
+    hour: Option<i32>,
+    minute: Option<i32>,
+    second: Option<i32>,
+    afternoon: Option<bool>,
+) -> Result<(Option<Date>, Option<Time>), String> {
+    let date = match (year, month, day) {
+        (Some(year), Some(month), Some(day)) => {
+            if !(1..=12).contains(&month) {
+                return Err(format!(
+                    ": Invalid value for MonthOfYear (valid values 1 - 12): {month}"
+                ));
+            }
+            if !(1..=31).contains(&day) {
+                return Err(format!(
+                    ": Invalid value for DayOfMonth (valid values 1 - 28/31): {day}"
+                ));
+            }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let length = i32::from(length_of_month(year, month as u8));
+            Some(Date::of(year, month, day.min(length)).map_err(|reason| format!(": {reason}"))?)
+        }
+        _ => None,
+    };
+    let time = match hour {
+        Some(hour) => {
+            let hour = match afternoon {
+                Some(true) if hour < 12 => hour + 12,
+                Some(false) if hour == 12 => 0,
+                _ => hour,
+            };
+            Some(
+                Time::of(hour, minute.unwrap_or(0), second.unwrap_or(0), 0)
+                    .map_err(|reason| format!(": {reason}"))?,
+            )
+        }
+        None => None,
+    };
+    Ok((date, time))
+}
+
 /// Read `text` through a parsed pattern, answering whichever of a date and a
 /// time it could build. `Err` is the index the JDK blames.
 pub fn parse_pieces(pieces: &[Piece], text: &str) -> Result<(Option<Date>, Option<Time>), String> {
@@ -1059,16 +1133,40 @@ pub fn parse_pieces(pieces: &[Piece], text: &str) -> Result<(Option<Date>, Optio
             continue;
         }
         // A number: as many digits as the pattern asks for, or as many as
-        // there are when the pattern wrote one letter.
+        // there are when the pattern wrote one letter. A YEAR may carry a
+        // sign, and a signed one is read greedily — which is how a year
+        // outside four digits is written back (`+10000-01-01`).
         let from = at;
-        let wanted = if count == 1 { usize::MAX } else { count };
-        while at < bytes.len() && bytes[at].is_ascii_digit() && at - from < wanted {
+        let signed = matches!(letter, 'y' | 'u') && matches!(bytes.get(at), Some(b'+' | b'-'));
+        if signed {
             at += 1;
         }
-        if at == from {
+        let wanted = if count == 1 || signed {
+            usize::MAX
+        } else {
+            count
+        };
+        let digits_from = at;
+        while at < bytes.len() && bytes[at].is_ascii_digit() && at - digits_from < wanted {
+            at += 1;
+        }
+        if at == digits_from {
             return Err(at_index(from));
         }
-        let value: i64 = text[from..at].parse().map_err(|_| at_index(from))?;
+        // `parse` reads the sign too, and a leading `+` is one Rust does not
+        // take, so it is dropped here.
+        let digits = text[from..at].trim_start_matches('+');
+        // A four-letter year is written with a SIGN when it needs more room
+        // than that (`+10000`), so an unsigned run of more digits is not a
+        // wide year — it is a bad one, and the field is what failed.
+        if matches!(letter, 'y' | 'u')
+            && !signed
+            && count >= 4
+            && bytes.get(at).is_some_and(u8::is_ascii_digit)
+        {
+            return Err(at_index(from));
+        }
+        let value: i64 = digits.parse().map_err(|_| at_index(from))?;
         #[allow(clippy::cast_possible_truncation)]
         let value = value as i32;
         match letter {
@@ -1086,43 +1184,7 @@ pub fn parse_pieces(pieces: &[Piece], text: &str) -> Result<(Option<Date>, Optio
     if at != text.len() {
         return Err(at_index(at));
     }
-    // `ofPattern` resolves SMARTLY: a day the month does not have is pulled
-    // back to the last one it does (February 30th is the 29th in a leap
-    // year), while a field outside its range at all is refused — and refused
-    // with a REASON rather than an index.
-    let date = match (year, month, day) {
-        (Some(year), Some(month), Some(day)) => {
-            if !(1..=12).contains(&month) {
-                return Err(format!(
-                    ": Invalid value for MonthOfYear (valid values 1 - 12): {month}"
-                ));
-            }
-            if !(1..=31).contains(&day) {
-                return Err(format!(
-                    ": Invalid value for DayOfMonth (valid values 1 - 28/31): {day}"
-                ));
-            }
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let length = i32::from(length_of_month(year, month as u8));
-            Some(Date::of(year, month, day.min(length)).map_err(|reason| format!(": {reason}"))?)
-        }
-        _ => None,
-    };
-    let time = match hour {
-        Some(hour) => {
-            let hour = match afternoon {
-                Some(true) if hour < 12 => hour + 12,
-                Some(false) if hour == 12 => 0,
-                _ => hour,
-            };
-            Some(
-                Time::of(hour, minute.unwrap_or(0), second.unwrap_or(0), 0)
-                    .map_err(|reason| format!(": {reason}"))?,
-            )
-        }
-        None => None,
-    };
-    Ok((date, time))
+    resolve_smartly(year, month, day, hour, minute, second, afternoon)
 }
 
 /// How a JDK DESCRIBES a formatter — `DateTimeFormatter.toString` prints the
@@ -1133,6 +1195,9 @@ pub fn describe_pieces(pieces: &[Piece]) -> String {
     let mut out = String::new();
     for piece in pieces {
         match piece {
+            // A literal that IS a quote prints as two of them, not as a
+            // quote inside quotes.
+            Piece::Literal(text) if text == "'" => out.push_str("''"),
             Piece::Literal(text) => {
                 let _ = write!(out, "'{text}'");
             }

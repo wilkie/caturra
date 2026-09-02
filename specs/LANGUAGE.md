@@ -12662,3 +12662,40 @@ be parsed at index 4".
 Pinned by `formatting_a_date_the_way_a_pattern_asks`,
 `what_a_pattern_says_when_it_is_wrong`, and the `date-patterns` feature on the
 compatibility page.
+
+### Fuzzing the calendar
+
+The `java.time` work was checked against a JDK battery by battery, and every
+battery passed. `scripts/fuzz/time.py` asks the same question of a few hundred
+dates instead of a dozen — random ones over four centuries, plus the edges a
+calendar trips over (year zero, the far side of the epoch, every February
+29th, the four-hundred-year cycle, five-digit years) — and found **five**
+divergences on its first run. That is the argument for the tool in one line:
+hand-written cases are the cases someone thought of.
+
+**`ChronoUnit.DAYS.between` overflowed a long.** Two dates two millennia apart
+are more nanoseconds than an `i64` holds, and reducing every temporal to
+nanoseconds-on-a-line — which is right for hours and minutes — silently wrapped
+for days. Days and weeks are counted as DAYS now, from the epoch day, with the
+time of day deciding only whether the last one is whole.
+
+**`HOURS.between` on two DATES.** A `LocalDate` has no hour, and `java.time`
+says so ("Unsupported unit: Hours") rather than treating it as midnight.
+
+**A negative `Duration` signs every part of its text.**
+`Duration.between(23:59:59.999999999, NOON)` is `PT-11H-59M-59.999999999S`, not
+`PT-12H0.000000001S` — the whole seconds are counted from `seconds + 1` and the
+fraction is the complement, which is a rule you cannot guess at.
+
+**`y` is the year OF THE ERA.** It is never negative: for the year -1 a `yyyy`
+pattern writes `0002`, because that is the year 2 of the era before this one.
+`u` is the proleptic year and carries its sign. Both pad DIGITS, with the sign
+outside the width and a `+` when the number needs more room than the pattern
+gave it — and a signed year is read back the same way, which is what makes a
+five-digit year round-trip.
+
+**The narrow text forms are one letter** (`EEEEE` is `M` for Monday), and a
+literal quote inside a pattern describes as `''` rather than as a quote inside
+quotes.
+
+Pinned by `the_awkward_edges_of_a_calendar`, and the fuzzer is checked in.

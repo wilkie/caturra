@@ -811,21 +811,12 @@ fn unit_method(
     let (Some(start), Some(end)) = (read(0), read(1)) else {
         return Err(throw("java.lang.ClassCastException: not a temporal"));
     };
-    // A date, a time and a date-time all reduce to nanoseconds on a line —
-    // except MONTHS and YEARS, which are calendar units and count whole
-    // months the way `Period.between` does.
-    let instant = |value: Temporal| match value {
-        Temporal::Date(date) => Some(
-            date.to_epoch_day()
-                .saturating_mul(crate::time::NANOS_PER_DAY),
-        ),
-        Temporal::Time(time) => Some(time.nano_of_day),
-        Temporal::DateTime(when) => Some(
-            when.date
-                .to_epoch_day()
-                .saturating_mul(crate::time::NANOS_PER_DAY)
-                + when.time.nano_of_day,
-        ),
+    // A date, a time and a date-time each reduce to (day, nano-of-day) —
+    // NOT to nanoseconds on one line, which overflows two centuries out.
+    let split = |value: Temporal| match value {
+        Temporal::Date(date) => Some((date.to_epoch_day(), 0, true)),
+        Temporal::Time(time) => Some((0, time.nano_of_day, false)),
+        Temporal::DateTime(when) => Some((when.date.to_epoch_day(), when.time.nano_of_day, false)),
         _ => None,
     };
     let calendar = |value: Temporal| match value {
@@ -839,23 +830,56 @@ fn unit_method(
         let (Some(from), Some(to)) = (calendar(start), calendar(end)) else {
             return Err(throw("java.lang.ClassCastException: not a date"));
         };
-        let whole = crate::time::Period::between(from, to);
-        let months = whole.total_months();
+        let months = crate::time::Period::between(from, to).total_months();
         return Ok(Some(JValue::Long(if unit == 9 {
             months
         } else {
             months / 12
         })));
     }
-    let (Some(from), Some(to)) = (instant(start), instant(end)) else {
+    let (Some((from_day, from_nano, from_is_date)), Some((to_day, to_nano, _))) =
+        (split(start), split(end))
+    else {
         return Err(throw("java.lang.ClassCastException: not a temporal"));
     };
-    let Some(nanos) = crate::time::unit_nanos(unit) else {
+    // A DATE has no hour to count, and `java.time` says so rather than
+    // pretending it is midnight.
+    if from_is_date && unit < 7 {
+        return Err(VmError::UncaughtException(format!(
+            "java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: {}",
+            crate::time::unit_name(unit)
+        )));
+    }
+    let days = to_day - from_day;
+    let nanos = to_nano - from_nano;
+    // Days and weeks count WHOLE ones: a day that is nineteen hours long is
+    // none, whichever way round it runs.
+    if unit >= 7 {
+        let whole = if days > 0 && nanos < 0 {
+            days - 1
+        } else if days < 0 && nanos > 0 {
+            days + 1
+        } else {
+            days
+        };
+        return Ok(Some(JValue::Long(if unit == 8 {
+            whole / 7
+        } else {
+            whole
+        })));
+    }
+    let Some(per_unit) = crate::time::unit_nanos(unit) else {
         return Err(VmError::UnknownIntrinsic(String::from(
             "java/time/temporal/ChronoUnit.between",
         )));
     };
-    Ok(Some(JValue::Long((to - from) / nanos)))
+    // In i128, because a span of centuries is more nanoseconds than an i64
+    // holds — and then back, because the ANSWER fits once it is divided.
+    let total = i128::from(days) * i128::from(crate::time::NANOS_PER_DAY) + i128::from(nanos);
+    let answer = total / i128::from(per_unit);
+    Ok(Some(JValue::Long(
+        i64::try_from(answer).unwrap_or(i64::MAX),
+    )))
 }
 
 /// `LocalDate.compareTo`'s answer: the first field that differs, as a raw

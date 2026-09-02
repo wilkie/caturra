@@ -46406,3 +46406,60 @@ public class BadPatterns {
 }
 "#
 );
+
+// What the java.time fuzz found, kept as a program: the awkward edges of a
+// calendar — the year before 1 CE, the far side of the epoch, a five-digit
+// year, the narrow text forms, and the negative durations whose text signs
+// every part.
+differential_test!(
+    the_awkward_edges_of_a_calendar,
+    "Edges",
+    r#"
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
+
+public class Edges {
+    public static void main(String[] args) {
+        // `y` is the year OF THE ERA and is never negative — year -1 is the
+        // year 2 of the era before this one — while `u` is the proleptic year
+        // and carries its sign.
+        for (int year : new int[] { -12345, -1234, -12, -1, 0, 5, 10000 }) {
+            LocalDate day = LocalDate.of(year, 12, 31);
+            System.out.println(day + " " + day.getDayOfWeek() + " " + day.toEpochDay()
+                + " " + day.format(DateTimeFormatter.ofPattern("yyyy"))
+                + " " + day.format(DateTimeFormatter.ofPattern("uuuu"))
+                + " " + day.format(DateTimeFormatter.ofPattern("yy"))
+                + " " + LocalDate.ofEpochDay(day.toEpochDay()));
+        }
+        // A signed year is written back with its sign, and read again.
+        DateTimeFormatter iso = DateTimeFormatter.ofPattern("uuuu-MM-dd");
+        for (int year : new int[] { -12345, -1, 10000 }) {
+            String text = LocalDate.of(year, 1, 1).format(iso);
+            System.out.println(text + " " + LocalDate.parse(text, iso));
+        }
+
+        // Counting across centuries is more nanoseconds than a long holds, so
+        // the days have to be counted as days.
+        System.out.println(ChronoUnit.DAYS.between(LocalDate.of(-2000, 1, 1), LocalDate.of(4000, 1, 1))
+            + " " + ChronoUnit.MONTHS.between(LocalDate.of(-2000, 1, 1), LocalDate.of(4000, 1, 1))
+            + " " + ChronoUnit.YEARS.between(LocalDate.of(-2000, 1, 1), LocalDate.of(4000, 1, 1))
+            + " " + ChronoUnit.WEEKS.between(LocalDate.of(-2000, 1, 1), LocalDate.of(4000, 1, 1)));
+
+        // A negative duration signs every part of its text.
+        System.out.println(Duration.between(LocalTime.of(23, 59, 59, 999999999), LocalTime.NOON)
+            + " " + Duration.ofSeconds(-1, 1) + " " + Duration.ofSeconds(-2, 500000000)
+            + " " + Duration.ofSeconds(-60, 1) + " " + Duration.ofSeconds(-3600, 1));
+
+        // The narrow text forms are one letter.
+        LocalDate monday = LocalDate.of(2024, 1, 1);
+        System.out.println(monday.format(DateTimeFormatter.ofPattern("EEEEE"))
+            + " " + monday.format(DateTimeFormatter.ofPattern("MMMMM"))
+            + " " + monday.format(DateTimeFormatter.ofPattern("MMM d ''yy"))
+            + " " + DateTimeFormatter.ofPattern("MMM d ''yy"));
+    }
+}
+"#
+);
