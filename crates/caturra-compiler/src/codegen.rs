@@ -1822,12 +1822,17 @@ impl MethodTable {
                         let Some(parent) = self.info_by_id(*iface) else {
                             continue;
                         };
-                        if parent.methods.iter().any(|m| {
-                            m.name == method.name
-                                && !m.is_static
-                                && !m.is_abstract
-                                && m.params == params
-                        }) {
+                        // An ABSTRACT interface method counts too: JLS
+                        // §8.4.8.1 is about an instance method, and a `static`
+                        // one cannot implement either kind. Reading only the
+                        // defaults meant `public static String name()` in a
+                        // class implementing `Named` compiled — and then had
+                        // no instance method to dispatch.
+                        if parent
+                            .methods
+                            .iter()
+                            .any(|m| m.name == method.name && !m.is_static && m.params == params)
+                        {
                             let verb = if class.is_interface {
                                 "clashes with"
                             } else {
@@ -2057,7 +2062,6 @@ impl MethodTable {
                     let Some((owner, implementation)) = found else {
                         continue;
                     };
-                    let owner_name = source_type_name(self.class_name(owner));
                     // javac names an anonymous class `<anonymous Outer$1>`;
                     // `source_type_name` reads the tail after the `$` as the
                     // simple name and printed the ordinal alone ("1 cannot
@@ -2094,7 +2098,16 @@ impl MethodTable {
                     // collections their own `JType` variants, so a pattern
                     // written in terms of `JType::Object` saw only
                     // user-declared classes and refused the textbook case.
-                    let compatible_return = approximate
+                    // An approximate interface's RETURN is only approximate
+                    // where it stands for a type variable or a collection
+                    // face — `Supplier.get()` answers `Object`, `Iterable`
+                    // answers a raw `Iterator`, and checking either would
+                    // refuse ordinary Java. A PRIMITIVE return is exact:
+                    // `Comparator.compare` really does return `int`, and
+                    // there is no covariance to allow, so `String compare(...)`
+                    // is an error a JDK reports and this waved through.
+                    let exact_return = sig.ret.is_some_and(|ret| !ret.is_reference());
+                    let compatible_return = (approximate && !exact_return)
                         || implementation.ret == sig.ret
                         || matches!(sig.ret, Some(JType::TypeVar(_)))
                         || matches!(
@@ -2102,9 +2115,19 @@ impl MethodTable {
                             (Some(sub), Some(sup))
                                 if sub.is_reference() && sup.is_reference() && widens(sub, sup, self)
                         );
+                    // Both `throws` lookups ask by the BINARY name, which is
+                    // what the table is keyed by — the same mistake the access
+                    // lookup beside them made. Asked by the SOURCE name they
+                    // found nothing for every nested type, and an empty clause
+                    // reads as "declares nothing", so an implementation could
+                    // broaden `throws` freely.
                     let interface_throws = self
                         .throws_clauses
-                        .get(&(interface_name.clone(), sig.name.clone(), sig.params.len()))
+                        .get(&(
+                            self.class_name(interface_id).to_owned(),
+                            sig.name.clone(),
+                            sig.params.len(),
+                        ))
                         .cloned()
                         .unwrap_or_default();
                     let allowed: Vec<crate::thrown::Exc> = interface_throws
@@ -2113,7 +2136,11 @@ impl MethodTable {
                         .collect();
                     let declared = self
                         .throws_clauses
-                        .get(&(owner_name.clone(), sig.name.clone(), sig.params.len()))
+                        .get(&(
+                            self.class_name(owner).to_owned(),
+                            sig.name.clone(),
+                            sig.params.len(),
+                        ))
                         .cloned()
                         .unwrap_or_default();
                     let broadened = if approximate {
@@ -2286,7 +2313,9 @@ impl MethodTable {
                             format!(
                                 "{} is not abstract and does not override abstract method \
                                  {method_name}({written}) in {}",
-                                source_interface_name(&class.name),
+                                anonymous_display_name(self.class_name(info.id)).unwrap_or_else(
+                                    || source_interface_name(&class.name).to_owned()
+                                ),
                                 source_interface_name(&owner)
                             ),
                             class.span,
@@ -2679,12 +2708,27 @@ impl MethodTable {
                 break;
             }
             if let Some(info) = self.info_by_id(id) {
+                // A BUNDLED interface carries an ERASED signature —
+                // `__Comparator` really declares `compare(Object, Object)` —
+                // so there is no type variable to substitute and every
+                // reference parameter matched. Where the class wrote a single
+                // type argument, that argument IS what each erased `Object`
+                // stands for, which is the same reading the message has used
+                // all along. Without it `compare(Integer, Integer)` satisfied
+                // `Comparator<String>`.
+                let erased_stand_in = (self.class_name(id).starts_with("__")
+                    && subst.len() == 1
+                    && subst[0] != JType::Object(self.object_id))
+                .then(|| subst[0]);
                 for m in &info.methods {
                     if m.is_abstract {
                         let params = m
                             .params
                             .iter()
-                            .map(|p| Self::substitute_type_var(*p, &subst))
+                            .map(|p| match (erased_stand_in, p) {
+                                (Some(arg), JType::Object(oid)) if *oid == self.object_id => arg,
+                                _ => Self::substitute_type_var(*p, &subst),
+                            })
                             .collect();
                         required.push((m.name.clone(), params, id));
                     }
@@ -2841,7 +2885,14 @@ impl MethodTable {
     ) -> Vec<JType> {
         let parent_name = self.class_name(parent).to_owned();
         for (name, args) in &info.supertype_args {
-            if *name != parent_name && self.class_id(name) != Some(parent) {
+            // `implements Comparator<String>` names the interface the way the
+            // SOURCE spells it, and the parent is the bundled `__Comparator`
+            // it aliases — a `class_id` lookup of the source name does not
+            // reach it, so the arguments a program wrote on any of the erased
+            // interfaces were being dropped.
+            let aliases = parent_name.starts_with("__")
+                && source_interface_name(name) == source_interface_name(&parent_name);
+            if *name != parent_name && !aliases && self.class_id(name) != Some(parent) {
                 continue;
             }
             let mut resolved = Vec::with_capacity(args.len());
@@ -5633,13 +5684,20 @@ fn written_type_name(ty: &TypeRef) -> String {
 /// A class as javac NAMES it in a message: an anonymous class by its binary
 /// name inside `<anonymous ...>`, anything else by its source name.
 fn described_type_name(described: &str) -> String {
-    if let Some((_, tail)) = described.rsplit_once('$')
-        && !tail.is_empty()
-        && tail.chars().all(|c| c.is_ascii_digit())
-    {
-        return format!("<anonymous {described}>");
+    anonymous_display_name(described).unwrap_or_else(|| source_type_name(described))
+}
+
+/// `<anonymous Outer$1>` — javac names an anonymous class by its BINARY name,
+/// whole, where the source name would be the ordinal alone. A synthesized
+/// lambda class ends in a counter too and is NOT one of these: it is named
+/// "lambda expression", which is what the program wrote.
+fn anonymous_display_name(binary: &str) -> Option<String> {
+    if crate::is_lambda_class(binary) {
+        return None;
     }
-    source_type_name(described)
+    let (_, tail) = binary.rsplit_once('$')?;
+    (!tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()))
+        .then(|| format!("<anonymous {binary}>"))
 }
 
 /// The type variables the JDK declares a synthesized interface's method with.

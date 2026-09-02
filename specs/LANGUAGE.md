@@ -12213,3 +12213,66 @@ Pinned by `reject_an_empty_statement_after_a_break`, `reject_a_stray_at_sign`,
 `reject_a_package_private_compare_in_an_anonymous_class`,
 `an_anonymous_class_is_named_as_javac_names_it` and
 `the_anonymous_implementations_that_are_legal`.
+
+### Twenty ways a class can fail to implement its interface
+
+The anonymous-class hole was found by a mutator, one token at a time. Asking
+the question directly — twenty programs that each satisfy or fail an interface
+in one specific way, half of them anonymous — found five more, four of them in
+the dangerous direction.
+
+**A broader `throws` was never checked through an interface.** The rule (JLS
+§8.4.8.3) was written and then asked of the `throws` table by the SOURCE name
+while the table is keyed by the BINARY one — the same mistake the access
+lookup two lines above it made, found the same week. An empty clause reads as
+"declares nothing", so an implementation could broaden freely: `public String
+name() throws IOException` against an interface that throws nothing compiled.
+
+**A `static` method could implement an abstract one.** The check existed and
+read only the interface's DEFAULT methods, because a static hiding a default is
+where the rule is usually met. JLS §8.4.8.1 is about an INSTANCE method,
+abstract or not: `public static String name()` in a class implementing `Named`
+compiled here, and then had no instance method to dispatch.
+
+**The type argument was a comment on the message, not a rule.** Matching ran on
+the erasure — `__Comparator.compare(Object, Object)` — while only the
+diagnostic substituted `Comparator<String>`'s argument back in, a split the
+code said out loud ("This shapes the MESSAGE only"). So `compare(Integer,
+Integer)` implemented a `Comparator<String>`. The substitution is what
+`missing_abstract_method` matches on now: where a class writes exactly one type
+argument on one of the erased interfaces, that argument is what each erased
+`Object` parameter stands for. A raw `implements Comparator` still matches by
+erasure, which is what a raw type means.
+
+That one needed a second fix underneath it: the arguments were being dropped
+twice over. An anonymous class recorded no `supertype_args` at all — `new
+Comparator<String>() { ... }` fixes the argument exactly as an `implements`
+clause does — and `written_supertype_args` looked the parent up by
+`class_id("Comparator")`, which does not reach the `__Comparator` it aliases.
+
+**A PRIMITIVE return is exact.** `approximate` — the flag that keeps the return
+and `throws` rules off a signature caturra only models — was waving through
+`public String compare(String, String)`. It is right about a reference return
+(`Supplier.get()` really does answer `Object`, and `Iterable` a raw `Iterator`)
+and wrong about a primitive one: `compare` returns `int`, there is no
+covariance to allow, and a JDK reports it.
+
+**And javac's names, in the other message too.** `<anonymous Outer$1>` and the
+substituted parameters now appear in "is not abstract and does not override
+abstract method" as well as in "cannot implement" — it said `1 is not abstract
+... compare(Object,Object)` where javac says `<anonymous MissingSamAnon$1> ...
+compare(String,String)`. A synthesized lambda class ends in a counter too and
+is deliberately not one of these: it stays "lambda expression".
+
+Of the twenty, the two that still differ are both refused by both engines: a
+wrong RETURN type makes javac report the missing override first and the clash
+second, where caturra reports only the clash — and for a named class, the body's
+own `incompatible types` gets there first. Fewer errors, in the safe direction.
+
+Pinned by `reject_a_broader_throws_on_an_interface_method`,
+`reject_a_broader_throws_in_an_anonymous_class`,
+`reject_a_static_method_implementing_an_interface`,
+`an_anonymous_class_that_implements_nothing`,
+`reject_a_signature_that_ignores_the_type_argument`,
+`reject_a_wrong_return_through_an_erased_interface` and
+`the_interface_implementations_that_are_legal`.

@@ -45315,3 +45315,175 @@ public class AnonFine {
 }
 "#
 );
+
+// An override may not BROADEN checked exceptions (JLS §8.4.8.3), and the rule
+// was written for interfaces too — asking the `throws` table by the SOURCE
+// name while it is keyed by the BINARY one, so it found nothing for every
+// nested type and an empty clause reads as "declares nothing". The same
+// mistake the access lookup two lines above it made.
+differential_wording!(
+    reject_a_broader_throws_on_an_interface_method,
+    "BroaderThrows",
+    r#"
+import java.io.IOException;
+
+public class BroaderThrows {
+    interface Named { String name(); }
+
+    static class Thing implements Named {
+        public String name() throws IOException { return "thing"; }
+    }
+
+    public static void main(String[] args) throws IOException {
+        System.out.println(new Thing().name());
+    }
+}
+"#
+);
+
+differential_wording!(
+    reject_a_broader_throws_in_an_anonymous_class,
+    "BroaderThrowsAnon",
+    r#"
+import java.io.IOException;
+
+public class BroaderThrowsAnon {
+    interface Named { String name(); }
+
+    public static void main(String[] args) throws IOException {
+        Named named = new Named() {
+            public String name() throws IOException { return "anon"; }
+        };
+        System.out.println(named.name());
+    }
+}
+"#
+);
+
+// A `static` method cannot implement an instance one (JLS §8.4.8.1). The
+// check read only the interface's DEFAULT methods, so a static implementing
+// an ABSTRACT one compiled — and then had no instance method to dispatch.
+differential_wording!(
+    reject_a_static_method_implementing_an_interface,
+    "StaticImpl",
+    r#"
+public class StaticImpl {
+    interface Named { String name(); }
+
+    static class Thing implements Named {
+        public static String name() { return "thing"; }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Thing());
+    }
+}
+"#
+);
+
+// An anonymous class that implements NOTHING the interface declares. javac
+// names it `<anonymous Outer$1>` and spells the parameters as the class fixed
+// them (`compare(String,String)`, not the erasure) — both of which needed the
+// type argument the anonymous class writes, which the parser was dropping.
+differential_wording!(
+    an_anonymous_class_that_implements_nothing,
+    "MissingSamAnon",
+    r"
+import java.util.Comparator;
+
+public class MissingSamAnon {
+    public static void main(String[] args) {
+        Comparator<String> byLength = new Comparator<String>() {
+            public int size(String text) { return text.length(); }
+        };
+        System.out.println(byLength);
+    }
+}
+"
+);
+
+// The type argument is what the erased `Object` parameters STAND FOR, so a
+// `compare(Integer, Integer)` does not implement a `Comparator<String>` — it
+// used to, because matching ran on the erasure while only the message
+// substituted.
+differential_wording!(
+    reject_a_signature_that_ignores_the_type_argument,
+    "WrongParamType",
+    r"
+import java.util.Comparator;
+
+public class WrongParamType {
+    static class ByValue implements Comparator<String> {
+        public int compare(Integer left, Integer right) { return left - right; }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new ByValue());
+    }
+}
+"
+);
+
+// A PRIMITIVE return on an approximate interface is exact — `compare` really
+// does return `int`, and there is no covariance to allow. (javac reports the
+// missing override first and this second; caturra says only this, which is
+// why the pin is on the refusal rather than the wording.)
+differential_reject!(
+    reject_a_wrong_return_through_an_erased_interface,
+    "WrongReturnAnon",
+    r"
+import java.util.Comparator;
+
+public class WrongReturnAnon {
+    public static void main(String[] args) {
+        Comparator<String> byLength = new Comparator<String>() {
+            public String compare(String left, String right) { return left; }
+        };
+        System.out.println(byLength);
+    }
+}
+"
+);
+
+// …and every legal shape around them still compiles: an ABSTRACT class need
+// not implement the interface, a SUPERCLASS may supply the implementation, a
+// covariant return through an erased interface is fine, and an anonymous
+// `Iterable` answers a parameterized `Iterator`.
+differential_test!(
+    the_interface_implementations_that_are_legal,
+    "ImplFine",
+    r#"
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+import java.util.function.Supplier;
+
+public class ImplFine {
+    abstract static class Partial implements Comparator<String> { }
+
+    static class Done extends Partial {
+        public int compare(String left, String right) { return left.compareTo(right); }
+    }
+
+    static class Base {
+        public int compare(String left, String right) { return right.compareTo(left); }
+    }
+
+    static class Sub extends Base implements Comparator<String> { }
+
+    public static void main(String[] args) {
+        System.out.println(new Done().compare("a", "b") + " " + new Sub().compare("a", "b"));
+        Supplier<Object> supplier = new Supplier<Object>() {
+            public String get() { return "covariant"; }
+        };
+        Iterable<String> once = new Iterable<String>() {
+            public Iterator<String> iterator() { return List.of("a", "b").iterator(); }
+        };
+        for (String each : once) {
+            System.out.println(each);
+        }
+        System.out.println(supplier.get());
+    }
+}
+"#
+);

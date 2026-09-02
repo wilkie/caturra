@@ -1205,7 +1205,7 @@ impl Parser<'_> {
             // a synthesized subclass of the enum; the constant is an instance of
             // that subclass rather than of the enum itself.
             let body = if self.at_symbol("{") {
-                Some(self.synth_class_from_body(&name, const_span)?)
+                Some(self.synth_class_from_body(&name, Vec::new(), const_span)?)
             } else {
                 None
             };
@@ -4162,10 +4162,11 @@ impl Parser<'_> {
     fn anonymous_class(
         &mut self,
         supertype: &str,
+        type_args: Vec<TypeRef>,
         args: Vec<Expr>,
         start: SourceSpan,
     ) -> Parsed<Expr> {
-        let name = self.synth_class_from_body(supertype, start)?;
+        let name = self.synth_class_from_body(supertype, type_args, start)?;
         let span = SourceSpan {
             start: start.start,
             end: self.here().start,
@@ -4187,7 +4188,12 @@ impl Parser<'_> {
     /// both for anonymous classes (`new T(){...}`) and for enum constants that
     /// carry a body (`PLUS { int apply(...) {...} }`).
     #[allow(clippy::unnecessary_wraps)] // Parsed<_> for symmetry with the caller
-    fn synth_class_from_body(&mut self, supertype: &str, start: SourceSpan) -> Parsed<String> {
+    fn synth_class_from_body(
+        &mut self,
+        supertype: &str,
+        type_args: Vec<TypeRef>,
+        start: SourceSpan,
+    ) -> Parsed<String> {
         self.pos += 1; // '{'
         let mut methods = Vec::new();
         let mut fields = Vec::new();
@@ -4258,7 +4264,16 @@ impl Parser<'_> {
             // compiler (it knows which names are interfaces).
             superclass: Some(String::from(supertype)),
             interfaces: Vec::new(),
-            supertype_args: Vec::new(),
+            // `new Comparator<String>() { ... }` FIXES the interface's type
+            // argument exactly as `implements Comparator<String>` does, and
+            // the messages read it: without this an anonymous class was told
+            // it does not override `compare(Object,Object)`, naming a
+            // signature the program never wrote.
+            supertype_args: if type_args.is_empty() {
+                Vec::new()
+            } else {
+                vec![(String::from(supertype), type_args)]
+            },
             is_abstract: false,
             is_final: false,
             is_interface: false,
@@ -4377,7 +4392,7 @@ impl Parser<'_> {
             let args = self.arguments()?;
             // Anonymous class: `new Type(args) { members }`.
             if self.at_symbol("{") {
-                return self.anonymous_class(&class, args, start);
+                return self.anonymous_class(&class, type_args, args, start);
             }
             let span = SourceSpan {
                 start: start.start,
