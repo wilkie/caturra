@@ -559,6 +559,7 @@ fn sound_samples_round_trip_through_the_vfs() {
     let (stdout, log) = run_theater(
         r#"
         import org.code.theater.*;
+        import org.code.media.SoundLoader;
         public class SoundArt extends Scene {
             public static void main(String[] args) {
                 double[] written = {0.5, -0.5, 0.0, 1.0};
@@ -4164,6 +4165,110 @@ fn easymock_full_mock_records_and_replays() {
         "Main",
     );
     assert_eq!(out, "5\n");
+}
+
+/// The course libraries need an import exactly as `java.util` does — and the
+/// exemption only showed with several FILES: the bundle an
+/// `import org.code.neighborhood.Painter` injects is global (there is one
+/// class table), so a SECOND file could name the class with no import of its
+/// own and compile. javac scopes an import to its compilation unit, and
+/// refuses this program (checked by hand against the vendored `org.code`
+/// classes; the differential harness compiles against a plain JDK, which has
+/// no `org.code` at all).
+#[test]
+fn an_org_code_class_needs_its_import_in_every_file() {
+    let result = caturra_compiler::compile(&[
+        caturra_compiler::SourceFile {
+            path: "Main.java".into(),
+            text: "import org.code.neighborhood.Painter;\n\
+                   public class Main {\n\
+                     public static void main(String[] args) { new Helper(); }\n\
+                   }\n"
+            .into(),
+        },
+        caturra_compiler::SourceFile {
+            path: "Helper.java".into(),
+            text: "public class Helper extends Painter {\n\
+                     public Helper() { super(0, 0, \"east\", 5); }\n\
+                   }\n"
+            .into(),
+        },
+    ]);
+    assert!(
+        !result.success(),
+        "the second file has no import of its own"
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("cannot find symbol") && d.path == "Helper.java"),
+        "{:?}",
+        result.diagnostics
+    );
+
+    // …and it compiles once that file imports it too.
+    let fixed = caturra_compiler::compile(&[
+        caturra_compiler::SourceFile {
+            path: "Main.java".into(),
+            text: "import org.code.neighborhood.Painter;\n\
+                   public class Main {\n\
+                     public static void main(String[] args) { new Helper(); }\n\
+                   }\n"
+            .into(),
+        },
+        caturra_compiler::SourceFile {
+            path: "Helper.java".into(),
+            text: "import org.code.neighborhood.Painter;\n\
+                   public class Helper extends Painter {\n\
+                     public Helper() { super(0, 0, \"east\", 5); }\n\
+                   }\n"
+            .into(),
+        },
+    ]);
+    assert!(fixed.success(), "{:?}", fixed.diagnostics);
+}
+
+#[test]
+fn easymock_partial_mock_of_a_class_with_no_default_constructor() {
+    // A mock is built WITHOUT running a constructor (real EasyMock uses
+    // Objenesis), so the target need not have a no-arg one. caturra
+    // synthesized that fallback for a FULL `createMock(T.class)` and not for
+    // `partialMockBuilder(T.class)` with no `withConstructor` — which is how
+    // one of the corpus's own validators mocks a `PainterPlus` whose only
+    // constructor takes four arguments, so the level could not be graded at
+    // all ("constructor PainterPlus cannot be applied to given types").
+    let out = run_neighborhood(
+        r#"
+        import org.code.neighborhood.*;
+        import static org.easymock.EasyMock.*;
+        class Main {
+            public static void main(String[] args) {}
+        }
+        class PainterPlus extends Painter {
+            public PainterPlus(int paint) { super(0, 0, "east", paint); }
+            public void turnRight() { turnLeft(); turnLeft(); turnLeft(); }
+            public void square() { move(); turnRight(); move(); turnRight(); }
+        }
+        class Checker {
+            public static void main(String[] args) {
+                PainterPlus p = partialMockBuilder(PainterPlus.class)
+                    .addMockedMethod("move")
+                    .addMockedMethod("turnRight")
+                    .createMock();
+                p.move(); p.turnRight(); p.move(); p.turnRight();
+                replay(p);
+                p.square();
+                verify(p);
+                System.out.println("mocked");
+            }
+        }
+        "#,
+        "Checker",
+        "1,0 1,0
+1,0 1,0",
+    );
+    assert_eq!(out, "mocked\n");
 }
 
 #[test]

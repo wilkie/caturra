@@ -12427,3 +12427,79 @@ Pinned by `diff_junit_captures_standard_out` (against real JUnit, including a
 test that FAILS while capturing), `capturing_what_a_program_prints`,
 `a_captured_buffer_survives_a_collection`, `a_print_stream_is_a_value`, and the
 `capture-standard-out` feature on the compatibility page.
+
+### The validators nobody compiles
+
+The grading sweep stages a level only when it ships a `solution` — there has to
+be something to grade. **Eighty-five levels have a validator and no solution**,
+so nothing had ever compiled their validators: they are what a student's
+submission is graded against, and no tool here had looked at them.
+
+Compiled beside their `start` files and compared with javac (the JUnit jars and
+the real `org.code` classes on its classpath): 64 compile in both, 20 are
+refused by both — they name a class the student has yet to write — and **one
+was refused only by caturra**.
+
+`partialMockBuilder(PainterPlus.class).addMockedMethod(...).createMock()`: the
+target's only constructor takes four arguments, and the generated mock subclass
+declared none of its own, so its implicit `super()` named a constructor
+`PainterPlus` does not have. Real EasyMock never runs a constructor at all
+(Objenesis), and caturra already synthesized a forwarding one with default
+argument values — but only for a FULL `createMock(T.class)`. Both shapes need
+it. (The level still cannot be graded to a PASS: its `@BeforeAll` runs the
+student's unwritten `main`, and the real reference produces no verdicts for it
+either. What changed is that it compiles, which is where the student's own work
+has to start.)
+
+### A `@BeforeAll` that fails
+
+Reading that validator turned up a second thing. Its setup is the shape most of
+the neighborhood validators use:
+
+```java
+@BeforeAll public static void setup() {
+    try { ... } catch (Exception e) { fail(message); }
+}
+```
+
+JUnit does not run the tests when `@BeforeAll` fails — a listener sees no
+verdict for any of them. caturra's runner swallowed the failure and ran each
+test anyway, so what a student read was whatever each test then tripped over
+(here, an empty message) rather than the sentence the level wrote for exactly
+this case. The tests stay in the runner's PLAN, so a host still counts them:
+announced and unreported is a failure, which is what the plan lines are for.
+
+### Every level's first file
+
+The same question, asked of every level's START files — the 6675 sets a student
+opens before typing anything, which the staged sweep never sees on their own
+(it merges them with the solution). Both engines agreed on all but seven.
+
+The one caturra refuses alone is a student example that uses `Thread`, an
+honest refusal. The other six were caturra compiling what javac refuses.
+
+**Five are one program.** A `Cupcake` whose constructor calls `super(newFlavor,
+newPrice)` in a class with no `extends` clause — the student is meant to add
+it. The implicit superclass is `Object`, whose only constructor takes nothing,
+and the arguments were being DROPPED: the call compiled as `super()` and did
+not even evaluate them.
+
+**The sixth is an import.** `class PainterPlus extends Painter` with no import
+of its own compiled, because a SIBLING file imported
+`org.code.neighborhood.Painter` — and the bundle that import injects is global
+(there is one class table), so the name was in scope everywhere after it. javac
+scopes an import to its own compilation unit. The course libraries need one
+exactly as `java.util` does, and turning the rule on immediately caught two
+invalid programs of caturra's OWN: a unit test and an end-to-end test, both
+reading `SoundLoader` (which lives in `org.code.media`) under an
+`import org.code.theater.*`. The playground's shipped levels import both, which
+is why nobody noticed.
+
+After both fixes: 6675 start-file sets, and the only disagreement left is the
+`Thread` refusal. Across the 2698 STAGED cases, caturra and javac now agree on
+every one — 2657 compile, 41 are refused by both.
+
+Pinned by `easymock_partial_mock_of_a_class_with_no_default_constructor`,
+`diff_junit_a_failing_before_all_runs_no_test` (against real JUnit),
+`reject_super_arguments_with_no_superclass` and
+`an_org_code_class_needs_its_import_in_every_file`.

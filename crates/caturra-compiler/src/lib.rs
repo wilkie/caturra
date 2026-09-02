@@ -269,14 +269,36 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
         }
     }
     for class in classes {
-        // `@BeforeAll` runs once (static); tolerate failure so per-test
-        // errors are still reported individually.
-        for setup in &class.before_all {
+        // `@BeforeAll` runs once, before any test in the class — and if it
+        // FAILS, JUnit runs none of them: the tests are skipped, and a
+        // listener sees no verdict at all. caturra used to swallow the failure
+        // and run each test anyway, so a validator whose setup is
+        // `try { ... } catch (Exception e) { fail(message); }` — the shape most
+        // of the neighborhood validators use — reported whatever each test
+        // tripped over downstream instead. The tests stay in the PLAN, so a
+        // host still counts them: announced and unreported is a failure.
+        let guard = !class.before_all.is_empty();
+        // One flag per CLASS, named after its position rather than its name: a
+        // hoisted nested class is `Outer$Inner`, which is not an identifier.
+        let flag = format!(
+            "__setup_{}",
+            classes
+                .iter()
+                .position(|c| std::ptr::eq(c, class))
+                .unwrap_or(0)
+        );
+        if guard {
+            let _ = writeln!(src, "    boolean {flag} = true;");
             src.push_str("    try {\n");
-            let _ = writeln!(src, "      {}.{setup}();", class.name);
-            src.push_str("    } catch (Throwable __e) {}\n");
+            for setup in &class.before_all {
+                let _ = writeln!(src, "      {}.{setup}();", class.name);
+            }
+            let _ = writeln!(src, "    }} catch (Throwable __e) {{ {flag} = false; }}");
         }
         for test in &class.tests {
+            if guard {
+                let _ = writeln!(src, "    if ({flag}) {{");
+            }
             let name = escape_for_java(&test.display);
             // Each test gets its own BLOCK: the instance is declared outside
             // the `try` so the catch arm can run the teardown on it too, and
@@ -324,6 +346,9 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
                 "      __log.println(\"__VTEST\\tFAIL\\t{name}\\t\" + __m);"
             );
             src.push_str("    }\n    }\n");
+            if guard {
+                src.push_str("    }\n");
+            }
         }
     }
     for class in classes {

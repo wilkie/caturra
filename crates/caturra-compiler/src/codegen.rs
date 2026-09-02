@@ -20431,6 +20431,20 @@ impl BodyGen<'_> {
     fn emit_constructor_call_on_this(&mut self, class_name: &str, args: &[Expr], span: SourceSpan) {
         self.code.push_op(op::ALOAD_0, 1);
         if class_name == "java/lang/Object" {
+            // `super(a, b)` in a class with no `extends` clause: the implicit
+            // superclass is `Object`, whose only constructor takes nothing.
+            // The arguments used to be DROPPED — the call compiled as
+            // `super()` and did not even evaluate them — so a start file
+            // written to be completed with `extends Dessert` compiled without
+            // it, and five corpus levels ship exactly that.
+            if !args.is_empty() {
+                let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+                self.error(
+                    span,
+                    constructor_inapplicable("Object", &[Vec::new()], &arg_types, self.table),
+                );
+                return;
+            }
             let object_init = intern_method_ref(self.pool, "java/lang/Object", "<init>", "()V");
             self.code.push_op_u16(op::INVOKESPECIAL, object_init, 0);
             self.code.drop_stack(1);

@@ -240,10 +240,16 @@ fn emit_mock_class(out: &mut String, name: &str, spec: &MockSpec, sigs: &[(Strin
     );
     out.push_str("  __EMockEngine __e = new __EMockEngine();\n");
     out.push_str("  public __EMockEngine __engine() { return __e; }\n");
-    // A full `createMock(T.class)` is constructed with no arguments, but T may
-    // have no no-arg constructor (real EasyMock bypasses it). Forward to T's
-    // simplest constructor with default argument values.
-    if spec.full
+    // A mock is built WITHOUT running a constructor at all — real EasyMock
+    // uses Objenesis — so the target may have no no-arg constructor to
+    // inherit. Forward to its simplest one with default argument values.
+    //
+    // This is every mock that does not name a constructor, not only the full
+    // `createMock(T.class)`: a `partialMockBuilder(T.class)` with no
+    // `withConstructor` produced a subclass whose implicit `super()` named a
+    // constructor the target does not have, and one of the corpus's own
+    // validators is written exactly that way.
+    if spec.ctor_arity == 0
         && let Some(params) = simplest_ctor(sigs, &spec.target)
         && !params.is_empty()
     {

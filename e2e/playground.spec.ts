@@ -292,6 +292,9 @@ test.describe('playground', () => {
       page,
       [
         'import org.code.theater.*;',
+        // `SoundLoader` lives in org.code.media, and an import is scoped to
+        // its own file — javac refuses this program without this line.
+        'import org.code.media.SoundLoader;',
         '',
         'public class Main {',
         '    public static void main(String[] args) {',

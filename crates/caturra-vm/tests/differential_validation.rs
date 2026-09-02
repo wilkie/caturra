@@ -282,6 +282,33 @@ fn run_with_caturra(class_name: &str, source: &str) -> String {
     verdicts(&console.stdout_text())
 }
 
+/// The runner's output as it was PRINTED, without the plan reconciliation a
+/// host layers on top.
+fn raw_runner_output(class_name: &str, source: &str) -> String {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: format!("{class_name}.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        compilation.success(),
+        "caturra rejected {class_name}: {:?}",
+        compilation.diagnostics
+    );
+    let entry = compilation
+        .validation_entry
+        .clone()
+        .expect("caturra found no tests to run");
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::with_input(Vec::<String>::new());
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("class loads");
+    }
+    let _ = vm.run_main(&entry, &[]);
+    drop(vm);
+    console.stdout_text()
+}
+
 fn assert_same_verdicts(class_name: &str, source: &str) {
     let expected = run_with_reference(class_name, source);
     let actual = run_with_caturra(class_name, source);
@@ -927,3 +954,67 @@ public class CaptureTest {
 }
 "#
 );
+
+// A `@BeforeAll` that FAILS: JUnit does not run the tests at all — a listener
+// sees no verdict for any of them. caturra's runner tolerated the failure and
+// ran each test anyway, so a validator whose setup is `try { ... } catch
+// (Exception e) { fail(message); }` — the shape most of the neighborhood
+// validators use — reported whatever each test tripped over downstream.
+//
+// Compared by hand rather than with the macro: both engines agree that NO test
+// runs, and what a host then shows for a test that was announced and never
+// reported is the host's own convention (caturra's plan lines exist so it can
+// count them as failures rather than lose them).
+#[test]
+fn diff_junit_a_failing_before_all_runs_no_test() {
+    const SOURCE: &str = r#"
+import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class BeforeAllTest {
+    static String[] loaded;
+
+    @BeforeAll
+    public static void setup() {
+        try {
+            String[] empty = new String[0];
+            loaded = new String[] { empty[0] };
+        } catch (Exception e) {
+            fail("the level could not be set up");
+        }
+    }
+
+    @Test
+    @Order(1)
+    @DisplayName("first =>")
+    public void first() {
+        assertEquals(1, loaded.length);
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("second =>")
+    public void second() {
+        assertEquals("x", loaded[0]);
+    }
+}
+"#;
+    if !reference_available() {
+        return;
+    }
+    assert_eq!(
+        run_with_reference("BeforeAllTest", SOURCE),
+        "",
+        "real JUnit runs no test when @BeforeAll fails"
+    );
+    let raw = raw_runner_output("BeforeAllTest", SOURCE);
+    assert!(
+        !raw.contains("__VTEST\t"),
+        "caturra reported a verdict after a failing @BeforeAll: {raw}"
+    );
+    assert!(
+        raw.contains("__VPLAN\tfirst =>"),
+        "the roster is still announced: {raw}"
+    );
+}

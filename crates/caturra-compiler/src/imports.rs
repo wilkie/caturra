@@ -459,6 +459,30 @@ const REQUIRES_IMPORT: &[&str] = &[
     "ToIntBiFunction",
     "ToLongBiFunction",
     "ToDoubleBiFunction",
+    // The course libraries need an import exactly as `java.util` does. They
+    // were exempt, and the exemption only shows with several FILES: the
+    // bundle an `import org.code.neighborhood.Painter` injects is global (one
+    // class table), so a SECOND file could write `extends Painter` with no
+    // import of its own and compile. javac scopes an import to its own
+    // compilation unit, and one of the corpus's own levels is written that
+    // way.
+    "Painter",
+    "Scene",
+    "Theater",
+    "Instrument",
+    "Image",
+    "Pixel",
+    "Font",
+    "FontStyle",
+    "SoundLoader",
+    "NeighborhoodTestRunner",
+    "SystemOutTestRunner",
+    "NeighborhoodLog",
+    "PainterLog",
+    "PainterEvent",
+    "Position",
+    "NeighborhoodActionType",
+    "ValidationHelper",
 ];
 
 /// The nested library types the compiler models, as (enclosing simple name,
