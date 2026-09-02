@@ -17,6 +17,16 @@ from its own location.
 
 ## What each one is for
 
+**`regex.py` — the regex engine against a JDK's.**
+`crates/caturra-vm/src/regex.rs` is a hand-written backtracking engine, and its
+input space — quantifiers, classes, groups, alternation, anchors, boundaries,
+backreferences — is far larger than any battery. Patterns come from a grammar,
+inputs are drawn from the pattern's own characters so a fair share of them
+match, and every observable answer is compared: `matches`, each `find`'s
+span and groups, `split`, `replaceAll`, and the exception a bad pattern throws.
+Two divergences in 6300 probes, both about how much CAPTURE STATE survives a
+failed attempt (see the spec); everything else agreed.
+
 **`time.py` — `java.time` at scale.** The calendar is arithmetic caturra WROTE
 — the proleptic Gregorian rules, the month-end clamping, the epoch-day
 conversion both ways, the ISO text, the pattern engine — so it is exactly the

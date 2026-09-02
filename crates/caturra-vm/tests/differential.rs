@@ -46518,3 +46518,50 @@ public class MoreTime {
 }
 "#
 );
+
+// What the regex fuzz found: `java.util.regex` keeps ONE group array for a
+// whole `find()` and only ever writes to it, so a capture made during an
+// attempt that FAILED — at an earlier start position, or inside a negative
+// lookahead whose body matched — is still readable from the match that
+// eventually succeeds.
+differential_test!(
+    a_capture_outlives_the_attempt_that_made_it,
+    "Leaked",
+    r#"
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Leaked {
+    static void probe(String source, String text) {
+        Matcher m = Pattern.compile(source).matcher(text);
+        StringBuilder out = new StringBuilder(source + " ~ " + text + " |");
+        while (m.find()) {
+            out.append(" [").append(m.start()).append(",").append(m.end()).append(")");
+            out.append(m.group());
+            for (int g = 1; g <= m.groupCount(); g++) {
+                out.append("<").append(m.group(g)).append(">");
+            }
+            if (m.end() == m.start() && m.end() >= text.length()) {
+                break;
+            }
+        }
+        System.out.println(out);
+    }
+
+    public static void main(String[] args) {
+        // The group captured while trying (and failing) at an earlier
+        // position is what the later match reports.
+        probe("([abc])*+a*?1+", "bx xac 10 ");
+        // The group is captured INSIDE a negative lookahead, whose body
+        // matching is exactly what makes the branch fail.
+        probe("(?!1*.[a-c]{1,3}|0*+(b{1,3}a*?[01]*?))(?!x[01]+?|1{2,})[abc]??", "b2010");
+        probe("(?!(a)b)ab", "ab");
+        probe("(?=(a))a", "ab");
+        // …and the ordinary cases, which must not have changed.
+        probe("(a+)(b+)", "aabbb aab");
+        probe("(a)|(b)", "ab");
+        probe("(x)?a", "a");
+    }
+}
+"#
+);

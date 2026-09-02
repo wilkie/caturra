@@ -12721,3 +12721,41 @@ how the library talks to ITSELF rather than anything a program writes, plus
 configuration, which is the part deliberately not modelled.
 
 Pinned by `the_rest_of_what_a_date_is_asked`.
+
+### Fuzzing the regex engine
+
+The calendar fuzz paid for itself, so the same question was put to the other
+thing here that is a hand-written engine: `crates/caturra-vm/src/regex.rs`.
+`scripts/fuzz/regex.py` builds patterns from a grammar (quantifiers greedy,
+reluctant and possessive; classes; alternation; nested groups; anchors;
+boundaries; backreferences; lookarounds), draws inputs from the pattern's OWN
+characters so a fair share of them match, and compares every observable
+answer — `matches`, each `find`'s span and groups, the group count, `split`,
+`replaceAll`, and the exception a bad pattern throws.
+
+**6300 probes, two divergences**, and both are the same fact about
+`java.util.regex`: it keeps ONE group array for a whole `find()` and only ever
+writes to it.
+
+**A capture outlives the attempt that made it.** `Matcher.find()` clears the
+groups once and then walks the start positions itself, so a group set while
+trying (and failing) at an earlier position is still readable from the match
+that eventually succeeds: `([abc])*+a*?1+` over `"bx xac 10 "` matches `"1"` at
+7 and reports group 1 as `"c"`. caturra allocated fresh captures per start
+position, which is tidier and answers `null` — a different string on the
+screen. One set per search now.
+
+**A negative lookahead's captures survive it.** The body matching is exactly
+what makes a negative lookahead fail, and the groups it set on the way are not
+taken back. `(?!(a)b)ab` against `"ab"` has group 1 set. The comment in the
+engine said the opposite in as many words ("a negative one matched nothing, so
+it captures nothing"), which is true of the MATCH and false of the group array.
+
+**What is left is one probe in 6300, and it is honest to leave it.** A pattern
+with two nested negative lookaheads reports a group caturra does not, because
+what a failed branch leaves behind depends on WHICH branches were tried — and
+that is the engine's search order, not a rule. Replicating it would mean
+replicating `java.util.regex`'s backtracking order, which is a different
+project from replicating its semantics.
+
+Pinned by `a_capture_outlives_the_attempt_that_made_it`.

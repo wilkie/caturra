@@ -1624,14 +1624,18 @@ impl<'a> Matcher<'a> {
                     Look::Ahead => self.run(node, pos, &mut probe, &Cont::Done).is_some(),
                 };
                 restore(self);
+                // Whatever the body CAPTURED is kept, whether the lookaround
+                // was positive or negative — `java.util.regex` writes group
+                // boundaries into one array and never takes them back, so a
+                // group set inside a NEGATIVE lookahead whose body matched
+                // (and which therefore failed the branch) is still readable
+                // afterwards. Dropping it here was tidier and answered `null`
+                // where a JDK answers the text.
+                if hit {
+                    *caps = probe;
+                }
                 if hit == *negated {
                     return None;
-                }
-                // A POSITIVE lookaround keeps what its body captured (Java
-                // does); a negative one matched nothing, so it captures
-                // nothing.
-                if !*negated {
-                    *caps = probe;
                 }
                 self.resume(pos, caps, cont)
             }
@@ -1831,6 +1835,13 @@ impl<'a> Matcher<'a> {
                 if let Some(end) = self.resume(pos, caps, parent) {
                     return Some(end);
                 }
+                // Restored on the way back out. `java.util.regex` does NOT do
+                // this — it writes group boundaries into one array and never
+                // takes them back — but replicating that exactly would mean
+                // replicating its backtracking ORDER too, since what a failed
+                // branch leaves behind depends on which branches were tried.
+                // The one place the difference shows is a capture inside a
+                // lookaround, which is handled where lookarounds are.
                 caps[*index] = previous;
                 None
             }
@@ -1954,8 +1965,16 @@ impl Regex {
             bounds.anchoring,
             bounds.transparent,
         );
+        // ONE set of captures for the whole search, not one per start
+        // position. `java.util.regex` clears its group array once per
+        // `find()` and then walks the start positions itself, so a group that
+        // captured during a FAILED attempt at an earlier position is still
+        // set when a later position matches — `([abc])*+a*?1+` over
+        // "bx xac 10 " matches "1" and reports group 1 as "c". Allocating
+        // fresh captures per position is tidier and answers `null` there,
+        // which is a different string on the screen.
+        let mut caps: Captures = vec![None; self.group_count + 1];
         for start in from..=bounds.end {
-            let mut caps: Captures = vec![None; self.group_count + 1];
             if let Some(end) = matcher.run(&self.node, start, &mut caps, &Cont::Done) {
                 caps[0] = Some((start, end));
                 return Attempt {
