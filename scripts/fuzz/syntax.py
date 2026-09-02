@@ -41,6 +41,24 @@ ENGINE = os.path.join(REPO, "target/release/examples/diagnostics")
 # The single-token edits a student really makes: a token dropped, one typed
 # twice, two transposed, and a symbol mistyped as its neighbour on the keyboard
 # or in the grammar.
+# A TYPE or a name written wrongly: the mistakes that survive the parser and
+# are caught by attribution instead. The oracle is the same — javac decides —
+# and the errors are the ones a student actually collects.
+MEANING = {
+    "int": ["boolean", "String"],
+    "boolean": ["int"],
+    "String": ["int"],
+    "double": ["String"],
+    "void": ["int"],
+    "static": [""],
+    "final": [""],
+    "return": [""],
+    "new": [""],
+    "this": ["that"],
+    "true": ["1"],
+    "null": ["0"],
+}
+
 SWAPS = {
     ";": [",", ":", ""],
     ",": [";", ""],
@@ -82,7 +100,20 @@ def mutate(source, rng):
     if not body:
         return None
     text, start, end = rng.choice(body)
-    kind = rng.choice(["delete", "double", "swap", "replace"])
+    kind = rng.choice(["delete", "double", "swap", "replace", "mean", "rename"])
+    if kind == "rename":
+        # An identifier the program never declares: the commonest mistake
+        # there is, and the one whose message a student reads most often.
+        if not text.isidentifier() or text in MEANING or text in ("class", "public"):
+            kind = "delete"
+        else:
+            return source[:start] + "xyzzy" + source[end:], f"rename {text!r}"
+    if kind == "mean":
+        options = MEANING.get(text)
+        if not options:
+            kind = "delete"
+        else:
+            return source[:start] + rng.choice(options) + source[end:], f"retype {text!r}"
     if kind == "replace":
         options = SWAPS.get(text)
         if not options:

@@ -874,6 +874,17 @@ impl Parser<'_> {
     /// this lets annotated code compile.
     fn skip_annotation(&mut self) {
         self.pos += 1; // '@'
+        // An `@` must be followed by the annotation's NAME — or by
+        // `interface`, which begins an annotation DECLARATION rather than a
+        // use. A stray `@` used to be skipped in silence, so `@ @Override`
+        // compiled; javac says "<identifier> expected" just past the `@`.
+        if !matches!(self.peek(), Some(TokenKind::Identifier(_)))
+            && !self.at_keyword(Keyword::Interface)
+        {
+            let span = self.after_previous();
+            self.error_at(span, "<identifier> expected");
+            return;
+        }
         let mut name = String::new();
         while let Some(TokenKind::Identifier(segment)) = self.peek() {
             name.clone_from(segment);
@@ -2604,9 +2615,13 @@ impl Parser<'_> {
                 && !self.at_keyword(Keyword::Default)
                 && self.peek().is_some()
             {
+                let started = self.pos;
                 match self.statement() {
                     Ok(Some(stmt)) => body.push(stmt),
-                    Ok(None) => {}
+                    // A `;` is a statement here too, for the same reachability
+                    // reason as in a block: `break; ;` in a switch arm is an
+                    // unreachable statement, and dropping the `;` compiled it.
+                    Ok(None) => body.push(Stmt::Empty(self.tokens[started].span)),
                     Err(Abort) => self.recover_to_statement_boundary(),
                 }
             }

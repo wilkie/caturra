@@ -12145,3 +12145,71 @@ interface is the erasure rather than the type variable javac prints.
 Pinned by `a_leading_zero_before_a_decimal_point`,
 `reject_an_implementation_that_weakens_access` and
 `reject_a_package_private_compare_to`.
+
+### Mutating what a program MEANS
+
+The mutator only ever broke the grammar: delete a token, double it, transpose
+two, swap one for a neighbour in the punctuation. Two more kinds of edit reach
+past the parser into attribution, where most of a student's errors actually
+live — rename an identifier to one the program never declares, and retype a
+declaration (`int` for `boolean`, `String` for `int`, drop a `static`, drop a
+`return`). The oracle is unchanged: javac decides, and the comparison is the
+first error's line and the number of errors.
+
+At 250 mutations on two seeds, 466 of the 474 that broke something put the
+first error on the same line, and nothing is refused that a JDK accepts. Two
+programs compiled that a JDK refuses, and neither was about meaning at all —
+both were the grammar, from a corner the earlier seeds had not reached.
+
+**`break; ;` in a switch arm.** An empty statement is a statement for
+reachability, which is why they are kept in the tree — and the switch-arm loop
+dropped them anyway. Two parsers read a block: `block_body` kept the `;` and
+the arm loop threw it away, so the one place the rule could still be broken was
+the one place a `break` is ordinary. The arm keeps it now, and all three of
+`break; ;`, `continue; ;` and `return x; ;` report on the same lines javac
+does.
+
+**`@ @Override`.** An `@` must be followed by the annotation's name — or by
+`interface`, which begins an annotation DECLARATION rather than a use. The
+annotation skipper read the name as "identifiers while there are identifiers",
+which is satisfied by none of them, so a stray `@` was skipped in silence.
+javac says `<identifier> expected` just past the `@`, and so does this.
+
+### An anonymous class implementing a library interface
+
+Pulling on the second of those found a much bigger hole than the `@`. The
+access rule from the seed before — an interface member is implicitly public, so
+an implementation cannot be package-private — was reaching a NAMED class only
+by luck. The check asks `implementation_of` for the method matching the
+interface's signature, and a synthesized library interface is written ERASED
+(`__Comparator.compare(Object, Object)`) while the class writes the real types
+(`compare(String, String)`). Those match only through the erasure BRIDGE
+synthesized beside them — and an anonymous class has no bridge. So
+
+```java
+Comparator<String> byLength = new Comparator<String>() {
+    int compare(String left, String right) { ... }   // javac: cannot implement
+};
+```
+
+compiled here, which is the shape every sorting lesson writes, one `public`
+away from correct. The implementation is matched by name and ARITY when the
+interface is one of the erased ones, which is how the bridge dispatches it
+anyway. `approximate` — the flag that keeps the return-type and `throws` rules
+off a signature caturra only approximates — never covered the `__`-prefixed
+interfaces at all: they come from caturra's own Java source rather than from
+the table of synthesized names, so `Comparator`, `Predicate`, `Function` and
+the rest were being checked as though their erased signatures were the JDK's.
+
+Two things the message says now. javac names an anonymous class
+`<anonymous Outer$1>`, its binary name whole; `source_type_name` reads the tail
+after a `$` as the simple name, so the message said "`1` cannot implement".
+And the interface's parameters are printed as the JDK DECLARES them —
+`compare(T,T)`, not `compare(Object,Object)` — for the handful of interfaces
+caturra writes erased rather than with a type variable.
+
+Pinned by `reject_an_empty_statement_after_a_break`, `reject_a_stray_at_sign`,
+`the_annotations_a_program_writes`,
+`reject_a_package_private_compare_in_an_anonymous_class`,
+`an_anonymous_class_is_named_as_javac_names_it` and
+`the_anonymous_implementations_that_are_legal`.

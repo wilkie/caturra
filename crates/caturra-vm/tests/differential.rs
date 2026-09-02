@@ -45147,3 +45147,171 @@ public class WeakerCompare {
 }
 "
 );
+
+// A `;` on its own is a STATEMENT, in a switch arm exactly as in a block — so
+// `break; ;` is an unreachable statement. The block parser kept the empty
+// statement in the tree for this reason; the switch-arm loop dropped it, and
+// the arm was the one place the program could still say it.
+differential_wording!(
+    reject_an_empty_statement_after_a_break,
+    "DeadArm",
+    r#"
+public class DeadArm {
+    public static void main(String[] args) {
+        switch (args.length) {
+            case 0:
+                System.out.println("none");
+                break; ;
+            default:
+                System.out.println("some");
+        }
+    }
+}
+"#
+);
+
+// An `@` must be followed by the annotation's name. A stray one was skipped in
+// silence, so a doubled `@` compiled; javac reports it just past the `@`.
+differential_wording!(
+    reject_a_stray_at_sign,
+    "StrayAt",
+    r#"
+public class StrayAt {
+    @ @Override
+    public String toString() { return "stray"; }
+
+    public static void main(String[] args) {
+        System.out.println(new StrayAt());
+    }
+}
+"#
+);
+
+// The annotations a student actually writes still parse — including
+// `@interface`, whose `@` is followed by a KEYWORD rather than a name, and an
+// annotation with arguments.
+differential_test!(
+    the_annotations_a_program_writes,
+    "Annotated",
+    r#"
+import java.util.List;
+import java.util.ArrayList;
+
+public class Annotated {
+    @interface Note { String value(); }
+
+    @FunctionalInterface
+    interface Op { int apply(int x); }
+
+    @Note("greeting")
+    static class Greeter {
+        @Override
+        public String toString() { return "greeter"; }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static void main(String[] args) {
+        Op op = x -> x + 1;
+        List<String> names = new ArrayList<>();
+        names.add(new Greeter().toString());
+        System.out.println(op.apply(41) + " " + names);
+    }
+}
+"#
+);
+
+// The access rule reached a NAMED class implementing `Comparator` only
+// because the erasure bridge beside it happened to match exactly. An
+// anonymous class has no bridge, so `new Comparator<String>() { int compare
+// ... }` — the shape every sorting lesson writes — skipped the rule entirely.
+// javac names the class `<anonymous Outer$1>` and the interface's parameters
+// by their type VARIABLES, both of which this message now says.
+differential_wording!(
+    reject_a_package_private_compare_in_an_anonymous_class,
+    "AnonWeak",
+    r#"
+import java.util.Comparator;
+
+public class AnonWeak {
+    public static void main(String[] args) {
+        Comparator<String> byLength = new Comparator<String>() {
+            int compare(String left, String right) { return left.length() - right.length(); }
+        };
+        System.out.println(byLength.compare("aa", "b"));
+    }
+}
+"#
+);
+
+// The same for a PROGRAM interface, which was caught — and named the class
+// "1", the tail of a binary name the program never wrote.
+differential_wording!(
+    an_anonymous_class_is_named_as_javac_names_it,
+    "AnonNamed",
+    r#"
+public class AnonNamed {
+    interface Named { String name(); }
+
+    public static void main(String[] args) {
+        Named named = new Named() {
+            String name() { return "anon"; }
+        };
+        System.out.println(named.name());
+    }
+}
+"#
+);
+
+// …and the anonymous implementations that ARE legal still compile: a
+// covariant return, a `throws` the interface does not declare being dropped,
+// and the erased library interfaces a lesson actually uses.
+differential_test!(
+    the_anonymous_implementations_that_are_legal,
+    "AnonFine",
+    r#"
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+
+public class AnonFine {
+    interface Maker { Object make(); }
+
+    public static void main(String[] args) {
+        List<String> words = new ArrayList<>(List.of("ccc", "a", "bb"));
+        words.sort(new Comparator<String>() {
+            public int compare(String left, String right) {
+                return left.length() - right.length();
+            }
+        });
+        Maker maker = new Maker() {
+            public String make() { return "covariant"; }
+        };
+        Function<String, Integer> length = new Function<String, Integer>() {
+            public Integer apply(String text) { return text.length(); }
+        };
+        Predicate<String> isShort = new Predicate<String>() {
+            public boolean test(String text) { return text.length() < 3; }
+        };
+        Supplier<String> supplier = new Supplier<String>() {
+            public String get() { return "supplied"; }
+        };
+        StringBuilder seen = new StringBuilder();
+        Consumer<String> collect = new Consumer<String>() {
+            public void accept(String text) { seen.append(text); }
+        };
+        words.forEach(collect);
+        Runnable task = new Runnable() {
+            public void run() { System.out.println("ran"); }
+        };
+        task.run();
+        System.out.println(words);
+        System.out.println(maker.make() + " " + length.apply("four"));
+        System.out.println(isShort.test("ab") + " " + supplier.get() + " " + seen);
+    }
+}
+"#
+);

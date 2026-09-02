@@ -2025,16 +2025,45 @@ impl MethodTable {
                     // implementation against one of those would refuse ordinary
                     // Java (`Iterator<String> iterator()`, `close() throws
                     // IOException`), so only the ACCESS rule applies to them.
-                    let approximate = self.synthesized.contains(&interface_name);
+                    // The `__`-prefixed bundled interfaces (`__Comparator`,
+                    // `__Predicate`, …) are approximate in the same way and
+                    // for the same reason — they are written ERASED — but they
+                    // come from caturra's own Java source rather than from the
+                    // table above, so the set never named them.
+                    let approximate = self.synthesized.contains(&interface_name)
+                        || self.class_name(interface_id).starts_with("__");
                     // The implementing method: this class's own, or one
                     // inherited from a superclass (which must satisfy the
                     // interface just the same).
-                    let Some((owner, implementation)) =
-                        self.implementation_of(info.id, &sig.name, &sig.params)
-                    else {
+                    let found = self
+                        .implementation_of(info.id, &sig.name, &sig.params)
+                        .or_else(|| {
+                            // A SYNTHESIZED interface is written erased
+                            // (`compare(Object, Object)`) while the class
+                            // writes the real types (`compare(String,
+                            // String)`), so the exact match finds it only
+                            // where an erasure BRIDGE happens to exist beside
+                            // it. A named class gets one; an anonymous class
+                            // did not, so `new Comparator<String>() { int
+                            // compare(String, String) { ... } }` — the shape
+                            // every sorting lesson writes — skipped these
+                            // rules entirely. By name and arity is how the
+                            // bridge dispatches it anyway.
+                            if !approximate {
+                                return None;
+                            }
+                            self.implementation_by_arity(info.id, &sig.name, sig.params.len())
+                        });
+                    let Some((owner, implementation)) = found else {
                         continue;
                     };
                     let owner_name = source_type_name(self.class_name(owner));
+                    // javac names an anonymous class `<anonymous Outer$1>`;
+                    // `source_type_name` reads the tail after the `$` as the
+                    // simple name and printed the ordinal alone ("1 cannot
+                    // implement"). Only the MESSAGE uses this — the tables
+                    // beside it are keyed by the ordinary name.
+                    let owner_display = described_type_name(self.class_name(owner));
                     // An INTERFACE member is implicitly public, whether or not
                     // the word is written; only a class's own declaration can
                     // weaken access.
@@ -2143,11 +2172,17 @@ impl MethodTable {
                         declared_params.as_deref().unwrap_or(&implementation.params),
                         self,
                     );
-                    let declared = describe_types(&sig.params, self);
+                    // The interface's parameters as the JDK DECLARES them.
+                    // caturra's stand-ins are erased, so this table holds what
+                    // javac prints — `compare(T,T)`, not `compare(Object,
+                    // Object)` — for the handful of interfaces it synthesizes
+                    // with an erased signature rather than a type variable.
+                    let declared = erased_type_variables(&interface_name, &sig.name)
+                        .map_or_else(|| describe_types(&sig.params, self), str::to_owned);
                     diagnostics.push(Diagnostic::error(
                         path,
                         format!(
-                            "{}({written}) in {owner_name} cannot implement \
+                            "{}({written}) in {owner_display} cannot implement \
                              {}({declared}) in {interface_name}{detail}",
                             sig.name, sig.name,
                         ),
@@ -3018,6 +3053,35 @@ impl MethodTable {
                     && !m.is_abstract
                     && self.params_match_override(class, id, &m.params, params)
             }) {
+                return Some((id, sig.clone()));
+            }
+            current = info.superclass;
+        }
+        None
+    }
+
+    /// The class that supplies a `name` of this ARITY — the match an erased
+    /// library interface gets, where the parameter types on the two sides are
+    /// the same only after erasure.
+    fn implementation_by_arity(
+        &self,
+        class: ClassId,
+        name: &str,
+        arity: usize,
+    ) -> Option<(ClassId, MethodSig)> {
+        let mut current = Some(class);
+        let mut steps = 0usize;
+        while let Some(id) = current {
+            steps += 1;
+            if steps > self.class_names.len() + 1 {
+                return None;
+            }
+            let info = self.info_by_id(id)?;
+            if let Some(sig) = info
+                .methods
+                .iter()
+                .find(|m| m.name == name && !m.is_abstract && m.params.len() == arity)
+            {
                 return Some((id, sig.clone()));
             }
             current = info.superclass;
@@ -5566,6 +5630,34 @@ fn written_type_name(ty: &TypeRef) -> String {
 /// name (`Outer$Inner`) and a bundled erased interface (`__Comparator`) are
 /// both implementation detail, and both can sit inside a type argument
 /// (`List<Outer$Inner>`) as easily as at the top.
+/// A class as javac NAMES it in a message: an anonymous class by its binary
+/// name inside `<anonymous ...>`, anything else by its source name.
+fn described_type_name(described: &str) -> String {
+    if let Some((_, tail)) = described.rsplit_once('$')
+        && !tail.is_empty()
+        && tail.chars().all(|c| c.is_ascii_digit())
+    {
+        return format!("<anonymous {described}>");
+    }
+    source_type_name(described)
+}
+
+/// The type variables the JDK declares a synthesized interface's method with.
+/// caturra writes those interfaces erased, so the parameter list a message
+/// would otherwise print is `Object` where javac prints `T`.
+fn erased_type_variables(interface: &str, method: &str) -> Option<&'static str> {
+    Some(match (interface, method) {
+        ("Comparator", "compare") => "T,T",
+        ("Function" | "UnaryOperator", "apply")
+        | ("Predicate", "test")
+        | ("Consumer", "accept") => "T",
+        ("BiFunction" | "BinaryOperator", "apply")
+        | ("BiPredicate", "test")
+        | ("BiConsumer", "accept") => "T,U",
+        _ => return None,
+    })
+}
+
 fn source_type_name(described: &str) -> String {
     // A LOCAL class is hoisted under `{name}$Local{n}`, which is the reverse of
     // a nested class's `Outer$Inner`: the SOURCE name is the part BEFORE the
