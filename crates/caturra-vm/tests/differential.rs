@@ -46102,3 +46102,207 @@ public class BadDates {
 }
 "#
 );
+
+// `LocalTime` and `LocalDateTime`: the same arithmetic with a time of day in
+// it. A time WRAPS at midnight and remembers nothing; a date-time CARRIES the
+// whole days into its date. And `toString` leaves out what is zero — `10:15`,
+// `10:15:30`, `10:15:30.500`, `01:02:03.000000004` — in whole groups of three
+// digits, which is a rule of its own.
+differential_test!(
+    the_time_of_day_and_the_date_time,
+    "Times",
+    r#"
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+
+public class Times {
+    public static void main(String[] args) {
+        LocalTime time = LocalTime.of(10, 15);
+        System.out.println(time + " " + LocalTime.of(10, 15, 30) + " "
+            + LocalTime.of(10, 15, 30, 500000000) + " " + LocalTime.of(0, 0));
+        System.out.println(LocalTime.of(1, 2, 3, 4) + " " + LocalTime.of(23, 59, 59, 999999999));
+        System.out.println(time.getHour() + " " + time.getMinute() + " " + time.getSecond()
+            + " " + time.getNano() + " " + time.toSecondOfDay() + " " + time.toNanoOfDay());
+        System.out.println(time.plusHours(2) + " " + time.plusMinutes(50) + " "
+            + time.minusHours(11) + " " + time.plusSeconds(45));
+        // It wraps rather than carrying.
+        System.out.println(time.plusHours(20) + " " + time.minusMinutes(20 * 60));
+        System.out.println(time.withHour(5) + " " + time.withMinute(0) + " "
+            + time.withSecond(9) + " " + time.withNano(1));
+        System.out.println(LocalTime.MIDNIGHT + " " + LocalTime.NOON + " " + LocalTime.MIN
+            + " " + LocalTime.MAX + " " + LocalTime.ofSecondOfDay(3600));
+        System.out.println(LocalTime.parse("08:30") + " " + LocalTime.parse("08:30:15")
+            + " " + LocalTime.parse("08:30:15.250"));
+        System.out.println(time.isBefore(LocalTime.NOON) + " " + time.isAfter(LocalTime.MIDNIGHT)
+            + " " + time.compareTo(LocalTime.NOON) + " " + time.equals(LocalTime.of(10, 15)));
+
+        LocalDateTime when = LocalDateTime.of(2024, 1, 15, 10, 15);
+        System.out.println(when + " " + LocalDateTime.of(2024, 1, 15, 10, 15, 30)
+            + " " + LocalDateTime.of(2024, 1, 15, 0, 0));
+        System.out.println(when.toLocalDate() + " " + when.toLocalTime() + " " + when.getYear()
+            + " " + when.getHour() + " " + when.getDayOfWeek() + " " + when.getMonth());
+        // The time carries into the date.
+        System.out.println(when.plusDays(20) + " " + when.plusHours(20) + " "
+            + when.minusMinutes(30) + " " + when.plusMonths(1) + " " + when.minusHours(11));
+        System.out.println(when.isBefore(when.plusDays(1)) + " " + when.compareTo(when)
+            + " " + LocalDateTime.parse("2024-01-15T10:15:30"));
+        System.out.println(LocalDateTime.of(LocalDate.of(2024, 3, 1), LocalTime.of(6, 0)));
+    }
+}
+"#
+);
+
+// `Duration` is an amount of TIME and `Period` is a number of years, months
+// and days — `P1M` is one month, not thirty days, and the two print in their
+// own ISO-8601 shapes. `PT48H` has no days in it; `PT-1M-30S` signs each part;
+// `PT1.5S` puts the fraction on the seconds.
+differential_test!(
+    how_long_something_took_and_how_far_apart_two_dates_are,
+    "Spans",
+    r#"
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.Period;
+import java.time.temporal.ChronoUnit;
+
+public class Spans {
+    public static void main(String[] args) {
+        Duration span = Duration.ofHours(2);
+        System.out.println(span + " " + Duration.ofMinutes(90) + " " + Duration.ofSeconds(45)
+            + " " + Duration.ZERO + " " + Duration.ofDays(2));
+        System.out.println(Duration.ofSeconds(3661) + " " + Duration.ofMillis(1500)
+            + " " + Duration.ofSeconds(-90) + " " + Duration.ofSeconds(0, 1));
+        System.out.println(span.toHours() + " " + span.toMinutes() + " " + span.getSeconds()
+            + " " + span.toMillis() + " " + span.toDays() + " " + span.toNanos());
+        System.out.println(span.plusMinutes(30) + " " + span.minusHours(3) + " "
+            + span.isNegative() + " " + span.isZero() + " " + span.negated());
+        System.out.println(Duration.between(LocalTime.of(9, 0), LocalTime.of(17, 30)).toMinutes());
+        System.out.println(Duration.between(LocalDateTime.of(2024, 1, 1, 9, 0),
+            LocalDateTime.of(2024, 1, 3, 10, 30)));
+        System.out.println(span.compareTo(Duration.ofHours(3)) + " "
+            + span.equals(Duration.ofMinutes(120)));
+
+        Period gap = Period.between(LocalDate.of(2024, 1, 15), LocalDate.of(2025, 3, 20));
+        System.out.println(gap + " " + gap.getYears() + " " + gap.getMonths() + " "
+            + gap.getDays() + " " + gap.toTotalMonths());
+        System.out.println(Period.ofDays(10) + " " + Period.of(1, 2, 3) + " " + Period.ZERO
+            + " " + Period.ofMonths(-3) + " " + Period.ofYears(2) + " " + Period.ofWeeks(2));
+        System.out.println(Period.between(LocalDate.of(2024, 3, 31), LocalDate.of(2024, 2, 1)));
+
+        System.out.println(ChronoUnit.DAYS.between(LocalDate.of(2024, 1, 1), LocalDate.of(2024, 3, 1))
+            + " " + ChronoUnit.WEEKS.between(LocalDate.of(2024, 1, 1), LocalDate.of(2024, 3, 1))
+            + " " + ChronoUnit.DAYS.between(LocalDate.of(2024, 3, 1), LocalDate.of(2024, 1, 1)));
+        System.out.println(ChronoUnit.MONTHS.between(LocalDate.of(2024, 1, 15), LocalDate.of(2025, 3, 20))
+            + " " + ChronoUnit.YEARS.between(LocalDate.of(2024, 1, 15), LocalDate.of(2025, 3, 20)));
+        System.out.println(ChronoUnit.HOURS.between(LocalDateTime.of(2024, 1, 1, 9, 0),
+                LocalDateTime.of(2024, 1, 3, 10, 30))
+            + " " + ChronoUnit.MINUTES.between(LocalTime.of(9, 0), LocalTime.of(17, 30)));
+        System.out.println(ChronoUnit.DAYS + " " + ChronoUnit.MONTHS);
+    }
+}
+"#
+);
+
+// Looping over an enum's constants is how a program uses one, so `values()`
+// has to answer a real array.
+differential_test!(
+    looping_over_the_days_and_the_months,
+    "EveryDay",
+    r#"
+import java.time.DayOfWeek;
+import java.time.Month;
+
+public class EveryDay {
+    public static void main(String[] args) {
+        for (DayOfWeek day : DayOfWeek.values()) {
+            System.out.print(day.getValue() + "=" + day + " ");
+        }
+        System.out.println();
+        System.out.println(DayOfWeek.values().length + " " + Month.values().length + " "
+            + Month.values()[0] + " " + DayOfWeek.valueOf("FRIDAY"));
+        int weekend = 0;
+        for (DayOfWeek day : DayOfWeek.values()) {
+            if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) {
+                weekend++;
+            }
+        }
+        System.out.println("weekend days: " + weekend);
+        for (Month month : Month.values()) {
+            System.out.print(month.length(false) + " ");
+        }
+        System.out.println();
+    }
+}
+"#
+);
+
+// Times and date-times are values too: they sort, they hash, and they print
+// the same inside a collection as they do alone.
+differential_test!(
+    times_are_values,
+    "TimeValues",
+    r#"
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
+public class TimeValues {
+    public static void main(String[] args) {
+        List<LocalTime> times = new ArrayList<>(
+            List.of(LocalTime.of(18, 0), LocalTime.of(6, 30), LocalTime.NOON));
+        Collections.sort(times);
+        System.out.println(times + " " + Collections.max(times) + " "
+            + times.contains(LocalTime.of(6, 30)) + " " + times.indexOf(LocalTime.NOON));
+
+        Set<LocalDateTime> seen = new HashSet<>();
+        seen.add(LocalDateTime.of(2024, 1, 1, 9, 0));
+        seen.add(LocalDateTime.of(2024, 1, 1, 9, 0));
+        System.out.println(seen.size() + " " + seen.contains(LocalDateTime.of(2024, 1, 1, 9, 0)));
+
+        Map<LocalDateTime, String> diary = new TreeMap<>();
+        diary.put(LocalDateTime.of(2024, 3, 1, 14, 30), "dentist");
+        diary.put(LocalDateTime.of(2024, 2, 1, 8, 0), "gym");
+        System.out.println(diary);
+    }
+}
+"#
+);
+
+// The bridges between the three: a date and a time make a date-time, either
+// way round, and `withX` on a date-time reaches whichever half owns the field.
+// (`ChronoUnit`'s `ordinal()` is the JDK's own, so the units it does not model
+// — MICROS, HALF_DAYS — still hold their places.)
+differential_test!(
+    building_a_date_time_from_its_halves,
+    "Bridges",
+    r#"
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
+
+public class Bridges {
+    public static void main(String[] args) {
+        LocalDate day = LocalDate.of(2024, 5, 15);
+        System.out.println(day.atStartOfDay() + " " + day.atTime(9, 30) + " "
+            + day.atTime(9, 30, 15) + " " + LocalTime.of(9, 30).atDate(day));
+        LocalDateTime when = LocalDateTime.of(2024, 5, 15, 9, 30);
+        System.out.println(when.withHour(6) + " " + when.withMinute(0) + " "
+            + when.withYear(2030) + " " + when.withMonth(12) + " "
+            + when.withDayOfMonth(1) + " " + when.withSecond(5));
+        System.out.println(ChronoUnit.DAYS.name() + " " + ChronoUnit.DAYS + " "
+            + ChronoUnit.DAYS.ordinal() + " " + ChronoUnit.MONTHS.ordinal() + " "
+            + ChronoUnit.NANOS.ordinal());
+    }
+}
+"#
+);

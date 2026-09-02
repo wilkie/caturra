@@ -1103,6 +1103,16 @@
     "expected": "2024-05-15 is a WEDNESDAY\nday 136 of 366\nreview starts 2024-05-01 (MAY)\ndays between: 14\n2024-02-29\n2025-02-28\ntrue 29\ntrue\n"
   },
   {
+    "id": "times-and-spans",
+    "category": "Library",
+    "title": "Times, and how far apart two moments are",
+    "summary": "`LocalTime`, `LocalDateTime`, `Duration` and `Period` \u2014 a time wraps at midnight, a date-time carries into its date, and `ChronoUnit.DAYS.between(...)` counts what lies between.",
+    "main": "Schedule",
+    "source": "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalDateTime;\nimport java.time.LocalTime;\nimport java.time.Period;\nimport java.time.temporal.ChronoUnit;\n\npublic class Schedule {\n    public static void main(String[] args) {\n        LocalTime start = LocalTime.of(9, 0);\n        LocalTime end = start.plusHours(8).plusMinutes(30);\n        System.out.println(start + \" to \" + end);\n        System.out.println(\"that is \" + Duration.between(start, end).toMinutes() + \" minutes\");\n        System.out.println(\"or \" + ChronoUnit.MINUTES.between(start, end) + \" the other way\");\n\n        // A time WRAPS at midnight; a date-time carries into its date.\n        System.out.println(LocalTime.of(23, 0).plusHours(2));\n        System.out.println(LocalDateTime.of(2024, 5, 15, 23, 0).plusHours(2));\n\n        LocalDate exam = LocalDate.of(2024, 5, 15);\n        LocalDate results = LocalDate.of(2024, 7, 8);\n        System.out.println(Period.between(exam, results) + \" = \"\n            + ChronoUnit.DAYS.between(exam, results) + \" days\");\n        System.out.println(exam.atTime(8, 45) + \" \" + exam.atStartOfDay());\n    }\n}\n",
+    "status": "supported",
+    "expected": "09:00 to 17:30\nthat is 510 minutes\nor 510 the other way\n01:00\n2024-05-16T01:00\nP1M23D = 54 days\n2024-05-15T08:45 2024-05-15T00:00\n"
+  },
+  {
     "id": "g-generic-supertype",
     "category": "Declarations",
     "title": "Parameterized supertype (with bridge methods)",

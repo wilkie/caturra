@@ -8,6 +8,8 @@
 //! already has the IANA database and vendoring a second copy would only add a
 //! version to disagree with.
 
+use std::fmt::Write as _;
+
 /// A `java.time.LocalDate`: a date on the proleptic Gregorian calendar, with
 /// no time and no zone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -405,4 +407,375 @@ mod tests {
             day += 1;
         }
     }
+}
+
+/// A `java.time.LocalTime`: a time of day with no date and no zone, held the
+/// way `java.time` holds it — as nanoseconds since midnight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Time {
+    pub nano_of_day: i64,
+}
+
+pub const NANOS_PER_SECOND: i64 = 1_000_000_000;
+pub const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
+pub const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
+pub const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
+
+impl Time {
+    /// `LocalTime.of(...)`, with `java.time`'s message for each field.
+    pub fn of(hour: i32, minute: i32, second: i32, nano: i32) -> Result<Self, String> {
+        for (value, name, high) in [
+            (hour, "HourOfDay", 23),
+            (minute, "MinuteOfHour", 59),
+            (second, "SecondOfMinute", 59),
+            (nano, "NanoOfSecond", 999_999_999),
+        ] {
+            if !(0..=high).contains(&value) {
+                return Err(format!(
+                    "Invalid value for {name} (valid values 0 - {high}): {value}"
+                ));
+            }
+        }
+        Ok(Self {
+            nano_of_day: i64::from(hour) * NANOS_PER_HOUR
+                + i64::from(minute) * NANOS_PER_MINUTE
+                + i64::from(second) * NANOS_PER_SECOND
+                + i64::from(nano),
+        })
+    }
+
+    /// Wrapping to the day, which is what `plusHours` and friends do.
+    #[must_use]
+    pub fn plus_nanos(self, nanos: i64) -> Self {
+        Self {
+            nano_of_day: (self.nano_of_day + nanos.rem_euclid(NANOS_PER_DAY))
+                .rem_euclid(NANOS_PER_DAY),
+        }
+    }
+
+    /// How many whole days `plus_nanos` would carry — what a `LocalDateTime`
+    /// needs when its time crosses midnight.
+    #[must_use]
+    pub fn overflow_days(self, nanos: i64) -> i64 {
+        (self.nano_of_day + nanos).div_euclid(NANOS_PER_DAY)
+    }
+
+    #[must_use]
+    pub fn hour(self) -> i32 {
+        #[allow(clippy::cast_possible_truncation)]
+        let hour = (self.nano_of_day / NANOS_PER_HOUR) as i32;
+        hour
+    }
+
+    #[must_use]
+    pub fn minute(self) -> i32 {
+        #[allow(clippy::cast_possible_truncation)]
+        let minute = (self.nano_of_day / NANOS_PER_MINUTE % 60) as i32;
+        minute
+    }
+
+    #[must_use]
+    pub fn second(self) -> i32 {
+        #[allow(clippy::cast_possible_truncation)]
+        let second = (self.nano_of_day / NANOS_PER_SECOND % 60) as i32;
+        second
+    }
+
+    #[must_use]
+    pub fn nano(self) -> i32 {
+        #[allow(clippy::cast_possible_truncation)]
+        let nano = (self.nano_of_day % NANOS_PER_SECOND) as i32;
+        nano
+    }
+}
+
+impl std::fmt::Display for Time {
+    /// `java.time`'s own rule: `HH:mm`, with `:ss` only when there is a second
+    /// or a fraction to show, and the fraction in whole groups of three —
+    /// `10:15`, `10:15:30`, `10:15:30.500`, `01:02:03.000000004`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02}:{:02}", self.hour(), self.minute())?;
+        let (second, nano) = (self.second(), self.nano());
+        if second == 0 && nano == 0 {
+            return Ok(());
+        }
+        write!(f, ":{second:02}")?;
+        if nano == 0 {
+            return Ok(());
+        }
+        if nano % 1_000_000 == 0 {
+            write!(f, ".{:03}", nano / 1_000_000)
+        } else if nano % 1000 == 0 {
+            write!(f, ".{:06}", nano / 1000)
+        } else {
+            write!(f, ".{nano:09}")
+        }
+    }
+}
+
+/// `LocalTime.parse` — the ISO forms `HH:mm`, `HH:mm:ss` and `HH:mm:ss.fff`.
+pub fn parse_time(text: &str) -> Result<Time, String> {
+    let invalid = |index: usize| format!("Text '{text}' could not be parsed at index {index}");
+    let bytes = text.as_bytes();
+    let two = |at: usize| -> Result<i32, String> {
+        if at + 2 > bytes.len() || !bytes[at].is_ascii_digit() || !bytes[at + 1].is_ascii_digit() {
+            return Err(invalid(at));
+        }
+        text[at..at + 2].parse().map_err(|_| invalid(at))
+    };
+    let hour = two(0)?;
+    if bytes.get(2) != Some(&b':') {
+        return Err(invalid(2));
+    }
+    let minute = two(3)?;
+    let (mut second, mut nano) = (0, 0);
+    let mut at = 5;
+    if bytes.get(at) == Some(&b':') {
+        second = two(at + 1)?;
+        at += 3;
+        if bytes.get(at) == Some(&b'.') {
+            let from = at + 1;
+            let mut end = from;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end == from || end - from > 9 {
+                return Err(invalid(from));
+            }
+            let digits = &text[from..end];
+            let scaled: i64 = digits.parse().map_err(|_| invalid(from))?;
+            #[allow(clippy::cast_possible_truncation)]
+            let scaled = (scaled * 10_i64.pow(9 - u32::try_from(digits.len()).unwrap_or(9))) as i32;
+            nano = scaled;
+            at = end;
+        }
+    }
+    if at != bytes.len() {
+        return Err(invalid(at));
+    }
+    Time::of(hour, minute, second, nano)
+}
+
+/// A `java.time.LocalDateTime`: a date and a time, with no zone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DateTime {
+    pub date: Date,
+    pub time: Time,
+}
+
+impl DateTime {
+    /// Add nanoseconds, carrying whole days into the DATE — which is the only
+    /// thing a `LocalDateTime` does that its two halves do not.
+    #[must_use]
+    pub fn plus_nanos(self, nanos: i64) -> Self {
+        Self {
+            date: self.date.plus_days(self.time.overflow_days(nanos)),
+            time: self.time.plus_nanos(nanos),
+        }
+    }
+}
+
+impl std::fmt::Display for DateTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}T{}", self.date, self.time)
+    }
+}
+
+/// `LocalDateTime.parse` — the ISO form, a date and a time joined by `T`.
+pub fn parse_date_time(text: &str) -> Result<DateTime, String> {
+    let invalid = |index: usize| format!("Text '{text}' could not be parsed at index {index}");
+    let Some(split) = text.find('T') else {
+        return Err(invalid(text.len().min(10)));
+    };
+    let date = parse_date(&text[..split]).map_err(|_| invalid(0))?;
+    let time = parse_time(&text[split + 1..]).map_err(|_| invalid(split + 1))?;
+    Ok(DateTime { date, time })
+}
+
+/// A `java.time.Duration`: an amount of time, held as `java.time` holds it —
+/// seconds plus a nanosecond part that is never negative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Duration {
+    pub seconds: i64,
+    pub nanos: i32,
+}
+
+impl Duration {
+    #[must_use]
+    pub fn of_nanos(total: i64) -> Self {
+        let seconds = total.div_euclid(NANOS_PER_SECOND);
+        #[allow(clippy::cast_possible_truncation)]
+        let nanos = total.rem_euclid(NANOS_PER_SECOND) as i32;
+        Self { seconds, nanos }
+    }
+
+    #[must_use]
+    pub fn total_nanos(self) -> i64 {
+        self.seconds
+            .saturating_mul(NANOS_PER_SECOND)
+            .saturating_add(i64::from(self.nanos))
+    }
+
+    #[must_use]
+    pub fn is_zero(self) -> bool {
+        self.seconds == 0 && self.nanos == 0
+    }
+
+    #[must_use]
+    pub fn is_negative(self) -> bool {
+        self.seconds < 0
+    }
+}
+
+impl std::fmt::Display for Duration {
+    /// ISO-8601, exactly as `java.time` writes it: `PT2H`, `PT1H30M`,
+    /// `PT48H` (a duration has no days in its text), `PT1.5S`, `PT-1M-30S`,
+    /// and `PT0S` for nothing at all.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_zero() {
+            return write!(f, "PT0S");
+        }
+        let hours = self.seconds / 3600;
+        let minutes = (self.seconds % 3600) / 60;
+        let secs = self.seconds % 60;
+        let mut out = String::from("PT");
+        if hours != 0 {
+            let _ = write!(out, "{hours}H");
+        }
+        if minutes != 0 {
+            let _ = write!(out, "{minutes}M");
+        }
+        if secs == 0 && self.nanos == 0 && out.len() > 2 {
+            return write!(f, "{out}");
+        }
+        // A negative second with a fraction reads as one number, not two:
+        // -0.5s is `PT-0.5S`, so the sign lives on the whole part.
+        if secs < 0 && self.nanos > 0 {
+            if secs == -1 {
+                out.push_str("-0");
+            } else {
+                let _ = write!(out, "{}", secs + 1);
+            }
+        } else {
+            let _ = write!(out, "{secs}");
+        }
+        if self.nanos > 0 {
+            let at = out.len();
+            let fraction = if secs < 0 {
+                2 * NANOS_PER_SECOND - i64::from(self.nanos)
+            } else {
+                i64::from(self.nanos) + NANOS_PER_SECOND
+            };
+            let _ = write!(out, "{fraction}");
+            // The leading 1 (or 2) was there to keep the zeros; it becomes the
+            // decimal point, and trailing zeros go.
+            out.replace_range(at..=at, ".");
+            while out.ends_with('0') {
+                out.pop();
+            }
+        }
+        out.push('S');
+        write!(f, "{out}")
+    }
+}
+
+/// A `java.time.Period`: a number of years, months and days, each kept as
+/// written — `P1Y2M5D` is not 425 days, and does not become them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Period {
+    pub years: i32,
+    pub months: i32,
+    pub days: i32,
+}
+
+impl Period {
+    /// `Period.between(start, end)` — `java.time`'s own algorithm, which
+    /// counts whole months first and takes the days from what is left, so
+    /// `2024-01-15` to `2025-03-20` is `P1Y2M5D` and not a day count.
+    #[must_use]
+    pub fn between(start: Date, end: Date) -> Self {
+        let proleptic = |date: Date| i64::from(date.year) * 12 + i64::from(date.month) - 1;
+        let mut total_months = proleptic(end) - proleptic(start);
+        let mut days = i32::from(end.day) - i32::from(start.day);
+        if total_months > 0 && days < 0 {
+            total_months -= 1;
+            let moved = start.plus_months(total_months);
+            #[allow(clippy::cast_possible_truncation)]
+            let difference = (end.to_epoch_day() - moved.to_epoch_day()) as i32;
+            days = difference;
+        } else if total_months < 0 && days > 0 {
+            total_months += 1;
+            days -= i32::from(length_of_month(end.year, end.month));
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        Self {
+            years: (total_months / 12) as i32,
+            months: (total_months % 12) as i32,
+            days,
+        }
+    }
+
+    #[must_use]
+    pub fn is_zero(self) -> bool {
+        self.years == 0 && self.months == 0 && self.days == 0
+    }
+
+    #[must_use]
+    pub fn total_months(self) -> i64 {
+        i64::from(self.years) * 12 + i64::from(self.months)
+    }
+}
+
+impl std::fmt::Display for Period {
+    /// `P1Y2M3D`, with each part left out when it is zero — and `P0D` when
+    /// they all are.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_zero() {
+            return write!(f, "P0D");
+        }
+        write!(f, "P")?;
+        if self.years != 0 {
+            write!(f, "{}Y", self.years)?;
+        }
+        if self.months != 0 {
+            write!(f, "{}M", self.months)?;
+        }
+        if self.days != 0 {
+            write!(f, "{}D", self.days)?;
+        }
+        Ok(())
+    }
+}
+
+/// The `ChronoUnit` constants caturra models, stored under the JDK's OWN
+/// ordinal so that `ordinal()` answers what a JDK answers — the two the
+/// calendar cannot count in nanoseconds (months and years) are at the end,
+/// where `java.time` puts them. Its `toString` is TITLE case ("Days"), which
+/// is not its `name()` ("DAYS"): a unit carries a description of its own.
+const UNIT_NAMES: [&str; 11] = [
+    "Nanos", "Micros", "Millis", "Seconds", "Minutes", "Hours", "HalfDays", "Days", "Weeks",
+    "Months", "Years",
+];
+
+#[must_use]
+pub fn unit_name(unit: u8) -> &'static str {
+    UNIT_NAMES[usize::from(unit).min(UNIT_NAMES.len() - 1)]
+}
+
+/// How many nanoseconds one unit is — `None` for the units a CALENDAR
+/// defines (a month is not a fixed number of anything).
+#[must_use]
+pub fn unit_nanos(unit: u8) -> Option<i64> {
+    Some(match unit {
+        0 => 1,
+        1 => 1_000,
+        2 => 1_000_000,
+        3 => NANOS_PER_SECOND,
+        4 => NANOS_PER_MINUTE,
+        5 => NANOS_PER_HOUR,
+        6 => 12 * NANOS_PER_HOUR,
+        7 => NANOS_PER_DAY,
+        8 => 7 * NANOS_PER_DAY,
+        _ => return None,
+    })
 }

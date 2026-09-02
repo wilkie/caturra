@@ -16165,6 +16165,11 @@ impl<'run> Interpreter<'run> {
                 // dates sorts and a `TreeSet` of them is a set.
                 Some(HeapObject::Temporal(value)) => Some(match value {
                     crate::value::Temporal::Date(_) => "java.time.LocalDate",
+                    crate::value::Temporal::Time(_) => "java.time.LocalTime",
+                    crate::value::Temporal::DateTime(_) => "java.time.LocalDateTime",
+                    crate::value::Temporal::Duration(_) => "java.time.Duration",
+                    crate::value::Temporal::Period(_) => "java.time.Period",
+                    crate::value::Temporal::Unit(_) => "java.time.temporal.ChronoUnit",
                     crate::value::Temporal::DayOfWeek(_) => "java.time.DayOfWeek",
                     crate::value::Temporal::Month(_) => "java.time.Month",
                 }),

@@ -49,5 +49,10 @@
   "java.io.ByteArrayOutputStream": "new java.io.ByteArrayOutputStream()",
   "java.time.LocalDate": "java.time.LocalDate.of(2024, 1, 15)",
   "java.time.DayOfWeek": "java.time.DayOfWeek.MONDAY",
-  "java.time.Month": "java.time.Month.JANUARY"
+  "java.time.Month": "java.time.Month.JANUARY",
+  "java.time.LocalTime": "java.time.LocalTime.of(10, 15)",
+  "java.time.LocalDateTime": "java.time.LocalDateTime.of(2024, 1, 15, 10, 15)",
+  "java.time.Duration": "java.time.Duration.ofHours(2)",
+  "java.time.Period": "java.time.Period.ofDays(10)",
+  "java.time.temporal.ChronoUnit": "java.time.temporal.ChronoUnit.DAYS"
 }

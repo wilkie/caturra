@@ -346,6 +346,13 @@ pub enum StdStream {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Temporal {
     Date(crate::time::Date),
+    Time(crate::time::Time),
+    DateTime(crate::time::DateTime),
+    Duration(crate::time::Duration),
+    Period(crate::time::Period),
+    /// A `java.time.temporal.ChronoUnit` constant, by its own ordinal — an
+    /// enum, so interned like the other two.
+    Unit(u8),
     /// `java.time.DayOfWeek`, 1..=7 with Monday at 1.
     DayOfWeek(u8),
     /// `java.time.Month`, 1..=12.
@@ -358,6 +365,11 @@ impl Temporal {
     pub fn class_name(self) -> &'static str {
         match self {
             Temporal::Date(_) => "java/time/LocalDate",
+            Temporal::Time(_) => "java/time/LocalTime",
+            Temporal::Duration(_) => "java/time/Duration",
+            Temporal::Period(_) => "java/time/Period",
+            Temporal::Unit(_) => "java/time/temporal/ChronoUnit",
+            Temporal::DateTime(_) => "java/time/LocalDateTime",
             Temporal::DayOfWeek(_) => "java/time/DayOfWeek",
             Temporal::Month(_) => "java/time/Month",
         }
@@ -368,6 +380,11 @@ impl Temporal {
     pub fn text(self) -> String {
         match self {
             Temporal::Date(date) => date.to_string(),
+            Temporal::Time(time) => time.to_string(),
+            Temporal::Duration(amount) => amount.to_string(),
+            Temporal::Period(period) => period.to_string(),
+            Temporal::Unit(unit) => crate::time::unit_name(unit).to_owned(),
+            Temporal::DateTime(when) => when.to_string(),
             Temporal::DayOfWeek(day) => crate::time::day_name(day).to_owned(),
             Temporal::Month(month) => crate::time::month_name(month).to_owned(),
         }
@@ -1385,7 +1402,16 @@ impl Heap {
     /// interned (a JDK's is not either), so it allocates.
     pub fn intern_temporal(&mut self, value: Temporal) -> HeapRef {
         let key = match value {
-            Temporal::Date(_) => return self.alloc(HeapObject::Temporal(value)),
+            // Only the two ENUMS are interned; a date, a time and a date-time
+            // are ordinary values, and a JDK does not intern those either.
+            Temporal::Date(_)
+            | Temporal::Time(_)
+            | Temporal::DateTime(_)
+            | Temporal::Duration(_)
+            | Temporal::Period(_) => {
+                return self.alloc(HeapObject::Temporal(value));
+            }
+            Temporal::Unit(unit) => (2u8, unit),
             Temporal::DayOfWeek(day) => (0u8, day),
             Temporal::Month(month) => (1u8, month),
         };

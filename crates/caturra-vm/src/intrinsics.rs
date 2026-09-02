@@ -72,6 +72,43 @@ fn date_time_exception(message: &str) -> VmError {
     VmError::UncaughtException(format!("java.time.DateTimeException: {message}"))
 }
 
+/// A `java.time` value's `hashCode`, as the JDK computes it — two equal
+/// values must hash alike wherever the program looks, and a `LocalDateTime`
+/// is its two halves `XOR`ed, so this has to be one function.
+fn temporal_hash(value: Temporal) -> i32 {
+    match value {
+        Temporal::Date(date) => {
+            let year = date.year;
+            #[allow(clippy::cast_possible_wrap)]
+            let mask = 0xFFFF_F800_u32 as i32;
+            (year & mask)
+                ^ (year.wrapping_shl(11) + (i32::from(date.month) << 6) + i32::from(date.day))
+        }
+        Temporal::Time(time) => {
+            #[allow(clippy::cast_possible_truncation)]
+            let folded = (time.nano_of_day ^ (time.nano_of_day >> 32)) as i32;
+            folded
+        }
+        Temporal::DateTime(when) => {
+            temporal_hash(Temporal::Date(when.date)) ^ temporal_hash(Temporal::Time(when.time))
+        }
+        // A `Duration` hashes its two fields the way the JDK folds them; a
+        // `Period` and a unit are small enough to hash as themselves.
+        Temporal::Duration(amount) => {
+            #[allow(clippy::cast_possible_truncation)]
+            let folded = (amount.seconds ^ (amount.seconds >> 32)) as i32;
+            folded + (51 * amount.nanos)
+        }
+        Temporal::Period(period) => period
+            .years
+            .wrapping_add(period.months.wrapping_shl(8))
+            .wrapping_add(period.days.wrapping_shl(16)),
+        Temporal::Unit(unit) => i32::from(unit),
+        Temporal::DayOfWeek(day) => i32::from(day),
+        Temporal::Month(month) => i32::from(month),
+    }
+}
+
 /// What all three answer alike: `toString`, `name`, `equals` and `hashCode`.
 /// `None` means "not one of these", so the caller carries on.
 fn temporal_object_method(
@@ -89,28 +126,17 @@ fn temporal_object_method(
     };
     let answer = match method {
         "toString" => JValue::Ref(Some(heap.alloc_string(&value.text()))),
-        "name" if !matches!(value, Temporal::Date(_)) => {
+        // An enum's `name()` is the CONSTANT — which for a `ChronoUnit` is
+        // not its `toString`: `ChronoUnit.DAYS.name()` is "DAYS" and its text
+        // is "Days".
+        "name" if matches!(value, Temporal::DayOfWeek(_) | Temporal::Month(_)) => {
             JValue::Ref(Some(heap.alloc_string(&value.text())))
         }
-        "equals" => JValue::Int(i32::from(other == Some(value))),
-        "hashCode" => {
-            // A `LocalDate`'s hash is the JDK's own mixing of its fields, so
-            // two equal dates hash alike wherever the program looks.
-            let hash = match value {
-                Temporal::Date(date) => {
-                    let year = date.year;
-                    #[allow(clippy::cast_possible_wrap)]
-                    let mask = 0xFFFF_F800_u32 as i32;
-                    (year & mask)
-                        ^ (year.wrapping_shl(11)
-                            + (i32::from(date.month) << 6)
-                            + i32::from(date.day))
-                }
-                Temporal::DayOfWeek(day) => i32::from(day),
-                Temporal::Month(month) => i32::from(month),
-            };
-            JValue::Int(hash)
+        "name" if matches!(value, Temporal::Unit(_)) => {
+            JValue::Ref(Some(heap.alloc_string(&value.text().to_uppercase())))
         }
+        "equals" => JValue::Int(i32::from(other == Some(value))),
+        "hashCode" => JValue::Int(temporal_hash(value)),
         _ => return None,
     };
     Some(answer)
@@ -159,6 +185,583 @@ fn temporal_enum_method(
     }
 }
 
+/// `LocalDateTime`'s factories: from fields, from a date and a time, from
+/// text, and from the host's clock.
+fn local_date_time_static(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let made = |heap: &mut Heap, when: crate::time::DateTime| {
+        Ok(Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::DateTime(when)),
+        ))))
+    };
+    match method {
+        "of" => {
+            // Either five-to-seven numbers, or a `LocalDate` and a
+            // `LocalTime` — the two shapes a program writes.
+            if let [JValue::Ref(Some(date_ref)), JValue::Ref(Some(time_ref))] = args {
+                let (
+                    Some(HeapObject::Temporal(Temporal::Date(date))),
+                    Some(HeapObject::Temporal(Temporal::Time(time))),
+                ) = (heap.get(*date_ref), heap.get(*time_ref))
+                else {
+                    return Err(throw("java.lang.ClassCastException: not a date and a time"));
+                };
+                let when = crate::time::DateTime {
+                    date: *date,
+                    time: *time,
+                };
+                return made(heap, when);
+            }
+            let field = |at: usize| match args.get(at) {
+                Some(JValue::Int(value)) => *value,
+                _ => 0,
+            };
+            let date = match crate::time::Date::of(field(0), field(1), field(2)) {
+                Ok(date) => date,
+                Err(message) => return Err(date_time_exception(&message)),
+            };
+            let time = match crate::time::Time::of(field(3), field(4), field(5), field(6)) {
+                Ok(time) => time,
+                Err(message) => return Err(date_time_exception(&message)),
+            };
+            made(heap, crate::time::DateTime { date, time })
+        }
+        "parse" => {
+            let text = match args.first() {
+                Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                Some(JValue::Ref(None)) => {
+                    return Err(throw("java.lang.NullPointerException: text"));
+                }
+                _ => None,
+            }
+            .unwrap_or_default();
+            match crate::time::parse_date_time(&text) {
+                Ok(when) => made(heap, when),
+                Err(message) => Err(VmError::UncaughtException(format!(
+                    "java.time.format.DateTimeParseException: {message}"
+                ))),
+            }
+        }
+        "now" => {
+            let offset = i64::from(console.zone_offset_seconds()) * 1000;
+            let local = console.now_millis().saturating_add(offset);
+            let when = crate::time::DateTime {
+                date: crate::time::Date::from_epoch_day(local.div_euclid(86_400_000)),
+                time: crate::time::Time {
+                    nano_of_day: local.rem_euclid(86_400_000) * 1_000_000,
+                },
+            };
+            made(heap, when)
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "java/time/LocalDateTime.{method}"
+        ))),
+    }
+}
+
+/// The unit a `plusX`/`minusX` name asks for, as nanoseconds — `None` when
+/// the unit is one only a DATE has (days and up are handled by the date).
+fn nanos_per_unit(unit: &str) -> Option<i64> {
+    Some(match unit {
+        "Nanos" => 1,
+        "Seconds" => crate::time::NANOS_PER_SECOND,
+        "Minutes" => crate::time::NANOS_PER_MINUTE,
+        "Hours" => crate::time::NANOS_PER_HOUR,
+        _ => return None,
+    })
+}
+
+/// The amount a one-argument `plusX`/`minusX` was given, signed by which of
+/// the two it was, with the unit's name.
+fn shift_by<'a>(method: &'a str, args: &[JValue]) -> Option<(&'a str, i64)> {
+    let plus = method.starts_with("plus");
+    if !plus && !method.starts_with("minus") {
+        return None;
+    }
+    let amount = match args.first() {
+        Some(JValue::Int(n)) => i64::from(*n),
+        Some(JValue::Long(n)) => *n,
+        _ => 0,
+    };
+    let unit = if plus {
+        method.trim_start_matches("plus")
+    } else {
+        method.trim_start_matches("minus")
+    };
+    Some((unit, if plus { amount } else { -amount }))
+}
+
+/// `java.time.LocalTime`: a time of day. Everything it answers is derived
+/// from the one number it holds.
+fn time_method(
+    time: crate::time::Time,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let int = |value: i64| Ok(Some(JValue::Int(i32::try_from(value).unwrap_or(i32::MAX))));
+    let made = |heap: &mut Heap, time: crate::time::Time| {
+        Ok(Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::Time(time)),
+        ))))
+    };
+    let other = match args.first() {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Temporal(Temporal::Time(other))) => Some(*other),
+            _ => None,
+        },
+        _ => None,
+    };
+    match method {
+        "getHour" => int(i64::from(time.hour())),
+        "getMinute" => int(i64::from(time.minute())),
+        "getSecond" => int(i64::from(time.second())),
+        "getNano" => int(i64::from(time.nano())),
+        "toSecondOfDay" => int(time.nano_of_day / crate::time::NANOS_PER_SECOND),
+        "toNanoOfDay" => Ok(Some(JValue::Long(time.nano_of_day))),
+        "withHour" | "withMinute" | "withSecond" | "withNano" => {
+            #[allow(clippy::cast_possible_truncation)]
+            let with = match args.first() {
+                Some(JValue::Int(n)) => *n,
+                Some(JValue::Long(n)) => *n as i32,
+                _ => 0,
+            };
+            let (hour, minute, second, nano) = match method {
+                "withHour" => (with, time.minute(), time.second(), time.nano()),
+                "withMinute" => (time.hour(), with, time.second(), time.nano()),
+                "withSecond" => (time.hour(), time.minute(), with, time.nano()),
+                _ => (time.hour(), time.minute(), time.second(), with),
+            };
+            match crate::time::Time::of(hour, minute, second, nano) {
+                Ok(made_time) => made(heap, made_time),
+                Err(message) => Err(date_time_exception(&message)),
+            }
+        }
+        // `atDate(date)` — the other way of building a date-time.
+        "atDate" => match args.first() {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::Temporal(Temporal::Date(date))) => {
+                    let when = crate::time::DateTime { date: *date, time };
+                    Ok(Some(JValue::Ref(Some(
+                        heap.intern_temporal(Temporal::DateTime(when)),
+                    ))))
+                }
+                _ => Err(throw("java.lang.ClassCastException: not a LocalDate")),
+            },
+            _ => Err(throw("java.lang.NullPointerException: date")),
+        },
+        "isBefore" | "isAfter" | "compareTo" => {
+            let Some(against) = other else {
+                return Err(throw("java.lang.ClassCastException: not a LocalTime"));
+            };
+            // `LocalTime.compareTo` is `Integer.compare` field by field, so
+            // -1/0/1 — a `LocalDate`'s is the raw difference, and the two
+            // really do differ.
+            if method == "compareTo" {
+                return int(i64::from(
+                    match time.nano_of_day.cmp(&against.nano_of_day) {
+                        std::cmp::Ordering::Less => -1,
+                        std::cmp::Ordering::Equal => 0,
+                        std::cmp::Ordering::Greater => 1,
+                    },
+                ));
+            }
+            let answer = if method == "isBefore" {
+                time < against
+            } else {
+                time > against
+            };
+            Ok(Some(JValue::Int(i32::from(answer))))
+        }
+        _ => match shift_by(method, args) {
+            // A time WRAPS at midnight rather than carrying: `23:00` plus two
+            // hours is `01:00`, and nothing about the day is remembered.
+            Some((unit, amount)) => match nanos_per_unit(unit) {
+                Some(nanos) => made(heap, time.plus_nanos(amount.saturating_mul(nanos))),
+                None => Err(VmError::UnknownIntrinsic(format!(
+                    "java/time/LocalTime.{method}"
+                ))),
+            },
+            None => Err(VmError::UnknownIntrinsic(format!(
+                "java/time/LocalTime.{method}"
+            ))),
+        },
+    }
+}
+
+/// `LocalDate.atTime` and the `withX` family — everything that builds a NEW
+/// date (or date-time) out of one, and validates as `of` does.
+fn date_builder(
+    date: crate::time::Date,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let number = || match args.first() {
+        Some(JValue::Int(n)) => i64::from(*n),
+        Some(JValue::Long(n)) => *n,
+        _ => 0,
+    };
+    match method {
+        "atTime" => {
+            let field = |at: usize| match args.get(at) {
+                Some(JValue::Int(value)) => *value,
+                _ => 0,
+            };
+            match crate::time::Time::of(field(0), field(1), field(2), field(3)) {
+                Ok(time) => Ok(Some(JValue::Ref(Some(heap.intern_temporal(
+                    Temporal::DateTime(crate::time::DateTime { date, time }),
+                ))))),
+                Err(message) => Err(date_time_exception(&message)),
+            }
+        }
+        "withYear" | "withMonth" | "withDayOfMonth" => {
+            #[allow(clippy::cast_possible_truncation)]
+            let with = number() as i32;
+            // `withYear`/`withMonth` CLAMP the day (the JDK's
+            // `resolvePreviousValid`, so `Jan 31` with month February is
+            // `Feb 29`); only `withDayOfMonth` is strict about it.
+            let (year, month, day) = match method {
+                "withYear" => (with, i32::from(date.month), i32::from(date.day)),
+                "withMonth" => (date.year, with, i32::from(date.day)),
+                _ => (date.year, i32::from(date.month), with),
+            };
+            let day = if method == "withDayOfMonth" {
+                day
+            } else if (1..=12).contains(&month) && (MIN_TIME_YEAR..=MAX_TIME_YEAR).contains(&year) {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let length = i32::from(crate::time::length_of_month(year, month as u8));
+                day.min(length)
+            } else {
+                day
+            };
+            match date.with(year, month, day) {
+                Ok(made) => Ok(Some(JValue::Ref(Some(
+                    heap.intern_temporal(Temporal::Date(made)),
+                )))),
+                Err(message) => Err(date_time_exception(&message)),
+            }
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "java/time/LocalDate.{method}"
+        ))),
+    }
+}
+
+/// `LocalDateTime.withX` — the half that owns the field answers, and the
+/// other half is carried over unchanged.
+fn date_time_with(
+    when: crate::time::DateTime,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let unknown = || VmError::UnknownIntrinsic(format!("java/time/LocalDateTime.{method}"));
+    let half = if matches!(
+        method,
+        "withHour" | "withMinute" | "withSecond" | "withNano"
+    ) {
+        time_method(when.time, heap, method, args)?
+    } else {
+        temporal_method(Temporal::Date(when.date), heap, method, args)?
+    };
+    let Some(JValue::Ref(Some(reference))) = half else {
+        return Err(unknown());
+    };
+    let made = match heap.get(reference) {
+        Some(HeapObject::Temporal(Temporal::Time(time))) => crate::time::DateTime {
+            date: when.date,
+            time: *time,
+        },
+        Some(HeapObject::Temporal(Temporal::Date(date))) => crate::time::DateTime {
+            date: *date,
+            time: when.time,
+        },
+        _ => return Err(unknown()),
+    };
+    Ok(Some(JValue::Ref(Some(
+        heap.intern_temporal(Temporal::DateTime(made)),
+    ))))
+}
+
+/// `java.time.LocalDateTime`: a date and a time. Its readers are its halves'
+/// readers, and its arithmetic carries whole days from one into the other.
+fn date_time_method(
+    when: crate::time::DateTime,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let made = |heap: &mut Heap, when: crate::time::DateTime| {
+        Ok(Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::DateTime(when)),
+        ))))
+    };
+    let other = match args.first() {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Temporal(Temporal::DateTime(other))) => Some(*other),
+            _ => None,
+        },
+        _ => None,
+    };
+    match method {
+        "toLocalDate" => Ok(Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::Date(when.date)),
+        )))),
+        "toLocalTime" => Ok(Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::Time(when.time)),
+        )))),
+        "isBefore" | "isAfter" | "isEqual" | "compareTo" => {
+            let Some(against) = other else {
+                return Err(throw("java.lang.ClassCastException: not a LocalDateTime"));
+            };
+            if method == "compareTo" {
+                // The DATE's difference decides, and only a tie reaches the
+                // time — which is how `java.time` writes it.
+                let date_order = date_difference(when.date, against.date);
+                let order = if date_order == 0 {
+                    i64::from(when.time.nano_of_day.cmp(&against.time.nano_of_day) as i8)
+                } else {
+                    date_order
+                };
+                return Ok(Some(JValue::Int(i32::try_from(order).unwrap_or(i32::MAX))));
+            }
+            let answer = match method {
+                "isBefore" => when < against,
+                "isAfter" => when > against,
+                _ => when == against,
+            };
+            Ok(Some(JValue::Int(i32::from(answer))))
+        }
+        _ => {
+            // A reader the DATE or the TIME answers: ask them, on the halves.
+            if let Some(answer) = date_reader(Temporal::Date(when.date), heap, method) {
+                return Ok(Some(answer));
+            }
+            if matches!(
+                method,
+                "getHour" | "getMinute" | "getSecond" | "getNano" | "toSecondOfDay"
+            ) {
+                return time_method(when.time, heap, method, args);
+            }
+            if method.starts_with("with") {
+                return date_time_with(when, heap, method, args);
+            }
+            let Some((unit, amount)) = shift_by(method, args) else {
+                return Err(VmError::UnknownIntrinsic(format!(
+                    "java/time/LocalDateTime.{method}"
+                )));
+            };
+            // A time unit carries into the date; a date unit moves the date
+            // and leaves the time alone.
+            if let Some(nanos) = nanos_per_unit(unit) {
+                return made(heap, when.plus_nanos(amount.saturating_mul(nanos)));
+            }
+            let moved = match unit {
+                "Days" => when.date.plus_days(amount),
+                "Weeks" => when.date.plus_days(amount.saturating_mul(7)),
+                "Months" => when.date.plus_months(amount),
+                "Years" => when.date.plus_years(amount),
+                _ => {
+                    return Err(VmError::UnknownIntrinsic(format!(
+                        "java/time/LocalDateTime.{method}"
+                    )));
+                }
+            };
+            made(
+                heap,
+                crate::time::DateTime {
+                    date: moved,
+                    time: when.time,
+                },
+            )
+        }
+    }
+}
+
+/// `java.time.Duration`: an amount of time, and the units it can be read in.
+fn duration_method(
+    amount: crate::time::Duration,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let made = |heap: &mut Heap, amount: crate::time::Duration| {
+        Ok(Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::Duration(amount)),
+        ))))
+    };
+    let other = match args.first() {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Temporal(Temporal::Duration(other))) => Some(*other),
+            _ => None,
+        },
+        _ => None,
+    };
+    let total = amount.total_nanos();
+    match method {
+        // Every `toX` TRUNCATES toward zero, as `java.time`'s do.
+        "toDays" => Ok(Some(JValue::Long(total / crate::time::NANOS_PER_DAY))),
+        "toHours" => Ok(Some(JValue::Long(total / crate::time::NANOS_PER_HOUR))),
+        "toMinutes" => Ok(Some(JValue::Long(total / crate::time::NANOS_PER_MINUTE))),
+        "getSeconds" | "toSeconds" => Ok(Some(JValue::Long(amount.seconds))),
+        "toMillis" => Ok(Some(JValue::Long(total / 1_000_000))),
+        "toNanos" => Ok(Some(JValue::Long(total))),
+        "getNano" => Ok(Some(JValue::Int(amount.nanos))),
+        "isZero" => Ok(Some(JValue::Int(i32::from(amount.is_zero())))),
+        "isNegative" => Ok(Some(JValue::Int(i32::from(amount.is_negative())))),
+        "compareTo" => match other {
+            Some(against) => Ok(Some(JValue::Int(match total.cmp(&against.total_nanos()) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            }))),
+            None => Err(throw("java.lang.ClassCastException: not a Duration")),
+        },
+        "negated" => made(heap, crate::time::Duration::of_nanos(-total)),
+        "abs" => made(heap, crate::time::Duration::of_nanos(total.abs())),
+        "plus" | "minus" => match other {
+            Some(against) => {
+                let shift = against.total_nanos();
+                let moved = if method == "plus" { shift } else { -shift };
+                made(heap, crate::time::Duration::of_nanos(total + moved))
+            }
+            None => Err(throw("java.lang.ClassCastException: not a Duration")),
+        },
+        _ => {
+            let Some((unit, count)) = shift_by(method, args) else {
+                return Err(VmError::UnknownIntrinsic(format!(
+                    "java/time/Duration.{method}"
+                )));
+            };
+            let nanos = match unit {
+                "Days" => crate::time::NANOS_PER_DAY,
+                "Hours" => crate::time::NANOS_PER_HOUR,
+                "Minutes" => crate::time::NANOS_PER_MINUTE,
+                "Seconds" => crate::time::NANOS_PER_SECOND,
+                "Millis" => 1_000_000,
+                "Nanos" => 1,
+                _ => {
+                    return Err(VmError::UnknownIntrinsic(format!(
+                        "java/time/Duration.{method}"
+                    )));
+                }
+            };
+            made(
+                heap,
+                crate::time::Duration::of_nanos(total + count.saturating_mul(nanos)),
+            )
+        }
+    }
+}
+
+/// `java.time.Period`: years, months and days, each as written.
+fn period_method(period: crate::time::Period, method: &str) -> Result<Option<JValue>, VmError> {
+    match method {
+        "getYears" => Ok(Some(JValue::Int(period.years))),
+        "getMonths" => Ok(Some(JValue::Int(period.months))),
+        "getDays" => Ok(Some(JValue::Int(period.days))),
+        "toTotalMonths" => Ok(Some(JValue::Long(period.total_months()))),
+        "isZero" => Ok(Some(JValue::Int(i32::from(period.is_zero())))),
+        // A period is negative when ANY part is: `P1Y-2D` is.
+        "isNegative" => Ok(Some(JValue::Int(i32::from(
+            period.years < 0 || period.months < 0 || period.days < 0,
+        )))),
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "java/time/Period.{method}"
+        ))),
+    }
+}
+
+/// `ChronoUnit.X.between(start, end)` — the only thing a unit is asked, and
+/// the reason a program names one at all.
+fn unit_method(
+    unit: u8,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    if method == "ordinal" {
+        return Ok(Some(JValue::Int(i32::from(unit))));
+    }
+    if method != "between" {
+        return Err(VmError::UnknownIntrinsic(format!(
+            "java/time/temporal/ChronoUnit.{method}"
+        )));
+    }
+    let read = |at: usize| match args.get(at) {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Temporal(value)) => Some(*value),
+            _ => None,
+        },
+        _ => None,
+    };
+    let (Some(start), Some(end)) = (read(0), read(1)) else {
+        return Err(throw("java.lang.ClassCastException: not a temporal"));
+    };
+    // A date, a time and a date-time all reduce to nanoseconds on a line —
+    // except MONTHS and YEARS, which are calendar units and count whole
+    // months the way `Period.between` does.
+    let instant = |value: Temporal| match value {
+        Temporal::Date(date) => Some(
+            date.to_epoch_day()
+                .saturating_mul(crate::time::NANOS_PER_DAY),
+        ),
+        Temporal::Time(time) => Some(time.nano_of_day),
+        Temporal::DateTime(when) => Some(
+            when.date
+                .to_epoch_day()
+                .saturating_mul(crate::time::NANOS_PER_DAY)
+                + when.time.nano_of_day,
+        ),
+        _ => None,
+    };
+    let calendar = |value: Temporal| match value {
+        Temporal::Date(date) => Some(date),
+        Temporal::DateTime(when) => Some(when.date),
+        _ => None,
+    };
+    // MONTHS and YEARS are CALENDAR units: they count whole months the way
+    // `Period.between` does, not a number of nanoseconds.
+    if matches!(unit, 9 | 10) {
+        let (Some(from), Some(to)) = (calendar(start), calendar(end)) else {
+            return Err(throw("java.lang.ClassCastException: not a date"));
+        };
+        let whole = crate::time::Period::between(from, to);
+        let months = whole.total_months();
+        return Ok(Some(JValue::Long(if unit == 9 {
+            months
+        } else {
+            months / 12
+        })));
+    }
+    let (Some(from), Some(to)) = (instant(start), instant(end)) else {
+        return Err(throw("java.lang.ClassCastException: not a temporal"));
+    };
+    let Some(nanos) = crate::time::unit_nanos(unit) else {
+        return Err(VmError::UnknownIntrinsic(String::from(
+            "java/time/temporal/ChronoUnit.between",
+        )));
+    };
+    Ok(Some(JValue::Long((to - from) / nanos)))
+}
+
+/// `LocalDate.compareTo`'s answer: the first field that differs, as a raw
+/// DIFFERENCE (not normalized), which is what a program printing it sees.
+fn date_difference(left: crate::time::Date, right: crate::time::Date) -> i64 {
+    if left.year != right.year {
+        i64::from(left.year) - i64::from(right.year)
+    } else if left.month != right.month {
+        i64::from(left.month) - i64::from(right.month)
+    } else {
+        i64::from(left.day) - i64::from(right.day)
+    }
+}
+
 /// The readers: everything a date answers about ITSELF, with no argument.
 fn date_reader(value: Temporal, heap: &mut Heap, method: &str) -> Option<JValue> {
     let Temporal::Date(date) = value else {
@@ -182,6 +785,12 @@ fn date_reader(value: Temporal, heap: &mut Heap, method: &str) -> Option<JValue>
         "getMonth" => Some(JValue::Ref(Some(
             heap.intern_temporal(Temporal::Month(date.month)),
         ))),
+        "atStartOfDay" => Some(JValue::Ref(Some(heap.intern_temporal(Temporal::DateTime(
+            crate::time::DateTime {
+                date,
+                time: crate::time::Time { nano_of_day: 0 },
+            },
+        ))))),
         _ => None,
     }
 }
@@ -214,12 +823,25 @@ fn temporal_method(
         return Ok(Some(answer));
     }
     // An enum answers the shared methods above; the rest are its own.
-    if !matches!(value, Temporal::Date(_)) {
-        return temporal_enum_method(value, heap, method, args);
+    match value {
+        Temporal::DayOfWeek(_) | Temporal::Month(_) => {
+            return temporal_enum_method(value, heap, method, args);
+        }
+        Temporal::Time(time) => return time_method(time, heap, method, args),
+        Temporal::DateTime(when) => return date_time_method(when, heap, method, args),
+        Temporal::Duration(amount) => return duration_method(amount, heap, method, args),
+        Temporal::Period(period) => return period_method(period, method),
+        Temporal::Unit(unit) => return unit_method(unit, heap, method, args),
+        Temporal::Date(_) => {}
     }
 
     if let Some(answer) = date_reader(value, heap, method) {
         return Ok(Some(answer));
+    }
+    if let Temporal::Date(date) = value
+        && (method == "atTime" || method.starts_with("with"))
+    {
+        return date_builder(date, heap, method, args);
     }
     match (value, method) {
         (Temporal::Date(date), _) if method.starts_with("plus") || method.starts_with("minus") => {
@@ -245,33 +867,6 @@ fn temporal_method(
                 heap.intern_temporal(Temporal::Date(moved)),
             ))))
         }
-        (Temporal::Date(date), "withYear" | "withMonth" | "withDayOfMonth") => {
-            #[allow(clippy::cast_possible_truncation)]
-            let with = number() as i32;
-            // `withYear`/`withMonth` CLAMP the day (the JDK's
-            // `resolvePreviousValid`, so `Jan 31` with month February is
-            // `Feb 29`); only `withDayOfMonth` is strict about it.
-            let (year, month, day) = match method {
-                "withYear" => (with, i32::from(date.month), i32::from(date.day)),
-                "withMonth" => (date.year, with, i32::from(date.day)),
-                _ => (date.year, i32::from(date.month), with),
-            };
-            let day = if method == "withDayOfMonth" {
-                day
-            } else if (1..=12).contains(&month) && (MIN_TIME_YEAR..=MAX_TIME_YEAR).contains(&year) {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let length = i32::from(crate::time::length_of_month(year, month as u8));
-                day.min(length)
-            } else {
-                day
-            };
-            match date.with(year, month, day) {
-                Ok(made) => Ok(Some(JValue::Ref(Some(
-                    heap.intern_temporal(Temporal::Date(made)),
-                )))),
-                Err(message) => Err(date_time_exception(&message)),
-            }
-        }
         (Temporal::Date(date), "isBefore" | "isAfter" | "isEqual" | "compareTo") => {
             let Some(Temporal::Date(against)) = other(heap) else {
                 return Err(throw("java.lang.ClassCastException: not a LocalDate"));
@@ -279,14 +874,7 @@ fn temporal_method(
             // `compareTo` answers the JDK's field-by-field difference, not a
             // normalized -1/0/1: a program that prints it sees the same number.
             if method == "compareTo" {
-                let difference = if date.year != against.year {
-                    i64::from(date.year) - i64::from(against.year)
-                } else if date.month != against.month {
-                    i64::from(date.month) - i64::from(against.month)
-                } else {
-                    i64::from(date.day) - i64::from(against.day)
-                };
-                return int(difference);
+                return int(date_difference(date, against));
             }
             let answer = match method {
                 "isBefore" => date < against,
@@ -7275,6 +7863,250 @@ pub fn invoke_static(
                 "java/time/LocalDate.{method}"
             ))),
         },
+        "java/time/LocalTime" => {
+            let field = |at: usize| match args.get(at) {
+                Some(JValue::Int(value)) => *value,
+                _ => 0,
+            };
+            match method {
+                "of" => match crate::time::Time::of(field(0), field(1), field(2), field(3)) {
+                    Ok(time) => Ok(Some(JValue::Ref(Some(
+                        heap.intern_temporal(Temporal::Time(time)),
+                    )))),
+                    Err(message) => Err(date_time_exception(&message)),
+                },
+                "ofSecondOfDay" => {
+                    let seconds = match args.first() {
+                        Some(JValue::Long(value)) => *value,
+                        Some(JValue::Int(value)) => i64::from(*value),
+                        _ => 0,
+                    };
+                    if !(0..86_400).contains(&seconds) {
+                        return Err(date_time_exception(&format!(
+                            "Invalid value for SecondOfDay (valid values 0 - 86399): {seconds}"
+                        )));
+                    }
+                    let time = crate::time::Time {
+                        nano_of_day: seconds * crate::time::NANOS_PER_SECOND,
+                    };
+                    Ok(Some(JValue::Ref(Some(
+                        heap.intern_temporal(Temporal::Time(time)),
+                    ))))
+                }
+                // `MIDNIGHT`/`NOON`/`MIN`/`MAX`, asked for the way the
+                // compiler asks for any library constant.
+                "__of" => {
+                    let time = crate::time::Time {
+                        nano_of_day: match field(0) {
+                            1 => 12 * crate::time::NANOS_PER_HOUR,
+                            2 => crate::time::NANOS_PER_DAY - 1,
+                            _ => 0,
+                        },
+                    };
+                    Ok(Some(JValue::Ref(Some(
+                        heap.intern_temporal(Temporal::Time(time)),
+                    ))))
+                }
+                "parse" => {
+                    let text = match args.first() {
+                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        Some(JValue::Ref(None)) => {
+                            return Err(throw("java.lang.NullPointerException: text"));
+                        }
+                        _ => None,
+                    }
+                    .unwrap_or_default();
+                    match crate::time::parse_time(&text) {
+                        Ok(time) => Ok(Some(JValue::Ref(Some(
+                            heap.intern_temporal(Temporal::Time(time)),
+                        )))),
+                        Err(message) => Err(VmError::UncaughtException(format!(
+                            "java.time.format.DateTimeParseException: {message}"
+                        ))),
+                    }
+                }
+                "now" => {
+                    let offset = i64::from(console.zone_offset_seconds()) * 1000;
+                    let local = console.now_millis().saturating_add(offset);
+                    let time = crate::time::Time {
+                        nano_of_day: local.rem_euclid(86_400_000) * 1_000_000,
+                    };
+                    Ok(Some(JValue::Ref(Some(
+                        heap.intern_temporal(Temporal::Time(time)),
+                    ))))
+                }
+                _ => Err(VmError::UnknownIntrinsic(format!(
+                    "java/time/LocalTime.{method}"
+                ))),
+            }
+        }
+        "java/time/LocalDateTime" => local_date_time_static(heap, console, method, args),
+        "java/time/Duration" => {
+            let count = match args.first() {
+                Some(JValue::Long(value)) => *value,
+                Some(JValue::Int(value)) => i64::from(*value),
+                _ => 0,
+            };
+            let made = |heap: &mut Heap, amount: crate::time::Duration| {
+                Ok(Some(JValue::Ref(Some(
+                    heap.intern_temporal(Temporal::Duration(amount)),
+                ))))
+            };
+            match method {
+                "ofDays" => made(
+                    heap,
+                    crate::time::Duration::of_nanos(
+                        count.saturating_mul(crate::time::NANOS_PER_DAY),
+                    ),
+                ),
+                "ofHours" => made(
+                    heap,
+                    crate::time::Duration::of_nanos(
+                        count.saturating_mul(crate::time::NANOS_PER_HOUR),
+                    ),
+                ),
+                "ofMinutes" => made(
+                    heap,
+                    crate::time::Duration::of_nanos(
+                        count.saturating_mul(crate::time::NANOS_PER_MINUTE),
+                    ),
+                ),
+                "ofMillis" => made(
+                    heap,
+                    crate::time::Duration::of_nanos(count.saturating_mul(1_000_000)),
+                ),
+                "ofNanos" => made(heap, crate::time::Duration::of_nanos(count)),
+                // `ofSeconds(seconds)` and `ofSeconds(seconds, nanoAdjust)`.
+                "ofSeconds" => {
+                    let adjust = match args.get(1) {
+                        Some(JValue::Long(value)) => *value,
+                        Some(JValue::Int(value)) => i64::from(*value),
+                        _ => 0,
+                    };
+                    made(
+                        heap,
+                        crate::time::Duration::of_nanos(
+                            count.saturating_mul(crate::time::NANOS_PER_SECOND) + adjust,
+                        ),
+                    )
+                }
+                // `__of` is the compiler's way of asking for `ZERO`.
+                "__of" => made(heap, crate::time::Duration::of_nanos(0)),
+                "between" => {
+                    let read = |at: usize| match args.get(at) {
+                        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                            Some(HeapObject::Temporal(value)) => Some(*value),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let instant = |value: Temporal| match value {
+                        Temporal::Time(time) => Some(time.nano_of_day),
+                        Temporal::Date(date) => Some(
+                            date.to_epoch_day()
+                                .saturating_mul(crate::time::NANOS_PER_DAY),
+                        ),
+                        Temporal::DateTime(when) => Some(
+                            when.date
+                                .to_epoch_day()
+                                .saturating_mul(crate::time::NANOS_PER_DAY)
+                                + when.time.nano_of_day,
+                        ),
+                        _ => None,
+                    };
+                    let (Some(start), Some(end)) = (read(0), read(1)) else {
+                        return Err(throw("java.lang.ClassCastException: not a temporal"));
+                    };
+                    let (Some(from), Some(to)) = (instant(start), instant(end)) else {
+                        return Err(throw("java.lang.ClassCastException: not a temporal"));
+                    };
+                    made(heap, crate::time::Duration::of_nanos(to - from))
+                }
+                _ => Err(VmError::UnknownIntrinsic(format!(
+                    "java/time/Duration.{method}"
+                ))),
+            }
+        }
+        "java/time/Period" => {
+            let field = |at: usize| match args.get(at) {
+                Some(JValue::Int(value)) => *value,
+                _ => 0,
+            };
+            let made = |heap: &mut Heap, period: crate::time::Period| {
+                Ok(Some(JValue::Ref(Some(
+                    heap.intern_temporal(Temporal::Period(period)),
+                ))))
+            };
+            match method {
+                "of" => made(
+                    heap,
+                    crate::time::Period {
+                        years: field(0),
+                        months: field(1),
+                        days: field(2),
+                    },
+                ),
+                "ofYears" | "ofMonths" | "ofWeeks" | "ofDays" | "__of" => {
+                    let count = field(0);
+                    let period = match method {
+                        "ofYears" => crate::time::Period {
+                            years: count,
+                            months: 0,
+                            days: 0,
+                        },
+                        "ofMonths" => crate::time::Period {
+                            years: 0,
+                            months: count,
+                            days: 0,
+                        },
+                        "ofWeeks" => crate::time::Period {
+                            years: 0,
+                            months: 0,
+                            days: count.saturating_mul(7),
+                        },
+                        // `__of` is `ZERO`, which is `P0D`.
+                        "__of" => crate::time::Period {
+                            years: 0,
+                            months: 0,
+                            days: 0,
+                        },
+                        _ => crate::time::Period {
+                            years: 0,
+                            months: 0,
+                            days: count,
+                        },
+                    };
+                    made(heap, period)
+                }
+                "between" => {
+                    let read = |at: usize| match args.get(at) {
+                        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                            Some(HeapObject::Temporal(Temporal::Date(date))) => Some(*date),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let (Some(start), Some(end)) = (read(0), read(1)) else {
+                        return Err(throw("java.lang.ClassCastException: not a LocalDate"));
+                    };
+                    made(heap, crate::time::Period::between(start, end))
+                }
+                _ => Err(VmError::UnknownIntrinsic(format!(
+                    "java/time/Period.{method}"
+                ))),
+            }
+        }
+        "java/time/temporal/ChronoUnit" => {
+            let ordinal = match args.first() {
+                Some(JValue::Int(value)) => *value,
+                _ => 0,
+            };
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let ordinal = ordinal.clamp(0, 10) as u8;
+            Ok(Some(JValue::Ref(Some(
+                heap.intern_temporal(Temporal::Unit(ordinal)),
+            ))))
+        }
         "java/time/DayOfWeek" | "java/time/Month" => {
             let day_of_week = class.ends_with("DayOfWeek");
             let limit = if day_of_week { 7 } else { 12 };
@@ -7283,6 +8115,23 @@ pub fn invoke_static(
                 _ => 1,
             };
             match method {
+                // `values()` — a fresh array each call (a JDK clones its own),
+                // holding the interned constants in ordinal order.
+                "values" => {
+                    let mut constants = Vec::new();
+                    for ordinal in 1..=limit {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let ordinal = ordinal as u8;
+                        let value = if day_of_week {
+                            Temporal::DayOfWeek(ordinal)
+                        } else {
+                            Temporal::Month(ordinal)
+                        };
+                        constants.push(JValue::Ref(Some(heap.intern_temporal(value))));
+                    }
+                    let array = heap.alloc(HeapObject::RefArray(class.to_owned(), constants));
+                    Ok(Some(JValue::Ref(Some(array))))
+                }
                 "valueOf" => {
                     let name = match args.first() {
                         Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),

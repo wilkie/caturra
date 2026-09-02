@@ -106,7 +106,19 @@ const JAVA_NIO_FILE: &[&str] = &["Files", "Path", "Paths"];
 /// two enums it answers with. What needs a ZONE (a `ZonedDateTime`, or what
 /// "today" is) is not here: the browser has the IANA database and vendoring a
 /// second copy would only add a version to disagree with.
-const JAVA_TIME: &[&str] = &["LocalDate", "DayOfWeek", "Month", "DateTimeException"];
+const JAVA_TIME: &[&str] = &[
+    "LocalDate",
+    "LocalTime",
+    "LocalDateTime",
+    "Duration",
+    "Period",
+    "DayOfWeek",
+    "Month",
+    "DateTimeException",
+];
+
+/// `java.time.temporal` — the unit a program names to ask `between`.
+const JAVA_TIME_TEMPORAL: &[&str] = &["ChronoUnit"];
 
 /// `java.time.format` — only the exception, so far: `LocalDate.parse` throws
 /// it and a program may catch it by name.
@@ -476,6 +488,11 @@ const REQUIRES_IMPORT: &[&str] = &[
     // compilation unit, and one of the corpus's own levels is written that
     // way.
     "LocalDate",
+    "LocalTime",
+    "LocalDateTime",
+    "Duration",
+    "Period",
+    "ChronoUnit",
     "DayOfWeek",
     "Month",
     "Painter",
@@ -645,6 +662,7 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("java.nio.file", JAVA_NIO_FILE),
     ("java.time", JAVA_TIME),
     ("java.time.format", JAVA_TIME_FORMAT),
+    ("java.time.temporal", JAVA_TIME_TEMPORAL),
     ("java.nio.charset", JAVA_NIO_CHARSET),
     ("java.lang", JAVA_LANG),
     ("java.lang.reflect", JAVA_LANG_REFLECT),

@@ -12574,3 +12574,46 @@ Pinned by `the_calendar_arithmetic_of_local_date`, `local_dates_are_values`,
 compatibility page, the browser test above, and three unit tests over the
 calendar itself — including one that round-trips every day from 1800 to 2200
 through the epoch-day conversion.
+
+### The rest of the time and date routines
+
+`LocalDate` was the half of `java.time` a program can do arithmetic with; this
+is the other half of what a student writes — **`LocalTime`, `LocalDateTime`,
+`Duration`, `Period` and `ChronoUnit`** — and it is the same bargain: all of it
+is pure computation, so all of it is exactly comparable with a JDK.
+
+Four rules are the whole of what makes these types feel right, and each is
+copied rather than invented:
+
+- **A time WRAPS; a date-time CARRIES.** `LocalTime.of(23, 0).plusHours(2)` is
+  `01:00` and remembers nothing; `LocalDateTime`'s is `2024-05-16T01:00`. That
+  is one line of arithmetic (`overflow_days`) and the only thing a date-time
+  does that its two halves do not.
+- **`toString` leaves out what is zero, in groups of three.** `10:15`,
+  `10:15:30`, `10:15:30.500`, `01:02:03.000000004` — a fraction prints as three
+  digits, six or nine, never as written.
+- **A `Duration` is an amount of time and a `Period` is a number of years,
+  months and days.** `Duration.ofDays(2)` prints `PT48H` (a duration's text has
+  no days in it); `Period.ofMonths(1)` is `P1M` and never becomes thirty days.
+  The signs sit per-part (`PT-1M-30S`, `P-1M-30D`), and a negative second with
+  a fraction reads as one number (`PT1.5S`, and `-0.5s` as `PT-0.5S`).
+- **`Period.between` counts whole months first**, so `2024-01-15` to
+  `2025-03-20` is `P1Y2M5D` — not a day count divided up. `ChronoUnit.MONTHS`
+  and `YEARS` use the same walk; every other unit is nanoseconds on a line,
+  truncated toward zero.
+
+`ChronoUnit`'s constants are stored under **the JDK's own ordinals**, so
+`ChronoUnit.DAYS.ordinal()` is 7 and the two units caturra does not count
+(`MICROS`, `HALF_DAYS`) still hold their places. Its `name()` is `DAYS` and its
+`toString()` is `Days`, which are different strings — an enum with a
+description of its own.
+
+`DayOfWeek.values()` and `Month.values()` answer a real array now (looping over
+an enum's constants is how a program uses one), which needed an element type
+for a library enum beside the one `File[]` has.
+
+Pinned by `the_time_of_day_and_the_date_time`,
+`how_long_something_took_and_how_far_apart_two_dates_are`,
+`looping_over_the_days_and_the_months`, `times_are_values`,
+`building_a_date_time_from_its_halves`, and the `times-and-spans` feature on
+the compatibility page.

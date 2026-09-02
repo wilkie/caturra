@@ -2404,6 +2404,41 @@ public class Dates {
 }
 """,
     ),
+    dict(
+        id="times-and-spans",
+        category="Library",
+        title="Times, and how far apart two moments are",
+        summary="`LocalTime`, `LocalDateTime`, `Duration` and `Period` — a time wraps at midnight, a date-time carries into its date, and `ChronoUnit.DAYS.between(...)` counts what lies between.",
+        main="Schedule",
+        source="""
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.Period;
+import java.time.temporal.ChronoUnit;
+
+public class Schedule {
+    public static void main(String[] args) {
+        LocalTime start = LocalTime.of(9, 0);
+        LocalTime end = start.plusHours(8).plusMinutes(30);
+        System.out.println(start + " to " + end);
+        System.out.println("that is " + Duration.between(start, end).toMinutes() + " minutes");
+        System.out.println("or " + ChronoUnit.MINUTES.between(start, end) + " the other way");
+
+        // A time WRAPS at midnight; a date-time carries into its date.
+        System.out.println(LocalTime.of(23, 0).plusHours(2));
+        System.out.println(LocalDateTime.of(2024, 5, 15, 23, 0).plusHours(2));
+
+        LocalDate exam = LocalDate.of(2024, 5, 15);
+        LocalDate results = LocalDate.of(2024, 7, 8);
+        System.out.println(Period.between(exam, results) + " = "
+            + ChronoUnit.DAYS.between(exam, results) + " days");
+        System.out.println(exam.atTime(8, 45) + " " + exam.atStartOfDay());
+    }
+}
+""",
+    ),
     dict(id="g-generic-supertype", category="Declarations", title="Parameterized supertype (with bridge methods)",
          summary="A subclass stands in for `Box<String>`, and a call through that reference reaches the OVERRIDE — which needs the bridge method erasure would otherwise lose.",
          main="G",

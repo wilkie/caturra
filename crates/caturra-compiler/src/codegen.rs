@@ -3493,6 +3493,11 @@ impl MethodTable {
                     "PrintWriter" | "FileWriter" => Some(JType::Writer),
                     "PrintStream" => Some(JType::PrintStream),
                     "LocalDate" => Some(JType::LocalDate),
+                    "LocalTime" => Some(JType::LocalTime),
+                    "Duration" => Some(JType::Duration),
+                    "Period" => Some(JType::Period),
+                    "ChronoUnit" => Some(JType::ChronoUnit),
+                    "LocalDateTime" => Some(JType::LocalDateTime),
                     "DayOfWeek" => Some(JType::DayOfWeek),
                     "Month" => Some(JType::Month),
                     // A `ByteArrayOutputStream` is the only `OutputStream`
@@ -3806,6 +3811,8 @@ impl MethodTable {
                     JType::StackFrame => ElemType::StackFrame,
                     JType::MatchResult => ElemType::MatchResult,
                     JType::File => ElemType::File,
+                    JType::DayOfWeek => ElemType::DayOfWeek,
+                    JType::Month => ElemType::Month,
                     // A wrapper array (`Integer[]`) is a REFERENCE array of
                     // boxed elements, distinct from the primitive `int[]`.
                     JType::Boxed(elem) => match Prim::of(elem) {
@@ -4596,6 +4603,8 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::StackFrame => "java/lang/StackTraceElement",
         ElemType::MatchResult => "java/util/regex/MatchResult",
         ElemType::File => "java/io/File",
+        ElemType::DayOfWeek => "java/time/DayOfWeek",
+        ElemType::Month => "java/time/Month",
         // A type variable erases to `Object`, like every other reference here.
         ElemType::TypeVar(_)
         | ElemType::Str
@@ -4868,6 +4877,8 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::StackFrame => String::from("StackTraceElement"),
         ElemType::MatchResult => String::from("MatchResult"),
         ElemType::File => String::from("File"),
+        ElemType::DayOfWeek => String::from("DayOfWeek"),
+        ElemType::Month => String::from("Month"),
         ElemType::TypeVar(_) => String::from("Object"),
         ElemType::Builder => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
@@ -5542,6 +5553,8 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::StackFrame => Some(ElemType::StackFrame),
         JType::MatchResult => Some(ElemType::MatchResult),
         JType::File => Some(ElemType::File),
+        JType::DayOfWeek => Some(ElemType::DayOfWeek),
+        JType::Month => Some(ElemType::Month),
         JType::Exception(id) => Some(ElemType::Throwable(id)),
         // A wrapper array element is a boxed REFERENCE (`Integer[]`).
         JType::Boxed(elem) => Prim::of(elem).map(ElemType::Wrapper),
@@ -5850,6 +5863,25 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         return None;
     }
     let names: &[&str] = match class.as_str() {
+        // `LocalTime`'s four constants are values rather than enum members,
+        // and are asked for the same way.
+        "LocalTime" => &["MIDNIGHT", "NOON", "MAX", "MIN"],
+        "Duration" | "Period" => &["ZERO"],
+        // The `ChronoUnit` constants, in the order the VM stores them.
+        // In the JDK's own order, so `ordinal()` answers what a JDK answers.
+        "ChronoUnit" => &[
+            "NANOS",
+            "MICROS",
+            "MILLIS",
+            "SECONDS",
+            "MINUTES",
+            "HOURS",
+            "HALF_DAYS",
+            "DAYS",
+            "WEEKS",
+            "MONTHS",
+            "YEARS",
+        ],
         "DayOfWeek" => &[
             "MONDAY",
             "TUESDAY",
@@ -5876,12 +5908,26 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         _ => return None,
     };
     let ordinal = names.iter().position(|known| known == name)?;
-    let ty = if class == "DayOfWeek" {
-        JType::DayOfWeek
-    } else {
-        JType::Month
+    let ty = match class.as_str() {
+        "DayOfWeek" => JType::DayOfWeek,
+        "LocalTime" => JType::LocalTime,
+        "Duration" => JType::Duration,
+        "Period" => JType::Period,
+        "ChronoUnit" => JType::ChronoUnit,
+        _ => JType::Month,
     };
-    Some((ty, i32::try_from(ordinal).unwrap_or(0) + 1))
+    // A time's constants are ordinals 0..=2 (`MIN` is midnight again); an
+    // enum's are its values, which start at one.
+    let ordinal = i32::try_from(ordinal).unwrap_or(0);
+    // An ENUM's constants are its values, which start at one; everything else
+    // here is stored by its own ordinal (and `LocalTime.MIN` is midnight
+    // again, which is ordinal zero).
+    let ordinal = match ty {
+        JType::DayOfWeek | JType::Month => ordinal + 1,
+        JType::LocalTime => ordinal.min(3) % 3,
+        _ => ordinal,
+    };
+    Some((ty, ordinal))
 }
 
 fn standard_charset(path: &[String], table: &MethodTable) -> Option<&'static str> {
@@ -6992,6 +7038,10 @@ enum ElemType {
     MatchResult,
     /// `java.io.File` (element of `File.listFiles()`).
     File,
+    /// A `java.time` ENUM as an element — what `DayOfWeek.values()` and
+    /// `Month.values()` answer, which is how a program loops over one.
+    DayOfWeek,
+    Month,
     /// A throwable element (`Throwable[]` from `getSuppressed()`, or an
     /// array of any exception class), carrying its exception id.
     Throwable(u8),
@@ -7137,6 +7187,8 @@ impl ElemType {
             ElemType::StackFrame => String::from("Ljava/lang/StackTraceElement;"),
             ElemType::MatchResult => String::from("Ljava/util/regex/MatchResult;"),
             ElemType::File => String::from("Ljava/io/File;"),
+            ElemType::DayOfWeek => String::from("Ljava/time/DayOfWeek;"),
+            ElemType::Month => String::from("Ljava/time/Month;"),
             ElemType::Throwable(id) => format!("L{};", exception_internal(id)),
             // A wildcard or nested element erases to its `read` class (Object,
             // unless a wildcard's modelled bound narrows it).
@@ -7205,6 +7257,8 @@ impl ElemType {
             ElemType::StackFrame => JType::StackFrame,
             ElemType::MatchResult => JType::MatchResult,
             ElemType::File => JType::File,
+            ElemType::DayOfWeek => JType::DayOfWeek,
+            ElemType::Month => JType::Month,
             ElemType::Throwable(id) => JType::Exception(id),
             // A wildcard or nested element erases (table-free) to its `read`
             // class; the nesting-aware `elem_value_type` recovers the true
@@ -7340,6 +7394,16 @@ enum JType {
     /// `java.time.LocalDate` — a date with no time and no zone, which is the
     /// part of `java.time` that is pure arithmetic.
     LocalDate,
+    /// `java.time.LocalTime` and `java.time.LocalDateTime`, the same
+    /// arithmetic with a time of day in it.
+    LocalTime,
+    LocalDateTime,
+    /// `java.time.Duration` (an amount of time) and `java.time.Period` (a
+    /// number of years, months and days — which is NOT an amount of time).
+    Duration,
+    Period,
+    /// `java.time.temporal.ChronoUnit`, whose only real use is `between`.
+    ChronoUnit,
     /// `java.time.DayOfWeek` and `java.time.Month`: real enums, so their
     /// constants are interned and `==` works on them.
     DayOfWeek,
@@ -7868,6 +7932,11 @@ impl JType {
             JType::Writer => String::from("PrintWriter"),
             JType::PrintStream => String::from("PrintStream"),
             JType::LocalDate => String::from("LocalDate"),
+            JType::LocalTime => String::from("LocalTime"),
+            JType::Duration => String::from("Duration"),
+            JType::Period => String::from("Period"),
+            JType::ChronoUnit => String::from("ChronoUnit"),
+            JType::LocalDateTime => String::from("LocalDateTime"),
             JType::DayOfWeek => String::from("DayOfWeek"),
             JType::Month => String::from("Month"),
             JType::ByteStream => String::from("ByteArrayOutputStream"),
@@ -7917,6 +7986,11 @@ impl JType {
                 | JType::PrintStream
                 | JType::ByteStream
                 | JType::LocalDate
+                | JType::LocalTime
+                | JType::LocalDateTime
+                | JType::Duration
+                | JType::Period
+                | JType::ChronoUnit
                 | JType::DayOfWeek
                 | JType::Month
                 | JType::Reader
@@ -8060,6 +8134,11 @@ impl JType {
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
             JType::PrintStream => String::from("Ljava/io/PrintStream;"),
             JType::LocalDate => String::from("Ljava/time/LocalDate;"),
+            JType::LocalTime => String::from("Ljava/time/LocalTime;"),
+            JType::Duration => String::from("Ljava/time/Duration;"),
+            JType::Period => String::from("Ljava/time/Period;"),
+            JType::ChronoUnit => String::from("Ljava/time/temporal/ChronoUnit;"),
+            JType::LocalDateTime => String::from("Ljava/time/LocalDateTime;"),
             JType::DayOfWeek => String::from("Ljava/time/DayOfWeek;"),
             JType::Month => String::from("Ljava/time/Month;"),
             JType::ByteStream => String::from("Ljava/io/ByteArrayOutputStream;"),
@@ -9631,6 +9710,11 @@ enum BParam {
     PrintStream,
     /// The `java.time` values, where a method takes another of its own kind.
     LocalDate,
+    LocalTime,
+    LocalDateTime,
+    Duration,
+    /// Any `java.time` value at all — what `between` takes.
+    Temporal,
     DayOfWeek,
     Month,
     /// The erased target type of a `Map.forEach` lambda: a class that
@@ -9670,6 +9754,14 @@ enum BRet {
     PrintStream,
     /// The `java.time` values.
     LocalDate,
+    LocalTime,
+    LocalDateTime,
+    Duration,
+    Period,
+    /// `DayOfWeek.values()` / `Month.values()`, which is how a program loops
+    /// over an enum.
+    DayOfWeekArray,
+    MonthArray,
     DayOfWeek,
     Month,
     /// The `java.io.PrintWriter` itself — `append`/`format` return the writer
@@ -12540,6 +12632,24 @@ const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
         "()Ljava/time/DayOfWeek;",
     ),
     bm(
+        "atStartOfDay",
+        &[],
+        BRet::LocalDateTime,
+        "()Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "atTime",
+        &[BParam::Int, BParam::Int],
+        BRet::LocalDateTime,
+        "(II)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "atTime",
+        &[BParam::Int, BParam::Int, BParam::Int],
+        BRet::LocalDateTime,
+        "(III)Ljava/time/LocalDateTime;",
+    ),
+    bm(
         "plusDays",
         &[BParam::Long],
         BRet::LocalDate,
@@ -12683,6 +12793,567 @@ const MONTH_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
+/// `java.time.LocalTime` — a time of day. It WRAPS at midnight rather than
+/// carrying: `23:00` plus two hours is `01:00`.
+const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
+    bm("getHour", &[], BRet::Int, "()I"),
+    bm("getMinute", &[], BRet::Int, "()I"),
+    bm("getSecond", &[], BRet::Int, "()I"),
+    bm("getNano", &[], BRet::Int, "()I"),
+    bm("toSecondOfDay", &[], BRet::Int, "()I"),
+    bm("toNanoOfDay", &[], BRet::Long, "()J"),
+    bm(
+        "atDate",
+        &[BParam::LocalDate],
+        BRet::LocalDateTime,
+        "(Ljava/time/LocalDate;)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "plusHours",
+        &[BParam::Long],
+        BRet::LocalTime,
+        "(J)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "plusMinutes",
+        &[BParam::Long],
+        BRet::LocalTime,
+        "(J)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "plusSeconds",
+        &[BParam::Long],
+        BRet::LocalTime,
+        "(J)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "plusNanos",
+        &[BParam::Long],
+        BRet::LocalTime,
+        "(J)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "minusHours",
+        &[BParam::Long],
+        BRet::LocalTime,
+        "(J)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "minusMinutes",
+        &[BParam::Long],
+        BRet::LocalTime,
+        "(J)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "minusSeconds",
+        &[BParam::Long],
+        BRet::LocalTime,
+        "(J)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "minusNanos",
+        &[BParam::Long],
+        BRet::LocalTime,
+        "(J)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "withHour",
+        &[BParam::Int],
+        BRet::LocalTime,
+        "(I)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "withMinute",
+        &[BParam::Int],
+        BRet::LocalTime,
+        "(I)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "withSecond",
+        &[BParam::Int],
+        BRet::LocalTime,
+        "(I)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "withNano",
+        &[BParam::Int],
+        BRet::LocalTime,
+        "(I)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "isBefore",
+        &[BParam::LocalTime],
+        BRet::Boolean,
+        "(Ljava/time/LocalTime;)Z",
+    ),
+    bm(
+        "isAfter",
+        &[BParam::LocalTime],
+        BRet::Boolean,
+        "(Ljava/time/LocalTime;)Z",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::LocalTime],
+        BRet::Int,
+        "(Ljava/time/LocalTime;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.time.LocalDateTime` — the two halves, and the arithmetic that
+/// carries whole days from the time into the date.
+const LOCAL_DATE_TIME_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "toLocalDate",
+        &[],
+        BRet::LocalDate,
+        "()Ljava/time/LocalDate;",
+    ),
+    bm(
+        "withYear",
+        &[BParam::Int],
+        BRet::LocalDateTime,
+        "(I)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "withMonth",
+        &[BParam::Int],
+        BRet::LocalDateTime,
+        "(I)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "withDayOfMonth",
+        &[BParam::Int],
+        BRet::LocalDateTime,
+        "(I)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "withHour",
+        &[BParam::Int],
+        BRet::LocalDateTime,
+        "(I)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "withMinute",
+        &[BParam::Int],
+        BRet::LocalDateTime,
+        "(I)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "withSecond",
+        &[BParam::Int],
+        BRet::LocalDateTime,
+        "(I)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "withNano",
+        &[BParam::Int],
+        BRet::LocalDateTime,
+        "(I)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "toLocalTime",
+        &[],
+        BRet::LocalTime,
+        "()Ljava/time/LocalTime;",
+    ),
+    bm("getYear", &[], BRet::Int, "()I"),
+    bm("getMonthValue", &[], BRet::Int, "()I"),
+    bm("getDayOfMonth", &[], BRet::Int, "()I"),
+    bm("getDayOfYear", &[], BRet::Int, "()I"),
+    bm("getHour", &[], BRet::Int, "()I"),
+    bm("getMinute", &[], BRet::Int, "()I"),
+    bm("getSecond", &[], BRet::Int, "()I"),
+    bm("getNano", &[], BRet::Int, "()I"),
+    bm("getMonth", &[], BRet::Month, "()Ljava/time/Month;"),
+    bm(
+        "getDayOfWeek",
+        &[],
+        BRet::DayOfWeek,
+        "()Ljava/time/DayOfWeek;",
+    ),
+    bm(
+        "plusDays",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "plusWeeks",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "plusMonths",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "plusYears",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "plusHours",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "plusMinutes",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "plusSeconds",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "plusNanos",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "minusDays",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "minusWeeks",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "minusMonths",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "minusYears",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "minusHours",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "minusMinutes",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "minusSeconds",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "minusNanos",
+        &[BParam::Long],
+        BRet::LocalDateTime,
+        "(J)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "isBefore",
+        &[BParam::LocalDateTime],
+        BRet::Boolean,
+        "(Ljava/time/LocalDateTime;)Z",
+    ),
+    bm(
+        "isAfter",
+        &[BParam::LocalDateTime],
+        BRet::Boolean,
+        "(Ljava/time/LocalDateTime;)Z",
+    ),
+    bm(
+        "isEqual",
+        &[BParam::LocalDateTime],
+        BRet::Boolean,
+        "(Ljava/time/LocalDateTime;)Z",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::LocalDateTime],
+        BRet::Int,
+        "(Ljava/time/LocalDateTime;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.time.Duration` — an amount of time. It is NOT a `Period`: two hours
+/// is two hours whatever the calendar says.
+const DURATION_METHODS: &[BuiltinMethod] = &[
+    bm("toDays", &[], BRet::Long, "()J"),
+    bm("toHours", &[], BRet::Long, "()J"),
+    bm("toMinutes", &[], BRet::Long, "()J"),
+    bm("getSeconds", &[], BRet::Long, "()J"),
+    bm("toMillis", &[], BRet::Long, "()J"),
+    bm("toNanos", &[], BRet::Long, "()J"),
+    bm("getNano", &[], BRet::Int, "()I"),
+    bm("isZero", &[], BRet::Boolean, "()Z"),
+    bm("isNegative", &[], BRet::Boolean, "()Z"),
+    bm("negated", &[], BRet::Duration, "()Ljava/time/Duration;"),
+    bm("abs", &[], BRet::Duration, "()Ljava/time/Duration;"),
+    bm(
+        "plus",
+        &[BParam::Duration],
+        BRet::Duration,
+        "(Ljava/time/Duration;)Ljava/time/Duration;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Duration],
+        BRet::Duration,
+        "(Ljava/time/Duration;)Ljava/time/Duration;",
+    ),
+    bm(
+        "plusDays",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "plusHours",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "plusMinutes",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "plusSeconds",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "plusMillis",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "plusNanos",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "minusDays",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "minusHours",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "minusMinutes",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "minusSeconds",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "minusMillis",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "minusNanos",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::Duration],
+        BRet::Int,
+        "(Ljava/time/Duration;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.time.Period` — years, months and days as WRITTEN. `P1M` is one
+/// month, not thirty days, and never becomes them.
+const PERIOD_METHODS: &[BuiltinMethod] = &[
+    bm("getYears", &[], BRet::Int, "()I"),
+    bm("getMonths", &[], BRet::Int, "()I"),
+    bm("getDays", &[], BRet::Int, "()I"),
+    bm("toTotalMonths", &[], BRet::Long, "()J"),
+    bm("isZero", &[], BRet::Boolean, "()Z"),
+    bm("isNegative", &[], BRet::Boolean, "()Z"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.time.temporal.ChronoUnit` — a program names one to ask `between`,
+/// which is the whole of what it is for here.
+const CHRONO_UNIT_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "between",
+        &[BParam::Temporal, BParam::Temporal],
+        BRet::Long,
+        "(Ljava/lang/Object;Ljava/lang/Object;)J",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("ordinal", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+const DURATION_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "ofDays",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "ofHours",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "ofMinutes",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "ofSeconds",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "ofMillis",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "ofNanos",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "ofSeconds",
+        &[BParam::Long, BParam::Long],
+        BRet::Duration,
+        "(JJ)Ljava/time/Duration;",
+    ),
+    bm(
+        "between",
+        &[BParam::Temporal, BParam::Temporal],
+        BRet::Duration,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/time/Duration;",
+    ),
+];
+
+const PERIOD_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "of",
+        &[BParam::Int, BParam::Int, BParam::Int],
+        BRet::Period,
+        "(III)Ljava/time/Period;",
+    ),
+    bm(
+        "ofYears",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "ofMonths",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "ofWeeks",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "ofDays",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "between",
+        &[BParam::LocalDate, BParam::LocalDate],
+        BRet::Period,
+        "(Ljava/time/LocalDate;Ljava/time/LocalDate;)Ljava/time/Period;",
+    ),
+];
+
 /// The static factories. `now()` is the one that needs the HOST: what "today"
 /// is depends on a zone, which the browser reads from its own IANA data and
 /// caturra does not vendor.
@@ -12708,6 +13379,86 @@ const LOCAL_DATE_STATIC_METHODS: &[BuiltinMethod] = &[
     ),
 ];
 
+const LOCAL_TIME_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm("now", &[], BRet::LocalTime, "()Ljava/time/LocalTime;"),
+    bm(
+        "of",
+        &[BParam::Int, BParam::Int],
+        BRet::LocalTime,
+        "(II)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "of",
+        &[BParam::Int, BParam::Int, BParam::Int],
+        BRet::LocalTime,
+        "(III)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "of",
+        &[BParam::Int, BParam::Int, BParam::Int, BParam::Int],
+        BRet::LocalTime,
+        "(IIII)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "ofSecondOfDay",
+        &[BParam::Long],
+        BRet::LocalTime,
+        "(J)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "parse",
+        &[BParam::CharSeq],
+        BRet::LocalTime,
+        "(Ljava/lang/CharSequence;)Ljava/time/LocalTime;",
+    ),
+];
+
+const LOCAL_DATE_TIME_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "now",
+        &[],
+        BRet::LocalDateTime,
+        "()Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "of",
+        &[BParam::LocalDate, BParam::LocalTime],
+        BRet::LocalDateTime,
+        "(Ljava/time/LocalDate;Ljava/time/LocalTime;)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "of",
+        &[
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+        ],
+        BRet::LocalDateTime,
+        "(IIIII)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "of",
+        &[
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+        ],
+        BRet::LocalDateTime,
+        "(IIIIII)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "parse",
+        &[BParam::CharSeq],
+        BRet::LocalDateTime,
+        "(Ljava/lang/CharSequence;)Ljava/time/LocalDateTime;",
+    ),
+];
+
 const DAY_OF_WEEK_STATIC_METHODS: &[BuiltinMethod] = &[
     bm(
         "of",
@@ -12721,6 +13472,12 @@ const DAY_OF_WEEK_STATIC_METHODS: &[BuiltinMethod] = &[
         BRet::DayOfWeek,
         "(Ljava/lang/String;)Ljava/time/DayOfWeek;",
     ),
+    bm(
+        "values",
+        &[],
+        BRet::DayOfWeekArray,
+        "()[Ljava/time/DayOfWeek;",
+    ),
 ];
 
 const MONTH_STATIC_METHODS: &[BuiltinMethod] = &[
@@ -12731,6 +13488,7 @@ const MONTH_STATIC_METHODS: &[BuiltinMethod] = &[
         BRet::Month,
         "(Ljava/lang/String;)Ljava/time/Month;",
     ),
+    bm("values", &[], BRet::MonthArray, "()[Ljava/time/Month;"),
 ];
 
 /// `java.io.PrintStream` — what `System.out` IS, and what a program builds
@@ -15441,6 +16199,11 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::PrintStream
             | JType::ByteStream
             | JType::LocalDate
+            | JType::LocalTime
+            | JType::LocalDateTime
+            | JType::Duration
+            | JType::Period
+            | JType::ChronoUnit
             | JType::DayOfWeek
             | JType::Month
             | JType::Reader
@@ -15482,6 +16245,11 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::PrintStream => Some(("java/io/PrintStream", PRINT_STREAM_METHODS)),
         JType::LocalDate => Some(("java/time/LocalDate", LOCAL_DATE_METHODS)),
+        JType::LocalTime => Some(("java/time/LocalTime", LOCAL_TIME_METHODS)),
+        JType::Duration => Some(("java/time/Duration", DURATION_METHODS)),
+        JType::Period => Some(("java/time/Period", PERIOD_METHODS)),
+        JType::ChronoUnit => Some(("java/time/temporal/ChronoUnit", CHRONO_UNIT_METHODS)),
+        JType::LocalDateTime => Some(("java/time/LocalDateTime", LOCAL_DATE_TIME_METHODS)),
         JType::DayOfWeek => Some(("java/time/DayOfWeek", DAY_OF_WEEK_METHODS)),
         JType::Month => Some(("java/time/Month", MONTH_METHODS)),
         JType::ByteStream => Some(("java/io/ByteArrayOutputStream", BYTE_STREAM_METHODS)),
@@ -16211,6 +16979,10 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
     match class {
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
         "LocalDate" => Some(("java/time/LocalDate", LOCAL_DATE_STATIC_METHODS)),
+        "LocalTime" => Some(("java/time/LocalTime", LOCAL_TIME_STATIC_METHODS)),
+        "Duration" => Some(("java/time/Duration", DURATION_STATIC_METHODS)),
+        "Period" => Some(("java/time/Period", PERIOD_STATIC_METHODS)),
+        "LocalDateTime" => Some(("java/time/LocalDateTime", LOCAL_DATE_TIME_STATIC_METHODS)),
         "DayOfWeek" => Some(("java/time/DayOfWeek", DAY_OF_WEEK_STATIC_METHODS)),
         "Month" => Some(("java/time/Month", MONTH_STATIC_METHODS)),
         "Map.Entry" | "Entry" => Some(("java/util/Map$Entry", MAP_ENTRY_STATIC_METHODS)),
@@ -16517,6 +17289,9 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Char => JType::Char,
         BParam::PrintStream => JType::PrintStream,
         BParam::LocalDate => JType::LocalDate,
+        BParam::LocalTime => JType::LocalTime,
+        BParam::Duration => JType::Duration,
+        BParam::LocalDateTime => JType::LocalDateTime,
         BParam::DayOfWeek => JType::DayOfWeek,
         BParam::Month => JType::Month,
         BParam::Str => JType::Str,
@@ -16559,7 +17334,10 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         | BParam::Supplier
         | BParam::Comparator => JType::Object(ClassId(0)),
         BParam::Builder => JType::StringBuilder,
-        BParam::Probe => JType::Object(table.object_id),
+        // `between` takes any two temporals, and a probe (`indexOf`) takes
+        // anything at all: both are `Object` here, and the VM checks what it
+        // was actually handed.
+        BParam::Temporal | BParam::Probe => JType::Object(table.object_id),
         BParam::Key => boxed_or_nested(args.first, table),
         BParam::Val => boxed_or_nested(args.second, table),
         BParam::SelfMap => match (args.first, args.second) {
@@ -16948,6 +17726,18 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Writer => Some(JType::Writer),
         BRet::PrintStream => Some(JType::PrintStream),
         BRet::LocalDate => Some(JType::LocalDate),
+        BRet::LocalTime => Some(JType::LocalTime),
+        BRet::Duration => Some(JType::Duration),
+        BRet::DayOfWeekArray => Some(JType::Array {
+            elem: ElemType::DayOfWeek,
+            dims: 1,
+        }),
+        BRet::MonthArray => Some(JType::Array {
+            elem: ElemType::Month,
+            dims: 1,
+        }),
+        BRet::Period => Some(JType::Period),
+        BRet::LocalDateTime => Some(JType::LocalDateTime),
         BRet::DayOfWeek => Some(JType::DayOfWeek),
         BRet::Month => Some(JType::Month),
         BRet::Path => Some(JType::Path),
@@ -24263,6 +25053,11 @@ impl BodyGen<'_> {
             | JType::PrintStream
             | JType::ByteStream
             | JType::LocalDate
+            | JType::LocalTime
+            | JType::LocalDateTime
+            | JType::Duration
+            | JType::Period
+            | JType::ChronoUnit
             | JType::DayOfWeek
             | JType::Month
             | JType::Reader
@@ -26120,6 +26915,11 @@ impl BodyGen<'_> {
             // is the whole point of capturing with one.
             JType::ByteStream => String::from("java/io/ByteArrayOutputStream"),
             JType::LocalDate => String::from("java/time/LocalDate"),
+            JType::LocalTime => String::from("java/time/LocalTime"),
+            JType::Duration => String::from("java/time/Duration"),
+            JType::Period => String::from("java/time/Period"),
+            JType::ChronoUnit => String::from("java/time/temporal/ChronoUnit"),
+            JType::LocalDateTime => String::from("java/time/LocalDateTime"),
             JType::DayOfWeek => String::from("java/time/DayOfWeek"),
             JType::Month => String::from("java/time/Month"),
             JType::List { .. } => String::from("java/util/ArrayList"),
@@ -29672,6 +30472,11 @@ impl BodyGen<'_> {
             // match must be total, and String is what will be on the stack.
             | JType::ByteStream
             | JType::LocalDate
+            | JType::LocalTime
+            | JType::LocalDateTime
+            | JType::Duration
+            | JType::Period
+            | JType::ChronoUnit
             | JType::DayOfWeek
             | JType::Month
             | JType::Path => Some(String::from("(Ljava/lang/String;)V")),
@@ -31880,6 +32685,8 @@ impl BodyGen<'_> {
             ElemType::Class => Some(String::from("java/lang/Class")),
             ElemType::MatchResult => Some(String::from("java/util/regex/MatchResult")),
             ElemType::File => Some(String::from("java/io/File")),
+            ElemType::DayOfWeek => Some(String::from("java/time/DayOfWeek")),
+            ElemType::Month => Some(String::from("java/time/Month")),
             ElemType::StackFrame => Some(String::from("java/lang/StackTraceElement")),
             ElemType::Builder => Some(String::from("java/lang/StringBuilder")),
             ElemType::Throwable(id) => Some(exception_internal(id).to_owned()),
@@ -32255,10 +33062,13 @@ impl BodyGen<'_> {
         }
         // `DayOfWeek.MONDAY` / `Month.JANUARY`.
         if let Some((ty, ordinal)) = time_constant(path, self.table) {
-            let class = if ty == JType::DayOfWeek {
-                "java/time/DayOfWeek"
-            } else {
-                "java/time/Month"
+            let class = match ty {
+                JType::DayOfWeek => "java/time/DayOfWeek",
+                JType::LocalTime => "java/time/LocalTime",
+                JType::Duration => "java/time/Duration",
+                JType::Period => "java/time/Period",
+                JType::ChronoUnit => "java/time/temporal/ChronoUnit",
+                _ => "java/time/Month",
             };
             self.push_int(ordinal);
             let descriptor = format!("(I)L{class};");
@@ -34640,6 +35450,11 @@ impl BodyGen<'_> {
             | JType::MatchResult
             | JType::ByteStream
             | JType::LocalDate
+            | JType::LocalTime
+            | JType::LocalDateTime
+            | JType::Duration
+            | JType::Period
+            | JType::ChronoUnit
             | JType::DayOfWeek
             | JType::Month
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
@@ -34877,6 +35692,8 @@ impl BodyGen<'_> {
             | ElemType::StackFrame
             | ElemType::MatchResult
             | ElemType::File
+            | ElemType::DayOfWeek
+            | ElemType::Month
             | ElemType::Throwable(_)
             | ElemType::Wildcard { .. }
             | ElemType::Nested { .. }
@@ -35021,6 +35838,11 @@ impl BodyGen<'_> {
             | JType::PrintStream
             | JType::ByteStream
             | JType::LocalDate
+            | JType::LocalTime
+            | JType::LocalDateTime
+            | JType::Duration
+            | JType::Period
+            | JType::ChronoUnit
             | JType::DayOfWeek
             | JType::Month
             | JType::List { .. }
@@ -35051,6 +35873,11 @@ impl BodyGen<'_> {
             | JType::PrintStream
             | JType::ByteStream
             | JType::LocalDate
+            | JType::LocalTime
+            | JType::LocalDateTime
+            | JType::Duration
+            | JType::Period
+            | JType::ChronoUnit
             | JType::DayOfWeek
             | JType::Month
             | JType::List { .. }
