@@ -1681,32 +1681,54 @@ impl MethodTable {
         units: &[(String, CompilationUnit)],
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        // Cycles: walk each chain with a step bound.
-        let mut cyclic = Vec::new();
-        for info in self.classes.values() {
-            let mut current = info.superclass;
-            let mut steps = 0usize;
-            while let Some(id) = current {
-                if id == info.id || steps > self.class_names.len() {
-                    cyclic.push(info.id);
-                    break;
+        // Cycles: walk each chain with a step bound. Once per CYCLE, in
+        // SOURCE order, at the class that declares it: a three-class cycle
+        // said three things, in a HashMap's order, each naming a BINARY name
+        // with no position at all — so the line was 0 and the class was one
+        // the program never wrote. javac says one thing, about `A`, on the
+        // line that declares `A`.
+        let mut on_a_cycle: Vec<ClassId> = Vec::new();
+        let mut broken: Vec<ClassId> = Vec::new();
+        for (path, unit) in units {
+            for class in &unit.classes {
+                let Some(start) = self.info(&class.name).map(|info| info.id) else {
+                    continue;
+                };
+                if on_a_cycle.contains(&start) {
+                    continue;
                 }
-                steps += 1;
-                current = self.info_by_id(id).and_then(|i| i.superclass);
+                // Only a class ON the cycle reports it. One that merely
+                // REACHES a cycle above it runs out of steps instead, and its
+                // own line is not where the mistake is.
+                let mut walked = vec![start];
+                let mut current = self.info_by_id(start).and_then(|i| i.superclass);
+                let mut steps = 0usize;
+                while let Some(id) = current {
+                    if id == start {
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            format!(
+                                "cyclic inheritance involving {}",
+                                source_type_name(self.class_name(start))
+                            ),
+                            class.span,
+                        ));
+                        on_a_cycle.extend(walked.iter().copied());
+                        broken.push(start);
+                        break;
+                    }
+                    if steps > self.class_names.len() {
+                        break;
+                    }
+                    walked.push(id);
+                    steps += 1;
+                    current = self.info_by_id(id).and_then(|i| i.superclass);
+                }
             }
         }
-        for id in cyclic {
-            let name = self.class_name(id).to_owned();
-            diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                message: format!("cyclic inheritance involving {name}"),
-                path: String::new(),
-                span: None,
-            });
-            // Break the cycle so later chain walks terminate.
-            let key = self
-                .class_id(&name)
-                .map_or_else(|| name.clone(), |id| self.class_name(id).to_owned());
+        // Break each cycle so later chain walks terminate.
+        for id in broken {
+            let key = self.class_name(id).to_owned();
             if let Some(info) = self.classes.get_mut(&key) {
                 info.superclass = None;
             }
@@ -1761,13 +1783,15 @@ impl MethodTable {
                 if let Some(sup) = info.superclass
                     && self.info_by_id(sup).is_some_and(|s| s.is_interface)
                 {
+                    // javac's exact words for this, and the counterpart of
+                    // the "interface expected here" above: a class in an
+                    // `implements` clause and an interface in an `extends`
+                    // one are the same mistake from either side. The friendlier
+                    // sentence caturra used to write also named the interface
+                    // by its BINARY name, which the program never wrote.
                     diagnostics.push(Diagnostic::error(
                         path,
-                        format!(
-                            "class {} cannot extend interface {} (use implements)",
-                            class.name,
-                            self.class_name(sup)
-                        ),
+                        String::from("no interface expected here"),
                         class.span,
                     ));
                 }
@@ -2675,10 +2699,13 @@ impl MethodTable {
                             && !resolved_above
                             && !self.class_overrides(class, &ma.name, &ma.params)
                         {
+                            // The SOURCE names: a nested interface is stored
+                            // as `Outer$Named`, and a message naming that
+                            // names a type the program never wrote.
                             return Some((
                                 ma.name.clone(),
-                                self.class_name(a).to_owned(),
-                                self.class_name(b).to_owned(),
+                                source_type_name(self.class_name(a)),
+                                source_type_name(self.class_name(b)),
                             ));
                         }
                     }
@@ -3105,6 +3132,27 @@ impl MethodTable {
                     && self.params_match_override(class, id, &m.params, params)
             }) {
                 return Some((id, sig.clone()));
+            }
+            current = info.superclass;
+        }
+        None
+    }
+
+    /// The class that DECLARES a method of this name, walking up from
+    /// `class`. javac names it in "cannot be applied to given types", where
+    /// naming the RECEIVER's class points at a class that does not declare the
+    /// method the message is about.
+    fn declaring_class(&self, class: &str, method: &str) -> Option<String> {
+        let mut current = self.class_id(class);
+        let mut steps = 0usize;
+        while let Some(id) = current {
+            steps += 1;
+            if steps > self.class_names.len() + 1 {
+                return None;
+            }
+            let info = self.info_by_id(id)?;
+            if info.methods.iter().any(|m| m.name == method) {
+                return Some(self.class_name(id).to_owned());
             }
             current = info.superclass;
         }
@@ -20342,6 +20390,13 @@ impl BodyGen<'_> {
             return;
         }
         let table = self.table;
+        // A class that `extends` an INTERFACE has already been told so. The
+        // implicit `super()` then finds no constructor there, which is that
+        // mistake's consequence rather than a second mistake, and javac
+        // reports only the first.
+        if table.info(class_name).is_some_and(|info| info.is_interface) {
+            return;
+        }
         let sig = match table.resolve(class_name, "<init>", &arg_types) {
             Resolution::Found(sig) => sig.clone(),
             Resolution::NoneApplicable(candidates) => {
@@ -25406,7 +25461,15 @@ impl BodyGen<'_> {
                 return None;
             }
             Resolution::NoneApplicable(candidates) => {
-                let described = format!("class {class_name}");
+                // javac names the class that DECLARES the method, not the
+                // receiver's: a `go(int)` inherited from `Base` is "method go
+                // in class Base" even when called on a `Sub`.
+                let described = format!(
+                    "class {}",
+                    self.table
+                        .declaring_class(&class_name, method)
+                        .unwrap_or_else(|| class_name.clone())
+                );
                 self.inapplicable_error(method, &described, &candidates, &arg_types, args, span);
                 return None;
             }

@@ -45487,3 +45487,170 @@ public class ImplFine {
 }
 "#
 );
+
+// A cycle in the hierarchy is ONE error, about the class the program wrote,
+// on the line that declares it. It used to be one error per class ON the
+// cycle, in a `HashMap`'s order, each naming a BINARY name with no position
+// at all — so a three-class cycle said three things about classes the program
+// never wrote, all on line 0.
+differential_wording!(
+    reject_a_cycle_in_the_class_hierarchy,
+    "Cyclic",
+    r"
+public class Cyclic {
+    static class A extends B { }
+    static class B extends C { }
+    static class C extends A { }
+
+    public static void main(String[] args) {
+        System.out.println(new A());
+    }
+}
+"
+);
+
+// Two separate cycles are two errors — one per cycle, not one per class on
+// one. (A class BELOW a cycle is left out of this: javac erases the broken
+// supertype and then cannot find it, a cascade of its own.)
+differential_error_count!(
+    two_cycles_are_two_errors,
+    "TwoCycles",
+    r"
+public class TwoCycles {
+    static class A extends B { }
+    static class B extends C { }
+    static class C extends A { }
+    static class Self extends Self { }
+
+    public static void main(String[] args) {
+        System.out.println(2);
+    }
+}
+"
+);
+
+// A class in an `extends` clause that names an INTERFACE, in javac's words —
+// and as ONE error: the bogus supertype's implicit `super()` then found no
+// constructor, which is the first mistake's consequence.
+differential_wording!(
+    reject_a_class_that_extends_an_interface,
+    "ExtendsInterface",
+    r#"
+public class ExtendsInterface {
+    interface Named { String name(); }
+
+    static class Thing extends Named {
+        public String name() { return "thing"; }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Thing().name());
+    }
+}
+"#
+);
+
+differential_error_count!(
+    a_class_extending_an_interface_says_one_thing,
+    "ExtendsInterfaceOnce",
+    r#"
+public class ExtendsInterfaceOnce {
+    interface Named { String name(); }
+
+    static class Thing extends Named {
+        public String name() { return "thing"; }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Thing().name());
+    }
+}
+"#
+);
+
+// "method go in class Base" — javac names the class that DECLARES the method,
+// where caturra named the RECEIVER's, a class that does not declare the
+// method the message is about.
+differential_wording!(
+    an_inherited_method_names_the_class_that_declares_it,
+    "InheritedArity",
+    r"
+public class InheritedArity {
+    static class Base { void go() { } }
+
+    static class Sub extends Base { }
+
+    public static void main(String[] args) {
+        new Sub().go(1);
+    }
+}
+"
+);
+
+// The ambiguous-default message names the interfaces as the SOURCE spells
+// them; nested, they were `Outer$A` and `Outer$B`.
+differential_wording!(
+    ambiguous_defaults_name_the_interfaces_as_written,
+    "Diamond",
+    r#"
+public class Diamond {
+    interface A { default String tag() { return "a"; } }
+
+    interface B { default String tag() { return "b"; } }
+
+    static class C implements A, B { }
+
+    public static void main(String[] args) {
+        System.out.println(new C().tag());
+    }
+}
+"#
+);
+
+// …and the inheritance a lesson actually writes still runs: an abstract base
+// with a constructor, a covariant override, `super.area()` from two levels
+// down, and dispatch through an array of the base type.
+differential_test!(
+    the_inheritance_chain_a_lesson_writes,
+    "LegalChain",
+    r#"
+public class LegalChain {
+    abstract static class Shape {
+        private final String tag;
+
+        Shape(String tag) { this.tag = tag; }
+
+        abstract double area();
+
+        @Override
+        public String toString() { return tag + ":" + area(); }
+    }
+
+    static class Square extends Shape {
+        private final double side;
+
+        Square(double side) { super("square"); this.side = side; }
+
+        @Override
+        double area() { return side * side; }
+    }
+
+    static class Cube extends Square {
+        Cube(double side) { super(side); }
+
+        @Override
+        double area() { return 6 * super.area(); }
+
+        @Override
+        public String toString() { return "cube:" + area(); }
+    }
+
+    public static void main(String[] args) {
+        Shape[] shapes = { new Square(2), new Cube(2) };
+        for (Shape shape : shapes) {
+            System.out.println(shape);
+        }
+    }
+}
+"#
+);

@@ -12276,3 +12276,51 @@ Pinned by `reject_a_broader_throws_on_an_interface_method`,
 `reject_a_signature_that_ignores_the_type_argument`,
 `reject_a_wrong_return_through_an_erased_interface` and
 `the_interface_implementations_that_are_legal`.
+
+### The class a message names
+
+The same twenty-question shape, asked of CLASS inheritance — a `final` method
+overridden, a `final` class extended, a private method "widened", a static over
+an instance and an instance over a static, an incompatible and a covariant
+return, an abstract class instantiated and one left unimplemented, a missing
+`super(...)`, a `super` call that is not first, a broader and a narrower
+`throws`, a hidden field, a hidden static, `@Override` on nothing, an
+assignment to an inherited `final`. Twenty-five programs; twenty-one already
+agreed with javac to the word, and nothing was accepted that a JDK refuses.
+
+What the four disagreements had in common was the NAME in the message.
+
+**A nested class was named by its BINARY name.** `class Thing extends Named`
+said "cannot extend interface `N02$Named`", the ambiguous-default message said
+"types `N19$A` and `N19$B` are incompatible", and a cycle said "cyclic
+inheritance involving `Cyc3$B`" — three types no program ever wrote. The rule
+is old and written down (a message showing a binary name reads as caturra's bug
+rather than the program's); these three sites were simply missed, which is what
+a probe set is for.
+
+**A cycle said one thing per CLASS, in a HashMap's order, at line 0.** javac
+says one thing per CYCLE, about the class that declares it, on that class's
+line: `A extends B`, `B extends C`, `C extends A` is one error about `A`. The
+walk now runs in SOURCE order and reports only where it returns to the class it
+started from — so a class that merely REACHES a cycle above it is not blamed
+for it, and every class on the cycle after the first is silent.
+
+**`class Thing extends SomeInterface` said two things.** The bogus supertype
+stayed in place, so the implicit `super()` then looked for a constructor on an
+interface — the first mistake's consequence reported as a second mistake.
+javac's own wording for this one is "no interface expected here", the
+counterpart of the "interface expected here" caturra already had for a class in
+an `implements` clause, and it replaces a friendlier sentence that named the
+interface by a name the program never wrote.
+
+**An inherited method was blamed on the wrong class.** `new Sub().go(1)` where
+`go()` is declared in `Base` said "method go in class Sub cannot be applied" —
+naming a class that does not declare the method the message is about. javac
+names the DECLARING class, which is what a reader needs to go and look at.
+
+Pinned by `reject_a_cycle_in_the_class_hierarchy`, `two_cycles_are_two_errors`,
+`reject_a_class_that_extends_an_interface`,
+`a_class_extending_an_interface_says_one_thing`,
+`an_inherited_method_names_the_class_that_declares_it`,
+`ambiguous_defaults_name_the_interfaces_as_written` and
+`the_inheritance_chain_a_lesson_writes`.
