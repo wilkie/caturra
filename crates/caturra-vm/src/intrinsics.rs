@@ -10,7 +10,7 @@ use crate::io::ConsoleIo;
 use crate::map::JavaHashMap;
 use crate::unicode;
 use crate::value::{
-    Heap, HeapObject, HeapRef, IntKind, IteratorWrites, JValue, MapViewKind, StdStream,
+    Heap, HeapObject, HeapRef, IntKind, IteratorWrites, JValue, MapViewKind, PrintSink, StdStream,
 };
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
@@ -18,8 +18,10 @@ use crate::vm::VmError;
 /// Lazily allocated intrinsic singletons (`System.out`, `System.err`).
 #[derive(Debug, Default)]
 pub struct IntrinsicStatics {
-    stdout: Option<HeapRef>,
-    stderr: Option<HeapRef>,
+    /// `System.out`. Public because `System.setOut` REPLACES it: the compiler
+    /// routes every `System.out.println` to whatever object this holds.
+    pub stdout: Option<HeapRef>,
+    pub stderr: Option<HeapRef>,
     stdin: Option<HeapRef>,
 }
 
@@ -35,15 +37,15 @@ impl IntrinsicStatics {
     pub fn static_field(&mut self, heap: &mut Heap, class: &str, field: &str) -> Option<JValue> {
         match (class, field) {
             ("java/lang/System", "out") => {
-                let reference = *self
-                    .stdout
-                    .get_or_insert_with(|| heap.alloc(HeapObject::PrintStream(StdStream::Out)));
+                let reference = *self.stdout.get_or_insert_with(|| {
+                    heap.alloc(HeapObject::PrintStream(PrintSink::Std(StdStream::Out)))
+                });
                 Some(JValue::Ref(Some(reference)))
             }
             ("java/lang/System", "err") => {
-                let reference = *self
-                    .stderr
-                    .get_or_insert_with(|| heap.alloc(HeapObject::PrintStream(StdStream::Err)));
+                let reference = *self.stderr.get_or_insert_with(|| {
+                    heap.alloc(HeapObject::PrintStream(PrintSink::Std(StdStream::Err)))
+                });
                 Some(JValue::Ref(Some(reference)))
             }
             ("java/lang/System", "in") => {
@@ -53,6 +55,22 @@ impl IntrinsicStatics {
                 Some(JValue::Ref(Some(reference)))
             }
             _ => None,
+        }
+    }
+}
+
+/// Write what a `PrintStream` was given where it points: a standard stream,
+/// or the bytes of a `ByteArrayOutputStream` the program holds. A JDK encodes
+/// with the platform charset; caturra's is UTF-8 both on the way in here and
+/// on the way back out through `toString()`.
+fn write_to_sink(sink: PrintSink, text: &str, heap: &mut Heap, console: &mut dyn ConsoleIo) {
+    match sink {
+        PrintSink::Std(StdStream::Out) => console.stdout(text.as_bytes()),
+        PrintSink::Std(StdStream::Err) => console.stderr(text.as_bytes()),
+        PrintSink::Bytes(reference) => {
+            if let Some(HeapObject::ByteStream(bytes)) = heap.get_mut(reference) {
+                bytes.extend_from_slice(text.as_bytes());
+            }
         }
     }
 }
@@ -109,6 +127,10 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             comparator: None,
         }),
         "java/io/File" => Some(HeapObject::File(String::new())),
+        "java/io/ByteArrayOutputStream" => Some(HeapObject::ByteStream(Vec::new())),
+        // Where it writes is decided by the constructor; standard out until
+        // then, which is also `new PrintStream(System.out)`.
+        "java/io/PrintStream" => Some(HeapObject::PrintStream(PrintSink::Std(StdStream::Out))),
         "java/io/PrintWriter" => Some(HeapObject::Writer {
             path: String::new(),
         }),
@@ -182,6 +204,20 @@ pub fn invoke_special(
             // `new InputStreamReader(System.in)` — read from standard input.
             if let Some(HeapObject::Reader { stdin, .. }) = heap.get_mut(receiver) {
                 *stdin = true;
+            }
+            Ok(())
+        }
+        // `new PrintStream(out)` — where an OutputStream is the only thing
+        // caturra has to give it, a `ByteArrayOutputStream` the program owns.
+        ("<init>", "(Ljava/io/OutputStream;)V") => {
+            let JValue::Ref(Some(sink)) = args[0] else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            if !matches!(heap.get(sink), Some(HeapObject::ByteStream(_))) {
+                return Err(throw("java.lang.ClassCastException: not an OutputStream"));
+            }
+            if let Some(HeapObject::PrintStream(stream)) = heap.get_mut(receiver) {
+                *stream = PrintSink::Bytes(sink);
             }
             Ok(())
         }
@@ -771,7 +807,45 @@ pub fn invoke_virtual(
         }
     }
     match (receiver_object, method) {
-        (HeapObject::PrintStream(stream), "printf") => {
+        // `java.io.ByteArrayOutputStream` — the bytes a capture collected.
+        // `toString()` decodes them as UTF-8, which is what wrote them.
+        (HeapObject::ByteStream(bytes), "toString") => {
+            let text = String::from_utf8_lossy(bytes).into_owned();
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        (HeapObject::ByteStream(bytes), "size") => Ok(Some(JValue::Int(
+            i32::try_from(bytes.len()).unwrap_or(i32::MAX),
+        ))),
+        (HeapObject::ByteStream(bytes), "toByteArray") => {
+            let copied: Vec<i8> = bytes.iter().map(|b| (*b).cast_signed()).collect();
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::ByteArray(copied)),
+            ))))
+        }
+        (HeapObject::ByteStream(_), "reset") => {
+            if let Some(HeapObject::ByteStream(bytes)) = heap.get_mut(receiver) {
+                bytes.clear();
+            }
+            Ok(None)
+        }
+
+        (HeapObject::ByteStream(_), "write") => {
+            if let [JValue::Int(byte)] = args {
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let unit = (*byte & 0xFF) as u8;
+                if let Some(HeapObject::ByteStream(bytes)) = heap.get_mut(receiver) {
+                    bytes.push(unit);
+                }
+            }
+            Ok(None)
+        }
+        // Neither has anything to flush — a byte stream is in memory and a
+        // print stream writes straight through — and closing either "has no
+        // effect" (the JDK says so of a ByteArrayOutputStream in as many
+        // words, and standard out stays usable).
+        (HeapObject::ByteStream(_) | HeapObject::PrintStream(_), "flush" | "close") => Ok(None),
+        (HeapObject::PrintStream(_), "checkError") => Ok(Some(JValue::Int(0))),
+        (HeapObject::PrintStream(stream), "printf" | "format") => {
             let stream = *stream;
             let template = match args.first() {
                 Some(JValue::Ref(Some(reference))) => {
@@ -793,16 +867,18 @@ pub fn invoke_virtual(
             let text = match result {
                 Ok(text) => text,
                 Err(error) => {
-                    match stream {
-                        StdStream::Out => console.stdout(produced.as_bytes()),
-                        StdStream::Err => console.stderr(produced.as_bytes()),
-                    }
+                    write_to_sink(stream, &produced, heap, console);
                     return Err(error);
                 }
             };
-            match stream {
-                StdStream::Out => console.stdout(text.as_bytes()),
-                StdStream::Err => console.stderr(text.as_bytes()),
+            write_to_sink(stream, &text, heap, console);
+            // Both answer the stream in Java, and the compiler emits the
+            // descriptor that says so where the value is USED — returning
+            // nothing there would underflow the operand stack, and returning
+            // something where the statement path emitted `)V` would leave one
+            // behind.
+            if descriptor.ends_with(")Ljava/io/PrintStream;") {
+                return Ok(Some(JValue::Ref(Some(receiver))));
             }
             Ok(None)
         }
@@ -818,13 +894,10 @@ pub fn invoke_virtual(
                 }
                 _ => print_argument_text(heap, descriptor, args)?,
             };
-            if stream == StdStream::Out && console.capturing() {
+            if stream == PrintSink::Std(StdStream::Out) && console.capturing() {
                 console.capture_message(&text);
             } else {
-                match stream {
-                    StdStream::Out => console.stdout(text.as_bytes()),
-                    StdStream::Err => console.stderr(text.as_bytes()),
-                }
+                write_to_sink(stream, &text, heap, console);
             }
             Ok(Some(JValue::Ref(Some(receiver))))
         }
@@ -834,17 +907,14 @@ pub fn invoke_virtual(
             // While `SystemOutTestRunner` is capturing, each print/println call
             // on `System.out` is one message (the argument, without the
             // println newline) — matching javabuilder's per-call messages.
-            if stream == StdStream::Out && console.capturing() {
+            if stream == PrintSink::Std(StdStream::Out) && console.capturing() {
                 console.capture_message(&text);
             } else {
                 let mut out = text;
                 if method == "println" {
                     out.push('\n');
                 }
-                match stream {
-                    StdStream::Out => console.stdout(out.as_bytes()),
-                    StdStream::Err => console.stderr(out.as_bytes()),
-                }
+                write_to_sink(stream, &out, heap, console);
             }
             Ok(None)
         }

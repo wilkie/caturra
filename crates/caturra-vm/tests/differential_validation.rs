@@ -863,3 +863,67 @@ public class AssertKindTest {
 }
 "#
 );
+
+// Capturing what a program PRINTS: `System.setOut(new PrintStream(captor))` in
+// `@BeforeEach`, the console back in `@AfterEach`. It is the standard way a
+// JUnit test checks output, and two of Code.org's own validators are written
+// exactly this way — neither of which could run here at all.
+//
+// It needs three things that were missing: `PrintStream` and
+// `ByteArrayOutputStream` as types, `System.setOut` to actually redirect what
+// `System.out.println` reaches, and `@AfterEach` to RUN — it never did, so the
+// console was never restored, and the runner's own verdict lines went into the
+// student's buffer.
+validation_differential_test!(
+    diff_junit_captures_standard_out,
+    "CaptureTest",
+    r#"
+import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class CaptureTest {
+    private final PrintStream standardOut = System.out;
+    private final ByteArrayOutputStream captor = new ByteArrayOutputStream();
+
+    @BeforeEach
+    public void setUp() {
+        System.setOut(new PrintStream(captor));
+    }
+
+    @AfterEach
+    public void tearDown() {
+        System.setOut(standardOut);
+    }
+
+    @Test
+    @Order(1)
+    @DisplayName("what a program printed is what the captor holds =>")
+    public void captures() {
+        System.out.println("hello");
+        System.out.print("world");
+        assertEquals("hello\nworld", captor.toString());
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("a fresh test gets a fresh captor =>")
+    public void freshEachTime() {
+        assertEquals(0, captor.size());
+        System.out.printf("%s=%d%n", "n", 7);
+        assertEquals("n=7\n", captor.toString());
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("and a failure inside a capture still reports =>")
+    public void failsWhileCapturing() {
+        System.out.println("swallowed");
+        assertEquals("nothing like it", captor.toString(), "the captured text");
+    }
+}
+"#
+);

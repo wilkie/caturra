@@ -45830,3 +45830,107 @@ public class SwitchFine {
 }
 "#
 );
+
+// `System.out` IS a `PrintStream`, and a program may hand `System.setOut` one
+// of its own: everything printed after that goes into the buffer behind it,
+// and `toString()` reads it back. The whole idiom — the type of `System.out`,
+// `ByteArrayOutputStream`, `new PrintStream(buffer)`, `setOut`, and putting
+// the console back — was refused as "outside the AP CS A subset".
+differential_test!(
+    capturing_what_a_program_prints,
+    "Capture",
+    r#"
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+
+public class Capture {
+    static void speak() {
+        System.out.println("from a method");
+        System.out.printf("%s=%d%n", "n", 7);
+    }
+
+    public static void main(String[] args) {
+        PrintStream original = System.out;
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        PrintStream capture = new PrintStream(buffer);
+        System.setOut(capture);
+        speak();
+        System.out.print(1);
+        System.out.print('x');
+        System.out.print(2.5);
+        System.out.print(true);
+        System.out.println();
+        System.out.println(new int[0].length);
+        System.setOut(original);
+        System.out.println("size=" + buffer.size());
+        System.out.println("text=[" + buffer.toString() + "]");
+        System.out.println("class=" + capture.getClass().getName());
+        System.out.println("bufclass=" + buffer.getClass().getName());
+        buffer.reset();
+        System.out.println("after reset=" + buffer.size());
+        PrintStream direct = new PrintStream(buffer);
+        direct.println("direct");
+        direct.flush();
+        System.out.println("direct=[" + buffer + "]");
+        System.out.println("raw=" + buffer.toByteArray().length);
+    }
+}
+"#
+);
+
+// The buffer a `PrintStream` writes into is reachable THROUGH it, so a
+// collection cycle in between must not take it away.
+differential_test!(
+    a_captured_buffer_survives_a_collection,
+    "CaptureGc",
+    r#"
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+
+public class CaptureGc {
+    public static void main(String[] args) {
+        PrintStream original = System.out;
+        System.setOut(new PrintStream(new ByteArrayOutputStream()));
+        for (int i = 0; i < 200; i++) {
+            System.out.println(new StringBuilder().append(i).append(" line").toString());
+        }
+        System.gc();
+        System.out.println("still writing");
+        System.setOut(original);
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// `System.out` answers the same methods whether it is called through directly
+// or held in a variable — the print calls keep their own route (it is where
+// the `println` overloads are chosen), and everything else is an ordinary
+// call on the value. `printf`/`append` answer the stream, so they CHAIN,
+// which used to be refused in as many words.
+differential_test!(
+    a_print_stream_is_a_value,
+    "StreamValue",
+    r#"
+import java.io.PrintStream;
+
+public class StreamValue {
+    static void report(PrintStream to, String what) {
+        to.println("via a parameter: " + what);
+    }
+
+    public static void main(String[] args) {
+        System.out.printf("%d-", 1).printf("%s%n", "chained");
+        System.out.append('a').append("bc");
+        System.out.println();
+        System.out.format("%s%n", "format");
+        System.out.println(System.out.checkError());
+        report(System.out, "out");
+        PrintStream held = System.out;
+        held.println("held in a variable");
+        held.flush();
+        System.out.flush();
+    }
+}
+"#
+);

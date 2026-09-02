@@ -3491,6 +3491,11 @@ impl MethodTable {
                     "CharSequence" => Some(JType::CharSequence),
                     "File" => Some(JType::File),
                     "PrintWriter" | "FileWriter" => Some(JType::Writer),
+                    "PrintStream" => Some(JType::PrintStream),
+                    // A `ByteArrayOutputStream` is the only `OutputStream`
+                    // there is here, so the abstract name is a FACE of it —
+                    // the way `List` is a face of `ArrayList`.
+                    "ByteArrayOutputStream" | "OutputStream" => Some(JType::ByteStream),
                     "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader" => {
                         Some(JType::Reader)
                     }
@@ -7276,6 +7281,12 @@ enum JType {
     /// `java.io.PrintWriter` (intrinsic, writes into the virtual
     /// filesystem).
     Writer,
+    /// `java.io.PrintStream` — the type of `System.out`, and of a stream a
+    /// program builds over a buffer of its own.
+    PrintStream,
+    /// `java.io.ByteArrayOutputStream` (and `OutputStream`, the only face of
+    /// it caturra has): the bytes something printed into it.
+    ByteStream,
     /// `java.io.BufferedReader`/`FileReader`/`InputStreamReader` (intrinsic).
     /// One reader kind: a file reader slurps the file, a `System.in` reader
     /// pulls console lines. `readLine`/`read` hand them out.
@@ -7798,6 +7809,8 @@ impl JType {
                 .to_owned(),
             JType::File => String::from("File"),
             JType::Writer => String::from("PrintWriter"),
+            JType::PrintStream => String::from("PrintStream"),
+            JType::ByteStream => String::from("ByteArrayOutputStream"),
             JType::Reader => String::from("BufferedReader"),
             JType::Path => String::from("Path"),
             JType::Charset => String::from("Charset"),
@@ -7841,6 +7854,8 @@ impl JType {
                 | JType::Scanner
                 | JType::File
                 | JType::Writer
+                | JType::PrintStream
+                | JType::ByteStream
                 | JType::Reader
                 | JType::Path
                 | JType::Charset
@@ -7980,6 +7995,8 @@ impl JType {
             JType::Exception(id) => format!("L{};", exception_internal(id)),
             JType::File => String::from("Ljava/io/File;"),
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
+            JType::PrintStream => String::from("Ljava/io/PrintStream;"),
+            JType::ByteStream => String::from("Ljava/io/ByteArrayOutputStream;"),
             JType::Reader => String::from("Ljava/io/BufferedReader;"),
             JType::Path => String::from("Ljava/nio/file/Path;"),
             JType::Charset => String::from("Ljava/nio/charset/Charset;"),
@@ -9544,6 +9561,8 @@ enum BParam {
     RefArray,
     /// `java.lang.Object` (`Field.get(Object)`, `Method.invoke(Object, ...)`).
     Object,
+    /// `java.io.PrintStream` — the argument `System.setOut` takes.
+    PrintStream,
     /// The erased target type of a `Map.forEach` lambda: a class that
     /// implements the bundled `__BiConsumer`. Only the lambda desugaring
     /// synthesizes one, so `map.forEach(anythingElse)` is refused.
@@ -9577,6 +9596,8 @@ enum BParam {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BRet {
     Void,
+    /// `java.io.PrintStream` — what `append`/`printf` answer, for chaining.
+    PrintStream,
     /// The `java.io.PrintWriter` itself — `append`/`format` return the writer
     /// for chaining.
     Writer,
@@ -12425,6 +12446,77 @@ const FILE_METHODS: &[BuiltinMethod] = &[
     bm("listFiles", &[], BRet::FileArray, "()[Ljava/io/File;"),
 ];
 
+/// `java.io.PrintStream` — what `System.out` IS, and what a program builds
+/// over a buffer of its own to capture printing. The overloads are
+/// `PrintWriter`'s plus the `Object` and wide-primitive ones a `println` is
+/// most often handed.
+const PRINT_STREAM_METHODS: &[BuiltinMethod] = &[
+    bm("println", &[], BRet::Void, "()V"),
+    bm(
+        "println",
+        &[BParam::Str],
+        BRet::Void,
+        "(Ljava/lang/String;)V",
+    ),
+    bm(
+        "println",
+        &[BParam::Object],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm("println", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("println", &[BParam::Long], BRet::Void, "(J)V"),
+    bm("println", &[BParam::Double], BRet::Void, "(D)V"),
+    bm("println", &[BParam::Float], BRet::Void, "(F)V"),
+    bm("println", &[BParam::Boolean], BRet::Void, "(Z)V"),
+    bm("println", &[BParam::Char], BRet::Void, "(C)V"),
+    bm("print", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
+    bm(
+        "print",
+        &[BParam::Object],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm("print", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("print", &[BParam::Long], BRet::Void, "(J)V"),
+    bm("print", &[BParam::Double], BRet::Void, "(D)V"),
+    bm("print", &[BParam::Float], BRet::Void, "(F)V"),
+    bm("print", &[BParam::Boolean], BRet::Void, "(Z)V"),
+    bm("print", &[BParam::Char], BRet::Void, "(C)V"),
+    bm("write", &[BParam::Int], BRet::Void, "(I)V"),
+    // `append` is `print` by another name, and answers the stream.
+    bm(
+        "append",
+        &[BParam::Char],
+        BRet::PrintStream,
+        "(C)Ljava/io/PrintStream;",
+    ),
+    bm(
+        "append",
+        &[BParam::CharSeq],
+        BRet::PrintStream,
+        "(Ljava/lang/CharSequence;)Ljava/io/PrintStream;",
+    ),
+    bm("close", &[], BRet::Void, "()V"),
+    bm("flush", &[], BRet::Void, "()V"),
+    // A `PrintStream` swallows its `IOException`s and records that one
+    // happened; nothing here can produce one, so the answer is always false —
+    // which is also a real JDK's answer for `System.out` on a working console.
+    bm("checkError", &[], BRet::Boolean, "()Z"),
+];
+
+/// `java.io.ByteArrayOutputStream` — the only `OutputStream` caturra models,
+/// and the one a test captures printing with.
+const BYTE_STREAM_METHODS: &[BuiltinMethod] = &[
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("size", &[], BRet::Int, "()I"),
+    bm("toByteArray", &[], BRet::ByteArray, "()[B"),
+    bm("reset", &[], BRet::Void, "()V"),
+    bm("write", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("close", &[], BRet::Void, "()V"),
+    bm("flush", &[], BRet::Void, "()V"),
+];
+
 const WRITER_METHODS: &[BuiltinMethod] = &[
     BuiltinMethod {
         name: "println",
@@ -13258,6 +13350,21 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;ILjava/lang/Object;II)V",
     ),
     bm("lineSeparator", &[], BRet::Str, "()Ljava/lang/String;"),
+    // `System.setOut(stream)` / `setErr`: what a JUnit test does to capture
+    // printing. The singleton BEHIND `System.out` is replaced, so every
+    // `System.out.println` after it goes wherever the new stream points.
+    bm(
+        "setOut",
+        &[BParam::PrintStream],
+        BRet::Void,
+        "(Ljava/io/PrintStream;)V",
+    ),
+    bm(
+        "setErr",
+        &[BParam::PrintStream],
+        BRet::Void,
+        "(Ljava/io/PrintStream;)V",
+    ),
     // Identity hash: stable per object for a run (the heap reference), 0 for
     // null. The VALUE differs from any real JVM's (which hands out address
     // bits) — only the identity properties are portable, and they hold.
@@ -15027,7 +15134,10 @@ fn is_empty_optional(receiver: &Expr) -> bool {
 /// cannot write `"" + scanner` must not be able to write `scanner.toString()`
 /// and get an invented answer.
 fn renders_as_text(ty: JType) -> bool {
-    !matches!(ty, JType::Scanner | JType::Writer | JType::Reader)
+    !matches!(
+        ty,
+        JType::Scanner | JType::Writer | JType::Reader | JType::PrintStream
+    )
 }
 
 /// Whether a library type is modelled as ONE class — no interface/concrete
@@ -15041,6 +15151,8 @@ fn is_single_class_library_type(ty: JType) -> bool {
         JType::Scanner
             | JType::File
             | JType::Writer
+            | JType::PrintStream
+            | JType::ByteStream
             | JType::Reader
             | JType::Path
             | JType::Charset
@@ -15078,6 +15190,8 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         }
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
+        JType::PrintStream => Some(("java/io/PrintStream", PRINT_STREAM_METHODS)),
+        JType::ByteStream => Some(("java/io/ByteArrayOutputStream", BYTE_STREAM_METHODS)),
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
         JType::Charset => Some(("java/nio/charset/Charset", CHARSET_METHODS)),
@@ -16105,6 +16219,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Byte => JType::Byte,
         BParam::Boolean => JType::Boolean,
         BParam::Char => JType::Char,
+        BParam::PrintStream => JType::PrintStream,
         BParam::Str => JType::Str,
         BParam::CharSeq => JType::CharSequence,
         BParam::CharArray => JType::Array {
@@ -16532,6 +16647,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
     match ret {
         BRet::Void => None,
         BRet::Writer => Some(JType::Writer),
+        BRet::PrintStream => Some(JType::PrintStream),
         BRet::Path => Some(JType::Path),
         BRet::Charset => Some(JType::Charset),
         BRet::Pattern => Some(JType::Pattern),
@@ -21269,6 +21385,8 @@ impl BodyGen<'_> {
             "Scanner" => JType::Scanner,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
+            "PrintStream" => JType::PrintStream,
+            "ByteArrayOutputStream" => JType::ByteStream,
             "BufferedReader" | "FileReader" | "InputStreamReader" => JType::Reader,
             "ArrayList" => match type_args {
                 // A diamond `new ArrayList<>(...)` leaves its element
@@ -21658,6 +21776,8 @@ impl BodyGen<'_> {
                 // writer, plus the APPEND flag: `new FileWriter(path, true)`
                 // adds to what is there instead of truncating.
                 "PrintWriter" | "FileWriter" => return self.new_writer(args, span),
+                "ByteArrayOutputStream" => return self.new_byte_stream(args, span),
+                "PrintStream" => return self.new_print_stream(args, span),
                 "Integer" | "Double" | "Long" | "Float" | "Short" | "Byte" | "Character"
                 | "Boolean"
                     if wrapper_elem(class_name).is_some() =>
@@ -22456,6 +22576,70 @@ impl BodyGen<'_> {
             "PrintWriter takes a path or a File: new PrintWriter(\"out.txt\")",
         );
         JType::Error
+    }
+
+    /// `new ByteArrayOutputStream()` — an empty buffer. The `(int)` form
+    /// takes a capacity HINT, which changes nothing that can be observed.
+    fn new_byte_stream(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class = intern_class(self.pool, "java/io/ByteArrayOutputStream");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let descriptor = match args {
+            [] => "()V",
+            [size] => {
+                if self.expr(size) != JType::Int {
+                    self.error(span, "a ByteArrayOutputStream's size hint is an int");
+                    return JType::Error;
+                }
+                "(I)V"
+            }
+            _ => {
+                self.error(span, "ByteArrayOutputStream takes no arguments, or a size");
+                return JType::Error;
+            }
+        };
+        let init = intern_method_ref(
+            self.pool,
+            "java/io/ByteArrayOutputStream",
+            "<init>",
+            descriptor,
+        );
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code
+            .drop_stack(if descriptor == "()V" { 1 } else { 2 });
+        JType::ByteStream
+    }
+
+    /// `new PrintStream(out)` — over the one `OutputStream` there is.
+    fn new_print_stream(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class = intern_class(self.pool, "java/io/PrintStream");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let [target] = args else {
+            self.error(
+                span,
+                "PrintStream takes the stream to write to: new PrintStream(buffer)",
+            );
+            return JType::Error;
+        };
+        let target_ty = self.expr(target);
+        if target_ty != JType::ByteStream {
+            self.error(
+                span,
+                "PrintStream writes to a ByteArrayOutputStream — a file is written \
+                 with a PrintWriter",
+            );
+            return JType::Error;
+        }
+        let init = intern_method_ref(
+            self.pool,
+            "java/io/PrintStream",
+            "<init>",
+            "(Ljava/io/OutputStream;)V",
+        );
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code.drop_stack(2);
+        JType::PrintStream
     }
 
     /// `new ArrayList<E>()` (diamond allowed when the declaration names
@@ -23760,6 +23944,8 @@ impl BodyGen<'_> {
             | JType::Scanner
             | JType::File
             | JType::Writer
+            | JType::PrintStream
+            | JType::ByteStream
             | JType::Reader
             | JType::Path
             | JType::Charset
@@ -24152,6 +24338,22 @@ impl BodyGen<'_> {
             && let Some(result) = self.reflective_varargs_call(method, args, span)
         {
             return result;
+        }
+        // The same on a `PrintStream` value, which answers ITSELF from
+        // `format` (a `PrintWriter` answers a writer).
+        if receiver_ty == JType::PrintStream && matches!(method, "printf" | "format") {
+            let (tags, width) = self.emit_format_varargs(args, span)?;
+            // BOTH answer the stream in Java (`PrintStream printf(...)`),
+            // which is what a chained `printf(...).println(...)` needs.
+            let (ret_desc, ret_width, ret_ty) =
+                ("Ljava/io/PrintStream;", 1, Some(JType::PrintStream));
+            let descriptor = format!("(Ljava/lang/String;{tags}){ret_desc}");
+            let method_ref =
+                intern_method_ref(self.pool, "java/io/PrintStream", method, &descriptor);
+            self.code
+                .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
+            self.code.drop_stack(1 + width);
+            return Some(ret_ty);
         }
         if receiver_ty == JType::Writer && matches!(method, "printf" | "format") {
             let (tags, width) = self.emit_format_varargs(args, span)?;
@@ -25595,6 +25797,9 @@ impl BodyGen<'_> {
             JType::Matcher => String::from("java/util/regex/Matcher"),
             JType::MatchResult => String::from("java/util/regex/MatchResult"),
             JType::StringBuilder => String::from("java/lang/StringBuilder"),
+            // A byte stream's `toString()` is the TEXT written into it, which
+            // is the whole point of capturing with one.
+            JType::ByteStream => String::from("java/io/ByteArrayOutputStream"),
             JType::List { .. } => String::from("java/util/ArrayList"),
             JType::Stack(_) => String::from("java/util/Stack"),
             JType::Object(class_id) => self.table.class_name(class_id).to_owned(),
@@ -26370,8 +26575,24 @@ impl BodyGen<'_> {
                 match target {
                     None => None,
                     Some(CallTarget::Stream(stream)) => {
-                        self.print_call(stream, method, args, *span);
-                        None
+                        // The print calls have a direct route (it is where the
+                        // `println` overloads are chosen). Everything else a
+                        // `PrintStream` answers is an ordinary call on the
+                        // value `System.out` now IS — without which the same
+                        // object answered `close()` through a variable and
+                        // "cannot find symbol" through `System.out`.
+                        if matches!(
+                            method.as_str(),
+                            "println" | "print" | "printf" | "write" | "append" | "flush"
+                        ) {
+                            self.print_call(stream, method, args, *span);
+                            None
+                        } else {
+                            match receiver.as_deref() {
+                                Some(target) => self.instance_call(target, method, args, *span),
+                                None => None,
+                            }
+                        }
                     }
                     Some(CallTarget::Static(class)) => {
                         let restore =
@@ -29125,8 +29346,11 @@ impl BodyGen<'_> {
             | JType::Stack(_)
             | JType::Exception(_)
             | JType::File
+            // Coerced to its text before this — the arm is here because the
+            // match must be total, and String is what will be on the stack.
+            | JType::ByteStream
             | JType::Path => Some(String::from("(Ljava/lang/String;)V")),
-            JType::Scanner | JType::Writer | JType::Reader => {
+            JType::Scanner | JType::Writer | JType::Reader | JType::PrintStream => {
                 self.error(
                     span,
                     format!("printing a {} is not supported", ty.describe(self.table)),
@@ -29278,6 +29502,23 @@ impl BodyGen<'_> {
                 self.table
                     .class_id("__Comparator")
                     .map_or(JType::Error, JType::Object)
+            }
+            // `System.out` / `System.err` as a value — the same answer the
+            // emit path gives, and the reason `report(System.out, ...)` was
+            // "cannot determine the type of an argument".
+            Expr::Name { path, .. }
+                if matches!(
+                    self.strip_package_prefix(path)
+                        .as_deref()
+                        .unwrap_or(path)
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()[..],
+                    ["System", "out" | "err"]
+                ) && !self.table.has_class("System")
+                    && self.lookup("System").is_none() =>
+            {
+                JType::PrintStream
             }
             // `StandardCharsets.UTF_8` and the names beside it — constants of a
             // class whose only role is to hold them.
@@ -30545,17 +30786,16 @@ impl BodyGen<'_> {
                 self.enter_member_access(receiver.as_deref());
                 let outcome = match self.call_target(receiver.as_deref(), *span) {
                     None => None,
-                    Some(CallTarget::Stream(_)) => {
-                        // `printf`/`append` DO return the stream in Java, so
-                        // chaining is valid — caturra models the print calls as
-                        // statements and cannot carry the stream as a value.
-                        self.error(
-                            *span,
-                            "chained print calls are not supported by caturra \
-                             (printf and append return the stream in Java)",
-                        );
-                        None
-                    }
+                    // In an EXPRESSION, a call through `System.out` is an
+                    // ordinary instance call on a `PrintStream` — which is
+                    // what makes `printf(...).println(...)` chain, and what
+                    // gives `System.out` the same methods a stream held in a
+                    // variable has. (A statement keeps the direct route below,
+                    // which is where the `println` overloads are chosen.)
+                    Some(CallTarget::Stream(_)) => match receiver.as_deref() {
+                        Some(stream) => self.instance_call(stream, method, args, *span),
+                        None => None,
+                    },
                     Some(CallTarget::Static(class)) => {
                         let restore =
                             std::mem::replace(&mut self.call_witness, type_args.first().cloned());
@@ -31696,6 +31936,30 @@ impl BodyGen<'_> {
             );
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
             return JType::Charset;
+        }
+        // `System.out` / `System.err` as a VALUE. A call THROUGH one is
+        // routed straight to the stream (`CallTarget::Stream`), which is why
+        // the field itself never needed a type — and why `PrintStream saved =
+        // System.out;`, the first half of every capture-and-restore, could not
+        // be written.
+        if let ["System", stream @ ("out" | "err")] = self
+            .strip_package_prefix(path)
+            .as_deref()
+            .unwrap_or(path)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()[..]
+            && !self.table.has_class("System")
+            && self.lookup("System").is_none()
+        {
+            let field = intern_field_ref(
+                self.pool,
+                "java/lang/System",
+                stream,
+                "Ljava/io/PrintStream;",
+            );
+            self.code.push_op_u16(op::GETSTATIC, field, 1);
+            return JType::PrintStream;
         }
         // Intrinsic constants: Integer.MAX_VALUE / MIN_VALUE.
         if path.len() == 2
@@ -34030,8 +34294,9 @@ impl BodyGen<'_> {
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
+            | JType::ByteStream
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
-            JType::Scanner | JType::Writer | JType::Reader => {
+            JType::Scanner | JType::Writer | JType::Reader | JType::PrintStream => {
                 self.error(
                     span,
                     format!(
@@ -34406,6 +34671,8 @@ impl BodyGen<'_> {
             | JType::Scanner
             | JType::File
             | JType::Writer
+            | JType::PrintStream
+            | JType::ByteStream
             | JType::List { .. }
             | JType::Stack(_)
             | JType::Map { .. }
@@ -34431,6 +34698,8 @@ impl BodyGen<'_> {
             | JType::Scanner
             | JType::File
             | JType::Writer
+            | JType::PrintStream
+            | JType::ByteStream
             | JType::List { .. }
             | JType::Stack(_)
             | JType::Map { .. }

@@ -8482,7 +8482,7 @@ fn labeled_break_continue_errors_match_javac() {
         ),
         (
             "class M { static void f() { continue; } }",
-            "'continue' can only be used inside a loop",
+            "continue outside of loop",
         ),
     ];
     for (source, expected) in cases {

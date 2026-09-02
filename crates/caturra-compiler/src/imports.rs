@@ -81,6 +81,13 @@ const JAVA_UTIL: &[&str] = &[
 const JAVA_IO: &[&str] = &[
     "File",
     "PrintWriter",
+    // `System.out` IS a `PrintStream`, and a test captures printing by
+    // handing `System.setOut` one over a `ByteArrayOutputStream` — the only
+    // `OutputStream` there is here, which is why the abstract name is a face
+    // of it rather than a type of its own.
+    "PrintStream",
+    "ByteArrayOutputStream",
+    "OutputStream",
     "BufferedReader",
     "FileReader",
     "InputStreamReader",
@@ -267,9 +274,7 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "Serializable",
             "BufferedWriter",
             "FileWriter",
-            "PrintStream",
             "InputStream",
-            "OutputStream",
             "Reader",
             "Writer",
         ],
@@ -362,6 +367,9 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Stream",
     "File",
     "PrintWriter",
+    "PrintStream",
+    "ByteArrayOutputStream",
+    "OutputStream",
     "BufferedReader",
     "FileReader",
     "InputStreamReader",

@@ -341,6 +341,17 @@ pub enum StdStream {
     Err,
 }
 
+/// Where a `PrintStream` puts what it is given: one of the two standard
+/// streams, or a `ByteArrayOutputStream` the program owns — which is how a
+/// `JUnit` test captures what a program prints (`System.setOut(new
+/// PrintStream(captor))`), and two of Code.org's own validators do exactly
+/// that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrintSink {
+    Std(StdStream),
+    Bytes(HeapRef),
+}
+
 /// Where each of a class's instance fields lives in an object.
 ///
 /// Fields are keyed `Declaring.name`: a subclass may hide a superclass field of
@@ -434,8 +445,13 @@ pub enum HeapObject {
     JavaString(Vec<u16>),
     /// A `java.lang.StringBuilder` (used by compiled string concatenation).
     StringBuilder(Vec<u16>),
-    /// The intrinsic object behind `System.out` / `System.err`.
-    PrintStream(StdStream),
+    /// The intrinsic object behind `System.out` / `System.err` — or one a
+    /// program built over a byte buffer of its own.
+    PrintStream(PrintSink),
+    /// A `java.io.ByteArrayOutputStream`: the bytes written into it so far.
+    /// The only `OutputStream` caturra models, and the one a test captures
+    /// output with.
+    ByteStream(Vec<u8>),
     /// An `int[]`, `boolean[]`, or `char[]` — all stored as i32 per
     /// JVMS array-load semantics (stores mask to the element width). The
     /// kind is carried because the three render and hash differently once
@@ -1032,11 +1048,16 @@ impl HeapObject {
             }
         };
         match self {
+            // A `PrintStream` over a program's own buffer KEEPS that buffer
+            // alive: `System.setOut(new PrintStream(captor))` and then reading
+            // `captor` after collection.
+            HeapObject::PrintStream(PrintSink::Bytes(reference)) => visit(*reference),
             // No references at all: the text, the primitive arrays, the
             // handles that hold only names, the stream/file endpoints.
             HeapObject::JavaString(_)
             | HeapObject::StringBuilder(_)
-            | HeapObject::PrintStream(_)
+            | HeapObject::ByteStream(_)
+            | HeapObject::PrintStream(PrintSink::Std(_))
             | HeapObject::IntArray(_, _)
             | HeapObject::DoubleArray(_)
             | HeapObject::LongArray(_)

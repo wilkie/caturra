@@ -12374,3 +12374,56 @@ Pinned by `an_inner_class_in_a_static_context`,
 `an_inner_class_from_another_class`, `reject_a_double_switch_selector`,
 `reject_an_object_switch_selector`, `reject_a_break_outside_a_loop`,
 `reject_a_continue_outside_a_loop` and `the_switches_a_lesson_writes`.
+
+### Capturing what a program prints
+
+Two of Code.org's own validators are written the way every JUnit tutorial
+writes an output test:
+
+```java
+private final PrintStream standardOut = System.out;
+private final ByteArrayOutputStream outputStreamCaptor = new ByteArrayOutputStream();
+
+@BeforeEach public void setUp()    { System.setOut(new PrintStream(outputStreamCaptor)); }
+@AfterEach  public void tearDown() { System.setOut(standardOut); }
+```
+
+Not one line of that ran here. `PrintStream` and `OutputStream` were on the
+honest-refusal list, `System.setOut` did not exist, and `System.out` was not a
+VALUE at all — the compiler routed `System.out.println(...)` straight to the
+stream, so the field itself never needed a type. (The two levels are not in the
+grading sweep, because neither ships a `solution` for it to grade. They are
+still levels a student is graded on.)
+
+**`System.out` is a `PrintStream` value now**, `System.setOut` REPLACES the
+singleton behind it — which is why every `System.out.println` after it follows,
+routed or not — and a `PrintStream` carries a SINK: one of the two standard
+streams, or a `ByteArrayOutputStream` the program owns. The buffer is reachable
+through the stream, so a collection cycle in between does not take it away.
+
+**And `@AfterEach` ran nowhere at all.** The generated runner did `@BeforeAll`,
+`@BeforeEach`, the test — and stopped. JUnit runs the teardown whether the test
+passed or threw, which is why it goes in both arms of the runner's `try` rather
+than a `finally`: a `finally` runs after the verdict is printed, and the
+teardown is what puts `System.out` back. `@AfterAll` runs at the end of the
+class.
+
+**The runner reports out of band.** Its `__VPLAN`/`__VTEST` lines went through
+`System.out` — the same channel the program under test can redirect. A
+validator that captures output would have collected the runner's own reporting
+into the student's buffer, and every verdict after the first would have
+vanished. The runner holds the stream `System.out` named at startup and prints
+through that, which is what a real harness does for the same reason.
+
+Two smaller things fell out of making `System.out` a value. `printf` and
+`append` answer the stream in Java, so they CHAIN — `System.out.printf(...)`
+`.println(...)` was refused in as many words ("chained print calls are not
+supported"). And `System.out.close()` was "cannot find symbol" while
+`held.close()` on the same object worked: the print calls keep their direct
+route (it is where the `println` overloads are chosen) and everything else is
+now an ordinary call on the value, so the two agree.
+
+Pinned by `diff_junit_captures_standard_out` (against real JUnit, including a
+test that FAILS while capturing), `capturing_what_a_program_prints`,
+`a_captured_buffer_survives_a_collection`, `a_print_stream_is_a_value`, and the
+`capture-standard-out` feature on the compatibility page.

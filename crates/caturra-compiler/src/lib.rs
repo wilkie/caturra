@@ -142,6 +142,8 @@ struct TestClass {
     name: String,
     before_all: Vec<String>,
     before_each: Vec<String>,
+    after_each: Vec<String>,
+    after_all: Vec<String>,
     tests: Vec<TestCase>,
 }
 
@@ -162,6 +164,22 @@ fn collect_tests(units: &[(String, ast::CompilationUnit)]) -> Vec<TestClass> {
                 .methods
                 .iter()
                 .filter(|m| has(m, "BeforeEach"))
+                .map(|m| m.name.clone())
+                .collect();
+            // `@AfterEach`/`@AfterAll` ran nowhere at all. JUnit runs the
+            // teardown even when the test FAILS, and a validator that captures
+            // printing restores `System.out` there — so without it every
+            // verdict after the first went into the student's own buffer.
+            let after_each: Vec<String> = class
+                .methods
+                .iter()
+                .filter(|m| has(m, "AfterEach"))
+                .map(|m| m.name.clone())
+                .collect();
+            let after_all: Vec<String> = class
+                .methods
+                .iter()
+                .filter(|m| has(m, "AfterAll"))
                 .map(|m| m.name.clone())
                 .collect();
             let mut tests: Vec<TestCase> = class
@@ -203,6 +221,8 @@ fn collect_tests(units: &[(String, ast::CompilationUnit)]) -> Vec<TestClass> {
                     name: class.name.clone(),
                     before_all,
                     before_each,
+                    after_each,
+                    after_all,
                     tests,
                 });
             }
@@ -228,14 +248,22 @@ fn collect_tests(units: &[(String, ast::CompilationUnit)]) -> Vec<TestClass> {
 /// plan lines make the roster known before anything can go wrong, so the count
 /// a host reports cannot shrink.
 fn validation_runner_source(classes: &[TestClass]) -> String {
+    // The protocol lines go out through the stream `System.out` names at
+    // startup, held in a local. A validator that captures printing —
+    // `System.setOut(new PrintStream(captor))`, which is how JUnit tests check
+    // console output and how two of Code.org's own validators are written —
+    // would otherwise redirect the RUNNER's reporting into the student's
+    // buffer, and every verdict after the first would vanish. A real harness
+    // reports out of band for the same reason.
     let mut src = String::from(
-        "public class __ValidationRunner {\n  public static void main(String[] args) {\n",
+        "public class __ValidationRunner {\n  public static void main(String[] args) {\n    \
+         java.io.PrintStream __log = System.out;\n",
     );
     for class in classes {
         for test in &class.tests {
             let _ = writeln!(
                 src,
-                "    System.out.println(\"__VPLAN\\t{}\");",
+                "    __log.println(\"__VPLAN\\t{}\");",
                 escape_for_java(&test.display)
             );
         }
@@ -250,16 +278,28 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
         }
         for test in &class.tests {
             let name = escape_for_java(&test.display);
+            // Each test gets its own BLOCK: the instance is declared outside
+            // the `try` so the catch arm can run the teardown on it too, and
+            // that declaration would otherwise collide with the next test's.
+            src.push_str("    {\n");
+            let _ = writeln!(src, "    {} __t = null;", class.name);
             src.push_str("    try {\n");
-            let _ = writeln!(src, "      {0} __t = new {0}();", class.name);
+            let _ = writeln!(src, "      __t = new {}();", class.name);
             for setup in &class.before_each {
                 let _ = writeln!(src, "      __t.{setup}();");
             }
             let _ = writeln!(src, "      __t.{}();", test.method);
-            let _ = writeln!(
-                src,
-                "      System.out.println(\"__VTEST\\tPASS\\t{name}\\t\");"
-            );
+            // JUnit runs the teardown whether the test passed or threw, so it
+            // goes in BOTH arms — a `finally` would run after the verdict is
+            // printed, which is the one order that does not work when the
+            // teardown is what restores `System.out`.
+            for teardown in &class.after_each {
+                let _ = writeln!(
+                    src,
+                    "      try {{ __t.{teardown}(); }} catch (Throwable __e) {{}}"
+                );
+            }
+            let _ = writeln!(src, "      __log.println(\"__VTEST\\tPASS\\t{name}\\t\");");
             src.push_str("    } catch (Throwable __e) {\n");
             // One line per test, so the message has to survive being put on
             // one. The corpus's failure messages are the HINT a student reads,
@@ -267,6 +307,13 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
             // ended at the first newline and the rest of the guidance was lost.
             // A null message (a bare `throw new IllegalStateException()`) is
             // empty, not the text "null".
+            for teardown in &class.after_each {
+                let _ = writeln!(
+                    src,
+                    "      if (__t != null) {{ try {{ __t.{teardown}(); }} \
+                     catch (Throwable __e2) {{}} }}"
+                );
+            }
             src.push_str("      String __m = __e.getMessage();\n");
             src.push_str("      if (__m == null) { __m = \"\"; }\n");
             src.push_str(
@@ -274,9 +321,18 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
             );
             let _ = writeln!(
                 src,
-                "      System.out.println(\"__VTEST\\tFAIL\\t{name}\\t\" + __m);"
+                "      __log.println(\"__VTEST\\tFAIL\\t{name}\\t\" + __m);"
             );
-            src.push_str("    }\n");
+            src.push_str("    }\n    }\n");
+        }
+    }
+    for class in classes {
+        for teardown in &class.after_all {
+            let _ = writeln!(
+                src,
+                "    try {{ {}.{teardown}(); }} catch (Throwable __e) {{}}",
+                class.name
+            );
         }
     }
     src.push_str("  }\n}\n");

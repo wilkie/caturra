@@ -44,5 +44,7 @@
   "java.util.stream.IntStream": "java.util.stream.IntStream.of(1)",
   "java.util.stream.Collectors": "STATIC",
   "java.util.regex.Pattern": "java.util.regex.Pattern.compile(\"a\")",
-  "java.util.regex.Matcher": "java.util.regex.Pattern.compile(\"a\").matcher(\"a\")"
+  "java.util.regex.Matcher": "java.util.regex.Pattern.compile(\"a\").matcher(\"a\")",
+  "java.io.PrintStream": "java.lang.System.out",
+  "java.io.ByteArrayOutputStream": "new java.io.ByteArrayOutputStream()"
 }

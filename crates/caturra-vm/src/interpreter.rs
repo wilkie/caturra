@@ -13440,6 +13440,27 @@ impl<'run> Interpreter<'run> {
             intrinsics::system_arraycopy(&mut self.heap, args, &fits)?;
             return Ok(None);
         }
+        // `System.setOut(stream)` / `setErr`: the singleton BEHIND `System.out`
+        // is replaced, so every `System.out.println` after it — which the
+        // compiler routes straight to that object — writes wherever the new
+        // stream points. Answered here rather than in the heap-only intrinsics
+        // because it is the interpreter that owns the singletons.
+        if class_name == "java/lang/System"
+            && matches!(method_name, "setOut" | "setErr")
+            && let Some(JValue::Ref(stream)) = args.first()
+        {
+            let Some(reference) = stream else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
+            if method_name == "setOut" {
+                self.intrinsic_statics.stdout = Some(*reference);
+            } else {
+                self.intrinsic_statics.stderr = Some(*reference);
+            }
+            return Ok(None);
+        }
         // `System.gc()`: a REQUEST, both in Java ("the Java Virtual Machine
         // expends effort") and here — the collector runs at the next
         // safepoint, which is the next instruction. Answered here rather than
@@ -20275,6 +20296,8 @@ pub(crate) fn object_class_name_of(
         Some(HeapObject::Scanner { .. }) => String::from("java/util/Scanner"),
         Some(HeapObject::Reader { .. }) => String::from("java/io/BufferedReader"),
         Some(HeapObject::Writer { .. }) => String::from("java/io/PrintWriter"),
+        Some(HeapObject::PrintStream(_)) => String::from("java/io/PrintStream"),
+        Some(HeapObject::ByteStream(_)) => String::from("java/io/ByteArrayOutputStream"),
         Some(HeapObject::StackFrame { .. }) => String::from("java/lang/StackTraceElement"),
         Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),
         // A path is the platform's implementation class — caturra's

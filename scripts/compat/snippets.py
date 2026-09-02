@@ -2344,6 +2344,34 @@ GRAMMAR = [
                       '    void viaAnonymous() {\n'
                       '        Src s = new Src() { public int get() { return x + twice(); } };\n'
                       '        System.out.println(s.get());\n    }')),
+    dict(
+        id="capture-standard-out",
+        category="Library",
+        title="Capturing what a program prints",
+        summary="`System.out` is a `PrintStream` value; hand `System.setOut` one over a `ByteArrayOutputStream` and everything printed lands in the buffer — the standard way a JUnit test checks console output.",
+        main="Capture",
+        source="""
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+
+public class Capture {
+    public static void main(String[] args) {
+        PrintStream console = System.out;
+        ByteArrayOutputStream captor = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(captor));
+
+        System.out.println("first");
+        System.out.printf("%s=%d%n", "n", 7);
+
+        System.setOut(console);
+        System.out.println("captured " + captor.size() + " bytes");
+        System.out.println("[" + captor + "]");
+        captor.reset();
+        System.out.println("after reset: " + captor.size());
+    }
+}
+""",
+    ),
     dict(id="g-generic-supertype", category="Declarations", title="Parameterized supertype (with bridge methods)",
          summary="A subclass stands in for `Box<String>`, and a call through that reference reaches the OVERRIDE — which needs the bridge method erasure would otherwise lose.",
          main="G",

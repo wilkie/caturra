@@ -1083,6 +1083,16 @@
     "expected": "1 2 2\n3\n"
   },
   {
+    "id": "capture-standard-out",
+    "category": "Library",
+    "title": "Capturing what a program prints",
+    "summary": "`System.out` is a `PrintStream` value; hand `System.setOut` one over a `ByteArrayOutputStream` and everything printed lands in the buffer \u2014 the standard way a JUnit test checks console output.",
+    "main": "Capture",
+    "source": "import java.io.ByteArrayOutputStream;\nimport java.io.PrintStream;\n\npublic class Capture {\n    public static void main(String[] args) {\n        PrintStream console = System.out;\n        ByteArrayOutputStream captor = new ByteArrayOutputStream();\n        System.setOut(new PrintStream(captor));\n\n        System.out.println(\"first\");\n        System.out.printf(\"%s=%d%n\", \"n\", 7);\n\n        System.setOut(console);\n        System.out.println(\"captured \" + captor.size() + \" bytes\");\n        System.out.println(\"[\" + captor + \"]\");\n        captor.reset();\n        System.out.println(\"after reset: \" + captor.size());\n    }\n}\n",
+    "status": "supported",
+    "expected": "captured 10 bytes\n[first\nn=7\n]\nafter reset: 0\n"
+  },
+  {
     "id": "g-generic-supertype",
     "category": "Declarations",
     "title": "Parameterized supertype (with bridge methods)",
