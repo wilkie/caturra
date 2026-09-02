@@ -12503,3 +12503,20 @@ Pinned by `easymock_partial_mock_of_a_class_with_no_default_constructor`,
 `diff_junit_a_failing_before_all_runs_no_test` (against real JUnit),
 `reject_super_arguments_with_no_superclass` and
 `an_org_code_class_needs_its_import_in_every_file`.
+
+### The levels the playground ships
+
+The corpus in `artifacts/` is the source; what a student actually opens is the
+generated `apps/playground/src/csa-units/unit-*.ts` — 724 levels, checked in
+rather than vendored, and the one population where a refusal means a level is
+broken today. Nothing had ever compiled them either.
+
+**724 levels: 591 compile in both engines, 133 are refused by both — they name
+a class the student has yet to write — and neither engine disagrees with the
+other about a single one.**
+
+All four populations are one script now (`scripts/sweep/compile.py --what
+starts|validators|staged|levels`), because the finding each time was not a bug
+in a rule but a set of files no tool had looked at. It is the cheapest question
+there is — does this compile, and does javac agree — and it was never asked of
+anything except the staged cases.

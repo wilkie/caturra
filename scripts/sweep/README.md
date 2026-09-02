@@ -32,6 +32,24 @@ scripts/sweep/compare.py vendor/sweep-reference-orgcode.json vendor/sweep-caturr
 scripts/sweep/stdout.py                       # what each level PRINTS, vs a JDK
 ```
 
+`compile.py` is the same corpus asked the FIRST question: does it compile at
+all, and does javac agree? It exists because every other sweep here compiles
+one set — a level's `solution` merged with its `start`, staged only when a
+solution exists — and each population OUTSIDE that set hid a divergence when it
+was first asked:
+
+```sh
+scripts/sweep/compile.py --what validators   # levels with a validator and NO solution
+scripts/sweep/compile.py --what starts       # every level's start files ALONE
+scripts/sweep/compile.py --what staged       # the staged cases, compile-for-compile
+scripts/sweep/compile.py --what levels       # the levels the playground SHIPS
+```
+
+`levels` is the one population that is checked in rather than vendored (it
+reads `apps/playground/src/csa-units/unit-*.ts`), so it runs anywhere; the
+other three need `artifacts/` or `vendor/sweep-cases/`. A "javac only" line is
+the dangerous direction — a program caturra accepts that a JDK refuses.
+
 `stdout.py` is the same corpus asked a different question. It needs no recorded
 reference — it runs `javac`/`java` beside caturra, level by level — and it
 compares the console rather than the verdict: the output a completing `main`
