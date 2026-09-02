@@ -341,6 +341,39 @@ pub enum StdStream {
     Err,
 }
 
+/// One `java.time` value. Small and `Copy`, because these are value types:
+/// every operation on one answers a NEW one, and nothing mutates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Temporal {
+    Date(crate::time::Date),
+    /// `java.time.DayOfWeek`, 1..=7 with Monday at 1.
+    DayOfWeek(u8),
+    /// `java.time.Month`, 1..=12.
+    Month(u8),
+}
+
+impl Temporal {
+    /// The class a `getClass()` reports, and the name an exception mentions.
+    #[must_use]
+    pub fn class_name(self) -> &'static str {
+        match self {
+            Temporal::Date(_) => "java/time/LocalDate",
+            Temporal::DayOfWeek(_) => "java/time/DayOfWeek",
+            Temporal::Month(_) => "java/time/Month",
+        }
+    }
+
+    /// What `toString()` gives.
+    #[must_use]
+    pub fn text(self) -> String {
+        match self {
+            Temporal::Date(date) => date.to_string(),
+            Temporal::DayOfWeek(day) => crate::time::day_name(day).to_owned(),
+            Temporal::Month(month) => crate::time::month_name(month).to_owned(),
+        }
+    }
+}
+
 /// Where a `PrintStream` puts what it is given: one of the two standard
 /// streams, or a `ByteArrayOutputStream` the program owns — which is how a
 /// `JUnit` test captures what a program prints (`System.setOut(new
@@ -448,6 +481,12 @@ pub enum HeapObject {
     /// The intrinsic object behind `System.out` / `System.err` — or one a
     /// program built over a byte buffer of its own.
     PrintStream(PrintSink),
+    /// A `java.time` value: a `LocalDate`, or one of the two enums it
+    /// answers with. Immutable, and compared BY VALUE — a `LocalDate` is not
+    /// interned (`LocalDate.of(y,m,d) == LocalDate.of(y,m,d)` is false on a
+    /// JDK, as it is here), while `DayOfWeek`/`Month` are real enum constants
+    /// and must be the same object every time.
+    Temporal(Temporal),
     /// A `java.io.ByteArrayOutputStream`: the bytes written into it so far.
     /// The only `OutputStream` caturra models, and the one a test captures
     /// output with.
@@ -1057,6 +1096,7 @@ impl HeapObject {
             HeapObject::JavaString(_)
             | HeapObject::StringBuilder(_)
             | HeapObject::ByteStream(_)
+            | HeapObject::Temporal(_)
             | HeapObject::PrintStream(PrintSink::Std(_))
             | HeapObject::IntArray(_, _)
             | HeapObject::DoubleArray(_)
@@ -1239,6 +1279,8 @@ pub struct Heap {
     /// a == b` is true while `200 == 200` (out of range) is false. Keyed by
     /// (wrapper tag, value) — see [`Heap::box_wrapper`].
     wrapper_cache: std::collections::HashMap<(u8, i64), HeapRef>,
+    /// The `java.time` enum constants, keyed by (kind, value).
+    temporal_pool: std::collections::HashMap<(u8, u8), HeapRef>,
     /// What an object RENDERS TO in a format call. Only the interpreter can
     /// run a user `toString`, so `String.format`'s arguments are rendered
     /// ahead of the formatter — but the formatter still has to name the
@@ -1285,6 +1327,7 @@ impl Default for Heap {
             live_bytes: 0,
             threshold: HEAP_FLOOR,
             wrapper_cache: std::collections::HashMap::new(),
+            temporal_pool: std::collections::HashMap::new(),
             format_text: std::collections::HashMap::new(),
             builder_capacity: std::collections::HashMap::new(),
         }
@@ -1334,6 +1377,30 @@ impl Heap {
     /// answer the same reference for the life of the program.
     pub fn cached_boxes(&self) -> impl Iterator<Item = HeapRef> + '_ {
         self.wrapper_cache.values().copied()
+    }
+
+    /// A `java.time` ENUM constant — the same object every time, because
+    /// `date.getDayOfWeek() == DayOfWeek.MONDAY` is how the comparison is
+    /// written and an enum constant is a singleton. A `LocalDate` is NOT
+    /// interned (a JDK's is not either), so it allocates.
+    pub fn intern_temporal(&mut self, value: Temporal) -> HeapRef {
+        let key = match value {
+            Temporal::Date(_) => return self.alloc(HeapObject::Temporal(value)),
+            Temporal::DayOfWeek(day) => (0u8, day),
+            Temporal::Month(month) => (1u8, month),
+        };
+        if let Some(existing) = self.temporal_pool.get(&key) {
+            return *existing;
+        }
+        let reference = self.alloc(HeapObject::Temporal(value));
+        self.temporal_pool.insert(key, reference);
+        reference
+    }
+
+    /// The interned `java.time` constants: roots, for the same reason the
+    /// boxes are.
+    pub fn interned_temporals(&self) -> impl Iterator<Item = HeapRef> + '_ {
+        self.temporal_pool.values().copied()
     }
 
     /// The object at a slot, for the collector's walk — which must see even a

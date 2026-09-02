@@ -3492,6 +3492,9 @@ impl MethodTable {
                     "File" => Some(JType::File),
                     "PrintWriter" | "FileWriter" => Some(JType::Writer),
                     "PrintStream" => Some(JType::PrintStream),
+                    "LocalDate" => Some(JType::LocalDate),
+                    "DayOfWeek" => Some(JType::DayOfWeek),
+                    "Month" => Some(JType::Month),
                     // A `ByteArrayOutputStream` is the only `OutputStream`
                     // there is here, so the abstract name is a FACE of it —
                     // the way `List` is a face of `ArrayList`.
@@ -5834,6 +5837,53 @@ fn strip_local_suffix(name: &str) -> &str {
 /// The charset a `StandardCharsets.X` path names, in the JDK's canonical
 /// spelling. `None` for anything else — including a program's own class of that
 /// name, which shadows the library one as every other name does.
+/// `DayOfWeek.MONDAY` / `Month.JANUARY` — an enum CONSTANT of one of the two
+/// `java.time` enums, as `(class, ordinal)`. They are static fields, so they
+/// are read where `StandardCharsets.UTF_8` is, and answered the same way: by a
+/// factory call the program cannot write, which interns the constant so `==`
+/// works on it.
+fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
+    let [class, name] = path else {
+        return None;
+    };
+    if table.has_class(class.as_str()) {
+        return None;
+    }
+    let names: &[&str] = match class.as_str() {
+        "DayOfWeek" => &[
+            "MONDAY",
+            "TUESDAY",
+            "WEDNESDAY",
+            "THURSDAY",
+            "FRIDAY",
+            "SATURDAY",
+            "SUNDAY",
+        ],
+        "Month" => &[
+            "JANUARY",
+            "FEBRUARY",
+            "MARCH",
+            "APRIL",
+            "MAY",
+            "JUNE",
+            "JULY",
+            "AUGUST",
+            "SEPTEMBER",
+            "OCTOBER",
+            "NOVEMBER",
+            "DECEMBER",
+        ],
+        _ => return None,
+    };
+    let ordinal = names.iter().position(|known| known == name)?;
+    let ty = if class == "DayOfWeek" {
+        JType::DayOfWeek
+    } else {
+        JType::Month
+    };
+    Some((ty, i32::try_from(ordinal).unwrap_or(0) + 1))
+}
+
 fn standard_charset(path: &[String], table: &MethodTable) -> Option<&'static str> {
     // Written plainly (`StandardCharsets.UTF_8`) or in full
     // (`java.nio.charset.StandardCharsets.UTF_8`) — the same constant either
@@ -7287,6 +7337,13 @@ enum JType {
     /// `java.io.ByteArrayOutputStream` (and `OutputStream`, the only face of
     /// it caturra has): the bytes something printed into it.
     ByteStream,
+    /// `java.time.LocalDate` — a date with no time and no zone, which is the
+    /// part of `java.time` that is pure arithmetic.
+    LocalDate,
+    /// `java.time.DayOfWeek` and `java.time.Month`: real enums, so their
+    /// constants are interned and `==` works on them.
+    DayOfWeek,
+    Month,
     /// `java.io.BufferedReader`/`FileReader`/`InputStreamReader` (intrinsic).
     /// One reader kind: a file reader slurps the file, a `System.in` reader
     /// pulls console lines. `readLine`/`read` hand them out.
@@ -7810,6 +7867,9 @@ impl JType {
             JType::File => String::from("File"),
             JType::Writer => String::from("PrintWriter"),
             JType::PrintStream => String::from("PrintStream"),
+            JType::LocalDate => String::from("LocalDate"),
+            JType::DayOfWeek => String::from("DayOfWeek"),
+            JType::Month => String::from("Month"),
             JType::ByteStream => String::from("ByteArrayOutputStream"),
             JType::Reader => String::from("BufferedReader"),
             JType::Path => String::from("Path"),
@@ -7856,6 +7916,9 @@ impl JType {
                 | JType::Writer
                 | JType::PrintStream
                 | JType::ByteStream
+                | JType::LocalDate
+                | JType::DayOfWeek
+                | JType::Month
                 | JType::Reader
                 | JType::Path
                 | JType::Charset
@@ -7996,6 +8059,9 @@ impl JType {
             JType::File => String::from("Ljava/io/File;"),
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
             JType::PrintStream => String::from("Ljava/io/PrintStream;"),
+            JType::LocalDate => String::from("Ljava/time/LocalDate;"),
+            JType::DayOfWeek => String::from("Ljava/time/DayOfWeek;"),
+            JType::Month => String::from("Ljava/time/Month;"),
             JType::ByteStream => String::from("Ljava/io/ByteArrayOutputStream;"),
             JType::Reader => String::from("Ljava/io/BufferedReader;"),
             JType::Path => String::from("Ljava/nio/file/Path;"),
@@ -9563,6 +9629,10 @@ enum BParam {
     Object,
     /// `java.io.PrintStream` — the argument `System.setOut` takes.
     PrintStream,
+    /// The `java.time` values, where a method takes another of its own kind.
+    LocalDate,
+    DayOfWeek,
+    Month,
     /// The erased target type of a `Map.forEach` lambda: a class that
     /// implements the bundled `__BiConsumer`. Only the lambda desugaring
     /// synthesizes one, so `map.forEach(anythingElse)` is refused.
@@ -9598,6 +9668,10 @@ enum BRet {
     Void,
     /// `java.io.PrintStream` — what `append`/`printf` answer, for chaining.
     PrintStream,
+    /// The `java.time` values.
+    LocalDate,
+    DayOfWeek,
+    Month,
     /// The `java.io.PrintWriter` itself — `append`/`format` return the writer
     /// for chaining.
     Writer,
@@ -12446,6 +12520,219 @@ const FILE_METHODS: &[BuiltinMethod] = &[
     bm("listFiles", &[], BRet::FileArray, "()[Ljava/io/File;"),
 ];
 
+/// `java.time.LocalDate` — the whole of it that is pure calendar arithmetic:
+/// no clock, no locale, no timezone database, and so exactly comparable with
+/// a JDK.
+const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
+    bm("getYear", &[], BRet::Int, "()I"),
+    bm("getMonthValue", &[], BRet::Int, "()I"),
+    bm("getDayOfMonth", &[], BRet::Int, "()I"),
+    bm("getDayOfYear", &[], BRet::Int, "()I"),
+    bm("lengthOfMonth", &[], BRet::Int, "()I"),
+    bm("lengthOfYear", &[], BRet::Int, "()I"),
+    bm("isLeapYear", &[], BRet::Boolean, "()Z"),
+    bm("toEpochDay", &[], BRet::Long, "()J"),
+    bm("getMonth", &[], BRet::Month, "()Ljava/time/Month;"),
+    bm(
+        "getDayOfWeek",
+        &[],
+        BRet::DayOfWeek,
+        "()Ljava/time/DayOfWeek;",
+    ),
+    bm(
+        "plusDays",
+        &[BParam::Long],
+        BRet::LocalDate,
+        "(J)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "minusDays",
+        &[BParam::Long],
+        BRet::LocalDate,
+        "(J)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "plusWeeks",
+        &[BParam::Long],
+        BRet::LocalDate,
+        "(J)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "minusWeeks",
+        &[BParam::Long],
+        BRet::LocalDate,
+        "(J)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "plusMonths",
+        &[BParam::Long],
+        BRet::LocalDate,
+        "(J)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "minusMonths",
+        &[BParam::Long],
+        BRet::LocalDate,
+        "(J)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "plusYears",
+        &[BParam::Long],
+        BRet::LocalDate,
+        "(J)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "minusYears",
+        &[BParam::Long],
+        BRet::LocalDate,
+        "(J)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "withYear",
+        &[BParam::Int],
+        BRet::LocalDate,
+        "(I)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "withMonth",
+        &[BParam::Int],
+        BRet::LocalDate,
+        "(I)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "withDayOfMonth",
+        &[BParam::Int],
+        BRet::LocalDate,
+        "(I)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "isBefore",
+        &[BParam::LocalDate],
+        BRet::Boolean,
+        "(Ljava/time/LocalDate;)Z",
+    ),
+    bm(
+        "isAfter",
+        &[BParam::LocalDate],
+        BRet::Boolean,
+        "(Ljava/time/LocalDate;)Z",
+    ),
+    bm(
+        "isEqual",
+        &[BParam::LocalDate],
+        BRet::Boolean,
+        "(Ljava/time/LocalDate;)Z",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::LocalDate],
+        BRet::Int,
+        "(Ljava/time/LocalDate;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.time.DayOfWeek` and `java.time.Month`: enums, so `name()`,
+/// `getValue()` and `ordinal()` — and `==`, which works because the constants
+/// are interned.
+const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
+    bm("getValue", &[], BRet::Int, "()I"),
+    bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("ordinal", &[], BRet::Int, "()I"),
+    bm(
+        "compareTo",
+        &[BParam::DayOfWeek],
+        BRet::Int,
+        "(Ljava/time/DayOfWeek;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+const MONTH_METHODS: &[BuiltinMethod] = &[
+    bm("getValue", &[], BRet::Int, "()I"),
+    bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("ordinal", &[], BRet::Int, "()I"),
+    bm("length", &[BParam::Boolean], BRet::Int, "(Z)I"),
+    bm(
+        "compareTo",
+        &[BParam::Month],
+        BRet::Int,
+        "(Ljava/time/Month;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// The static factories. `now()` is the one that needs the HOST: what "today"
+/// is depends on a zone, which the browser reads from its own IANA data and
+/// caturra does not vendor.
+const LOCAL_DATE_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm("now", &[], BRet::LocalDate, "()Ljava/time/LocalDate;"),
+    bm(
+        "of",
+        &[BParam::Int, BParam::Int, BParam::Int],
+        BRet::LocalDate,
+        "(III)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "ofEpochDay",
+        &[BParam::Long],
+        BRet::LocalDate,
+        "(J)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "parse",
+        &[BParam::CharSeq],
+        BRet::LocalDate,
+        "(Ljava/lang/CharSequence;)Ljava/time/LocalDate;",
+    ),
+];
+
+const DAY_OF_WEEK_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "of",
+        &[BParam::Int],
+        BRet::DayOfWeek,
+        "(I)Ljava/time/DayOfWeek;",
+    ),
+    bm(
+        "valueOf",
+        &[BParam::Str],
+        BRet::DayOfWeek,
+        "(Ljava/lang/String;)Ljava/time/DayOfWeek;",
+    ),
+];
+
+const MONTH_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm("of", &[BParam::Int], BRet::Month, "(I)Ljava/time/Month;"),
+    bm(
+        "valueOf",
+        &[BParam::Str],
+        BRet::Month,
+        "(Ljava/lang/String;)Ljava/time/Month;",
+    ),
+];
+
 /// `java.io.PrintStream` — what `System.out` IS, and what a program builds
 /// over a buffer of its own to capture printing. The overloads are
 /// `PrintWriter`'s plus the `Object` and wide-primitive ones a `println` is
@@ -15153,6 +15440,9 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::Writer
             | JType::PrintStream
             | JType::ByteStream
+            | JType::LocalDate
+            | JType::DayOfWeek
+            | JType::Month
             | JType::Reader
             | JType::Path
             | JType::Charset
@@ -15191,6 +15481,9 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::PrintStream => Some(("java/io/PrintStream", PRINT_STREAM_METHODS)),
+        JType::LocalDate => Some(("java/time/LocalDate", LOCAL_DATE_METHODS)),
+        JType::DayOfWeek => Some(("java/time/DayOfWeek", DAY_OF_WEEK_METHODS)),
+        JType::Month => Some(("java/time/Month", MONTH_METHODS)),
         JType::ByteStream => Some(("java/io/ByteArrayOutputStream", BYTE_STREAM_METHODS)),
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
@@ -15917,6 +16210,9 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
     }
     match class {
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
+        "LocalDate" => Some(("java/time/LocalDate", LOCAL_DATE_STATIC_METHODS)),
+        "DayOfWeek" => Some(("java/time/DayOfWeek", DAY_OF_WEEK_STATIC_METHODS)),
+        "Month" => Some(("java/time/Month", MONTH_STATIC_METHODS)),
         "Map.Entry" | "Entry" => Some(("java/util/Map$Entry", MAP_ENTRY_STATIC_METHODS)),
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
@@ -16220,6 +16516,9 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Boolean => JType::Boolean,
         BParam::Char => JType::Char,
         BParam::PrintStream => JType::PrintStream,
+        BParam::LocalDate => JType::LocalDate,
+        BParam::DayOfWeek => JType::DayOfWeek,
+        BParam::Month => JType::Month,
         BParam::Str => JType::Str,
         BParam::CharSeq => JType::CharSequence,
         BParam::CharArray => JType::Array {
@@ -16648,6 +16947,9 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Void => None,
         BRet::Writer => Some(JType::Writer),
         BRet::PrintStream => Some(JType::PrintStream),
+        BRet::LocalDate => Some(JType::LocalDate),
+        BRet::DayOfWeek => Some(JType::DayOfWeek),
+        BRet::Month => Some(JType::Month),
         BRet::Path => Some(JType::Path),
         BRet::Charset => Some(JType::Charset),
         BRet::Pattern => Some(JType::Pattern),
@@ -23960,6 +24262,9 @@ impl BodyGen<'_> {
             | JType::Writer
             | JType::PrintStream
             | JType::ByteStream
+            | JType::LocalDate
+            | JType::DayOfWeek
+            | JType::Month
             | JType::Reader
             | JType::Path
             | JType::Charset
@@ -25814,6 +26119,9 @@ impl BodyGen<'_> {
             // A byte stream's `toString()` is the TEXT written into it, which
             // is the whole point of capturing with one.
             JType::ByteStream => String::from("java/io/ByteArrayOutputStream"),
+            JType::LocalDate => String::from("java/time/LocalDate"),
+            JType::DayOfWeek => String::from("java/time/DayOfWeek"),
+            JType::Month => String::from("java/time/Month"),
             JType::List { .. } => String::from("java/util/ArrayList"),
             JType::Stack(_) => String::from("java/util/Stack"),
             JType::Object(class_id) => self.table.class_name(class_id).to_owned(),
@@ -29363,6 +29671,9 @@ impl BodyGen<'_> {
             // Coerced to its text before this — the arm is here because the
             // match must be total, and String is what will be on the stack.
             | JType::ByteStream
+            | JType::LocalDate
+            | JType::DayOfWeek
+            | JType::Month
             | JType::Path => Some(String::from("(Ljava/lang/String;)V")),
             JType::Scanner | JType::Writer | JType::Reader | JType::PrintStream => {
                 self.error(
@@ -29533,6 +29844,12 @@ impl BodyGen<'_> {
                     && self.lookup("System").is_none() =>
             {
                 JType::PrintStream
+            }
+            // The `java.time` enum constants, in the typing pass as well as
+            // the emit one — the two have to agree or an argument of this type
+            // is "cannot determine the type of an argument".
+            Expr::Name { path, .. } if time_constant(path, self.table).is_some() => {
+                time_constant(path, self.table).map_or(JType::Error, |(ty, _)| ty)
             }
             // `StandardCharsets.UTF_8` and the names beside it — constants of a
             // class whose only role is to hold them.
@@ -31936,6 +32253,19 @@ impl BodyGen<'_> {
                 .class_id("__Comparator")
                 .map_or(JType::Error, JType::Object);
         }
+        // `DayOfWeek.MONDAY` / `Month.JANUARY`.
+        if let Some((ty, ordinal)) = time_constant(path, self.table) {
+            let class = if ty == JType::DayOfWeek {
+                "java/time/DayOfWeek"
+            } else {
+                "java/time/Month"
+            };
+            self.push_int(ordinal);
+            let descriptor = format!("(I)L{class};");
+            let method_ref = intern_method_ref(self.pool, class, "__of", &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+            return ty;
+        }
         // `StandardCharsets.UTF_8` — a constant whose value is a Charset, built
         // by the same call `Charset.forName` makes.
         if let Some(name) = standard_charset(path, self.table) {
@@ -34309,6 +34639,9 @@ impl BodyGen<'_> {
             | JType::Matcher
             | JType::MatchResult
             | JType::ByteStream
+            | JType::LocalDate
+            | JType::DayOfWeek
+            | JType::Month
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
             JType::Scanner | JType::Writer | JType::Reader | JType::PrintStream => {
                 self.error(
@@ -34687,6 +35020,9 @@ impl BodyGen<'_> {
             | JType::Writer
             | JType::PrintStream
             | JType::ByteStream
+            | JType::LocalDate
+            | JType::DayOfWeek
+            | JType::Month
             | JType::List { .. }
             | JType::Stack(_)
             | JType::Map { .. }
@@ -34714,6 +35050,9 @@ impl BodyGen<'_> {
             | JType::Writer
             | JType::PrintStream
             | JType::ByteStream
+            | JType::LocalDate
+            | JType::DayOfWeek
+            | JType::Month
             | JType::List { .. }
             | JType::Stack(_)
             | JType::Map { .. }

@@ -12520,3 +12520,57 @@ starts|validators|staged|levels`), because the finding each time was not a bug
 in a rule but a set of files no tool had looked at. It is the cheapest question
 there is — does this compile, and does javac agree — and it was never asked of
 anything except the staged cases.
+
+### java.time, without a timezone database
+
+`java.time` was an honestly-refused package: "package java.time is not
+supported by caturra (the class library covers the AP CS A subset)". It is
+also the first thing a student reaches for the moment a program has a date in
+it, so the refusal is a wall rather than a boundary.
+
+The part that is worth having is the part that is **pure arithmetic**: a
+`LocalDate` has no clock, no locale and no zone behind it, so every answer it
+gives is exactly comparable with a JDK's. `LocalDate`, `DayOfWeek` and `Month`
+are modelled now — the calendar (`crates/caturra-vm/src/time.rs`) is the
+proleptic Gregorian one, with the month-end clamping rule (`Jan 31` plus a
+month is `Feb 29` in a leap year, `Feb 29` plus a year is `Feb 28`), the
+epoch-day conversion both ways, and `java.time`'s own exception text —
+including the two spellings of the same complaint, `Invalid date 'FEBRUARY 30'`
+beside `Invalid date 'February 29' as '2023' is not a leap year`, which are the
+JDK's inconsistency and not a slip.
+
+**What needs a zone asks the HOST.** `LocalDate.now()` has to know what "today"
+is, and that is a timezone question. The browser already has the IANA database
+— `Date.getTimezoneOffset()` reads it — so nothing is vendored and there is no
+second copy of the database to fall out of date. The hook is
+`ConsoleIo::zone_offset_seconds`, beside `now_millis`; a host without a zone
+(the CLI, the test harness) is UTC, which is why a program that asks what today
+is cannot be compared against a JDK any more than one that asks for a random
+number can. The browser half is checked where it is true: an end-to-end test
+runs `LocalDate.now()` in the page and compares it with the browser's own
+`new Date()`.
+
+**Vendoring the database was considered and rejected**, and the measurement is
+worth recording: OpenJDK does NOT use the system database — it ships its own
+`$JAVA_HOME/lib/tzdb.dat` — and on the machine this was written on the JDK is
+on tzdb **2026b** while the OS is on **2026c**. So a vendored copy would not
+have bought JDK parity either; it would only have added a third version to
+disagree with. Zone RULES (a `ZonedDateTime`, `ZoneId.of("Asia/Tokyo")`) stay
+unmodelled for that reason, and the honest contract for anything zone-shaped
+is "correct per the host", not "byte-identical to a JDK".
+
+Four things a date has to be beyond its own methods, each found by writing the
+program a student would write: it SORTS (`Collections.sort` asks an intrinsic
+for `compareTo`, and the dispatch resolved against class files only, so a
+`LocalDate` was "not Comparable"); it HASHES (a `HashSet` held two equal
+dates); it compares by VALUE inside a collection (`contains` and `indexOf` said
+no); and it renders the same inside a collection as it does alone (a list of
+dates printed `object@1c`). The last three are the same defect the
+collection-renderer and the equality path have had before — one fact, read
+somewhere else.
+
+Pinned by `the_calendar_arithmetic_of_local_date`, `local_dates_are_values`,
+`what_java_time_says_when_a_date_is_wrong`, the `local-date` feature on the
+compatibility page, the browser test above, and three unit tests over the
+calendar itself — including one that round-trips every day from 1800 to 2200
+through the epoch-day conversion.

@@ -2372,6 +2372,38 @@ public class Capture {
 }
 """,
     ),
+    dict(
+        id="local-date",
+        category="Library",
+        title="Dates that do calendar arithmetic",
+        summary="`java.time.LocalDate` — leap years, month-end clamping, days between two dates, and the `DayOfWeek`/`Month` enums. Pure computation: no clock, no locale, no timezone database.",
+        main="Dates",
+        source="""
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.Month;
+
+public class Dates {
+    public static void main(String[] args) {
+        LocalDate exam = LocalDate.of(2024, 5, 15);
+        System.out.println(exam + " is a " + exam.getDayOfWeek());
+        System.out.println("day " + exam.getDayOfYear() + " of " + exam.lengthOfYear());
+
+        LocalDate review = exam.minusWeeks(2);
+        System.out.println("review starts " + review + " (" + review.getMonth() + ")");
+        System.out.println("days between: " + (exam.toEpochDay() - review.toEpochDay()));
+
+        // The month-end rule: a day that the next month does not have is
+        // pulled back to the last one it does.
+        System.out.println(LocalDate.of(2024, 1, 31).plusMonths(1));
+        System.out.println(LocalDate.of(2024, 2, 29).plusYears(1));
+
+        System.out.println(exam.isLeapYear() + " " + Month.FEBRUARY.length(exam.isLeapYear()));
+        System.out.println(exam.getDayOfWeek() == DayOfWeek.WEDNESDAY);
+    }
+}
+""",
+    ),
     dict(id="g-generic-supertype", category="Declarations", title="Parameterized supertype (with bridge methods)",
          summary="A subclass stands in for `Box<String>`, and a call through that reference reaches the OVERRIDE — which needs the bridge method erasure would otherwise lose.",
          main="G",

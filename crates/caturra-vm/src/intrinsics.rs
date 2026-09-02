@@ -11,6 +11,7 @@ use crate::map::JavaHashMap;
 use crate::unicode;
 use crate::value::{
     Heap, HeapObject, HeapRef, IntKind, IteratorWrites, JValue, MapViewKind, PrintSink, StdStream,
+    Temporal,
 };
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
@@ -56,6 +57,248 @@ impl IntrinsicStatics {
             }
             _ => None,
         }
+    }
+}
+
+/// The year range `java.time` accepts, repeated here so the clamping in
+/// `withYear`/`withMonth` does not have to guess at a month length for a year
+/// that will be refused anyway.
+const MIN_TIME_YEAR: i32 = -999_999_999;
+const MAX_TIME_YEAR: i32 = 999_999_999;
+
+/// `java.time.DateTimeException` with this text — what every invalid date
+/// operation throws.
+fn date_time_exception(message: &str) -> VmError {
+    VmError::UncaughtException(format!("java.time.DateTimeException: {message}"))
+}
+
+/// What all three answer alike: `toString`, `name`, `equals` and `hashCode`.
+/// `None` means "not one of these", so the caller carries on.
+fn temporal_object_method(
+    value: Temporal,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Option<JValue> {
+    let other = match args.first() {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Temporal(other)) => Some(*other),
+            _ => None,
+        },
+        _ => None,
+    };
+    let answer = match method {
+        "toString" => JValue::Ref(Some(heap.alloc_string(&value.text()))),
+        "name" if !matches!(value, Temporal::Date(_)) => {
+            JValue::Ref(Some(heap.alloc_string(&value.text())))
+        }
+        "equals" => JValue::Int(i32::from(other == Some(value))),
+        "hashCode" => {
+            // A `LocalDate`'s hash is the JDK's own mixing of its fields, so
+            // two equal dates hash alike wherever the program looks.
+            let hash = match value {
+                Temporal::Date(date) => {
+                    let year = date.year;
+                    #[allow(clippy::cast_possible_wrap)]
+                    let mask = 0xFFFF_F800_u32 as i32;
+                    (year & mask)
+                        ^ (year.wrapping_shl(11)
+                            + (i32::from(date.month) << 6)
+                            + i32::from(date.day))
+                }
+                Temporal::DayOfWeek(day) => i32::from(day),
+                Temporal::Month(month) => i32::from(month),
+            };
+            JValue::Int(hash)
+        }
+        _ => return None,
+    };
+    Some(answer)
+}
+
+/// `DayOfWeek` and `Month`: enums, so a value, a name, an ordinal and an
+/// ordering. Their shared `equals`/`hashCode`/`toString` are handled with the
+/// date's, above.
+fn temporal_enum_method(
+    value: Temporal,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let int = |value: i64| Ok(Some(JValue::Int(i32::try_from(value).unwrap_or(i32::MAX))));
+    let other = match args.first() {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Temporal(other)) => Some(*other),
+            _ => None,
+        },
+        _ => None,
+    };
+    match (value, method) {
+        (Temporal::DayOfWeek(day), "getValue") => int(i64::from(day)),
+        (Temporal::Month(month), "getValue") => int(i64::from(month)),
+        (Temporal::DayOfWeek(day), "ordinal") => int(i64::from(day) - 1),
+        (Temporal::Month(month), "ordinal") => int(i64::from(month) - 1),
+        (Temporal::DayOfWeek(day), "compareTo") => match other {
+            Some(Temporal::DayOfWeek(against)) => int(i64::from(day) - i64::from(against)),
+            _ => Err(throw("java.lang.ClassCastException: not a DayOfWeek")),
+        },
+        (Temporal::Month(month), "compareTo") => match other {
+            Some(Temporal::Month(against)) => int(i64::from(month) - i64::from(against)),
+            _ => Err(throw("java.lang.ClassCastException: not a Month")),
+        },
+        // `Month.length(boolean leapYear)`.
+        (Temporal::Month(month), "length") => {
+            let leap = matches!(args.first(), Some(JValue::Int(1)));
+            let year = if leap { 2024 } else { 2023 };
+            int(i64::from(crate::time::length_of_month(year, month)))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "{}.{method}",
+            value.class_name()
+        ))),
+    }
+}
+
+/// The readers: everything a date answers about ITSELF, with no argument.
+fn date_reader(value: Temporal, heap: &mut Heap, method: &str) -> Option<JValue> {
+    let Temporal::Date(date) = value else {
+        return None;
+    };
+    let int = |value: i64| Some(JValue::Int(i32::try_from(value).unwrap_or(i32::MAX)));
+    match method {
+        "getYear" => int(i64::from(date.year)),
+        "getMonthValue" => int(i64::from(date.month)),
+        "getDayOfMonth" => int(i64::from(date.day)),
+        "getDayOfYear" => int(i64::from(date.day_of_year())),
+        "lengthOfMonth" => int(i64::from(crate::time::length_of_month(
+            date.year, date.month,
+        ))),
+        "lengthOfYear" => int(i64::from(date.length_of_year())),
+        "isLeapYear" => Some(JValue::Int(i32::from(crate::time::is_leap_year(date.year)))),
+        "toEpochDay" => Some(JValue::Long(date.to_epoch_day())),
+        "getDayOfWeek" => Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::DayOfWeek(date.day_of_week())),
+        ))),
+        "getMonth" => Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::Month(date.month)),
+        ))),
+        _ => None,
+    }
+}
+
+/// One `LocalDate`/`DayOfWeek`/`Month` method. These are VALUE types: every
+/// answer is a new value, `equals` compares contents, and the two enums are
+/// interned so `==` works on them as it does in Java.
+fn temporal_method(
+    value: Temporal,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let int = |value: i64| Ok(Some(JValue::Int(i32::try_from(value).unwrap_or(i32::MAX))));
+    // The argument of a one-argument call, as a number and as another temporal.
+    let number = || match args.first() {
+        Some(JValue::Int(n)) => i64::from(*n),
+        Some(JValue::Long(n)) => *n,
+        _ => 0,
+    };
+    let other = |heap: &Heap| match args.first() {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Temporal(other)) => Some(*other),
+            _ => None,
+        },
+        _ => None,
+    };
+
+    if let Some(answer) = temporal_object_method(value, heap, method, args) {
+        return Ok(Some(answer));
+    }
+    // An enum answers the shared methods above; the rest are its own.
+    if !matches!(value, Temporal::Date(_)) {
+        return temporal_enum_method(value, heap, method, args);
+    }
+
+    if let Some(answer) = date_reader(value, heap, method) {
+        return Ok(Some(answer));
+    }
+    match (value, method) {
+        (Temporal::Date(date), _) if method.starts_with("plus") || method.starts_with("minus") => {
+            let plus = method.starts_with("plus");
+            let amount = if plus { number() } else { -number() };
+            let unit = if plus {
+                method.trim_start_matches("plus")
+            } else {
+                method.trim_start_matches("minus")
+            };
+            let moved = match unit {
+                "Days" => date.plus_days(amount),
+                "Weeks" => date.plus_days(amount.saturating_mul(7)),
+                "Months" => date.plus_months(amount),
+                "Years" => date.plus_years(amount),
+                _ => {
+                    return Err(VmError::UnknownIntrinsic(format!(
+                        "java/time/LocalDate.{method}"
+                    )));
+                }
+            };
+            Ok(Some(JValue::Ref(Some(
+                heap.intern_temporal(Temporal::Date(moved)),
+            ))))
+        }
+        (Temporal::Date(date), "withYear" | "withMonth" | "withDayOfMonth") => {
+            #[allow(clippy::cast_possible_truncation)]
+            let with = number() as i32;
+            // `withYear`/`withMonth` CLAMP the day (the JDK's
+            // `resolvePreviousValid`, so `Jan 31` with month February is
+            // `Feb 29`); only `withDayOfMonth` is strict about it.
+            let (year, month, day) = match method {
+                "withYear" => (with, i32::from(date.month), i32::from(date.day)),
+                "withMonth" => (date.year, with, i32::from(date.day)),
+                _ => (date.year, i32::from(date.month), with),
+            };
+            let day = if method == "withDayOfMonth" {
+                day
+            } else if (1..=12).contains(&month) && (MIN_TIME_YEAR..=MAX_TIME_YEAR).contains(&year) {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let length = i32::from(crate::time::length_of_month(year, month as u8));
+                day.min(length)
+            } else {
+                day
+            };
+            match date.with(year, month, day) {
+                Ok(made) => Ok(Some(JValue::Ref(Some(
+                    heap.intern_temporal(Temporal::Date(made)),
+                )))),
+                Err(message) => Err(date_time_exception(&message)),
+            }
+        }
+        (Temporal::Date(date), "isBefore" | "isAfter" | "isEqual" | "compareTo") => {
+            let Some(Temporal::Date(against)) = other(heap) else {
+                return Err(throw("java.lang.ClassCastException: not a LocalDate"));
+            };
+            // `compareTo` answers the JDK's field-by-field difference, not a
+            // normalized -1/0/1: a program that prints it sees the same number.
+            if method == "compareTo" {
+                let difference = if date.year != against.year {
+                    i64::from(date.year) - i64::from(against.year)
+                } else if date.month != against.month {
+                    i64::from(date.month) - i64::from(against.month)
+                } else {
+                    i64::from(date.day) - i64::from(against.day)
+                };
+                return int(difference);
+            }
+            let answer = match method {
+                "isBefore" => date < against,
+                "isAfter" => date > against,
+                _ => date == against,
+            };
+            Ok(Some(JValue::Int(i32::from(answer))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "{}.{method}",
+            value.class_name()
+        ))),
     }
 }
 
@@ -807,6 +1050,9 @@ pub fn invoke_virtual(
         }
     }
     match (receiver_object, method) {
+        // `java.time.LocalDate` and the two enums it answers with. Every
+        // operation makes a NEW value; nothing here mutates.
+        (HeapObject::Temporal(value), _) => temporal_method(*value, heap, method, args),
         // `java.io.ByteArrayOutputStream` — the bytes a capture collected.
         // `toString()` decodes them as UTF-8, which is what wrote them.
         (HeapObject::ByteStream(bytes), "toString") => {
@@ -4134,6 +4380,10 @@ pub(crate) fn native_equals(heap: &Heap, a: JValue, b: JValue) -> bool {
                     }
                     (Some(HeapObject::File(sx)), Some(HeapObject::File(sy)))
                     | (Some(HeapObject::Charset(sx)), Some(HeapObject::Charset(sy))) => sx == sy,
+                    // A `java.time` value compares by its FIELDS, which is
+                    // what makes `dates.contains(LocalDate.of(...))` answer
+                    // the way a JDK's does.
+                    (Some(HeapObject::Temporal(vx)), Some(HeapObject::Temporal(vy))) => vx == vy,
                     _ => false,
                 }
         }
@@ -6960,6 +7210,135 @@ pub fn invoke_static(
         "java/lang/Float" => float_static(heap, method, args),
         "java/lang/Short" => small_int_static(heap, "Short", method, args),
         "java/lang/Byte" => small_int_static(heap, "Byte", method, args),
+        // `java.time`'s factories. `__of` is how the compiler asks for an
+        // enum CONSTANT (`DayOfWeek.MONDAY`) — a name the program cannot
+        // write, and the interning happens on the way out.
+        "java/time/LocalDate" => match method {
+            "of" => {
+                let (year, month, day) = match args {
+                    [JValue::Int(y), JValue::Int(m), JValue::Int(d)] => (*y, *m, *d),
+                    _ => {
+                        return Err(throw(
+                            "java.lang.VerifyError: LocalDate.of takes three ints",
+                        ));
+                    }
+                };
+                match crate::time::Date::of(year, month, day) {
+                    Ok(date) => Ok(Some(JValue::Ref(Some(
+                        heap.intern_temporal(Temporal::Date(date)),
+                    )))),
+                    Err(message) => Err(date_time_exception(&message)),
+                }
+            }
+            // What "today" is depends on a ZONE, which the host owns: the
+            // browser reads its own IANA data, and a host without one is UTC.
+            "now" => {
+                let offset = i64::from(console.zone_offset_seconds()) * 1000;
+                let local = console.now_millis().saturating_add(offset);
+                let date = crate::time::Date::from_epoch_day(local.div_euclid(86_400_000));
+                Ok(Some(JValue::Ref(Some(
+                    heap.intern_temporal(Temporal::Date(date)),
+                ))))
+            }
+            "ofEpochDay" => {
+                let day = match args.first() {
+                    Some(JValue::Long(day)) => *day,
+                    Some(JValue::Int(day)) => i64::from(*day),
+                    _ => 0,
+                };
+                let date = crate::time::Date::from_epoch_day(day);
+                Ok(Some(JValue::Ref(Some(
+                    heap.intern_temporal(Temporal::Date(date)),
+                ))))
+            }
+            "parse" => {
+                let text = match args.first() {
+                    Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                    Some(JValue::Ref(None)) => {
+                        return Err(throw("java.lang.NullPointerException: text"));
+                    }
+                    _ => None,
+                }
+                .unwrap_or_default();
+                match crate::time::parse_date(&text) {
+                    Ok(date) => Ok(Some(JValue::Ref(Some(
+                        heap.intern_temporal(Temporal::Date(date)),
+                    )))),
+                    // A parse failure is its own exception type, not a
+                    // DateTimeException — a program may catch either.
+                    Err(message) => Err(VmError::UncaughtException(format!(
+                        "java.time.format.DateTimeParseException: {message}"
+                    ))),
+                }
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!(
+                "java/time/LocalDate.{method}"
+            ))),
+        },
+        "java/time/DayOfWeek" | "java/time/Month" => {
+            let day_of_week = class.ends_with("DayOfWeek");
+            let limit = if day_of_week { 7 } else { 12 };
+            let ordinal = match args.first() {
+                Some(JValue::Int(value)) => *value,
+                _ => 1,
+            };
+            match method {
+                "valueOf" => {
+                    let name = match args.first() {
+                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        _ => None,
+                    }
+                    .unwrap_or_default();
+                    let found = (1..=limit).find(|ordinal| {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let ordinal = *ordinal as u8;
+                        let known = if day_of_week {
+                            crate::time::day_name(ordinal)
+                        } else {
+                            crate::time::month_name(ordinal)
+                        };
+                        known == name
+                    });
+                    match found {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        Some(ordinal) => {
+                            let ordinal = ordinal as u8;
+                            let value = if day_of_week {
+                                Temporal::DayOfWeek(ordinal)
+                            } else {
+                                Temporal::Month(ordinal)
+                            };
+                            Ok(Some(JValue::Ref(Some(heap.intern_temporal(value)))))
+                        }
+                        None => Err(throw(&*format!(
+                            "java.lang.IllegalArgumentException: No enum constant {}.{name}",
+                            class.replace('/', ".")
+                        ))),
+                    }
+                }
+                "__of" | "of" => {
+                    if !(1..=limit).contains(&ordinal) {
+                        let field = if day_of_week {
+                            "DayOfWeek"
+                        } else {
+                            "MonthOfYear"
+                        };
+                        return Err(date_time_exception(&format!(
+                            "Invalid value for {field} (valid values 1 - {limit}): {ordinal}"
+                        )));
+                    }
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let ordinal = ordinal as u8;
+                    let value = if day_of_week {
+                        Temporal::DayOfWeek(ordinal)
+                    } else {
+                        Temporal::Month(ordinal)
+                    };
+                    Ok(Some(JValue::Ref(Some(heap.intern_temporal(value)))))
+                }
+                _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
+            }
+        }
         "java/lang/System" => match method {
             // The interpreter intercepts arraycopy (its element check needs the
             // class hierarchy); this path only runs if that one is bypassed.
@@ -9470,6 +9849,7 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::Path(text) | HeapObject::Charset(text) | HeapObject::File(text)) => {
                 text.clone()
             }
+            Some(HeapObject::Temporal(value)) => value.text(),
             Some(HeapObject::Collector(_)) => collector_text(reference),
             Some(HeapObject::SummaryStats {
                 count,

@@ -371,6 +371,16 @@ impl ConsoleIo for JsConsole<'_> {
         millis
     }
 
+    /// The browser already has the IANA database — `Date.getTimezoneOffset()`
+    /// reads it for the current instant in the host's own zone — so there is
+    /// nothing to vendor and no second copy to disagree with a JDK's.
+    /// (Minutes WEST of UTC, hence the sign flip.)
+    fn zone_offset_seconds(&mut self) -> i32 {
+        #[allow(clippy::cast_possible_truncation)]
+        let minutes = js_sys::Date::new_0().get_timezone_offset() as i32;
+        -minutes * 60
+    }
+
     fn stdout(&mut self, bytes: &[u8]) {
         let text = JsValue::from_str(&String::from_utf8_lossy(bytes));
         let _ = self.stdout.call1(&JsValue::NULL, &text);

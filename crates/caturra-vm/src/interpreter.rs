@@ -1164,6 +1164,7 @@ impl<'run> Interpreter<'run> {
             .chain(self.string_pool.values().copied())
             .chain(self.class_pool.values().copied())
             .chain(self.heap.cached_boxes())
+            .chain(self.heap.interned_temporals())
             .chain(self.stdin_scanner)
             .chain(self.last_thrown)
             .collect();
@@ -6547,6 +6548,26 @@ impl<'run> Interpreter<'run> {
     /// `value.hashCode()`, dispatching a user `hashCode()` override.
     fn java_hash_code(&mut self, value: JValue) -> Result<i32, VmError> {
         use crate::value::HeapObject;
+        // A `java.time` value hashes by its FIELDS, as it compares by them —
+        // without this a `HashSet<LocalDate>` held two equal dates, which is
+        // the one place the difference shows.
+        if let JValue::Ref(Some(reference)) = value
+            && matches!(self.heap.get(reference), Some(HeapObject::Temporal(_)))
+        {
+            let hashed = intrinsics::invoke_virtual(
+                &mut self.heap,
+                self.console,
+                self.vfs,
+                reference,
+                "java/time/LocalDate",
+                "hashCode",
+                "()I",
+                &[],
+            )?;
+            if let Some(JValue::Int(hash)) = hashed {
+                return Ok(hash);
+            }
+        }
         if let JValue::Ref(Some(reference)) = value
             && let Some(HeapObject::Instance { class_name, .. }) = self.heap.get(reference)
         {
@@ -16139,6 +16160,14 @@ impl<'run> Interpreter<'run> {
                 // pathname — so a list of them sorts, and a `TreeSet` of them
                 // is a set rather than a cast error.
                 Some(HeapObject::File(_)) => Some("java.io.File"),
+                // `LocalDate implements Comparable<ChronoLocalDate>`, and the
+                // two enums are `Comparable` as every enum is — so a list of
+                // dates sorts and a `TreeSet` of them is a set.
+                Some(HeapObject::Temporal(value)) => Some(match value {
+                    crate::value::Temporal::Date(_) => "java.time.LocalDate",
+                    crate::value::Temporal::DayOfWeek(_) => "java.time.DayOfWeek",
+                    crate::value::Temporal::Month(_) => "java.time.Month",
+                }),
                 Some(HeapObject::Boxed { class_name, .. }) => Some(match class_name.as_ref() {
                     "java/lang/Integer" => "java.lang.Integer",
                     "java/lang/Long" => "java.lang.Long",
@@ -16169,6 +16198,12 @@ impl<'run> Interpreter<'run> {
                 self.heap.get(reference)
         {
             let class_name = class_name.clone();
+            return self.call_compare_to(reference, &class_name, b);
+        }
+        if let JValue::Ref(Some(reference)) = a
+            && let Some(crate::value::HeapObject::Temporal(value)) = self.heap.get(reference)
+        {
+            let class_name = value.class_name().to_owned();
             return self.call_compare_to(reference, &class_name, b);
         }
         // A wrapper's `compareTo` takes its OWN type: `Integer.compareTo` casts
@@ -16712,6 +16747,31 @@ impl<'run> Interpreter<'run> {
         class_name: &str,
         other: JValue,
     ) -> Result<i32, VmError> {
+        // An INTRINSIC value can be Comparable too — a `LocalDate` is, and
+        // sorting a list of them is the first thing anyone does with one. The
+        // user dispatch resolves against class FILES, which these have none
+        // of, so it answered "not Comparable" for a type that is.
+        if matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::Temporal(_))
+        ) {
+            let answer = intrinsics::invoke_virtual(
+                &mut self.heap,
+                self.console,
+                self.vfs,
+                receiver,
+                class_name,
+                "compareTo",
+                "(Ljava/lang/Object;)I",
+                &[other],
+            )?;
+            return match answer {
+                Some(JValue::Int(order)) => Ok(order),
+                _ => Err(VmError::UnknownIntrinsic(format!(
+                    "{class_name}.compareTo did not return an int"
+                ))),
+            };
+        }
         let dispatched = self.user_virtual_dispatch(
             receiver,
             class_name,
@@ -20297,6 +20357,7 @@ pub(crate) fn object_class_name_of(
         Some(HeapObject::Reader { .. }) => String::from("java/io/BufferedReader"),
         Some(HeapObject::Writer { .. }) => String::from("java/io/PrintWriter"),
         Some(HeapObject::PrintStream(_)) => String::from("java/io/PrintStream"),
+        Some(HeapObject::Temporal(value)) => value.class_name().to_owned(),
         Some(HeapObject::ByteStream(_)) => String::from("java/io/ByteArrayOutputStream"),
         Some(HeapObject::StackFrame { .. }) => String::from("java/lang/StackTraceElement"),
         Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),

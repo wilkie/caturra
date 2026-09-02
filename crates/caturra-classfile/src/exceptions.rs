@@ -215,6 +215,15 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/io/UnsupportedEncodingException",
         "java/io/IOException",
     ),
+    // `java.time`'s two. A date that does not exist throws the first; text
+    // that will not parse throws the second, which is a SUBCLASS of it — so
+    // `catch (DateTimeException e)` catches a parse failure too, and a
+    // program may catch either.
+    ("java/time/DateTimeException", "java/lang/RuntimeException"),
+    (
+        "java/time/format/DateTimeParseException",
+        "java/time/DateTimeException",
+    ),
     (
         "java/nio/charset/UnsupportedCharsetException",
         "java/lang/IllegalArgumentException",

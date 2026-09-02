@@ -101,6 +101,16 @@ const JAVA_IO: &[&str] = &[
 /// `java.nio.file` — the modeled slice: build a `Path` and read/write it through
 /// `Files`. The rest of `java.nio` stays unsupported.
 const JAVA_NIO_FILE: &[&str] = &["Files", "Path", "Paths"];
+
+/// `java.time` — the slice that is pure calendar arithmetic. A date, and the
+/// two enums it answers with. What needs a ZONE (a `ZonedDateTime`, or what
+/// "today" is) is not here: the browser has the IANA database and vendoring a
+/// second copy would only add a version to disagree with.
+const JAVA_TIME: &[&str] = &["LocalDate", "DayOfWeek", "Month", "DateTimeException"];
+
+/// `java.time.format` — only the exception, so far: `LocalDate.parse` throws
+/// it and a program may catch it by name.
+const JAVA_TIME_FORMAT: &[&str] = &["DateTimeParseException"];
 /// `java.nio.charset` — the charsets a program names when it turns text into
 /// bytes and back. `Charset` is the type; `StandardCharsets` holds the
 /// constants; the exceptions are what an unknown name throws.
@@ -304,7 +314,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
 const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
     "java.net",
     "java.nio",
-    "java.time",
     "java.text",
     "java.math",
     "java.sql",
@@ -466,6 +475,9 @@ const REQUIRES_IMPORT: &[&str] = &[
     // import of its own and compile. javac scopes an import to its own
     // compilation unit, and one of the corpus's own levels is written that
     // way.
+    "LocalDate",
+    "DayOfWeek",
+    "Month",
     "Painter",
     "Scene",
     "Theater",
@@ -631,6 +643,8 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("java.util.function", JAVA_UTIL_FUNCTION),
     ("java.io", JAVA_IO),
     ("java.nio.file", JAVA_NIO_FILE),
+    ("java.time", JAVA_TIME),
+    ("java.time.format", JAVA_TIME_FORMAT),
     ("java.nio.charset", JAVA_NIO_CHARSET),
     ("java.lang", JAVA_LANG),
     ("java.lang.reflect", JAVA_LANG_REFLECT),

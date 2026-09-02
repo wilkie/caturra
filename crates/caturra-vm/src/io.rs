@@ -13,6 +13,16 @@ pub trait ConsoleIo {
         0
     }
 
+    /// Seconds to add to UTC for the host's own zone, right now
+    /// (`LocalDate.now()` has to know what "today" is, and that is a zone
+    /// question). The browser answers from its own IANA data; a host without
+    /// a zone — the tests, the CLI — is UTC, which is why a program that asks
+    /// what today is cannot be compared against a JDK any more than one that
+    /// asks for a random number can.
+    fn zone_offset_seconds(&mut self) -> i32 {
+        0
+    }
+
     /// Write bytes to standard out.
     fn stdout(&mut self, bytes: &[u8]);
 

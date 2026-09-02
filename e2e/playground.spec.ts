@@ -115,6 +115,43 @@ test.describe('playground', () => {
     await expect(consoleOutput).toContainText('Hello, World!');
   });
 
+  test("LocalDate.now() reads the browser's own clock and zone", async ({ page }) => {
+    // The only part of `java.time` that needs a HOST: what "today" is depends
+    // on a timezone, and the browser already has the IANA database. Nothing is
+    // vendored, so this is also the only place the answer can be checked —
+    // the CLI and the test harness have no zone and are UTC.
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'import java.time.LocalDate;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        LocalDate today = LocalDate.now();',
+        '        System.out.println("today=" + today);',
+        '        System.out.println("dow=" + today.getDayOfWeek());',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    const consoleOutput = page.getByTestId('console');
+    await expect(consoleOutput).toContainText('today=');
+    // The browser's own local date, formatted the way `LocalDate` prints it.
+    const expected = await page.evaluate(() => {
+      const now = new Date();
+      const pad = (n: number): string => String(n).padStart(2, '0');
+      const names = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+      return {
+        date: `${pad(now.getFullYear())}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+        day: names[now.getDay()] ?? '?',
+      };
+    });
+    await expect(consoleOutput).toContainText(`today=${expected.date}`);
+    await expect(consoleOutput).toContainText(`dow=${expected.day}`);
+  });
+
   test('loads a Unit 1 neighborhood level and animates it on the canvas', async ({ page }) => {
     await page.goto('/');
     // Choose the unit, then a real multi-file lesson level from it.

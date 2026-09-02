@@ -1093,6 +1093,16 @@
     "expected": "captured 10 bytes\n[first\nn=7\n]\nafter reset: 0\n"
   },
   {
+    "id": "local-date",
+    "category": "Library",
+    "title": "Dates that do calendar arithmetic",
+    "summary": "`java.time.LocalDate` \u2014 leap years, month-end clamping, days between two dates, and the `DayOfWeek`/`Month` enums. Pure computation: no clock, no locale, no timezone database.",
+    "main": "Dates",
+    "source": "import java.time.DayOfWeek;\nimport java.time.LocalDate;\nimport java.time.Month;\n\npublic class Dates {\n    public static void main(String[] args) {\n        LocalDate exam = LocalDate.of(2024, 5, 15);\n        System.out.println(exam + \" is a \" + exam.getDayOfWeek());\n        System.out.println(\"day \" + exam.getDayOfYear() + \" of \" + exam.lengthOfYear());\n\n        LocalDate review = exam.minusWeeks(2);\n        System.out.println(\"review starts \" + review + \" (\" + review.getMonth() + \")\");\n        System.out.println(\"days between: \" + (exam.toEpochDay() - review.toEpochDay()));\n\n        // The month-end rule: a day that the next month does not have is\n        // pulled back to the last one it does.\n        System.out.println(LocalDate.of(2024, 1, 31).plusMonths(1));\n        System.out.println(LocalDate.of(2024, 2, 29).plusYears(1));\n\n        System.out.println(exam.isLeapYear() + \" \" + Month.FEBRUARY.length(exam.isLeapYear()));\n        System.out.println(exam.getDayOfWeek() == DayOfWeek.WEDNESDAY);\n    }\n}\n",
+    "status": "supported",
+    "expected": "2024-05-15 is a WEDNESDAY\nday 136 of 366\nreview starts 2024-05-01 (MAY)\ndays between: 14\n2024-02-29\n2025-02-28\ntrue 29\ntrue\n"
+  },
+  {
     "id": "g-generic-supertype",
     "category": "Declarations",
     "title": "Parameterized supertype (with bridge methods)",

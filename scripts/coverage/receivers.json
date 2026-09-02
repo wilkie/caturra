@@ -46,5 +46,8 @@
   "java.util.regex.Pattern": "java.util.regex.Pattern.compile(\"a\")",
   "java.util.regex.Matcher": "java.util.regex.Pattern.compile(\"a\").matcher(\"a\")",
   "java.io.PrintStream": "java.lang.System.out",
-  "java.io.ByteArrayOutputStream": "new java.io.ByteArrayOutputStream()"
+  "java.io.ByteArrayOutputStream": "new java.io.ByteArrayOutputStream()",
+  "java.time.LocalDate": "java.time.LocalDate.of(2024, 1, 15)",
+  "java.time.DayOfWeek": "java.time.DayOfWeek.MONDAY",
+  "java.time.Month": "java.time.Month.JANUARY"
 }

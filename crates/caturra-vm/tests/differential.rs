@@ -45958,3 +45958,147 @@ public class NoParent {
 }
 "#
 );
+
+// `java.time`'s calendar arithmetic, which is pure computation — no clock, no
+// locale, no timezone database — and so exactly comparable with a JDK. The
+// month-end clamping rule (`Jan 31` plus a month is `Feb 29` in a leap year),
+// the four-digit year with its sign, the epoch day, and the two enums.
+differential_test!(
+    the_calendar_arithmetic_of_local_date,
+    "Dates",
+    r#"
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.Month;
+
+public class Dates {
+    public static void main(String[] args) {
+        LocalDate day = LocalDate.of(2024, 1, 15);
+        System.out.println(day + " " + day.getYear() + " " + day.getMonthValue() + " "
+            + day.getDayOfMonth() + " " + day.getDayOfYear() + " " + day.toEpochDay());
+        System.out.println(day.getDayOfWeek() + " " + day.getMonth() + " "
+            + day.getDayOfWeek().getValue() + " " + day.getMonth().getValue());
+        System.out.println(day.plusDays(30) + " " + day.minusWeeks(3) + " "
+            + day.plusMonths(1) + " " + day.plusYears(1));
+        System.out.println(LocalDate.of(2024, 1, 31).plusMonths(1) + " "
+            + LocalDate.of(2024, 2, 29).plusYears(1) + " "
+            + LocalDate.of(2023, 3, 31).minusMonths(1) + " "
+            + LocalDate.of(2024, 12, 31).plusDays(1));
+        System.out.println(day.isLeapYear() + " " + day.lengthOfMonth() + " "
+            + day.lengthOfYear() + " " + LocalDate.of(2023, 2, 1).lengthOfMonth());
+        System.out.println(day.withYear(2000) + " " + day.withMonth(12) + " "
+            + day.withDayOfMonth(1));
+        System.out.println(day.isBefore(LocalDate.of(2024, 2, 1)) + " "
+            + day.isAfter(LocalDate.of(2024, 2, 1)) + " "
+            + day.isEqual(LocalDate.of(2024, 1, 15)) + " "
+            + day.compareTo(LocalDate.of(2024, 2, 1)));
+        System.out.println(LocalDate.parse(day.toString()) + " " + LocalDate.ofEpochDay(0)
+            + " " + LocalDate.ofEpochDay(-1) + " " + LocalDate.ofEpochDay(19737));
+        System.out.println(LocalDate.of(1, 1, 1) + " " + LocalDate.of(-1, 1, 1) + " "
+            + LocalDate.of(10000, 1, 1) + " " + LocalDate.of(0, 1, 1));
+        System.out.println(day.equals(LocalDate.of(2024, 1, 15)) + " "
+            + (day == LocalDate.of(2024, 1, 15)) + " "
+            + (day.hashCode() == LocalDate.of(2024, 1, 15).hashCode()));
+        System.out.println((day.getDayOfWeek() == DayOfWeek.MONDAY) + " "
+            + (day.getMonth() == Month.JANUARY) + " " + DayOfWeek.SATURDAY.getValue() + " "
+            + Month.of(2) + " " + DayOfWeek.of(3) + " " + Month.DECEMBER.length(false));
+        System.out.println(day.getDayOfWeek().name() + " " + day.getMonth().ordinal() + " "
+            + day.getDayOfWeek().compareTo(DayOfWeek.FRIDAY));
+    }
+}
+"#
+);
+
+// A date is a value: it sorts, it hashes, and it prints the same inside a
+// collection as it does alone.
+differential_test!(
+    local_dates_are_values,
+    "DateValues",
+    r#"
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
+public class DateValues {
+    static String describe(LocalDate date) {
+        return date + " is a " + date.getDayOfWeek();
+    }
+
+    public static void main(String[] args) {
+        List<LocalDate> week = new ArrayList<>();
+        LocalDate start = LocalDate.of(2024, 2, 26);
+        for (int i = 0; i < 7; i++) {
+            week.add(start.plusDays(i));
+        }
+        for (LocalDate day : week) {
+            System.out.println(describe(day));
+        }
+        System.out.println(week.contains(LocalDate.of(2024, 2, 29)) + " "
+            + week.indexOf(LocalDate.of(2024, 3, 1)));
+        Collections.shuffle(week, new java.util.Random(7));
+        Collections.sort(week);
+        System.out.println(week);
+        System.out.println(Collections.max(week) + " " + Collections.min(week));
+
+        Set<LocalDate> seen = new HashSet<>();
+        seen.add(LocalDate.of(2024, 1, 1));
+        seen.add(LocalDate.of(2024, 1, 1));
+        seen.add(LocalDate.of(2024, 6, 1));
+        System.out.println(seen.size() + " " + seen.contains(LocalDate.of(2024, 6, 1)));
+
+        Map<LocalDate, String> events = new TreeMap<>();
+        events.put(LocalDate.of(2024, 12, 25), "holiday");
+        events.put(LocalDate.of(2024, 1, 1), "new year");
+        System.out.println(events);
+    }
+}
+"#
+);
+
+// Every way a date can be wrong, in `java.time`'s own words — including the
+// two spellings of the same complaint ("FEBRUARY 30" in upper case beside
+// "February 29" in title), which are the JDK's and not a slip.
+differential_test!(
+    what_java_time_says_when_a_date_is_wrong,
+    "BadDates",
+    r#"
+import java.time.DateTimeException;
+import java.time.LocalDate;
+
+public class BadDates {
+    static void attempt(String what, Runnable body) {
+        try {
+            body.run();
+            System.out.println(what + " -> no exception");
+        } catch (DateTimeException e) {
+            System.out.println(what + " -> " + e);
+        }
+    }
+
+    public static void main(String[] args) {
+        attempt("of(2024,2,30)", () -> LocalDate.of(2024, 2, 30));
+        attempt("of(2024,13,1)", () -> LocalDate.of(2024, 13, 1));
+        attempt("of(2024,1,0)", () -> LocalDate.of(2024, 1, 0));
+        attempt("of(2023,2,29)", () -> LocalDate.of(2023, 2, 29));
+        attempt("of(2024,4,31)", () -> LocalDate.of(2024, 4, 31));
+        attempt("parse", () -> LocalDate.parse("15/01/2024"));
+        attempt("parse short", () -> LocalDate.parse("2024-1-5"));
+        attempt("withDayOfMonth", () -> LocalDate.of(2024, 2, 1).withDayOfMonth(31));
+        attempt("withMonth", () -> LocalDate.of(2024, 1, 31).withMonth(2));
+        // A parse failure is a SUBCLASS of DateTimeException, so the catch
+        // above sees it; caught by its own name it is a
+        // DateTimeParseException.
+        try {
+            LocalDate.parse("nope");
+        } catch (java.time.format.DateTimeParseException e) {
+            System.out.println("parse type -> " + e.getMessage());
+        }
+    }
+}
+"#
+);
