@@ -779,3 +779,449 @@ pub fn unit_nanos(unit: u8) -> Option<i64> {
         _ => return None,
     })
 }
+
+/// One piece of a `DateTimeFormatter` pattern: a field to print, or text to
+/// print as it stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Piece {
+    /// A field and how many letters were written for it — the count decides
+    /// the width, and for a month or a day-of-week it decides text vs number.
+    Field(char, usize),
+    Literal(String),
+}
+
+/// Parse a `DateTimeFormatter.ofPattern` pattern. `Err` is the
+/// `IllegalArgumentException`'s text, which the JDK spells out.
+pub fn parse_pattern(pattern: &str) -> Result<Vec<Piece>, String> {
+    // A QUOTED run is one piece and each unquoted character is its own: they
+    // print the same either way, and it is what a JDK's `toString` shows.
+    let mut pieces = Vec::new();
+    let letters = pattern.chars().collect::<Vec<_>>();
+    let mut at = 0;
+    while at < letters.len() {
+        let letter = letters[at];
+        if letter == '\'' {
+            // `''` is one quote; `'...'` is text to print as it stands.
+            if letters.get(at + 1) == Some(&'\'') {
+                pieces.push(Piece::Literal(String::from("'")));
+                at += 2;
+                continue;
+            }
+            let mut end = at + 1;
+            while end < letters.len() && letters[end] != '\'' {
+                end += 1;
+            }
+            if end == letters.len() {
+                return Err(format!(
+                    "Pattern ends with an incomplete string literal: {}",
+                    &pattern[at..]
+                ));
+            }
+            pieces.push(Piece::Literal(letters[at + 1..end].iter().collect()));
+            at = end + 1;
+            continue;
+        }
+        if !letter.is_ascii_alphabetic() {
+            pieces.push(Piece::Literal(letter.to_string()));
+            at += 1;
+            continue;
+        }
+        let mut count = 0;
+        while at + count < letters.len() && letters[at + count] == letter {
+            count += 1;
+        }
+        // Three answers, not two. A letter `java.time` does not know is its
+        // own error, in its words. A letter it DOES know that caturra does not
+        // model (a zone, an era, a quarter, a localized week) is a refusal of
+        // ours, which says so rather than claiming the pattern is invalid —
+        // the program is valid Java.
+        if "BCIJPRTUbfijlort".contains(letter) {
+            return Err(format!("Unknown pattern letter: {letter}"));
+        }
+        if !matches!(
+            letter,
+            'y' | 'u' | 'M' | 'd' | 'E' | 'H' | 'h' | 'm' | 's' | 'S' | 'a' | 'D'
+        ) {
+            return Err(format!(
+                "pattern letter '{letter}' is not supported by caturra (dates, times and the \
+                 names of months and days are)"
+            ));
+        }
+        // Each letter has its own limit, and going past it is the JDK's own
+        // complaint — `ddd` is not a three-digit day, it is a mistake.
+        let most = match letter {
+            'd' | 'H' | 'h' | 'm' | 's' => 2,
+            'a' => 1,
+            'D' => 3,
+            'M' | 'E' => 5,
+            'S' => 9,
+            _ => 19,
+        };
+        if count > most {
+            return Err(format!("Too many pattern letters: {letter}"));
+        }
+        pieces.push(Piece::Field(letter, count));
+        at += count;
+    }
+    Ok(pieces)
+}
+
+/// The `ChronoField` a pattern letter reads, as the JDK NAMES it — which is
+/// what its "Unsupported field" message says when the value has no such part.
+fn field_name(letter: char) -> &'static str {
+    match letter {
+        // `u` is the proleptic year and `y` is the year OF THE ERA. They are
+        // the same number for every date a student writes, and different
+        // names in every message.
+        'u' => "Year",
+        'H' => "HourOfDay",
+        'h' => "ClockHourOfAmPm",
+        'm' => "MinuteOfHour",
+        's' => "SecondOfMinute",
+        'S' => "NanoOfSecond",
+        'a' => "AmPmOfDay",
+        'y' => "YearOfEra",
+        'M' => "MonthOfYear",
+        'd' => "DayOfMonth",
+        'D' => "DayOfYear",
+        _ => "DayOfWeek",
+    }
+}
+
+const SHORT_MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+const SHORT_DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// Title case, as a formatter's text fields print: "May", "Saturday".
+fn title(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..1]);
+    out.push_str(&text[1..].to_lowercase());
+    out
+}
+
+/// Print `date`/`time` through a parsed pattern. `Err` is the name of a field
+/// the value does not have — a `LocalDate` has no `HourOfDay`.
+pub fn format_pieces(
+    pieces: &[Piece],
+    date: Option<Date>,
+    time: Option<Time>,
+) -> Result<String, String> {
+    let mut out = String::new();
+    for piece in pieces {
+        let (letter, count) = match piece {
+            Piece::Literal(text) => {
+                out.push_str(text);
+                continue;
+            }
+            Piece::Field(letter, count) => (*letter, *count),
+        };
+        let needs_time = matches!(letter, 'H' | 'h' | 'm' | 's' | 'S' | 'a');
+        if needs_time && time.is_none() || !needs_time && date.is_none() {
+            return Err(field_name(letter).to_owned());
+        }
+        let (date, time) = (
+            date.unwrap_or(Date {
+                year: 0,
+                month: 1,
+                day: 1,
+            }),
+            time.unwrap_or(Time { nano_of_day: 0 }),
+        );
+        match letter {
+            // Two letters of a year is the last two digits; more is the year
+            // itself, padded to the count.
+            'y' | 'u' => {
+                if count == 2 {
+                    let _ = write!(out, "{:02}", date.year.rem_euclid(100));
+                } else {
+                    let _ = write!(out, "{:0width$}", date.year, width = count);
+                }
+            }
+            'M' => match count {
+                1 | 2 => {
+                    let _ = write!(out, "{:0width$}", date.month, width = count);
+                }
+                3 => out.push_str(SHORT_MONTHS[usize::from(date.month) - 1]),
+                _ => out.push_str(&title(month_name(date.month))),
+            },
+            'd' => {
+                let _ = write!(out, "{:0width$}", date.day, width = count);
+            }
+            'D' => {
+                let _ = write!(out, "{:0width$}", date.day_of_year(), width = count);
+            }
+            // One to three letters of `E` are all the short name; four is the
+            // long one.
+            'E' => {
+                let day = usize::from(date.day_of_week()) - 1;
+                if count <= 3 {
+                    out.push_str(SHORT_DAYS[day]);
+                } else {
+                    out.push_str(&title(day_name(date.day_of_week())));
+                }
+            }
+            'H' => {
+                let _ = write!(out, "{:0width$}", time.hour(), width = count);
+            }
+            'h' => {
+                let hour = match time.hour() % 12 {
+                    0 => 12,
+                    other => other,
+                };
+                let _ = write!(out, "{hour:0count$}");
+            }
+            'm' => {
+                let _ = write!(out, "{:0width$}", time.minute(), width = count);
+            }
+            's' => {
+                let _ = write!(out, "{:0width$}", time.second(), width = count);
+            }
+            'S' => {
+                let digits = time.nano() / 10_i32.pow(u32::try_from(9 - count.min(9)).unwrap_or(0));
+                let _ = write!(out, "{digits:0width$}", width = count.min(9));
+            }
+            _ => out.push_str(if time.hour() < 12 { "AM" } else { "PM" }),
+        }
+    }
+    Ok(out)
+}
+
+/// The month or day-of-week NAME at the start of `text` — long form first, so
+/// "May" is not read as a short "May" when the pattern asked for the long one.
+/// Answers the index and how many bytes it took.
+fn match_name(letter: char, text: &str) -> Option<(usize, usize)> {
+    let names: &[&str] = if letter == 'M' {
+        &SHORT_MONTHS
+    } else {
+        &SHORT_DAYS
+    };
+    (0..names.len()).find_map(|index| {
+        #[allow(clippy::cast_possible_truncation)]
+        let ordinal = (index + 1) as u8;
+        let full = if letter == 'M' {
+            title(month_name(ordinal))
+        } else {
+            title(day_name(ordinal))
+        };
+        if text.starts_with(full.as_str()) {
+            Some((index, full.len()))
+        } else if text.starts_with(names[index]) {
+            Some((index, names[index].len()))
+        } else {
+            None
+        }
+    })
+}
+
+/// Read `text` through a parsed pattern, answering whichever of a date and a
+/// time it could build. `Err` is the index the JDK blames.
+pub fn parse_pieces(pieces: &[Piece], text: &str) -> Result<(Option<Date>, Option<Time>), String> {
+    let at_index = |index: usize| format!(" at index {index}");
+    let bytes = text.as_bytes();
+    let mut at = 0usize;
+    let (mut year, mut month, mut day) = (None, None, None);
+    let (mut hour, mut minute, mut second) = (None, None, None);
+    let mut afternoon = None;
+    for piece in pieces {
+        let (letter, count) = match piece {
+            Piece::Literal(literal) => {
+                if !text[at.min(text.len())..].starts_with(literal.as_str()) {
+                    return Err(at_index(at));
+                }
+                at += literal.len();
+                continue;
+            }
+            Piece::Field(letter, count) => (*letter, *count),
+        };
+        if letter == 'a' {
+            let rest = &text[at.min(text.len())..];
+            if rest.starts_with("AM") {
+                afternoon = Some(false);
+            } else if rest.starts_with("PM") {
+                afternoon = Some(true);
+            } else {
+                return Err(at_index(at));
+            }
+            at += 2;
+            continue;
+        }
+        if matches!(letter, 'M' | 'E') && count >= 3 {
+            let Some((index, width)) = match_name(letter, &text[at.min(text.len())..]) else {
+                return Err(at_index(at));
+            };
+            if letter == 'M' {
+                month = i32::try_from(index + 1).ok();
+            }
+            at += width;
+            continue;
+        }
+        // A number: as many digits as the pattern asks for, or as many as
+        // there are when the pattern wrote one letter.
+        let from = at;
+        let wanted = if count == 1 { usize::MAX } else { count };
+        while at < bytes.len() && bytes[at].is_ascii_digit() && at - from < wanted {
+            at += 1;
+        }
+        if at == from {
+            return Err(at_index(from));
+        }
+        let value: i64 = text[from..at].parse().map_err(|_| at_index(from))?;
+        #[allow(clippy::cast_possible_truncation)]
+        let value = value as i32;
+        match letter {
+            // Two digits of a year are 2000-based, as `ofPattern("yy")` reads
+            // them.
+            'y' | 'u' => year = Some(if count == 2 { 2000 + value } else { value }),
+            'M' => month = Some(value),
+            'd' => day = Some(value),
+            'H' | 'h' => hour = Some(value),
+            'm' => minute = Some(value),
+            's' => second = Some(value),
+            _ => {}
+        }
+    }
+    if at != text.len() {
+        return Err(at_index(at));
+    }
+    // `ofPattern` resolves SMARTLY: a day the month does not have is pulled
+    // back to the last one it does (February 30th is the 29th in a leap
+    // year), while a field outside its range at all is refused — and refused
+    // with a REASON rather than an index.
+    let date = match (year, month, day) {
+        (Some(year), Some(month), Some(day)) => {
+            if !(1..=12).contains(&month) {
+                return Err(format!(
+                    ": Invalid value for MonthOfYear (valid values 1 - 12): {month}"
+                ));
+            }
+            if !(1..=31).contains(&day) {
+                return Err(format!(
+                    ": Invalid value for DayOfMonth (valid values 1 - 28/31): {day}"
+                ));
+            }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let length = i32::from(length_of_month(year, month as u8));
+            Some(Date::of(year, month, day.min(length)).map_err(|reason| format!(": {reason}"))?)
+        }
+        _ => None,
+    };
+    let time = match hour {
+        Some(hour) => {
+            let hour = match afternoon {
+                Some(true) if hour < 12 => hour + 12,
+                Some(false) if hour == 12 => 0,
+                _ => hour,
+            };
+            Some(
+                Time::of(hour, minute.unwrap_or(0), second.unwrap_or(0), 0)
+                    .map_err(|reason| format!(": {reason}"))?,
+            )
+        }
+        None => None,
+    };
+    Ok((date, time))
+}
+
+/// How a JDK DESCRIBES a formatter — `DateTimeFormatter.toString` prints the
+/// printer it built, not the pattern it was given, and a program that prints
+/// one sees this. Every shape here was read off a real JDK.
+#[must_use]
+pub fn describe_pieces(pieces: &[Piece]) -> String {
+    let mut out = String::new();
+    for piece in pieces {
+        match piece {
+            Piece::Literal(text) => {
+                let _ = write!(out, "'{text}'");
+            }
+            Piece::Field(letter, count) => {
+                let field = field_name(*letter);
+                let count = *count;
+                match letter {
+                    // A month or a day-of-week written three times or more is
+                    // TEXT; up to two is a number.
+                    // A day-of-week is ALWAYS text; a month is text from
+                    // three letters. Five letters is the narrow form.
+                    'E' | 'M' if *letter == 'E' || count >= 3 => {
+                        let form = match count {
+                            1..=3 => ",SHORT",
+                            5 => ",NARROW",
+                            _ => "",
+                        };
+                        let _ = write!(out, "Text({field}{form})");
+                    }
+                    'a' => {
+                        let _ = write!(out, "Text({field},SHORT)");
+                    }
+                    'S' => {
+                        let _ = write!(out, "Fraction(NanoOfSecond,{count},{count})");
+                    }
+                    // A two-letter year is the last two digits of a
+                    // 2000-based century; more is the year, padded.
+                    'y' | 'u' if count == 2 => {
+                        let _ = write!(out, "ReducedValue({field},2,2,2000-01-01)");
+                    }
+                    // Four or more letters PADS the year; three is plain.
+                    'y' | 'u' if count >= 3 => {
+                        let style = if count >= 4 { "EXCEEDS_PAD" } else { "NORMAL" };
+                        let _ = write!(out, "Value({field},{count},19,{style})");
+                    }
+                    // Two letters of a day-of-year is a RANGE (2 to 3); three
+                    // is an exact width.
+                    'D' if count == 2 => {
+                        let _ = write!(out, "Value({field},2,3,NOT_NEGATIVE)");
+                    }
+                    _ if count == 1 => {
+                        let _ = write!(out, "Value({field})");
+                    }
+                    _ => {
+                        let _ = write!(out, "Value({field},{count})");
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The ISO formatters, which are NOT a value's `toString`: an ISO time always
+/// writes its seconds (`14:05:00`), and its fraction carries only as many
+/// digits as it needs (`14:05:09.5`, where `toString` writes `.500`).
+#[must_use]
+pub fn iso_time_text(time: Time) -> String {
+    let mut out = format!(
+        "{:02}:{:02}:{:02}",
+        time.hour(),
+        time.minute(),
+        time.second()
+    );
+    let nano = time.nano();
+    if nano != 0 {
+        let mut digits = format!("{nano:09}");
+        while digits.ends_with('0') {
+            digits.pop();
+        }
+        let _ = write!(out, ".{digits}");
+    }
+    out
+}
+
+/// How a JDK describes each ISO formatter — read off a real one, brackets and
+/// all (an optional section prints in brackets).
+#[must_use]
+pub fn iso_description(kind: u8) -> &'static str {
+    const DATE: &str = "Value(Year,4,10,EXCEEDS_PAD)'-'Value(MonthOfYear,2)'-'Value(DayOfMonth,2)";
+    const TIME: &str = "Value(HourOfDay,2)':'Value(MinuteOfHour,2)[':'Value(SecondOfMinute,2)\
+                        [Fraction(NanoOfSecond,0,9,DecimalPoint)]]";
+    match kind {
+        0 => DATE,
+        1 => TIME,
+        _ => concat!(
+            "Value(Year,4,10,EXCEEDS_PAD)'-'Value(MonthOfYear,2)'-'Value(DayOfMonth,2)",
+            "'T'Value(HourOfDay,2)':'Value(MinuteOfHour,2)[':'Value(SecondOfMinute,2)",
+            "[Fraction(NanoOfSecond,0,9,DecimalPoint)]]"
+        ),
+    }
+}

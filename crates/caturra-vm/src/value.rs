@@ -341,6 +341,16 @@ pub enum StdStream {
     Err,
 }
 
+/// What a `DateTimeFormatter` was built from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DateFormatKind {
+    Pattern(String),
+    /// One of `ISO_LOCAL_DATE` (0), `ISO_LOCAL_TIME` (1) and
+    /// `ISO_LOCAL_DATE_TIME` (2). `ISO_DATE`/`ISO_TIME`/`ISO_DATE_TIME` are
+    /// the same three for a value with no zone in it.
+    Iso(u8),
+}
+
 /// One `java.time` value. Small and `Copy`, because these are value types:
 /// every operation on one answers a NEW one, and nothing mutates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -504,6 +514,10 @@ pub enum HeapObject {
     /// JDK, as it is here), while `DayOfWeek`/`Month` are real enum constants
     /// and must be the same object every time.
     Temporal(Temporal),
+    /// A `java.time.format.DateTimeFormatter`: a pattern, or one of the ISO
+    /// constants — which are NOT the value's `toString` (an ISO time always
+    /// writes its seconds, where `toString` leaves them out).
+    DateFormat(DateFormatKind),
     /// A `java.io.ByteArrayOutputStream`: the bytes written into it so far.
     /// The only `OutputStream` caturra models, and the one a test captures
     /// output with.
@@ -1114,6 +1128,7 @@ impl HeapObject {
             | HeapObject::StringBuilder(_)
             | HeapObject::ByteStream(_)
             | HeapObject::Temporal(_)
+            | HeapObject::DateFormat(_)
             | HeapObject::PrintStream(PrintSink::Std(_))
             | HeapObject::IntArray(_, _)
             | HeapObject::DoubleArray(_)

@@ -2439,6 +2439,35 @@ public class Schedule {
 }
 """,
     ),
+    dict(
+        id="date-patterns",
+        category="Library",
+        title="Printing a date the way you want it",
+        summary="`DateTimeFormatter.ofPattern(\"EEEE, MMMM d\")` — the pattern letters, quoted text, formatting either way round, and parsing back through the same pattern.",
+        main="Formats",
+        source="""
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
+public class Formats {
+    public static void main(String[] args) {
+        LocalDate day = LocalDate.of(2024, 5, 4);
+        System.out.println(day.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
+        System.out.println(day.format(DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy")));
+        System.out.println(day.format(DateTimeFormatter.ofPattern("'day' D 'of' yyyy")));
+
+        LocalDateTime when = LocalDateTime.of(2024, 5, 4, 14, 5);
+        System.out.println(when.format(DateTimeFormatter.ofPattern("h:mm a")));
+        System.out.println(when.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+
+        // And back again, through the same pattern.
+        DateTimeFormatter british = DateTimeFormatter.ofPattern("d MMM yyyy");
+        System.out.println(LocalDate.parse("4 Jul 2024", british).getDayOfWeek());
+    }
+}
+""",
+    ),
     dict(id="g-generic-supertype", category="Declarations", title="Parameterized supertype (with bridge methods)",
          summary="A subclass stands in for `Box<String>`, and a call through that reference reaches the OVERRIDE — which needs the bridge method erasure would otherwise lose.",
          main="G",

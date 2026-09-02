@@ -12617,3 +12617,48 @@ Pinned by `the_time_of_day_and_the_date_time`,
 `looping_over_the_days_and_the_months`, `times_are_values`,
 `building_a_date_time_from_its_halves`, and the `times-and-spans` feature on
 the compatibility page.
+
+### Printing a date the way a pattern asks
+
+`DateTimeFormatter.ofPattern` is the last of `java.time` a student writes, and
+the one place its behaviour is a small language of its own. The letters
+modelled are the ones a program uses — `y`/`u`, `M`, `d`, `D`, `E`, `H`, `h`,
+`m`, `s`, `S`, `a` — with quoted text between them, formatting either way round
+(`value.format(fmt)` and `fmt.format(value)`), parsing back through the same
+pattern, and the ISO constants.
+
+Four things had to be read off a JDK rather than assumed:
+
+**A letter caturra does not model is not an invalid pattern.** `java.time`
+knows `q` (quarter), `G` (era), `z` (zone) and a dozen more; refusing them as
+"Unknown pattern letter" would be refusing valid Java. There are three answers
+now: a letter `java.time` does not know gets its message
+(`Unknown pattern letter: b` — and the set is exactly `BCIJPRTUbfijlort`), a
+letter it knows but caturra does not model gets a refusal of ours that says so,
+and the rest are formatted. Each letter also has its own LIMIT — `ddd` is
+"Too many pattern letters: d", not a three-digit day.
+
+**`toString` prints the printer, not the pattern.** A JDK's formatter describes
+what it built: `Value(DayOfMonth,2)'/'Value(MonthOfYear,2)'/'Value(YearOfEra,4,19,EXCEEDS_PAD)`.
+Every shape in that description is mechanical once the pattern is parsed — the
+sign style changes at four letters, a two-letter year is a `ReducedValue`, a
+day-of-week is always `Text` — so it is produced exactly rather than
+approximated with the pattern text. It also showed that a quoted run is ONE
+piece and each unquoted character is its own (`', '` is `','' '`).
+
+**An ISO constant is not the value's `toString`.** `ISO_LOCAL_TIME` always
+writes the seconds (`14:05:00` where `toString` gives `14:05`) and its fraction
+carries only as many digits as it needs (`14:05:09.5` where `toString` gives
+`.500`). Modelling the ISO formatters as "print what the value prints" was
+wrong in exactly that way, and the compatibility page caught it — the recorded
+JDK output and the live one disagreed on one line.
+
+**`ofPattern` resolves SMARTLY.** `LocalDate.parse("2024-02-30", ofPattern("yyyy-MM-dd"))`
+is not an error: the day is pulled back to the 29th. A field outside its range
+altogether IS an error, and a differently-shaped one — "could not be parsed:
+Invalid value for MonthOfYear (valid values 1 - 12): 13" rather than "could not
+be parsed at index 4".
+
+Pinned by `formatting_a_date_the_way_a_pattern_asks`,
+`what_a_pattern_says_when_it_is_wrong`, and the `date-patterns` feature on the
+compatibility page.

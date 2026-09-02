@@ -118,11 +118,11 @@ const JAVA_TIME: &[&str] = &[
 ];
 
 /// `java.time.temporal` — the unit a program names to ask `between`.
-const JAVA_TIME_TEMPORAL: &[&str] = &["ChronoUnit"];
+const JAVA_TIME_TEMPORAL: &[&str] = &["ChronoUnit", "UnsupportedTemporalTypeException"];
 
 /// `java.time.format` — only the exception, so far: `LocalDate.parse` throws
 /// it and a program may catch it by name.
-const JAVA_TIME_FORMAT: &[&str] = &["DateTimeParseException"];
+const JAVA_TIME_FORMAT: &[&str] = &["DateTimeFormatter", "DateTimeParseException"];
 /// `java.nio.charset` — the charsets a program names when it turns text into
 /// bytes and back. `Charset` is the type; `StandardCharsets` holds the
 /// constants; the exceptions are what an unknown name throws.
@@ -493,6 +493,7 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Duration",
     "Period",
     "ChronoUnit",
+    "DateTimeFormatter",
     "DayOfWeek",
     "Month",
     "Painter",

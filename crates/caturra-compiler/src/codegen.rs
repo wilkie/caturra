@@ -3497,6 +3497,7 @@ impl MethodTable {
                     "Duration" => Some(JType::Duration),
                     "Period" => Some(JType::Period),
                     "ChronoUnit" => Some(JType::ChronoUnit),
+                    "DateTimeFormatter" => Some(JType::DateFormat),
                     "LocalDateTime" => Some(JType::LocalDateTime),
                     "DayOfWeek" => Some(JType::DayOfWeek),
                     "Month" => Some(JType::Month),
@@ -5867,6 +5868,16 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         // and are asked for the same way.
         "LocalTime" => &["MIDNIGHT", "NOON", "MAX", "MIN"],
         "Duration" | "Period" => &["ZERO"],
+        // Every ISO constant prints what the value's own `toString` prints,
+        // so they are all the same object here.
+        "DateTimeFormatter" => &[
+            "ISO_LOCAL_DATE",
+            "ISO_LOCAL_TIME",
+            "ISO_LOCAL_DATE_TIME",
+            "ISO_DATE",
+            "ISO_TIME",
+            "ISO_DATE_TIME",
+        ],
         // The `ChronoUnit` constants, in the order the VM stores them.
         // In the JDK's own order, so `ordinal()` answers what a JDK answers.
         "ChronoUnit" => &[
@@ -5914,6 +5925,7 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         "Duration" => JType::Duration,
         "Period" => JType::Period,
         "ChronoUnit" => JType::ChronoUnit,
+        "DateTimeFormatter" => JType::DateFormat,
         _ => JType::Month,
     };
     // A time's constants are ordinals 0..=2 (`MIN` is midnight again); an
@@ -7404,6 +7416,9 @@ enum JType {
     Period,
     /// `java.time.temporal.ChronoUnit`, whose only real use is `between`.
     ChronoUnit,
+    /// `java.time.format.DateTimeFormatter` — a pattern, or one of the ISO
+    /// constants.
+    DateFormat,
     /// `java.time.DayOfWeek` and `java.time.Month`: real enums, so their
     /// constants are interned and `==` works on them.
     DayOfWeek,
@@ -7936,6 +7951,7 @@ impl JType {
             JType::Duration => String::from("Duration"),
             JType::Period => String::from("Period"),
             JType::ChronoUnit => String::from("ChronoUnit"),
+            JType::DateFormat => String::from("DateTimeFormatter"),
             JType::LocalDateTime => String::from("LocalDateTime"),
             JType::DayOfWeek => String::from("DayOfWeek"),
             JType::Month => String::from("Month"),
@@ -7991,6 +8007,7 @@ impl JType {
                 | JType::Duration
                 | JType::Period
                 | JType::ChronoUnit
+                | JType::DateFormat
                 | JType::DayOfWeek
                 | JType::Month
                 | JType::Reader
@@ -8138,6 +8155,7 @@ impl JType {
             JType::Duration => String::from("Ljava/time/Duration;"),
             JType::Period => String::from("Ljava/time/Period;"),
             JType::ChronoUnit => String::from("Ljava/time/temporal/ChronoUnit;"),
+            JType::DateFormat => String::from("Ljava/time/format/DateTimeFormatter;"),
             JType::LocalDateTime => String::from("Ljava/time/LocalDateTime;"),
             JType::DayOfWeek => String::from("Ljava/time/DayOfWeek;"),
             JType::Month => String::from("Ljava/time/Month;"),
@@ -9713,6 +9731,8 @@ enum BParam {
     LocalTime,
     LocalDateTime,
     Duration,
+    /// A `DateTimeFormatter`, which `format` and `parse` take.
+    DateFormat,
     /// Any `java.time` value at all — what `between` takes.
     Temporal,
     DayOfWeek,
@@ -9762,6 +9782,8 @@ enum BRet {
     /// over an enum.
     DayOfWeekArray,
     MonthArray,
+    /// A `DateTimeFormatter`.
+    DateFormat,
     DayOfWeek,
     Month,
     /// The `java.io.PrintWriter` itself — `append`/`format` return the writer
@@ -12616,6 +12638,12 @@ const FILE_METHODS: &[BuiltinMethod] = &[
 /// no clock, no locale, no timezone database, and so exactly comparable with
 /// a JDK.
 const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "format",
+        &[BParam::DateFormat],
+        BRet::Str,
+        "(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;",
+    ),
     bm("getYear", &[], BRet::Int, "()I"),
     bm("getMonthValue", &[], BRet::Int, "()I"),
     bm("getDayOfMonth", &[], BRet::Int, "()I"),
@@ -12796,6 +12824,12 @@ const MONTH_METHODS: &[BuiltinMethod] = &[
 /// `java.time.LocalTime` — a time of day. It WRAPS at midnight rather than
 /// carrying: `23:00` plus two hours is `01:00`.
 const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "format",
+        &[BParam::DateFormat],
+        BRet::Str,
+        "(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;",
+    ),
     bm("getHour", &[], BRet::Int, "()I"),
     bm("getMinute", &[], BRet::Int, "()I"),
     bm("getSecond", &[], BRet::Int, "()I"),
@@ -12911,6 +12945,12 @@ const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
 /// `java.time.LocalDateTime` — the two halves, and the arithmetic that
 /// carries whole days from the time into the date.
 const LOCAL_DATE_TIME_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "format",
+        &[BParam::DateFormat],
+        BRet::Str,
+        "(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;",
+    ),
     bm(
         "toLocalDate",
         &[],
@@ -13354,6 +13394,33 @@ const PERIOD_STATIC_METHODS: &[BuiltinMethod] = &[
     ),
 ];
 
+/// `java.time.format.DateTimeFormatter` — the pattern letters a program
+/// writes (`yyyy`, `MM`, `dd`, `EEEE`, `HH`, `mm`, `ss`, `a`, `D`), quoted
+/// text, and the ISO constants.
+const DATE_FORMAT_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "format",
+        &[BParam::Temporal],
+        BRet::Str,
+        "(Ljava/lang/Object;)Ljava/lang/String;",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+const DATE_FORMAT_STATIC_METHODS: &[BuiltinMethod] = &[bm(
+    "ofPattern",
+    &[BParam::Str],
+    BRet::DateFormat,
+    "(Ljava/lang/String;)Ljava/time/format/DateTimeFormatter;",
+)];
+
 /// The static factories. `now()` is the one that needs the HOST: what "today"
 /// is depends on a zone, which the browser reads from its own IANA data and
 /// caturra does not vendor.
@@ -13376,6 +13443,12 @@ const LOCAL_DATE_STATIC_METHODS: &[BuiltinMethod] = &[
         &[BParam::CharSeq],
         BRet::LocalDate,
         "(Ljava/lang/CharSequence;)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "parse",
+        &[BParam::CharSeq, BParam::DateFormat],
+        BRet::LocalDate,
+        "(Ljava/lang/CharSequence;Ljava/time/format/DateTimeFormatter;)Ljava/time/LocalDate;",
     ),
 ];
 
@@ -13410,6 +13483,12 @@ const LOCAL_TIME_STATIC_METHODS: &[BuiltinMethod] = &[
         &[BParam::CharSeq],
         BRet::LocalTime,
         "(Ljava/lang/CharSequence;)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "parse",
+        &[BParam::CharSeq, BParam::DateFormat],
+        BRet::LocalTime,
+        "(Ljava/lang/CharSequence;Ljava/time/format/DateTimeFormatter;)Ljava/time/LocalTime;",
     ),
 ];
 
@@ -13452,10 +13531,30 @@ const LOCAL_DATE_TIME_STATIC_METHODS: &[BuiltinMethod] = &[
         "(IIIIII)Ljava/time/LocalDateTime;",
     ),
     bm(
+        "of",
+        &[
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+        ],
+        BRet::LocalDateTime,
+        "(IIIIIII)Ljava/time/LocalDateTime;",
+    ),
+    bm(
         "parse",
         &[BParam::CharSeq],
         BRet::LocalDateTime,
         "(Ljava/lang/CharSequence;)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "parse",
+        &[BParam::CharSeq, BParam::DateFormat],
+        BRet::LocalDateTime,
+        "(Ljava/lang/CharSequence;Ljava/time/format/DateTimeFormatter;)Ljava/time/LocalDateTime;",
     ),
 ];
 
@@ -16204,6 +16303,7 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
             | JType::Reader
@@ -16249,6 +16349,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Duration => Some(("java/time/Duration", DURATION_METHODS)),
         JType::Period => Some(("java/time/Period", PERIOD_METHODS)),
         JType::ChronoUnit => Some(("java/time/temporal/ChronoUnit", CHRONO_UNIT_METHODS)),
+        JType::DateFormat => Some(("java/time/format/DateTimeFormatter", DATE_FORMAT_METHODS)),
         JType::LocalDateTime => Some(("java/time/LocalDateTime", LOCAL_DATE_TIME_METHODS)),
         JType::DayOfWeek => Some(("java/time/DayOfWeek", DAY_OF_WEEK_METHODS)),
         JType::Month => Some(("java/time/Month", MONTH_METHODS)),
@@ -16982,6 +17083,10 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "LocalTime" => Some(("java/time/LocalTime", LOCAL_TIME_STATIC_METHODS)),
         "Duration" => Some(("java/time/Duration", DURATION_STATIC_METHODS)),
         "Period" => Some(("java/time/Period", PERIOD_STATIC_METHODS)),
+        "DateTimeFormatter" => Some((
+            "java/time/format/DateTimeFormatter",
+            DATE_FORMAT_STATIC_METHODS,
+        )),
         "LocalDateTime" => Some(("java/time/LocalDateTime", LOCAL_DATE_TIME_STATIC_METHODS)),
         "DayOfWeek" => Some(("java/time/DayOfWeek", DAY_OF_WEEK_STATIC_METHODS)),
         "Month" => Some(("java/time/Month", MONTH_STATIC_METHODS)),
@@ -17291,6 +17396,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::LocalDate => JType::LocalDate,
         BParam::LocalTime => JType::LocalTime,
         BParam::Duration => JType::Duration,
+        BParam::DateFormat => JType::DateFormat,
         BParam::LocalDateTime => JType::LocalDateTime,
         BParam::DayOfWeek => JType::DayOfWeek,
         BParam::Month => JType::Month,
@@ -17728,6 +17834,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::LocalDate => Some(JType::LocalDate),
         BRet::LocalTime => Some(JType::LocalTime),
         BRet::Duration => Some(JType::Duration),
+        BRet::DateFormat => Some(JType::DateFormat),
         BRet::DayOfWeekArray => Some(JType::Array {
             elem: ElemType::DayOfWeek,
             dims: 1,
@@ -25058,6 +25165,7 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
             | JType::Reader
@@ -26919,6 +27027,7 @@ impl BodyGen<'_> {
             JType::Duration => String::from("java/time/Duration"),
             JType::Period => String::from("java/time/Period"),
             JType::ChronoUnit => String::from("java/time/temporal/ChronoUnit"),
+            JType::DateFormat => String::from("java/time/format/DateTimeFormatter"),
             JType::LocalDateTime => String::from("java/time/LocalDateTime"),
             JType::DayOfWeek => String::from("java/time/DayOfWeek"),
             JType::Month => String::from("java/time/Month"),
@@ -30477,6 +30586,7 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
             | JType::Path => Some(String::from("(Ljava/lang/String;)V")),
@@ -33068,6 +33178,7 @@ impl BodyGen<'_> {
                 JType::Duration => "java/time/Duration",
                 JType::Period => "java/time/Period",
                 JType::ChronoUnit => "java/time/temporal/ChronoUnit",
+                JType::DateFormat => "java/time/format/DateTimeFormatter",
                 _ => "java/time/Month",
             };
             self.push_int(ordinal);
@@ -35455,6 +35566,7 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
@@ -35843,6 +35955,7 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
             | JType::List { .. }
@@ -35878,6 +35991,7 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
             | JType::List { .. }

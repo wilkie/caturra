@@ -239,6 +239,10 @@ fn local_date_time_static(
                 _ => None,
             }
             .unwrap_or_default();
+            if let Some(JValue::Ref(Some(formatter))) = args.get(1) {
+                let formatter = *formatter;
+                return parse_with_formatter(heap, "java/time/LocalDateTime", &text, formatter);
+            }
             match crate::time::parse_date_time(&text) {
                 Ok(when) => made(heap, when),
                 Err(message) => Err(VmError::UncaughtException(format!(
@@ -583,6 +587,110 @@ fn date_time_method(
     }
 }
 
+/// The pattern a formatter reference holds, and the pieces it parses to.
+/// `Ok(None)` is one of the ISO constants, which format as the value's own
+/// `toString` does.
+fn formatter_pieces(
+    heap: &Heap,
+    reference: HeapRef,
+) -> Result<Result<Vec<crate::time::Piece>, u8>, VmError> {
+    let Some(HeapObject::DateFormat(kind)) = heap.get(reference) else {
+        return Err(throw(
+            "java.lang.ClassCastException: not a DateTimeFormatter",
+        ));
+    };
+    let pattern = match kind {
+        crate::value::DateFormatKind::Iso(which) => return Ok(Err(*which)),
+        crate::value::DateFormatKind::Pattern(pattern) => pattern,
+    };
+    match crate::time::parse_pattern(pattern) {
+        Ok(pieces) => Ok(Ok(pieces)),
+        Err(message) => Err(throw(&*format!(
+            "java.lang.IllegalArgumentException: {message}"
+        ))),
+    }
+}
+
+/// `value.format(formatter)` — and `formatter.format(value)`, which is the
+/// same thing written the other way round.
+fn format_temporal(
+    value: Temporal,
+    heap: &mut Heap,
+    formatter: HeapRef,
+) -> Result<Option<JValue>, VmError> {
+    let (date, time) = match value {
+        Temporal::Date(date) => (Some(date), None),
+        Temporal::Time(time) => (None, Some(time)),
+        Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
+        _ => return Err(throw("java.lang.ClassCastException: not a date or a time")),
+    };
+    let text = match formatter_pieces(heap, formatter)? {
+        // An ISO constant is NOT the value's `toString`: its time half
+        // always writes the seconds, and its fraction carries only as many
+        // digits as it needs.
+        Err(_) => match (date, time) {
+            (Some(date), None) => date.to_string(),
+            (None, Some(time)) => crate::time::iso_time_text(time),
+            (Some(date), Some(time)) => format!("{date}T{}", crate::time::iso_time_text(time)),
+            _ => value.text(),
+        },
+        Ok(pieces) => match crate::time::format_pieces(&pieces, date, time) {
+            Ok(text) => text,
+            Err(field) => {
+                return Err(VmError::UncaughtException(format!(
+                    "java.time.temporal.UnsupportedTemporalTypeException: Unsupported field: \
+                     {field}"
+                )));
+            }
+        },
+    };
+    Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+}
+
+/// `LocalDate.parse(text, formatter)` and its two siblings. `want` is which
+/// of the three asked, so that a missing field is that type's own complaint.
+fn parse_with_formatter(
+    heap: &mut Heap,
+    want: &str,
+    text: &str,
+    formatter: HeapRef,
+) -> Result<Option<JValue>, VmError> {
+    // The JDK's two shapes: "could not be parsed at index 4" when the text
+    // does not fit the pattern, and "could not be parsed: Invalid value for
+    // MonthOfYear …" when it fits but says something impossible.
+    let failed = |why: &str| {
+        VmError::UncaughtException(format!(
+            "java.time.format.DateTimeParseException: Text '{text}' could not be parsed{why}"
+        ))
+    };
+    let built = match formatter_pieces(heap, formatter)? {
+        Err(_) => match want {
+            "java/time/LocalDate" => crate::time::parse_date(text)
+                .map(|date| (Some(date), None))
+                .map_err(|_| failed(" at index 0"))?,
+            "java/time/LocalTime" => crate::time::parse_time(text)
+                .map(|time| (None, Some(time)))
+                .map_err(|_| failed(" at index 0"))?,
+            _ => crate::time::parse_date_time(text)
+                .map(|when| (Some(when.date), Some(when.time)))
+                .map_err(|_| failed(" at index 0"))?,
+        },
+        Ok(pieces) => {
+            crate::time::parse_pieces(&pieces, text).map_err(|why| failed(why.as_str()))?
+        }
+    };
+    let value = match (want, built) {
+        ("java/time/LocalDate", (Some(date), _)) => Temporal::Date(date),
+        ("java/time/LocalTime", (_, Some(time))) => Temporal::Time(time),
+        ("java/time/LocalDateTime", (Some(date), Some(time))) => {
+            Temporal::DateTime(crate::time::DateTime { date, time })
+        }
+        // The text parsed, but not into what was asked for.
+        _ => return Err(failed(" at index 0")),
+    };
+    Ok(Some(JValue::Ref(Some(heap.intern_temporal(value)))))
+}
+
 /// `java.time.Duration`: an amount of time, and the units it can be read in.
 fn duration_method(
     amount: crate::time::Duration,
@@ -821,6 +929,12 @@ fn temporal_method(
 
     if let Some(answer) = temporal_object_method(value, heap, method, args) {
         return Ok(Some(answer));
+    }
+    // `format(formatter)` reads the same on a date, a time and a date-time.
+    if method == "format"
+        && let Some(JValue::Ref(Some(formatter))) = args.first()
+    {
+        return format_temporal(value, heap, *formatter);
     }
     // An enum answers the shared methods above; the rest are its own.
     match value {
@@ -1638,6 +1752,33 @@ pub fn invoke_virtual(
         }
     }
     match (receiver_object, method) {
+        // A `DateTimeFormatter` formats a value handed TO it, which is the
+        // other way of writing `value.format(formatter)`.
+        (HeapObject::DateFormat(_), "format") => {
+            let Some(JValue::Ref(Some(target))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException: temporal"));
+            };
+            let Some(HeapObject::Temporal(value)) = heap.get(*target) else {
+                return Err(throw("java.lang.ClassCastException: not a date or a time"));
+            };
+            let value = *value;
+            format_temporal(value, heap, receiver)
+        }
+        (HeapObject::DateFormat(kind), "toString") => {
+            // A JDK prints the PRINTER it built, not the pattern it was given.
+            let text = match kind {
+                crate::value::DateFormatKind::Pattern(pattern) => {
+                    crate::time::parse_pattern(pattern).map_or_else(
+                        |_| pattern.clone(),
+                        |pieces| crate::time::describe_pieces(&pieces),
+                    )
+                }
+                crate::value::DateFormatKind::Iso(which) => {
+                    crate::time::iso_description(*which).to_owned()
+                }
+            };
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
         // `java.time.LocalDate` and the two enums it answers with. Every
         // operation makes a NEW value; nothing here mutates.
         (HeapObject::Temporal(value), _) => temporal_method(*value, heap, method, args),
@@ -7848,6 +7989,11 @@ pub fn invoke_static(
                     _ => None,
                 }
                 .unwrap_or_default();
+                // `parse(text, formatter)` reads it the formatter's way.
+                if let Some(JValue::Ref(Some(formatter))) = args.get(1) {
+                    let formatter = *formatter;
+                    return parse_with_formatter(heap, class, &text, formatter);
+                }
                 match crate::time::parse_date(&text) {
                     Ok(date) => Ok(Some(JValue::Ref(Some(
                         heap.intern_temporal(Temporal::Date(date)),
@@ -7916,6 +8062,10 @@ pub fn invoke_static(
                         _ => None,
                     }
                     .unwrap_or_default();
+                    if let Some(JValue::Ref(Some(formatter))) = args.get(1) {
+                        let formatter = *formatter;
+                        return parse_with_formatter(heap, class, &text, formatter);
+                    }
                     match crate::time::parse_time(&text) {
                         Ok(time) => Ok(Some(JValue::Ref(Some(
                             heap.intern_temporal(Temporal::Time(time)),
@@ -7941,6 +8091,46 @@ pub fn invoke_static(
             }
         }
         "java/time/LocalDateTime" => local_date_time_static(heap, console, method, args),
+        // `DateTimeFormatter.ofPattern(...)` and the ISO constants. The
+        // pattern is checked HERE, because that is where a JDK throws for a
+        // bad one — not at the first use.
+        "java/time/format/DateTimeFormatter" => match method {
+            "ofPattern" => {
+                let pattern = match args.first() {
+                    Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                    _ => return Err(throw("java.lang.NullPointerException: pattern")),
+                }
+                .unwrap_or_default();
+                if let Err(message) = crate::time::parse_pattern(&pattern) {
+                    return Err(throw(&*format!(
+                        "java.lang.IllegalArgumentException: {message}"
+                    )));
+                }
+                let formatter = heap.alloc(HeapObject::DateFormat(
+                    crate::value::DateFormatKind::Pattern(pattern),
+                ));
+                Ok(Some(JValue::Ref(Some(formatter))))
+            }
+            // `__of` is how the compiler asks for a CONSTANT; all of the ISO
+            // ones print what the value's own `toString` prints.
+            // The three zone-less shapes are a date, a time and both;
+            // `ISO_DATE`, `ISO_TIME` and `ISO_DATE_TIME` are those same three
+            // for a value that carries no zone.
+            "__of" => {
+                let which = match args.first() {
+                    Some(JValue::Int(index)) => (*index % 3).clamp(0, 2),
+                    _ => 0,
+                };
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let formatter = heap.alloc(HeapObject::DateFormat(
+                    crate::value::DateFormatKind::Iso(which as u8),
+                ));
+                Ok(Some(JValue::Ref(Some(formatter))))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!(
+                "java/time/format/DateTimeFormatter.{method}"
+            ))),
+        },
         "java/time/Duration" => {
             let count = match args.first() {
                 Some(JValue::Long(value)) => *value,

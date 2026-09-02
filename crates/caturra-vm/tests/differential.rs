@@ -46306,3 +46306,103 @@ public class Bridges {
 }
 "#
 );
+
+// `DateTimeFormatter.ofPattern` — the pattern letters a program writes, the
+// quoted text between them, formatting in both directions
+// (`value.format(fmt)` and `fmt.format(value)`), parsing back through the
+// same pattern, and the ISO constants.
+differential_test!(
+    formatting_a_date_the_way_a_pattern_asks,
+    "Patterns",
+    r#"
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+
+public class Patterns {
+    public static void main(String[] args) {
+        LocalDate day = LocalDate.of(2024, 5, 4);
+        LocalDateTime when = LocalDateTime.of(2024, 5, 4, 14, 5, 9);
+        LocalTime time = LocalTime.of(14, 5, 9);
+
+        System.out.println(day.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")));
+        System.out.println(day.format(DateTimeFormatter.ofPattern("MM/dd/yyyy")));
+        System.out.println(day.format(DateTimeFormatter.ofPattern("d/M/yy")));
+        System.out.println(day.format(DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy")));
+        System.out.println(day.format(DateTimeFormatter.ofPattern("EEE MMM d"))
+            + " " + day.format(DateTimeFormatter.ofPattern("E"))
+            + " " + day.format(DateTimeFormatter.ofPattern("D")));
+        System.out.println(when.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+            + " " + when.format(DateTimeFormatter.ofPattern("h:mm a")));
+        System.out.println(time.format(DateTimeFormatter.ofPattern("HH:mm"))
+            + " " + time.format(DateTimeFormatter.ofPattern("hh:mm:ss a"))
+            + " " + LocalTime.of(0, 30).format(DateTimeFormatter.ofPattern("h:mm a")));
+        System.out.println(day.format(DateTimeFormatter.ofPattern("'Week of' MMMM"))
+            + " " + day.format(DateTimeFormatter.ofPattern("''yy")));
+        // An ISO formatter is NOT the value's `toString`: its time half
+        // always writes the seconds, and its fraction only as many digits as
+        // it needs.
+        System.out.println(day.format(DateTimeFormatter.ISO_LOCAL_DATE)
+            + " " + when.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+            + " " + LocalTime.of(14, 5).format(DateTimeFormatter.ISO_LOCAL_TIME)
+            + " " + LocalTime.of(14, 5, 9, 500000000).format(DateTimeFormatter.ISO_TIME));
+        System.out.println(DateTimeFormatter.ISO_LOCAL_DATE + " " + DateTimeFormatter.ISO_LOCAL_TIME);
+
+        // The formatter can be the one doing the formatting, and it prints
+        // the printer it built rather than the pattern it was given.
+        DateTimeFormatter british = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+        System.out.println(british.format(day) + " " + british);
+
+        System.out.println(LocalDate.parse("04/05/2024", british)
+            + " " + LocalDate.parse("2024-05-04", DateTimeFormatter.ISO_LOCAL_DATE)
+            + " " + LocalDate.parse("4 Jul 2024", DateTimeFormatter.ofPattern("d MMM yyyy"))
+            + " " + LocalDate.parse("4 July 2024", DateTimeFormatter.ofPattern("d MMMM yyyy")));
+        System.out.println(LocalDateTime.parse("2024-05-04 14:05",
+                DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+            + " " + LocalTime.parse("2:05 PM", DateTimeFormatter.ofPattern("h:mm a"))
+            + " " + LocalTime.parse("12:05 AM", DateTimeFormatter.ofPattern("h:mm a")));
+    }
+}
+"#
+);
+
+// What a pattern says when it is wrong: a field the value does not have, text
+// that does not match, a letter `java.time` does not know, and a quote that
+// never closes.
+differential_test!(
+    what_a_pattern_says_when_it_is_wrong,
+    "BadPatterns",
+    r#"
+import java.time.DateTimeException;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+
+public class BadPatterns {
+    static void attempt(String what, Runnable body) {
+        try {
+            body.run();
+            System.out.println(what + " -> no exception");
+        } catch (DateTimeException e) {
+            System.out.println(what + " -> " + e);
+        } catch (IllegalArgumentException e) {
+            System.out.println(what + " -> " + e);
+        }
+    }
+
+    public static void main(String[] args) {
+        attempt("a time field on a date",
+            () -> LocalDate.of(2024, 1, 1).format(DateTimeFormatter.ofPattern("HH:mm")));
+        attempt("text that does not match",
+            () -> LocalDate.parse("nope", DateTimeFormatter.ofPattern("yyyy")));
+        attempt("the wrong separator",
+            () -> LocalDate.parse("2024/01/02", DateTimeFormatter.ofPattern("yyyy-MM-dd")));
+        attempt("a day that is not one",
+            () -> LocalDate.parse("2024-02-30", DateTimeFormatter.ofPattern("yyyy-MM-dd")));
+        attempt("an unknown letter", () -> DateTimeFormatter.ofPattern("bbb"));
+        attempt("too many letters", () -> DateTimeFormatter.ofPattern("ddd"));
+        attempt("an unclosed quote", () -> DateTimeFormatter.ofPattern("'abc"));
+    }
+}
+"#
+);

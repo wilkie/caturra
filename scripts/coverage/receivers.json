@@ -54,5 +54,6 @@
   "java.time.LocalDateTime": "java.time.LocalDateTime.of(2024, 1, 15, 10, 15)",
   "java.time.Duration": "java.time.Duration.ofHours(2)",
   "java.time.Period": "java.time.Period.ofDays(10)",
-  "java.time.temporal.ChronoUnit": "java.time.temporal.ChronoUnit.DAYS"
+  "java.time.temporal.ChronoUnit": "java.time.temporal.ChronoUnit.DAYS",
+  "java.time.format.DateTimeFormatter": "java.time.format.DateTimeFormatter.ofPattern(\"yyyy\")"
 }

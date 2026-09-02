@@ -224,6 +224,12 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/time/format/DateTimeParseException",
         "java/time/DateTimeException",
     ),
+    // Asking a value for a field it does not have — a `LocalDate` for an
+    // hour — which a formatter does when its pattern reaches past the value.
+    (
+        "java/time/temporal/UnsupportedTemporalTypeException",
+        "java/time/DateTimeException",
+    ),
     (
         "java/nio/charset/UnsupportedCharsetException",
         "java/lang/IllegalArgumentException",

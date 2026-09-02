@@ -1113,6 +1113,16 @@
     "expected": "09:00 to 17:30\nthat is 510 minutes\nor 510 the other way\n01:00\n2024-05-16T01:00\nP1M23D = 54 days\n2024-05-15T08:45 2024-05-15T00:00\n"
   },
   {
+    "id": "date-patterns",
+    "category": "Library",
+    "title": "Printing a date the way you want it",
+    "summary": "`DateTimeFormatter.ofPattern(\"EEEE, MMMM d\")` \u2014 the pattern letters, quoted text, formatting either way round, and parsing back through the same pattern.",
+    "main": "Formats",
+    "source": "import java.time.LocalDate;\nimport java.time.LocalDateTime;\nimport java.time.format.DateTimeFormatter;\n\npublic class Formats {\n    public static void main(String[] args) {\n        LocalDate day = LocalDate.of(2024, 5, 4);\n        System.out.println(day.format(DateTimeFormatter.ofPattern(\"dd/MM/yyyy\")));\n        System.out.println(day.format(DateTimeFormatter.ofPattern(\"EEEE, MMMM d, yyyy\")));\n        System.out.println(day.format(DateTimeFormatter.ofPattern(\"'day' D 'of' yyyy\")));\n\n        LocalDateTime when = LocalDateTime.of(2024, 5, 4, 14, 5);\n        System.out.println(when.format(DateTimeFormatter.ofPattern(\"h:mm a\")));\n        System.out.println(when.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));\n\n        // And back again, through the same pattern.\n        DateTimeFormatter british = DateTimeFormatter.ofPattern(\"d MMM yyyy\");\n        System.out.println(LocalDate.parse(\"4 Jul 2024\", british).getDayOfWeek());\n    }\n}\n",
+    "status": "supported",
+    "expected": "04/05/2024\nSaturday, May 4, 2024\nday 125 of 2024\n2:05 PM\n2024-05-04T14:05:00\nTHURSDAY\n"
+  },
+  {
     "id": "g-generic-supertype",
     "category": "Declarations",
     "title": "Parameterized supertype (with bridge methods)",

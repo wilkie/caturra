@@ -20363,6 +20363,7 @@ pub(crate) fn object_class_name_of(
         Some(HeapObject::Writer { .. }) => String::from("java/io/PrintWriter"),
         Some(HeapObject::PrintStream(_)) => String::from("java/io/PrintStream"),
         Some(HeapObject::Temporal(value)) => value.class_name().to_owned(),
+        Some(HeapObject::DateFormat(_)) => String::from("java/time/format/DateTimeFormatter"),
         Some(HeapObject::ByteStream(_)) => String::from("java/io/ByteArrayOutputStream"),
         Some(HeapObject::StackFrame { .. }) => String::from("java/lang/StackTraceElement"),
         Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),
