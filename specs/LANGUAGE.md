@@ -12699,3 +12699,25 @@ literal quote inside a pattern describes as `''` rather than as a quote inside
 quotes.
 
 Pinned by `the_awkward_edges_of_a_calendar`, and the fuzzer is checked in.
+
+### The rest of what a date is asked
+
+The last of the `java.time` surface a program actually reaches for: `until` in
+both its forms (a `Period`, or a count in one unit), `withDayOfYear` and
+`ofYearDay`, `truncatedTo` on a time and on a date-time, a `Period`'s own
+arithmetic (`plusDays`, `withMonths`, `multipliedBy`, `negated`,
+`normalized` — which folds MONTHS into years and leaves the days alone,
+because a day is not a fixed part of a month), a `Duration` read in parts
+(`toHoursPart` is the hours of a duration that also has minutes in it, not the
+whole of it in hours), and the two enums ROTATING — Saturday plus three days
+is Tuesday.
+
+That takes the measured surface to `LocalDate` 35/50, `LocalDateTime` 44/63,
+`Duration` 43/52, `Period` 24/33 and `LocalTime` 28/43. What is left in each is
+almost entirely `TemporalAccessor` plumbing — `adjustInto`, `query`, `getLong`,
+`isSupported`, `range`, `from`, the generic `plus(TemporalAmount)` — which is
+how the library talks to ITSELF rather than anything a program writes, plus
+`datesUntil` (a stream of dates) and the formatter's locale and zone
+configuration, which is the part deliberately not modelled.
+
+Pinned by `the_rest_of_what_a_date_is_asked`.

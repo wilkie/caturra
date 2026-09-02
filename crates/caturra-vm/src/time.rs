@@ -625,6 +625,21 @@ impl Duration {
     pub fn is_negative(self) -> bool {
         self.seconds < 0
     }
+
+    /// The PART of each unit, as `java.time`'s `toXPart` reads them: the
+    /// hours of a duration that also has minutes in it, not the whole of it
+    /// in hours.
+    #[must_use]
+    pub fn part(self, unit: char) -> i64 {
+        let total = self.total_nanos();
+        match unit {
+            'H' => total / NANOS_PER_HOUR,
+            'M' => total / NANOS_PER_MINUTE % 60,
+            'S' => total / NANOS_PER_SECOND % 60,
+            'm' => total / 1_000_000 % 1_000,
+            _ => total % NANOS_PER_SECOND,
+        }
+    }
 }
 
 impl std::fmt::Display for Duration {
@@ -724,6 +739,20 @@ impl Period {
     #[must_use]
     pub fn is_zero(self) -> bool {
         self.years == 0 && self.months == 0 && self.days == 0
+    }
+
+    /// `normalized()` folds the MONTHS into years — and only those: a period
+    /// keeps its days as written, because a day is not a fixed part of a
+    /// month.
+    #[must_use]
+    pub fn normalized(self) -> Self {
+        let total = self.total_months();
+        #[allow(clippy::cast_possible_truncation)]
+        Self {
+            years: (total / 12) as i32,
+            months: (total % 12) as i32,
+            days: self.days,
+        }
     }
 
     #[must_use]

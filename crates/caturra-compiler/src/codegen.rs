@@ -9733,6 +9733,8 @@ enum BParam {
     Duration,
     /// A `DateTimeFormatter`, which `format` and `parse` take.
     DateFormat,
+    /// A `ChronoUnit`, which `until` and `truncatedTo` take.
+    ChronoUnit,
     /// Any `java.time` value at all — what `between` takes.
     Temporal,
     DayOfWeek,
@@ -12775,6 +12777,24 @@ const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "until",
+        &[BParam::LocalDate],
+        BRet::Period,
+        "(Ljava/time/LocalDate;)Ljava/time/Period;",
+    ),
+    bm(
+        "until",
+        &[BParam::LocalDate, BParam::ChronoUnit],
+        BRet::Long,
+        "(Ljava/time/LocalDate;Ljava/time/temporal/ChronoUnit;)J",
+    ),
+    bm(
+        "withDayOfYear",
+        &[BParam::Int],
+        BRet::LocalDate,
+        "(I)Ljava/time/LocalDate;",
+    ),
 ];
 
 /// `java.time.DayOfWeek` and `java.time.Month`: enums, so `name()`,
@@ -12798,6 +12818,18 @@ const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "plus",
+        &[BParam::Long],
+        BRet::DayOfWeek,
+        "(J)Ljava/time/DayOfWeek;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Long],
+        BRet::DayOfWeek,
+        "(J)Ljava/time/DayOfWeek;",
+    ),
 ];
 
 const MONTH_METHODS: &[BuiltinMethod] = &[
@@ -12819,6 +12851,16 @@ const MONTH_METHODS: &[BuiltinMethod] = &[
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("plus", &[BParam::Long], BRet::Month, "(J)Ljava/time/Month;"),
+    bm(
+        "minus",
+        &[BParam::Long],
+        BRet::Month,
+        "(J)Ljava/time/Month;",
+    ),
+    bm("maxLength", &[], BRet::Int, "()I"),
+    bm("minLength", &[], BRet::Int, "()I"),
+    bm("firstDayOfYear", &[BParam::Boolean], BRet::Int, "(Z)I"),
 ];
 
 /// `java.time.LocalTime` — a time of day. It WRAPS at midnight rather than
@@ -12940,6 +12982,12 @@ const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "truncatedTo",
+        &[BParam::ChronoUnit],
+        BRet::LocalTime,
+        "(Ljava/time/temporal/ChronoUnit;)Ljava/time/LocalTime;",
+    ),
 ];
 
 /// `java.time.LocalDateTime` — the two halves, and the arithmetic that
@@ -13148,6 +13196,12 @@ const LOCAL_DATE_TIME_METHODS: &[BuiltinMethod] = &[
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "truncatedTo",
+        &[BParam::ChronoUnit],
+        BRet::LocalDateTime,
+        "(Ljava/time/temporal/ChronoUnit;)Ljava/time/LocalDateTime;",
+    ),
 ];
 
 /// `java.time.Duration` — an amount of time. It is NOT a `Period`: two hours
@@ -13262,6 +13316,36 @@ const DURATION_METHODS: &[BuiltinMethod] = &[
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("toHoursPart", &[], BRet::Int, "()I"),
+    bm("toMinutesPart", &[], BRet::Int, "()I"),
+    bm("toSecondsPart", &[], BRet::Int, "()I"),
+    bm("toMillisPart", &[], BRet::Int, "()I"),
+    bm("toNanosPart", &[], BRet::Int, "()I"),
+    bm("toSeconds", &[], BRet::Long, "()J"),
+    bm(
+        "multipliedBy",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "dividedBy",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "withSeconds",
+        &[BParam::Long],
+        BRet::Duration,
+        "(J)Ljava/time/Duration;",
+    ),
+    bm(
+        "withNanos",
+        &[BParam::Int],
+        BRet::Duration,
+        "(I)Ljava/time/Duration;",
+    ),
 ];
 
 /// `java.time.Period` — years, months and days as WRITTEN. `P1M` is one
@@ -13281,6 +13365,68 @@ const PERIOD_METHODS: &[BuiltinMethod] = &[
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "plusYears",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "plusMonths",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "plusDays",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "minusYears",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "minusMonths",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "minusDays",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "withYears",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "withMonths",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "withDays",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm(
+        "multipliedBy",
+        &[BParam::Int],
+        BRet::Period,
+        "(I)Ljava/time/Period;",
+    ),
+    bm("negated", &[], BRet::Period, "()Ljava/time/Period;"),
+    bm("normalized", &[], BRet::Period, "()Ljava/time/Period;"),
 ];
 
 /// `java.time.temporal.ChronoUnit` — a program names one to ask `between`,
@@ -13449,6 +13595,12 @@ const LOCAL_DATE_STATIC_METHODS: &[BuiltinMethod] = &[
         &[BParam::CharSeq, BParam::DateFormat],
         BRet::LocalDate,
         "(Ljava/lang/CharSequence;Ljava/time/format/DateTimeFormatter;)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "ofYearDay",
+        &[BParam::Int, BParam::Int],
+        BRet::LocalDate,
+        "(II)Ljava/time/LocalDate;",
     ),
 ];
 
@@ -17397,6 +17549,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::LocalTime => JType::LocalTime,
         BParam::Duration => JType::Duration,
         BParam::DateFormat => JType::DateFormat,
+        BParam::ChronoUnit => JType::ChronoUnit,
         BParam::LocalDateTime => JType::LocalDateTime,
         BParam::DayOfWeek => JType::DayOfWeek,
         BParam::Month => JType::Month,

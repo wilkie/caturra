@@ -46463,3 +46463,58 @@ public class Edges {
 }
 "#
 );
+
+// The rest of what a program asks a date for: how far to another one
+// (`until`, in a Period or in a unit), the n-th day of a year, a time with
+// everything below a unit cleared, a Period's own arithmetic, a Duration read
+// in parts, and the two enums ROTATING.
+differential_test!(
+    the_rest_of_what_a_date_is_asked,
+    "MoreTime",
+    r#"
+import java.time.DayOfWeek;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.Month;
+import java.time.Period;
+import java.time.temporal.ChronoUnit;
+
+public class MoreTime {
+    public static void main(String[] args) {
+        LocalDate day = LocalDate.of(2024, 5, 15);
+        System.out.println(day.until(LocalDate.of(2025, 8, 20)) + " "
+            + day.until(LocalDate.of(2025, 8, 20), ChronoUnit.DAYS) + " "
+            + day.until(LocalDate.of(2025, 8, 20), ChronoUnit.MONTHS) + " "
+            + day.withDayOfYear(200) + " " + LocalDate.ofYearDay(2024, 366));
+
+        LocalDateTime when = LocalDateTime.of(2024, 5, 15, 14, 37, 42, 123456789);
+        System.out.println(when.truncatedTo(ChronoUnit.DAYS) + " "
+            + when.truncatedTo(ChronoUnit.HOURS) + " "
+            + when.truncatedTo(ChronoUnit.MINUTES) + " "
+            + when.truncatedTo(ChronoUnit.SECONDS) + " "
+            + LocalTime.of(14, 37, 42, 123456789).truncatedTo(ChronoUnit.MINUTES));
+
+        Period span = Period.of(1, 2, 3);
+        System.out.println(span.plusDays(10) + " " + span.plusMonths(11) + " "
+            + span.plusYears(1) + " " + span.minusDays(5) + " " + span.withDays(9) + " "
+            + span.withMonths(0) + " " + span.withYears(-1));
+        System.out.println(span.multipliedBy(3) + " " + span.negated() + " "
+            + Period.of(1, 25, 3).normalized() + " " + Period.of(0, -13, 0).normalized());
+
+        Duration length = Duration.ofSeconds(3725, 500000000);
+        System.out.println(length.multipliedBy(3) + " " + length.dividedBy(2) + " "
+            + length.withSeconds(60) + " " + length.withNanos(0) + " " + length.toSeconds());
+        System.out.println(length.toHoursPart() + " " + length.toMinutesPart() + " "
+            + length.toSecondsPart() + " " + length.toMillisPart() + " "
+            + length.toNanosPart());
+
+        System.out.println(DayOfWeek.SATURDAY.plus(3) + " " + DayOfWeek.MONDAY.minus(3) + " "
+            + Month.NOVEMBER.plus(4) + " " + Month.JANUARY.minus(1) + " "
+            + Month.MARCH.firstDayOfYear(true) + " " + Month.MARCH.firstDayOfYear(false) + " "
+            + Month.FEBRUARY.maxLength() + " " + Month.FEBRUARY.minLength());
+    }
+}
+"#
+);
