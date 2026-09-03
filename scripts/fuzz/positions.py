@@ -90,6 +90,10 @@ EXPRS = [
  # wildcard rather than to the positional sentinel a bare one keeps.
  ("typevarNested", 'Holder<String> h = new Holder<>(); h.addAll(new ArrayList<>(List.of("a")));',
   'h.extra()'),
+ # A generic METHOD's own variable, pinned by the container and answerable to
+ # the value beside it.
+ ("pinnedVariable", 'List<String> sink = new ArrayList<>(); giveTo(sink, "ab");',
+  'sink.get(0).length()'),
 ]
 
 POSITIONS = {
@@ -121,6 +125,7 @@ HELPERS = """    static class Node<T> {
     static void take(Object o) { System.out.println(o); }
     static <T> List<T> pairOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }
     static <T> List<T> none() { return new ArrayList<>(); }
+    static <T> void giveTo(List<T> into, T value) { into.add(value); }
     static class Bag<T> {
         private final List<T> items = new ArrayList<>();
         Bag<T> put(T v) { items.add(v); return this; }

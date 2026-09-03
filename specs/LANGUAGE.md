@@ -13488,11 +13488,41 @@ one place the two must differ: it really IS an `Object[]` at run time, which is
 right for the descriptor and useless for the check, so the written form keeps
 the variable and the descriptor keeps the erasure.
 
-What is still accepted is a generic METHOD's own variable, pinned by one
-argument and unchecked against the rest: `static <T> void give(Bag<T> bag,
-T value); give(bagOfStrings, 1)`. The plan the compiler keeps for a generic
-method reads its RETURN, and a `void` one has none.
-
 Pinned as `a_type_variable_inside_a_parameter` — the shapes that must still
 compile, a raw receiver, a two-variable class and a `? extends` parameter among
 them — with nine refusals pinned by their wording.
+
+## A generic method's variable answers every argument
+
+The last of that matrix: `static <T> void give(Bag<T> bag, T value)` called as
+`give(bagOfStrings, 1)`. Erasure reads both parameters as `Object`, so every
+call fit. The plan the compiler keeps for a generic method reads its RETURN and
+a `void` one has none — but the parser records a plan for EVERY variable the
+parameters mention, beside the one for the return, and nothing had ever asked
+for it.
+
+Which parameter pins a variable decides what the others may be. A CONTAINER
+parameter is invariant, so `Bag<T>` given a `Bag<String>` pins `T` to `String`
+exactly, and the `T value` beside it has to fit — while a variable named only by
+DIRECT parameters (`<T> T pick(T a, T b)`) is joined at the least upper bound,
+which is why `pick("a", 1)` compiles and must keep compiling. Two containers
+that disagree are the same contradiction from both sides.
+
+A container that is itself a POLY expression pins nothing: its element is
+whatever the call needs, so `firstOf(new ArrayList<>(List.of("a")), 1)` is
+javac's answer too. It still has to REACH a pin another argument made — an
+inline `List.of(1)` for a `Bag<String>` is refused — and an empty diamond,
+having no element at all, reaches anything.
+
+The diagnostic is javac's, through the line that names the mistake:
+
+    method give in class R4 cannot be applied to given types;
+      required: Bag<T>,T
+      found: Bag<String>,int
+      reason: inference variable T has incompatible bounds
+
+which needed the parameter list as WRITTEN — the erased one says `Bag,Object`
+and explains nothing — so the table keeps that too, for the message alone.
+
+Pinned as `a_generic_methods_variable_answers_every_argument`, with five
+refusals beside it.

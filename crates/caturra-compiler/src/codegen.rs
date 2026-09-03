@@ -483,6 +483,16 @@ struct MethodSig {
     /// its bound) and for every non-generic declaration, where the erased
     /// parameter already says everything.
     declared: Vec<JType>,
+    /// For each of the method's OWN type variables, the parameters that pin it
+    /// (see `ast::MethodDecl::type_var_sources`). A variable pinned by an
+    /// invariant CONTAINER parameter is pinned exactly, and every other
+    /// parameter naming it has to fit — which is the whole of what a call to a
+    /// generic method can get wrong that the erased signature does not catch.
+    var_sources: Vec<(String, Vec<crate::ast::InferSource>)>,
+    /// The parameter list as WRITTEN, every type variable kept — what javac
+    /// prints as `required:` when a call cannot pin one. Display only: the
+    /// CHECK reads `declared`, which is empty exactly where this is not.
+    written: Vec<JType>,
     /// Return-type inference plan (see `ast::MethodDecl::infer_return`),
     /// carried through from the erased AST: the parameter indices whose
     /// argument types join to the actual (un-erased) return type. `None`
@@ -716,6 +726,52 @@ fn declared_parameters(class: &ClassDecl, method: &MethodDecl, table: &MethodTab
     out
 }
 
+/// The parameters as written with EVERY type variable kept — the class's by its
+/// own position, the method's by its. For the message only, where javac prints
+/// `required: Bag<T>,T` and the erased list would say `Bag,Object`.
+fn written_parameters(class: &ClassDecl, method: &MethodDecl, table: &MethodTable) -> Vec<JType> {
+    if method.declared_params.len() != method.params.len() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(method.declared_params.len());
+    for written in &method.declared_params {
+        let named = |name: &str| {
+            let at = class
+                .type_params
+                .iter()
+                .position(|tp| tp.name == name)
+                .or_else(|| method.type_params.iter().position(|tp| tp.name == name))?;
+            u8::try_from(at).ok().map(crate::parser::typevar_sentinel)
+        };
+        let Some(resolved) =
+            rename_all_vars(written, &named).and_then(|ty| table.resolve_type(&ty))
+        else {
+            return Vec::new();
+        };
+        out.push(resolved);
+    }
+    out
+}
+
+/// A written type with every name `rename` claims replaced by what it answers.
+fn rename_all_vars(ty: &TypeRef, rename: &impl Fn(&str) -> Option<String>) -> Option<TypeRef> {
+    Some(match ty {
+        TypeRef::Named(name) => match rename(name) {
+            Some(sentinel) => TypeRef::Named(sentinel),
+            None => ty.clone(),
+        },
+        TypeRef::Generic { base, args } => TypeRef::Generic {
+            base: base.clone(),
+            args: args
+                .iter()
+                .map(|arg| rename_all_vars(arg, rename))
+                .collect::<Option<Vec<_>>>()?,
+        },
+        TypeRef::Array(inner) => TypeRef::Array(Box::new(rename_all_vars(inner, rename)?)),
+        other => other.clone(),
+    })
+}
+
 /// A written type with each of the class's type variables replaced by its
 /// positional sentinel. `None` when it mentions one of the METHOD's own.
 fn rename_class_vars(
@@ -924,6 +980,8 @@ impl MethodTable {
                         is_abstract: false,
                         is_varargs: false,
                         declared: Vec::new(),
+                        var_sources: Vec::new(),
+                        written: Vec::new(),
                         ret_infer: None,
                     },
                     // NOT flagged `is_final` here: the dedicated check for
@@ -940,6 +998,8 @@ impl MethodTable {
                         is_abstract: false,
                         is_varargs: false,
                         declared: Vec::new(),
+                        var_sources: Vec::new(),
+                        written: Vec::new(),
                         ret_infer: None,
                     },
                     // `protected Object clone() throws CloneNotSupportedException`
@@ -955,6 +1015,8 @@ impl MethodTable {
                         is_abstract: false,
                         is_varargs: false,
                         declared: Vec::new(),
+                        var_sources: Vec::new(),
+                        written: Vec::new(),
                         ret_infer: None,
                     },
                     MethodSig {
@@ -967,6 +1029,8 @@ impl MethodTable {
                         is_abstract: false,
                         is_varargs: false,
                         declared: Vec::new(),
+                        var_sources: Vec::new(),
+                        written: Vec::new(),
                         ret_infer: None,
                     },
                     MethodSig {
@@ -979,6 +1043,8 @@ impl MethodTable {
                         is_abstract: false,
                         is_varargs: false,
                         declared: Vec::new(),
+                        var_sources: Vec::new(),
+                        written: Vec::new(),
                         ret_infer: None,
                     },
                 ],
@@ -1018,6 +1084,8 @@ impl MethodTable {
                     is_abstract: true,
                     is_varargs: false,
                     declared: Vec::new(),
+                    var_sources: Vec::new(),
+                    written: Vec::new(),
                     ret_infer: None,
                 }],
                 fields: Vec::new(),
@@ -1077,6 +1145,8 @@ impl MethodTable {
                             is_abstract: true,
                             is_varargs: false,
                             declared: Vec::new(),
+                            var_sources: Vec::new(),
+                            written: Vec::new(),
                             ret_infer: None,
                         }]
                     },
@@ -1110,6 +1180,8 @@ impl MethodTable {
                     is_abstract: true,
                     is_varargs: false,
                     declared: Vec::new(),
+                    var_sources: Vec::new(),
+                    written: Vec::new(),
                     ret_infer: None,
                 }],
             ),
@@ -1126,6 +1198,8 @@ impl MethodTable {
                         is_abstract: true,
                         is_varargs: false,
                         declared: Vec::new(),
+                        var_sources: Vec::new(),
+                        written: Vec::new(),
                         ret_infer: None,
                     },
                     MethodSig {
@@ -1138,6 +1212,8 @@ impl MethodTable {
                         is_abstract: true,
                         is_varargs: false,
                         declared: Vec::new(),
+                        var_sources: Vec::new(),
+                        written: Vec::new(),
                         ret_infer: None,
                     },
                     // `remove()` is a DEFAULT since Java 8 — an implementor
@@ -1155,6 +1231,8 @@ impl MethodTable {
                         is_abstract: false,
                         is_varargs: false,
                         declared: Vec::new(),
+                        var_sources: Vec::new(),
+                        written: Vec::new(),
                         ret_infer: None,
                     },
                 ],
@@ -1219,6 +1297,8 @@ impl MethodTable {
                 is_abstract: true,
                 is_varargs: false,
                 declared: Vec::new(),
+                var_sources: Vec::new(),
+                written: Vec::new(),
                 ret_infer: None,
             };
             table.classes.insert(
@@ -1281,6 +1361,8 @@ impl MethodTable {
                 is_abstract: true,
                 is_varargs: false,
                 declared: Vec::new(),
+                var_sources: Vec::new(),
+                written: Vec::new(),
                 ret_infer: None,
             };
             table.classes.insert(
@@ -1545,6 +1627,8 @@ impl MethodTable {
                         // arguments against once the receiver says what those
                         // variables are.
                         declared: declared_parameters(class, method, &table),
+                        var_sources: method.type_var_sources.clone(),
+                        written: written_parameters(class, method, &table),
                         ret_infer: if method.is_constructor {
                             constructor_infer_plan(class, method)
                         } else {
@@ -1588,6 +1672,8 @@ impl MethodTable {
                         is_abstract: false,
                         is_varargs: false,
                         declared: Vec::new(),
+                        var_sources: Vec::new(),
+                        written: Vec::new(),
                         ret_infer: None,
                     });
                 }
@@ -30264,6 +30350,36 @@ impl BodyGen<'_> {
                 return None;
             }
         };
+        // ...and a generic method's own type VARIABLES have to agree, which the
+        // erased signature cannot say: `<T> void give(Bag<T> bag, T value)`
+        // reads as `give(Object, Object)` and every call fit.
+        if let Some(variable) = self.generic_variables_agree(&sig, args, &arg_types) {
+            let described = source_type_name(&format!("class {class}"));
+            // javac's shape for an inference failure: the headline, what the
+            // method REQUIRES with its variables still written, what was
+            // FOUND, and which variable could not be pinned. The argument-
+            // blaming form the erased list would produce points at a parameter
+            // that reads `Object`, which explains nothing.
+            let required = if sig.written.is_empty() {
+                &sig.params
+            } else {
+                &sig.written
+            };
+            self.error(
+                span,
+                format!(
+                    "method {method} in {described} cannot be applied to given types;\n  \
+                     required: {}\n  found: {}\n  reason: inference variable {variable} has \
+                     incompatible bounds",
+                    argument_list(required, self.table),
+                    argument_list(&arg_types, self.table)
+                ),
+            );
+            for arg in args {
+                self.expr(arg);
+            }
+            return None;
+        }
 
         // A PRIVATE static member is reachable only from inside its own
         // top-level type (JLS §6.6.1) — including a private static method of
@@ -31931,6 +32047,97 @@ impl BodyGen<'_> {
             );
         }
         reached
+    }
+
+    /// Whether every one of a generic method's OWN type variables can be
+    /// pinned consistently by the arguments (JLS §18.2.3). A variable named by
+    /// an invariant CONTAINER parameter — `<T> void give(Bag<T> bag, T value)`
+    /// — is pinned EXACTLY by it, so `give(bagOfStrings, 1)` is javac's "method
+    /// give in class One cannot be applied to given types". Erasure loses that
+    /// entirely: both parameters read as `Object`, and every call fit.
+    ///
+    /// A variable named only by DIRECT parameters (`<T> T pick(T a, T b)`) is
+    /// not this: javac joins them at their least upper bound, and
+    /// `pick("a", 1)` compiles. Only an exact pin can be contradicted.
+    fn generic_variables_agree<'v>(
+        &self,
+        sig: &'v MethodSig,
+        args: &[Expr],
+        arg_types: &[JType],
+    ) -> Option<&'v str> {
+        use crate::ast::InferSource;
+        // The ELEMENT a container argument offers, as a value type.
+        let element = |index: usize| {
+            TypeArgs::of(*arg_types.get(index)?)
+                .first
+                .map(|elem| elem_value_type(elem, self.table))
+        };
+        for (name, sources) in &sig.var_sources {
+            // What the containers the program WROTE OUT pin it to, exactly:
+            // a container is invariant, so two of them must agree.
+            let mut pinned: Option<JType> = None;
+            for source in sources {
+                let InferSource::Element(index) = source else {
+                    continue;
+                };
+                // A container that is itself a POLY expression pins nothing —
+                // its element is whatever the call needs, which is why
+                // `firstOf(new ArrayList<>(List.of("a")), 1)` compiles.
+                if args.get(*index).is_some_and(mints_a_collection) {
+                    continue;
+                }
+                let Some(exact) = element(*index) else {
+                    continue;
+                };
+                match pinned {
+                    None => pinned = Some(exact),
+                    Some(seen) if seen == exact => {}
+                    Some(_) => return Some(name),
+                }
+            }
+            let Some(want) = pinned else {
+                continue;
+            };
+            // A poly container has to REACH that pin, which is the element
+            // test a target-typed factory gets everywhere else.
+            for source in sources {
+                let InferSource::Element(index) = source else {
+                    continue;
+                };
+                if !args.get(*index).is_some_and(mints_a_collection) {
+                    continue;
+                }
+                let Some(have) = element(*index) else {
+                    continue;
+                };
+                // An EMPTY diamond has no element of its own — `new
+                // ArrayList<>()` becomes whatever the call needs, and reading
+                // its erasure as a real `Object` element refused it.
+                if have == JType::Null || have == JType::Object(self.table.object_id) {
+                    continue;
+                }
+                if have != want && !widens(have, want, self.table) {
+                    return Some(name);
+                }
+            }
+            // ...and so does every argument that IS the variable.
+            for source in sources {
+                let InferSource::Direct(index) = source else {
+                    continue;
+                };
+                let Some(&given) = arg_types.get(*index) else {
+                    continue;
+                };
+                let given = match boxable_primitive(given) {
+                    Some(elem) => JType::Boxed(elem),
+                    None => given,
+                };
+                if given != JType::Null && !widens(given, want, self.table) {
+                    return Some(name);
+                }
+            }
+        }
+        None
     }
 
     /// Resolve again with those adopted argument types, when they exist.

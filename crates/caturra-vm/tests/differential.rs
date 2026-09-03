@@ -49166,3 +49166,156 @@ differential_wording!(
     "RejWritten",
     "import java.util.*;\npublic class RejWritten {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addFrom(Bag<T> o) { } void addArray(T[] m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Names n = new Names(); n.addArray(new Integer[] {1}); System.out.println(\"no\"); }\n}"
 );
+
+differential_test!(
+    a_generic_methods_variable_answers_every_argument,
+    "Pinned",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+
+/** A generic METHOD's own type variable, pinned by one argument and answerable
+ * to the rest. */
+public class Pinned {
+    interface Shape {
+        double area();
+    }
+
+    static class Circle implements Shape {
+        public double area() {
+            return 3.0;
+        }
+
+        public String toString() {
+            return "circle";
+        }
+    }
+
+    static class Bag<T> {
+        List<T> items = new ArrayList<>();
+
+        void add(T value) {
+            items.add(value);
+        }
+
+        public String toString() {
+            return items.toString();
+        }
+    }
+
+    static <T> void give(Bag<T> bag, T value) {
+        bag.add(value);
+    }
+
+    static <T> void giveAll(List<T> into, T value) {
+        into.add(value);
+    }
+
+    static <T> T pick(T first, T second) {
+        return first;
+    }
+
+    static <T> T firstOf(List<T> values, T fallback) {
+        return values.isEmpty() ? fallback : values.get(0);
+    }
+
+    static <T> void pairUp(Bag<T> bag, List<T> more) {
+        for (T one : more) {
+            bag.add(one);
+        }
+    }
+
+    static <K, V> void put(Map<K, V> into, K key, V value) {
+        into.put(key, value);
+    }
+
+    static <T, R> List<R> convert(List<T> from, Function<T, R> f) {
+        List<R> out = new ArrayList<>();
+        for (T one : from) {
+            out.add(f.apply(one));
+        }
+        return out;
+    }
+
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // What the container pins, and what fits it.
+        Bag<String> text = new Bag<>();
+        give(text, "a");
+        give(text, null);
+        Bag<Shape> shapes = new Bag<>();
+        give(shapes, new Circle());
+        Bag<Object> anything = new Bag<>();
+        give(anything, 1);
+        Bag<Integer> counts = new Bag<>();
+        give(counts, 1);
+        Bag<List<String>> nested = new Bag<>();
+        give(nested, new ArrayList<>(List.of("x")));
+        List<String> into = new ArrayList<>();
+        giveAll(into, "b");
+        System.out.println(text + " " + shapes + " " + anything + " " + counts + " " + nested
+            + " " + into);
+
+        // A variable named only by DIRECT parameters joins at the least upper
+        // bound, so two unrelated arguments are fine.
+        System.out.println(pick("a", "b") + " " + pick("a", 1));
+
+        // A POLY container pins nothing of its own - its element is whatever
+        // the call needs - but it still has to reach a pin another argument
+        // made.
+        System.out.println(firstOf(new ArrayList<>(List.of("a")), 1));
+        Bag<String> more = new Bag<>();
+        pairUp(more, new ArrayList<>());
+        pairUp(more, new ArrayList<>(List.of("c")));
+        pairUp(more, List.of("d"));
+        System.out.println(more);
+
+        // A RAW receiver, and the shapes with two variables.
+        Bag raw = new Bag();
+        give(raw, 1);
+        Map<String, Integer> scores = new HashMap<>();
+        put(scores, "ada", 100);
+        System.out.println(raw + " " + scores);
+
+        // ...and one whose second variable only a lambda pins.
+        probe("convert", () -> convert(new ArrayList<>(List.of("ab", "c")), s -> s.length()));
+    }
+}
+"#
+);
+
+differential_wording!(
+    reject_pinned_variable_int,
+    "RejPin",
+    "import java.util.*;\npublic class RejPin {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } }\n  static <T> void give(Bag<T> b, T v) { b.add(v); }\n  static <T> void giveAll(List<T> into, T v) { into.add(v); }\n  static <T> void pairUp(Bag<T> b, List<T> more) { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); give(b, 1); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_pinned_variable_object,
+    "RejPin",
+    "import java.util.*;\npublic class RejPin {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } }\n  static <T> void give(Bag<T> b, T v) { b.add(v); }\n  static <T> void giveAll(List<T> into, T v) { into.add(v); }\n  static <T> void pairUp(Bag<T> b, List<T> more) { }\n  public static void main(String[] args) { Bag<Circle> b = new Bag<>(); give(b, new Square()); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_pinned_variable_list,
+    "RejPin",
+    "import java.util.*;\npublic class RejPin {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } }\n  static <T> void give(Bag<T> b, T v) { b.add(v); }\n  static <T> void giveAll(List<T> into, T v) { into.add(v); }\n  static <T> void pairUp(Bag<T> b, List<T> more) { }\n  public static void main(String[] args) { List<String> l = new ArrayList<>(); giveAll(l, 1); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_pinned_two_containers,
+    "RejPin",
+    "import java.util.*;\npublic class RejPin {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } }\n  static <T> void give(Bag<T> b, T v) { b.add(v); }\n  static <T> void giveAll(List<T> into, T v) { into.add(v); }\n  static <T> void pairUp(Bag<T> b, List<T> more) { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); List<Integer> l = new ArrayList<>(); pairUp(b, l); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_pinned_poly_container,
+    "RejPin",
+    "import java.util.*;\npublic class RejPin {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } }\n  static <T> void give(Bag<T> b, T v) { b.add(v); }\n  static <T> void giveAll(List<T> into, T v) { into.add(v); }\n  static <T> void pairUp(Bag<T> b, List<T> more) { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); pairUp(b, List.of(1)); System.out.println(\"no\"); }\n}"
+);
