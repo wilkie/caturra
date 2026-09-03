@@ -371,6 +371,10 @@ pub enum Temporal {
     Field(u8),
     /// `java.time.temporal.ValueRange` — what a field can hold.
     Range(crate::time::ValueRange),
+    /// A `java.time.temporal.TemporalAdjusters` rule.
+    Adjuster(crate::time::Adjuster),
+    /// `java.time.chrono.IsoEra` — 0 is BCE and 1 is CE.
+    Era(u8),
 }
 
 impl Temporal {
@@ -388,6 +392,10 @@ impl Temporal {
             Temporal::Month(_) => "java/time/Month",
             Temporal::Field(_) => "java/time/temporal/ChronoField",
             Temporal::Range(_) => "java/time/temporal/ValueRange",
+            // Every adjuster is a lambda inside the JDK, so its class is a
+            // synthetic one; a program never prints it usefully.
+            Temporal::Adjuster(_) => "java/time/temporal/TemporalAdjusters",
+            Temporal::Era(_) => "java/time/chrono/IsoEra",
         }
     }
 
@@ -405,6 +413,8 @@ impl Temporal {
             Temporal::Month(month) => crate::time::month_name(month).to_owned(),
             Temporal::Field(field) => crate::time::field_info(field).text.to_owned(),
             Temporal::Range(range) => range.text(),
+            Temporal::Adjuster(adjuster) => format!("{adjuster:?}"),
+            Temporal::Era(era) => String::from(if era == 0 { "BCE" } else { "CE" }),
         }
     }
 }
@@ -1441,13 +1451,15 @@ impl Heap {
             | Temporal::DateTime(_)
             | Temporal::Duration(_)
             | Temporal::Period(_)
-            | Temporal::Range(_) => {
+            | Temporal::Range(_)
+            | Temporal::Adjuster(_) => {
                 return self.alloc(HeapObject::Temporal(value));
             }
             Temporal::Unit(unit) => (2u8, unit),
             Temporal::DayOfWeek(day) => (0u8, day),
             Temporal::Month(month) => (1u8, month),
             Temporal::Field(field) => (3u8, field),
+            Temporal::Era(era) => (4u8, era),
         };
         if let Some(existing) = self.temporal_pool.get(&key) {
             return *existing;

@@ -13045,3 +13045,39 @@ Gregorian year, and `FOREVER` is as long as a `Duration` goes),
 words, which name no unit at all.
 
 Pinned as `a_date_as_a_temporal` (1637 answers) and `every_chrono_unit` (339).
+
+## Adjusting a date
+
+The other half of what a `LocalDate` is asked. `java.time.temporal.TemporalAdjusters`
+is thirteen factories, each a RULE for moving a date, which `with` applies:
+`firstDayOfMonth`, `lastDayOfMonth`, `firstDayOfNextMonth` and their year
+counterparts, and the six that hunt for a weekday — `firstInMonth`,
+`lastInMonth`, `dayOfWeekInMonth`, `next`, `nextOrSame`, `previous`,
+`previousOrSame`. `next` is strictly forwards where `nextOrSame` stays put, and
+`dayOfWeekInMonth` counts from the END of the month when its ordinal is
+negative.
+
+`with` also takes a VALUE rather than a rule: a `Month` or a `DayOfWeek` sets
+its own field, and a `LocalDate` or `LocalTime` replaces that half of a
+`LocalDateTime`. And `plus`/`minus` take a whole amount. A `Period` is not
+three separate additions: a JDK adds `years * 12 + months` as ONE number of
+months and then the days, and adding the years first would clamp February 29 to
+the 28th on the way through — which is the difference between 2025-05-02 and
+2025-05-01 for `2024-02-29.plus(P1Y2M3D)`.
+
+The rest of the surface came with it: `LocalDate.getEra` (and so
+`java.time.chrono.IsoEra`), `datesUntil`, `LocalDateTime.withDayOfYear`,
+`LocalTime.ofNanoOfDay` and `toNanoOfDay`, `Month.firstMonthOfQuarter`, the
+`from(temporal)` factory on all five types, `Duration.parse` and `Period.parse`
+(where `P1W` is seven days, and a fraction belongs to the seconds and nothing
+else), `Duration.of(amount, unit)` — which refuses a unit whose length is an
+ESTIMATE, `DAYS` excepted — `Duration.truncatedTo`, `toDaysPart`, and `get`
+and `getUnits` on both amounts, which hold exactly two and exactly three units
+respectively.
+
+Two JDK messages name no unit, where an obvious reading would: "Unit is too
+large to be used for truncation" and "Unit must not have an estimated
+duration". And `Duration.toHoursPart` is the hours WITHIN the day, not the
+whole span, which `toHours` is.
+
+Pinned as `adjusting_a_date` — 601 answers.

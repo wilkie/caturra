@@ -633,7 +633,9 @@ impl Duration {
     pub fn part(self, unit: char) -> i64 {
         let total = self.total_nanos();
         match unit {
-            'H' => total / NANOS_PER_HOUR,
+            // The PART within a day — `toHours` is the whole span, and
+            // `toHoursPart` is what is left after the days are taken out.
+            'H' => total / NANOS_PER_HOUR % 24,
             'M' => total / NANOS_PER_MINUTE % 60,
             'S' => total / NANOS_PER_SECOND % 60,
             'm' => total / 1_000_000 % 1_000,
@@ -895,6 +897,286 @@ pub fn unit_nanos(unit: u8) -> Option<i64> {
         8 => 7 * NANOS_PER_DAY,
         _ => return None,
     })
+}
+
+/// `Duration.parse` — the ISO-8601 form `PnDTnHnMnS`, where every part is
+/// optional, each may be signed, and the seconds may have a fraction.
+///
+/// # Errors
+/// The JDK's one message for anything it cannot read.
+pub fn parse_duration(text: &str) -> Result<Duration, String> {
+    const BAD: &str = "Text cannot be parsed to a Duration";
+    let units: Vec<char> = text.chars().collect();
+    let mut at = 0;
+    let overall: i128 = match units.first() {
+        Some('-') => {
+            at = 1;
+            -1
+        }
+        Some('+') => {
+            at = 1;
+            1
+        }
+        _ => 1,
+    };
+    if units.get(at).is_none_or(|c| !c.eq_ignore_ascii_case(&'P')) {
+        return Err(String::from(BAD));
+    }
+    at += 1;
+    let mut nanos: i128 = 0;
+    let mut after_t = false;
+    let mut any = false;
+    while at < units.len() {
+        if units[at].eq_ignore_ascii_case(&'T') {
+            if after_t {
+                return Err(String::from(BAD));
+            }
+            after_t = true;
+            at += 1;
+            continue;
+        }
+        let start = at;
+        if matches!(units.get(at), Some('-' | '+')) {
+            at += 1;
+        }
+        let digits_from = at;
+        while units.get(at).is_some_and(char::is_ascii_digit) {
+            at += 1;
+        }
+        if at == digits_from {
+            return Err(String::from(BAD));
+        }
+        let whole: String = units[start..at].iter().collect();
+        // A FRACTION belongs to the seconds and to nothing else.
+        let mut fraction = String::new();
+        if units.get(at) == Some(&'.') {
+            at += 1;
+            while units.get(at).is_some_and(char::is_ascii_digit) {
+                fraction.push(units[at]);
+                at += 1;
+            }
+        }
+        let Some(letter) = units.get(at).copied() else {
+            return Err(String::from(BAD));
+        };
+        at += 1;
+        let value: i128 = whole.parse().map_err(|_| String::from(BAD))?;
+        let per: i128 = match (letter.to_ascii_uppercase(), after_t) {
+            ('D', false) => 86_400,
+            ('H', true) => 3_600,
+            ('M', true) => 60,
+            ('S', true) => 1,
+            _ => return Err(String::from(BAD)),
+        };
+        nanos += value * per * 1_000_000_000;
+        if !fraction.is_empty() {
+            if !letter.eq_ignore_ascii_case(&'S') {
+                return Err(String::from(BAD));
+            }
+            let padded = format!("{fraction:0<9}");
+            let part: i128 = padded[..9].parse().unwrap_or(0);
+            // The sign of the WHOLE part carries into its fraction.
+            nanos += if whole.starts_with('-') { -part } else { part };
+        }
+        any = true;
+    }
+    if !any {
+        return Err(String::from(BAD));
+    }
+    let total = nanos * overall;
+    Ok(Duration {
+        seconds: i64::try_from(total.div_euclid(1_000_000_000)).map_err(|_| String::from(BAD))?,
+        nanos: i32::try_from(total.rem_euclid(1_000_000_000)).unwrap_or(0),
+    })
+}
+
+/// `Period.parse` — `PnYnMnWnD`, where a week is seven days.
+///
+/// # Errors
+/// The JDK's one message for anything it cannot read.
+pub fn parse_period(text: &str) -> Result<Period, String> {
+    const BAD: &str = "Text cannot be parsed to a Period";
+    let units: Vec<char> = text.chars().collect();
+    let mut at = 0;
+    let overall: i64 = match units.first() {
+        Some('-') => {
+            at = 1;
+            -1
+        }
+        Some('+') => {
+            at = 1;
+            1
+        }
+        _ => 1,
+    };
+    if units.get(at).is_none_or(|c| !c.eq_ignore_ascii_case(&'P')) {
+        return Err(String::from(BAD));
+    }
+    at += 1;
+    let (mut years, mut months, mut days) = (0i64, 0i64, 0i64);
+    let mut any = false;
+    while at < units.len() {
+        let start = at;
+        if matches!(units.get(at), Some('-' | '+')) {
+            at += 1;
+        }
+        let digits_from = at;
+        while units.get(at).is_some_and(char::is_ascii_digit) {
+            at += 1;
+        }
+        if at == digits_from {
+            return Err(String::from(BAD));
+        }
+        let value: i64 = units[start..at]
+            .iter()
+            .collect::<String>()
+            .parse()
+            .map_err(|_| String::from(BAD))?;
+        let Some(letter) = units.get(at).copied() else {
+            return Err(String::from(BAD));
+        };
+        at += 1;
+        match letter.to_ascii_uppercase() {
+            'Y' => years += value,
+            'M' => months += value,
+            'W' => days += value * 7,
+            'D' => days += value,
+            _ => return Err(String::from(BAD)),
+        }
+        any = true;
+    }
+    if !any {
+        return Err(String::from(BAD));
+    }
+    Ok(Period {
+        years: i32::try_from(years * overall).unwrap_or(0),
+        months: i32::try_from(months * overall).unwrap_or(0),
+        days: i32::try_from(days * overall).unwrap_or(0),
+    })
+}
+
+/// A `java.time.temporal.TemporalAdjusters` adjuster: a rule for moving a
+/// date, remembered as which rule and what it was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Adjuster {
+    pub kind: AdjusterKind,
+    /// The day of week `firstInMonth` and its relatives were given, 1..=7.
+    pub day: u8,
+    /// The count `dayOfWeekInMonth` was given, which may be negative.
+    pub ordinal: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AdjusterKind {
+    FirstDayOfMonth,
+    LastDayOfMonth,
+    FirstDayOfNextMonth,
+    FirstDayOfYear,
+    LastDayOfYear,
+    FirstDayOfNextYear,
+    FirstInMonth,
+    LastInMonth,
+    DayOfWeekInMonth,
+    Next,
+    NextOrSame,
+    Previous,
+    PreviousOrSame,
+}
+
+impl Adjuster {
+    /// The date this adjuster makes of `date`.
+    #[must_use]
+    pub fn apply(self, date: Date) -> Date {
+        let wanted = i32::from(self.day);
+        let current = i32::from(date.day_of_week());
+        match self.kind {
+            AdjusterKind::FirstDayOfMonth => {
+                Date::from_epoch_day(date.to_epoch_day() - i64::from(date.day) + 1)
+            }
+            AdjusterKind::LastDayOfMonth => Date::from_epoch_day(
+                date.to_epoch_day() - i64::from(date.day)
+                    + i64::from(length_of_month(date.year, date.month)),
+            ),
+            AdjusterKind::FirstDayOfNextMonth => {
+                let last = Adjuster {
+                    kind: AdjusterKind::LastDayOfMonth,
+                    ..self
+                }
+                .apply(date);
+                Date::from_epoch_day(last.to_epoch_day() + 1)
+            }
+            AdjusterKind::FirstDayOfYear => {
+                Date::from_epoch_day(date.to_epoch_day() - i64::from(date.day_of_year()) + 1)
+            }
+            AdjusterKind::LastDayOfYear => Date::from_epoch_day(
+                date.to_epoch_day() - i64::from(date.day_of_year())
+                    + if is_leap_year(date.year) { 366 } else { 365 },
+            ),
+            AdjusterKind::FirstDayOfNextYear => {
+                let last = Adjuster {
+                    kind: AdjusterKind::LastDayOfYear,
+                    ..self
+                }
+                .apply(date);
+                Date::from_epoch_day(last.to_epoch_day() + 1)
+            }
+            // The first of a weekday in the month: go to the first of the
+            // month and then forwards to the day wanted.
+            AdjusterKind::FirstInMonth => Adjuster {
+                kind: AdjusterKind::DayOfWeekInMonth,
+                ordinal: 1,
+                ..self
+            }
+            .apply(date),
+            AdjusterKind::LastInMonth => Adjuster {
+                kind: AdjusterKind::DayOfWeekInMonth,
+                ordinal: -1,
+                ..self
+            }
+            .apply(date),
+            AdjusterKind::DayOfWeekInMonth => {
+                if self.ordinal >= 0 {
+                    let first = Adjuster {
+                        kind: AdjusterKind::FirstDayOfMonth,
+                        ..self
+                    }
+                    .apply(date);
+                    let ahead = (wanted - i32::from(first.day_of_week())).rem_euclid(7);
+                    let weeks = i64::from(self.ordinal.max(1) - 1);
+                    Date::from_epoch_day(first.to_epoch_day() + i64::from(ahead) + weeks * 7)
+                } else {
+                    let last = Adjuster {
+                        kind: AdjusterKind::LastDayOfMonth,
+                        ..self
+                    }
+                    .apply(date);
+                    let behind = (i32::from(last.day_of_week()) - wanted).rem_euclid(7);
+                    let weeks = i64::from(-self.ordinal - 1);
+                    Date::from_epoch_day(last.to_epoch_day() - i64::from(behind) - weeks * 7)
+                }
+            }
+            // NEXT is strictly forwards; `nextOrSame` stays put when it is
+            // already the day wanted.
+            AdjusterKind::Next | AdjusterKind::NextOrSame => {
+                let ahead = (wanted - current).rem_euclid(7);
+                let ahead = if ahead == 0 && self.kind == AdjusterKind::Next {
+                    7
+                } else {
+                    ahead
+                };
+                Date::from_epoch_day(date.to_epoch_day() + i64::from(ahead))
+            }
+            AdjusterKind::Previous | AdjusterKind::PreviousOrSame => {
+                let behind = (current - wanted).rem_euclid(7);
+                let behind = if behind == 0 && self.kind == AdjusterKind::Previous {
+                    7
+                } else {
+                    behind
+                };
+                Date::from_epoch_day(date.to_epoch_day() - i64::from(behind))
+            }
+        }
+    }
 }
 
 /// `java.time.temporal.ChronoField`, in the JDK's own order — a program names

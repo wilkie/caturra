@@ -107,6 +107,8 @@ fn temporal_hash(value: Temporal) -> i32 {
         Temporal::DayOfWeek(day) => i32::from(day),
         Temporal::Month(month) => i32::from(month),
         Temporal::Field(field) => i32::from(field),
+        Temporal::Adjuster(adjuster) => i32::from(adjuster.day),
+        Temporal::Era(era) => i32::from(era),
         // `ValueRange` folds its four numbers the way the JDK does.
         Temporal::Range(range) => {
             let fold = range.min + (range.largest_min << 16) + (range.largest_min >> 48)
@@ -148,6 +150,7 @@ fn temporal_object_method(
         // their text is not: `HALF_DAYS` prints as "HalfDays", and
         // `NANO_OF_SECOND` as "NanoOfSecond".
         "name" => match value {
+            Temporal::Era(_) => JValue::Ref(Some(heap.alloc_string(&value.text()))),
             Temporal::Unit(unit) => JValue::Ref(Some(
                 heap.alloc_string(crate::time::UNIT_CONSTANTS[usize::from(unit)]),
             )),
@@ -218,6 +221,14 @@ fn temporal_enum_method(
                 _ => Temporal::Month(rotated),
             };
             Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
+        }
+        // The quarter a month is in starts at January, April, July or
+        // October.
+        (Temporal::Month(month), "firstMonthOfQuarter") => {
+            let first = (month - 1) / 3 * 3 + 1;
+            Ok(Some(JValue::Ref(Some(
+                heap.intern_temporal(Temporal::Month(first)),
+            ))))
         }
         (Temporal::Month(month), "maxLength") => {
             int(i64::from(crate::time::length_of_month(2024, month)))
@@ -325,6 +336,7 @@ fn local_date_time_static(
             };
             made(heap, when)
         }
+        "from" => temporal_from(heap, args, true),
         _ => Err(VmError::UnknownIntrinsic(format!(
             "java/time/LocalDateTime.{method}"
         ))),
@@ -930,6 +942,7 @@ fn duration_rebuilt(
 }
 
 /// `java.time.Duration`: an amount of time, and the units it can be read in.
+#[allow(clippy::too_many_lines)] // one arm per method
 fn duration_method(
     amount: crate::time::Duration,
     heap: &mut Heap,
@@ -960,6 +973,45 @@ fn duration_method(
             None => Err(throw("java.lang.ClassCastException: not a Duration")),
         },
         "negated" => made(heap, crate::time::Duration::of_nanos(-total)),
+        "toDaysPart" => Ok(Some(JValue::Long(total / crate::time::NANOS_PER_DAY))),
+        // `truncatedTo` on a Duration is truncation TOWARDS ZERO, not the
+        // floor a time of day gets.
+        "truncatedTo" => {
+            let Some(unit) = unit_argument(heap, args.first()) else {
+                return Err(throw("java.lang.ClassCastException: not a ChronoUnit"));
+            };
+            let Some(step) =
+                crate::time::unit_nanos(unit).filter(|step| *step <= crate::time::NANOS_PER_DAY)
+            else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.time.temporal.UnsupportedTemporalTypeException: Unit is too large \
+                     to be used for truncation",
+                )));
+            };
+            made(heap, crate::time::Duration::of_nanos(total - total % step))
+        }
+        // A `Duration` holds exactly two units, and answers only those.
+        "get" => {
+            let Some(unit) = unit_argument(heap, args.first()) else {
+                return Err(throw("java.lang.ClassCastException: not a ChronoUnit"));
+            };
+            match unit {
+                3 => Ok(Some(JValue::Long(amount.seconds))),
+                0 => Ok(Some(JValue::Long(i64::from(amount.nanos)))),
+                _ => Err(VmError::UncaughtException(format!(
+                    "java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: {}",
+                    crate::time::unit_name(unit)
+                ))),
+            }
+        }
+        "getUnits" => {
+            let units: Vec<JValue> = [3u8, 0]
+                .into_iter()
+                .map(|unit| JValue::Ref(Some(heap.intern_temporal(Temporal::Unit(unit)))))
+                .collect();
+            let list = heap.alloc(HeapObject::ArrayList(units));
+            Ok(Some(JValue::Ref(Some(list))))
+        }
         "toHoursPart" => Ok(Some(JValue::Int(
             i32::try_from(amount.part('H')).unwrap_or(i32::MAX),
         ))),
@@ -1006,6 +1058,7 @@ fn duration_method(
 }
 
 /// `java.time.Period`: years, months and days, each as written.
+#[allow(clippy::too_many_lines)] // one arm per method
 fn period_method(
     period: crate::time::Period,
     heap: &mut Heap,
@@ -1022,6 +1075,45 @@ fn period_method(
             heap.intern_temporal(Temporal::Period(period)),
         ))))
     };
+    // `plus(period)` and `minus(period)` add the three fields separately —
+    // a period is not a length, so there is nothing to normalize.
+    if matches!(method, "plus" | "minus")
+        && let Some(JValue::Ref(Some(reference))) = args.first()
+        && let Some(HeapObject::Temporal(Temporal::Period(other))) = heap.get(*reference)
+    {
+        let sign = if method == "minus" { -1 } else { 1 };
+        return made(
+            heap,
+            crate::time::Period {
+                years: period.years + other.years * sign,
+                months: period.months + other.months * sign,
+                days: period.days + other.days * sign,
+            },
+        );
+    }
+    // A `Period` holds exactly three units, and answers only those.
+    if method == "get" {
+        let Some(unit) = unit_argument(heap, args.first()) else {
+            return Err(throw("java.lang.ClassCastException: not a ChronoUnit"));
+        };
+        return match unit {
+            10 => Ok(Some(JValue::Long(i64::from(period.years)))),
+            9 => Ok(Some(JValue::Long(i64::from(period.months)))),
+            7 => Ok(Some(JValue::Long(i64::from(period.days)))),
+            _ => Err(VmError::UncaughtException(format!(
+                "java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: {}",
+                crate::time::unit_name(unit)
+            ))),
+        };
+    }
+    if method == "getUnits" {
+        let units: Vec<JValue> = [10u8, 9, 7]
+            .into_iter()
+            .map(|unit| JValue::Ref(Some(heap.intern_temporal(Temporal::Unit(unit)))))
+            .collect();
+        let list = heap.alloc(HeapObject::ArrayList(units));
+        return Ok(Some(JValue::Ref(Some(list))));
+    }
     // The whole plus/minus/with family, each touching one field.
     if let Some(field) = method
         .strip_prefix("plus")
@@ -1623,6 +1715,122 @@ fn unit_facts(
     Ok(Some(answer))
 }
 
+/// `with(x)` where `x` is a value rather than a field: an adjuster, a month,
+/// a day of week, or the date or time half of a stamp.
+fn adjust_with(
+    value: Temporal,
+    adjuster: Temporal,
+    heap: &mut Heap,
+) -> Result<Option<JValue>, VmError> {
+    let (date, time) = match value {
+        Temporal::Date(date) => (Some(date), None),
+        Temporal::Time(time) => (None, Some(time)),
+        Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
+        _ => return Err(throw("java.lang.ClassCastException: not a temporal")),
+    };
+    let rebuild = |heap: &mut Heap, date: Option<crate::time::Date>, time| {
+        let made = match (date, time) {
+            (Some(date), Some(time)) => Temporal::DateTime(crate::time::DateTime { date, time }),
+            (Some(date), None) => Temporal::Date(date),
+            (None, Some(time)) => Temporal::Time(time),
+            (None, None) => return Err(throw("java.lang.ClassCastException: not a temporal")),
+        };
+        Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
+    };
+    match adjuster {
+        Temporal::Adjuster(rule) => {
+            let Some(date) = date else {
+                return Err(throw("java.lang.ClassCastException: not a date"));
+            };
+            rebuild(heap, Some(rule.apply(date)), time)
+        }
+        // A month or a day of week SETS its own field.
+        Temporal::Month(month) => with_field(value, 23, i64::from(month), heap),
+        Temporal::DayOfWeek(day) => with_field(value, 15, i64::from(day), heap),
+        Temporal::Date(replacement) => rebuild(heap, Some(replacement), time),
+        Temporal::Time(replacement) => rebuild(heap, date, Some(replacement)),
+        Temporal::DateTime(replacement) => {
+            rebuild(heap, Some(replacement.date), Some(replacement.time))
+        }
+        _ => Err(throw("java.lang.ClassCastException: not an adjuster")),
+    }
+}
+
+/// `plus(amount)` — a whole `Period` or `Duration` at once.
+fn shift_by_amount(
+    value: Temporal,
+    amount: Temporal,
+    negate: bool,
+    heap: &mut Heap,
+) -> Result<Option<JValue>, VmError> {
+    let sign = if negate { -1 } else { 1 };
+    match amount {
+        // A period is years, then months, then days — in that order, because
+        // each may land on a shorter month than the last.
+        Temporal::Period(period) => {
+            // Years and months go on TOGETHER, as one number of months: a
+            // JDK adds `years * 12 + months` and then the days, and adding
+            // the years first would clamp February 29 to the 28th on the way
+            // through.
+            let mut moved = value;
+            for (unit, count) in [
+                (9, i64::from(period.years) * 12 + i64::from(period.months)),
+                (7, i64::from(period.days)),
+            ] {
+                if count == 0 {
+                    continue;
+                }
+                let Some(JValue::Ref(Some(reference))) =
+                    shift_by_unit(moved, count * sign, unit, heap)?
+                else {
+                    return Err(throw("java.lang.ClassCastException: not a temporal"));
+                };
+                let Some(HeapObject::Temporal(next)) = heap.get(reference) else {
+                    return Err(throw("java.lang.ClassCastException: not a temporal"));
+                };
+                moved = *next;
+            }
+            Ok(Some(JValue::Ref(Some(heap.intern_temporal(moved)))))
+        }
+        Temporal::Duration(duration) => {
+            let Some(JValue::Ref(Some(reference))) =
+                shift_by_unit(value, duration.seconds * sign, 3, heap)?
+            else {
+                return Err(throw("java.lang.ClassCastException: not a temporal"));
+            };
+            let Some(HeapObject::Temporal(moved)) = heap.get(reference) else {
+                return Err(throw("java.lang.ClassCastException: not a temporal"));
+            };
+            shift_by_unit(*moved, i64::from(duration.nanos) * sign, 0, heap)
+        }
+        _ => Err(throw("java.lang.ClassCastException: not an amount")),
+    }
+}
+
+/// `LocalTime.from(temporal)` and `LocalDateTime.from(temporal)` — the half
+/// of a value that is asked for.
+fn temporal_from(heap: &mut Heap, args: &[JValue], whole: bool) -> Result<Option<JValue>, VmError> {
+    let Some(JValue::Ref(Some(reference))) = args.first() else {
+        return Err(throw("java.lang.NullPointerException"));
+    };
+    let Some(HeapObject::Temporal(value)) = heap.get(*reference) else {
+        return Err(throw("java.lang.ClassCastException: not a temporal"));
+    };
+    let made = match (*value, whole) {
+        (Temporal::Time(time), false) => Temporal::Time(time),
+        (Temporal::DateTime(when), false) => Temporal::Time(when.time),
+        (Temporal::DateTime(when), true) => Temporal::DateTime(when),
+        (other, _) => {
+            return Err(date_time_exception(&format!(
+                "Unable to obtain {} from TemporalAccessor: {}",
+                if whole { "LocalDateTime" } else { "LocalTime" },
+                other.text()
+            )));
+        }
+    };
+    Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
+}
+
 /// The `ChronoUnit` an argument names, if it is one.
 fn unit_argument(heap: &Heap, value: Option<&JValue>) -> Option<u8> {
     match value {
@@ -1925,6 +2133,10 @@ fn date_reader(value: Temporal, heap: &mut Heap, method: &str) -> Option<JValue>
                 time: crate::time::Time { nano_of_day: 0 },
             },
         ))))),
+        // The ISO calendar has two eras, and year one begins the later one.
+        "getEra" => Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::Era(u8::from(date.year >= 1))),
+        ))),
         _ => None,
     }
 }
@@ -1962,6 +2174,49 @@ fn temporal_method(
         && let Some(JValue::Ref(Some(formatter))) = args.first()
     {
         return format_temporal(value, heap, *formatter);
+    }
+    // `datesUntil(end)` — every date from here up to, but not including, the
+    // end. A JDK's is lazy; a fixed stream answers the same questions.
+    if method == "datesUntil"
+        && let Temporal::Date(date) = value
+        && let Some(JValue::Ref(Some(reference))) = args.first()
+        && let Some(HeapObject::Temporal(Temporal::Date(end))) = heap.get(*reference)
+    {
+        let end = *end;
+        let mut dates: Vec<JValue> = Vec::new();
+        let mut at = date;
+        while at.to_epoch_day() < end.to_epoch_day() {
+            dates.push(JValue::Ref(Some(heap.intern_temporal(Temporal::Date(at)))));
+            at = at.plus_days(1);
+        }
+        let stream = heap.alloc(HeapObject::Stream {
+            source: crate::value::StreamSource::Fixed(dates),
+            ops: Vec::new(),
+        });
+        return Ok(Some(JValue::Ref(Some(stream))));
+    }
+    // `with(adjuster)` and `with(temporal)` — one value adjusting another,
+    // which reads the same on a date and a stamp.
+    if method == "with"
+        && args.len() == 1
+        && let Some(JValue::Ref(Some(reference))) = args.first()
+        && let Some(HeapObject::Temporal(adjuster)) = heap.get(*reference)
+    {
+        return adjust_with(value, *adjuster, heap);
+    }
+    // `plus(amount)` and `minus(amount)` where the amount is a `Period` or a
+    // `Duration` — a whole amount rather than a number and a unit.
+    if matches!(method, "plus" | "minus")
+        && args.len() == 1
+        && matches!(
+            value,
+            Temporal::Date(_) | Temporal::Time(_) | Temporal::DateTime(_)
+        )
+        && let Some(JValue::Ref(Some(reference))) = args.first()
+        && let Some(HeapObject::Temporal(amount @ (Temporal::Period(_) | Temporal::Duration(_)))) =
+            heap.get(*reference)
+    {
+        return shift_by_amount(value, *amount, method == "minus", heap);
     }
     // `plus(amount, unit)` and `minus(amount, unit)` read the same on all
     // three values, and so does `until(end, unit)`.
@@ -2006,6 +2261,22 @@ fn temporal_method(
         Temporal::Unit(unit) => return unit_method(unit, heap, method, args),
         Temporal::Field(field) => return field_method(field, heap, method, args),
         Temporal::Range(range) => return range_method(range, method, args),
+        // An era answers only what an enum answers.
+        Temporal::Era(era) => {
+            return match method {
+                "getValue" | "ordinal" => Ok(Some(JValue::Int(i32::from(era)))),
+                _ => Err(VmError::UnknownIntrinsic(format!(
+                    "java/time/chrono/IsoEra.{method}"
+                ))),
+            };
+        }
+        // An adjuster is a rule, not a value: it answers nothing itself, and
+        // reaches a date through `with`.
+        Temporal::Adjuster(_) => {
+            return Err(VmError::UnknownIntrinsic(format!(
+                "java/time/temporal/TemporalAdjusters.{method}"
+            )));
+        }
         Temporal::Date(_) => {}
     }
 
@@ -9155,6 +9426,27 @@ pub fn invoke_static(
                     ))),
                 }
             }
+            // `from(temporal)` — the date half of whatever it is handed.
+            "from" => {
+                let Some(JValue::Ref(Some(reference))) = args.first() else {
+                    return Err(throw("java.lang.NullPointerException"));
+                };
+                let Some(HeapObject::Temporal(value)) = heap.get(*reference) else {
+                    return Err(throw("java.lang.ClassCastException: not a temporal"));
+                };
+                match *value {
+                    Temporal::Date(date) => Ok(Some(JValue::Ref(Some(
+                        heap.intern_temporal(Temporal::Date(date)),
+                    )))),
+                    Temporal::DateTime(when) => Ok(Some(JValue::Ref(Some(
+                        heap.intern_temporal(Temporal::Date(when.date)),
+                    )))),
+                    other => Err(date_time_exception(&format!(
+                        "Unable to obtain LocalDate from TemporalAccessor: {}",
+                        other.text()
+                    ))),
+                }
+            }
             _ => Err(VmError::UnknownIntrinsic(format!(
                 "java/time/LocalDate.{method}"
             ))),
@@ -9235,6 +9527,23 @@ pub fn invoke_static(
                         heap.intern_temporal(Temporal::Time(time)),
                     ))))
                 }
+                "ofNanoOfDay" => {
+                    let nanos = match args.first() {
+                        Some(JValue::Long(value)) => *value,
+                        Some(JValue::Int(value)) => i64::from(*value),
+                        _ => 0,
+                    };
+                    if !(0..crate::time::NANOS_PER_DAY).contains(&nanos) {
+                        return Err(date_time_exception(&format!(
+                            "Invalid value for NanoOfDay (valid values 0 - 86399999999999): \
+                             {nanos}"
+                        )));
+                    }
+                    Ok(Some(JValue::Ref(Some(heap.intern_temporal(
+                        Temporal::Time(crate::time::Time { nano_of_day: nanos }),
+                    )))))
+                }
+                "from" => temporal_from(heap, args, false),
                 _ => Err(VmError::UnknownIntrinsic(format!(
                     "java/time/LocalTime.{method}"
                 ))),
@@ -9332,6 +9641,39 @@ pub fn invoke_static(
                 }
                 // `__of` is the compiler's way of asking for `ZERO`.
                 "__of" => made(heap, crate::time::Duration::of_nanos(0)),
+                // `of(amount, unit)` — only a unit with a fixed length, since
+                // a `Duration` is a number of seconds and not a calendar.
+                "of" => {
+                    let Some(unit) = unit_argument(heap, args.get(1)) else {
+                        return Err(throw("java.lang.ClassCastException: not a ChronoUnit"));
+                    };
+                    let Some(nanos) = crate::time::unit_nanos(unit)
+                        .filter(|_| unit == 7 || !crate::time::unit_is_estimated(unit))
+                    else {
+                        // The JDK names no unit here either.
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.time.temporal.UnsupportedTemporalTypeException: \
+                             Unit must not have an estimated duration",
+                        )));
+                    };
+                    made(
+                        heap,
+                        crate::time::Duration::of_nanos(count.saturating_mul(nanos)),
+                    )
+                }
+                "parse" => {
+                    let text = match args.first() {
+                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        _ => None,
+                    }
+                    .unwrap_or_default();
+                    match crate::time::parse_duration(&text) {
+                        Ok(amount) => made(heap, amount),
+                        Err(message) => Err(VmError::UncaughtException(format!(
+                            "java.time.format.DateTimeParseException: {message}"
+                        ))),
+                    }
+                }
                 "between" => {
                     let read = |at: usize| match args.get(at) {
                         Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
@@ -9386,6 +9728,19 @@ pub fn invoke_static(
                         days: field(2),
                     },
                 ),
+                "parse" => {
+                    let text = match args.first() {
+                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        _ => None,
+                    }
+                    .unwrap_or_default();
+                    match crate::time::parse_period(&text) {
+                        Ok(period) => made(heap, period),
+                        Err(message) => Err(VmError::UncaughtException(format!(
+                            "java.time.format.DateTimeParseException: {message}"
+                        ))),
+                    }
+                }
                 "ofYears" | "ofMonths" | "ofWeeks" | "ofDays" | "__of" => {
                     let count = field(0);
                     let period = match method {
@@ -9435,6 +9790,53 @@ pub fn invoke_static(
                     "java/time/Period.{method}"
                 ))),
             }
+        }
+        "java/time/temporal/TemporalAdjusters" => {
+            use crate::time::AdjusterKind;
+            let day = match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::Temporal(Temporal::DayOfWeek(day))) => *day,
+                    _ => 1,
+                },
+                _ => 1,
+            };
+            // `dayOfWeekInMonth` takes the count FIRST, so its day is the
+            // second argument.
+            let (kind, day, ordinal) = match method {
+                "firstDayOfMonth" => (AdjusterKind::FirstDayOfMonth, 1, 0),
+                "lastDayOfMonth" => (AdjusterKind::LastDayOfMonth, 1, 0),
+                "firstDayOfNextMonth" => (AdjusterKind::FirstDayOfNextMonth, 1, 0),
+                "firstDayOfYear" => (AdjusterKind::FirstDayOfYear, 1, 0),
+                "lastDayOfYear" => (AdjusterKind::LastDayOfYear, 1, 0),
+                "firstDayOfNextYear" => (AdjusterKind::FirstDayOfNextYear, 1, 0),
+                "firstInMonth" => (AdjusterKind::FirstInMonth, day, 1),
+                "lastInMonth" => (AdjusterKind::LastInMonth, day, -1),
+                "next" => (AdjusterKind::Next, day, 0),
+                "nextOrSame" => (AdjusterKind::NextOrSame, day, 0),
+                "previous" => (AdjusterKind::Previous, day, 0),
+                "previousOrSame" => (AdjusterKind::PreviousOrSame, day, 0),
+                "dayOfWeekInMonth" => {
+                    let ordinal = match args.first() {
+                        Some(JValue::Int(value)) => *value,
+                        _ => 1,
+                    };
+                    let day = match args.get(1) {
+                        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                            Some(HeapObject::Temporal(Temporal::DayOfWeek(day))) => *day,
+                            _ => 1,
+                        },
+                        _ => 1,
+                    };
+                    (AdjusterKind::DayOfWeekInMonth, day, ordinal)
+                }
+                _ => {
+                    return Err(VmError::UnknownIntrinsic(format!(
+                        "java/time/temporal/TemporalAdjusters.{method}"
+                    )));
+                }
+            };
+            let made = Temporal::Adjuster(crate::time::Adjuster { kind, day, ordinal });
+            Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
         }
         "java/time/temporal/ChronoUnit" | "java/time/temporal/ChronoField" => {
             let is_unit = class.ends_with("ChronoUnit");
@@ -9515,6 +9917,32 @@ pub fn invoke_static(
                     }
                     let array = heap.alloc(HeapObject::RefArray(class.to_owned(), constants));
                     Ok(Some(JValue::Ref(Some(array))))
+                }
+                // `from(temporal)` — the day or the month a date falls on.
+                "from" => {
+                    let Some(JValue::Ref(Some(reference))) = args.first() else {
+                        return Err(throw("java.lang.NullPointerException"));
+                    };
+                    let Some(HeapObject::Temporal(value)) = heap.get(*reference) else {
+                        return Err(throw("java.lang.ClassCastException: not a temporal"));
+                    };
+                    let date = match *value {
+                        Temporal::Date(date) => date,
+                        Temporal::DateTime(when) => when.date,
+                        other => {
+                            return Err(date_time_exception(&format!(
+                                "Unable to obtain {} from TemporalAccessor: {}",
+                                if day_of_week { "DayOfWeek" } else { "Month" },
+                                other.text()
+                            )));
+                        }
+                    };
+                    let made = if day_of_week {
+                        Temporal::DayOfWeek(date.day_of_week())
+                    } else {
+                        Temporal::Month(date.month)
+                    };
+                    Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
                 }
                 "valueOf" => {
                     let name = match args.first() {

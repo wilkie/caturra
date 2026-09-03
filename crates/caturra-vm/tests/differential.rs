@@ -47270,7 +47270,7 @@ public class Sup {
 differential_test!(
     a_date_as_a_temporal,
     "Fields",
-    r##"
+    r#"
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -47348,7 +47348,7 @@ public class Fields {
         probe("field.checkValidIntValue", () -> ChronoField.MONTH_OF_YEAR.checkValidIntValue(5));
     }
 }
-"##
+"#
 );
 
 // `java.time.temporal.ChronoUnit`, the whole enum: what each unit is, what
@@ -47356,7 +47356,7 @@ public class Fields {
 differential_test!(
     every_chrono_unit,
     "Units",
-    r##"
+    r#"
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -47407,5 +47407,130 @@ public class Units {
         probe("DAYS == DAYS", () -> ChronoUnit.DAYS == ChronoUnit.valueOf("DAYS"));
     }
 }
-"##
+"#
+);
+
+// `TemporalAdjusters`, `with(temporal)`, `plus(amount)` — and the rest of
+// what a date, a `Duration` and a `Period` are asked.
+differential_test!(
+    adjusting_a_date,
+    "Adjust",
+    r#"
+import java.time.DayOfWeek;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.Month;
+import java.time.Period;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAdjusters;
+
+/** Adjusters, amounts, and the rest of what a date is asked. */
+public class Adjust {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        LocalDate[] dates = {
+            LocalDate.of(2024, 2, 29), LocalDate.of(2023, 1, 1), LocalDate.of(2000, 12, 31),
+            LocalDate.of(1999, 7, 15), LocalDate.of(-44, 3, 15),
+        };
+        LocalTime time = LocalTime.of(13, 45, 30, 123456789);
+
+        for (LocalDate date : dates) {
+            LocalDateTime stamp = LocalDateTime.of(date, time);
+            probe("firstDayOfMonth " + date, () -> date.with(TemporalAdjusters.firstDayOfMonth()));
+            probe("lastDayOfMonth " + date, () -> date.with(TemporalAdjusters.lastDayOfMonth()));
+            probe("firstDayOfNextMonth " + date,
+                () -> date.with(TemporalAdjusters.firstDayOfNextMonth()));
+            probe("firstDayOfYear " + date, () -> date.with(TemporalAdjusters.firstDayOfYear()));
+            probe("lastDayOfYear " + date, () -> date.with(TemporalAdjusters.lastDayOfYear()));
+            probe("firstDayOfNextYear " + date,
+                () -> date.with(TemporalAdjusters.firstDayOfNextYear()));
+            probe("stamp lastDayOfMonth " + date,
+                () -> stamp.with(TemporalAdjusters.lastDayOfMonth()));
+            for (DayOfWeek day : DayOfWeek.values()) {
+                probe("firstInMonth " + date + " " + day,
+                    () -> date.with(TemporalAdjusters.firstInMonth(day)));
+                probe("lastInMonth " + date + " " + day,
+                    () -> date.with(TemporalAdjusters.lastInMonth(day)));
+                probe("next " + date + " " + day, () -> date.with(TemporalAdjusters.next(day)));
+                probe("nextOrSame " + date + " " + day,
+                    () -> date.with(TemporalAdjusters.nextOrSame(day)));
+                probe("previous " + date + " " + day,
+                    () -> date.with(TemporalAdjusters.previous(day)));
+                probe("previousOrSame " + date + " " + day,
+                    () -> date.with(TemporalAdjusters.previousOrSame(day)));
+                for (int ordinal : new int[] {-2, -1, 1, 2, 5}) {
+                    probe("dayOfWeekInMonth " + date + " " + ordinal + " " + day,
+                        () -> date.with(TemporalAdjusters.dayOfWeekInMonth(ordinal, day)));
+                }
+            }
+            // `with(Temporal)` — one value adjusting another.
+            probe("with(month) " + date, () -> date.with(Month.APRIL));
+            probe("with(dayOfWeek) " + date, () -> date.with(DayOfWeek.MONDAY));
+            probe("stamp.with(date) " + date, () -> stamp.with(LocalDate.of(2020, 1, 2)));
+            probe("stamp.with(time) " + date, () -> stamp.with(LocalTime.of(1, 2, 3)));
+            // `plus`/`minus` of an amount.
+            probe("plus(Period) " + date, () -> date.plus(Period.of(1, 2, 3)));
+            probe("minus(Period) " + date, () -> date.minus(Period.of(1, 2, 3)));
+            probe("stamp.plus(Duration) " + date, () -> stamp.plus(Duration.ofHours(30)));
+            probe("stamp.minus(Duration) " + date, () -> stamp.minus(Duration.ofMinutes(90)));
+            probe("time.plus(Duration) " + date, () -> time.plus(Duration.ofMinutes(90)));
+            probe("time.minus(Duration) " + date, () -> time.minus(Duration.ofHours(30)));
+            // The odds and ends.
+            probe("getEra " + date, () -> date.getEra());
+            probe("datesUntil " + date, () -> date.datesUntil(date.plusDays(4)).count());
+            probe("withDayOfYear " + date, () -> stamp.withDayOfYear(200));
+            probe("LocalDate.from " + date, () -> LocalDate.from(stamp));
+            probe("LocalTime.from " + date, () -> LocalTime.from(stamp));
+            probe("LocalDateTime.from " + date, () -> LocalDateTime.from(stamp));
+            probe("DayOfWeek.from " + date, () -> DayOfWeek.from(date));
+            probe("Month.from " + date, () -> Month.from(date));
+        }
+
+        probe("ofNanoOfDay", () -> LocalTime.ofNanoOfDay(3_661_000_000_000L));
+        probe("toNanoOfDay", () -> time.toNanoOfDay());
+        probe("firstMonthOfQuarter", () -> Month.MAY.firstMonthOfQuarter());
+        for (Month month : Month.values()) {
+            probe("firstMonthOfQuarter " + month, () -> month.firstMonthOfQuarter());
+        }
+
+        // Duration and Period, the rest of them.
+        for (String text : new String[] {
+            "PT2H30M15.5S", "P2DT3H", "P1D", "PT0S", "-PT5M", "PT-6H3M", "P-1DT2H", "PT1.5S",
+            "nonsense", "P1Y",
+        }) {
+            probe("Duration.parse " + text, () -> Duration.parse(text));
+        }
+        for (String text : new String[] {
+            "P1Y2M3D", "P2M", "-P1Y", "P-1Y2M", "P1W", "P1Y2M3W4D", "nonsense", "PT1H",
+        }) {
+            probe("Period.parse " + text, () -> Period.parse(text));
+        }
+        for (ChronoUnit unit : ChronoUnit.values()) {
+            probe("Duration.of 90 " + unit, () -> Duration.of(90, unit));
+            probe("Duration.truncatedTo " + unit,
+                () -> Duration.parse("P2DT3H4M5.6S").truncatedTo(unit));
+            probe("Duration.get " + unit, () -> Duration.parse("PT2H").get(unit));
+        }
+        probe("Duration.toDaysPart", () -> Duration.parse("P2DT3H4M").toDaysPart());
+        probe("Duration.toHoursPart", () -> Duration.parse("P2DT3H4M").toHoursPart());
+        probe("Duration.getUnits", () -> Duration.parse("PT2H").getUnits());
+        probe("Period.getUnits", () -> Period.ofDays(1).getUnits());
+        probe("Period.plus", () -> Period.ofDays(1).plus(Period.ofMonths(2)));
+        probe("Period.minus", () -> Period.ofDays(5).minus(Period.ofDays(2)));
+        probe("Period.get YEARS", () -> Period.of(1, 2, 3).get(ChronoUnit.YEARS));
+        probe("Period.get MONTHS", () -> Period.of(1, 2, 3).get(ChronoUnit.MONTHS));
+        probe("Period.get DAYS", () -> Period.of(1, 2, 3).get(ChronoUnit.DAYS));
+        probe("Period.get HOURS", () -> Period.of(1, 2, 3).get(ChronoUnit.HOURS));
+    }
+}
+"#
 );
