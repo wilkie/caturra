@@ -13121,3 +13121,51 @@ JDK either.
 Pinned as `every_date_time_conversion` — 839 answers — and swept by
 `scripts/fuzz/format.py`, which pairs a date-time conversion only with a
 `java.time` value for exactly that reason.
+
+## Every pattern letter
+
+`DateTimeFormatter.ofPattern`'s javadoc opens with a table too — thirty-five
+letters, each meaning something different at each count it is written. caturra
+knew twelve of them and refused the rest with a message of its own.
+
+Asking a JDK all thirty-five at counts one to five, over a date, a time, a
+date-time and a year before the era, is 926 answers. caturra differed on 568.
+
+What was missing, and is not now:
+
+- **`G`** the era ("AD", "Anno Domini", "A" by count), **`K`** the hour within
+  the half-day and **`k`** the clock hour of the day, **`A`** the millisecond
+  of the day, **`n`** the nanosecond of the second and **`N`** of the day.
+- **`L`** and **`q`**, the STANDALONE month and quarter, which in English read
+  exactly as `M` and `Q` do — and `Q` itself, whose four-letter form is "1st
+  quarter".
+- **`W`** and **`F`**, the aligned week of the month and the aligned day of
+  the week in it.
+- **`e`** and **`c`**, the day of week counted the way the LOCALE counts it —
+  this formatter is en-US throughout, where the week begins on Sunday, so
+  Thursday is 5 — and **`Y`**/**`w`**, the week-based year and its week
+  number under the same rules.
+- **`p`**, which pads whatever comes after it: `ppppHH` is "  13".
+- **`[...]`**, an optional section, which prints only when the value has every
+  field inside it. caturra printed the brackets.
+- `''` inside a quoted run is one quote, so `'It''s'` is "It's". caturra
+  dropped it.
+- `{`, `}` and `#` are RESERVED — held back for a future release — and a JDK
+  refuses a pattern containing one rather than printing it.
+
+The zone letters — `V`, `z`, `O`, `X`, `x`, `Z` — parse and then fail where a
+JDK fails, in a JDK's own words, because no `LocalDate`, `LocalTime` or
+`LocalDateTime` carries a zone: an offset letter is a missing FIELD
+("Unsupported field: OffsetSeconds") and a zone letter is a missing zone
+("Unable to extract ZoneId from temporal 2024-02-29T13:45:30.123456789").
+That is the whole of what they can do without a time zone database.
+
+Two smaller things fell out. `uu` of the year -44 is "44" — the last two
+digits of the MAGNITUDE, not the 56 a modulo of a negative gives — and the
+width of a signed year counts digits, so `YYYY` of -44 is "-0044". And when a
+pattern parses but into the wrong kind, a JDK says which type it wanted and
+what it resolved instead ("Unable to obtain LocalTime from TemporalAccessor:
+{},ISO resolved to 2024-02-29 of type java.time.format.Parsed") rather than
+pointing at an index.
+
+Pinned as `every_pattern_letter`.

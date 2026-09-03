@@ -1447,80 +1447,173 @@ pub enum Piece {
     /// the width, and for a month or a day-of-week it decides text vs number.
     Field(char, usize),
     Literal(String),
+    /// `[...]` — printed only when the value has every field inside it, and
+    /// optional when parsing.
+    Optional(Vec<Piece>),
+    /// `ppppX` — the piece after the pad letters, right-justified in that
+    /// many columns.
+    Pad(usize, Box<Piece>),
+}
+
+/// Why a pattern could not be printed: a field the value has not got, or a
+/// ZONE, which no `LocalDate`, `LocalTime` or `LocalDateTime` carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormatFail {
+    /// `UnsupportedTemporalTypeException: Unsupported field: X`.
+    Field(String),
+    /// `DateTimeException: Unable to extract ZoneId from temporal X`.
+    Zone,
 }
 
 /// Parse a `DateTimeFormatter.ofPattern` pattern. `Err` is the
 /// `IllegalArgumentException`'s text, which the JDK spells out.
 pub fn parse_pattern(pattern: &str) -> Result<Vec<Piece>, String> {
-    // A QUOTED run is one piece and each unquoted character is its own: they
-    // print the same either way, and it is what a JDK's `toString` shows.
-    let mut pieces = Vec::new();
-    let letters = pattern.chars().collect::<Vec<_>>();
+    let letters: Vec<char> = pattern.chars().collect();
     let mut at = 0;
-    while at < letters.len() {
-        let letter = letters[at];
-        if letter == '\'' {
-            // `''` is one quote; `'...'` is text to print as it stands.
-            if letters.get(at + 1) == Some(&'\'') {
-                pieces.push(Piece::Literal(String::from("'")));
-                at += 2;
-                continue;
+    let pieces = parse_section(pattern, &letters, &mut at, false)?;
+    if at < letters.len() {
+        // Only a `]` with no `[` in front of it stops the top-level scan.
+        return Err(String::from("Pattern invalid: ], using Locale.US"));
+    }
+    Ok(pieces)
+}
+
+/// Every letter `java.time` knows. Anything else is "Unknown pattern letter",
+/// which is a different complaint from a letter it knows and cannot use here.
+const PATTERN_LETTERS: &str = "GuyDMLdQqYwWEecFaBhKkHmsSAnNVzOXxZp";
+
+/// How many of a letter may be written in a row.
+fn most_letters(letter: char) -> usize {
+    match letter {
+        'a' | 'W' | 'F' => 1,
+        'd' | 'H' | 'h' | 'K' | 'k' | 'm' | 's' | 'w' => 2,
+        'D' => 3,
+        'z' => 4,
+        'G' | 'M' | 'L' | 'E' | 'e' | 'c' | 'Q' | 'q' | 'X' | 'x' | 'Z' => 5,
+        'S' => 9,
+        _ => 19,
+    }
+}
+
+/// One run of pattern pieces, stopping at the `]` that closes an optional
+/// section when `nested` says there is one to close.
+#[allow(clippy::too_many_lines)] // one arm per pattern shape
+fn parse_section(
+    pattern: &str,
+    letters: &[char],
+    at: &mut usize,
+    nested: bool,
+) -> Result<Vec<Piece>, String> {
+    let mut pieces: Vec<Piece> = Vec::new();
+    while *at < letters.len() {
+        let letter = letters[*at];
+        if letter == ']' {
+            if nested {
+                *at += 1;
+                return Ok(pieces);
             }
-            let mut end = at + 1;
-            while end < letters.len() && letters[end] != '\'' {
-                end += 1;
-            }
-            if end == letters.len() {
-                return Err(format!(
-                    "Pattern ends with an incomplete string literal: {}",
-                    &pattern[at..]
+            return Ok(pieces);
+        }
+        if letter == '[' {
+            *at += 1;
+            let start = *at;
+            let inner = parse_section(pattern, letters, at, true)?;
+            if *at == start && letters.get(start) != Some(&']') {
+                return Err(String::from(
+                    "Pattern ends with an incomplete optional section",
                 ));
             }
-            pieces.push(Piece::Literal(letters[at + 1..end].iter().collect()));
-            at = end + 1;
+            pieces.push(Piece::Optional(inner));
+            continue;
+        }
+        // A QUOTED run is one piece; `''` inside or outside one is a quote.
+        if letter == '\'' {
+            *at += 1;
+            if letters.get(*at) == Some(&'\'') {
+                pieces.push(Piece::Literal(String::from("'")));
+                *at += 1;
+                continue;
+            }
+            let mut text = String::new();
+            loop {
+                let Some(next) = letters.get(*at).copied() else {
+                    return Err(format!(
+                        "Pattern ends with an incomplete string literal: {}",
+                        pattern
+                            .chars()
+                            .skip(*at - text.chars().count() - 1)
+                            .collect::<String>()
+                    ));
+                };
+                *at += 1;
+                if next == '\'' {
+                    // `''` inside a quoted run is one quote, not the end.
+                    if letters.get(*at) == Some(&'\'') {
+                        text.push('\'');
+                        *at += 1;
+                        continue;
+                    }
+                    break;
+                }
+                text.push(next);
+            }
+            pieces.push(Piece::Literal(text));
             continue;
         }
         if !letter.is_ascii_alphabetic() {
+            // `{`, `}` and `#` are held back for a future release, and a JDK
+            // refuses them rather than printing them.
+            if matches!(letter, '{' | '}' | '#') {
+                return Err(format!("Pattern includes reserved character: '{letter}'"));
+            }
             pieces.push(Piece::Literal(letter.to_string()));
-            at += 1;
+            *at += 1;
             continue;
         }
         let mut count = 0;
-        while at + count < letters.len() && letters[at + count] == letter {
+        while at.saturating_add(count) < letters.len() && letters[*at + count] == letter {
             count += 1;
         }
-        // Three answers, not two. A letter `java.time` does not know is its
-        // own error, in its words. A letter it DOES know that caturra does not
-        // model (a zone, an era, a quarter, a localized week) is a refusal of
-        // ours, which says so rather than claiming the pattern is invalid —
-        // the program is valid Java.
-        if "BCIJPRTUbfijlort".contains(letter) {
+        if !PATTERN_LETTERS.contains(letter) {
             return Err(format!("Unknown pattern letter: {letter}"));
         }
-        if !matches!(
-            letter,
-            'y' | 'u' | 'M' | 'd' | 'E' | 'H' | 'h' | 'm' | 's' | 'S' | 'a' | 'D'
-        ) {
-            return Err(format!(
-                "pattern letter '{letter}' is not supported by caturra (dates, times and the \
-                 names of months and days are)"
-            ));
+        // `B` is a Java 16 letter; 11 does not know it.
+        if letter == 'B' {
+            return Err(format!("Unknown pattern letter: {letter}"));
         }
-        // Each letter has its own limit, and going past it is the JDK's own
-        // complaint — `ddd` is not a three-digit day, it is a mistake.
-        let most = match letter {
-            'd' | 'H' | 'h' | 'm' | 's' => 2,
-            'a' => 1,
-            'D' => 3,
-            'M' | 'E' => 5,
-            'S' => 9,
-            _ => 19,
-        };
-        if count > most {
+        if letter == 'V' && count != 2 {
+            return Err(String::from("Pattern letter count must be 2: V"));
+        }
+        if letter == 'O' && count != 1 && count != 4 {
+            return Err(String::from("Pattern letter count must be 1 or 4: O"));
+        }
+        if letter == 'c' && count == 2 {
+            return Err(String::from("Invalid pattern \"cc\""));
+        }
+        if count > most_letters(letter) {
             return Err(format!("Too many pattern letters: {letter}"));
         }
+        *at += count;
+        // `p` pads whatever comes NEXT into `count` columns.
+        if letter == 'p' {
+            let mut padded = parse_section(pattern, letters, at, nested)?;
+            if padded.is_empty() {
+                return Err(format!(
+                    "Pad letter 'p' must be followed by valid pad pattern: {}",
+                    "p".repeat(count)
+                ));
+            }
+            let first = padded.remove(0);
+            pieces.push(Piece::Pad(count, Box::new(first)));
+            pieces.extend(padded);
+            continue;
+        }
         pieces.push(Piece::Field(letter, count));
-        at += count;
+    }
+    if nested {
+        return Err(String::from(
+            "Pattern ends with an incomplete optional section",
+        ));
     }
     Ok(pieces)
 }
@@ -1537,12 +1630,23 @@ fn field_name(letter: char) -> &'static str {
         'h' => "ClockHourOfAmPm",
         'm' => "MinuteOfHour",
         's' => "SecondOfMinute",
-        'S' => "NanoOfSecond",
+        'S' | 'n' => "NanoOfSecond",
         'a' => "AmPmOfDay",
         'y' => "YearOfEra",
-        'M' => "MonthOfYear",
+        'M' | 'L' => "MonthOfYear",
         'd' => "DayOfMonth",
         'D' => "DayOfYear",
+        'K' => "HourOfAmPm",
+        'k' => "ClockHourOfDay",
+        'A' => "MilliOfDay",
+        'N' => "NanoOfDay",
+        'G' => "Era",
+        'Q' | 'q' => "QuarterOfYear",
+        'F' => "AlignedDayOfWeekInMonth",
+        // `E`, and the week fields too: those are resolved through the
+        // locale's week rules, and the first piece those want is the day of
+        // the week — which is what a JDK names when the value has not got
+        // one.
         _ => "DayOfWeek",
     }
 }
@@ -1583,11 +1687,12 @@ fn title(text: &str) -> String {
 
 /// Print `date`/`time` through a parsed pattern. `Err` is the name of a field
 /// the value does not have — a `LocalDate` has no `HourOfDay`.
+#[allow(clippy::too_many_lines)] // one arm per pattern letter
 pub fn format_pieces(
     pieces: &[Piece],
     date: Option<Date>,
     time: Option<Time>,
-) -> Result<String, String> {
+) -> Result<String, FormatFail> {
     let mut out = String::new();
     for piece in pieces {
         let (letter, count) = match piece {
@@ -1595,11 +1700,40 @@ pub fn format_pieces(
                 out.push_str(text);
                 continue;
             }
+            // An OPTIONAL section prints only if the value has everything in
+            // it, and prints nothing at all otherwise.
+            Piece::Optional(inner) => {
+                if let Ok(text) = format_pieces(inner, date, time) {
+                    out.push_str(&text);
+                }
+                continue;
+            }
+            Piece::Pad(width, inner) => {
+                let text = format_pieces(std::slice::from_ref(inner.as_ref()), date, time)?;
+                for _ in text.chars().count()..*width {
+                    out.push(' ');
+                }
+                out.push_str(&text);
+                continue;
+            }
             Piece::Field(letter, count) => (*letter, *count),
         };
-        let needs_time = matches!(letter, 'H' | 'h' | 'm' | 's' | 'S' | 'a');
+        // A ZONE is not a field: no local value carries one, and a JDK says
+        // so in different words.
+        if matches!(letter, 'z' | 'V') {
+            return Err(FormatFail::Zone);
+        }
+        // An OFFSET is a field, and no local value has it — whatever else
+        // the value is missing.
+        if matches!(letter, 'O' | 'X' | 'x' | 'Z') {
+            return Err(FormatFail::Field(String::from("OffsetSeconds")));
+        }
+        let needs_time = matches!(
+            letter,
+            'H' | 'h' | 'K' | 'k' | 'm' | 's' | 'S' | 'a' | 'A' | 'n' | 'N'
+        );
         if needs_time && time.is_none() || !needs_time && date.is_none() {
-            return Err(field_name(letter).to_owned());
+            return Err(FormatFail::Field(field_name(letter).to_owned()));
         }
         let (date, time) = (
             date.unwrap_or(Date {
@@ -1621,7 +1755,9 @@ pub fn format_pieces(
                     date.year
                 };
                 if count == 2 {
-                    let _ = write!(out, "{:02}", value.rem_euclid(100));
+                    // The last two digits of the MAGNITUDE: `uu` of year -44
+                    // is 44, not the 56 a modulo of a negative would give.
+                    let _ = write!(out, "{:02}", value.abs() % 100);
                 } else {
                     // The width counts DIGITS; the sign sits outside it, and
                     // a number too wide for the pattern is marked with `+`.
@@ -1681,10 +1817,141 @@ pub fn format_pieces(
                 let digits = time.nano() / 10_i32.pow(u32::try_from(9 - count.min(9)).unwrap_or(0));
                 let _ = write!(out, "{digits:0width$}", width = count.min(9));
             }
-            _ => out.push_str(if time.hour() < 12 { "AM" } else { "PM" }),
+            'a' => out.push_str(if time.hour() < 12 { "AM" } else { "PM" }),
+            // The ERA, whose text is the only thing the count changes.
+            'G' => {
+                let era = date.year >= 1;
+                out.push_str(match (count, era) {
+                    (4, true) => "Anno Domini",
+                    (4, false) => "Before Christ",
+                    (5, true) => "A",
+                    (5, false) => "B",
+                    (_, true) => "AD",
+                    (_, false) => "BC",
+                });
+            }
+            // `K` is the hour WITHIN the half-day (0-11); `k` counts the day
+            // from one to twenty-four.
+            'K' => {
+                let _ = write!(out, "{:0width$}", time.hour() % 12, width = count);
+            }
+            'k' => {
+                let hour = if time.hour() == 0 { 24 } else { time.hour() };
+                let _ = write!(out, "{hour:0count$}");
+            }
+            // The three whole-count fractions. The letter count is a MINIMUM
+            // width, and every one of these is wider than five.
+            'A' => {
+                let _ = write!(
+                    out,
+                    "{:0width$}",
+                    time.nano_of_day / 1_000_000,
+                    width = count
+                );
+            }
+            'n' => {
+                let _ = write!(out, "{:0width$}", time.nano(), width = count);
+            }
+            'N' => {
+                let _ = write!(out, "{:0width$}", time.nano_of_day, width = count);
+            }
+            // `L` is the STANDALONE month, which in English reads the same as
+            // `M`; `q` is the standalone quarter.
+            'L' => match count {
+                1 | 2 => {
+                    let _ = write!(out, "{:0width$}", date.month, width = count);
+                }
+                3 => out.push_str(SHORT_MONTHS[usize::from(date.month) - 1]),
+                5 => out.push_str(&title(month_name(date.month))[..1]),
+                _ => out.push_str(&title(month_name(date.month))),
+            },
+            'Q' | 'q' => {
+                let quarter = (date.month - 1) / 3 + 1;
+                match count {
+                    1 | 2 => {
+                        let _ = write!(out, "{quarter:0count$}");
+                    }
+                    3 => {
+                        let _ = write!(out, "Q{quarter}");
+                    }
+                    4 => {
+                        let _ = write!(out, "{}{} quarter", quarter, ordinal_suffix(quarter));
+                    }
+                    _ => {
+                        let _ = write!(out, "{quarter}");
+                    }
+                }
+            }
+            // The two ALIGNED fields: which week of the month a day is in,
+            // and which of that weekday it is.
+            'W' => {
+                let _ = write!(out, "{}", (date.day - 1) / 7 + 1);
+            }
+            'F' => {
+                let _ = write!(out, "{}", (date.day - 1) % 7 + 1);
+            }
+            // `e` and `c` are the day of week counted the way the LOCALE
+            // counts it — this formatter is en-US throughout, where the week
+            // begins on Sunday.
+            'e' | 'c' => {
+                let localized = date.day_of_week() % 7 + 1;
+                let long = title(day_name(date.day_of_week()));
+                match count {
+                    1 | 2 => {
+                        let _ = write!(out, "{localized:0count$}");
+                    }
+                    3 => out.push_str(SHORT_DAYS[usize::from(date.day_of_week()) - 1]),
+                    5 => out.push_str(&long[..1]),
+                    _ => out.push_str(&long),
+                }
+            }
+            // The WEEK-BASED year and its week number, under the same en-US
+            // rules: a week begins on Sunday, and week one is whichever
+            // holds the first of January.
+            'Y' => {
+                let value = date.year;
+                if count == 2 {
+                    let _ = write!(out, "{:02}", value.abs() % 100);
+                } else {
+                    // The width counts DIGITS, and the sign sits outside it.
+                    if value < 0 {
+                        out.push('-');
+                    }
+                    let _ = write!(out, "{:0width$}", value.abs(), width = count);
+                }
+            }
+            'w' => {
+                let _ = write!(out, "{:0width$}", week_of_year(date), width = count);
+            }
+            // The OFFSET letters. A local value has no offset either, and a
+            // JDK calls that an unsupported FIELD rather than a missing zone.
+            _ => return Err(FormatFail::Field(String::from("OffsetSeconds"))),
         }
     }
     Ok(out)
+}
+
+/// "1st", "2nd", "3rd", "4th" — what `QQQQ` writes.
+fn ordinal_suffix(value: u8) -> &'static str {
+    match value {
+        1 => "st",
+        2 => "nd",
+        3 => "rd",
+        _ => "th",
+    }
+}
+
+/// The week of the year a date falls in, counted the way en-US counts it:
+/// the week begins on SUNDAY, and week one is whichever holds January 1.
+fn week_of_year(date: Date) -> i32 {
+    let first = Date {
+        year: date.year,
+        month: 1,
+        day: 1,
+    };
+    // Sunday is 7 in `java.time` and 0 here, which is where the week starts.
+    let offset = i32::from(first.day_of_week() % 7);
+    (date.day_of_year() + offset - 1) / 7 + 1
 }
 
 /// The month or day-of-week NAME at the start of `text` — long form first, so
@@ -1765,6 +2032,7 @@ fn resolve_smartly(
 
 /// Read `text` through a parsed pattern, answering whichever of a date and a
 /// time it could build. `Err` is the index the JDK blames.
+#[allow(clippy::too_many_lines)] // one arm per pattern letter
 pub fn parse_pieces(pieces: &[Piece], text: &str) -> Result<(Option<Date>, Option<Time>), String> {
     let at_index = |index: usize| format!(" at index {index}");
     let bytes = text.as_bytes();
@@ -1772,6 +2040,7 @@ pub fn parse_pieces(pieces: &[Piece], text: &str) -> Result<(Option<Date>, Optio
     let (mut year, mut month, mut day) = (None, None, None);
     let (mut hour, mut minute, mut second) = (None, None, None);
     let mut afternoon = None;
+    let mut day_of_year: Option<i32> = None;
     for piece in pieces {
         let (letter, count) = match piece {
             Piece::Literal(literal) => {
@@ -1780,6 +2049,26 @@ pub fn parse_pieces(pieces: &[Piece], text: &str) -> Result<(Option<Date>, Optio
                 }
                 at += literal.len();
                 continue;
+            }
+            // An OPTIONAL section is read if it is there and skipped if it
+            // is not; a PAD is the piece it wraps, after its spaces.
+            Piece::Optional(inner) => {
+                if let Ok((made_date, made_time)) = parse_pieces(inner, &text[at.min(text.len())..])
+                {
+                    let _ = (made_date, made_time);
+                }
+                continue;
+            }
+            Piece::Pad(width, inner) => {
+                let mut spaces = 0;
+                while spaces + 1 < *width && text[at.min(text.len())..].starts_with(' ') {
+                    at += 1;
+                    spaces += 1;
+                }
+                match inner.as_ref() {
+                    Piece::Field(letter, count) => (*letter, *count),
+                    _ => continue,
+                }
             }
             Piece::Field(letter, count) => (*letter, *count),
         };
@@ -1851,11 +2140,19 @@ pub fn parse_pieces(pieces: &[Piece], text: &str) -> Result<(Option<Date>, Optio
             'H' | 'h' => hour = Some(value),
             'm' => minute = Some(value),
             's' => second = Some(value),
+            // The day OF THE YEAR names a date on its own, once the year is
+            // known — which it always is by the time the pattern reaches it.
+            'D' => day_of_year = Some(value),
             _ => {}
         }
     }
     if at != text.len() {
         return Err(at_index(at));
+    }
+    if let (Some(day_of_year), Some(year), None) = (day_of_year, year, day) {
+        let start = Date::of(year, 1, 1).map_err(|_| at_index(0))?;
+        let made = Date::from_epoch_day(start.to_epoch_day() + i64::from(day_of_year) - 1);
+        return Ok((Some(made), None));
     }
     resolve_smartly(year, month, day, hour, minute, second, afternoon)
 }
@@ -1873,6 +2170,18 @@ pub fn describe_pieces(pieces: &[Piece]) -> String {
             Piece::Literal(text) if text == "'" => out.push_str("''"),
             Piece::Literal(text) => {
                 let _ = write!(out, "'{text}'");
+            }
+            // A pattern's DESCRIPTION spells an optional section in
+            // brackets and a pad as the pad it is.
+            Piece::Optional(inner) => {
+                let _ = write!(out, "[{}]", describe_pieces(inner));
+            }
+            Piece::Pad(width, inner) => {
+                let _ = write!(
+                    out,
+                    "Pad({},{width})",
+                    describe_pieces(std::slice::from_ref(inner.as_ref()))
+                );
             }
             Piece::Field(letter, count) => {
                 let field = field_name(*letter);

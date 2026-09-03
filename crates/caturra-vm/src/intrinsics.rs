@@ -793,10 +793,18 @@ fn format_temporal(
         },
         Ok(pieces) => match crate::time::format_pieces(&pieces, date, time) {
             Ok(text) => text,
-            Err(field) => {
+            Err(crate::time::FormatFail::Field(field)) => {
                 return Err(VmError::UncaughtException(format!(
                     "java.time.temporal.UnsupportedTemporalTypeException: Unsupported field: \
                      {field}"
+                )));
+            }
+            // A ZONE is not a missing field but a missing zone, and a JDK
+            // names the value it could not find one in.
+            Err(crate::time::FormatFail::Zone) => {
+                return Err(VmError::UncaughtException(format!(
+                    "java.time.DateTimeException: Unable to extract ZoneId from temporal {}",
+                    value.text()
                 )));
             }
         },
@@ -842,8 +850,25 @@ fn parse_with_formatter(
         ("java/time/LocalDateTime", (Some(date), Some(time))) => {
             Temporal::DateTime(crate::time::DateTime { date, time })
         }
-        // The text parsed, but not into what was asked for.
-        _ => return Err(failed(" at index 0")),
+        // The text PARSED, but not into what was asked for — a date pattern
+        // read into a `LocalTime`. The JDK says which type it wanted and what
+        // it resolved instead, which is a different sentence from "the text
+        // does not fit".
+        (_, (date, time)) => {
+            // The value's OWN text, not the ISO formatter's: a time with no
+            // seconds prints as "13:45" here, where ISO writes "13:45:00".
+            let resolved = match (date, time) {
+                (Some(date), Some(time)) => format!("{date}T{time}"),
+                (Some(date), None) => date.to_string(),
+                (None, Some(time)) => time.to_string(),
+                (None, None) => String::new(),
+            };
+            return Err(failed(&format!(
+                ": Unable to obtain {} from TemporalAccessor: {{}},ISO resolved to {resolved} \
+                 of type java.time.format.Parsed",
+                want.rsplit('/').next().unwrap_or(want)
+            )));
+        }
     };
     Ok(Some(JValue::Ref(Some(heap.intern_temporal(value)))))
 }

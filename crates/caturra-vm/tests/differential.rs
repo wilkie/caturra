@@ -47621,3 +47621,93 @@ public class Dates {
 }
 "#
 );
+
+// Every pattern letter of `DateTimeFormatter`, at every count that means
+// something — and the punctuation of a pattern: quoting, optional sections,
+// padding, and the characters a JDK holds back.
+differential_test!(
+    every_pattern_letter,
+    "Letters",
+    r##"
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+
+/** Every pattern letter of DateTimeFormatter, at every count that means one. */
+public class Letters {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        LocalDate date = LocalDate.of(2024, 2, 29);
+        LocalTime time = LocalTime.of(13, 45, 30, 123456789);
+        LocalDateTime stamp = LocalDateTime.of(date, time);
+        LocalDateTime morning = LocalDateTime.of(2001, 1, 2, 0, 5, 9);
+        LocalDate old = LocalDate.of(-44, 3, 15);
+
+        String letters = "GuyDMLdQqYwWEecFaBhKkHmsSAnNVzOXxZp";
+        for (int i = 0; i < letters.length(); i++) {
+            char letter = letters.charAt(i);
+            for (int count = 1; count <= 5; count++) {
+                String pattern = String.valueOf(letter).repeat(count);
+                probe("stamp " + pattern,
+                    () -> "[" + stamp.format(DateTimeFormatter.ofPattern(pattern)) + "]");
+                probe("morning " + pattern,
+                    () -> "[" + morning.format(DateTimeFormatter.ofPattern(pattern)) + "]");
+                probe("date " + pattern,
+                    () -> "[" + date.format(DateTimeFormatter.ofPattern(pattern)) + "]");
+                probe("time " + pattern,
+                    () -> "[" + time.format(DateTimeFormatter.ofPattern(pattern)) + "]");
+                probe("old " + pattern,
+                    () -> "[" + old.format(DateTimeFormatter.ofPattern(pattern)) + "]");
+            }
+        }
+
+        // The punctuation of a pattern: literals, quoting, optional sections.
+        String[] shapes = {
+            "yyyy-MM-dd", "dd/MM/yyyy HH:mm:ss", "EEEE, MMMM d", "'at' h:mm a",
+            "yyyy'T'MM", "''", "'It''s' HH", "[yyyy]", "[yyyy][ HH]", "yyyy[-MM[-dd]]",
+            "ppppHH", "HH:mm[:ss]", "'unclosed", "{}", "#", "b", "I", "R", "j", "P",
+            "", "yyyyMMdd", "M/d/yy", "EEEEE", "MMMMM", "aaa",
+        };
+        for (String shape : shapes) {
+            probe("stamp <" + shape + ">",
+                () -> "[" + stamp.format(DateTimeFormatter.ofPattern(shape)) + "]");
+        }
+
+        // Parsing back through the same pattern.
+        String[][] parses = {
+            {"yyyy-MM-dd", "2024-02-29"},
+            {"dd/MM/yyyy", "29/02/2024"},
+            {"d MMM yyyy", "5 Mar 2021"},
+            {"d MMMM yyyy", "5 March 2021"},
+            {"yyyy-DDD", "2024-060"},
+            {"HH:mm:ss", "13:45:30"},
+            {"h:mm a", "1:45 PM"},
+            {"yyyy-MM-dd", "2024-13-01"},
+            {"yyyy-MM-dd", "not a date"},
+            {"uuuu-MM-dd", "2024-02-29"},
+        };
+        for (String[] pair : parses) {
+            probe("parse date " + pair[0] + " <" + pair[1] + ">",
+                () -> LocalDate.parse(pair[1], DateTimeFormatter.ofPattern(pair[0])));
+            probe("parse time " + pair[0] + " <" + pair[1] + ">",
+                () -> LocalTime.parse(pair[1], DateTimeFormatter.ofPattern(pair[0])));
+        }
+
+        // The formatter's own toString, which is the pattern it was given.
+        probe("toString", () -> DateTimeFormatter.ofPattern("yyyy-MM-dd").toString());
+        probe("format(temporal)", () -> DateTimeFormatter.ofPattern("yyyy").format(date));
+        probe("ISO_LOCAL_DATE", () -> DateTimeFormatter.ISO_LOCAL_DATE.format(date));
+        probe("ISO_LOCAL_TIME", () -> DateTimeFormatter.ISO_LOCAL_TIME.format(time));
+        probe("ISO_LOCAL_DATE_TIME", () -> DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(stamp));
+    }
+}
+"##
+);
