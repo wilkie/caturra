@@ -3313,6 +3313,16 @@ impl MethodTable {
     /// answers too.
     fn generic_supertype_arg(&self, sub: ClassId, sup: ClassId) -> Option<ElemType> {
         let sup_name = self.class_name(sup).to_owned();
+        // An ENUM's own two supertype arguments are ITSELF: `enum Kind` is an
+        // `Enum<Kind>`, which is a `Comparable<Kind>`. Neither is written in
+        // the source, so nothing recorded either, and an unrecorded argument
+        // means "unchecked" — `Comparable<String> c = Kind.A;` compiled, and so
+        // did `Enum<Kind> e = Other.X;`.
+        if matches!(sup_name.as_str(), "Comparable" | "Enum")
+            && self.info_by_id(sub).is_some_and(|info| info.is_enum)
+        {
+            return Some(ElemType::Object(sub));
+        }
         let mut queue = vec![sub];
         let mut steps = 0usize;
         while let Some(current) = queue.pop() {
@@ -3735,20 +3745,28 @@ impl MethodTable {
                     // as `Object`, which made `Integer y = node.get()` a
                     // compile error and `p(node.get())` pick `p(Object)`.
                     let carryable = |elem: &ElemType| match elem {
-                        // A WRAPPER argument on a SYNTHESIZED interface is
-                        // carried only for the iteration pair: `Comparable
-                        // <Integer>` is modelled as the erased face a wrapper
-                        // widens to, but `Iterable<Integer>` really does answer
-                        // an `Iterator<Integer>` — without the argument,
-                        // `for (Integer v : face)` over one saw an `Object`
-                        // element and would not compile.
-                        ElemType::Wrapper(_) => {
-                            !self.synthesized.contains(base.as_str())
-                                || matches!(base.as_str(), "Iterable" | "Iterator")
-                        }
-                        ElemType::Str
+                        // A WRAPPER argument is carried everywhere now,
+                        // synthesized interface or not. It used to be dropped
+                        // on one — the comment here said `Comparable<Integer>`
+                        // is "the erased face a wrapper widens to", and
+                        // dropping the argument made it exactly that: RAW, so
+                        // `Comparable<Integer> c = "x";` compiled, and so did
+                        // every other value in the language. The conversions
+                        // below know the argument now, which is what that
+                        // erasure was standing in for.
+                        ElemType::Wrapper(_)
+                        | ElemType::Str
                         | ElemType::Object(_)
                         | ElemType::Builder
+                        // A `java.time` value as the argument — `Comparable
+                        // <Month>`, which is what an enum of theirs implements.
+                        // Dropped, it left the same hole.
+                        | ElemType::DayOfWeek
+                        | ElemType::Month
+                        | ElemType::ChronoUnit
+                        | ElemType::ChronoField
+                        | ElemType::IsoEra
+                        | ElemType::LocalDate
                         // A parameterized argument (`Pair<String, Pair<…>>`)
                         // rides as an interned nested type, so the inner
                         // arguments survive the outer read.
@@ -5958,6 +5976,18 @@ pub(crate) fn library_answer_descriptor(
     answer
 }
 
+/// Whether a type argument names exactly the type `value` is. A `java.time`
+/// value has an element KIND for some of them and rides INTERNED for the rest
+/// (`LocalTime`, `Duration`), so the two spellings have to be asked separately
+/// — and asking only the first made `Comparable<Duration> d = aDuration;` an
+/// error about the one type it is.
+fn same_written_type(value: JType, arg: ElemType, table: &MethodTable) -> bool {
+    if let Some(own) = elem_type_of(value) {
+        return own == arg;
+    }
+    matches!(arg, ElemType::Nested { inner, .. } if table.nested_type(inner) == value)
+}
+
 /// The `java.time` values that implement `Comparable`, and whether they do so
 /// with THEMSELVES as the type argument. The dates are ordered through a
 /// chronology interface — a `LocalDate` is a `Comparable<ChronoLocalDate>`, so
@@ -6771,6 +6801,13 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         )
         || (from == JType::Null && to.is_reference())
         || (to == JType::Object(table.object_id) && from.is_reference())
+        // EVERY array is `Cloneable` (JLS 10.7) — which is what makes
+        // `arr.clone()` legal — so one assigns to a `Cloneable` variable.
+        // `instanceof` already said so; the assignment did not.
+        || matches!(
+            (from, to),
+            (JType::Array { .. }, JType::Object(id)) if table.class_id("Cloneable") == Some(id)
+        )
         // A `String` and the wrappers implement `Comparable`, so they assign to
         // a `Comparable<T>` variable — the erased interface caturra registers
         // for a user class to implement. The VM dispatches `compareTo` on the
@@ -6810,8 +6847,35 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (f, JType::Generic { class: id, arg, .. })
                 if table.class_id("Comparable") == Some(id)
                     && library_comparable(f) == Some(true)
-                    && elem_type_of(f).is_some_and(|own| {
-                        elem_matches(own, arg, table) || elem_matches(arg, own, table)
+                    && same_written_type(f, arg, table)
+        )
+        // A library ENUM is an `Enum` — it extends `java.lang.Enum` exactly as
+        // a program's own enum does, which is where its `name`, `ordinal` and
+        // ordering come from. Held as one it was "Month cannot be converted to
+        // Enum<Month>", though the same value CAST to one already worked.
+        || matches!(
+            (from, to),
+            (f, JType::Object(id))
+                if table.class_id("Enum") == Some(id) && library_enum_constants(f).is_some()
+        )
+        || matches!(
+            (from, to),
+            (f, JType::Generic { class: id, arg, .. })
+                if table.class_id("Enum") == Some(id)
+                    && library_enum_constants(f).is_some()
+                    && same_written_type(f, arg, table)
+        )
+        // A PRIMITIVE reaching a parameterized `Comparable`: the boxing
+        // conversion, then the widening one — `Comparable<Integer> c = 5;`.
+        // The `Object` form was already a boxing position; the parameterized
+        // one had no arm, so tracking the argument turned an accepts-invalid
+        // into a false refusal of the very line that motivated the erasure.
+        || matches!(
+            (from, to),
+            (f, JType::Generic { class: id, arg, .. })
+                if table.class_id("Comparable") == Some(id)
+                    && boxable_primitive(f).is_some_and(|elem| {
+                        arg == elem || Prim::of(elem).is_some_and(|p| arg == ElemType::Wrapper(p))
                     })
         )
         // A user class that implements `Iterator` IS one: it assigns to an
@@ -29624,6 +29688,28 @@ impl BodyGen<'_> {
                 self.code.drop_stack(1);
                 return Some(Some(JType::Object(id)));
             }
+            // ...and a LIBRARY enum named the same way. It has no class in the
+            // table, but it has a `valueOf` of its own, which is the same call
+            // with the same failure.
+            if method == "valueOf"
+                && let [Expr::Field { object, name, .. }, wanted] = args
+                && name == "class"
+                && let Expr::Name { path, .. } = object.as_ref()
+                && let Some(ty) = library_enum_type(path.last().map_or("", String::as_str))
+            {
+                let internal = library_enum_class(ty);
+                let got = self.expr(wanted);
+                self.convert_for_assignment(got, JType::Str, wanted.span());
+                let method_ref = intern_method_ref(
+                    self.pool,
+                    internal,
+                    "valueOf",
+                    &format!("(Ljava/lang/String;)L{internal};"),
+                );
+                self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+                self.code.drop_stack(1);
+                return Some(Some(ty));
+            }
             self.no_suitable_library_method("Enum", method, args, span);
             return Some(None);
         }
@@ -35450,7 +35536,10 @@ impl BodyGen<'_> {
         // by an unboxing conversion (JLS §5.5): `(int) someNumber` is legal
         // Java and was refused as "cannot cast Number to int".
         if let Some(elem) = elem_type_of(target).filter(|elem| Prim::of(*elem).is_some())
-            && matches!(source, JType::Object(_))
+            // ...and from a PARAMETERIZED one, which `Comparable<Integer>`
+            // became once its argument was tracked: the same supertype, and
+            // `(int) cmp` is the same two conversions.
+            && matches!(source, JType::Object(_) | JType::Generic { .. })
             && !target.is_reference()
         {
             let class_index = intern_class(self.pool, wrapper_internal(elem));
@@ -37456,6 +37545,17 @@ impl BodyGen<'_> {
                 self.emit_box(elem);
                 return;
             }
+            // A primitive reaching a PARAMETERIZED `Comparable<Integer>` —
+            // the same boxing conversion as the raw form below, which is all
+            // the erasure that used to drop the argument was standing in for.
+            if let JType::Generic { class, .. } = to
+                && self.table.class_id("Comparable") == Some(class)
+                && let Some(elem) = boxable_primitive(from)
+                && widens(from, to, self.table)
+            {
+                self.emit_box(elem);
+                return;
+            }
             if let JType::Object(id) = to
                 && let Some(elem) = boxable_primitive(from)
                 && wrapper_face(Some(elem), id, self.table)
@@ -37562,14 +37662,20 @@ impl BodyGen<'_> {
                 if widens(from, to, self.table) => {}
             // Any reference type widens to the Object top type.
             (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
+            // ...and an ARRAY to `Cloneable`, which every one of them is.
+            (JType::Array { .. }, JType::Object(id))
+                if self.table.class_id("Cloneable") == Some(id) => {}
             // A String already satisfies a `Comparable`-bounded param — it is a
             // reference and implements Comparable (a boxed wrapper is boxed
             // above; a primitive is boxed by the autoboxing rule).
             (JType::Str, JType::Object(id)) if self.table.class_id("Comparable") == Some(id) => {}
-            // An ordered `java.time` value likewise: it IS a `Comparable`, so
-            // reaching one needs no code at all.
+            // An ordered `java.time` value likewise: it IS a `Comparable` (and,
+            // when it is one of their enums, an `Enum`), so reaching either
+            // face needs no code at all.
             (from, JType::Object(_) | JType::Generic { .. })
-                if library_comparable(from).is_some() && widens(from, to, self.table) => {}
+                if (library_comparable(from).is_some()
+                    || library_enum_constants(from).is_some())
+                    && widens(from, to, self.table) => {}
             // `String`/`StringBuilder` widening to `CharSequence` needs no
             // code (a widening reference conversion) — the same two-gate split
             // as every other widening (`widens` allows it; this matrix must

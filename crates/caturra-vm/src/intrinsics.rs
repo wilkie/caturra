@@ -9144,10 +9144,9 @@ fn boxed_virtual(
                             Some(HeapObject::JavaString(_)) => String::from("java.lang.String"),
                             _ => String::from("java.lang.Object"),
                         };
-                        return Err(throw(format!(
-                            "java.lang.ClassCastException: class {named} cannot be cast to \
-                             class {}",
-                            class_name.replace('/', ".")
+                        return Err(throw(crate::interpreter::class_cast_message(
+                            &named,
+                            &class_name.replace('/', "."),
                         )));
                     }
                 },
@@ -9157,6 +9156,20 @@ fn boxed_virtual(
                 Some(other) => *other,
                 None => JValue::Int(0),
             };
+            // The three NARROW wrappers answer the DIFFERENCE, not the sign:
+            // `Character.compare(x, y)` is `x - y` in a JDK, and so is the
+            // `compareTo` built on it, which cannot overflow an int from two
+            // 16-bit values. The static forms already said so — this is the
+            // same fact on the instance path, and it said 1.
+            if matches!(
+                class_name,
+                "java/lang/Character" | "java/lang/Byte" | "java/lang/Short"
+            ) {
+                let difference = as_long(value).saturating_sub(as_long(other));
+                return Ok(Some(JValue::Int(
+                    i32::try_from(difference).unwrap_or(i32::MAX),
+                )));
+            }
             let ordering = match (value, other) {
                 (JValue::Double(a), JValue::Double(b)) => a.total_cmp(&b),
                 (JValue::Float(a), JValue::Float(b)) => a.total_cmp(&b),

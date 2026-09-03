@@ -4120,7 +4120,9 @@ impl<'run> Interpreter<'run> {
         // it gets from it. Neither is in the class file: they are the
         // desugar's scaffolding, and `getInterfaces()` must not report them as
         // the student's own. Enum-ness answers for both.
-        if matches!(sup, "Enum" | "Comparable" | "java/lang/Enum") && self.is_enum_class(sub) {
+        if matches!(sup, "Enum" | "Comparable" | "java/lang/Enum")
+            && (self.is_enum_class(sub) || is_library_enum(sub))
+        {
             return true;
         }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
@@ -17000,7 +17002,11 @@ impl<'run> Interpreter<'run> {
                     "isInterface" => {
                         Ok(Some(JValue::Int(i32::from(self.class_is_interface(&name)))))
                     }
-                    "isEnum" => Ok(Some(JValue::Int(i32::from(self.is_enum_class(&name))))),
+                    // ...and a LIBRARY enum is one too, though there is no
+                    // class file here to read a `values()` off.
+                    "isEnum" => Ok(Some(JValue::Int(i32::from(
+                        self.is_enum_class(&name) || is_library_enum(&name),
+                    )))),
                     "isPrimitive" => Ok(Some(JValue::Int(i32::from(matches!(
                         name.as_str(),
                         "int"
@@ -17172,7 +17178,9 @@ impl<'run> Interpreter<'run> {
                             // caturra's desugar leaves the class file saying
                             // `Object`, which is the one place that shows.
                             .map(|parent| {
-                                if parent == "java/lang/Object" && self.is_enum_class(&name) {
+                                if parent == "java/lang/Object"
+                                    && (self.is_enum_class(&name) || is_library_enum(&name))
+                                {
                                     String::from("java/lang/Enum")
                                 } else {
                                     parent
@@ -20277,12 +20285,14 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         | "java/time/LocalDate"
         | "java/time/LocalTime"
         | "java/time/LocalDateTime"
-        | "java/time/Duration"
-        | "java/time/DayOfWeek"
+        | "java/time/Duration" => &["java/lang/Comparable"],
+        // ...and the `java.time` ENUMS, which are ordered because they extend
+        // `java.lang.Enum` — a supertype a program can name and test for.
+        "java/time/DayOfWeek"
         | "java/time/Month"
         | "java/time/temporal/ChronoUnit"
         | "java/time/temporal/ChronoField"
-        | "java/time/chrono/IsoEra" => &["java/lang/Comparable"],
+        | "java/time/chrono/IsoEra" => &["java/lang/Comparable", "java/lang/Enum"],
         // A `Matcher` IS a `MatchResult` (it implements the interface), and so
         // is the frozen result it hands out — which a JDK calls
         // `Matcher$ImmutableMatchResult`.
@@ -20330,6 +20340,20 @@ fn wrapper_is(wrapper: &str, target: &str) -> bool {
 /// `java.lang.Comparable`, however it is spelled: caturra bundles the interface,
 /// so user classes implement a `Comparable` with no package while the JDK name is
 /// `java/lang/Comparable`.
+/// The `java.time` types that are ENUMS. Each really extends `java.lang.Enum`,
+/// which shows in three places a program can see: `instanceof Enum`, the
+/// `getSuperclass()` of its class, and holding one as an `Enum<E>`.
+pub(crate) fn is_library_enum(internal: &str) -> bool {
+    matches!(
+        internal,
+        "java/time/DayOfWeek"
+            | "java/time/Month"
+            | "java/time/temporal/ChronoUnit"
+            | "java/time/temporal/ChronoField"
+            | "java/time/chrono/IsoEra"
+    )
+}
+
 fn is_comparable(target: &str) -> bool {
     matches!(target, "Comparable" | "java/lang/Comparable")
 }
@@ -20893,15 +20917,20 @@ fn class_cast_error(classes: &HashMap<String, ClassFile>, actual: &str, target: 
         name.replace('/', ".")
     };
     let (actual, target) = (qualify(actual), qualify(target));
-    let (ma, mt) = (class_module_desc(&actual), class_module_desc(&target));
+    VmError::UncaughtException(class_cast_message(&actual, &target))
+}
+
+/// The text of that exception, for the casts raised where the loaded classes
+/// are not in reach — a wrapper's `compareTo` casting its argument is one. The
+/// module/loader parenthetical is half the message, and a JDK never omits it.
+pub(crate) fn class_cast_message(actual: &str, target: &str) -> String {
+    let (ma, mt) = (class_module_desc(actual), class_module_desc(target));
     let paren = if ma == mt {
         format!("({actual} and {target} are in {ma})")
     } else {
         format!("({actual} is in {ma}; {target} is in {mt})")
     };
-    VmError::UncaughtException(format!(
-        "java.lang.ClassCastException: class {actual} cannot be cast to class {target} {paren}"
-    ))
+    format!("java.lang.ClassCastException: class {actual} cannot be cast to class {target} {paren}")
 }
 
 /// The `Class: message` header of a thrown exception, without the stack trace

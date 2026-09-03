@@ -48006,3 +48006,172 @@ public class Backwards {
 }
 "#
 );
+
+differential_test!(
+    a_library_interfaces_type_argument,
+    "Argument",
+    r#"
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.Month;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+/** The type ARGUMENT of a library interface target, which the conversions read. */
+public class Argument {
+    enum Kind { A, B }
+
+    static class Box implements Comparable<Box> {
+        public int compareTo(Box other) {
+            return 0;
+        }
+
+        public String toString() {
+            return "box";
+        }
+    }
+
+    static <T extends Comparable<T>> T biggest(List<T> values) {
+        T best = values.get(0);
+        for (T one : values) {
+            if (one.compareTo(best) > 0) {
+                best = one;
+            }
+        }
+        return best;
+    }
+
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // Every value that really IS a `Comparable<X>`, held as one.
+        Comparable<Integer> boxedInt = 5;
+        Comparable<Double> boxedDouble = 1.5;
+        Comparable<Character> boxedChar = 'c';
+        Comparable<Boolean> boxedBoolean = true;
+        Comparable<Long> boxedLong = 7L;
+        Comparable<String> text = "x";
+        Comparable<Month> month = Month.MAY;
+        Comparable<LocalTime> time = LocalTime.of(1, 2);
+        Comparable<Duration> span = Duration.ofHours(1);
+        Comparable<Kind> kind = Kind.A;
+        Comparable<Box> box = new Box();
+        Comparable<?> anything = LocalDate.of(2024, 1, 1);
+        Comparable raw = 5;
+        System.out.println(boxedInt + " " + boxedDouble + " " + boxedChar + " " + boxedBoolean
+            + " " + boxedLong + " " + text + " " + month + " " + time + " " + span
+            + " " + kind + " " + box + " " + anything + " " + raw);
+
+        // ...and each answers its own `compareTo`, which is the whole point of
+        // the argument: it says what the other side has to be.
+        probe("int", () -> boxedInt.compareTo(3));
+        probe("double", () -> boxedDouble.compareTo(2.5));
+        probe("char", () -> boxedChar.compareTo('a'));
+        probe("boolean", () -> boxedBoolean.compareTo(false));
+        probe("string", () -> text.compareTo("y"));
+        probe("month", () -> month.compareTo(Month.JUNE));
+        probe("time", () -> time.compareTo(LocalTime.of(3, 4)));
+        probe("duration", () -> span.compareTo(Duration.ofMinutes(1)));
+        probe("kind", () -> kind.compareTo(Kind.B));
+        probe("box", () -> box.compareTo(new Box()));
+
+        // The casts back out, and the two conversions a primitive target needs.
+        probe("unbox", () -> (int) boxedInt + 1);
+        probe("to wrapper", () -> ((Integer) boxedInt) + 1);
+        probe("to String", () -> ((String) text).length());
+        probe("bad cast", () -> ((Comparable<String>) (Object) Integer.valueOf(1)).compareTo("y"));
+
+        // An ENUM is an `Enum<itself>` and a `Comparable<itself>`, neither of
+        // which is written anywhere in its source.
+        Enum<Kind> asEnum = Kind.A;
+        System.out.println(asEnum.name() + " " + asEnum.ordinal() + " " + asEnum.compareTo(Kind.B));
+
+        // The bound every "biggest of" helper carries.
+        probe("biggest ints", () -> biggest(new ArrayList<>(List.of(3, 1, 2))));
+        probe("biggest strings", () -> biggest(new ArrayList<>(List.of("b", "a"))));
+        probe("biggest kinds", () -> biggest(new ArrayList<>(List.of(Kind.B, Kind.A))));
+        probe("biggest months", () -> biggest(new ArrayList<>(List.of(Month.MAY, Month.JUNE))));
+        probe("biggest times",
+            () -> biggest(new ArrayList<>(List.of(LocalTime.of(9, 0), LocalTime.of(1, 0)))));
+        probe("biggest spans",
+            () -> biggest(new ArrayList<>(List.of(Duration.ofHours(2), Duration.ofMinutes(5)))));
+        probe("biggest boxes", () -> biggest(new ArrayList<>(List.of(new Box()))));
+        probe("max months", () -> Collections.max(List.of(Month.MAY, Month.JUNE)));
+
+        // A library enum extends `java.lang.Enum` exactly as a program's own
+        // does - a supertype it can be held as, tested for, and reflected on.
+        Enum<Month> asMonth = Month.MAY;
+        Enum<?> anyEnum = java.time.temporal.ChronoUnit.DAYS;
+        System.out.println(asMonth.name() + " " + asMonth.ordinal()
+            + " " + asMonth.compareTo(Month.JUNE) + " " + anyEnum.name());
+        System.out.println((((Object) Month.MAY) instanceof Enum)
+            + " " + (((Object) LocalDate.of(2024, 1, 1)) instanceof Enum)
+            + " " + Month.class.isEnum() + " " + Kind.class.isEnum()
+            + " " + LocalDate.class.isEnum() + " " + String.class.isEnum());
+        System.out.println(Month.MAY.getClass().getSuperclass().getName()
+            + " " + Kind.A.getClass().getSuperclass().getName()
+            + " " + LocalDate.of(2024, 1, 1).getClass().getSuperclass().getName());
+        probe("Enum.valueOf library", () -> Enum.valueOf(Month.class, "MAY").getValue());
+        probe("Enum.valueOf user", () -> Enum.valueOf(Kind.class, "B"));
+        probe("Enum.valueOf missing", () -> Enum.valueOf(Month.class, "NOPE"));
+
+        // Every array is Cloneable, which is what makes `clone()` legal on one.
+        Cloneable ints = new int[] {1, 2};
+        Cloneable strings = new String[] {"a"};
+        System.out.println((ints instanceof int[]) + " " + (strings instanceof String[])
+            + " " + (((Object) new long[1]) instanceof Cloneable)
+            + " " + Arrays.toString(((int[]) ints).clone()));
+    }
+}
+"#
+);
+
+differential_wording!(
+    reject_comparable_wrong_string,
+    "RejArg",
+    "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalTime;\nimport java.time.Month;\npublic class RejArg { enum Kind { A, B } enum Other { X }\npublic static void main(String[] a) { Comparable<Integer> c = \"x\"; System.out.println(c); } }"
+);
+differential_wording!(
+    reject_comparable_wrong_int,
+    "RejArg",
+    "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalTime;\nimport java.time.Month;\npublic class RejArg { enum Kind { A, B } enum Other { X }\npublic static void main(String[] a) { Comparable<String> c = 5; System.out.println(c); } }"
+);
+differential_wording!(
+    reject_comparable_wrong_double,
+    "RejArg",
+    "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalTime;\nimport java.time.Month;\npublic class RejArg { enum Kind { A, B } enum Other { X }\npublic static void main(String[] a) { Comparable<Integer> c = 1.5; System.out.println(c); } }"
+);
+differential_wording!(
+    reject_comparable_wrong_library,
+    "RejArg",
+    "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalTime;\nimport java.time.Month;\npublic class RejArg { enum Kind { A, B } enum Other { X }\npublic static void main(String[] a) { Comparable<Month> c = LocalDate.of(2024, 1, 1); System.out.println(c); } }"
+);
+differential_wording!(
+    reject_comparable_chronology,
+    "RejArg",
+    "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalTime;\nimport java.time.Month;\npublic class RejArg { enum Kind { A, B } enum Other { X }\npublic static void main(String[] a) { Comparable<LocalDate> c = LocalDate.of(2024, 1, 1); System.out.println(c); } }"
+);
+differential_wording!(
+    reject_comparable_wrong_amount,
+    "RejArg",
+    "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalTime;\nimport java.time.Month;\npublic class RejArg { enum Kind { A, B } enum Other { X }\npublic static void main(String[] a) { Comparable<Duration> c = LocalTime.of(1, 2); System.out.println(c); } }"
+);
+differential_wording!(
+    reject_comparable_wrong_enum,
+    "RejArg",
+    "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalTime;\nimport java.time.Month;\npublic class RejArg { enum Kind { A, B } enum Other { X }\npublic static void main(String[] a) { Comparable<String> c = Kind.A; System.out.println(c); } }"
+);
+differential_wording!(
+    reject_enum_of_another_enum,
+    "RejArg",
+    "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalTime;\nimport java.time.Month;\npublic class RejArg { enum Kind { A, B } enum Other { X }\npublic static void main(String[] a) { Enum<Kind> c = Other.X; System.out.println(c); } }"
+);

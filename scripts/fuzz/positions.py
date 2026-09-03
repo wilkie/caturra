@@ -50,6 +50,16 @@ EXPRS = [
  ("comparator", '', 'Comparator.comparing(String::length).compare("aa", "b")'),
  ("nested", '', 'new ArrayList<>(Arrays.asList(new ArrayList<>(Arrays.asList(1)))).get(0).get(0)'),
  ("stringFmt", '', 'String.format("%s-%d", "x", 5)'),
+ # A parameterized library INTERFACE as a declared type. Its type ARGUMENT
+ # used to be dropped on the way in, so `Comparable<Integer> c = "x";`
+ # compiled; every position has to read the same argument now.
+ ("comparableInt", 'Comparable<Integer> c = 5;', 'c.compareTo(3)'),
+ ("comparableStr", 'Comparable<String> c = "b";', 'c.compareTo("a")'),
+ ("comparableChar", 'Comparable<Character> c = \'z\';', 'c.compareTo(\'a\')'),
+ ("comparableEnum", '', 'java.time.Month.MAY.compareTo(java.time.Month.JUNE)'),
+ ("comparableUnbox", 'Comparable<Integer> c = 5;', '(int) c + 1'),
+ ("enumFace", '', '((Enum<java.time.DayOfWeek>) java.time.DayOfWeek.MONDAY).ordinal()'),
+ ("cloneableArray", 'Cloneable c = new int[] {1, 2};', '((int[]) c).length'),
 ]
 
 POSITIONS = {

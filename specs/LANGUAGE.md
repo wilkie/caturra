@@ -13239,3 +13239,52 @@ aLocalDate;` is accepted where javac refuses it, which is the same hole
 
 Pinned as `java_time_in_every_position`, `an_object_folds_answer_a_reference`
 and `a_backwards_enum_range_names_its_ends`.
+
+## The type argument a target names
+
+`Comparable<X> c = value;` for every pair of thirteen arguments and eleven
+values — 143 cells against a real JDK. Seventy-five agreed. The other
+sixty-eight were one fact: **the argument was thrown away.**
+
+`Comparable<Integer>` resolved to the RAW `Comparable`, on the reasoning
+written beside the code that dropped it — that it is "the erased face a wrapper
+widens to", and tracking the argument would refuse `Comparable<Integer> c = 5;`.
+Dropping it made the target exactly that erased face, so every value in the
+language assigned to it: `Comparable<Integer> c = "x";` compiled, and so did a
+date, a `Duration`, an enum constant of any type. The two conversions the
+erasure stood in for are written out now — a primitive BOXES into a
+parameterized `Comparable`, and a value whose element rides interned
+(`LocalTime`, `Duration`, which have no element kind of their own) reaches its
+own — so the argument can be carried and every cell answers.
+
+Two neighbours of that fact were unwritten in the same way. An ENUM's supertype
+arguments are ITSELF — `enum Kind` is an `Enum<Kind>`, which is a
+`Comparable<Kind>` — and neither appears in its source, so nothing recorded
+them and an unrecorded argument reads as unchecked: `Comparable<String> c =
+Kind.A;` and `Enum<Kind> e = Other.X;` both compiled. And a `java.time` enum was
+not an `Enum` at all here, where a JDK's is: `Month.MAY instanceof Enum` was
+false, `Month.class.isEnum()` was false, `getSuperclass()` said `Object`,
+`Enum<Month> m = Month.MAY;` was refused, and `Enum.valueOf(Month.class, "MAY")`
+had no overload — while the identical five lines about a program's own enum all
+worked.
+
+Then forty-four positions for the same target — a parameter, a field, an array
+element, a type argument, a cast, a return, a bound, `instanceof`, the sibling
+faces (`Iterable<E>`, `Iterator<E>`, `Comparator<E>`, `Collection<E>`) — and
+twenty-six shapes for a tracked argument on a user generic. All agree.
+
+Three things fell out. `(int) aComparableOfInteger` is a checked cast plus an
+unboxing conversion, and the arm that knew that matched only the RAW spelling,
+so tracking the argument turned an accepts-invalid into a false refusal.
+`Character`, `Byte` and `Short` answer their `compareTo` as a DIFFERENCE — `'c'
+.compareTo('a')` is 2, not 1 — where the static `compare` of each already did,
+one fact on two paths. And every array is `Cloneable` (JLS 10.7, which is what
+makes `arr.clone()` legal): `instanceof` said so and the assignment did not.
+
+The remaining known gap in this direction is a generic FACTORY's argument,
+which javac infers from the target: `List<Number> l = List.of(1, 2);` is refused
+here, though `take(List.of(1, 2))` into a `List<Number>` parameter is not. That
+is target-typed inference, and it is its own unit.
+
+Pinned as `a_library_interfaces_type_argument`, plus eight refusals pinned by
+their WORDING, which javac's matches exactly.
