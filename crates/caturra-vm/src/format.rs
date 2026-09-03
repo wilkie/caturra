@@ -242,6 +242,9 @@ fn java_format_inner(
                         )
                     })?
                 };
+                // AFTER the argument is fetched: a missing one is reported
+                // before a flag that needs an argument to judge.
+                validate_with_argument(&spec)?;
                 let text = render(heap, &spec, arg)?;
                 out.push_str(&text);
                 produced.push_str(&text);
@@ -548,24 +551,6 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
         ));
     }
 
-    // A flag that needs a width but has none — `%-d`, `%0x` — is a
-    // `MissingFormatWidthException` naming the whole specifier. `,`/`+`/` `/`(`
-    // do not require one.
-    if spec.width.is_none() && (spec.left_justify || spec.zero_pad) {
-        return Err(throw(
-            "java.util.MissingFormatWidthException",
-            &spec.java_text(),
-        ));
-    }
-
-    // Mutually exclusive flag pairs (checked on the flags alone).
-    if spec.left_justify && spec.zero_pad {
-        return Err(illegal_format_flags("-0"));
-    }
-    if spec.plus && spec.space {
-        return Err(illegal_format_flags("+ "));
-    }
-
     // The JDK reports the LOWERCASE conversion here: `%,E` says `Conversion =
     // e`, because an uppercase conversion is the lowercase one plus a flag.
     let mismatch = |flag: char| -> VmError {
@@ -574,94 +559,147 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
             &format!("Conversion = {lower}, Flags = {flag}"),
         )
     };
-
-    // General ('s'/'b'/'h') and character ('c') conversions accept only '-'
-    // (and, for 's', '#' when the arg is Formattable — caturra has none, so a
-    // '#' there is a mismatch, as a JDK reports for a plain String).
-    if matches!(lower, 's' | 'b' | 'h' | 'c') {
-        for (present, flag) in [
-            (spec.grouping, ','),
-            (spec.plus, '+'),
-            (spec.space, ' '),
-            (spec.parentheses, '('),
-            (spec.zero_pad, '0'),
-            (spec.alternate, '#'),
-        ] {
-            if present {
-                return Err(mismatch(flag));
-            }
-        }
-    }
-    // Unsigned integer radixes ('o'/'x') reject the signed-numeric flags.
-    if matches!(lower, 'o' | 'x') {
-        for (present, flag) in [
-            (spec.grouping, ','),
-            (spec.plus, '+'),
-            (spec.space, ' '),
-            (spec.parentheses, '('),
-        ] {
-            if present {
-                return Err(mismatch(flag));
-            }
-        }
-    }
-    // Decimal 'd' takes every numeric flag except '#'; general float 'g'
-    // rejects '#' too (only e/f and the integer radixes o/x accept it).
-    if (lower == 'd' || lower == 'g') && spec.alternate {
-        return Err(mismatch('#'));
-    }
-    // Scientific notation has no grouping to do, so ',' is a mismatch there.
-    if lower == 'e' && spec.grouping {
-        return Err(mismatch(','));
-    }
-    // A date-time conversion takes only '-' (which the width rule above
-    // covers). Its diagnostics name the SUFFIX as the conversion, since that
-    // is the character that chose the format.
-    if lower == 't' {
-        let suffix = spec.date_time.unwrap_or(spec.conversion);
-        let mismatch = |flag: char| -> VmError {
-            throw(
-                "java.util.FormatFlagsConversionMismatchException",
-                &format!("Conversion = {suffix}, Flags = {flag}"),
-            )
-        };
-        for (present, flag) in [
-            (spec.grouping, ','),
-            (spec.plus, '+'),
-            (spec.space, ' '),
-            (spec.parentheses, '('),
-            (spec.zero_pad, '0'),
-            (spec.alternate, '#'),
-        ] {
-            if present {
-                return Err(mismatch(flag));
-            }
-        }
-        if let Some(precision) = spec.precision {
-            return Err(throw(
-                "java.util.IllegalFormatPrecisionException",
-                &precision.to_string(),
-            ));
-        }
-    }
-    // A hexadecimal float has no grouping and no parenthesized negative: its
-    // digits are not decimal ones. It DOES take '+', ' ' and '0'.
-    if lower == 'a' {
-        for (present, flag) in [(spec.grouping, ','), (spec.parentheses, '(')] {
-            if present {
-                return Err(mismatch(flag));
-            }
-        }
-    }
-
-    // Precision is meaningless for the integer and character conversions.
-    if let Some(precision) = spec.precision
-        && matches!(lower, 'd' | 'o' | 'x' | 'c')
-    {
-        return Err(throw(
+    let missing_width =
+        || -> VmError { throw("java.util.MissingFormatWidthException", &spec.java_text()) };
+    let bad_precision = || -> VmError {
+        throw(
             "java.util.IllegalFormatPrecisionException",
-            &precision.to_string(),
-        ));
+            &spec.precision.unwrap_or(0).to_string(),
+        )
+    };
+    // The ORDER of these checks is observable: a specifier can be wrong in
+    // two ways at once, and which exception a program sees is the one the JDK
+    // reaches first. Each family below follows `java.util.Formatter`'s own
+    // sequence, which is not the same sequence twice.
+    let flags_in_order = |flags: &[char]| -> Result<(), VmError> {
+        for flag in flags {
+            let present = match flag {
+                '+' => spec.plus,
+                ' ' => spec.space,
+                '0' => spec.zero_pad,
+                ',' => spec.grouping,
+                '(' => spec.parentheses,
+                _ => spec.alternate,
+            };
+            if present {
+                return Err(mismatch(*flag));
+            }
+        }
+        Ok(())
+    };
+    // The two flag pairs that contradict each other. `checkNumeric` looks at
+    // them for the numeric families; the general ones never reach it.
+    let contradictions = || -> Result<(), VmError> {
+        if spec.left_justify && spec.zero_pad {
+            return Err(illegal_format_flags("-0"));
+        }
+        if spec.plus && spec.space {
+            return Err(illegal_format_flags("+ "));
+        }
+        Ok(())
+    };
+
+    match lower {
+        // General: `#` is wrong for a boolean or a hash BEFORE the width rule,
+        // and `#` with `s` is not decided here at all — it depends on the
+        // ARGUMENT (a `Formattable` accepts it), so it waits for one.
+        's' | 'b' | 'h' => {
+            if matches!(lower, 'b' | 'h') && spec.alternate {
+                return Err(mismatch('#'));
+            }
+            if spec.width.is_none() && spec.left_justify {
+                return Err(missing_width());
+            }
+            flags_in_order(&['+', ' ', '0', ',', '('])?;
+        }
+        // Character: the precision is wrong before any flag is, and the
+        // missing width is last.
+        'c' => {
+            if spec.precision.is_some() {
+                return Err(bad_precision());
+            }
+            flags_in_order(&['+', ' ', '0', ',', '(', '#'])?;
+            if spec.width.is_none() && spec.left_justify {
+                return Err(missing_width());
+            }
+        }
+        // Integers: the width rule, then the contradictions, then the
+        // precision — and only then the one flag each radix rejects. The
+        // signed flags on `%o`/`%x` are not rejected here: they wait for the
+        // argument, as a JDK's `print(long)` does.
+        'd' | 'o' | 'x' => {
+            if spec.width.is_none() && (spec.left_justify || spec.zero_pad) {
+                return Err(missing_width());
+            }
+            contradictions()?;
+            if spec.precision.is_some() {
+                return Err(bad_precision());
+            }
+            if lower == 'd' {
+                flags_in_order(&['#'])?;
+            } else {
+                flags_in_order(&[','])?;
+            }
+        }
+        // Floats: the same numeric preamble, then the one flag each rejects.
+        'e' | 'f' | 'g' | 'a' => {
+            if spec.width.is_none() && (spec.left_justify || spec.zero_pad) {
+                return Err(missing_width());
+            }
+            contradictions()?;
+            match lower {
+                'e' => flags_in_order(&[','])?,
+                'g' => flags_in_order(&['#'])?,
+                'a' => flags_in_order(&[',', '('])?,
+                _ => {}
+            }
+        }
+        // A date-time conversion takes only `-`, and its diagnostics name the
+        // SUFFIX as the conversion, since that is the character that chose the
+        // format.
+        _ => {
+            if spec.width.is_none() && spec.left_justify {
+                return Err(missing_width());
+            }
+            let suffix = spec.date_time.unwrap_or(spec.conversion);
+            for (present, flag) in [
+                (spec.grouping, ','),
+                (spec.plus, '+'),
+                (spec.space, ' '),
+                (spec.parentheses, '('),
+                (spec.zero_pad, '0'),
+                (spec.alternate, '#'),
+            ] {
+                if present {
+                    return Err(throw(
+                        "java.util.FormatFlagsConversionMismatchException",
+                        &format!("Conversion = {suffix}, Flags = {flag}"),
+                    ));
+                }
+            }
+            if spec.precision.is_some() {
+                return Err(bad_precision());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The checks a JDK makes when the ARGUMENT arrives rather than when the
+/// specifier is read: `%#s` is legal for a `Formattable` (caturra has none),
+/// and the signed flags on `%o`/`%x` are rejected by the integer printer. They
+/// are separate because the ORDER is observable — `"%#.0s %,(3.0b"` blames the
+/// `b`, since every specifier is read before any argument is looked at.
+fn validate_with_argument(spec: &Spec) -> Result<(), VmError> {
+    let lower = spec.conversion.to_ascii_lowercase();
+    let mismatch = |flag: char| -> VmError {
+        throw(
+            "java.util.FormatFlagsConversionMismatchException",
+            &format!("Conversion = {lower}, Flags = {flag}"),
+        )
+    };
+    if lower == 's' && spec.alternate {
+        return Err(mismatch('#'));
     }
     Ok(())
 }
@@ -870,6 +908,11 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
             if conversion == 'H' {
                 text = text.to_uppercase();
             }
+            // A hash is TEXT once it is written, so a precision truncates it
+            // exactly as it truncates a `%s` — `%.3h` is three hex digits.
+            if let Some(precision) = spec.precision {
+                text.truncate(text.len().min(precision));
+            }
             Ok(pad(spec, &text))
         }
         'c' => {
@@ -943,6 +986,19 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 FormatArg::Long(v) => v.cast_unsigned(),
                 other => return Err(conversion_mismatch(heap, conversion, other)),
             };
+            // The signed flags are refused by the INTEGER printer, which is
+            // reached only once the argument turns out to be an integer — so
+            // `%(20o` handed a Double is a conversion mismatch, not a flag
+            // one.
+            let lower = conversion.to_ascii_lowercase();
+            for (present, flag) in [(spec.parentheses, '('), (spec.space, ' '), (spec.plus, '+')] {
+                if present {
+                    return Err(throw(
+                        "java.util.FormatFlagsConversionMismatchException",
+                        &format!("Conversion = {lower}, Flags = {flag}"),
+                    ));
+                }
+            }
             let mut text = match conversion.to_ascii_lowercase() {
                 'o' => format!("{value:o}"),
                 _ => format!("{value:x}"),

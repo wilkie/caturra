@@ -143,3 +143,33 @@ At 200 mutations: 172 of 193 put the first error in the same place, 0 in either
 dangerous direction. It found one accepts-invalid on its first run — a `;`
 after a `return` is an unreachable STATEMENT, and caturra dropped empty
 statements at parse time because they do nothing at run time.
+
+## `format.py` — a specifier, wrong in several ways at once
+
+`String.format` has a grammar of its own — flags, width, precision, and a
+conversion — and most combinations are illegal. A program that gets one wrong
+does not see "your format string is bad": it sees a specific exception, and
+WHICH one is whatever `java.util.Formatter` reaches first.
+
+This builds random templates out of random specifiers, hands each a random
+argument (`int`, `double`, `String`, `null`, a `Character`, a `Date`, a list),
+and prints either the formatted text or the exception's class and message.
+Every probe is wrapped in a `try`/`catch`, so one failure does not truncate
+the run.
+
+    scripts/fuzz/format.py [--count N] [--seed N] [--programs N] [--out DIR]
+
+The first run diverged on about 120 of 1900 probes, nearly all of them
+ordering: caturra validated a specifier in the order the fields are WRITTEN,
+and a JDK validates in an order that differs per conversion family — an
+integer's precision is illegal before its flags are, but a general
+conversion's `0` is a flag mismatch rather than a missing width. It also
+found that two checks are not parse-time at all: `%#s` is legal until an
+argument arrives (a `Formattable` accepts it), so a MISSING argument is
+reported first; and `%(o` against a `double` is a conversion mismatch, because
+the argument's type is judged before the flags that only make sense while
+printing an integer.
+
+Arguments whose text carries an identity hash (an array, an anonymous
+`Object`) are deliberately not in the pool: `%h` of one differs between two
+runs of the same JDK, so it compares nothing.

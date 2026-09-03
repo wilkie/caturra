@@ -46634,3 +46634,49 @@ public class Buckets {
 }
 "#
 );
+
+// What the format fuzz found. A specifier can be wrong in more than one way
+// at once, and WHICH exception a program sees is the one `java.util.Formatter`
+// reaches first — an order that is not the same twice, and that splits into
+// what it checks when it READS the specifier and what waits for the argument.
+differential_test!(
+    which_complaint_a_bad_specifier_gets,
+    "Specifiers",
+    r#"
+public class Specifiers {
+    static void probe(String shape, Object... args) {
+        try {
+            System.out.println(shape + " => [" + String.format(shape, args) + "]");
+        } catch (Throwable e) {
+            System.out.println(shape + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // Integer: the precision is wrong before the flag is.
+        probe("% 1.0X", 5);
+        probe("%+020.0o", 5);
+        probe("%,1.1x", 5);
+        // General: `0` is a flag mismatch, not a missing width.
+        probe("%0H", "x");
+        probe("%0s", "x");
+        probe("%-s", "x");
+        // Every specifier is READ before any argument is looked at, so the
+        // second one's flag beats the first one's — and `%#s` waits for an
+        // argument, because a `Formattable` would accept it.
+        probe("%#.0s %,(3.0b", "x", true);
+        probe("%#s");
+        probe("%#s", "x");
+        // The argument's TYPE is judged before the flags a JDK checks while
+        // printing an integer.
+        probe("%(20o", 3.5);
+        probe("%(20o", 5);
+        // A hash is text once written, so a precision truncates it.
+        probe("%.0h", "abc");
+        probe("%.3h", "abcdef");
+        probe("%-12.3H", "abcdef");
+        probe("%12.8s", 1e10);
+    }
+}
+"#
+);

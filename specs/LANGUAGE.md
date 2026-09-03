@@ -12798,3 +12798,46 @@ JDK's exact ordering rules.
 
 Pinned by `the_bucket_order_of_a_hash_map`, which holds the agreeing side of
 both thresholds.
+
+## Which complaint a bad specifier gets
+
+A format specifier can be wrong in more than one way at once — `% 1.0X` has a
+flag that an uppercase hex does not take AND a precision that no integer
+conversion takes — and a program only ever sees one exception. Which one is
+not a matter of taste: `java.util.Formatter` checks in a fixed order, the
+order differs per conversion family, and a student reading the message is
+being told which mistake to fix first.
+
+caturra checked in the order the fields are written — flags, then width, then
+precision — which agreed with a JDK for the general conversions and disagreed
+for the numeric ones. The rule, per family:
+
+- general (`s`, `b`, `h`): the `0` flag is a MISMATCH for this conversion, not
+  a missing width; `-` without a width is the missing-width error; then the
+  contradictory pairs.
+- character (`c`): a precision is illegal FIRST, then the flags, then a lone
+  `-`.
+- integer (`d`, `o`, `x`): `d` rejects `#`, and `o`/`x` reject `,`; then a
+  precision is illegal; then a lone `-`; then the contradictions.
+- floating point (`e`, `f`, `g`, `a`): `#` is illegal for `e`, `,` for `e` and
+  `a`, precision for `a`; then a lone `-`; then the contradictions.
+
+Two checks are not made while READING the specifier at all, and a program can
+tell:
+
+- `%#s` is legal until the argument arrives, because an argument that
+  implements `Formattable` is handed the flag to interpret. So
+  `String.format("%#s")` with NO argument raises
+  `MissingFormatArgumentException`, and only a `%#s` that HAS a plain argument
+  raises the flag mismatch.
+- `%(20o` against a `Double` is `IllegalFormatConversionException`, not a
+  flag error: a JDK dispatches on the argument's type first and reaches the
+  `(`/`+`/space checks only once it is already printing an integer.
+
+And a hash is text once it is written, so a precision truncates it the way it
+truncates a string: `%.3h` of `"abcdef"` is the first three characters of the
+hash, not the whole of it.
+
+Pinned by `which_complaint_a_bad_specifier_gets` in
+`crates/caturra-vm/tests/differential.rs`, and swept by `scripts/fuzz/format.py`
+— 2783 random probes over six seeds, all agreeing.

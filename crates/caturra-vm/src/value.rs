@@ -1313,6 +1313,14 @@ pub struct Heap {
     wrapper_cache: std::collections::HashMap<(u8, i64), HeapRef>,
     /// The `java.time` enum constants, keyed by (kind, value).
     temporal_pool: std::collections::HashMap<(u8, u8), HeapRef>,
+    /// What class a VIEW object reports: `Collections.emptyList()` and
+    /// `List.of(a, b)` are both an unmodifiable list here, and a JDK names
+    /// them `Collections$EmptyList` and `ImmutableCollections$List12`. It
+    /// lives on the HEAP rather than the interpreter because every path that
+    /// names a class needs it — including the formatter, whose exception
+    /// message was answering the generic name while `getClass()` answered the
+    /// real one.
+    view_class: std::collections::HashMap<HeapRef, &'static str>,
     /// What an object RENDERS TO in a format call. Only the interpreter can
     /// run a user `toString`, so `String.format`'s arguments are rendered
     /// ahead of the formatter — but the formatter still has to name the
@@ -1360,6 +1368,7 @@ impl Default for Heap {
             threshold: HEAP_FLOOR,
             wrapper_cache: std::collections::HashMap::new(),
             temporal_pool: std::collections::HashMap::new(),
+            view_class: std::collections::HashMap::new(),
             format_text: std::collections::HashMap::new(),
             builder_capacity: std::collections::HashMap::new(),
         }
@@ -1436,6 +1445,22 @@ impl Heap {
         let reference = self.alloc(HeapObject::Temporal(value));
         self.temporal_pool.insert(key, reference);
         reference
+    }
+
+    /// Record what class a view object answers to.
+    pub fn set_view_class(&mut self, reference: HeapRef, class: &'static str) {
+        self.view_class.insert(reference, class);
+    }
+
+    /// The class a view answers to, if it is one.
+    #[must_use]
+    pub fn view_class_of(&self, reference: HeapRef) -> Option<&'static str> {
+        self.view_class.get(&reference).copied()
+    }
+
+    /// Drop the views whose objects the collector swept.
+    pub fn retain_views(&mut self, alive: impl Fn(HeapRef) -> bool) {
+        self.view_class.retain(|reference, _| alive(*reference));
     }
 
     /// The interned `java.time` constants: roots, for the same reason the

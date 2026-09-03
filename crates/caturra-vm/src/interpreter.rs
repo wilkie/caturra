@@ -190,7 +190,6 @@ pub(crate) struct Interpreter<'run> {
     /// override it, and inside a `ClassCastException` message. Recorded per
     /// view at construction, like the index style beside it, because the
     /// wrapper itself cannot tell them apart.
-    view_class: HashMap<HeapRef, &'static str>,
     /// How a stack-trace frame in a SYNTHESIZED class is written, from the
     /// class file's `CaturraTraceName`: a lambda's javac-style synthetic
     /// method on its enclosing class, or the empty string for a method
@@ -316,7 +315,6 @@ impl<'run> Interpreter<'run> {
             map_views: HashMap::new(),
             checked_cursor_views: std::collections::HashSet::new(),
             view_index_style: HashMap::new(),
-            view_class: HashMap::new(),
             trace_names: classes
                 .iter()
                 .filter_map(|(name, class)| {
@@ -1216,6 +1214,7 @@ impl<'run> Interpreter<'run> {
     /// object at the same index.
     fn prune_tables(&mut self, marked: &[bool]) {
         let alive = |reference: &HeapRef| marked.get(*reference as usize).copied().unwrap_or(true);
+        let alive_by_value = |reference: HeapRef| alive(&reference);
         self.exception_traces
             .retain(|reference, _| alive(reference));
         self.map_views
@@ -1223,7 +1222,7 @@ impl<'run> Interpreter<'run> {
         self.checked_cursor_views.retain(alive);
         self.view_index_style
             .retain(|reference, _| alive(reference));
-        self.view_class.retain(|reference, _| alive(reference));
+        self.heap.retain_views(alive_by_value);
         self.heap.retain_format_text(alive);
         self.cursor_pending.retain(|reference, _| alive(reference));
         self.spent_streams.retain(alive);
@@ -4625,8 +4624,8 @@ impl<'run> Interpreter<'run> {
             ("emptyList", []) => {
                 let empty = self.heap.alloc(HeapObject::ArrayList(Vec::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableList(empty));
-                self.view_class
-                    .insert(view, "java/util/Collections$EmptyList");
+                self.heap
+                    .set_view_class(view, "java/util/Collections$EmptyList");
                 self.view_index_style.insert(view, IndexStyle::IndexOnly);
                 // The `empty*` factories share one `EmptyIterator`, whose
                 // `remove` is an IllegalStateException, not a refusal.
@@ -4638,8 +4637,8 @@ impl<'run> Interpreter<'run> {
             ("singletonList", [value]) => {
                 let inner = self.heap.alloc(HeapObject::ArrayList(vec![*value]));
                 let view = self.heap.alloc(HeapObject::UnmodifiableList(inner));
-                self.view_class
-                    .insert(view, "java/util/Collections$SingletonList");
+                self.heap
+                    .set_view_class(view, "java/util/Collections$SingletonList");
                 self.view_index_style.insert(view, IndexStyle::WithSize);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
@@ -4674,8 +4673,8 @@ impl<'run> Interpreter<'run> {
                     .heap
                     .alloc(HeapObject::HashSet(crate::map::JavaHashMap::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableSet(inner));
-                self.view_class
-                    .insert(view, "java/util/Collections$EmptySet");
+                self.heap
+                    .set_view_class(view, "java/util/Collections$EmptySet");
                 self.checked_cursor_views.insert(view);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
@@ -4685,8 +4684,8 @@ impl<'run> Interpreter<'run> {
                     .heap
                     .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableMap(inner));
-                self.view_class
-                    .insert(view, "java/util/Collections$EmptyMap");
+                self.heap
+                    .set_view_class(view, "java/util/Collections$EmptyMap");
                 self.checked_cursor_views.insert(view);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
@@ -4697,8 +4696,8 @@ impl<'run> Interpreter<'run> {
                     .alloc(HeapObject::HashSet(crate::map::JavaHashMap::new()));
                 self.set_add(inner, *element)?;
                 let view = self.heap.alloc(HeapObject::UnmodifiableSet(inner));
-                self.view_class
-                    .insert(view, "java/util/Collections$SingletonSet");
+                self.heap
+                    .set_view_class(view, "java/util/Collections$SingletonSet");
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
@@ -4708,8 +4707,8 @@ impl<'run> Interpreter<'run> {
                     .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
                 self.map_put(inner, *key, *value)?;
                 let view = self.heap.alloc(HeapObject::UnmodifiableMap(inner));
-                self.view_class
-                    .insert(view, "java/util/Collections$SingletonMap");
+                self.heap
+                    .set_view_class(view, "java/util/Collections$SingletonMap");
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
@@ -4725,7 +4724,7 @@ impl<'run> Interpreter<'run> {
             // `UnmodifiableRandomAccessList`, a LinkedList the plain one.
             let random_access = !matches!(self.heap.get(list), Some(HeapObject::LinkedList(_)));
             let view = self.heap.alloc(HeapObject::UnmodifiableList(list));
-            self.view_class.insert(
+            self.heap.set_view_class(
                 view,
                 if random_access {
                     "java/util/Collections$UnmodifiableRandomAccessList"
@@ -4738,7 +4737,7 @@ impl<'run> Interpreter<'run> {
         }
         if method_name == "unmodifiableSet" || method_name == "unmodifiableSortedSet" {
             let view = self.heap.alloc(HeapObject::UnmodifiableSet(list));
-            self.view_class.insert(
+            self.heap.set_view_class(
                 view,
                 if method_name == "unmodifiableSet" {
                     "java/util/Collections$UnmodifiableSet"
@@ -4751,7 +4750,7 @@ impl<'run> Interpreter<'run> {
         }
         if method_name == "unmodifiableMap" || method_name == "unmodifiableSortedMap" {
             let view = self.heap.alloc(HeapObject::UnmodifiableMap(list));
-            self.view_class.insert(
+            self.heap.set_view_class(
                 view,
                 if method_name == "unmodifiableMap" {
                     "java/util/Collections$UnmodifiableMap"
@@ -4773,8 +4772,8 @@ impl<'run> Interpreter<'run> {
             };
             let view = self.heap.alloc(view);
             // Whichever wrapper it needed, the CLASS is the Collection one.
-            self.view_class
-                .insert(view, "java/util/Collections$UnmodifiableCollection");
+            self.heap
+                .set_view_class(view, "java/util/Collections$UnmodifiableCollection");
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
@@ -6649,7 +6648,7 @@ impl<'run> Interpreter<'run> {
     /// them apart.
     fn refuses_before_checking(&self, reference: HeapRef) -> bool {
         use crate::value::HeapObject::{UnmodifiableList, UnmodifiableMap, UnmodifiableSet};
-        match self.view_class.get(&reference) {
+        match self.heap.view_class_of(reference).as_ref() {
             Some(name) => {
                 name.starts_with("java/util/Collections$Unmodifiable")
                     || name.starts_with("java/util/ImmutableCollections$")
@@ -7248,8 +7247,8 @@ impl<'run> Interpreter<'run> {
                 .alloc(crate::value::HeapObject::UnmodifiableList(view));
             // The JDK's `UnmodifiableList.subList` keeps the wrapper's own
             // class, random-access or not.
-            if let Some(name) = self.view_class.get(&list).copied() {
-                self.view_class.insert(wrapper, name);
+            if let Some(name) = self.heap.view_class_of(list) {
+                self.heap.set_view_class(wrapper, name);
             }
             return Ok(JValue::Ref(Some(wrapper)));
         }
@@ -7686,7 +7685,7 @@ impl<'run> Interpreter<'run> {
                 let count = items.len();
                 let backing = self.heap.alloc(HeapObject::ArrayList(items));
                 let view = self.heap.alloc(HeapObject::UnmodifiableList(backing));
-                self.view_class.insert(
+                self.heap.set_view_class(
                     view,
                     if count == 1 || count == 2 {
                         "java/util/ImmutableCollections$List12"
@@ -7713,7 +7712,7 @@ impl<'run> Interpreter<'run> {
                     self.map_put(backing, item, JValue::NULL)?;
                 }
                 let view = self.heap.alloc(HeapObject::UnmodifiableSet(backing));
-                self.view_class.insert(
+                self.heap.set_view_class(
                     view,
                     if small {
                         "java/util/ImmutableCollections$Set12"
@@ -7738,7 +7737,7 @@ impl<'run> Interpreter<'run> {
                     self.map_put(backing, *key, *value)?;
                 }
                 let view = self.heap.alloc(HeapObject::UnmodifiableMap(backing));
-                self.view_class.insert(
+                self.heap.set_view_class(
                     view,
                     if small {
                         "java/util/ImmutableCollections$Map1"
@@ -11102,13 +11101,13 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::TreeSet { .. }) => "java/util/RegularEnumSet",
             _ => return,
         };
-        self.view_class.insert(reference, name);
+        self.heap.set_view_class(reference, name);
     }
 
     /// Whether this collection was built as an enum-keyed one.
     fn is_enum_collection(&self, reference: HeapRef) -> bool {
         matches!(
-            self.view_class.get(&reference),
+            self.heap.view_class_of(reference).as_ref(),
             Some(&"java/util/EnumMap" | &"java/util/RegularEnumSet")
         )
     }
@@ -12676,8 +12675,8 @@ impl<'run> Interpreter<'run> {
         // the same shape `Arrays.asList`'s cursor has. An immutable LIST's
         // does override it, and throws the message-less form.
         if self
-            .view_class
-            .get(&view)
+            .heap
+            .view_class_of(view)
             .is_some_and(|name| name.starts_with("java/util/ImmutableCollections$Set"))
         {
             return IteratorWrites::ArrayCursor;
@@ -13524,8 +13523,8 @@ impl<'run> Interpreter<'run> {
             });
             // It is NOT one of a map's own entries, so it does not answer that
             // map's inner `Node` class even though one backs it here.
-            self.view_class
-                .insert(entry, "java/util/AbstractMap$SimpleEntry");
+            self.heap
+                .set_view_class(entry, "java/util/AbstractMap$SimpleEntry");
             frame.stack.push(JValue::Ref(Some(entry)));
             return Ok(None);
         }
@@ -14883,8 +14882,8 @@ impl<'run> Interpreter<'run> {
                                   // a second, and matching the whole argument list missed it.
         ) && matches!(args.first(), Some(JValue::Ref(None)))
             && self
-                .view_class
-                .get(&receiver)
+                .heap
+                .view_class_of(receiver)
                 .is_some_and(|name| name.starts_with("java/util/ImmutableCollections$"))
         {
             return Err(VmError::UncaughtException(String::from(
@@ -14896,8 +14895,8 @@ impl<'run> Interpreter<'run> {
         // default — one JDK class apart, and a program sees which.
         if matches!(method_name, "removeIf" | "replaceAll")
             && self
-                .view_class
-                .get(&receiver)
+                .heap
+                .view_class_of(receiver)
                 .is_some_and(|name| name.starts_with("java/util/Collections$Singleton"))
         {
             return Err(VmError::UncaughtException(String::from(
@@ -15038,8 +15037,8 @@ impl<'run> Interpreter<'run> {
                 let wrapper = self
                     .heap
                     .alloc(crate::value::HeapObject::UnmodifiableList(view));
-                if let Some(name) = self.view_class.get(&receiver).copied() {
-                    self.view_class.insert(wrapper, name);
+                if let Some(name) = self.heap.view_class_of(receiver) {
+                    self.heap.set_view_class(wrapper, name);
                 }
                 frame.stack.push(JValue::Ref(Some(wrapper)));
                 self.vec_pool.push(args);
@@ -15783,7 +15782,7 @@ impl<'run> Interpreter<'run> {
     /// for. [`object_class_name_of`] is the same fact without that record, for
     /// the diagnostics that reach it with a heap and nothing else.
     fn object_class_name(&self, receiver: HeapRef) -> String {
-        object_class_name_of(&self.heap, Some(&self.view_class), receiver)
+        object_class_name_of(&self.heap, receiver)
     }
 
     /// The `Class` names inside a `Class[]` argument (for `getConstructor`).
@@ -20289,11 +20288,7 @@ fn is_comparable(target: &str) -> bool {
 /// name a value's type. Arrays render as their descriptor with dots
 /// (`[Ljava.lang.Integer;`), as `Class.getName` does.
 #[allow(clippy::too_many_lines)] // one arm per heap object kind
-pub(crate) fn object_class_name_of(
-    heap: &Heap,
-    view_class: Option<&HashMap<HeapRef, &'static str>>,
-    receiver: HeapRef,
-) -> String {
+pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
     use crate::value::HeapObject;
     match heap.get(receiver) {
         Some(HeapObject::Instance { class_name, .. } | HeapObject::Boxed { class_name, .. }) => {
@@ -20327,18 +20322,12 @@ pub(crate) fn object_class_name_of(
         // A sorted collection is what an ENUM-keyed one is made of, so which
         // class it reports was recorded when it was built — the same way a
         // wrapped collection's is.
-        Some(HeapObject::TreeSet { .. }) => String::from(
-            view_class
-                .and_then(|classes| classes.get(&receiver))
-                .copied()
-                .unwrap_or("java/util/TreeSet"),
-        ),
-        Some(HeapObject::TreeMap { .. }) => String::from(
-            view_class
-                .and_then(|classes| classes.get(&receiver))
-                .copied()
-                .unwrap_or("java/util/TreeMap"),
-        ),
+        Some(HeapObject::TreeSet { .. }) => {
+            String::from(heap.view_class_of(receiver).unwrap_or("java/util/TreeSet"))
+        }
+        Some(HeapObject::TreeMap { .. }) => {
+            String::from(heap.view_class_of(receiver).unwrap_or("java/util/TreeMap"))
+        }
         Some(HeapObject::PriorityQueue { .. }) => String::from("java/util/PriorityQueue"),
         Some(HeapObject::Optional { kind, .. }) => {
             format!("java/util/{}", kind.prefix())
@@ -20393,9 +20382,7 @@ pub(crate) fn object_class_name_of(
             | HeapObject::UnmodifiableSet(_)
             | HeapObject::UnmodifiableMap(_),
         ) => String::from(
-            view_class
-                .and_then(|classes| classes.get(&receiver))
-                .copied()
+            heap.view_class_of(receiver)
                 .unwrap_or("java/util/Collections$UnmodifiableCollection"),
         ),
         // A map's three views and its entries are INNER classes of the map
@@ -20407,12 +20394,10 @@ pub(crate) fn object_class_name_of(
         }
         Some(HeapObject::MapEntry { map, .. }) => {
             let map = *map;
-            view_class
-                .and_then(|classes| classes.get(&receiver))
-                .map_or_else(
-                    || map_member_class_of(heap, map, None),
-                    |name| (*name).to_string(),
-                )
+            match heap.view_class_of(receiver) {
+                Some(name) => name.to_owned(),
+                None => map_member_class_of(heap, map, None),
+            }
         }
         // A sub-list is an inner class of the list it views, and WHICH one
         // says whether the view is random-access: an `ArrayList`'s has its
@@ -20420,7 +20405,7 @@ pub(crate) fn object_class_name_of(
         // `AbstractList`'s, and a `LinkedList`'s is the plain one.
         Some(HeapObject::SubList { backing, .. }) => {
             let backing = *backing;
-            match object_class_name_of(heap, view_class, backing).as_str() {
+            match object_class_name_of(heap, backing).as_str() {
                 // A sub-list OF a sub-list is that same class again.
                 "java/util/ArrayList" | "java/util/ArrayList$SubList" => {
                     String::from("java/util/ArrayList$SubList")
@@ -20571,7 +20556,7 @@ fn cursor_class_name_of(
 /// answers the generic `Collections$UnmodifiableCollection` rather than the
 /// exact subclass it was built as; nothing but that one family is affected.
 pub(crate) fn heap_binary_name(heap: &Heap, reference: HeapRef) -> String {
-    object_class_name_of(heap, None, reference).replace('/', ".")
+    object_class_name_of(heap, reference).replace('/', ".")
 }
 
 pub(crate) fn heap_object_binary_name(object: &crate::value::HeapObject) -> String {
