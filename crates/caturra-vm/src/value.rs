@@ -1665,6 +1665,16 @@ impl Heap {
             _ => None,
         }
     }
+
+    /// The string's own UTF-16 units, which `string_text` cannot hand back
+    /// faithfully: an unpaired surrogate is a `char` no Rust `String` holds.
+    #[must_use]
+    pub fn string_units(&self, reference: HeapRef) -> Option<&[u16]> {
+        match self.get(reference)? {
+            HeapObject::JavaString(units) => Some(units),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -424,7 +424,7 @@ fn extract_spec(expr: &Expr) -> Option<(MockSpec, Vec<Expr>)> {
                         ..
                     } = arg
                     {
-                        methods.push(name.clone());
+                        methods.push(String::from_utf16_lossy(name));
                     }
                 }
                 current = inner;

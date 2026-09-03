@@ -35,7 +35,9 @@ pub(crate) struct Interpreter<'run> {
     pub vfs: &'run mut VirtualFileSystem,
     pub heap: Heap,
     pub intrinsic_statics: IntrinsicStatics,
-    string_pool: HashMap<String, HeapRef>,
+    /// Keyed by UTF-16 UNITS: two literals differ where their text cannot,
+    /// because an unpaired surrogate has no Rust spelling.
+    string_pool: HashMap<Vec<u16>, HeapRef>,
     /// One `Class` object per class name, as a real JVM has (`Foo.class ==
     /// Foo.class`, and every `getClass()` on a `Foo` returns the SAME
     /// reference). Minting a fresh one per query made the textbook `equals`
@@ -361,11 +363,17 @@ impl<'run> Interpreter<'run> {
     /// Allocate (or reuse) the interned string for `text`, per JLS
     /// string-literal semantics.
     pub fn intern_string(&mut self, text: &str) -> HeapRef {
-        if let Some(existing) = self.string_pool.get(text) {
+        self.intern_string_units(&text.encode_utf16().collect::<Vec<_>>())
+    }
+
+    /// The same, keyed by UTF-16 UNITS — the only key that can tell two
+    /// strings apart when one holds an unpaired surrogate.
+    pub fn intern_string_units(&mut self, units: &[u16]) -> HeapRef {
+        if let Some(existing) = self.string_pool.get(units) {
             return *existing;
         }
-        let reference = self.heap.alloc_string(text);
-        self.string_pool.insert(text.to_owned(), reference);
+        let reference = self.heap.alloc_string_units(units);
+        self.string_pool.insert(units.to_vec(), reference);
         reference
     }
 
@@ -15681,13 +15689,13 @@ impl<'run> Interpreter<'run> {
             && args.is_empty()
             && let Some(crate::value::HeapObject::JavaString(units)) = self.heap.get(receiver)
         {
-            let text = String::from_utf16_lossy(units);
+            let key = units.clone();
             // A string the pool has never seen becomes the pooled one ITSELF:
             // `String.valueOf(42).intern() == String.valueOf(42)`'s receiver
             // is true on a JDK, because `intern` adds the receiver rather than
             // a canonical copy of it. Allocating one made the identity false
             // for every string the program built rather than wrote.
-            let canonical = *self.string_pool.entry(text).or_insert(receiver);
+            let canonical = *self.string_pool.entry(key).or_insert(receiver);
             frame.stack.push(JValue::Ref(Some(canonical)));
             return Ok(None);
         }
@@ -17821,12 +17829,14 @@ impl<'run> Interpreter<'run> {
             Constant::Long(v) => Ok(JValue::Long(*v)),
             Constant::Double(v) => Ok(JValue::Double(*v)),
             Constant::String { string_index } => {
-                let text = class
+                // The UNITS, not the text: a string constant may hold an
+                // unpaired surrogate, which is a legal `char` and has no Rust
+                // spelling.
+                let units = class
                     .constant_pool
-                    .get_utf8(*string_index)
-                    .ok_or_else(|| malformed(format!("bad string constant at {index}")))?
-                    .to_owned();
-                Ok(JValue::Ref(Some(self.intern_string(&text))))
+                    .get_utf8_units(*string_index)
+                    .ok_or_else(|| malformed(format!("bad string constant at {index}")))?;
+                Ok(JValue::Ref(Some(self.intern_string_units(&units))))
             }
             other => Err(malformed(format!(
                 "cannot load constant {other:?} with ldc"

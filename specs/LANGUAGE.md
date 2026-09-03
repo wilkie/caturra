@@ -12955,3 +12955,52 @@ cover them.
 
 And a lone surrogate now survives `Matcher.group()`: the text was going through
 a Rust `String`, where an unpaired surrogate becomes U+FFFD.
+
+## A string of code units
+
+A Java `String` is a sequence of `char` — UTF-16 code UNITS — and three layers
+of caturra used a Rust `String` instead, which cannot hold one of them. An
+unpaired surrogate is a legal `char`: `"\\uD83D"` is a one-character string a
+JDK prints, hashes and reverses like any other, and a Rust `String` turns it
+into U+FFFD on the way past. So did every answer downstream.
+
+A sweep of the whole `String` surface over text that is not all Basic
+Multilingual Plane — an emoji, a Deseret pair, a lone high surrogate, a lone
+low one — diverged on 60 of 307 answers. They had five causes:
+
+- **The string LITERAL** was carried as a Rust `String` from the lexer to the
+  class file's constant pool. It is UTF-16 units now, all the way through:
+  `TokenKind::StringLiteral`, `Literal::Str`, a new `Constant::Utf8Units` for
+  the pool entries that are not text, and a string pool keyed by units. The
+  class file's two long-standing TODOs went with it — the constant pool now
+  reads and writes **modified UTF-8** (JVMS §4.4.7), where U+0000 takes two
+  bytes and everything above the BMP is written as its surrogate pair, which
+  is also what gives an unpaired one a spelling.
+- **`String.format`** built its output as a Rust `String`. A precision counts
+  UTF-16 units, so `"%.3s"` of "a😀b" keeps the whole surrogate pair and
+  `"%.2s"` keeps the high half ALONE — a `char` that has to survive to the
+  output. The formatter works in units now, and `%S` uppercases with the JDK
+  11 tables rather than Rust's newer ones.
+- **`toUpperCase` and `toLowerCase`** mapped unit by unit, so the five
+  supplementary scripts with a case — Deseret, Osage, Warang Citi, Adlam and
+  Medefaidrin — were left alone. They map by CODE POINT now.
+- **`codePointBefore`** read forwards: at index 2 of "a😀b" it combined the
+  pair that STARTS there and answered the whole emoji, where a JDK answers the
+  high surrogate alone. The unit before an index is a unit unless it is the
+  low half of a pair.
+- **`trim`, `strip`, `join` and `Matcher.group`** each round-tripped through a
+  Rust `String` for no reason. They work in units.
+
+`Character` grew the code point half it was missing while this was measured:
+`isValidCodePoint`, `isBmpCodePoint`, `isSupplementaryCodePoint`,
+`highSurrogate`, `lowSurrogate`, `isSurrogatePair`, the `CharSequence` forms of
+`codePointAt`, `codePointBefore` and `offsetByCodePoints`, and the three
+methods deprecated in Java 1.1 that are still there in 11.
+
+All 307 answers agree, pinned as `a_string_of_code_units`.
+
+What is still a Rust `String`, and so still lossy for an unpaired surrogate:
+constant FOLDING (`"a" + "\\uD83D"` written as one constant expression), and
+the bytes a `PrintStream` writes — where a JDK's encoder substitutes `?` and
+caturra now does too, so only `System.out.print` of a lone surrogate differs
+from the string it was given.

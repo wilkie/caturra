@@ -1346,6 +1346,42 @@ fn temporal_method(
 /// or the bytes of a `ByteArrayOutputStream` the program holds. A JDK encodes
 /// with the platform charset; caturra's is UTF-8 both on the way in here and
 /// on the way back out through `toString()`.
+/// UTF-16 units as the bytes a `PrintStream` would write: UTF-8, with an
+/// UNPAIRED surrogate replaced by `?` — which is what a JDK's encoder does
+/// with a character it cannot map, and not the U+FFFD a lossy Rust decode
+/// would put there.
+pub(crate) fn units_to_utf8(units: &[u16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(units.len());
+    for piece in char::decode_utf16(units.iter().copied()) {
+        match piece {
+            Ok(c) => {
+                let mut buffer = [0u8; 4];
+                out.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
+            }
+            Err(_) => out.push(b'?'),
+        }
+    }
+    out
+}
+
+fn write_units_to_sink(
+    sink: PrintSink,
+    units: &[u16],
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+) {
+    let bytes = units_to_utf8(units);
+    match sink {
+        PrintSink::Std(StdStream::Out) => console.stdout(&bytes),
+        PrintSink::Std(StdStream::Err) => console.stderr(&bytes),
+        PrintSink::Bytes(reference) => {
+            if let Some(HeapObject::ByteStream(stream)) = heap.get_mut(reference) {
+                stream.extend_from_slice(&bytes);
+            }
+        }
+    }
+}
+
 fn write_to_sink(sink: PrintSink, text: &str, heap: &mut Heap, console: &mut dyn ConsoleIo) {
     match sink {
         PrintSink::Std(StdStream::Out) => console.stdout(text.as_bytes()),
@@ -2180,11 +2216,11 @@ pub fn invoke_virtual(
             let text = match result {
                 Ok(text) => text,
                 Err(error) => {
-                    write_to_sink(stream, &produced, heap, console);
+                    write_units_to_sink(stream, &produced, heap, console);
                     return Err(error);
                 }
             };
-            write_to_sink(stream, &text, heap, console);
+            write_units_to_sink(stream, &text, heap, console);
             // Both answer the stream in Java, and the compiler emits the
             // descriptor that says so where the value is USED — returning
             // nothing there would underflow the operand stack, and returning
@@ -2986,15 +3022,16 @@ fn string_method(
         }
         // The FULL mappings, from the JDK 11 tables rather than from Rust's
         // (a newer Unicode version, which disagreed on thousands of units).
-        // Unit by unit, so an unpaired surrogate passes through untouched.
+        // By CODE POINT, so a surrogate PAIR is cased as the character it
+        // spells — the supplementary scripts that have a case are Deseret,
+        // Osage, Warang Citi, Adlam and Medefaidrin — while an unpaired
+        // surrogate passes through untouched.
         ("toUpperCase", []) => {
-            let mapped: Vec<u16> = units.iter().flat_map(|u| unicode::full_upper(*u)).collect();
-            let reference = heap.alloc(HeapObject::JavaString(mapped));
+            let reference = heap.alloc(HeapObject::JavaString(unicode::map_case(&units, true)));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         ("toLowerCase", []) => {
-            let mapped: Vec<u16> = units.iter().flat_map(|u| unicode::full_lower(*u)).collect();
-            let reference = heap.alloc(HeapObject::JavaString(mapped));
+            let reference = heap.alloc(HeapObject::JavaString(unicode::map_case(&units, false)));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         // `lines()` — a Stream of the lines, split on \n, \r\n or \r, with
@@ -3067,8 +3104,10 @@ fn string_method(
             Ok(Some(JValue::Ref(Some(stream))))
         }
         ("trim", []) => {
-            let text = String::from_utf16_lossy(&units);
-            let reference = heap.alloc_string(text.trim_matches(|c| c <= ' '));
+            // Over UNITS: an unpaired surrogate is not whitespace and must
+            // survive, which a round trip through a Rust `String` cannot.
+            let trimmed = trim_units(&units, true, true, |unit| unit <= u16::from(b' '));
+            let reference = heap.alloc_string_units(trimmed);
             Ok(Some(JValue::Ref(Some(reference))))
         }
         ("strip" | "stripLeading" | "stripTrailing", []) => {
@@ -3077,13 +3116,13 @@ fn string_method(
             // spaces (Java: no). Rust's `char::is_whitespace` silently used
             // the Unicode set, so `strip()` disagreed with caturra's own
             // `Character.isWhitespace`.
-            let text = String::from_utf16_lossy(&units);
+            let white = |unit: u16| unicode::is_whitespace(u32::from(unit));
             let stripped = match method {
-                "strip" => text.trim_matches(java_is_whitespace),
-                "stripLeading" => text.trim_start_matches(java_is_whitespace),
-                _ => text.trim_end_matches(java_is_whitespace),
+                "strip" => trim_units(&units, true, true, white),
+                "stripLeading" => trim_units(&units, true, false, white),
+                _ => trim_units(&units, false, true, white),
             };
-            let reference = heap.alloc_string(stripped);
+            let reference = heap.alloc_string_units(stripped);
             Ok(Some(JValue::Ref(Some(reference))))
         }
         ("isBlank", []) => {
@@ -3414,10 +3453,32 @@ fn code_point_before(units: &[u16], index: i32) -> Result<i32, VmError> {
     {
         return code_point_at(units, before - 1);
     }
-    code_point_at(units, before)
+    // Otherwise the UNIT, whatever it is. Reading it as a code point instead
+    // looked FORWARD and combined a pair that starts here — so
+    // `"a\ud83d\ude00b".codePointBefore(2)` answered the whole emoji where a
+    // JDK answers the high surrogate alone.
+    let Some(unit) = units.get(at) else {
+        return code_point_at(units, before);
+    };
+    Ok(i32::from(*unit))
 }
 
 /// `codePointCount(begin, end)`: code points in the half-open range.
+/// The units behind a `CharSequence` that `Character` was handed. Unlike the
+/// concatenating one, a null here is a `NullPointerException` rather than the
+/// four characters of "null".
+fn code_point_source(heap: &Heap, value: &JValue) -> Result<Vec<u16>, VmError> {
+    match value {
+        JValue::Ref(Some(reference)) => match heap.get(*reference) {
+            Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
+                Ok(units.clone())
+            }
+            _ => Err(throw("java.lang.ClassCastException: not a CharSequence")),
+        },
+        _ => Err(throw("java.lang.NullPointerException")),
+    }
+}
+
 fn code_point_count(units: &[u16], begin: i32, end: i32) -> Result<i32, VmError> {
     let (begin, end) = usize::try_from(begin)
         .ok()
@@ -7764,7 +7825,7 @@ fn writer_method(
             };
             let format_args = crate::format::args_from_descriptor(heap, descriptor, &args[1..])?;
             let text = crate::format::java_format(heap, &template, &format_args)?;
-            vfs.append_file(&path, text.as_bytes())
+            vfs.append_file(&path, &units_to_utf8(&text))
                 .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
             // `format` returns the writer for chaining; `printf` is void.
             Ok((method == "format").then_some(JValue::Ref(Some(receiver))))
@@ -10411,6 +10472,38 @@ fn character_static(
             };
             code_point_count(&units, *begin, *end).map(|n| Some(JValue::Int(n)))
         }
+        // The CODE POINT half. `String` already answers these about itself;
+        // `Character` answers them about any `CharSequence`, with the same
+        // rules underneath.
+        ("codePointAt", [text, JValue::Int(at)]) => {
+            let units = code_point_source(heap, text)?;
+            code_point_at(&units, *at).map(|point| Some(JValue::Int(point)))
+        }
+        ("codePointBefore", [text, JValue::Int(at)]) => {
+            let units = code_point_source(heap, text)?;
+            code_point_before(&units, *at).map(|point| Some(JValue::Int(point)))
+        }
+        ("offsetByCodePoints", [text, JValue::Int(index), JValue::Int(offset)]) => {
+            let units = code_point_source(heap, text)?;
+            offset_by_code_points(&units, *index, *offset).map(|at| Some(JValue::Int(at)))
+        }
+        ("isValidCodePoint", [JValue::Int(v)]) => z((0..=0x10_FFFF).contains(v)),
+        ("isBmpCodePoint", [JValue::Int(v)]) => z((0..=0xFFFF).contains(v)),
+        ("isSupplementaryCodePoint", [JValue::Int(v)]) => z((0x1_0000..=0x10_FFFF).contains(v)),
+        // The two halves of the pair a supplementary code point is written
+        // as. A JDK does not check the range first: the arithmetic is the
+        // whole method.
+        ("highSurrogate", [JValue::Int(v)]) => Ok(Some(JValue::Int(
+            0xD800 + ((v.wrapping_sub(0x1_0000) >> 10) & 0x3FF),
+        ))),
+        ("lowSurrogate", [JValue::Int(v)]) => Ok(Some(JValue::Int(0xDC00 + (v & 0x3FF)))),
+        ("isSurrogatePair", [JValue::Int(high), JValue::Int(low)]) => {
+            z((0xD800..0xDC00).contains(high) && (0xDC00..0xE000).contains(low))
+        }
+        // Deprecated in Java 1.1 and still there in 11: `isJavaLetter` and
+        // `isJavaLetterOrDigit` are the old spellings of the identifier
+        // predicates below, and `isSpace` is five ASCII characters.
+        ("isSpace", [JValue::Int(v)]) => z(matches!(*v, 0x20 | 0x09 | 0x0A | 0x0C | 0x0D)),
         // These come from the JDK 11 category table rather than from Rust's
         // Unicode data, which is a NEWER version and disagreed on 4761 BMP
         // units. See `crate::unicode`.
@@ -10435,10 +10528,10 @@ fn character_static(
         // a CONNECTING punctuation, two whole categories that start an
         // identifier. Reading the rule as "alphabetic, or one of those two
         // characters" answered wrongly for every other currency sign.
-        ("isJavaIdentifierStart", [JValue::Int(v)]) => {
+        ("isJavaIdentifierStart" | "isJavaLetter", [JValue::Int(v)]) => {
             z(unicode::is_java_identifier_start(point_of(v)))
         }
-        ("isJavaIdentifierPart", [JValue::Int(v)]) => {
+        ("isJavaIdentifierPart" | "isJavaLetterOrDigit", [JValue::Int(v)]) => {
             z(unicode::is_java_identifier_part(point_of(v)))
         }
         ("isUnicodeIdentifierStart", [JValue::Int(v)]) => {
@@ -10463,15 +10556,17 @@ fn character_static(
         {
             Ok(Some(JValue::Int(*v)))
         }
-        ("toTitleCase", [JValue::Int(v)]) => Ok(Some(JValue::Int(i32::from(unicode::title_case(
-            unit_of(v),
-        ))))),
-        ("toUpperCase", [JValue::Int(v)]) => Ok(Some(JValue::Int(i32::from(
-            unicode::simple_upper(unit_of(v)),
-        )))),
-        ("toLowerCase", [JValue::Int(v)]) => Ok(Some(JValue::Int(i32::from(
-            unicode::simple_lower(unit_of(v)),
-        )))),
+        // These take a CODE POINT in their `int` form, and the supplementary
+        // scripts with a case (Deseret and four others) map like any other.
+        ("toTitleCase", [JValue::Int(v)]) => Ok(Some(JValue::Int(
+            i32::try_from(unicode::title_point(point_of(v))).unwrap_or(*v),
+        ))),
+        ("toUpperCase", [JValue::Int(v)]) => Ok(Some(JValue::Int(
+            i32::try_from(unicode::upper_point(point_of(v))).unwrap_or(*v),
+        ))),
+        ("toLowerCase", [JValue::Int(v)]) => Ok(Some(JValue::Int(
+            i32::try_from(unicode::lower_point(point_of(v))).unwrap_or(*v),
+        ))),
         ("getNumericValue", [JValue::Int(v)]) => {
             let c = c_of(v);
             // The Nd decimal value (0..=9) or a Latin letter's 10..=35 —
@@ -10950,7 +11045,7 @@ fn string_static(
         };
         let format_args = crate::format::args_from_descriptor(heap, descriptor, &args[1..])?;
         let text = crate::format::java_format(heap, &template, &format_args)?;
-        let reference = heap.alloc_string(&text);
+        let reference = heap.alloc_string_units(&text);
         return Ok(Some(JValue::Ref(Some(reference))));
     }
     if method == "join" {
@@ -11102,18 +11197,37 @@ fn set_like_elements(heap: &Heap, reference: HeapRef) -> Option<Vec<JValue>> {
     })
 }
 
+/// Trim units from one or both ends of a string, by a predicate over UNITS.
+fn trim_units(units: &[u16], leading: bool, trailing: bool, cut: impl Fn(u16) -> bool) -> &[u16] {
+    let mut start = 0;
+    let mut end = units.len();
+    if leading {
+        while start < end && cut(units[start]) {
+            start += 1;
+        }
+    }
+    if trailing {
+        while end > start && cut(units[end - 1]) {
+            end -= 1;
+        }
+    }
+    &units[start..end]
+}
+
 fn string_join(
     heap: &mut Heap,
     descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
-    let delimiter = match args.first() {
-        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference).unwrap_or_default(),
+    let delimiter: Vec<u16> = match args.first() {
+        Some(JValue::Ref(Some(reference))) => {
+            heap.string_units(*reference).unwrap_or_default().to_vec()
+        }
         Some(JValue::Ref(None)) => {
             // `Objects.requireNonNull(delimiter)` throws bare.
             return Err(throw("java.lang.NullPointerException"));
         }
-        _ => String::new(),
+        _ => Vec::new(),
     };
     let shape = descriptor
         .strip_prefix("(Ljava/lang/String;")
@@ -11141,16 +11255,20 @@ fn string_join(
     } else {
         args.get(1..).unwrap_or(&[]).to_vec()
     };
-    let parts: Vec<String> = elements
-        .iter()
-        .map(|value| match value {
-            JValue::Ref(Some(reference)) => heap
-                .string_text(*reference)
-                .unwrap_or_else(|| String::from("null")),
-            _ => String::from("null"),
-        })
-        .collect();
-    let reference = heap.alloc_string(&parts.join(&delimiter));
+    let mut out: Vec<u16> = Vec::new();
+    for (at, value) in elements.iter().enumerate() {
+        if at > 0 {
+            out.extend_from_slice(&delimiter);
+        }
+        match value {
+            JValue::Ref(Some(reference)) => match heap.string_units(*reference) {
+                Some(units) => out.extend_from_slice(units),
+                None => out.extend("null".encode_utf16()),
+            },
+            _ => out.extend("null".encode_utf16()),
+        }
+    }
+    let reference = heap.alloc_string_units(&out);
     Ok(Some(JValue::Ref(Some(reference))))
 }
 

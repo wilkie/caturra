@@ -92,7 +92,7 @@ impl ConstValue {
             ConstValue::Double(v) => Literal::Double(*v),
             ConstValue::Bool(b) => Literal::Bool(*b),
             ConstValue::Char(c) => Literal::Char(*c),
-            ConstValue::Str(s) => Literal::Str(s.clone()),
+            ConstValue::Str(s) => Literal::Str(s.encode_utf16().collect()),
         }
     }
 }
@@ -249,7 +249,7 @@ fn literal_value(value: &Literal) -> Option<ConstValue> {
         Literal::Double(v) => ConstValue::Double(*v),
         Literal::Bool(b) => ConstValue::Bool(*b),
         Literal::Char(c) => ConstValue::Char(u16::try_from(u32::from(*c)).ok()?),
-        Literal::Str(s) => ConstValue::Str(s.clone()),
+        Literal::Str(s) => ConstValue::Str(String::from_utf16_lossy(s)),
         Literal::Null => return None,
     })
 }

@@ -47068,15 +47068,15 @@ public class Graph {
     }
 
     public static void main(String[] args) {
-        String flagUS = "🇺🇸";
-        String family = "👨‍👩‍👦";
-        String thumbsUp = "👍🏽";
-        String hangul = "각";
-        String devanagari = "क्षि";
+        String flagUS = "\ud83c\uddfa\ud83c\uddf8";
+        String family = "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc66";
+        String thumbsUp = "\ud83d\udc4d\ud83c\udffd";
+        String hangul = "\u1100\u1161\u11a8";
+        String devanagari = "\u0915\u094d\u0937\u093f";
         for (String text : new String[] {
-            "ab", "áb", "é̂", flagUS, flagUS + flagUS, family,
-            thumbsUp, hangul, "각", devanagari, "a\r\nb", "\r\n",
-            "a\nb", "a‍b", "", "x😀y", "กำ",
+            "ab", "a\u0301b", "e\u0301\u0302", flagUS, flagUS + flagUS, family,
+            thumbsUp, hangul, "\uac00\u11a8", devanagari, "a\r\nb", "\r\n",
+            "a\nb", "a\u200db", "", "x\ud83d\ude00y", "\u0e01\u0e33",
         }) {
             probe("\\X", text);
             probe("\\X{2}", text);
@@ -47087,8 +47087,8 @@ public class Graph {
         probe("\\b{x}", "ab");
         probe("\\b{", "ab");
         probe("\\b{g", "ab");
-        probe("\\X+", "ábć");
-        probe("\\X?", "á");
+        probe("\\X+", "a\u0301bc\u0301");
+        probe("\\X?", "a\u0301");
         probe("[\\X]", "aX");
     }
 }
@@ -47148,4 +47148,118 @@ public class Cat {
     }
 }
 "#
+);
+
+// A string is a sequence of UTF-16 CODE UNITS, and every answer about one has
+// to agree even when the text is not all in the Basic Multilingual Plane.
+differential_test!(
+    a_string_of_code_units,
+    "Sup",
+    r##"
+import java.util.Arrays;
+import java.util.stream.Collectors;
+
+/** Every String-shaped answer, asked of text that is not all BMP. */
+public class Sup {
+    static String show(String s) {
+        if (s == null) {
+            return "null";
+        }
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x20 && c < 0x7f) {
+                b.append(c);
+            } else {
+                b.append(String.format("<%04x>", (int) c));
+            }
+        }
+        return b.toString();
+    }
+
+    static void say(String label, Object value) {
+        String text = value instanceof String ? show((String) value) : String.valueOf(value);
+        System.out.println(label + " = " + text);
+    }
+
+    static void surface(String name, String s) {
+        System.out.println("--- " + name + " " + show(s));
+        say("length", s.length());
+        say("codePointCount", s.codePointCount(0, s.length()));
+        say("isEmpty", s.isEmpty());
+        say("toUpperCase", s.toUpperCase());
+        say("toLowerCase", s.toLowerCase());
+        say("trim", s.trim());
+        say("strip", s.strip());
+        say("reverse", new StringBuilder(s).reverse().toString());
+        say("hashCode", s.hashCode());
+        say("chars.count", s.chars().count());
+        say("codePoints.count", s.codePoints().count());
+        say("chars.sum", s.chars().sum());
+        say("codePoints.sum", s.codePoints().sum());
+        say("toCharArray.length", s.toCharArray().length);
+        say("indexOf-a", s.indexOf("a"));
+        say("lastIndexOf-a", s.lastIndexOf("a"));
+        say("contains-a", s.contains("a"));
+        say("repeat2", s.repeat(2));
+        say("concat", s.concat("!"));
+        say("split-empty", Arrays.toString(s.split("")));
+        say("split-a", Arrays.toString(s.split("a")));
+        say("replace-a", s.replace("a", "z"));
+        say("replaceAll-dot", s.replaceAll(".", "#"));
+        say("matches-dot-star", s.matches(".*"));
+        say("compareTo", s.compareTo("a"));
+        say("equalsIgnoreCase", s.equalsIgnoreCase(s.toUpperCase()));
+        say("getBytes.length", s.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        say("format", String.format("[%s][%10s][%.3s]", s, s, s));
+        say("join", String.join("-", s, s));
+        say("lines.count", s.lines().count());
+        say("codePoints.boxed", s.codePoints().boxed().map(Object::toString)
+            .collect(Collectors.joining(",")));
+        for (int i = 0; i < s.length(); i++) {
+            say("charAt" + i, (int) s.charAt(i));
+        }
+        for (int i = 0; i < s.length(); i++) {
+            say("codePointAt" + i, s.codePointAt(i));
+        }
+        for (int i = 1; i <= s.length(); i++) {
+            say("codePointBefore" + i, s.codePointBefore(i));
+        }
+        for (int i = 0; i <= s.length(); i++) {
+            say("substring" + i, s.substring(i));
+        }
+        say("offsetByCodePoints", s.offsetByCodePoints(0, s.codePointCount(0, s.length())));
+    }
+
+    public static void main(String[] args) {
+        surface("emoji", "a\ud83d\ude00b");
+        surface("two", "\ud83d\ude00\ud83d\ude00");
+        surface("deseret", "\ud801\udc00\ud801\udc28");
+        surface("lonehigh", "a\uD83D");
+        surface("lonelow", "\uDE00b");
+        surface("mixed", "a\u00e9\ud83d\ude00\u01c5");
+        // Character's code point half.
+        int cp = 0x1F600;
+        say("charCount", Character.charCount(cp));
+        say("isBmpCodePoint", Character.isBmpCodePoint(cp));
+        say("isSupplementaryCodePoint", Character.isSupplementaryCodePoint(cp));
+        say("isValidCodePoint", Character.isValidCodePoint(cp));
+        say("isValidCodePoint-big", Character.isValidCodePoint(0x110000));
+        say("highSurrogate", (int) Character.highSurrogate(cp));
+        say("lowSurrogate", (int) Character.lowSurrogate(cp));
+        say("isSurrogatePair", Character.isSurrogatePair('\uD83D', '\uDE00'));
+        say("isSurrogatePair-no", Character.isSurrogatePair('a', 'b'));
+        say("toCodePoint", Character.toCodePoint('\uD83D', '\uDE00'));
+        say("toChars.length", Character.toChars(cp).length);
+        say("codePointAt-cs", Character.codePointAt("a\ud83d\ude00b", 1));
+        say("codePointBefore-cs", Character.codePointBefore("a\ud83d\ude00b", 3));
+        say("codePointCount-cs", Character.codePointCount("a\ud83d\ude00b", 0, 4));
+        say("offsetByCodePoints-cs", Character.offsetByCodePoints("a\ud83d\ude00b", 0, 2));
+        say("toString-cp", Character.toString(cp));
+        say("isLetter-sup", Character.isLetter(0x10400));
+        say("toUpperCase-sup", Character.toUpperCase(0x10428));
+        say("getType-sup", Character.getType(0x10400));
+    }
+}
+"##
 );

@@ -38,6 +38,11 @@ pub enum Constant {
         name_index: CpIndex,
         descriptor_index: CpIndex,
     },
+    /// A UTF-8 entry whose value is not text a Rust `String` can hold: a
+    /// string literal is a sequence of `char`, and `"\uD83D"` is a legal one
+    /// whose unpaired surrogate has no Rust spelling. Written as modified
+    /// UTF-8 like any other, and read back the same way.
+    Utf8Units(Vec<u16>),
     /// Placeholder for the second slot of a `Long`/`Double` entry.
     Unusable,
 }
@@ -53,7 +58,7 @@ impl Constant {
     #[must_use]
     pub fn tag(&self) -> u8 {
         match self {
-            Constant::Utf8(_) => 1,
+            Constant::Utf8(_) | Constant::Utf8Units(_) => 1,
             Constant::Integer(_) => 3,
             Constant::Float(_) => 4,
             Constant::Long(_) => 5,
@@ -116,6 +121,16 @@ impl ConstantPool {
     pub fn get_utf8(&self, index: CpIndex) -> Option<&str> {
         match self.get(index)? {
             Constant::Utf8(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The same as UTF-16 units, which is what a string CONSTANT is made of.
+    #[must_use]
+    pub fn get_utf8_units(&self, index: CpIndex) -> Option<Vec<u16>> {
+        match self.get(index)? {
+            Constant::Utf8(s) => Some(s.encode_utf16().collect()),
+            Constant::Utf8Units(units) => Some(units.clone()),
             _ => None,
         }
     }
@@ -198,6 +213,17 @@ impl ConstantPool {
     /// Find an existing UTF-8 entry or insert a new one, returning its index.
     pub fn intern_utf8(&mut self, value: &str) -> CpIndex {
         self.intern(Constant::Utf8(value.to_owned()))
+    }
+
+    /// The same for a value given as UTF-16 units. It becomes an ordinary
+    /// `Utf8` entry whenever the units spell text — so the pool interns a
+    /// literal and a name that read the same to ONE entry — and a `Utf8Units`
+    /// entry only when they do not.
+    pub fn intern_utf8_units(&mut self, units: &[u16]) -> CpIndex {
+        match String::from_utf16(units) {
+            Ok(text) => self.intern(Constant::Utf8(text)),
+            Err(_) => self.intern(Constant::Utf8Units(units.to_vec())),
+        }
     }
 }
 

@@ -16,7 +16,11 @@ pub enum TokenKind {
     LongLiteral(i64),
     FloatLiteral(f32),
     DoubleLiteral(f64),
-    StringLiteral(String),
+    /// A string literal's UTF-16 code UNITS. Not a Rust `String`: a Java
+    /// string is a sequence of `char`, and `"\uD83D"` denotes one no Rust
+    /// `String` can hold — it would become the replacement character, and
+    /// everything downstream would answer about that instead.
+    StringLiteral(Vec<u16>),
     /// The literal's UTF-16 code unit, which may be an unpaired surrogate.
     CharLiteral(u16),
     BooleanLiteral(bool),
@@ -799,13 +803,6 @@ impl Lexer<'_> {
         true
     }
 
-    /// An escape as a `char`, for a STRING literal — whose token is a Rust
-    /// `String`, so an unpaired surrogate there still becomes U+FFFD.
-    fn escape(&mut self, start: SourcePosition) -> Option<char> {
-        let unit = self.escape_unit(start)?;
-        Some(char::from_u32(unit).unwrap_or('\u{FFFD}'))
-    }
-
     /// An escape as its raw code UNIT. A `\uD83D` is a perfectly legal char
     /// literal denoting an unpaired surrogate, and no Rust `char` can hold
     /// one — so a char literal is carried as a number all the way through.
@@ -866,7 +863,7 @@ impl Lexer<'_> {
 
     fn string_literal(&mut self, start: SourcePosition) {
         self.bump();
-        let mut value = String::new();
+        let mut value: Vec<u16> = Vec::new();
         loop {
             match self.peek() {
                 None | Some('\n') => {
@@ -884,11 +881,15 @@ impl Lexer<'_> {
                 }
                 Some('\\') => {
                     self.bump();
-                    if let Some(c) = self.escape(start) {
-                        value.push(c);
+                    if let Some(unit) = self.escape_unit(start) {
+                        value.push(u16::try_from(unit).unwrap_or(u16::MAX));
                     }
                 }
-                Some(_) => value.push(self.bump().expect("peeked")),
+                Some(_) => {
+                    let mut buffer = [0u16; 2];
+                    let encoded = self.bump().expect("peeked").encode_utf16(&mut buffer);
+                    value.extend_from_slice(encoded);
+                }
             }
         }
     }
@@ -967,7 +968,9 @@ mod tests {
         let tokens = kinds(source);
         assert!(tokens.contains(&TokenKind::Keyword(Keyword::Class)));
         assert!(tokens.contains(&TokenKind::Identifier(String::from("println"))));
-        assert!(tokens.contains(&TokenKind::StringLiteral(String::from("Hello, World!"))));
+        assert!(tokens.contains(&TokenKind::StringLiteral(
+            "Hello, World!".encode_utf16().collect()
+        )));
         assert!(tokens.contains(&TokenKind::Symbol("[")));
     }
 

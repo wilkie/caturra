@@ -82,12 +82,10 @@ fn write_constant(out: &mut Vec<u8>, constant: &Constant) {
         return;
     }
     out.push(constant.tag());
+
     match constant {
-        Constant::Utf8(s) => {
-            // TODO: encode "modified UTF-8" (JVMS §4.4.7).
-            out.extend_from_slice(&u16_len(s.len()).to_be_bytes());
-            out.extend_from_slice(s.as_bytes());
-        }
+        Constant::Utf8(s) => write_modified_utf8(out, &s.encode_utf16().collect::<Vec<_>>()),
+        Constant::Utf8Units(units) => write_modified_utf8(out, units),
         Constant::Integer(v) => out.extend_from_slice(&v.to_be_bytes()),
         Constant::Float(v) => out.extend_from_slice(&v.to_bits().to_be_bytes()),
         Constant::Long(v) => out.extend_from_slice(&v.to_be_bytes()),
@@ -131,6 +129,33 @@ fn write_attributes(out: &mut Vec<u8>, attributes: &[AttributeInfo]) {
         );
         out.extend_from_slice(&attribute.info);
     }
+}
+
+/// "Modified UTF-8" (JVMS §4.4.7): like UTF-8, except that U+0000 is written
+/// as two bytes and every code point above the BMP is written as its
+/// SURROGATE PAIR, three bytes each. Encoding the units one at a time gives
+/// both for free — and gives an UNPAIRED surrogate a spelling too, which is
+/// the whole reason a string constant is carried as units.
+fn write_modified_utf8(out: &mut Vec<u8>, units: &[u16]) {
+    let start = out.len();
+    out.extend_from_slice(&[0, 0]);
+    for unit in units {
+        let value = u32::from(*unit);
+        match value {
+            0x0001..=0x007F => out.push(u8::try_from(value).unwrap_or(b'?')),
+            0 | 0x0080..=0x07FF => {
+                out.push(u8::try_from(0xC0 | (value >> 6)).unwrap_or(b'?'));
+                out.push(u8::try_from(0x80 | (value & 0x3F)).unwrap_or(b'?'));
+            }
+            _ => {
+                out.push(u8::try_from(0xE0 | (value >> 12)).unwrap_or(b'?'));
+                out.push(u8::try_from(0x80 | ((value >> 6) & 0x3F)).unwrap_or(b'?'));
+                out.push(u8::try_from(0x80 | (value & 0x3F)).unwrap_or(b'?'));
+            }
+        }
+    }
+    let length = u16_len(out.len() - start - 2);
+    out[start..start + 2].copy_from_slice(&length.to_be_bytes());
 }
 
 #[cfg(test)]

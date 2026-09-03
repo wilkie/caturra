@@ -8892,14 +8892,14 @@ fn const_from_literal(lit: &Literal) -> Option<crate::constfold::ConstValue> {
         Literal::Double(v) => ConstValue::Double(*v),
         Literal::Bool(b) => ConstValue::Bool(*b),
         Literal::Char(c) => ConstValue::Char(u16::try_from(u32::from(*c)).ok()?),
-        Literal::Str(s) => ConstValue::Str(s.clone()),
+        Literal::Str(s) => ConstValue::Str(String::from_utf16_lossy(s)),
         Literal::Null => return None,
     })
 }
 
 fn literal_java_string(lit: &Literal) -> Option<String> {
     Some(match lit {
-        Literal::Str(s) => s.clone(),
+        Literal::Str(s) => String::from_utf16_lossy(s),
         Literal::Int(v) | Literal::Long(v) => v.to_string(),
         // The CHARACTER the unit denotes, not the number. A lone surrogate has
         // no `char` and so no constant string form — folding must not invent
@@ -14484,6 +14484,36 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
     // surrogate pair back to the code point it spells.
     bm("toChars", &[I], BRet::CharArray, "(I)[C"),
     bm("toCodePoint", &[C, C], BRet::Int, "(CC)I"),
+    // The code point half: what is a valid one, which plane it is in, and the
+    // two halves of the pair a supplementary one is written as.
+    bm("isValidCodePoint", &[I], BRet::Boolean, "(I)Z"),
+    bm("isBmpCodePoint", &[I], BRet::Boolean, "(I)Z"),
+    bm("isSupplementaryCodePoint", &[I], BRet::Boolean, "(I)Z"),
+    bm("highSurrogate", &[I], BRet::Char, "(I)C"),
+    bm("lowSurrogate", &[I], BRet::Char, "(I)C"),
+    bm("isSurrogatePair", &[C, C], BRet::Boolean, "(CC)Z"),
+    bm(
+        "codePointAt",
+        &[BParam::CharSeq, I],
+        BRet::Int,
+        "(Ljava/lang/CharSequence;I)I",
+    ),
+    bm(
+        "codePointBefore",
+        &[BParam::CharSeq, I],
+        BRet::Int,
+        "(Ljava/lang/CharSequence;I)I",
+    ),
+    bm(
+        "offsetByCodePoints",
+        &[BParam::CharSeq, I, I],
+        BRet::Int,
+        "(Ljava/lang/CharSequence;II)I",
+    ),
+    // Deprecated in Java 1.1 and still present in 11.
+    bm("isJavaLetter", &[C], BRet::Boolean, "(C)Z"),
+    bm("isJavaLetterOrDigit", &[C], BRet::Boolean, "(C)Z"),
+    bm("isSpace", &[C], BRet::Boolean, "(C)Z"),
 ];
 
 const SHORT_METHODS: &[BuiltinMethod] = &[
@@ -19449,7 +19479,7 @@ impl BodyGen<'_> {
         let arm_labels: Vec<Label> = arms.iter().map(|_| self.code.new_label()).collect();
         let mut default_arm: Option<usize> = None;
         let mut seen_ints: Vec<i64> = Vec::new();
-        let mut seen_strings: Vec<String> = Vec::new();
+        let mut seen_strings: Vec<Vec<u16>> = Vec::new();
 
         // The dispatch chain: one comparison per case label.
         for (index, arm) in arms.iter().enumerate() {
@@ -19497,10 +19527,11 @@ impl BodyGen<'_> {
                         continue;
                     }
                     let const_name = path.join(".");
-                    if seen_strings.iter().any(|s| s == &const_name) {
+                    let const_units: Vec<u16> = const_name.encode_utf16().collect();
+                    if seen_strings.contains(&const_units) {
                         self.error(value.span(), "duplicate case label");
                     }
-                    seen_strings.push(const_name.clone());
+                    seen_strings.push(const_units);
                     self.emit_load(selector_slot, selector_ty);
                     let enum_name = self.table.class_name(enum_id).to_owned();
                     let descriptor = format!("L{enum_name};");
@@ -19531,13 +19562,13 @@ impl BodyGen<'_> {
                         }
                         continue;
                     };
-                    if seen_strings.iter().any(|s| s == &text) {
+                    if seen_strings.contains(&text) {
                         self.error(value.span(), "duplicate case label");
                     }
                     seen_strings.push(text.clone());
                     // selector.equals("text")
                     self.emit_load(selector_slot, selector_ty);
-                    let utf8 = self.pool.intern_utf8(&text);
+                    let utf8 = self.pool.intern_utf8_units(&text);
                     let string_index = self.pool.intern(Constant::String { string_index: utf8 });
                     self.code.push_ldc(string_index);
                     let equals = intern_method_ref(
@@ -22662,7 +22693,7 @@ impl BodyGen<'_> {
                 }
             }
             Literal::Str(s) => {
-                let utf8 = self.pool.intern_utf8(s);
+                let utf8 = self.pool.intern_utf8_units(s);
                 let index = self.pool.intern(Constant::String { string_index: utf8 });
                 self.code.push_ldc(index);
             }
@@ -26887,7 +26918,8 @@ impl BodyGen<'_> {
                     ..
                 },
             ] = args
-            && let Some(simple) = crate::imports::canonical_library_class(name)
+            && let Some(simple) =
+                crate::imports::canonical_library_class(&String::from_utf16_lossy(name))
         {
             return Some(Some(self.class_literal(simple)));
         }
@@ -33214,7 +33246,7 @@ impl BodyGen<'_> {
                 JType::Double
             }
             Literal::Str(value) => {
-                let utf8 = self.pool.intern_utf8(value);
+                let utf8 = self.pool.intern_utf8_units(value);
                 let index = self.pool.intern(Constant::String { string_index: utf8 });
                 self.code.push_ldc(index);
                 JType::Str

@@ -765,7 +765,8 @@ pub enum Literal {
     Long(i64),
     Float(f32),
     Double(f64),
-    Str(String),
+    /// A string literal's UTF-16 code UNITS — see `TokenKind::StringLiteral`.
+    Str(Vec<u16>),
     /// A `char` literal's UTF-16 code UNIT — not a Rust `char`, which cannot
     /// hold the unpaired surrogate `'\uD83D'` legally denotes.
     Char(u16),

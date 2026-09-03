@@ -168,7 +168,7 @@ pub struct FormatArgs {
 /// `printf` to a stream) want [`java_format_partial`] instead, because the
 /// JDK's Formatter appends to its destination one specifier at a time and so
 /// leaves the prefix visible when a later one throws.
-pub fn java_format(heap: &Heap, template: &str, args: &FormatArgs) -> Result<String, VmError> {
+pub fn java_format(heap: &Heap, template: &str, args: &FormatArgs) -> Result<Vec<u16>, VmError> {
     java_format_partial(heap, template, args).1
 }
 
@@ -177,8 +177,8 @@ pub fn java_format_partial(
     heap: &Heap,
     template: &str,
     args: &FormatArgs,
-) -> (String, Result<String, VmError>) {
-    let mut produced = String::new();
+) -> (Vec<u16>, Result<Vec<u16>, VmError>) {
+    let mut produced: Vec<u16> = Vec::new();
     let result = java_format_inner(heap, template, args, &mut produced);
     (produced, result)
 }
@@ -187,8 +187,8 @@ fn java_format_inner(
     heap: &Heap,
     template: &str,
     args: &FormatArgs,
-    produced: &mut String,
-) -> Result<String, VmError> {
+    produced: &mut Vec<u16>,
+) -> Result<Vec<u16>, VmError> {
     let chars: Vec<char> = template.chars().collect();
     // A JDK parses the WHOLE template before it renders any of it — every
     // `FormatSpecifier` validates its own flags as it is constructed — so a
@@ -206,14 +206,16 @@ fn java_format_inner(
         let spec = parse_spec(&chars, &mut scan)?;
         validate_spec(&spec)?;
     }
-    let mut out = String::new();
+    let mut out: Vec<u16> = Vec::new();
     let mut at = 0;
     let mut cursor = ArgCursor::default();
 
     while at < chars.len() {
         if chars[at] != '%' {
-            out.push(chars[at]);
-            produced.push(chars[at]);
+            let mut buffer = [0u16; 2];
+            let encoded = chars[at].encode_utf16(&mut buffer);
+            out.extend_from_slice(encoded);
+            produced.extend_from_slice(encoded);
             at += 1;
             continue;
         }
@@ -221,12 +223,12 @@ fn java_format_inner(
         match spec.conversion {
             '%' => {
                 let text = pad(&spec, "%");
-                out.push_str(&text);
-                produced.push_str(&text);
+                out.extend_from_slice(&text);
+                produced.extend_from_slice(&text);
             }
             'n' => {
-                out.push('\n');
-                produced.push('\n');
+                out.push(0x0A);
+                produced.push(0x0A);
             }
             _ => {
                 let index = cursor.index(&spec)?;
@@ -246,8 +248,8 @@ fn java_format_inner(
                 // before a flag that needs an argument to judge.
                 validate_with_argument(&spec)?;
                 let text = render(heap, &spec, arg)?;
-                out.push_str(&text);
-                produced.push_str(&text);
+                out.extend_from_slice(&text);
+                produced.extend_from_slice(&text);
             }
         }
     }
@@ -716,27 +718,63 @@ fn illegal_format_flags(flags: &str) -> VmError {
 /// The width counts UTF-16 code UNITS, because a JDK's `Formatter` measures
 /// with `CharSequence.length()`. A supplementary code point is two of them, so
 /// counting code points padded `%5s` of an emoji one space too far.
-fn pad(spec: &Spec, body: &str) -> String {
+fn pad(spec: &Spec, body: &str) -> Vec<u16> {
+    pad_units(spec, &units_of(body))
+}
+
+/// The same, over UTF-16 units — which is what a padded body really is, since
+/// a precision can cut a string between the two halves of a surrogate pair
+/// and leave a `char` no Rust `String` can hold.
+fn pad_units(spec: &Spec, body: &[u16]) -> Vec<u16> {
     let width = spec.width.unwrap_or(0);
-    let len = body.encode_utf16().count();
-    if len >= width {
-        return body.to_owned();
+    if body.len() >= width {
+        return body.to_vec();
     }
-    let padding = " ".repeat(width - len);
+    let padding = vec![u16::from(b' '); width - body.len()];
+    let mut out = Vec::with_capacity(width);
     if spec.left_justify {
-        format!("{body}{padding}")
+        out.extend_from_slice(body);
+        out.extend_from_slice(&padding);
     } else {
-        format!("{padding}{body}")
+        out.extend_from_slice(&padding);
+        out.extend_from_slice(body);
     }
+    out
+}
+
+/// A Rust string as the UTF-16 units a Java one is made of.
+fn units_of(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+}
+
+/// A general conversion's body: cut to the precision and uppercased if the
+/// conversion is. Both are in UTF-16 units, which is what a JDK counts —
+/// `String.format("%.3s", "a\ud83d\ude00b")` keeps THREE chars, so it keeps
+/// the whole surrogate pair, and `%.2s` keeps the high half alone.
+fn general_text(text: &str, spec: &Spec, uppercase: bool) -> Vec<u16> {
+    general_units(&units_of(text), spec, uppercase)
+}
+
+fn general_units(units: &[u16], spec: &Spec, uppercase: bool) -> Vec<u16> {
+    let mut out = units.to_vec();
+    if let Some(precision) = spec.precision {
+        out.truncate(precision);
+    }
+    if uppercase {
+        // The JDK 11 tables, not Rust's newer ones — `%S` is
+        // `String.toUpperCase`, and the two disagree on thousands of units.
+        out = crate::unicode::map_case(&out, true);
+    }
+    out
 }
 
 /// Numeric padding: honors `0` (after the sign) unless left-justified.
-fn pad_numeric(spec: &Spec, sign: &str, magnitude: &str) -> String {
+fn pad_numeric(spec: &Spec, sign: &str, magnitude: &str) -> Vec<u16> {
     let width = spec.width.unwrap_or(0);
     let len = sign.chars().count() + magnitude.chars().count();
     if spec.zero_pad && !spec.left_justify && len < width {
         let zeros = "0".repeat(width - len);
-        return format!("{sign}{zeros}{magnitude}");
+        return units_of(&format!("{sign}{zeros}{magnitude}"));
     }
     pad(spec, &format!("{sign}{magnitude}"))
 }
@@ -792,7 +830,7 @@ fn conversion_mismatch(heap: &Heap, conversion: char, arg: FormatArg) -> VmError
 }
 
 #[allow(clippy::too_many_lines)] // one arm per conversion
-fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
+fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<Vec<u16>, VmError> {
     let conversion = spec.conversion;
     // A BOXED wrapper argument formats as its value: the compiler passes the
     // reference through (so a null Boolean can reach `%b` as null, not as an
@@ -804,26 +842,31 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
     // uppercase conversion. This is what lets `%d` and `%x` of null print
     // `null` instead of throwing.
     if matches!(arg, FormatArg::Str(None)) && !matches!(conversion, 'b' | 'B' | 'h' | 'H') {
-        let mut text = String::from("null");
-        if let Some(precision) = spec.precision {
-            text = text.chars().take(precision).collect();
-        }
-        if conversion.is_ascii_uppercase() {
-            text = text.to_uppercase();
-        }
-        return Ok(pad(spec, &text));
+        return Ok(pad_units(
+            spec,
+            &general_text("null", spec, conversion.is_ascii_uppercase()),
+        ));
     }
     match conversion.to_ascii_lowercase() {
         's' => {
-            let mut text = match arg {
+            let text = match arg {
                 // A reference that is not a String was rendered ahead of the
                 // formatter, since only the interpreter can run a user
                 // `toString` — but it is still the OBJECT here, so `%d` in the
                 // same template can name its class.
-                FormatArg::Str(Some(reference)) => heap
-                    .string_text(reference)
-                    .or_else(|| heap.rendered_format_text(reference).map(str::to_owned))
-                    .unwrap_or_default(),
+                FormatArg::Str(Some(reference)) => {
+                    // A string's own UNITS, so a lone surrogate reaches the
+                    // output rather than the replacement character.
+                    if let Some(units) = heap.string_units(reference) {
+                        return Ok(pad_units(
+                            spec,
+                            &general_units(units, spec, conversion == 'S'),
+                        ));
+                    }
+                    heap.rendered_format_text(reference)
+                        .map(str::to_owned)
+                        .unwrap_or_default()
+                }
                 FormatArg::Str(None) => String::from("null"),
                 FormatArg::Int(v) => v.to_string(),
                 FormatArg::Short(v) => v.to_string(),
@@ -831,18 +874,18 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 FormatArg::Long(v) => v.to_string(),
                 FormatArg::Float(v) => crate::intrinsics::java_float_to_string(v),
                 FormatArg::Double(v) => crate::intrinsics::java_double_to_string(v),
-                FormatArg::Char(u) => char::from_u32(u32::from(u))
-                    .unwrap_or('\u{FFFD}')
-                    .to_string(),
+                FormatArg::Char(u) => {
+                    return Ok(pad_units(
+                        spec,
+                        &general_units(&[u], spec, conversion == 'S'),
+                    ));
+                }
                 FormatArg::Boolean(b) => b.to_string(),
             };
-            if let Some(precision) = spec.precision {
-                text = text.chars().take(precision).collect();
-            }
-            if conversion == 'S' {
-                text = text.to_uppercase();
-            }
-            Ok(pad(spec, &text))
+            Ok(pad_units(
+                spec,
+                &general_text(&text, spec, conversion == 'S'),
+            ))
         }
         'b' => {
             let value = match arg {
@@ -851,14 +894,11 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 // Java: any non-null non-Boolean argument is true.
                 _ => true,
             };
-            let mut text = value.to_string();
-            if let Some(precision) = spec.precision {
-                text = text.chars().take(precision).collect();
-            }
-            if conversion == 'B' {
-                text = text.to_uppercase();
-            }
-            Ok(pad(spec, &text))
+            let text = value.to_string();
+            Ok(pad_units(
+                spec,
+                &general_text(&text, spec, conversion == 'B'),
+            ))
         }
         'h' => {
             let hash = match arg {
@@ -963,7 +1003,7 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 let body_len = 2 + magnitude.chars().count();
                 if spec.zero_pad && !spec.left_justify && body_len < width {
                     let zeros = "0".repeat(width - body_len);
-                    return Ok(format!("({zeros}{magnitude})"));
+                    return Ok(units_of(&format!("({zeros}{magnitude})")));
                 }
                 return Ok(pad(spec, &format!("({magnitude})")));
             }
@@ -1208,7 +1248,13 @@ fn pad_hex_fraction(text: &str, precision: usize) -> String {
 /// Width for `%a`: the sign (or `+`/` `) leads, then `0x`, and a zero-pad goes
 /// BETWEEN that prefix and the digits — `%012a` of `0.0` is `0x000000.0p0`,
 /// where padding the whole body would have written `000000x0.0p0`.
-fn pad_hex_float(spec: &Spec, negative: bool, prefix: &str, digits: &str, padded: &str) -> String {
+fn pad_hex_float(
+    spec: &Spec,
+    negative: bool,
+    prefix: &str,
+    digits: &str,
+    padded: &str,
+) -> Vec<u16> {
     let sign = if negative {
         "-"
     } else if spec.plus {
@@ -1227,7 +1273,7 @@ fn pad_hex_float(spec: &Spec, negative: bool, prefix: &str, digits: &str, padded
         let measured = digits.chars().count() + prefix.len();
         if measured < width {
             let zeros = "0".repeat(width - measured);
-            return format!("{sign}{prefix}{zeros}{padded}");
+            return units_of(&format!("{sign}{prefix}{zeros}{padded}"));
         }
     }
     pad(spec, &format!("{sign}{prefix}{padded}"))
@@ -1235,7 +1281,7 @@ fn pad_hex_float(spec: &Spec, negative: bool, prefix: &str, digits: &str, padded
 
 /// Width handling for floats: the body already contains its sign, so
 /// zero-padding must go after it.
-fn pad_sign_aware(spec: &Spec, _negative: bool, body: &str) -> String {
+fn pad_sign_aware(spec: &Spec, _negative: bool, body: &str) -> Vec<u16> {
     // The JDK ignores zero-padding for non-finite values: `%010f` of
     // Infinity is `  Infinity`, not `00Infinity`.
     let non_finite = {
@@ -1250,7 +1296,7 @@ fn pad_sign_aware(spec: &Spec, _negative: bool, body: &str) -> String {
             // A parenthesized negative (`%(08.2f` of -3.5) fills INSIDE the
             // parens: `(003.50)`, not `00(3.50)`.
             if let Some(inner) = body.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
-                return format!("({zeros}{inner})");
+                return units_of(&format!("({zeros}{inner})"));
             }
             let (sign, magnitude) = if let Some(rest) = body.strip_prefix('-') {
                 ("-", rest)
@@ -1259,7 +1305,7 @@ fn pad_sign_aware(spec: &Spec, _negative: bool, body: &str) -> String {
             } else {
                 ("", body)
             };
-            return format!("{sign}{zeros}{magnitude}");
+            return units_of(&format!("{sign}{zeros}{magnitude}"));
         }
     }
     pad(spec, body)

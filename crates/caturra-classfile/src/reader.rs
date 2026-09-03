@@ -137,11 +137,17 @@ fn read_constant_pool(c: &mut Cursor<'_>) -> Result<ConstantPool, ReadError> {
             1 => {
                 let len = usize::from(c.u16()?);
                 let bytes = c.take(len)?;
-                // TODO: decode "modified UTF-8" (JVMS §4.4.7) instead of
-                // assuming standard UTF-8; they differ for NUL and
-                // supplementary characters.
-                let s = std::str::from_utf8(bytes).map_err(|_| ReadError::InvalidUtf8)?;
-                Constant::Utf8(s.to_owned())
+                // "Modified UTF-8" (JVMS §4.4.7), which is not UTF-8: U+0000
+                // is two bytes and everything above the BMP is written as its
+                // surrogate pair. Decoding it as UTF-8 refused a class file
+                // holding either.
+                let units = read_modified_utf8(bytes)?;
+                match String::from_utf16(&units) {
+                    Ok(text) => Constant::Utf8(text),
+                    // An unpaired surrogate, which only a string constant can
+                    // hold and which no Rust `String` can.
+                    Err(_) => Constant::Utf8Units(units),
+                }
             }
             3 => Constant::Integer(c.u32()?.cast_signed()),
             4 => Constant::Float(f32::from_bits(c.u32()?)),
@@ -219,6 +225,41 @@ fn read_attributes(c: &mut Cursor<'_>) -> Result<Vec<AttributeInfo>, ReadError> 
         attributes.push(AttributeInfo { name_index, info });
     }
     Ok(attributes)
+}
+
+/// Decode "modified UTF-8" into UTF-16 units. Every three-byte group is one
+/// unit, so a surrogate pair arrives as the two units it is, and an unpaired
+/// surrogate arrives intact rather than as an error.
+fn read_modified_utf8(bytes: &[u8]) -> Result<Vec<u16>, ReadError> {
+    let mut units: Vec<u16> = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let first = bytes[at];
+        let taken = match first {
+            0x00..=0x7F => {
+                units.push(u16::from(first));
+                1
+            }
+            0xC0..=0xDF => {
+                let second = *bytes.get(at + 1).ok_or(ReadError::InvalidUtf8)?;
+                units.push(((u16::from(first) & 0x1F) << 6) | (u16::from(second) & 0x3F));
+                2
+            }
+            0xE0..=0xEF => {
+                let second = *bytes.get(at + 1).ok_or(ReadError::InvalidUtf8)?;
+                let third = *bytes.get(at + 2).ok_or(ReadError::InvalidUtf8)?;
+                units.push(
+                    ((u16::from(first) & 0x0F) << 12)
+                        | ((u16::from(second) & 0x3F) << 6)
+                        | (u16::from(third) & 0x3F),
+                );
+                3
+            }
+            _ => return Err(ReadError::InvalidUtf8),
+        };
+        at += taken;
+    }
+    Ok(units)
 }
 
 #[cfg(test)]

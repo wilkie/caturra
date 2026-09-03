@@ -8668,6 +8668,105 @@ pub fn full_upper(unit: u16) -> Vec<u16> {
     }
 }
 
+/// The case mappings ABOVE the BMP, as (first, last, delta) runs — Deseret,
+/// Osage, Warang Citi, Adlam and Medefaidrin, which are the only supplementary
+/// scripts with a case at all. Recorded from a real JDK 11.
+static SUPPLEMENTARY_UPPER: &[(u32, u32, i32)] = &[
+    (0x10428, 0x1044F, -40),
+    (0x104D8, 0x104FB, -40),
+    (0x10CC0, 0x10CF2, -64),
+    (0x118C0, 0x118DF, -32),
+    (0x1E922, 0x1E943, -34),
+];
+
+static SUPPLEMENTARY_LOWER: &[(u32, u32, i32)] = &[
+    (0x10400, 0x10427, 40),
+    (0x104B0, 0x104D3, 40),
+    (0x10C80, 0x10CB2, 64),
+    (0x118A0, 0x118BF, 32),
+    (0x1E900, 0x1E921, 34),
+];
+
+static SUPPLEMENTARY_TITLE: &[(u32, u32, i32)] = &[
+    (0x10428, 0x1044F, -40),
+    (0x104D8, 0x104FB, -40),
+    (0x10CC0, 0x10CF2, -64),
+    (0x118C0, 0x118DF, -32),
+    (0x1E922, 0x1E943, -34),
+];
+
+fn shifted(table: &[(u32, u32, i32)], point: u32) -> u32 {
+    for (first, last, delta) in table {
+        if (*first..=*last).contains(&point) {
+            return point.wrapping_add_signed(*delta);
+        }
+    }
+    point
+}
+
+/// `Character.toUpperCase(int)` — a CODE POINT, so the supplementary scripts
+/// that have a case are mapped rather than passed through.
+#[must_use]
+pub fn upper_point(point: u32) -> u32 {
+    match u16::try_from(point) {
+        Ok(unit) => u32::from(simple_upper(unit)),
+        Err(_) => shifted(SUPPLEMENTARY_UPPER, point),
+    }
+}
+
+/// `Character.toLowerCase(int)`.
+#[must_use]
+pub fn lower_point(point: u32) -> u32 {
+    match u16::try_from(point) {
+        Ok(unit) => u32::from(simple_lower(unit)),
+        Err(_) => shifted(SUPPLEMENTARY_LOWER, point),
+    }
+}
+
+/// `Character.toTitleCase(int)`.
+#[must_use]
+pub fn title_point(point: u32) -> u32 {
+    match u16::try_from(point) {
+        Ok(unit) => u32::from(title_case(unit)),
+        Err(_) => shifted(SUPPLEMENTARY_TITLE, point),
+    }
+}
+
+/// A whole string's worth of units, cased the way `String.toUpperCase` and
+/// `String.toLowerCase` do: by CODE POINT, so a surrogate pair is mapped as
+/// the character it spells and an unpaired one passes through untouched.
+#[must_use]
+pub fn map_case(units: &[u16], upper: bool) -> Vec<u16> {
+    let mut out: Vec<u16> = Vec::with_capacity(units.len());
+    let mut at = 0;
+    while at < units.len() {
+        let high = units[at];
+        if (0xD800..0xDC00).contains(&high)
+            && let Some(&low) = units.get(at + 1)
+            && (0xDC00..0xE000).contains(&low)
+        {
+            let point = 0x1_0000 + ((u32::from(high) - 0xD800) << 10) + (u32::from(low) - 0xDC00);
+            let mapped = if upper {
+                upper_point(point)
+            } else {
+                lower_point(point)
+            };
+            let above = mapped - 0x1_0000;
+            out.push(u16::try_from(0xD800 + (above >> 10)).unwrap_or(high));
+            out.push(u16::try_from(0xDC00 + (above & 0x3FF)).unwrap_or(low));
+            at += 2;
+            continue;
+        }
+        out.extend(if upper {
+            full_upper(high)
+        } else {
+            full_lower(high)
+        });
+        at += 1;
+    }
+    out
+}
+
 /// One unit lowercased the way `String.toLowerCase` does.
 #[must_use]
 pub fn full_lower(unit: u16) -> Vec<u16> {

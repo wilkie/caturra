@@ -898,7 +898,9 @@ impl Parser<'_> {
         if self.at_symbol("(") {
             match self.peek_at(1) {
                 Some(TokenKind::IntLiteral(value)) => int_arg = i32::try_from(*value).ok(),
-                Some(TokenKind::StringLiteral(text)) => str_arg = Some(text.clone()),
+                Some(TokenKind::StringLiteral(text)) => {
+                    str_arg = Some(String::from_utf16_lossy(text));
+                }
                 _ => {}
             }
             let mut depth = 0usize;
@@ -2911,7 +2913,7 @@ impl Parser<'_> {
             let concat = Expr::Binary {
                 op: BinaryOp::Add,
                 lhs: Box::new(Expr::Literal {
-                    value: Literal::Str(String::new()),
+                    value: Literal::Str(Vec::new()),
                     span,
                 }),
                 rhs: Box::new(message),
@@ -4768,7 +4770,7 @@ fn desugar_enum(
         span: zero,
     };
     let lit_str = |s: &str| Expr::Literal {
-        value: Literal::Str(String::from(s)),
+        value: Literal::Str(s.encode_utf16().collect()),
         span: zero,
     };
     let var = |n: &str| Expr::Name {
@@ -5336,9 +5338,9 @@ fn replace_string_literal(stmt: &mut Stmt, from: &str, to: &str) {
                 value: Literal::Str(text),
                 ..
             } = lhs.as_mut()
-            && text == from
+            && String::from_utf16_lossy(text) == from
         {
-            *text = String::from(to);
+            *text = to.encode_utf16().collect();
         }
     }
 }
