@@ -48382,3 +48382,203 @@ differential_reject!(
     "RejInfer",
     "import java.util.*;\npublic class RejInfer {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  public static void main(String[] args) { Map<String, Integer> m = new HashMap<>(); Map<String, Number> w = m; System.out.println(\"no\"); }\n}"
 );
+
+differential_test!(
+    a_generic_methods_variable_comes_from_the_target,
+    "Inferring",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/** A generic METHOD's type variable, pinned by the target rather than by what
+ * the call was handed. */
+public class Inferring {
+    interface Shape { }
+
+    static class Circle implements Shape {
+        public String toString() {
+            return "circle";
+        }
+    }
+
+    static class Square implements Shape {
+        public String toString() {
+            return "square";
+        }
+    }
+
+    static class Box<T> {
+        T held;
+
+        Box(T held) {
+            this.held = held;
+        }
+
+        T get() {
+            return held;
+        }
+
+        public String toString() {
+            return "Box(" + held + ")";
+        }
+    }
+
+    static class Holder {
+        <T> Box<T> make(T value) {
+            return new Box<>(value);
+        }
+    }
+
+    static <T> Box<T> boxed(T value) {
+        return new Box<>(value);
+    }
+
+    static <T> List<T> listOf(T first, T second) {
+        return new ArrayList<>(Arrays.asList(first, second));
+    }
+
+    static <T> List<T> none() {
+        return new ArrayList<>();
+    }
+
+    static <T> T firstOf(List<T> values) {
+        return values.get(0);
+    }
+
+    static <K, V> Map<K, V> pairOf(K key, V value) {
+        Map<K, V> out = new HashMap<>();
+        out.put(key, value);
+        return out;
+    }
+
+    static <T> Optional<T> maybe(T value) {
+        return Optional.of(value);
+    }
+
+    @SafeVarargs
+    static <T> List<T> allOf(T... values) {
+        return new ArrayList<>(Arrays.asList(values));
+    }
+
+    static <T extends Number> Box<T> numeric(T value) {
+        return new Box<>(value);
+    }
+
+    static <T extends Comparable<T>> T biggest(List<T> values) {
+        T best = values.get(0);
+        for (T one : values) {
+            if (one.compareTo(best) > 0) {
+                best = one;
+            }
+        }
+        return best;
+    }
+
+    static Box<Number> field = boxed(1);
+
+    static List<Shape> answers() {
+        return listOf(new Circle(), new Square());
+    }
+
+    static void takesShapes(List<Shape> shapes) {
+        System.out.println("shapes " + shapes);
+    }
+
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // The ARGUMENT still pins it when nothing wider is asked for.
+        Box<Integer> exact = boxed(1);
+        List<Integer> exactList = listOf(1, 2);
+        System.out.println(exact.get() + 1);
+        System.out.println(exactList.get(0) + 1);
+
+        // ...and the TARGET pins it when something wider is.
+        Box<Number> wide = boxed(1);
+        Box<Shape> shaped = boxed(new Circle());
+        List<Number> wideList = listOf(1, 2);
+        List<Shape> shapes = listOf(new Circle(), new Square());
+        Map<String, Number> pair = pairOf("k", 1);
+        Optional<Number> optional = maybe(1);
+        List<Number> varargs = allOf(1, 2, 3);
+        Box<Number> bounded = numeric(1);
+        Box<Number> instanceMethod = new Holder().make(1);
+        System.out.println(wide.get().intValue() + " " + shaped + " " + wideList + " " + shapes
+            + " " + pair + " " + optional + " " + varargs + " " + bounded
+            + " " + instanceMethod.get().doubleValue());
+
+        // Every position, and the ones a variable cannot reach.
+        System.out.println(field + " " + answers());
+        takesShapes(listOf(new Circle(), new Square()));
+        takesShapes(allOf(new Circle()));
+        Box<Number> assigned;
+        assigned = boxed(1);
+        Box<Number> conditional = args.length == 0 ? boxed(1) : boxed(2.5);
+        Box<Number>[] holder = new Box[1];
+        holder[0] = boxed(1);
+        System.out.println(assigned + " " + conditional + " " + holder[0]);
+
+        // A method with no argument at all: only the target can say.
+        List<String> emptyStrings = none();
+        emptyStrings.add("x");
+        List<Number> emptyNumbers = none();
+        emptyNumbers.add(1);
+        System.out.println(emptyStrings + " " + emptyNumbers);
+
+        // Reading back, and the bound.
+        probe("read", () -> firstOf(listOf("a", "b")).length());
+        probe("read wide", () -> firstOf(listOf(1, 2)).intValue());
+        probe("bound", () -> biggest(new ArrayList<>(List.of(3, 1, 2))));
+        probe("bound strings", () -> biggest(new ArrayList<>(List.of("b", "a"))));
+        probe("witness", () -> Inferring.<Number>boxed(1).get().doubleValue());
+        probe("chained", () -> boxed(boxed("x")).get().get().length());
+        probe("write through", () -> {
+            List<Shape> made = listOf(new Circle(), new Square());
+            made.add(new Circle());
+            return made;
+        });
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_concrete_return_to_wider,
+    "RejGeneric",
+    "import java.util.*;\npublic class RejGeneric {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  static <T> Box<T> boxed(T v) { return new Box<>(v); }\n  static <T> List<T> listOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }\n  static Box<Integer> intBox() { return new Box<>(1); }\n  static List<Integer> ints() { return new ArrayList<>(); }\n  public static void main(String[] args) { Box<Number> b = intBox(); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_concrete_list_to_wider,
+    "RejGeneric",
+    "import java.util.*;\npublic class RejGeneric {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  static <T> Box<T> boxed(T v) { return new Box<>(v); }\n  static <T> List<T> listOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }\n  static Box<Integer> intBox() { return new Box<>(1); }\n  static List<Integer> ints() { return new ArrayList<>(); }\n  public static void main(String[] args) { List<Number> l = ints(); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_generic_wrong_target,
+    "RejGeneric",
+    "import java.util.*;\npublic class RejGeneric {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  static <T> Box<T> boxed(T v) { return new Box<>(v); }\n  static <T> List<T> listOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }\n  static Box<Integer> intBox() { return new Box<>(1); }\n  static List<Integer> ints() { return new ArrayList<>(); }\n  public static void main(String[] args) { Box<String> b = boxed(1); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_generic_list_wrong_target,
+    "RejGeneric",
+    "import java.util.*;\npublic class RejGeneric {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  static <T> Box<T> boxed(T v) { return new Box<>(v); }\n  static <T> List<T> listOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }\n  static Box<Integer> intBox() { return new Box<>(1); }\n  static List<Integer> ints() { return new ArrayList<>(); }\n  public static void main(String[] args) { List<String> l = listOf(1, 2); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_mixed_conditional_branches,
+    "RejGeneric",
+    "import java.util.*;\npublic class RejGeneric {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  static <T> Box<T> boxed(T v) { return new Box<>(v); }\n  static <T> List<T> listOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }\n  static Box<Integer> intBox() { return new Box<>(1); }\n  static List<Integer> ints() { return new ArrayList<>(); }\n  public static void main(String[] args) { Box<Number> b = args.length == 0 ? boxed(1) : intBox(); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_held_generic_result,
+    "RejGeneric",
+    "import java.util.*;\npublic class RejGeneric {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  static <T> Box<T> boxed(T v) { return new Box<>(v); }\n  static <T> List<T> listOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }\n  static Box<Integer> intBox() { return new Box<>(1); }\n  static List<Integer> ints() { return new ArrayList<>(); }\n  public static void main(String[] args) { Box<Integer> a = boxed(1); Box<Number> b = a; System.out.println(\"no\"); }\n}"
+);

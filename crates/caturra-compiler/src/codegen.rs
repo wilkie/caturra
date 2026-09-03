@@ -306,6 +306,7 @@ fn emit_clinit(
     let mut body = BodyGen {
         receiver_location: None,
         void_target: None,
+        last_call_inferred: false,
         in_lambda_result: false,
         call_witness: None,
         void_receiver: false,
@@ -9482,6 +9483,7 @@ fn emit_method(
     let mut body = BodyGen {
         receiver_location: None,
         void_target: None,
+        last_call_inferred: false,
         in_lambda_result: false,
         call_witness: None,
         void_receiver: false,
@@ -19634,6 +19636,11 @@ struct BodyGen<'a> {
     /// ARGUMENTS are evaluated — an argument is a different position, and
     /// javac words it differently.
     void_target: Option<JType>,
+    /// Set by the call just EMITTED when its return was inferred — the mark a
+    /// generic method leaves. `expr_toward` reads it immediately after, which
+    /// is the only place that can then take the type argument from the target
+    /// instead of from the arguments (JLS 18.5.2).
+    last_call_inferred: bool,
     /// The explicit type WITNESS of the call being emitted
     /// (`Optional.<String>empty()`), for the factories whose result type has
     /// nothing else to read: with no argument and no assignment context, the
@@ -21888,6 +21895,9 @@ impl BodyGen<'_> {
                         );
                     }
                 } else {
+                    // The mark belongs to this initializer, not to whatever
+                    // was emitted before it.
+                    self.last_call_inferred = false;
                     let init_ty = self.expr_assigned_to(init, var_ty);
                     // A DIAMOND takes its type argument from the target, not
                     // from what it copies (JLS §15.9.1: it is a poly
@@ -21980,7 +21990,27 @@ impl BodyGen<'_> {
         actual
     }
 
+    /// [`inferred_return`], remembering that this call's return WAS inferred —
+    /// so the reader immediately after can take the type argument from the
+    /// target instead. Used only where a call is emitted; `type_of` peeks, and
+    /// a peek must not move the mark.
+    fn emitted_return(&mut self, sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
+        self.last_call_inferred = sig.ret_infer.is_some();
+        inferred_return(sig, arg_types, self.table)
+    }
+
+    /// The same, on the PEEK path. A conditional's branches are only ever
+    /// peeked at, so without this a `flag ? boxed(1) : boxed(2.5)` had no way
+    /// to say that both halves are poly.
+    fn peeked_return(&mut self, sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
+        self.last_call_inferred = sig.ret_infer.is_some();
+        inferred_return(sig, arg_types, self.table)
+    }
+
     fn expr_toward(&mut self, expr: &Expr, target: JType) -> JType {
+        // The mark belongs to the expression about to be emitted, not to
+        // whatever came before it.
+        self.last_call_inferred = false;
         let actual = self.expr(expr);
         if self.ternary_adopts_target(expr, actual, target)
             || self.poly_adopts_target(expr, actual, target)
@@ -22004,7 +22034,13 @@ impl BodyGen<'_> {
     /// list held in a VARIABLE is not fresh, and `List<Shape> s = circles;`
     /// stays the error javac calls it.
     fn poly_adopts_target(&mut self, init: &Expr, init_ty: JType, target: JType) -> bool {
-        mints_a_collection(init) && self.elements_widen(init_ty, target)
+        // A generic METHOD is the other poly form. Nothing about it is fresh —
+        // `<T> Box<T> shared()` could hand back the same box every time — but
+        // javac does not ask: it infers `T` from the target and then checks the
+        // ARGUMENTS against it, which is what the element test does here.
+        let poly = mints_a_collection(init)
+            || (self.last_call_inferred && matches!(init, Expr::Call { .. }));
+        poly && self.elements_widen(init_ty, target)
     }
 
     /// Whether a CONDITIONAL takes its type from the target instead of from
@@ -22039,13 +22075,15 @@ impl BodyGen<'_> {
     /// recursion the inner conditional's own join was asked instead, and that
     /// is the one type the intersection had to give up.
     fn branch_reaches(&mut self, branch: &Expr, target: JType) -> bool {
+        self.last_call_inferred = false;
         let ty = self.type_of(branch);
         if ty == JType::Null || widens(ty, target, self.table) {
             return true;
         }
-        // A branch that MINTS a collection reaches the target the same way an
-        // initializer does: its type argument is the target's.
-        if mints_a_collection(branch) && self.elements_widen(ty, target) {
+        // A branch that MINTS a collection — or calls a generic method —
+        // reaches the target the same way an initializer does: its type
+        // argument is the target's.
+        if self.poly_adopts_target(branch, ty, target) {
             return true;
         }
         match branch {
@@ -28436,7 +28474,7 @@ impl BodyGen<'_> {
             self.code
                 .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
             self.code.drop_stack(args_width);
-            return Some(inferred_return(&sig, &arg_types, self.table));
+            return Some(self.emitted_return(&sig, &arg_types));
         }
 
         let args_width = self.emit_call_args(args, &sig, span);
@@ -28455,7 +28493,7 @@ impl BodyGen<'_> {
         };
         self.code.push_op_u16(opcode, method_ref, ret_width);
         self.code.drop_stack(1 + args_width);
-        Some(inferred_return(&sig, &arg_types, self.table))
+        Some(self.emitted_return(&sig, &arg_types))
     }
 
     /// Coerce a value on the stack into a `String` for printing or
@@ -30106,7 +30144,7 @@ impl BodyGen<'_> {
         self.code.drop_stack(args_width);
         // A generic method's erased return recovers its type argument from the
         // arguments (`<T> T max(T, T)`); a non-generic one is unchanged.
-        Some(inferred_return(&sig, &arg_types, self.table))
+        Some(self.emitted_return(&sig, &arg_types))
     }
 
     /// `Optional.of(x)` / `Optional.ofNullable(x)` / `Optional.empty()`. The VM
@@ -32874,7 +32912,7 @@ impl BodyGen<'_> {
                                 // typed fine, and the same call CHAINED into
                                 // `.get()` answered an Object.
                                 Resolution::Found(sig) => {
-                                    match inferred_return(sig, &arg_types, self.table) {
+                                    match self.peeked_return(sig, &arg_types) {
                                         // Must agree with `substitute_type_var`,
                                         // down to WHICH parameter this is: a
                                         // `Pair<String, Integer>.getValue()`
@@ -33274,8 +33312,7 @@ impl BodyGen<'_> {
                         if let Resolution::Found(sig) =
                             self.table.resolve(&enc_name, method, &arg_types)
                         {
-                            return inferred_return(sig, &arg_types, self.table)
-                                .unwrap_or(JType::Error);
+                            return self.peeked_return(sig, &arg_types).unwrap_or(JType::Error);
                         }
                     }
                     // ...and the lexical chain, which is the only route to an
@@ -33286,8 +33323,7 @@ impl BodyGen<'_> {
                         if let Resolution::Found(sig) =
                             self.table.resolve(&enc_name, method, &arg_types)
                         {
-                            return inferred_return(sig, &arg_types, self.table)
-                                .unwrap_or(JType::Error);
+                            return self.peeked_return(sig, &arg_types).unwrap_or(JType::Error);
                         }
                     }
                 }
@@ -33298,8 +33334,7 @@ impl BodyGen<'_> {
                     // enclosing overload resolution saw `Object` and silently
                     // picked `p(Object)` where javac picks `p(Integer)`.
                     Resolution::Found(sig) => {
-                        let ret =
-                            inferred_return(sig, &arg_types, self.table).unwrap_or(JType::Error);
+                        let ret = self.peeked_return(sig, &arg_types).unwrap_or(JType::Error);
                         // The same substitution the emit path makes: a
                         // subclass that FIXED a generic supertype's argument
                         // (`class IntBox extends Box<Integer>`) reads an
@@ -33989,7 +34024,7 @@ impl BodyGen<'_> {
             self.code
                 .push_op_u16(op::INVOKESPECIAL, method_ref, ret_width);
             self.code.drop_stack(1 + args_width);
-            return Some(inferred_return(&sig, &arg_types, self.table));
+            return Some(self.emitted_return(&sig, &arg_types));
         }
         let current = self.table.class_name(self.current_class_id).to_owned();
         let Some(superclass) = self.table.info(&current).and_then(|c| c.superclass) else {
@@ -34079,7 +34114,7 @@ impl BodyGen<'_> {
         self.code
             .push_op_u16(op::INVOKESPECIAL, method_ref, ret_width);
         self.code.drop_stack(1 + args_width);
-        Some(inferred_return(&sig, &arg_types, self.table))
+        Some(self.emitted_return(&sig, &arg_types))
     }
 
     /// Field access on a value: only `.length` on arrays exists so far.

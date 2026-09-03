@@ -68,6 +68,11 @@ EXPRS = [
  ("wideOptional", 'Optional<Number> w = Optional.of(1);', 'w.get().doubleValue()'),
  ("wideCollected", 'List<Number> w = Stream.of(1, 2).collect(Collectors.toList());',
   'w.size() + w.get(1).intValue()'),
+ # A generic METHOD's variable comes from the target too, and one written with
+ # no argument at all has nowhere else to get it.
+ ("genericWide", 'List<Number> w = pairOf(1, 2.5);', 'w.get(0).intValue() + w.size()'),
+ ("genericEmpty", 'List<Number> w = none(); w.add(3);', 'w.get(0).intValue()'),
+ ("genericExact", '', 'pairOf("a", "b").get(0).length()'),
 ]
 
 POSITIONS = {
@@ -97,6 +102,8 @@ HELPERS = """    static class Node<T> {
         static <T> Box<T> of(T v) { return new Box<>(v); }
     }
     static void take(Object o) { System.out.println(o); }
+    static <T> List<T> pairOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }
+    static <T> List<T> none() { return new ArrayList<>(); }
 """
 
 out_dir = "cases"

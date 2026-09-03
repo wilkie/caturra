@@ -13338,3 +13338,37 @@ which is the safe direction.
 Pinned as `a_factorys_argument_comes_from_the_target`, with eight refusals
 beside it — five wrong arguments to a factory, and three collections held in a
 variable, which is what keeps the rule from being unsound.
+
+## A generic method's variable comes from the target too
+
+The factory rule stopped at the LIBRARY factories and the diamond. A program's
+own generic method is the same poly expression (JLS §18.5.2), and thirty-five
+shapes of one against a JDK found nine that disagreed — every one of them the
+target asking for something wider than the call was handed:
+`Box<Number> b = boxed(1);`, `List<Shape> l = listOf(new Circle(), new
+Square());`, `Map<String, Number> m = pairOf("k", 1);`, and the same call in a
+field, an array element and a conditional.
+
+What tells a generic call from an ordinary one is already recorded: a method
+whose return is an inferable type variable carries a plan for reading it off
+the arguments, and a method without one carries `None`. The call now leaves a
+MARK saying which it was, and the reader immediately after — the same one that
+handles a diamond and a factory — takes the type argument from the target when
+it does. The peek path leaves the mark too, since a conditional's branches are
+only ever peeked at.
+
+The freshness argument that carries the factory rule is not needed here, and
+would be wrong: `<T> Box<T> shared()` may hand back the same box every time.
+javac does not ask. It infers `T` from the target and then checks the ARGUMENTS
+against it, which is what the element test does — so `Box<String> b = boxed(1);`
+is still the error javac calls it, and a method that returns a concrete
+`Box<Integer>` still cannot fill a `Box<Number>`.
+
+One limit remains, the same one the factory unit left: inference does not
+recurse, so `List<List<Number>> l = listOf(List.of(1), List.of(2));` is refused.
+Reaching a level down needs to know that the inner call is poly as well, and
+the safe answer is the refusal.
+
+Pinned as `a_generic_methods_variable_comes_from_the_target`, with six refusals
+beside it — a concrete return, an argument the target contradicts, one poly
+branch of a conditional and one not, and a result already held in a variable.
