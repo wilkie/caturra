@@ -13081,3 +13081,43 @@ duration". And `Duration.toHoursPart` is the hours WITHIN the day, not the
 whole span, which `toHours` is.
 
 Pinned as `adjusting_a_date` — 601 answers.
+
+## Every date-time conversion
+
+`String.format`'s third family. `%tY`, `%tB`, `%tR` and their twenty-eight
+relatives take a moment and print one piece of it, and caturra refused every
+one of them — with a comment saying it had "no Date, Calendar or java.time",
+which stopped being true four units ago.
+
+A `java.time` value answers every conversion whose FIELD it has, which is the
+same question `getLong(field)` asks, so the two share one reader. The rest
+falls out of that:
+
+- A `LocalDate` has no hour, so `%tH` of one is
+  `IllegalFormatConversionException: H != java.time.LocalDate`. For a
+  COMPOSITE the letter named is the piece it stopped on, not the composite's
+  own: `%tR` over a date reports `H`, and `%tc` over a date-time reports `Z` —
+  the zone name, which a local value does not have. That is not a choice; a
+  JDK builds a composite by recursion and catches the failure one frame in.
+- `%tY`, `%ty` and `%tC` read the year of the ERA, so 45 BCE prints as `0045`,
+  and `%tF` — which is `%tY-%tm-%td` — prints `0045-03-15`.
+- `%T` uppercases the whole rendering, which only the NAME conversions notice,
+  and it uppercases the suffix in its own error text too: `%-Tp` writes itself
+  as `%-TP`.
+- A `Duration` and a `Period` are not moments at all, so they never reach the
+  printer — and a composite over one names its OWN letter, where a `Month`
+  (which IS one field of a moment) names the piece.
+
+The validation order is its own rule again, as it was for the other families:
+a PRECISION is the first complaint — a date-time conversion has none — then
+the flags in the JDK's order (`#`, `+`, space, `0`, `,`, `(`), then a lone `-`
+without a width.
+
+Still refused, and now for a stated reason: `%t` over a `long`. That means
+milliseconds read in the DEFAULT TIME ZONE, and this engine vendors no time
+zone database — the same reason `LocalDate.now()` is not compared against a
+JDK either.
+
+Pinned as `every_date_time_conversion` — 839 answers — and swept by
+`scripts/fuzz/format.py`, which pairs a date-time conversion only with a
+`java.time` value for exactly that reason.

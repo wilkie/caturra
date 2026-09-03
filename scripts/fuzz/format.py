@@ -15,11 +15,17 @@ so a wrong ANSWER and a wrong REFUSAL are both caught.
 """
 
 import argparse
+import re
 import os
 import random
 import sys
 
-CONVERSIONS = list("bBsScCdoxXeEfgGhH%n")
+CONVERSIONS = list("bBsScCdoxXeEfgGhH%n") + [
+    # The DATE-TIME conversions are two characters, and which of the two a
+    # failure names is its own rule.
+    "t" + suffix
+    for suffix in "HIklMSLNpzZsQBbhAaCYyjmdeRTrDFc"
+] + ["T" + suffix for suffix in "HMSpBbAaYymdRTrDFc"]
 FLAGS = ["", "", "", "-", "+", "0", ",", "(", " ", "#", "-,", "+0", ",(", "0,"]
 WIDTHS = ["", "", "", "1", "3", "8", "12", "20"]
 PRECISIONS = ["", "", "", ".0", ".1", ".3", ".8"]
@@ -37,7 +43,34 @@ ARGUMENTS = [
     # between runs of the same JDK — a value the reference cannot reproduce
     # compares nothing.
     "java.util.List.of(1, 2)",
+    # The `java.time` values a date-time conversion takes — and the two
+    # AMOUNTS, which it does not.
+    "java.time.LocalDate.of(2024, 2, 29)",
+    "java.time.LocalTime.of(13, 45, 30, 123456789)",
+    "java.time.LocalDateTime.of(2024, 2, 29, 0, 5, 9)",
+    "java.time.LocalDate.of(-44, 3, 15)",
+    "java.time.Duration.ofHours(2)",
+    "java.time.Period.ofDays(3)",
 ]
+
+# What a date-time conversion may be handed: the `java.time` values, and the
+# other types it must REFUSE — but never a number, which would be a question
+# about the host's time zone.
+TEMPORAL = [
+    "java.time.LocalDate.of(2024, 2, 29)",
+    "java.time.LocalTime.of(13, 45, 30, 123456789)",
+    "java.time.LocalDateTime.of(2024, 2, 29, 0, 5, 9)",
+    "java.time.LocalDate.of(-44, 3, 15)",
+    "java.time.Duration.ofHours(2)",
+    "java.time.Period.ofDays(3)",
+    '"text"',
+    "null",
+    "true",
+]
+# NOT `Month.MAY` or `DayOfWeek.FRIDAY`: an ENUM's `hashCode` is its identity
+# hash, so a `%h` of one differs between two runs of the same JDK — the same
+# noise class as an array's `toString`. The construct table pin covers what
+# they answer for every date-time conversion.
 
 
 def specifier(rng):
@@ -76,7 +109,15 @@ def program(rng, index, count):
         # missing argument and a spare one are both worth comparing.
         wanted = shape.count("%") - shape.count("%%") - shape.count("%n")
         wanted = max(0, wanted + rng.choice([0, 0, 0, -1, 1]))
-        args = ", ".join(rng.choice(ARGUMENTS) for _ in range(wanted))
+        # A DATE-TIME conversion is only ever handed a `java.time` value.
+        # Over a `long` it means milliseconds read in the DEFAULT TIME ZONE,
+        # and the CLI host answers UTC where a JDK answers its own — the same
+        # reason `LocalDate.now()` is not compared either.
+        # (The flags, width and precision sit BETWEEN the `%` and the `t`,
+        # so looking for the two characters side by side misses most of them.)
+        dated = re.search(r"%[-+ 0,(#<0-9.$]*[tT]", shape) is not None
+        pool = TEMPORAL if dated else ARGUMENTS
+        args = ", ".join(rng.choice(pool) for _ in range(wanted))
         probes.append((shape, args))
     lines = "\n".join(
         f'        probe("{java_literal(shape)}"{", " + args if args else ""});'

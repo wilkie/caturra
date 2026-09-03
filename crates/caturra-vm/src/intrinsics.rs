@@ -1544,6 +1544,13 @@ fn unsupported_field(field: u8) -> VmError {
     ))
 }
 
+/// One field of a `java.time` value, for the formatter — `None` where the
+/// value does not have it, which is what a date-time conversion reports.
+#[must_use]
+pub(crate) fn temporal_field(value: Temporal, field: u8) -> Option<i64> {
+    field_value(value, field).ok()
+}
+
 /// One field's value. This is the whole of `getLong(field)`, and everything
 /// else that reads a field goes through it.
 #[allow(clippy::too_many_lines)] // one arm per field

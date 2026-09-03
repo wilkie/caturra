@@ -47534,3 +47534,90 @@ public class Adjust {
 }
 "#
 );
+
+// Every DATE-TIME conversion — `%tY` and its thirty relatives — over every
+// `java.time` value that has one, and over the ones that have none.
+differential_test!(
+    every_date_time_conversion,
+    "Dates",
+    r#"
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+
+/** Every date-time conversion, over every java.time value that has one. */
+public class Dates {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        LocalDate date = LocalDate.of(2024, 2, 29);
+        LocalTime time = LocalTime.of(13, 45, 30, 123456789);
+        LocalDateTime stamp = LocalDateTime.of(date, time);
+        LocalTime morning = LocalTime.of(0, 5, 9);
+        LocalDate old = LocalDate.of(-44, 3, 15);
+        LocalDateTime midnight = LocalDateTime.of(2001, 1, 2, 0, 0, 0);
+
+        Object[] values = {date, time, stamp, morning, old, midnight};
+        String[] names = {"date", "time", "stamp", "morning", "old", "midnight"};
+        String suffixes = "HIklMSLNpQBbhAaCYyjmdeRTrDFc";
+
+        for (int at = 0; at < values.length; at++) {
+            for (int i = 0; i < suffixes.length(); i++) {
+                char suffix = suffixes.charAt(i);
+                Object value = values[at];
+                probe(names[at] + " %t" + suffix,
+                    () -> "[" + String.format("%t" + suffix, value) + "]");
+                probe(names[at] + " %T" + suffix,
+                    () -> "[" + String.format("%T" + suffix, value) + "]");
+                probe(names[at] + " %-12t" + suffix,
+                    () -> "[" + String.format("%-12t" + suffix, value) + "]");
+                probe(names[at] + " %12t" + suffix,
+                    () -> "[" + String.format("%12t" + suffix, value) + "]");
+            }
+        }
+
+        // The zone conversions, which a value without a zone does not have.
+        for (int at = 0; at < values.length; at++) {
+            Object value = values[at];
+            probe(names[at] + " %tz", () -> String.format("%tz", value));
+            probe(names[at] + " %tZ", () -> String.format("%tZ", value));
+            probe(names[at] + " %ts", () -> String.format("%ts", value));
+        }
+
+        // The other `java.time` values: two are TemporalAccessors with one
+        // field each, and two are amounts rather than moments.
+        Object[] others = {
+            java.time.Month.MAY, java.time.DayOfWeek.FRIDAY,
+            java.time.Duration.ofHours(2), java.time.Period.ofDays(3),
+            java.time.temporal.ChronoUnit.DAYS,
+        };
+        String[] otherNames = {"month", "dayofweek", "duration", "period", "unit"};
+        for (int at = 0; at < others.length; at++) {
+            for (int i = 0; i < suffixes.length(); i++) {
+                char suffix = suffixes.charAt(i);
+                Object value = others[at];
+                probe(otherNames[at] + " %t" + suffix,
+                    () -> "[" + String.format("%t" + suffix, value) + "]");
+            }
+        }
+
+        // The wrong argument types, and the bad suffixes.
+        probe("string %tY", () -> String.format("%tY", "text"));
+        probe("int %tY", () -> String.format("%tY", 7));
+        probe("double %tY", () -> String.format("%tY", 1.5));
+        probe("null %tY", () -> String.format("%tY", (Object) null));
+        probe("bad suffix", () -> String.format("%tw", date));
+        probe("no suffix", () -> String.format("%t", date));
+        probe("precision", () -> String.format("%.3tY", date));
+        probe("zero pad", () -> String.format("%012tY", date));
+        probe("plus", () -> String.format("%+tY", date));
+    }
+}
+"#
+);

@@ -1547,6 +1547,26 @@ fn field_name(letter: char) -> &'static str {
     }
 }
 
+/// The month's name in title case — "February" — and its short form.
+#[must_use]
+pub fn month_text(month: u8, short: bool) -> String {
+    if short {
+        SHORT_MONTHS[usize::from(month.clamp(1, 12)) - 1].to_owned()
+    } else {
+        title(month_name(month))
+    }
+}
+
+/// The day's name in title case — "Thursday" — and its short form.
+#[must_use]
+pub fn day_text(day: u8, short: bool) -> String {
+    if short {
+        SHORT_DAYS[usize::from(day.clamp(1, 7)) - 1].to_owned()
+    } else {
+        title(day_name(day))
+    }
+}
+
 const SHORT_MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];

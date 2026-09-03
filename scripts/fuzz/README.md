@@ -187,5 +187,14 @@ the argument's type is judged before the flags that only make sense while
 printing an integer.
 
 Arguments whose text carries an identity hash (an array, an anonymous
-`Object`) are deliberately not in the pool: `%h` of one differs between two
-runs of the same JDK, so it compares nothing.
+`Object`, a `java.time` ENUM) are deliberately not in the pool: `%h` of one
+differs between two runs of the same JDK, so it compares nothing.
+
+Its conversions now include the DATE-TIME family, which is two characters and
+has validation rules of its own. A date-time conversion is only ever paired
+with a `java.time` value: over a `long` it means milliseconds read in the
+default time zone, and the CLI host answers UTC where a JDK answers its own —
+the same reason `LocalDate.now()` is not compared. It found two divergences on
+its first run: the whole validation ORDER for the family (a precision is the
+first complaint, not the last), and `%-Tp` writing itself as `%-Tp` where a
+JDK writes `%-TP`.

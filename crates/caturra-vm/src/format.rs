@@ -10,7 +10,7 @@
 //! decimal digits like Java's `BigDecimal.valueOf` path, so `%.2f` of
 //! `2.675` is `2.68` here and on a real JVM alike.
 
-use crate::value::{Heap, HeapObject, JValue};
+use crate::value::{Heap, HeapObject, JValue, Temporal};
 use crate::vm::VmError;
 
 /// A formatting argument: the static Java type (from the synthesized
@@ -128,7 +128,13 @@ impl Spec {
         }
         if let Some(suffix) = self.date_time {
             text.push(self.conversion);
-            text.push(suffix);
+            // An UPPERCASE conversion uppercases its suffix too, so `%-Tp`
+            // writes itself as `%-TP` in the exception it raises.
+            if self.conversion.is_ascii_uppercase() {
+                text.push(suffix.to_ascii_uppercase());
+            } else {
+                text.push(suffix);
+            }
         } else {
             text.push(self.conversion);
         }
@@ -660,17 +666,20 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
         // SUFFIX as the conversion, since that is the character that chose the
         // format.
         _ => {
-            if spec.width.is_none() && spec.left_justify {
-                return Err(missing_width());
+            // A PRECISION is the first complaint here — a date-time
+            // conversion has none at all — then the flags in the JDK's own
+            // order, and a lone `-` last.
+            if spec.precision.is_some() {
+                return Err(bad_precision());
             }
             let suffix = spec.date_time.unwrap_or(spec.conversion);
             for (present, flag) in [
-                (spec.grouping, ','),
+                (spec.alternate, '#'),
                 (spec.plus, '+'),
                 (spec.space, ' '),
-                (spec.parentheses, '('),
                 (spec.zero_pad, '0'),
-                (spec.alternate, '#'),
+                (spec.grouping, ','),
+                (spec.parentheses, '('),
             ] {
                 if present {
                     return Err(throw(
@@ -679,8 +688,8 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
                     ));
                 }
             }
-            if spec.precision.is_some() {
-                return Err(bad_precision());
+            if spec.width.is_none() && spec.left_justify {
+                return Err(missing_width());
             }
         }
     }
@@ -745,6 +754,88 @@ fn pad_units(spec: &Spec, body: &[u16]) -> Vec<u16> {
 /// A Rust string as the UTF-16 units a Java one is made of.
 fn units_of(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
+}
+
+/// One date-time conversion over a `java.time` value. The error carries the
+/// conversion letter that FAILED, which is the letter a JDK's exception names
+/// — and for a composite (`%tT`, `%tc`) that is the letter of the piece it
+/// stopped on, because the JDK catches the failure one recursion in.
+fn render_temporal(value: Temporal, suffix: char) -> Result<String, char> {
+    use crate::intrinsics::temporal_field;
+    // Each letter is one `ChronoField`, read by its ordinal.
+    let read = |field: u8| temporal_field(value, field).ok_or(suffix);
+    let pad = |number: i64, width: usize| format!("{number:0width$}");
+    Ok(match suffix {
+        'H' => pad(read(12)?, 2),
+        'k' => read(12)?.to_string(),
+        'I' => pad(read(11)?, 2),
+        'l' => read(11)?.to_string(),
+        'M' => pad(read(8)?, 2),
+        'S' => pad(read(6)?, 2),
+        'L' => pad(read(4)?, 3),
+        'N' => pad(read(0)?, 9),
+        'p' => String::from(if read(14)? == 0 { "am" } else { "pm" }),
+        // The day and month NAMES, which are their own text and not a number.
+        'A' | 'a' => {
+            let day = u8::try_from(read(15)?).unwrap_or(1);
+            crate::time::day_text(day, suffix == 'a')
+        }
+        'B' | 'b' | 'h' => {
+            let month = u8::try_from(read(23)?).unwrap_or(1);
+            crate::time::month_text(month, suffix != 'B')
+        }
+        // The YEAR here is the year of the ERA, so 45 BCE prints as 0045.
+        'C' => pad(read(25)? / 100, 2),
+        'Y' => pad(read(25)?, 4),
+        'y' => pad(read(25)? % 100, 2),
+        'j' => pad(read(19)?, 3),
+        'm' => pad(read(23)?, 2),
+        'd' => pad(read(18)?, 2),
+        'e' => read(18)?.to_string(),
+        // The composites, each spelled out in the JDK's own order.
+        'R' => format!(
+            "{}:{}",
+            render_temporal(value, 'H')?,
+            render_temporal(value, 'M')?
+        ),
+        'T' => format!(
+            "{}:{}",
+            render_temporal(value, 'R')?,
+            render_temporal(value, 'S')?
+        ),
+        'r' => format!(
+            "{}:{}:{} {}",
+            render_temporal(value, 'I')?,
+            render_temporal(value, 'M')?,
+            render_temporal(value, 'S')?,
+            render_temporal(value, 'p')?.to_uppercase()
+        ),
+        'D' => format!(
+            "{}/{}/{}",
+            render_temporal(value, 'm')?,
+            render_temporal(value, 'd')?,
+            render_temporal(value, 'y')?
+        ),
+        'F' => format!(
+            "{}-{}-{}",
+            render_temporal(value, 'Y')?,
+            render_temporal(value, 'm')?,
+            render_temporal(value, 'd')?
+        ),
+        'c' => format!(
+            "{} {} {} {} {} {}",
+            render_temporal(value, 'a')?,
+            render_temporal(value, 'b')?,
+            render_temporal(value, 'd')?,
+            render_temporal(value, 'T')?,
+            // The zone NAME, which a local value does not have.
+            render_temporal(value, 'Z')?,
+            render_temporal(value, 'Y')?
+        ),
+        // Everything that needs a ZONE: a local date, time or date-time has
+        // none, and a JDK says so with the conversion's own letter.
+        _ => return Err(suffix),
+    })
 }
 
 /// A general conversion's body: cut to the precision and uppercased if the
@@ -1083,9 +1174,49 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<Vec<u16>, VmError>
         // depends on the default time zone, which is the browser's.)
         't' | 'T' => {
             let suffix = spec.date_time.unwrap_or(conversion);
+            // A `java.time` value answers every conversion whose FIELD it
+            // has, and refuses the rest by naming that field's letter — which
+            // for a composite is the letter of the piece that failed, not the
+            // composite's own.
+            // Only a `TemporalAccessor` — a moment, or an enum that is one
+            // field of a moment — reaches the printer at all. An AMOUNT and
+            // the unit and field enums are not, so a composite conversion
+            // over one names its OWN letter rather than the piece it would
+            // have stopped on.
+            if let FormatArg::Str(Some(reference)) = arg
+                && let Some(HeapObject::Temporal(
+                    value @ (Temporal::Date(_)
+                    | Temporal::Time(_)
+                    | Temporal::DateTime(_)
+                    | Temporal::Month(_)
+                    | Temporal::DayOfWeek(_)),
+                )) = heap.get(reference)
+            {
+                let value = *value;
+                return match render_temporal(value, suffix) {
+                    // `%T` uppercases the whole rendering, which for the
+                    // NAME conversions is the only thing that changes.
+                    Ok(text) => {
+                        let mut units = units_of(&text);
+                        if conversion == 'T' {
+                            units = crate::unicode::map_case(&units, true);
+                        }
+                        Ok(pad_units(spec, &units))
+                    }
+                    Err(failed) => Err(throw(
+                        "java.util.IllegalFormatConversionException",
+                        &format!("{failed} != {}", arg.java_class(heap)),
+                    )),
+                };
+            }
             match arg {
+                // A `long` is milliseconds since the epoch READ IN A ZONE,
+                // and a zone is what this engine does not carry (see the
+                // spec: no time zone database is vendored).
                 FormatArg::Long(_) => Err(VmError::UnknownIntrinsic(format!(
-                    "a date-time conversion (%{conversion}{suffix}) over a long —                      caturra has no Date, Calendar or java.time"
+                    "a date-time conversion (%{conversion}{suffix}) over a long — \
+                     it means milliseconds in the default time zone, and caturra \
+                     vendors no time zone database"
                 ))),
                 other => Err(throw(
                     "java.util.IllegalFormatConversionException",

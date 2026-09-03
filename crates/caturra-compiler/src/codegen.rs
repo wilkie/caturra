@@ -27122,7 +27122,23 @@ impl BodyGen<'_> {
                 // array reaches here (a lone reference array was taken as the
                 // varargs array above), and `%s` of one is its default
                 // `toString` — `[I@1b6d3586` — not a refusal.
-                JType::Array { .. } | JType::Class | JType::Type | JType::CharSequence => {
+                // A `java.time` value rides through too: it is what the
+                // DATE-TIME conversions take.
+                JType::Array { .. }
+                | JType::Class
+                | JType::Type
+                | JType::CharSequence
+                | JType::LocalDate
+                | JType::LocalTime
+                | JType::LocalDateTime
+                | JType::Duration
+                | JType::Period
+                | JType::DayOfWeek
+                | JType::Month
+                | JType::ChronoUnit
+                | JType::ChronoField
+                | JType::ValueRange
+                | JType::IsoEra => {
                     tags.push_str("Ljava/lang/Object;");
                     width += 1;
                 }
