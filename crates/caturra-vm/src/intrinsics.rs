@@ -106,6 +106,18 @@ fn temporal_hash(value: Temporal) -> i32 {
         Temporal::Unit(unit) => i32::from(unit),
         Temporal::DayOfWeek(day) => i32::from(day),
         Temporal::Month(month) => i32::from(month),
+        Temporal::Field(field) => i32::from(field),
+        // `ValueRange` folds its four numbers the way the JDK does.
+        Temporal::Range(range) => {
+            let fold = range.min + (range.largest_min << 16) + (range.largest_min >> 48)
+                - (range.smallest_max << 32)
+                - (range.smallest_max >> 32)
+                + (range.max << 48)
+                + (range.max >> 16);
+            #[allow(clippy::cast_possible_truncation)]
+            let hash = ((fold ^ (fold >> 32)) & 0xFFFF_FFFF) as i32;
+            hash
+        }
     }
 }
 
@@ -132,9 +144,18 @@ fn temporal_object_method(
         "name" if matches!(value, Temporal::DayOfWeek(_) | Temporal::Month(_)) => {
             JValue::Ref(Some(heap.alloc_string(&value.text())))
         }
-        "name" if matches!(value, Temporal::Unit(_)) => {
-            JValue::Ref(Some(heap.alloc_string(&value.text().to_uppercase())))
-        }
+        // A `ChronoUnit`'s and a `ChronoField`'s name is the CONSTANT, which
+        // their text is not: `HALF_DAYS` prints as "HalfDays", and
+        // `NANO_OF_SECOND` as "NanoOfSecond".
+        "name" => match value {
+            Temporal::Unit(unit) => JValue::Ref(Some(
+                heap.alloc_string(crate::time::UNIT_CONSTANTS[usize::from(unit)]),
+            )),
+            Temporal::Field(field) => JValue::Ref(Some(
+                heap.alloc_string(crate::time::field_info(field).constant),
+            )),
+            _ => return None,
+        },
         "equals" => JValue::Int(i32::from(other == Some(value))),
         "hashCode" => JValue::Int(temporal_hash(value)),
         _ => return None,
@@ -355,11 +376,15 @@ fn truncate_time(
     let Some(HeapObject::Temporal(Temporal::Unit(unit))) = heap.get(*reference) else {
         return Err(throw("java.lang.ClassCastException: not a ChronoUnit"));
     };
-    let Some(step) = crate::time::unit_nanos(*unit) else {
-        return Err(VmError::UncaughtException(format!(
+    // A unit larger than a day cannot truncate a time of day, and neither
+    // can one that does not divide a day evenly.
+    let Some(step) =
+        crate::time::unit_nanos(*unit).filter(|step| *step <= crate::time::NANOS_PER_DAY)
+    else {
+        // The JDK names no unit here — the sentence is the whole message.
+        return Err(VmError::UncaughtException(String::from(
             "java.time.temporal.UnsupportedTemporalTypeException: Unit is too large to be \
-                     used for truncation: {}",
-            crate::time::unit_name(*unit)
+             used for truncation",
         )));
     };
     let truncated = crate::time::Time {
@@ -1069,6 +1094,653 @@ fn period_method(
 
 /// `ChronoUnit.X.between(start, end)` — the only thing a unit is asked, and
 /// the reason a program names one at all.
+/// `java.time.temporal.ValueRange` — four numbers and the questions asked of
+/// them.
+fn range_method(
+    range: crate::time::ValueRange,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let number = || match args.first() {
+        Some(JValue::Long(v)) => *v,
+        Some(JValue::Int(v)) => i64::from(*v),
+        _ => 0,
+    };
+    Ok(Some(match method {
+        "getMinimum" => JValue::Long(range.min),
+        "getLargestMinimum" => JValue::Long(range.largest_min),
+        "getSmallestMaximum" => JValue::Long(range.smallest_max),
+        "getMaximum" => JValue::Long(range.max),
+        "isFixed" => JValue::Int(i32::from(range.is_fixed())),
+        "isValidValue" => JValue::Int(i32::from(range.contains(number()))),
+        "isIntValue" => JValue::Int(i32::from(
+            i32::try_from(range.min).is_ok() && i32::try_from(range.max).is_ok(),
+        )),
+        "isValidIntValue" => JValue::Int(i32::from(
+            i32::try_from(range.min).is_ok()
+                && i32::try_from(range.max).is_ok()
+                && range.contains(number()),
+        )),
+        _ => {
+            return Err(VmError::UnknownIntrinsic(format!(
+                "java/time/temporal/ValueRange.{method}"
+            )));
+        }
+    }))
+}
+
+/// `java.time.temporal.ChronoField` — what a field IS, before any date is
+/// asked about it.
+fn field_method(
+    field: u8,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let info = crate::time::field_info(field);
+    Ok(Some(match method {
+        "ordinal" => JValue::Int(i32::from(field)),
+        "range" => JValue::Ref(Some(
+            heap.intern_temporal(Temporal::Range(crate::time::field_range(field))),
+        )),
+        "isDateBased" => JValue::Int(i32::from(crate::time::field_is_date_based(field))),
+        "isTimeBased" => JValue::Int(i32::from(crate::time::field_is_time_based(field))),
+        "getBaseUnit" => JValue::Ref(Some(heap.intern_temporal(Temporal::Unit(info.base_unit)))),
+        "getRangeUnit" => JValue::Ref(Some(heap.intern_temporal(Temporal::Unit(info.range_unit)))),
+        "getDisplayName" => {
+            let reference = heap.alloc_string(info.text);
+            JValue::Ref(Some(reference))
+        }
+        // `isSupportedBy(temporal)` and `getFrom(temporal)` ask the value,
+        // which is the same question `isSupported`/`getLong` ask the other
+        // way round.
+        "isSupportedBy" | "getFrom" | "rangeRefinedBy" => {
+            let Some(JValue::Ref(Some(reference))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let Some(HeapObject::Temporal(value)) = heap.get(*reference) else {
+                return Err(throw("java.lang.ClassCastException: not a temporal"));
+            };
+            let value = *value;
+            match method {
+                "isSupportedBy" => JValue::Int(i32::from(supports_field(value, field))),
+                "getFrom" => JValue::Long(field_value(value, field)?),
+                _ => JValue::Ref(Some(
+                    heap.intern_temporal(Temporal::Range(field_range_of(value, field)?)),
+                )),
+            }
+        }
+        "checkValidValue" | "checkValidIntValue" => {
+            let value = match args.first() {
+                Some(JValue::Long(v)) => *v,
+                Some(JValue::Int(v)) => i64::from(*v),
+                _ => 0,
+            };
+            let range = crate::time::field_range(field);
+            if !range.contains(value) {
+                return Err(date_time_exception(&format!(
+                    "Invalid value for {} (valid values {}): {value}",
+                    info.text,
+                    range.text()
+                )));
+            }
+            if method == "checkValidIntValue" {
+                JValue::Int(i32::try_from(value).unwrap_or(0))
+            } else {
+                JValue::Long(value)
+            }
+        }
+        _ => {
+            return Err(VmError::UnknownIntrinsic(format!(
+                "java/time/temporal/ChronoField.{method}"
+            )));
+        }
+    }))
+}
+
+/// The `ChronoField` constants, in the order the compiler emits them — which
+/// is `crate::time::FIELDS`' order, spelled as the enum names.
+static FIELD_CONSTANTS: [&str; 30] = [
+    "NANO_OF_SECOND",
+    "NANO_OF_DAY",
+    "MICRO_OF_SECOND",
+    "MICRO_OF_DAY",
+    "MILLI_OF_SECOND",
+    "MILLI_OF_DAY",
+    "SECOND_OF_MINUTE",
+    "SECOND_OF_DAY",
+    "MINUTE_OF_HOUR",
+    "MINUTE_OF_DAY",
+    "HOUR_OF_AMPM",
+    "CLOCK_HOUR_OF_AMPM",
+    "HOUR_OF_DAY",
+    "CLOCK_HOUR_OF_DAY",
+    "AMPM_OF_DAY",
+    "DAY_OF_WEEK",
+    "ALIGNED_DAY_OF_WEEK_IN_MONTH",
+    "ALIGNED_DAY_OF_WEEK_IN_YEAR",
+    "DAY_OF_MONTH",
+    "DAY_OF_YEAR",
+    "EPOCH_DAY",
+    "ALIGNED_WEEK_OF_MONTH",
+    "ALIGNED_WEEK_OF_YEAR",
+    "MONTH_OF_YEAR",
+    "PROLEPTIC_MONTH",
+    "YEAR_OF_ERA",
+    "YEAR",
+    "ERA",
+    "INSTANT_SECONDS",
+    "OFFSET_SECONDS",
+];
+
+/// The `ChronoField` an argument names, if it is one.
+fn field_argument(heap: &Heap, value: Option<&JValue>) -> Option<u8> {
+    match value {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference)? {
+            HeapObject::Temporal(Temporal::Field(field)) => Some(*field),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `isSupported(field)`, `get(field)`, `getLong(field)`, `range(field)` and
+/// `with(field, value)` — the `TemporalAccessor` surface, in one place.
+fn field_surface(
+    value: Temporal,
+    field: u8,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    match method {
+        "isSupported" => Ok(Some(JValue::Int(i32::from(supports_field(value, field))))),
+        "range" => {
+            let range = field_range_of(value, field)?;
+            Ok(Some(JValue::Ref(Some(
+                heap.intern_temporal(Temporal::Range(range)),
+            ))))
+        }
+        "getLong" => Ok(Some(JValue::Long(field_value(value, field)?))),
+        "get" => {
+            // A field the value does not have at all is reported as that
+            // FIRST — the width complaint below is for a field it does have.
+            if !supports_field(value, field) {
+                return Err(unsupported_field(field));
+            }
+            // Four fields are too wide for an `int`, and a JDK says so rather
+            // than truncating — even for a value that would have fitted.
+            if matches!(field, 1 | 3 | 20 | 24) {
+                return Err(VmError::UncaughtException(format!(
+                    "java.time.temporal.UnsupportedTemporalTypeException: Invalid field '{}' \
+                     for get() method, use getLong() instead",
+                    crate::time::field_info(field).text
+                )));
+            }
+            let answer = field_value(value, field)?;
+            Ok(Some(JValue::Int(i32::try_from(answer).unwrap_or(0))))
+        }
+        _ => {
+            let wanted = match args.get(1) {
+                Some(JValue::Long(v)) => *v,
+                Some(JValue::Int(v)) => i64::from(*v),
+                _ => 0,
+            };
+            with_field(value, field, wanted, heap)
+        }
+    }
+}
+
+/// `with(field, value)` — the same value with ONE field changed.
+fn with_field(
+    value: Temporal,
+    field: u8,
+    wanted: i64,
+    heap: &mut Heap,
+) -> Result<Option<JValue>, VmError> {
+    // The VALUE is checked against the field's OWN range first, before the
+    // receiver is asked whether it has the field at all — so
+    // `LocalDate.with(HOUR_OF_AMPM, 30)` complains about the 30 rather than
+    // about a date having no hour.
+    let range = crate::time::field_range(field);
+    if !range.contains(wanted) {
+        return Err(date_time_exception(&format!(
+            "Invalid value for {} (valid values {}): {wanted}",
+            crate::time::field_info(field).text,
+            range.text()
+        )));
+    }
+    if !supports_field(value, field) {
+        return Err(unsupported_field(field));
+    }
+    let current = field_value(value, field)?;
+    let (date, time) = match value {
+        Temporal::Date(date) => (Some(date), None),
+        Temporal::Time(time) => (None, Some(time)),
+        Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
+        _ => return Err(unsupported_field(field)),
+    };
+    // Every field is either a NUMBER of some unit away from where it is —
+    // which is exactly `plus` — or a piece of the date to write directly.
+    let rebuilt = if crate::time::field_is_time_based(field) {
+        let Some(time) = time else {
+            return Err(unsupported_field(field));
+        };
+        // A "-of-second" field REPLACES the whole nano-of-second, so setting
+        // the microsecond clears the nanoseconds under it; a "-of-day" field
+        // replaces the whole day. The rest move the clock by a difference.
+        let second_start = time.nano_of_day - time.nano_of_day % crate::time::NANOS_PER_SECOND;
+        let nano = match field {
+            0 => second_start + wanted,
+            1 => wanted,
+            2 => second_start + wanted * 1_000,
+            3 => wanted * 1_000,
+            4 => second_start + wanted * 1_000_000,
+            5 => wanted * 1_000_000,
+            6 | 7 => time.nano_of_day + (wanted - current) * crate::time::NANOS_PER_SECOND,
+            8 | 9 => time.nano_of_day + (wanted - current) * crate::time::NANOS_PER_MINUTE,
+            10 | 12 => time.nano_of_day + (wanted - current) * crate::time::NANOS_PER_HOUR,
+            11 | 13 => {
+                let midnight = if field == 11 { 12 } else { 24 };
+                let hours = if wanted == midnight { 0 } else { wanted };
+                let now = if current == midnight { 0 } else { current };
+                time.nano_of_day + (hours - now) * crate::time::NANOS_PER_HOUR
+            }
+            _ => time.nano_of_day + (wanted - current) * 12 * crate::time::NANOS_PER_HOUR,
+        };
+        let made = crate::time::Time {
+            nano_of_day: nano.rem_euclid(crate::time::NANOS_PER_DAY),
+        };
+        match value {
+            Temporal::Time(_) => Temporal::Time(made),
+            _ => Temporal::DateTime(crate::time::DateTime {
+                date: date.unwrap_or_else(|| crate::time::Date::from_epoch_day(0)),
+                time: made,
+            }),
+        }
+    } else {
+        let Some(date) = date else {
+            return Err(unsupported_field(field));
+        };
+        let made = date_with_field(date, field, wanted, current)?;
+        match value {
+            Temporal::Date(_) => Temporal::Date(made),
+            _ => Temporal::DateTime(crate::time::DateTime {
+                date: made,
+                time: time.unwrap_or(crate::time::Time { nano_of_day: 0 }),
+            }),
+        }
+    };
+    Ok(Some(JValue::Ref(Some(heap.intern_temporal(rebuilt)))))
+}
+
+/// A date with one calendar field changed.
+fn date_with_field(
+    date: crate::time::Date,
+    field: u8,
+    wanted: i64,
+    current: i64,
+) -> Result<crate::time::Date, VmError> {
+    let days = |count: i64| {
+        Ok(crate::time::Date::from_epoch_day(
+            date.to_epoch_day() + count,
+        ))
+    };
+    let year = |value: i64| {
+        let year = i32::try_from(value).unwrap_or(0);
+        crate::time::Date::of(
+            year,
+            i32::from(date.month),
+            i32::from(date.day.min(crate::time::length_of_month(year, date.month))),
+        )
+        .map_err(|message| date_time_exception(&message))
+    };
+    match field {
+        // A day field moves by days and a WEEK field by weeks.
+        15..=17 | 19 => days(wanted - current),
+        21 | 22 => days((wanted - current) * 7),
+        18 => crate::time::Date::of(
+            date.year,
+            i32::from(date.month),
+            i32::try_from(wanted).unwrap_or(1),
+        )
+        .map_err(|message| date_time_exception(&message)),
+        20 => Ok(crate::time::Date::from_epoch_day(wanted)),
+        23 => {
+            let month = u8::try_from(wanted).unwrap_or(1);
+            crate::time::Date::of(
+                date.year,
+                i32::from(month),
+                i32::from(date.day.min(crate::time::length_of_month(date.year, month))),
+            )
+            .map_err(|message| date_time_exception(&message))
+        }
+        24 => {
+            let months = wanted - current;
+            let total = i64::from(date.year) * 12 + i64::from(date.month) - 1 + months;
+            let made_year = i32::try_from(total.div_euclid(12)).unwrap_or(0);
+            let made_month = u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1);
+            crate::time::Date::of(
+                made_year,
+                i32::from(made_month),
+                i32::from(
+                    date.day
+                        .min(crate::time::length_of_month(made_year, made_month)),
+                ),
+            )
+            .map_err(|message| date_time_exception(&message))
+        }
+        25 => year(if date.year >= 1 { wanted } else { 1 - wanted }),
+        26 => year(wanted),
+        // The ERA: staying in the same era changes nothing, and swapping it
+        // reflects the year about 1.
+        _ => {
+            if wanted == i64::from(u8::from(date.year >= 1)) {
+                Ok(date)
+            } else {
+                year(1 - i64::from(date.year))
+            }
+        }
+    }
+}
+
+/// The message a JDK gives for a field a value does not have.
+fn unsupported_field(field: u8) -> VmError {
+    VmError::UncaughtException(format!(
+        "java.time.temporal.UnsupportedTemporalTypeException: Unsupported field: {}",
+        crate::time::field_info(field).text
+    ))
+}
+
+/// One field's value. This is the whole of `getLong(field)`, and everything
+/// else that reads a field goes through it.
+#[allow(clippy::too_many_lines)] // one arm per field
+fn field_value(value: Temporal, field: u8) -> Result<i64, VmError> {
+    // `INSTANT_SECONDS` and `OFFSET_SECONDS` are neither date- nor
+    // time-based: they need a zone, which none of these values has.
+    if !supports_field(value, field) {
+        return Err(unsupported_field(field));
+    }
+    let (date, time) = match value {
+        Temporal::Date(date) => (Some(date), None),
+        Temporal::Time(time) => (None, Some(time)),
+        Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
+        Temporal::DayOfWeek(day) if field == 15 => return Ok(i64::from(day)),
+        Temporal::Month(month) if field == 23 => return Ok(i64::from(month)),
+        _ => return Err(unsupported_field(field)),
+    };
+    if crate::time::field_is_time_based(field) {
+        let Some(time) = time else {
+            return Err(unsupported_field(field));
+        };
+        let nano = time.nano_of_day;
+        let hour = nano / crate::time::NANOS_PER_HOUR;
+        let minute = (nano / crate::time::NANOS_PER_MINUTE) % 60;
+        let second = (nano / crate::time::NANOS_PER_SECOND) % 60;
+        return Ok(match field {
+            0 => nano % 1_000_000_000,
+            1 => nano,
+            2 => (nano % 1_000_000_000) / 1_000,
+            3 => nano / 1_000,
+            4 => (nano % 1_000_000_000) / 1_000_000,
+            5 => nano / 1_000_000,
+            6 => second,
+            7 => nano / 1_000_000_000,
+            8 => minute,
+            9 => hour * 60 + minute,
+            10 => hour % 12,
+            11 => {
+                let of_am_pm = hour % 12;
+                if of_am_pm == 0 { 12 } else { of_am_pm }
+            }
+            12 => hour,
+            13 => {
+                if hour == 0 {
+                    24
+                } else {
+                    hour
+                }
+            }
+            _ => hour / 12,
+        });
+    }
+    let Some(date) = date else {
+        return Err(unsupported_field(field));
+    };
+    let day_of_year = i64::from(date.day_of_year());
+    let year = i64::from(date.year);
+    Ok(match field {
+        15 => i64::from(date.day_of_week()),
+        16 => (i64::from(date.day) - 1) % 7 + 1,
+        17 => (day_of_year - 1) % 7 + 1,
+        18 => i64::from(date.day),
+        19 => day_of_year,
+        20 => date.to_epoch_day(),
+        21 => (i64::from(date.day) - 1) / 7 + 1,
+        22 => (day_of_year - 1) / 7 + 1,
+        23 => i64::from(date.month),
+        24 => year * 12 + i64::from(date.month) - 1,
+        25 => {
+            if year >= 1 {
+                year
+            } else {
+                1 - year
+            }
+        }
+        26 => year,
+        _ => i64::from(u8::from(year >= 1)),
+    })
+}
+
+/// A field's range NARROWED by the value: February 2024 has 29 days, and a
+/// year before the era has fewer years in it.
+fn field_range_of(value: Temporal, field: u8) -> Result<crate::time::ValueRange, VmError> {
+    if !supports_field(value, field) {
+        return Err(unsupported_field(field));
+    }
+    let date = match value {
+        Temporal::Date(date) => Some(date),
+        Temporal::DateTime(when) => Some(when.date),
+        _ => None,
+    };
+    let Some(date) = date else {
+        return Ok(crate::time::field_range(field));
+    };
+    Ok(match field {
+        18 => crate::time::ValueRange::fixed(
+            1,
+            i64::from(crate::time::length_of_month(date.year, date.month)),
+        ),
+        19 => crate::time::ValueRange::fixed(
+            1,
+            if crate::time::is_leap_year(date.year) {
+                366
+            } else {
+                365
+            },
+        ),
+        // The aligned week of a month runs to 4 or 5 depending on where the
+        // first of the month falls.
+        21 => crate::time::ValueRange::fixed(
+            1,
+            if date.day <= 2 && date.day_of_week() > 4 {
+                4
+            } else {
+                5
+            },
+        ),
+        25 => crate::time::ValueRange::fixed(
+            1,
+            if date.year <= 0 {
+                1_000_000_000
+            } else {
+                999_999_999
+            },
+        ),
+        _ => crate::time::field_range(field),
+    })
+}
+
+/// What a `ChronoUnit` says about ITSELF — how long it is, what it measures,
+/// and whether a given value can be moved by it. `None` means "not one of
+/// these", so the caller carries on to `between`.
+fn unit_facts(
+    unit: u8,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let answer = match method {
+        "getDuration" => {
+            let made = Temporal::Duration(crate::time::unit_duration(unit));
+            JValue::Ref(Some(heap.intern_temporal(made)))
+        }
+        "isDateBased" => JValue::Int(i32::from(crate::time::unit_is_date_based(unit))),
+        "isTimeBased" => JValue::Int(i32::from(crate::time::unit_is_time_based(unit))),
+        "isDurationEstimated" => JValue::Int(i32::from(crate::time::unit_is_estimated(unit))),
+        "isSupportedBy" => {
+            let supported = match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::Temporal(value)) => supports_unit(*value, unit),
+                    _ => false,
+                },
+                _ => false,
+            };
+            JValue::Int(i32::from(supported))
+        }
+        "compareTo" => {
+            let against = match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::Temporal(Temporal::Unit(other))) => i32::from(*other),
+                    _ => return Err(throw("java.lang.ClassCastException: not a ChronoUnit")),
+                },
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            JValue::Int(i32::from(unit) - against)
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(answer))
+}
+
+/// The `ChronoUnit` an argument names, if it is one.
+fn unit_argument(heap: &Heap, value: Option<&JValue>) -> Option<u8> {
+    match value {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference)? {
+            HeapObject::Temporal(Temporal::Unit(unit)) => Some(*unit),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `plus(amount, unit)` — the same value moved by a number of any unit it
+/// knows.
+fn shift_by_unit(
+    value: Temporal,
+    amount: i64,
+    unit: u8,
+    heap: &mut Heap,
+) -> Result<Option<JValue>, VmError> {
+    if !supports_unit(value, unit) {
+        return Err(VmError::UncaughtException(format!(
+            "java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: {}",
+            crate::time::unit_name(unit)
+        )));
+    }
+    let (date, time) = match value {
+        Temporal::Date(date) => (Some(date), None),
+        Temporal::Time(time) => (None, Some(time)),
+        Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
+        _ => return Err(throw("java.lang.ClassCastException: not a temporal")),
+    };
+    // A clock unit moves the nano-of-day, carrying whole days into the date;
+    // a calendar unit moves the date and leaves the clock alone.
+    let made = if let Some(nanos) = crate::time::unit_nanos(unit).filter(|_| unit < 7) {
+        let Some(time) = time else {
+            return Err(throw("java.lang.ClassCastException: not a time"));
+        };
+        let total = i128::from(time.nano_of_day) + i128::from(amount) * i128::from(nanos);
+        let day_nanos = i128::from(crate::time::NANOS_PER_DAY);
+        let carried = total.div_euclid(day_nanos);
+        let moved = crate::time::Time {
+            nano_of_day: i64::try_from(total.rem_euclid(day_nanos)).unwrap_or(0),
+        };
+        match date {
+            None => Temporal::Time(moved),
+            Some(date) => Temporal::DateTime(crate::time::DateTime {
+                date: date.plus_days(i64::try_from(carried).unwrap_or(0)),
+                time: moved,
+            }),
+        }
+    } else {
+        let Some(date) = date else {
+            return Err(throw("java.lang.ClassCastException: not a date"));
+        };
+        let moved = match unit {
+            7 => date.plus_days(amount),
+            8 => date.plus_days(amount.saturating_mul(7)),
+            9 => date.plus_months(amount),
+            10 => date.plus_years(amount),
+            11 => date.plus_years(amount.saturating_mul(10)),
+            12 => date.plus_years(amount.saturating_mul(100)),
+            13 => date.plus_years(amount.saturating_mul(1000)),
+            // An ERA away is the SAME date in the other era, which is what
+            // setting the era field does.
+            _ => {
+                let era = i64::from(u8::from(date.year >= 1));
+                return with_field(Temporal::Date(date), 27, era.saturating_add(amount), heap).map(
+                    |answer| match (answer, time) {
+                        (Some(JValue::Ref(Some(made))), Some(time)) => {
+                            let Some(HeapObject::Temporal(Temporal::Date(date))) = heap.get(made)
+                            else {
+                                return Some(JValue::Ref(Some(made)));
+                            };
+                            let when = crate::time::DateTime { date: *date, time };
+                            Some(JValue::Ref(Some(
+                                heap.intern_temporal(Temporal::DateTime(when)),
+                            )))
+                        }
+                        (other, _) => other,
+                    },
+                );
+            }
+        };
+        match time {
+            None => Temporal::Date(moved),
+            Some(time) => Temporal::DateTime(crate::time::DateTime { date: moved, time }),
+        }
+    };
+    Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
+}
+
+/// Whether a value can be moved by a unit: a date knows nothing smaller than
+/// a day, a time nothing larger than a half-day, and nothing at all measures
+/// FOREVER.
+fn supports_unit(value: Temporal, unit: u8) -> bool {
+    match value {
+        Temporal::Date(_) => (7..=14).contains(&unit),
+        Temporal::Time(_) => unit <= 6,
+        Temporal::DateTime(_) => unit <= 14,
+        _ => false,
+    }
+}
+
+/// Whether a value answers a field at all — `LocalDate` knows nothing of an
+/// hour, and `LocalTime` nothing of a month.
+fn supports_field(value: Temporal, field: u8) -> bool {
+    match value {
+        Temporal::Date(_) => crate::time::field_is_date_based(field),
+        Temporal::Time(_) => crate::time::field_is_time_based(field),
+        Temporal::DateTime(_) => {
+            crate::time::field_is_date_based(field) || crate::time::field_is_time_based(field)
+        }
+        Temporal::DayOfWeek(_) => field == 15,
+        Temporal::Month(_) => field == 23,
+        _ => false,
+    }
+}
+
 fn unit_method(
     unit: u8,
     heap: &mut Heap,
@@ -1077,6 +1749,9 @@ fn unit_method(
 ) -> Result<Option<JValue>, VmError> {
     if method == "ordinal" {
         return Ok(Some(JValue::Int(i32::from(unit))));
+    }
+    if let Some(answer) = unit_facts(unit, heap, method, args)? {
+        return Ok(Some(answer));
     }
     if method != "between" {
         return Err(VmError::UnknownIntrinsic(format!(
@@ -1106,18 +1781,32 @@ fn unit_method(
         Temporal::DateTime(when) => Some(when.date),
         _ => None,
     };
-    // MONTHS and YEARS are CALENDAR units: they count whole months the way
-    // `Period.between` does, not a number of nanoseconds.
-    if matches!(unit, 9 | 10) {
+    // From MONTHS up these are CALENDAR units: they count whole months the
+    // way `Period.between` does, not a number of nanoseconds.
+    if unit >= 9 {
         let (Some(from), Some(to)) = (calendar(start), calendar(end)) else {
             return Err(throw("java.lang.ClassCastException: not a date"));
         };
+        // An ERA away is a different era, which a proleptic calendar reaches
+        // only across year zero; FOREVER is not a span anything measures.
+        if unit == 14 {
+            let era = |date: crate::time::Date| i64::from(u8::from(date.year >= 1));
+            return Ok(Some(JValue::Long(era(to) - era(from))));
+        }
+        if unit == 15 {
+            return Err(VmError::UncaughtException(String::from(
+                "java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: Forever",
+            )));
+        }
         let months = crate::time::Period::between(from, to).total_months();
-        return Ok(Some(JValue::Long(if unit == 9 {
-            months
-        } else {
-            months / 12
-        })));
+        let per = match unit {
+            9 => 1,
+            10 => 12,
+            11 => 120,
+            12 => 1200,
+            _ => 12_000,
+        };
+        return Ok(Some(JValue::Long(months / per)));
     }
     let (Some((from_day, from_nano, from_is_date)), Some((to_day, to_nano, _))) =
         (split(start), split(end))
@@ -1243,6 +1932,7 @@ fn date_reader(value: Temporal, heap: &mut Heap, method: &str) -> Option<JValue>
 /// One `LocalDate`/`DayOfWeek`/`Month` method. These are VALUE types: every
 /// answer is a new value, `equals` compares contents, and the two enums are
 /// interned so `==` works on them as it does in Java.
+#[allow(clippy::too_many_lines)] // one arm per shape
 fn temporal_method(
     value: Temporal,
     heap: &mut Heap,
@@ -1273,6 +1963,37 @@ fn temporal_method(
     {
         return format_temporal(value, heap, *formatter);
     }
+    // `plus(amount, unit)` and `minus(amount, unit)` read the same on all
+    // three values, and so does `until(end, unit)`.
+    if matches!(method, "plus" | "minus")
+        && let Some(unit) = unit_argument(heap, args.get(1))
+    {
+        let amount = match args.first() {
+            Some(JValue::Long(n)) => *n,
+            Some(JValue::Int(n)) => i64::from(*n),
+            _ => 0,
+        };
+        let amount = if method == "minus" { -amount } else { amount };
+        return shift_by_unit(value, amount, unit, heap);
+    }
+    // `until(end, unit)` is `unit.between(this, end)` — and the receiver has
+    // to be handed over as a value, since `between` reads BOTH ends from its
+    // arguments.
+    if method == "until"
+        && let Some(unit) = unit_argument(heap, args.get(1))
+        && let Some(end) = args.first().copied()
+    {
+        let start = JValue::Ref(Some(heap.intern_temporal(value)));
+        return unit_method(unit, heap, "between", &[start, end]);
+    }
+    // The FIELD surface — `isSupported`, `get`, `getLong`, `range` and the
+    // two-argument `with` — reads the same on every value that has fields,
+    // which is why it sits above the per-type dispatch.
+    if let Some(field) = field_argument(heap, args.first())
+        && matches!(method, "isSupported" | "get" | "getLong" | "range" | "with")
+    {
+        return field_surface(value, field, heap, method, args);
+    }
     // An enum answers the shared methods above; the rest are its own.
     match value {
         Temporal::DayOfWeek(_) | Temporal::Month(_) => {
@@ -1283,6 +2004,8 @@ fn temporal_method(
         Temporal::Duration(amount) => return duration_method(amount, heap, method, args),
         Temporal::Period(period) => return period_method(period, heap, method, args),
         Temporal::Unit(unit) => return unit_method(unit, heap, method, args),
+        Temporal::Field(field) => return field_method(field, heap, method, args),
+        Temporal::Range(range) => return range_method(range, method, args),
         Temporal::Date(_) => {}
     }
 
@@ -8713,16 +9436,60 @@ pub fn invoke_static(
                 ))),
             }
         }
-        "java/time/temporal/ChronoUnit" => {
-            let ordinal = match args.first() {
-                Some(JValue::Int(value)) => *value,
-                _ => 0,
+        "java/time/temporal/ChronoUnit" | "java/time/temporal/ChronoField" => {
+            let is_unit = class.ends_with("ChronoUnit");
+            let names: &[&str] = if is_unit {
+                &crate::time::UNIT_CONSTANTS
+            } else {
+                &FIELD_CONSTANTS
             };
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let ordinal = ordinal.clamp(0, 10) as u8;
-            Ok(Some(JValue::Ref(Some(
-                heap.intern_temporal(Temporal::Unit(ordinal)),
-            ))))
+            let made = |heap: &mut Heap, ordinal: u8| {
+                let value = if is_unit {
+                    Temporal::Unit(ordinal)
+                } else {
+                    Temporal::Field(ordinal)
+                };
+                JValue::Ref(Some(heap.intern_temporal(value)))
+            };
+            match method {
+                // `values()` — a fresh array each call, holding the interned
+                // constants in ordinal order.
+                "values" => {
+                    let mut constants = Vec::new();
+                    for ordinal in 0..names.len() {
+                        let ordinal = u8::try_from(ordinal).unwrap_or(0);
+                        constants.push(made(heap, ordinal));
+                    }
+                    let array = heap.alloc(HeapObject::RefArray(class.to_owned(), constants));
+                    Ok(Some(JValue::Ref(Some(array))))
+                }
+                "valueOf" => {
+                    let name = match args.first() {
+                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        _ => None,
+                    }
+                    .unwrap_or_default();
+                    match names.iter().position(|known| *known == name) {
+                        Some(ordinal) => Ok(Some(made(heap, u8::try_from(ordinal).unwrap_or(0)))),
+                        None => Err(throw(&*format!(
+                            "java.lang.IllegalArgumentException: No enum constant {}.{name}",
+                            class.replace('/', ".")
+                        ))),
+                    }
+                }
+                // A constant, named by its ordinal — how the compiler emits
+                // `ChronoUnit.DAYS` and `ChronoField.YEAR`.
+                _ => {
+                    let ordinal = match args.first() {
+                        Some(JValue::Int(value)) => *value,
+                        _ => 0,
+                    };
+                    let last = i32::try_from(names.len()).unwrap_or(1) - 1;
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let ordinal = ordinal.clamp(0, last) as u8;
+                    Ok(Some(made(heap, ordinal)))
+                }
+            }
         }
         "java/time/DayOfWeek" | "java/time/Month" => {
             let day_of_week = class.ends_with("DayOfWeek");

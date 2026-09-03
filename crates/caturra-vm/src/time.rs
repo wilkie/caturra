@@ -787,9 +787,44 @@ impl std::fmt::Display for Period {
 /// calendar cannot count in nanoseconds (months and years) are at the end,
 /// where `java.time` puts them. Its `toString` is TITLE case ("Days"), which
 /// is not its `name()` ("DAYS"): a unit carries a description of its own.
-const UNIT_NAMES: [&str; 11] = [
-    "Nanos", "Micros", "Millis", "Seconds", "Minutes", "Hours", "HalfDays", "Days", "Weeks",
-    "Months", "Years",
+const UNIT_NAMES: [&str; 16] = [
+    "Nanos",
+    "Micros",
+    "Millis",
+    "Seconds",
+    "Minutes",
+    "Hours",
+    "HalfDays",
+    "Days",
+    "Weeks",
+    "Months",
+    "Years",
+    "Decades",
+    "Centuries",
+    "Millennia",
+    "Eras",
+    "Forever",
+];
+
+/// The `ChronoUnit` names in Java's own spelling, which is not the enum's:
+/// `ChronoUnit.HALF_DAYS.toString()` is `HalfDays`.
+pub const UNIT_CONSTANTS: [&str; 16] = [
+    "NANOS",
+    "MICROS",
+    "MILLIS",
+    "SECONDS",
+    "MINUTES",
+    "HOURS",
+    "HALF_DAYS",
+    "DAYS",
+    "WEEKS",
+    "MONTHS",
+    "YEARS",
+    "DECADES",
+    "CENTURIES",
+    "MILLENNIA",
+    "ERAS",
+    "FOREVER",
 ];
 
 #[must_use]
@@ -797,8 +832,55 @@ pub fn unit_name(unit: u8) -> &'static str {
     UNIT_NAMES[usize::from(unit).min(UNIT_NAMES.len() - 1)]
 }
 
-/// How many nanoseconds one unit is — `None` for the units a CALENDAR
-/// defines (a month is not a fixed number of anything).
+/// How long one unit is ESTIMATED to be — what `ChronoUnit.getDuration`
+/// answers. A month is 31556952 seconds divided by twelve (the average
+/// Gregorian year), and FOREVER is as long as a `Duration` goes.
+#[must_use]
+pub fn unit_duration(unit: u8) -> Duration {
+    const YEAR_SECONDS: i64 = 31_556_952;
+    if let Some(nanos) = unit_nanos(unit) {
+        return Duration {
+            seconds: nanos / NANOS_PER_SECOND,
+            nanos: i32::try_from(nanos % NANOS_PER_SECOND).unwrap_or(0),
+        };
+    }
+    let seconds = match unit {
+        9 => YEAR_SECONDS / 12,
+        10 => YEAR_SECONDS,
+        11 => YEAR_SECONDS * 10,
+        12 => YEAR_SECONDS * 100,
+        13 => YEAR_SECONDS * 1000,
+        14 => YEAR_SECONDS * 1_000_000_000,
+        _ => i64::MAX,
+    };
+    Duration {
+        seconds,
+        nanos: if unit >= 15 { 999_999_999 } else { 0 },
+    }
+}
+
+/// Whether a unit measures the CALENDAR (days and up) or the clock.
+/// `FOREVER` is neither.
+#[must_use]
+pub fn unit_is_date_based(unit: u8) -> bool {
+    (7..=14).contains(&unit)
+}
+
+#[must_use]
+pub fn unit_is_time_based(unit: u8) -> bool {
+    unit < 7
+}
+
+/// Whether a unit's length is an ESTIMATE: every calendar unit is, because a
+/// month and a year vary, and so is `FOREVER`. `DAYS` is estimated too — a
+/// day is not always 24 hours where there is a time zone.
+#[must_use]
+pub fn unit_is_estimated(unit: u8) -> bool {
+    unit >= 7
+}
+
+/// How many nanoseconds one unit is EXACTLY — `None` for the units a
+/// CALENDAR defines (a month is not a fixed number of anything).
 #[must_use]
 pub fn unit_nanos(unit: u8) -> Option<i64> {
     Some(match unit {
@@ -813,6 +895,266 @@ pub fn unit_nanos(unit: u8) -> Option<i64> {
         8 => 7 * NANOS_PER_DAY,
         _ => return None,
     })
+}
+
+/// `java.time.temporal.ChronoField`, in the JDK's own order — a program names
+/// one to ask a date or a time for a single field, and the answers below are
+/// the JDK's, recorded field by field.
+///
+/// Each entry is the enum CONSTANT, the `toString` spelling, the base unit,
+/// the range unit, and the field's own `range()` as
+/// (minimum, largest minimum, smallest maximum, maximum).
+#[derive(Debug)]
+pub struct FieldInfo {
+    pub constant: &'static str,
+    pub text: &'static str,
+    pub base_unit: u8,
+    pub range_unit: u8,
+    pub range: (i64, i64, i64, i64),
+}
+
+const fn field(
+    constant: &'static str,
+    text: &'static str,
+    base_unit: u8,
+    range_unit: u8,
+    range: (i64, i64, i64, i64),
+) -> FieldInfo {
+    FieldInfo {
+        constant,
+        text,
+        base_unit,
+        range_unit,
+        range,
+    }
+}
+
+pub static FIELDS: &[FieldInfo] = &[
+    field(
+        "NANO_OF_SECOND",
+        "NanoOfSecond",
+        0,
+        3,
+        (0, 0, 999_999_999, 999_999_999),
+    ),
+    field(
+        "NANO_OF_DAY",
+        "NanoOfDay",
+        0,
+        7,
+        (0, 0, 86_399_999_999_999, 86_399_999_999_999),
+    ),
+    field(
+        "MICRO_OF_SECOND",
+        "MicroOfSecond",
+        1,
+        3,
+        (0, 0, 999_999, 999_999),
+    ),
+    field(
+        "MICRO_OF_DAY",
+        "MicroOfDay",
+        1,
+        7,
+        (0, 0, 86_399_999_999, 86_399_999_999),
+    ),
+    field("MILLI_OF_SECOND", "MilliOfSecond", 2, 3, (0, 0, 999, 999)),
+    field(
+        "MILLI_OF_DAY",
+        "MilliOfDay",
+        2,
+        7,
+        (0, 0, 86_399_999, 86_399_999),
+    ),
+    field("SECOND_OF_MINUTE", "SecondOfMinute", 3, 4, (0, 0, 59, 59)),
+    field("SECOND_OF_DAY", "SecondOfDay", 3, 7, (0, 0, 86_399, 86_399)),
+    field("MINUTE_OF_HOUR", "MinuteOfHour", 4, 5, (0, 0, 59, 59)),
+    field("MINUTE_OF_DAY", "MinuteOfDay", 4, 7, (0, 0, 1439, 1439)),
+    field("HOUR_OF_AMPM", "HourOfAmPm", 5, 6, (0, 0, 11, 11)),
+    field(
+        "CLOCK_HOUR_OF_AMPM",
+        "ClockHourOfAmPm",
+        5,
+        6,
+        (1, 1, 12, 12),
+    ),
+    field("HOUR_OF_DAY", "HourOfDay", 5, 7, (0, 0, 23, 23)),
+    field("CLOCK_HOUR_OF_DAY", "ClockHourOfDay", 5, 7, (1, 1, 24, 24)),
+    field("AMPM_OF_DAY", "AmPmOfDay", 6, 7, (0, 0, 1, 1)),
+    field("DAY_OF_WEEK", "DayOfWeek", 7, 8, (1, 1, 7, 7)),
+    field(
+        "ALIGNED_DAY_OF_WEEK_IN_MONTH",
+        "AlignedDayOfWeekInMonth",
+        7,
+        8,
+        (1, 1, 7, 7),
+    ),
+    field(
+        "ALIGNED_DAY_OF_WEEK_IN_YEAR",
+        "AlignedDayOfWeekInYear",
+        7,
+        8,
+        (1, 1, 7, 7),
+    ),
+    field("DAY_OF_MONTH", "DayOfMonth", 7, 9, (1, 1, 28, 31)),
+    field("DAY_OF_YEAR", "DayOfYear", 7, 10, (1, 1, 365, 366)),
+    field(
+        "EPOCH_DAY",
+        "EpochDay",
+        7,
+        15,
+        (
+            -365_243_219_162,
+            -365_243_219_162,
+            365_241_780_471,
+            365_241_780_471,
+        ),
+    ),
+    field(
+        "ALIGNED_WEEK_OF_MONTH",
+        "AlignedWeekOfMonth",
+        8,
+        9,
+        (1, 1, 4, 5),
+    ),
+    field(
+        "ALIGNED_WEEK_OF_YEAR",
+        "AlignedWeekOfYear",
+        8,
+        10,
+        (1, 1, 53, 53),
+    ),
+    field("MONTH_OF_YEAR", "MonthOfYear", 9, 10, (1, 1, 12, 12)),
+    field(
+        "PROLEPTIC_MONTH",
+        "ProlepticMonth",
+        9,
+        15,
+        (
+            -11_999_999_988,
+            -11_999_999_988,
+            11_999_999_999,
+            11_999_999_999,
+        ),
+    ),
+    field(
+        "YEAR_OF_ERA",
+        "YearOfEra",
+        10,
+        15,
+        (1, 1, 999_999_999, 1_000_000_000),
+    ),
+    field(
+        "YEAR",
+        "Year",
+        10,
+        15,
+        (-999_999_999, -999_999_999, 999_999_999, 999_999_999),
+    ),
+    field("ERA", "Era", 14, 15, (0, 0, 1, 1)),
+    field(
+        "INSTANT_SECONDS",
+        "InstantSeconds",
+        3,
+        15,
+        (i64::MIN, i64::MIN, i64::MAX, i64::MAX),
+    ),
+    field(
+        "OFFSET_SECONDS",
+        "OffsetSeconds",
+        3,
+        15,
+        (-64800, -64800, 64800, 64800),
+    ),
+];
+
+/// A field by its `ChronoField` constant name.
+#[must_use]
+pub fn field_by_constant(name: &str) -> Option<u8> {
+    FIELDS
+        .iter()
+        .position(|info| info.constant == name)
+        .and_then(|at| u8::try_from(at).ok())
+}
+
+#[must_use]
+pub fn field_info(field: u8) -> &'static FieldInfo {
+    &FIELDS[usize::from(field).min(FIELDS.len() - 1)]
+}
+
+/// A field's own `range()`, before any date narrows it.
+#[must_use]
+pub fn field_range(field: u8) -> ValueRange {
+    let (min, largest_min, smallest_max, max) = field_info(field).range;
+    ValueRange {
+        min,
+        largest_min,
+        smallest_max,
+        max,
+    }
+}
+
+/// Whether a field measures the CALENDAR. `INSTANT_SECONDS` and
+/// `OFFSET_SECONDS` are neither date- nor time-based: they need a zone.
+#[must_use]
+pub fn field_is_date_based(field: u8) -> bool {
+    (15..=27).contains(&field)
+}
+
+#[must_use]
+pub fn field_is_time_based(field: u8) -> bool {
+    field < 15
+}
+
+/// `java.time.temporal.ValueRange` — what a field can hold, which for a few
+/// fields depends on the date: February has 29 days this year and 28 the
+/// next, so `DAY_OF_MONTH` has a smallest maximum and a maximum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ValueRange {
+    pub min: i64,
+    pub largest_min: i64,
+    pub smallest_max: i64,
+    pub max: i64,
+}
+
+impl ValueRange {
+    #[must_use]
+    pub fn fixed(min: i64, max: i64) -> ValueRange {
+        ValueRange {
+            min,
+            largest_min: min,
+            smallest_max: max,
+            max,
+        }
+    }
+
+    #[must_use]
+    pub fn is_fixed(&self) -> bool {
+        self.min == self.largest_min && self.smallest_max == self.max
+    }
+
+    #[must_use]
+    pub fn contains(&self, value: i64) -> bool {
+        self.min <= value && value <= self.max
+    }
+
+    /// The JDK's own wording: "1 - 28/31" where the maximum varies, and
+    /// "1/2 - 28/31" where the minimum does too.
+    #[must_use]
+    pub fn text(&self) -> String {
+        let mut out = self.min.to_string();
+        if self.min != self.largest_min {
+            out.push('/');
+            out.push_str(&self.largest_min.to_string());
+        }
+        out.push_str(" - ");
+        out.push_str(&self.smallest_max.to_string());
+        if self.smallest_max != self.max {
+            out.push('/');
+            out.push_str(&self.max.to_string());
+        }
+        out
+    }
 }
 
 /// One piece of a `DateTimeFormatter` pattern: a field to print, or text to

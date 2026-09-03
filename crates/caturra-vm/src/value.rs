@@ -367,6 +367,10 @@ pub enum Temporal {
     DayOfWeek(u8),
     /// `java.time.Month`, 1..=12.
     Month(u8),
+    /// A `java.time.temporal.ChronoField` constant, by its own ordinal.
+    Field(u8),
+    /// `java.time.temporal.ValueRange` — what a field can hold.
+    Range(crate::time::ValueRange),
 }
 
 impl Temporal {
@@ -382,6 +386,8 @@ impl Temporal {
             Temporal::DateTime(_) => "java/time/LocalDateTime",
             Temporal::DayOfWeek(_) => "java/time/DayOfWeek",
             Temporal::Month(_) => "java/time/Month",
+            Temporal::Field(_) => "java/time/temporal/ChronoField",
+            Temporal::Range(_) => "java/time/temporal/ValueRange",
         }
     }
 
@@ -397,6 +403,8 @@ impl Temporal {
             Temporal::DateTime(when) => when.to_string(),
             Temporal::DayOfWeek(day) => crate::time::day_name(day).to_owned(),
             Temporal::Month(month) => crate::time::month_name(month).to_owned(),
+            Temporal::Field(field) => crate::time::field_info(field).text.to_owned(),
+            Temporal::Range(range) => range.text(),
         }
     }
 }
@@ -1432,12 +1440,14 @@ impl Heap {
             | Temporal::Time(_)
             | Temporal::DateTime(_)
             | Temporal::Duration(_)
-            | Temporal::Period(_) => {
+            | Temporal::Period(_)
+            | Temporal::Range(_) => {
                 return self.alloc(HeapObject::Temporal(value));
             }
             Temporal::Unit(unit) => (2u8, unit),
             Temporal::DayOfWeek(day) => (0u8, day),
             Temporal::Month(month) => (1u8, month),
+            Temporal::Field(field) => (3u8, field),
         };
         if let Some(existing) = self.temporal_pool.get(&key) {
             return *existing;

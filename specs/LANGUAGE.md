@@ -13004,3 +13004,44 @@ constant FOLDING (`"a" + "\\uD83D"` written as one constant expression), and
 the bytes a `PrintStream` writes — where a JDK's encoder substitutes `?` and
 caturra now does too, so only `System.out.print` of a lone surrogate differs
 from the string it was given.
+
+## A date as a Temporal
+
+A `LocalDate` is not only its own getters. Underneath, `java.time` is built on
+two interfaces a program can name directly: a `TemporalField` — one number a
+value holds — and a `TemporalUnit` — one step a value can be moved by. Both are
+enums, `ChronoField` and `ChronoUnit`, and caturra knew only part of the second.
+
+`ChronoField` is here now, all thirty constants, and with it the whole
+`TemporalAccessor` surface on `LocalDate`, `LocalTime` and `LocalDateTime`:
+
+- `isSupported(field)` — a date has no hour and a time has no month.
+- `getLong(field)` and `get(field)`, which differ in more than a cast: four
+  fields (`NANO_OF_DAY`, `MICRO_OF_DAY`, `EPOCH_DAY`, `PROLEPTIC_MONTH`) are
+  too wide for an `int`, and a JDK refuses them from `get` even when the value
+  would have fitted.
+- `range(field)` — a `ValueRange`, which is four numbers and not two: February
+  has 28 days some years and 29 others, so `DAY_OF_MONTH` has a smallest
+  maximum of 28 and a maximum of 31, and prints as "1 - 28/31".
+- `with(field, value)`, whose ORDER of complaints is its own rule. The value is
+  checked against the FIELD's own range first, so
+  `LocalDate.with(HOUR_OF_AMPM, 30)` complains about the 30 rather than about a
+  date having no hour. Then the field must be one the value has. Only then is
+  the date built, which is where "Invalid date 'FEBRUARY 30'" comes from.
+
+`with` is not one operation either. A "-of-second" field REPLACES the whole
+nano-of-second, so setting the microsecond clears the nanoseconds beneath it; a
+"-of-day" field replaces the whole day; a week field moves by weeks and a day
+field by days; and the era is a reflection about year one.
+
+`ChronoUnit` gained the five constants above `YEARS` — `DECADES`, `CENTURIES`,
+`MILLENNIA`, `ERAS` and `FOREVER` — and the questions a unit answers about
+itself: `getDuration` (an estimate: a month is a twelfth of the average
+Gregorian year, and `FOREVER` is as long as a `Duration` goes),
+`isDateBased`, `isTimeBased`, `isDurationEstimated`, `isSupportedBy`,
+`compareTo`, `values` and `valueOf`. With them, `plus(amount, unit)`,
+`minus(amount, unit)` and `until(end, unit)` work on all three values, and
+`truncatedTo` refuses a unit that does not divide a day — in the JDK's own
+words, which name no unit at all.
+
+Pinned as `a_date_as_a_temporal` (1637 answers) and `every_chrono_unit` (339).

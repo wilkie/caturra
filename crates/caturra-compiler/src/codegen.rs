@@ -3497,6 +3497,8 @@ impl MethodTable {
                     "Duration" => Some(JType::Duration),
                     "Period" => Some(JType::Period),
                     "ChronoUnit" => Some(JType::ChronoUnit),
+                    "ChronoField" => Some(JType::ChronoField),
+                    "ValueRange" => Some(JType::ValueRange),
                     "DateTimeFormatter" => Some(JType::DateFormat),
                     "LocalDateTime" => Some(JType::LocalDateTime),
                     "DayOfWeek" => Some(JType::DayOfWeek),
@@ -3814,6 +3816,8 @@ impl MethodTable {
                     JType::File => ElemType::File,
                     JType::DayOfWeek => ElemType::DayOfWeek,
                     JType::Month => ElemType::Month,
+                    JType::ChronoUnit => ElemType::ChronoUnit,
+                    JType::ChronoField => ElemType::ChronoField,
                     // A wrapper array (`Integer[]`) is a REFERENCE array of
                     // boxed elements, distinct from the primitive `int[]`.
                     JType::Boxed(elem) => match Prim::of(elem) {
@@ -4606,6 +4610,8 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::File => "java/io/File",
         ElemType::DayOfWeek => "java/time/DayOfWeek",
         ElemType::Month => "java/time/Month",
+        ElemType::ChronoUnit => "java/time/temporal/ChronoUnit",
+        ElemType::ChronoField => "java/time/temporal/ChronoField",
         // A type variable erases to `Object`, like every other reference here.
         ElemType::TypeVar(_)
         | ElemType::Str
@@ -4880,6 +4886,8 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::File => String::from("File"),
         ElemType::DayOfWeek => String::from("DayOfWeek"),
         ElemType::Month => String::from("Month"),
+        ElemType::ChronoUnit => String::from("ChronoUnit"),
+        ElemType::ChronoField => String::from("ChronoField"),
         ElemType::TypeVar(_) => String::from("Object"),
         ElemType::Builder => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
@@ -5856,6 +5864,7 @@ fn strip_local_suffix(name: &str) -> &str {
 /// are read where `StandardCharsets.UTF_8` is, and answered the same way: by a
 /// factory call the program cannot write, which interns the constant so `==`
 /// works on it.
+#[allow(clippy::too_many_lines)] // one list per enum
 fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
     let [class, name] = path else {
         return None;
@@ -5892,6 +5901,45 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
             "WEEKS",
             "MONTHS",
             "YEARS",
+            "DECADES",
+            "CENTURIES",
+            "MILLENNIA",
+            "ERAS",
+            "FOREVER",
+        ],
+        // Likewise `ChronoField`, whose ordinals a program can print. The VM
+        // stores a field by this position, so the two lists must agree.
+        "ChronoField" => &[
+            "NANO_OF_SECOND",
+            "NANO_OF_DAY",
+            "MICRO_OF_SECOND",
+            "MICRO_OF_DAY",
+            "MILLI_OF_SECOND",
+            "MILLI_OF_DAY",
+            "SECOND_OF_MINUTE",
+            "SECOND_OF_DAY",
+            "MINUTE_OF_HOUR",
+            "MINUTE_OF_DAY",
+            "HOUR_OF_AMPM",
+            "CLOCK_HOUR_OF_AMPM",
+            "HOUR_OF_DAY",
+            "CLOCK_HOUR_OF_DAY",
+            "AMPM_OF_DAY",
+            "DAY_OF_WEEK",
+            "ALIGNED_DAY_OF_WEEK_IN_MONTH",
+            "ALIGNED_DAY_OF_WEEK_IN_YEAR",
+            "DAY_OF_MONTH",
+            "DAY_OF_YEAR",
+            "EPOCH_DAY",
+            "ALIGNED_WEEK_OF_MONTH",
+            "ALIGNED_WEEK_OF_YEAR",
+            "MONTH_OF_YEAR",
+            "PROLEPTIC_MONTH",
+            "YEAR_OF_ERA",
+            "YEAR",
+            "ERA",
+            "INSTANT_SECONDS",
+            "OFFSET_SECONDS",
         ],
         "DayOfWeek" => &[
             "MONDAY",
@@ -5925,6 +5973,8 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         "Duration" => JType::Duration,
         "Period" => JType::Period,
         "ChronoUnit" => JType::ChronoUnit,
+        "ChronoField" => JType::ChronoField,
+        "ValueRange" => JType::ValueRange,
         "DateTimeFormatter" => JType::DateFormat,
         _ => JType::Month,
     };
@@ -7054,6 +7104,9 @@ enum ElemType {
     /// `Month.values()` answer, which is how a program loops over one.
     DayOfWeek,
     Month,
+    /// `ChronoUnit.values()` and `ChronoField.values()`.
+    ChronoUnit,
+    ChronoField,
     /// A throwable element (`Throwable[]` from `getSuppressed()`, or an
     /// array of any exception class), carrying its exception id.
     Throwable(u8),
@@ -7201,6 +7254,8 @@ impl ElemType {
             ElemType::File => String::from("Ljava/io/File;"),
             ElemType::DayOfWeek => String::from("Ljava/time/DayOfWeek;"),
             ElemType::Month => String::from("Ljava/time/Month;"),
+            ElemType::ChronoUnit => String::from("Ljava/time/temporal/ChronoUnit;"),
+            ElemType::ChronoField => String::from("Ljava/time/temporal/ChronoField;"),
             ElemType::Throwable(id) => format!("L{};", exception_internal(id)),
             // A wildcard or nested element erases to its `read` class (Object,
             // unless a wildcard's modelled bound narrows it).
@@ -7271,6 +7326,8 @@ impl ElemType {
             ElemType::File => JType::File,
             ElemType::DayOfWeek => JType::DayOfWeek,
             ElemType::Month => JType::Month,
+            ElemType::ChronoUnit => JType::ChronoUnit,
+            ElemType::ChronoField => JType::ChronoField,
             ElemType::Throwable(id) => JType::Exception(id),
             // A wildcard or nested element erases (table-free) to its `read`
             // class; the nesting-aware `elem_value_type` recovers the true
@@ -7416,6 +7473,11 @@ enum JType {
     Period,
     /// `java.time.temporal.ChronoUnit`, whose only real use is `between`.
     ChronoUnit,
+    /// `java.time.temporal.ChronoField` — the field a program names to ask a
+    /// date or a time for one number.
+    ChronoField,
+    /// `java.time.temporal.ValueRange` — what a field can hold.
+    ValueRange,
     /// `java.time.format.DateTimeFormatter` — a pattern, or one of the ISO
     /// constants.
     DateFormat,
@@ -7951,6 +8013,8 @@ impl JType {
             JType::Duration => String::from("Duration"),
             JType::Period => String::from("Period"),
             JType::ChronoUnit => String::from("ChronoUnit"),
+            JType::ChronoField => String::from("ChronoField"),
+            JType::ValueRange => String::from("ValueRange"),
             JType::DateFormat => String::from("DateTimeFormatter"),
             JType::LocalDateTime => String::from("LocalDateTime"),
             JType::DayOfWeek => String::from("DayOfWeek"),
@@ -8007,6 +8071,8 @@ impl JType {
                 | JType::Duration
                 | JType::Period
                 | JType::ChronoUnit
+                | JType::ChronoField
+                | JType::ValueRange
                 | JType::DateFormat
                 | JType::DayOfWeek
                 | JType::Month
@@ -8155,6 +8221,8 @@ impl JType {
             JType::Duration => String::from("Ljava/time/Duration;"),
             JType::Period => String::from("Ljava/time/Period;"),
             JType::ChronoUnit => String::from("Ljava/time/temporal/ChronoUnit;"),
+            JType::ChronoField => String::from("Ljava/time/temporal/ChronoField;"),
+            JType::ValueRange => String::from("Ljava/time/temporal/ValueRange;"),
             JType::DateFormat => String::from("Ljava/time/format/DateTimeFormatter;"),
             JType::LocalDateTime => String::from("Ljava/time/LocalDateTime;"),
             JType::DayOfWeek => String::from("Ljava/time/DayOfWeek;"),
@@ -9735,6 +9803,8 @@ enum BParam {
     DateFormat,
     /// A `ChronoUnit`, which `until` and `truncatedTo` take.
     ChronoUnit,
+    /// A `ChronoField`, which the field surface takes.
+    ChronoField,
     /// Any `java.time` value at all — what `between` takes.
     Temporal,
     DayOfWeek,
@@ -9784,10 +9854,16 @@ enum BRet {
     /// over an enum.
     DayOfWeekArray,
     MonthArray,
+    ChronoUnitArray,
+    ChronoFieldArray,
     /// A `DateTimeFormatter`.
     DateFormat,
     DayOfWeek,
     Month,
+    /// A `ChronoUnit`, `ChronoField` or `ValueRange`.
+    ChronoUnit,
+    ChronoField,
+    ValueRange,
     /// The `java.io.PrintWriter` itself — `append`/`format` return the writer
     /// for chaining.
     Writer,
@@ -12640,6 +12716,51 @@ const FILE_METHODS: &[BuiltinMethod] = &[
 /// no clock, no locale, no timezone database, and so exactly comparable with
 /// a JDK.
 const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
+    // `plus(amount, unit)` and its opposite — a number of any unit the
+    // value knows.
+    bm(
+        "plus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::LocalDate,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::LocalDate,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/LocalDate;",
+    ),
+    // The `TemporalAccessor` surface: one field, asked for by name.
+    bm(
+        "isSupported",
+        &[BParam::ChronoField],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    bm(
+        "get",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/TemporalField;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::ChronoField],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalField;)J",
+    ),
+    bm(
+        "range",
+        &[BParam::ChronoField],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalField;)Ljava/time/temporal/ValueRange;",
+    ),
+    bm(
+        "with",
+        &[BParam::ChronoField, BParam::Long],
+        BRet::LocalDate,
+        "(Ljava/time/temporal/TemporalField;J)Ljava/time/LocalDate;",
+    ),
     bm(
         "format",
         &[BParam::DateFormat],
@@ -12801,6 +12922,31 @@ const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
 /// `getValue()` and `ordinal()` — and `==`, which works because the constants
 /// are interned.
 const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
+    // The `TemporalAccessor` surface: one field, asked for by name.
+    bm(
+        "isSupported",
+        &[BParam::ChronoField],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    bm(
+        "get",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/TemporalField;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::ChronoField],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalField;)J",
+    ),
+    bm(
+        "range",
+        &[BParam::ChronoField],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalField;)Ljava/time/temporal/ValueRange;",
+    ),
     bm("getValue", &[], BRet::Int, "()I"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
@@ -12833,6 +12979,31 @@ const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
 ];
 
 const MONTH_METHODS: &[BuiltinMethod] = &[
+    // The `TemporalAccessor` surface: one field, asked for by name.
+    bm(
+        "isSupported",
+        &[BParam::ChronoField],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    bm(
+        "get",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/TemporalField;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::ChronoField],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalField;)J",
+    ),
+    bm(
+        "range",
+        &[BParam::ChronoField],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalField;)Ljava/time/temporal/ValueRange;",
+    ),
     bm("getValue", &[], BRet::Int, "()I"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
@@ -12866,6 +13037,57 @@ const MONTH_METHODS: &[BuiltinMethod] = &[
 /// `java.time.LocalTime` — a time of day. It WRAPS at midnight rather than
 /// carrying: `23:00` plus two hours is `01:00`.
 const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "until",
+        &[BParam::LocalTime, BParam::ChronoUnit],
+        BRet::Long,
+        "(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J",
+    ),
+    // `plus(amount, unit)` and its opposite — a number of any unit the
+    // value knows.
+    bm(
+        "plus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::LocalTime,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/LocalTime;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::LocalTime,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/LocalTime;",
+    ),
+    // The `TemporalAccessor` surface: one field, asked for by name.
+    bm(
+        "isSupported",
+        &[BParam::ChronoField],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    bm(
+        "get",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/TemporalField;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::ChronoField],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalField;)J",
+    ),
+    bm(
+        "range",
+        &[BParam::ChronoField],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalField;)Ljava/time/temporal/ValueRange;",
+    ),
+    bm(
+        "with",
+        &[BParam::ChronoField, BParam::Long],
+        BRet::LocalTime,
+        "(Ljava/time/temporal/TemporalField;J)Ljava/time/LocalTime;",
+    ),
     bm(
         "format",
         &[BParam::DateFormat],
@@ -12993,6 +13215,57 @@ const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
 /// `java.time.LocalDateTime` — the two halves, and the arithmetic that
 /// carries whole days from the time into the date.
 const LOCAL_DATE_TIME_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "until",
+        &[BParam::LocalDateTime, BParam::ChronoUnit],
+        BRet::Long,
+        "(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J",
+    ),
+    // `plus(amount, unit)` and its opposite — a number of any unit the
+    // value knows.
+    bm(
+        "plus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::LocalDateTime,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::LocalDateTime,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/LocalDateTime;",
+    ),
+    // The `TemporalAccessor` surface: one field, asked for by name.
+    bm(
+        "isSupported",
+        &[BParam::ChronoField],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    bm(
+        "get",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/TemporalField;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::ChronoField],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalField;)J",
+    ),
+    bm(
+        "range",
+        &[BParam::ChronoField],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalField;)Ljava/time/temporal/ValueRange;",
+    ),
+    bm(
+        "with",
+        &[BParam::ChronoField, BParam::Long],
+        BRet::LocalDateTime,
+        "(Ljava/time/temporal/TemporalField;J)Ljava/time/LocalDateTime;",
+    ),
     bm(
         "format",
         &[BParam::DateFormat],
@@ -13432,6 +13705,22 @@ const PERIOD_METHODS: &[BuiltinMethod] = &[
 /// `java.time.temporal.ChronoUnit` — a program names one to ask `between`,
 /// which is the whole of what it is for here.
 const CHRONO_UNIT_METHODS: &[BuiltinMethod] = &[
+    bm("getDuration", &[], BRet::Duration, "()Ljava/time/Duration;"),
+    bm("isDateBased", &[], BRet::Boolean, "()Z"),
+    bm("isTimeBased", &[], BRet::Boolean, "()Z"),
+    bm("isDurationEstimated", &[], BRet::Boolean, "()Z"),
+    bm(
+        "isSupportedBy",
+        &[BParam::Temporal],
+        BRet::Boolean,
+        "(Ljava/time/temporal/Temporal;)Z",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::ChronoUnit],
+        BRet::Int,
+        "(Ljava/time/temporal/ChronoUnit;)I",
+    ),
     bm(
         "between",
         &[BParam::Temporal, BParam::Temporal],
@@ -13448,6 +13737,117 @@ const CHRONO_UNIT_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)Z",
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+/// `java.time.temporal.ChronoField` — the field itself, asked what it is.
+const CHRONO_FIELD_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "range",
+        &[],
+        BRet::ValueRange,
+        "()Ljava/time/temporal/ValueRange;",
+    ),
+    bm("isDateBased", &[], BRet::Boolean, "()Z"),
+    bm("isTimeBased", &[], BRet::Boolean, "()Z"),
+    bm(
+        "getBaseUnit",
+        &[],
+        BRet::ChronoUnit,
+        "()Ljava/time/temporal/TemporalUnit;",
+    ),
+    bm(
+        "getRangeUnit",
+        &[],
+        BRet::ChronoUnit,
+        "()Ljava/time/temporal/TemporalUnit;",
+    ),
+    bm(
+        "getDisplayName",
+        &[BParam::Object],
+        BRet::Str,
+        "(Ljava/util/Locale;)Ljava/lang/String;",
+    ),
+    bm(
+        "isSupportedBy",
+        &[BParam::Temporal],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalAccessor;)Z",
+    ),
+    bm(
+        "getFrom",
+        &[BParam::Temporal],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalAccessor;)J",
+    ),
+    bm(
+        "rangeRefinedBy",
+        &[BParam::Temporal],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalAccessor;)Ljava/time/temporal/ValueRange;",
+    ),
+    bm("checkValidValue", &[BParam::Long], BRet::Long, "(J)J"),
+    bm("checkValidIntValue", &[BParam::Long], BRet::Int, "(J)I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("ordinal", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+/// `java.time.temporal.ValueRange` — four numbers, and the questions asked
+/// of them.
+const VALUE_RANGE_METHODS: &[BuiltinMethod] = &[
+    bm("getMinimum", &[], BRet::Long, "()J"),
+    bm("getLargestMinimum", &[], BRet::Long, "()J"),
+    bm("getSmallestMaximum", &[], BRet::Long, "()J"),
+    bm("getMaximum", &[], BRet::Long, "()J"),
+    bm("isFixed", &[], BRet::Boolean, "()Z"),
+    bm("isIntValue", &[], BRet::Boolean, "()Z"),
+    bm("isValidValue", &[BParam::Long], BRet::Boolean, "(J)Z"),
+    bm("isValidIntValue", &[BParam::Long], BRet::Boolean, "(J)Z"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+const CHRONO_UNIT_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "valueOf",
+        &[BParam::Str],
+        BRet::ChronoUnit,
+        "(Ljava/lang/String;)Ljava/time/temporal/ChronoUnit;",
+    ),
+    bm(
+        "values",
+        &[],
+        BRet::ChronoUnitArray,
+        "()[Ljava/time/temporal/ChronoUnit;",
+    ),
+];
+
+const CHRONO_FIELD_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "valueOf",
+        &[BParam::Str],
+        BRet::ChronoField,
+        "(Ljava/lang/String;)Ljava/time/temporal/ChronoField;",
+    ),
+    bm(
+        "values",
+        &[],
+        BRet::ChronoFieldArray,
+        "()[Ljava/time/temporal/ChronoField;",
+    ),
 ];
 
 const DURATION_STATIC_METHODS: &[BuiltinMethod] = &[
@@ -16507,6 +16907,8 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::ChronoField
+            | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
@@ -16553,6 +16955,8 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Duration => Some(("java/time/Duration", DURATION_METHODS)),
         JType::Period => Some(("java/time/Period", PERIOD_METHODS)),
         JType::ChronoUnit => Some(("java/time/temporal/ChronoUnit", CHRONO_UNIT_METHODS)),
+        JType::ChronoField => Some(("java/time/temporal/ChronoField", CHRONO_FIELD_METHODS)),
+        JType::ValueRange => Some(("java/time/temporal/ValueRange", VALUE_RANGE_METHODS)),
         JType::DateFormat => Some(("java/time/format/DateTimeFormatter", DATE_FORMAT_METHODS)),
         JType::LocalDateTime => Some(("java/time/LocalDateTime", LOCAL_DATE_TIME_METHODS)),
         JType::DayOfWeek => Some(("java/time/DayOfWeek", DAY_OF_WEEK_METHODS)),
@@ -17294,6 +17698,11 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "LocalDateTime" => Some(("java/time/LocalDateTime", LOCAL_DATE_TIME_STATIC_METHODS)),
         "DayOfWeek" => Some(("java/time/DayOfWeek", DAY_OF_WEEK_STATIC_METHODS)),
         "Month" => Some(("java/time/Month", MONTH_STATIC_METHODS)),
+        "ChronoUnit" => Some(("java/time/temporal/ChronoUnit", CHRONO_UNIT_STATIC_METHODS)),
+        "ChronoField" => Some((
+            "java/time/temporal/ChronoField",
+            CHRONO_FIELD_STATIC_METHODS,
+        )),
         "Map.Entry" | "Entry" => Some(("java/util/Map$Entry", MAP_ENTRY_STATIC_METHODS)),
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
@@ -17602,6 +18011,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Duration => JType::Duration,
         BParam::DateFormat => JType::DateFormat,
         BParam::ChronoUnit => JType::ChronoUnit,
+        BParam::ChronoField => JType::ChronoField,
         BParam::LocalDateTime => JType::LocalDateTime,
         BParam::DayOfWeek => JType::DayOfWeek,
         BParam::Month => JType::Month,
@@ -18048,9 +18458,20 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             elem: ElemType::Month,
             dims: 1,
         }),
+        BRet::ChronoUnitArray => Some(JType::Array {
+            elem: ElemType::ChronoUnit,
+            dims: 1,
+        }),
+        BRet::ChronoFieldArray => Some(JType::Array {
+            elem: ElemType::ChronoField,
+            dims: 1,
+        }),
         BRet::Period => Some(JType::Period),
         BRet::LocalDateTime => Some(JType::LocalDateTime),
         BRet::DayOfWeek => Some(JType::DayOfWeek),
+        BRet::ChronoUnit => Some(JType::ChronoUnit),
+        BRet::ChronoField => Some(JType::ChronoField),
+        BRet::ValueRange => Some(JType::ValueRange),
         BRet::Month => Some(JType::Month),
         BRet::Path => Some(JType::Path),
         BRet::Charset => Some(JType::Charset),
@@ -25371,6 +25792,8 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::ChronoField
+            | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
@@ -27234,6 +27657,8 @@ impl BodyGen<'_> {
             JType::Duration => String::from("java/time/Duration"),
             JType::Period => String::from("java/time/Period"),
             JType::ChronoUnit => String::from("java/time/temporal/ChronoUnit"),
+            JType::ChronoField => String::from("java/time/temporal/ChronoField"),
+            JType::ValueRange => String::from("java/time/temporal/ValueRange"),
             JType::DateFormat => String::from("java/time/format/DateTimeFormatter"),
             JType::LocalDateTime => String::from("java/time/LocalDateTime"),
             JType::DayOfWeek => String::from("java/time/DayOfWeek"),
@@ -30793,6 +31218,8 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::ChronoField
+            | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
@@ -33385,6 +33812,8 @@ impl BodyGen<'_> {
                 JType::Duration => "java/time/Duration",
                 JType::Period => "java/time/Period",
                 JType::ChronoUnit => "java/time/temporal/ChronoUnit",
+                JType::ChronoField => "java/time/temporal/ChronoField",
+                JType::ValueRange => "java/time/temporal/ValueRange",
                 JType::DateFormat => "java/time/format/DateTimeFormatter",
                 _ => "java/time/Month",
             };
@@ -35773,6 +36202,8 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::ChronoField
+            | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
@@ -36013,6 +36444,8 @@ impl BodyGen<'_> {
             | ElemType::File
             | ElemType::DayOfWeek
             | ElemType::Month
+            | ElemType::ChronoUnit
+            | ElemType::ChronoField
             | ElemType::Throwable(_)
             | ElemType::Wildcard { .. }
             | ElemType::Nested { .. }
@@ -36162,6 +36595,8 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::ChronoField
+            | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
@@ -36198,6 +36633,8 @@ impl BodyGen<'_> {
             | JType::Duration
             | JType::Period
             | JType::ChronoUnit
+            | JType::ChronoField
+            | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month

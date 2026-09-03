@@ -47263,3 +47263,149 @@ public class Sup {
 }
 "##
 );
+
+// `java.time.temporal.ChronoField` and the `TemporalAccessor` surface —
+// `isSupported`, `get`, `getLong`, `range` and `with(field, value)` — asked
+// of a date, a time and a stamp, for every field there is.
+differential_test!(
+    a_date_as_a_temporal,
+    "Fields",
+    r##"
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.temporal.ChronoField;
+
+/** The field surface, asked of a date, a time and a stamp. */
+public class Fields {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        LocalDate date = LocalDate.of(2024, 2, 29);
+        LocalTime time = LocalTime.of(13, 45, 30, 123456789);
+        LocalDateTime stamp = LocalDateTime.of(date, time);
+        LocalDate old = LocalDate.of(-44, 3, 15);
+
+        for (ChronoField field : ChronoField.values()) {
+            probe("field " + field, () -> field.name() + " " + field.ordinal() + " " + field);
+            probe("field.range " + field, () -> field.range());
+            probe("field.isDateBased " + field, () -> field.isDateBased());
+            probe("field.isTimeBased " + field, () -> field.isTimeBased());
+            probe("field.getBaseUnit " + field, () -> field.getBaseUnit());
+            probe("field.getRangeUnit " + field, () -> field.getRangeUnit());
+            probe("date.isSupported " + field, () -> date.isSupported(field));
+            probe("time.isSupported " + field, () -> time.isSupported(field));
+            probe("stamp.isSupported " + field, () -> stamp.isSupported(field));
+            probe("date.getLong " + field, () -> date.getLong(field));
+            probe("time.getLong " + field, () -> time.getLong(field));
+            probe("stamp.getLong " + field, () -> stamp.getLong(field));
+            probe("old.getLong " + field, () -> old.getLong(field));
+            probe("date.get " + field, () -> date.get(field));
+            probe("time.get " + field, () -> time.get(field));
+            probe("stamp.get " + field, () -> stamp.get(field));
+            probe("date.range " + field, () -> date.range(field));
+            probe("time.range " + field, () -> time.range(field));
+            probe("stamp.range " + field, () -> stamp.range(field));
+            probe("old.range " + field, () -> old.range(field));
+            probe("field.isSupportedBy date " + field, () -> field.isSupportedBy(date));
+            probe("field.isSupportedBy time " + field, () -> field.isSupportedBy(time));
+            probe("field.getFrom stamp " + field, () -> field.getFrom(stamp));
+            probe("field.rangeRefinedBy date " + field, () -> field.rangeRefinedBy(date));
+            for (long value : new long[] {0, 1, 2, 7, 12, 28, 30, 60, 400, 1000}) {
+                probe("date.with " + field + " " + value, () -> date.with(field, value));
+                probe("time.with " + field + " " + value, () -> time.with(field, value));
+                probe("stamp.with " + field + " " + value, () -> stamp.with(field, value));
+            }
+        }
+
+        // ValueRange itself.
+        probe("range.getMinimum", () -> ChronoField.DAY_OF_MONTH.range().getMinimum());
+        probe("range.getLargestMinimum",
+            () -> ChronoField.DAY_OF_MONTH.range().getLargestMinimum());
+        probe("range.getSmallestMaximum",
+            () -> ChronoField.DAY_OF_MONTH.range().getSmallestMaximum());
+        probe("range.getMaximum", () -> ChronoField.DAY_OF_MONTH.range().getMaximum());
+        probe("range.isFixed", () -> ChronoField.DAY_OF_MONTH.range().isFixed());
+        probe("range.isFixed year", () -> ChronoField.YEAR.range().isFixed());
+        probe("range.isIntValue", () -> ChronoField.DAY_OF_MONTH.range().isIntValue());
+        probe("range.isIntValue nano", () -> ChronoField.NANO_OF_DAY.range().isIntValue());
+        probe("range.isValidValue", () -> ChronoField.DAY_OF_MONTH.range().isValidValue(30));
+        probe("range.isValidValue no", () -> ChronoField.DAY_OF_MONTH.range().isValidValue(40));
+        probe("range.equals", () -> ChronoField.DAY_OF_MONTH.range()
+            .equals(ChronoField.DAY_OF_MONTH.range()));
+        probe("range.hashCode same", () -> ChronoField.DAY_OF_MONTH.range().hashCode()
+            == ChronoField.DAY_OF_MONTH.range().hashCode());
+        probe("field.equals", () -> ChronoField.YEAR.equals(ChronoField.YEAR));
+        probe("field ==", () -> ChronoField.YEAR == ChronoField.valueOf("YEAR"));
+        probe("field.checkValidValue", () -> ChronoField.MONTH_OF_YEAR.checkValidValue(5));
+        probe("field.checkValidValue bad", () -> ChronoField.MONTH_OF_YEAR.checkValidValue(13));
+        probe("field.checkValidIntValue", () -> ChronoField.MONTH_OF_YEAR.checkValidIntValue(5));
+    }
+}
+"##
+);
+
+// `java.time.temporal.ChronoUnit`, the whole enum: what each unit is, what
+// it can move, and what it measures between two values.
+differential_test!(
+    every_chrono_unit,
+    "Units",
+    r##"
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
+
+/** ChronoUnit, the whole enum. */
+public class Units {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        LocalDate date = LocalDate.of(2024, 2, 29);
+        LocalTime time = LocalTime.of(13, 45, 30, 123456789);
+        LocalDateTime stamp = LocalDateTime.of(date, time);
+        LocalDate later = LocalDate.of(2031, 7, 4);
+        LocalDateTime laterStamp = LocalDateTime.of(later, LocalTime.of(1, 2, 3));
+
+        for (ChronoUnit unit : ChronoUnit.values()) {
+            probe("name " + unit, () -> unit.name() + " " + unit.ordinal() + " " + unit);
+            probe("getDuration " + unit, () -> unit.getDuration());
+            probe("isDateBased " + unit, () -> unit.isDateBased());
+            probe("isTimeBased " + unit, () -> unit.isTimeBased());
+            probe("isDurationEstimated " + unit, () -> unit.isDurationEstimated());
+            probe("isSupportedBy date " + unit, () -> unit.isSupportedBy(date));
+            probe("isSupportedBy time " + unit, () -> unit.isSupportedBy(time));
+            probe("isSupportedBy stamp " + unit, () -> unit.isSupportedBy(stamp));
+            probe("compareTo DAYS " + unit, () -> unit.compareTo(ChronoUnit.DAYS));
+            probe("valueOf " + unit, () -> ChronoUnit.valueOf(unit.name()) == unit);
+            probe("date.plus " + unit, () -> date.plus(2, unit));
+            probe("date.minus " + unit, () -> date.minus(3, unit));
+            probe("time.plus " + unit, () -> time.plus(2, unit));
+            probe("stamp.plus " + unit, () -> stamp.plus(2, unit));
+            probe("stamp.minus " + unit, () -> stamp.minus(2, unit));
+            probe("between dates " + unit, () -> unit.between(date, later));
+            probe("between stamps " + unit, () -> unit.between(stamp, laterStamp));
+            probe("date.until " + unit, () -> date.until(later, unit));
+            probe("stamp.until " + unit, () -> stamp.until(laterStamp, unit));
+            probe("time.truncatedTo " + unit, () -> time.truncatedTo(unit));
+            probe("stamp.truncatedTo " + unit, () -> stamp.truncatedTo(unit));
+        }
+        probe("valueOf bad", () -> ChronoUnit.valueOf("FORTNIGHTS"));
+        probe("values length", () -> ChronoUnit.values().length);
+        probe("DAYS == DAYS", () -> ChronoUnit.DAYS == ChronoUnit.valueOf("DAYS"));
+    }
+}
+"##
+);

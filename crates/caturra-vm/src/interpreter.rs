@@ -16179,6 +16179,8 @@ impl<'run> Interpreter<'run> {
                     crate::value::Temporal::Unit(_) => "java.time.temporal.ChronoUnit",
                     crate::value::Temporal::DayOfWeek(_) => "java.time.DayOfWeek",
                     crate::value::Temporal::Month(_) => "java.time.Month",
+                    crate::value::Temporal::Field(_) => "java.time.temporal.ChronoField",
+                    crate::value::Temporal::Range(_) => "java.time.temporal.ValueRange",
                 }),
                 Some(HeapObject::Boxed { class_name, .. }) => Some(match class_name.as_ref() {
                     "java/lang/Integer" => "java.lang.Integer",

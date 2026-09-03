@@ -118,7 +118,12 @@ const JAVA_TIME: &[&str] = &[
 ];
 
 /// `java.time.temporal` — the unit a program names to ask `between`.
-const JAVA_TIME_TEMPORAL: &[&str] = &["ChronoUnit", "UnsupportedTemporalTypeException"];
+const JAVA_TIME_TEMPORAL: &[&str] = &[
+    "ChronoUnit",
+    "ChronoField",
+    "ValueRange",
+    "UnsupportedTemporalTypeException",
+];
 
 /// `java.time.format` — only the exception, so far: `LocalDate.parse` throws
 /// it and a program may catch it by name.
@@ -493,6 +498,8 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Duration",
     "Period",
     "ChronoUnit",
+    "ChronoField",
+    "ValueRange",
     "DateTimeFormatter",
     "DayOfWeek",
     "Month",
