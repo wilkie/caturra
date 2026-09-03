@@ -49007,6 +49007,16 @@ public class Inside {
             items.addAll(more);
         }
 
+        void addFrom(Bag<T> other) {
+            items.addAll(other.items);
+        }
+
+        void addArray(T[] more) {
+            for (T one : more) {
+                items.add(one);
+            }
+        }
+
         void addAny(Collection<? extends T> more) {
             items.addAll(more);
         }
@@ -49061,6 +49071,17 @@ public class Inside {
         text.addMap(named);
         System.out.println(text);
 
+        // A USER generic as the parameter, and an ARRAY of the variable: the
+        // erasure leaves the raw class and an `Object[]`, so the check reads
+        // what the program WROTE instead.
+        Bag<String> copied = new Bag<>();
+        copied.addFrom(text);
+        copied.addArray(new String[] {"i"});
+        System.out.println(copied);
+        Names inheritedArray = new Names();
+        inheritedArray.addArray(new String[] {"j"});
+        System.out.println(inheritedArray);
+
         // A wildcard parameter takes a NARROWER element, which is the whole
         // point of writing one.
         Bag<Shape> shapes = new Bag<>();
@@ -49079,6 +49100,7 @@ public class Inside {
         List<Integer> numbers = new ArrayList<>();
         numbers.add(1);
         raw.addAll(numbers);
+        raw.addArray(new Integer[] {2});
         System.out.println(raw);
         Pair<String, Integer> pair = new Pair<>();
         pair.put(new ArrayList<>(), new ArrayList<>());
@@ -49122,4 +49144,25 @@ differential_wording!(
     reject_nested_typevar_narrower,
     "RejInside",
     "import java.util.*;\npublic class RejInside {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addAll(List<T> m) { } void addMap(Map<String, T> m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Bag<Shape> b = new Bag<>(); List<Circle> l = new ArrayList<>(); b.addAll(l); System.out.println(\"no\"); }\n}"
+);
+
+differential_wording!(
+    reject_written_generic_parameter,
+    "RejWritten",
+    "import java.util.*;\npublic class RejWritten {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addFrom(Bag<T> o) { } void addArray(T[] m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); Bag<Integer> c = new Bag<>(); b.addFrom(c); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_written_generic_narrower,
+    "RejWritten",
+    "import java.util.*;\npublic class RejWritten {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addFrom(Bag<T> o) { } void addArray(T[] m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Bag<Shape> b = new Bag<>(); Bag<Circle> c = new Bag<>(); b.addFrom(c); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_written_array_parameter,
+    "RejWritten",
+    "import java.util.*;\npublic class RejWritten {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addFrom(Bag<T> o) { } void addArray(T[] m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); b.addArray(new Integer[] {1}); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_written_array_inherited,
+    "RejWritten",
+    "import java.util.*;\npublic class RejWritten {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addFrom(Bag<T> o) { } void addArray(T[] m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Names n = new Names(); n.addArray(new Integer[] {1}); System.out.println(\"no\"); }\n}"
 );

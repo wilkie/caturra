@@ -13477,15 +13477,22 @@ and "List<Circle> cannot be converted to List<Shape>" for the narrower element,
 which is the invariance rule a `? extends T` parameter exists to relax — and
 `addAny(Collection<? extends T>)` takes the circles it refuses.
 
-Six cells are still accepted. Two are the erasure keeping no marker at all: a
-USER generic as the parameter (`void addFrom(Bag<T> other)`) comes through as
-the RAW class, and an array of the variable (`void addArray(T[] more)`) as
-`Object[]` — neither carries anything to substitute. The other four are a
-generic METHOD's own variable, pinned by one argument and unchecked against the
-rest: `static <T> void give(Bag<T> bag, T value); give(bagOfStrings, 1)`. The
-plan the compiler keeps for a generic method reads its RETURN, and a `void` one
-has none.
+Two shapes carried no marker at all: a USER generic as the parameter
+(`void addFrom(Bag<T> other)`) arrives as the RAW class, and an array of the
+variable (`void addArray(T[] more)`) as `Object[]`. Neither erasure has anything
+to substitute — and neither had to, because the parser kept the parameter list
+AS WRITTEN all along, for every method of a generic class. The table records it
+now, resolved with the class's variables renamed to the positional sentinels,
+and the check reads that where it says more than the erasure does. `T[]` is the
+one place the two must differ: it really IS an `Object[]` at run time, which is
+right for the descriptor and useless for the check, so the written form keeps
+the variable and the descriptor keeps the erasure.
+
+What is still accepted is a generic METHOD's own variable, pinned by one
+argument and unchecked against the rest: `static <T> void give(Bag<T> bag,
+T value); give(bagOfStrings, 1)`. The plan the compiler keeps for a generic
+method reads its RETURN, and a `void` one has none.
 
 Pinned as `a_type_variable_inside_a_parameter` — the shapes that must still
 compile, a raw receiver, a two-variable class and a `? extends` parameter among
-them — with five refusals pinned by their wording.
+them — with nine refusals pinned by their wording.

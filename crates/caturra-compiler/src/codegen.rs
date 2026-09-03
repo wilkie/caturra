@@ -475,6 +475,14 @@ struct MethodSig {
     /// The last parameter is `Type... name` — extra trailing arguments
     /// pack into the array.
     is_varargs: bool,
+    /// The parameter types AS THE PROGRAM WROTE THEM, with the declaring
+    /// class's type variables kept as positional sentinels — so `void
+    /// addFrom(Bag<T> other)` is a `Bag<TypeVar(0)>` here where `params` has
+    /// only the raw class the erasure leaves. Empty for a parameter list that
+    /// mentions a variable this cannot carry (a METHOD's own, whose erasure is
+    /// its bound) and for every non-generic declaration, where the erased
+    /// parameter already says everything.
+    declared: Vec<JType>,
     /// Return-type inference plan (see `ast::MethodDecl::infer_return`),
     /// carried through from the erased AST: the parameter indices whose
     /// argument types join to the actual (un-erased) return type. `None`
@@ -662,6 +670,85 @@ fn substitute_member_type(
     })
 }
 
+/// The parameters of `method` as the program wrote them, with the CLASS's type
+/// variables renamed to the positional sentinels the resolver understands.
+///
+/// Empty when nothing is gained or nothing can be said: a class with no type
+/// parameters, a declaration the parser kept no written form for, or a
+/// parameter mentioning one of the METHOD's own variables — that one erases to
+/// its BOUND, which the erased parameter beside this already is.
+fn declared_parameters(class: &ClassDecl, method: &MethodDecl, table: &MethodTable) -> Vec<JType> {
+    if class.type_params.is_empty() || method.declared_params.len() != method.params.len() {
+        return Vec::new();
+    }
+    let own: Vec<&str> = method
+        .type_params
+        .iter()
+        .map(|tp| tp.name.as_str())
+        .collect();
+    let mut out = Vec::with_capacity(method.declared_params.len());
+    for written in &method.declared_params {
+        let renamed = rename_class_vars(written, &class.type_params, &own);
+        // `T[]` really IS an `Object[]` at run time, and the resolver says so —
+        // which is right for the descriptor and useless for the CHECK, where
+        // the variable is the whole point: `bagOfStrings.addArray(new
+        // Integer[] {1})` is javac's "Integer[] cannot be converted to
+        // String[]". `declared` never reaches a descriptor, so it can say the
+        // variable.
+        if let Some(TypeRef::Array(inner)) = &renamed
+            && let TypeRef::Named(name) = inner.as_ref()
+            && let Some(index) = crate::parser::typevar_index(name)
+        {
+            out.push(JType::Array {
+                elem: ElemType::TypeVar(index),
+                dims: 1,
+            });
+            continue;
+        }
+        let resolved = renamed.and_then(|ty| table.resolve_type(&ty));
+        match resolved {
+            Some(ty) => out.push(ty),
+            // A parameter this cannot resolve leaves the whole list alone:
+            // half a signature is worse than the erased one.
+            None => return Vec::new(),
+        }
+    }
+    out
+}
+
+/// A written type with each of the class's type variables replaced by its
+/// positional sentinel. `None` when it mentions one of the METHOD's own.
+fn rename_class_vars(
+    ty: &TypeRef,
+    class_params: &[crate::ast::TypeParam],
+    own: &[&str],
+) -> Option<TypeRef> {
+    Some(match ty {
+        TypeRef::Named(name) => {
+            if own.iter().any(|it| it == name) {
+                return None;
+            }
+            match class_params.iter().position(|tp| tp.name == *name) {
+                Some(index) => {
+                    TypeRef::Named(crate::parser::typevar_sentinel(u8::try_from(index).ok()?))
+                }
+                None => ty.clone(),
+            }
+        }
+        TypeRef::Generic { base, args } => TypeRef::Generic {
+            base: base.clone(),
+            args: args
+                .iter()
+                .map(|arg| rename_class_vars(arg, class_params, own))
+                .collect::<Option<Vec<_>>>()?,
+        },
+        TypeRef::Array(inner) => {
+            TypeRef::Array(Box::new(rename_class_vars(inner, class_params, own)?))
+        }
+        other => other.clone(),
+    })
+}
+
 /// Whether a type mentions one of the DECLARING class's type variables — as
 /// itself, or inside its own arguments. A bare one keeps the positional
 /// sentinel; a nested one erases to a wildcard whose bound names the class.
@@ -836,6 +923,7 @@ impl MethodTable {
                         is_final: false,
                         is_abstract: false,
                         is_varargs: false,
+                        declared: Vec::new(),
                         ret_infer: None,
                     },
                     // NOT flagged `is_final` here: the dedicated check for
@@ -851,6 +939,7 @@ impl MethodTable {
                         is_final: false,
                         is_abstract: false,
                         is_varargs: false,
+                        declared: Vec::new(),
                         ret_infer: None,
                     },
                     // `protected Object clone() throws CloneNotSupportedException`
@@ -865,6 +954,7 @@ impl MethodTable {
                         is_final: false,
                         is_abstract: false,
                         is_varargs: false,
+                        declared: Vec::new(),
                         ret_infer: None,
                     },
                     MethodSig {
@@ -876,6 +966,7 @@ impl MethodTable {
                         is_final: false,
                         is_abstract: false,
                         is_varargs: false,
+                        declared: Vec::new(),
                         ret_infer: None,
                     },
                     MethodSig {
@@ -887,6 +978,7 @@ impl MethodTable {
                         is_final: false,
                         is_abstract: false,
                         is_varargs: false,
+                        declared: Vec::new(),
                         ret_infer: None,
                     },
                 ],
@@ -925,6 +1017,7 @@ impl MethodTable {
                     is_final: false,
                     is_abstract: true,
                     is_varargs: false,
+                    declared: Vec::new(),
                     ret_infer: None,
                 }],
                 fields: Vec::new(),
@@ -983,6 +1076,7 @@ impl MethodTable {
                             is_final: false,
                             is_abstract: true,
                             is_varargs: false,
+                            declared: Vec::new(),
                             ret_infer: None,
                         }]
                     },
@@ -1015,6 +1109,7 @@ impl MethodTable {
                     is_final: false,
                     is_abstract: true,
                     is_varargs: false,
+                    declared: Vec::new(),
                     ret_infer: None,
                 }],
             ),
@@ -1030,6 +1125,7 @@ impl MethodTable {
                         is_final: false,
                         is_abstract: true,
                         is_varargs: false,
+                        declared: Vec::new(),
                         ret_infer: None,
                     },
                     MethodSig {
@@ -1041,6 +1137,7 @@ impl MethodTable {
                         is_final: false,
                         is_abstract: true,
                         is_varargs: false,
+                        declared: Vec::new(),
                         ret_infer: None,
                     },
                     // `remove()` is a DEFAULT since Java 8 — an implementor
@@ -1057,6 +1154,7 @@ impl MethodTable {
                         is_final: false,
                         is_abstract: false,
                         is_varargs: false,
+                        declared: Vec::new(),
                         ret_infer: None,
                     },
                 ],
@@ -1120,6 +1218,7 @@ impl MethodTable {
                 is_final: false,
                 is_abstract: true,
                 is_varargs: false,
+                declared: Vec::new(),
                 ret_infer: None,
             };
             table.classes.insert(
@@ -1181,6 +1280,7 @@ impl MethodTable {
                 is_final: false,
                 is_abstract: true,
                 is_varargs: false,
+                declared: Vec::new(),
                 ret_infer: None,
             };
             table.classes.insert(
@@ -1440,6 +1540,11 @@ impl MethodTable {
                         // `Node<Integer>` because the constructor's parameter
                         // is the class's own variable. The plan is built the
                         // same way and read at the `new`.
+                        // The parameters as WRITTEN, with the class's own
+                        // variables kept by position: what a call checks its
+                        // arguments against once the receiver says what those
+                        // variables are.
+                        declared: declared_parameters(class, method, &table),
                         ret_infer: if method.is_constructor {
                             constructor_infer_plan(class, method)
                         } else {
@@ -1482,6 +1587,7 @@ impl MethodTable {
                         is_final: false,
                         is_abstract: false,
                         is_varargs: false,
+                        declared: Vec::new(),
                         ret_infer: None,
                     });
                 }
@@ -28506,6 +28612,7 @@ impl BodyGen<'_> {
             && sig
                 .params
                 .iter()
+                .chain(&sig.declared)
                 .any(|p| mentions_type_var(*p, self.table.object_id)))
         .then(|| {
             let declarer = self.table.declaring_class(&class_name, method)?;
@@ -34573,9 +34680,17 @@ impl BodyGen<'_> {
     ///
     /// Only the CHECK is substituted. The descriptor stays erased, because
     /// that is what the JVM signature is.
-    fn receiver_parameter(&self, param: JType) -> JType {
+    fn receiver_parameter(&self, sig: &MethodSig, at: usize) -> JType {
+        // The parameter AS WRITTEN where the table kept it: `Bag<T> other` and
+        // `T[] more` erase to the raw class and to `Object[]`, which carry
+        // nothing to substitute, and the written form carries the variable.
+        let param = sig
+            .declared
+            .get(at)
+            .copied()
+            .unwrap_or_else(|| sig.params[at]);
         let Some((first, rest)) = self.receiver_args else {
-            return param;
+            return sig.params[at];
         };
         let substituted = substitute_member_type(param, first, rest, self.table);
         // A class variable INSIDE a parameter's own arguments erases to a
@@ -34598,8 +34713,8 @@ impl BodyGen<'_> {
 
     fn emit_call_args_inner(&mut self, args: &[Expr], sig: &MethodSig, span: SourceSpan) -> u16 {
         if !sig.is_varargs {
-            for (arg, param) in args.iter().zip(&sig.params) {
-                let param = self.receiver_parameter(*param);
+            for (at, arg) in args.iter().enumerate().take(sig.params.len()) {
+                let param = self.receiver_parameter(sig, at);
                 let actual = self.expr_toward(arg, param);
                 self.convert_for_assignment(actual, param, arg.span());
             }
@@ -34607,8 +34722,8 @@ impl BodyGen<'_> {
         }
         let fixed = sig.params.len() - 1;
         let array_ty = sig.params[fixed];
-        for (arg, param) in args.iter().zip(&sig.params).take(fixed) {
-            let param = self.receiver_parameter(*param);
+        for (at, arg) in args.iter().enumerate().take(fixed) {
+            let param = self.receiver_parameter(sig, at);
             let actual = self.expr_toward(arg, param);
             self.convert_for_assignment(actual, param, arg.span());
         }
