@@ -13454,3 +13454,38 @@ others (`static <T> void give(Bag<T> bag, T value); give(bagOfStrings, 1)`).
 Pinned as `a_type_variable_in_a_parameter` — the shapes that must still compile,
 including a raw receiver and a call from inside the class — with eleven
 refusals pinned by their WORDING, which javac's matches exactly.
+
+## A type variable inside a parameter
+
+`Bag<String> b; b.addAll(listOfIntegers);` compiled — the parameter is
+`List<T>`, and the erasure it was checked against is `List<Object>`. Twenty-five
+shapes against a JDK found eleven accepted where javac refuses; five of them are
+this, and the substitution that fixes them is the one the RETURN side has always
+made, asked of the parameter as well.
+
+It needed one thing the return side did not. A bare `T` keeps the parser's
+POSITIONAL sentinel, and the previous unit read the index straight off it. A
+variable inside a parameter's own arguments erases to a WILDCARD whose bound
+names the declaring class instead — no index at all — so only a receiver with a
+single argument can say which variable it was. That is `Bag<T>.addAll(List<T>)`,
+the shape this is about; a class with two variables keeps the erasure it had,
+which is the safe direction.
+
+The wording is javac's exactly, down to the receiver's own spelling:
+"incompatible types: ArrayList<Integer> cannot be converted to List<String>",
+and "List<Circle> cannot be converted to List<Shape>" for the narrower element,
+which is the invariance rule a `? extends T` parameter exists to relax — and
+`addAny(Collection<? extends T>)` takes the circles it refuses.
+
+Six cells are still accepted. Two are the erasure keeping no marker at all: a
+USER generic as the parameter (`void addFrom(Bag<T> other)`) comes through as
+the RAW class, and an array of the variable (`void addArray(T[] more)`) as
+`Object[]` — neither carries anything to substitute. The other four are a
+generic METHOD's own variable, pinned by one argument and unchecked against the
+rest: `static <T> void give(Bag<T> bag, T value); give(bagOfStrings, 1)`. The
+plan the compiler keeps for a generic method reads its RETURN, and a `void` one
+has none.
+
+Pinned as `a_type_variable_inside_a_parameter` — the shapes that must still
+compile, a raw receiver, a two-variable class and a `? extends` parameter among
+them — with five refusals pinned by their wording.

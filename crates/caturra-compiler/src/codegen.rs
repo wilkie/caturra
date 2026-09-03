@@ -662,6 +662,21 @@ fn substitute_member_type(
     })
 }
 
+/// Whether a type mentions one of the DECLARING class's type variables — as
+/// itself, or inside its own arguments. A bare one keeps the positional
+/// sentinel; a nested one erases to a wildcard whose bound names the class.
+fn mentions_type_var(ty: JType, object: ClassId) -> bool {
+    matches!(ty, JType::TypeVar(_))
+        || substitute_member_elems(ty, |elem| match elem {
+            ElemType::TypeVar(_)
+            | ElemType::Wildcard {
+                bound: WildcardBound::TypeVar(_),
+                ..
+            } => ElemType::Object(object),
+            other => other,
+        }) != ty
+}
+
 /// The same, over a substitution given directly — what a SUBCLASS that fixed
 /// its supertype's argument has, where nothing is interned to look up.
 fn substitute_member_elems(ty: JType, arg: impl Fn(ElemType) -> ElemType) -> JType {
@@ -28488,7 +28503,10 @@ impl BodyGen<'_> {
         // has to be checked against it: `n.add(1)` is javac's "int cannot be
         // converted to String".
         let inherited = (self.receiver_args.is_none()
-            && sig.params.iter().any(|p| matches!(p, JType::TypeVar(_))))
+            && sig
+                .params
+                .iter()
+                .any(|p| mentions_type_var(*p, self.table.object_id)))
         .then(|| {
             let declarer = self.table.declaring_class(&class_name, method)?;
             let owner = self.table.class_id(&declarer)?;
@@ -34548,19 +34566,51 @@ impl BodyGen<'_> {
         ty
     }
 
+    /// A parameter as the RECEIVER's arguments make it. A variable inside a
+    /// parameter's own arguments — `void addAll(List<T> more)` — erased to
+    /// `List<Object>`, so `bagOfStrings.addAll(listOfIntegers)` compiled; the
+    /// same substitution the RETURN side has always made says `List<String>`.
+    ///
+    /// Only the CHECK is substituted. The descriptor stays erased, because
+    /// that is what the JVM signature is.
+    fn receiver_parameter(&self, param: JType) -> JType {
+        let Some((first, rest)) = self.receiver_args else {
+            return param;
+        };
+        let substituted = substitute_member_type(param, first, rest, self.table);
+        // A class variable INSIDE a parameter's own arguments erases to a
+        // WILDCARD whose bound names the class — not to the positional sentinel
+        // a bare parameter and a return both keep — so the index is gone, and
+        // only a single-argument receiver can say which variable it was. That
+        // is `Bag<T>.addAll(List<T>)`, the shape this is about; a class with
+        // two variables keeps the erasure, which is where it already was.
+        if rest != NO_TYPE_ARGS {
+            return substituted;
+        }
+        substitute_member_elems(substituted, |elem| match elem {
+            ElemType::Wildcard {
+                bound: WildcardBound::TypeVar(_),
+                ..
+            } => first,
+            other => other,
+        })
+    }
+
     fn emit_call_args_inner(&mut self, args: &[Expr], sig: &MethodSig, span: SourceSpan) -> u16 {
         if !sig.is_varargs {
             for (arg, param) in args.iter().zip(&sig.params) {
-                let actual = self.expr_toward(arg, *param);
-                self.convert_for_assignment(actual, *param, arg.span());
+                let param = self.receiver_parameter(*param);
+                let actual = self.expr_toward(arg, param);
+                self.convert_for_assignment(actual, param, arg.span());
             }
             return sig.params.iter().map(|p| p.width()).sum();
         }
         let fixed = sig.params.len() - 1;
         let array_ty = sig.params[fixed];
         for (arg, param) in args.iter().zip(&sig.params).take(fixed) {
-            let actual = self.expr_toward(arg, *param);
-            self.convert_for_assignment(actual, *param, arg.span());
+            let param = self.receiver_parameter(*param);
+            let actual = self.expr_toward(arg, param);
+            self.convert_for_assignment(actual, param, arg.span());
         }
         // Array form: a single trailing argument assignable to the
         // varargs array is passed straight through.

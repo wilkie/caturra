@@ -48969,3 +48969,157 @@ differential_wording!(
     "RejVar",
     "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { System.out.println(new Bag<String>().has(1)); System.out.println(\"no\"); }\n}"
 );
+
+differential_test!(
+    a_type_variable_inside_a_parameter,
+    "Inside",
+    r#"
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/** A type variable INSIDE a parameter's own arguments. */
+public class Inside {
+    interface Shape {
+        double area();
+    }
+
+    static class Circle implements Shape {
+        public double area() {
+            return 3.0;
+        }
+
+        public String toString() {
+            return "circle";
+        }
+    }
+
+    static class Bag<T> {
+        List<T> items = new ArrayList<>();
+
+        void add(T value) {
+            items.add(value);
+        }
+
+        void addAll(List<T> more) {
+            items.addAll(more);
+        }
+
+        void addAny(Collection<? extends T> more) {
+            items.addAll(more);
+        }
+
+        void addMap(Map<String, T> more) {
+            items.addAll(more.values());
+        }
+
+        void seed(List<T> first, List<T> second) {
+            items.addAll(first);
+            items.addAll(second);
+        }
+
+        void mix(String label, List<T> more) {
+            System.out.println(label);
+            items.addAll(more);
+        }
+
+        List<T> all() {
+            return items;
+        }
+
+        public String toString() {
+            return items.toString();
+        }
+    }
+
+    static class Names extends Bag<String> {
+        void fill() {
+            addAll(new ArrayList<>(List.of("inherited")));
+        }
+    }
+
+    static class Pair<A, B> {
+        void put(List<A> first, List<B> second) {
+            System.out.println(first + " " + second);
+        }
+    }
+
+    public static void main(String[] args) {
+        // What the receiver's argument DOES accept, inside a parameter's own
+        // arguments.
+        Bag<String> text = new Bag<>();
+        text.addAll(new ArrayList<>(List.of("a")));
+        List<String> more = new ArrayList<>(List.of("b"));
+        text.addAll(more);
+        text.addAll(text.all());
+        text.seed(new ArrayList<>(List.of("c")), new ArrayList<>(List.of("d")));
+        text.mix("label", new ArrayList<>(List.of("e")));
+        Map<String, String> named = new HashMap<>();
+        named.put("k", "f");
+        text.addMap(named);
+        System.out.println(text);
+
+        // A wildcard parameter takes a NARROWER element, which is the whole
+        // point of writing one.
+        Bag<Shape> shapes = new Bag<>();
+        shapes.addAny(new ArrayList<>(List.of(new Circle())));
+        System.out.println(shapes);
+
+        // A subclass that fixed the argument, from inside and from outside.
+        Names names = new Names();
+        names.fill();
+        names.addAll(new ArrayList<>(List.of("outside")));
+        System.out.println(names);
+
+        // A RAW receiver is unchecked, and a two-variable class keeps the
+        // erasure it had.
+        Bag raw = new Bag();
+        List<Integer> numbers = new ArrayList<>();
+        numbers.add(1);
+        raw.addAll(numbers);
+        System.out.println(raw);
+        Pair<String, Integer> pair = new Pair<>();
+        pair.put(new ArrayList<>(), new ArrayList<>());
+
+        // An element that is itself a container.
+        Bag<List<String>> nested = new Bag<>();
+        nested.addAll(new ArrayList<>(List.of(List.of("g"))));
+        System.out.println(nested);
+
+        // ...and `Object` takes anything, which is not the erasure being loose
+        // but the argument really being `Object`.
+        Bag<Object> anything = new Bag<>();
+        anything.addAll(new ArrayList<>(List.of("h")));
+        System.out.println(anything);
+    }
+}
+"#
+);
+
+differential_wording!(
+    reject_nested_typevar_list,
+    "RejInside",
+    "import java.util.*;\npublic class RejInside {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addAll(List<T> m) { } void addMap(Map<String, T> m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); List<Integer> l = new ArrayList<>(); b.addAll(l); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_nested_typevar_inline,
+    "RejInside",
+    "import java.util.*;\npublic class RejInside {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addAll(List<T> m) { } void addMap(Map<String, T> m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); b.addAll(new ArrayList<Integer>()); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_nested_typevar_map,
+    "RejInside",
+    "import java.util.*;\npublic class RejInside {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addAll(List<T> m) { } void addMap(Map<String, T> m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); b.addMap(new HashMap<String, Integer>()); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_nested_typevar_inherited,
+    "RejInside",
+    "import java.util.*;\npublic class RejInside {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addAll(List<T> m) { } void addMap(Map<String, T> m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Names n = new Names(); List<Integer> l = new ArrayList<>(); n.addAll(l); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_nested_typevar_narrower,
+    "RejInside",
+    "import java.util.*;\npublic class RejInside {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void addAll(List<T> m) { } void addMap(Map<String, T> m) { } }\n  static class Names extends Bag<String> { }\n  public static void main(String[] args) { Bag<Shape> b = new Bag<>(); List<Circle> l = new ArrayList<>(); b.addAll(l); System.out.println(\"no\"); }\n}"
+);

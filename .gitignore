@@ -48,4 +48,6 @@ __pycache__/
 # `java` processes in parallel for a sweep occasionally trips the host VM's
 # collector, and it drops these in the working directory.
 hs_err_pid*.log
+# ...and the REPLAY log the same crash writes beside it.
+replay_pid*.log
 core.*

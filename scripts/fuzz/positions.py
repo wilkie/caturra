@@ -86,6 +86,10 @@ EXPRS = [
  ("typevarParam", 'Holder<String> h = new Holder<>(); h.set("ab");', 'h.get().length()'),
  ("typevarBoxed", 'Holder<Integer> h = new Holder<>(); h.set(5);', 'h.get() + 1'),
  ("typevarInherited", 'Names named = new Names(); named.put("ab");', 'named.all().get(0).length()'),
+ # ...and a variable INSIDE a parameter's own arguments, which erases to a
+ # wildcard rather than to the positional sentinel a bare one keeps.
+ ("typevarNested", 'Holder<String> h = new Holder<>(); h.addAll(new ArrayList<>(List.of("a")));',
+  'h.extra()'),
 ]
 
 POSITIONS = {
@@ -124,7 +128,14 @@ HELPERS = """    static class Node<T> {
         Stream<T> stream() { return items.stream(); }
     }
     static class Names extends Bag<String> { }
-    static class Holder<T> { private T v; void set(T x) { v = x; } T get() { return v; } }
+    static class Holder<T> {
+        private T v;
+        private final List<T> more = new ArrayList<>();
+        void set(T x) { v = x; }
+        void addAll(List<T> xs) { more.addAll(xs); }
+        T get() { return v; }
+        int extra() { return more.size(); }
+    }
 """
 
 out_dir = "cases"
