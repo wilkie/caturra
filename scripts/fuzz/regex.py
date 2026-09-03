@@ -33,7 +33,9 @@ ATOMS = (
     + ["[abc]", "[a-c]", "[01]", "[^a]", ".", "\\\\d", "\\\\w", "\\\\s"] * 2
     + ["\\\\D", "\\\\W", "\\\\S", "[.]", "\\\\.", "x"]
 )
-QUANTIFIERS = ["", "", "", "?", "*", "+", "{2}", "{1,3}", "{2,}", "??", "*?", "+?", "*+", "++"]
+QUANTIFIERS = [
+    "", "", "", "?", "*", "+", "{2}", "{1,3}", "{2,}", "??", "*?", "+?", "*+", "++", "?+", "{1,2}+",
+]
 ANCHORS = ["^", "$", "\\\\b", "\\\\B"]
 
 
@@ -43,7 +45,7 @@ def atom(rng, depth):
         inner = "".join(atom(rng, depth - 1) for _ in range(rng.randint(1, 3)))
         if rng.random() < 0.3:
             inner += "|" + "".join(atom(rng, depth - 1) for _ in range(rng.randint(1, 2)))
-        kind = rng.choice(["(", "(", "(", "(?:", "(?=", "(?!"])
+        kind = rng.choice(["(", "(", "(", "(?:", "(?=", "(?!", "(?>"])
         # A lookahead with a quantifier after it is not what a program writes.
         if kind in ("(?=", "(?!"):
             return kind + inner + ")"

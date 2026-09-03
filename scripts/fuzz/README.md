@@ -34,8 +34,19 @@ backreferences — is far larger than any battery. Patterns come from a grammar,
 inputs are drawn from the pattern's own characters so a fair share of them
 match, and every observable answer is compared: `matches`, each `find`'s
 span and groups, `split`, `replaceAll`, and the exception a bad pattern throws.
-Two divergences in 6300 probes, both about how much CAPTURE STATE survives a
-failed attempt (see the spec); everything else agreed.
+
+Its patterns now include atomic groups (`(?>X)`) and the two possessive
+quantifiers that were missing (`?+`, `{m,n}+`). Everything it has ever found
+has been one question: how much CAPTURE STATE survives a failed attempt.
+Pulling on that replaced this engine's whole-snapshot save-and-restore with the
+one restore a JDK actually does — a group's own tail, when its continuation
+fails — and closed six shapes at once: an empty iteration ending a repetition,
+a fixed-width body re-writing its group on the way out, an optional
+zero-length repetition leaving its group unset, `?` not being a counted
+closure, a failed branch's capture staying readable, and a possessive
+repetition's last, failed attempt writing through. The spec section "The
+atomic group, and what a group is left holding" writes the rules down. Forty
+seeds and roughly 26000 probes now agree.
 
 **`time.py` — `java.time` at scale.** The calendar is arithmetic caturra WROTE
 — the proleptic Gregorian rules, the month-end clamping, the epoch-day

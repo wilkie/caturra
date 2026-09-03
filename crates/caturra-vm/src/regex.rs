@@ -79,6 +79,12 @@ enum Node {
     Alt(Vec<Node>),
     Repeat {
         node: Box<Node>,
+        /// Whether the quantifier was a COUNTED closure — `*`, `+`, `{m,n}`.
+        /// A `?` is not: `java.util.regex` compiles `X?` to a branch and
+        /// `X{0,1}` to a loop, and a loop over a capturing group puts the
+        /// group's boundaries back on its way out. So `((?!x))?` reports the
+        /// group as "" and `((?!x)){0,1}` reports it as null.
+        counted: bool,
         min: u32,
         max: Option<u32>,
         kind: RepeatKind,
@@ -173,6 +179,44 @@ fn max_width(node: &Node) -> Option<Width> {
             (Width::Fixed(width), Some(max)) => Some(Width::Fixed(width * max as usize)),
             _ => Some(Width::Unbounded),
         },
+        Node::BackRef { .. } => None,
+    }
+}
+
+/// Whether a repeated body always matches the SAME number of code units —
+/// what `java.util.regex` calls a deterministic node, and the reason it
+/// compiles `(X){m,n}` two different ways. A fixed-width body becomes a
+/// `GroupCurly`, which re-asserts the group's boundaries once the rest of the
+/// pattern has matched; a variable one becomes a `Loop`, where the boundaries
+/// are simply whatever the last iteration wrote. The two answer differently
+/// only when the same group is written again deeper in the match, which is
+/// what `fixed_width` is asked about.
+fn fixed_width(node: &Node) -> Option<usize> {
+    match node {
+        Node::Empty
+        | Node::Start
+        | Node::End
+        | Node::WordBoundary(_)
+        | Node::InputStart
+        | Node::InputEnd
+        | Node::InputEndBeforeFinalTerminator
+        | Node::LineStart
+        | Node::LineEnd
+        | Node::Look { .. } => Some(0),
+        Node::Literal(_) | Node::AnyChar | Node::AnyCharDotAll | Node::Class(_) => Some(1),
+        Node::Concat(nodes) => nodes
+            .iter()
+            .try_fold(0, |total, node| Some(total + fixed_width(node)?)),
+        Node::Alt(branches) => {
+            let mut widths = branches.iter().map(fixed_width);
+            let first = widths.next()??;
+            widths.all(|width| width == Some(first)).then_some(first)
+        }
+        Node::Group { node, .. } => fixed_width(node),
+        // `X{2}` is fixed where `X{1,2}` is not, whatever `X` is.
+        Node::Repeat { node, min, max, .. } => {
+            (Some(*min) == *max).then(|| fixed_width(node).map(|width| width * *min as usize))?
+        }
         Node::BackRef { .. } => None,
     }
 }
@@ -441,6 +485,7 @@ impl Parser<'_> {
         let start = self.at;
         let atom = self.parse_atom()?;
         self.skip_ignorable();
+        let mut counted = true;
         let (min, max) = match self.peek() {
             Some(unit) if unit == u16::from(b'*') => {
                 self.at += 1;
@@ -452,6 +497,7 @@ impl Parser<'_> {
             }
             Some(unit) if unit == u16::from(b'?') => {
                 self.at += 1;
+                counted = false;
                 (0, Some(1))
             }
             Some(unit) if unit == u16::from(b'{') => match self.parse_bounds()? {
@@ -495,6 +541,7 @@ impl Parser<'_> {
                 let last = nodes.pop().expect("non-empty");
                 nodes.push(Node::Repeat {
                     node: Box::new(last),
+                    counted,
                     min,
                     max,
                     kind,
@@ -505,6 +552,7 @@ impl Parser<'_> {
         };
         Ok(Node::Repeat {
             node: Box::new(atom),
+            counted,
             min,
             max,
             kind,
@@ -698,19 +746,14 @@ impl Parser<'_> {
                     node: Box::new(node),
                 });
             }
+            if self.eat(u16::from(b'>')) {
+                return self.parse_atomic();
+            }
             if !self.eat(u16::from(b':')) {
-                // `(?>` is an ATOMIC group — real Java syntax this engine does
-                // not implement, and saying so is honest. Anything else after
-                // `(?` is a modifier a JDK does not know either, reported at
-                // the offending character (or at the end, if there is none).
-                let unsupported = self.peek() == Some(u16::from(b'>'));
-                let description = if unsupported {
-                    "Unsupported group construct"
-                } else {
-                    "Unknown inline modifier"
-                };
-                let at = if unsupported { open } else { self.at };
-                return Err(self.error(description, at));
+                // Anything else after `(?` is a modifier a JDK does not know
+                // either, reported at the offending character (or at the end,
+                // if there is none).
+                return Err(self.error("Unknown inline modifier", self.at));
             }
         } else {
             self.groups += 1;
@@ -777,6 +820,28 @@ impl Parser<'_> {
             self.at += 1;
         }
         Ok(name)
+    }
+
+    /// `(?>X)` — an ATOMIC group. It matches `X` once and then refuses to
+    /// reconsider, which is exactly one possessive repetition: the engine
+    /// already has that, so the construct needs no node of its own.
+    fn parse_atomic(&mut self) -> ParseResult<Node> {
+        let saved = self.flags;
+        let node = self.parse_alt()?;
+        self.flags = saved;
+        if !self.eat(u16::from(b')')) {
+            return Err(self.error("Unclosed group", self.units.len()));
+        }
+        Ok(Node::Repeat {
+            node: Box::new(Node::Group {
+                index: None,
+                node: Box::new(node),
+            }),
+            counted: true,
+            min: 1,
+            max: Some(1),
+            kind: RepeatKind::Possessive,
+        })
     }
 
     /// `(?i)`, `(?im-sx)` — set flags for the rest of the enclosing group —
@@ -1212,6 +1277,7 @@ enum Cont<'a> {
     /// One iteration of a repeat just succeeded; try for another.
     Repeat {
         node: &'a Node,
+        counted: bool,
         min: u32,
         max: Option<u32>,
         kind: RepeatKind,
@@ -1453,12 +1519,15 @@ impl<'a> Matcher<'a> {
                 self.run(&nodes[0], pos, caps, &next)
             }
             Node::Alt(branches) => {
+                // No snapshot around a branch. `java.util.regex` runs every
+                // branch against ONE group array and puts a group back only
+                // where the group's own tail sees its continuation fail, so a
+                // capture made by a branch that then failed is still readable
+                // — `(?=(a))?b|a` over "ab" reports group 1 as "a".
                 for branch in branches {
-                    let saved = caps.clone();
                     if let Some(end) = self.run(branch, pos, caps, cont) {
                         return Some(end);
                     }
-                    *caps = saved;
                 }
                 None
             }
@@ -1478,13 +1547,15 @@ impl<'a> Matcher<'a> {
                 min,
                 max,
                 kind: RepeatKind::Possessive,
+                ..
             } => self.repeat_possessive(node, *min, *max, pos, caps, cont),
             Node::Repeat {
                 node,
+                counted,
                 min,
                 max,
                 kind,
-            } => self.repeat(node, *min, *max, *kind, 0, pos, caps, cont),
+            } => self.repeat(node, *counted, *min, *max, *kind, 0, None, pos, caps, cont),
             Node::BackRef { index, fold } => {
                 let Some(Some((from, to))) = caps.get(*index).copied() else {
                     // An unmatched group's backreference fails, per Java.
@@ -1602,7 +1673,6 @@ impl<'a> Matcher<'a> {
                     matcher.limit.set(kept_limit);
                     matcher.floor.set(kept_floor);
                 };
-                let mut probe = caps.clone();
                 let hit = match direction {
                     // Backwards: the body must END at `pos`, and it can begin
                     // no earlier than its widest match allows — or at the
@@ -1612,28 +1682,19 @@ impl<'a> Matcher<'a> {
                             Width::Fixed(width) => pos.saturating_sub(*width),
                             Width::Unbounded => 0,
                         };
-                        (earliest..=pos).rev().any(|start| {
-                            let mut attempt = caps.clone();
-                            let landed = self.run(node, start, &mut attempt, &Cont::EndAt(pos));
-                            if landed.is_some() {
-                                probe = attempt;
-                            }
-                            landed.is_some()
-                        })
+                        (earliest..=pos)
+                            .rev()
+                            .any(|start| self.run(node, start, caps, &Cont::EndAt(pos)).is_some())
                     }
-                    Look::Ahead => self.run(node, pos, &mut probe, &Cont::Done).is_some(),
+                    Look::Ahead => self.run(node, pos, caps, &Cont::Done).is_some(),
                 };
                 restore(self);
                 // Whatever the body CAPTURED is kept, whether the lookaround
-                // was positive or negative — `java.util.regex` writes group
-                // boundaries into one array and never takes them back, so a
-                // group set inside a NEGATIVE lookahead whose body matched
-                // (and which therefore failed the branch) is still readable
-                // afterwards. Dropping it here was tidier and answered `null`
-                // where a JDK answers the text.
-                if hit {
-                    *caps = probe;
-                }
+                // was positive or negative and whether or not it matched —
+                // the body ran against the same group array the rest of the
+                // match uses, which is why a group set inside a NEGATIVE
+                // lookahead whose body matched (and which therefore failed
+                // the branch) is still readable afterwards.
                 if hit == *negated {
                     return None;
                 }
@@ -1662,10 +1723,14 @@ impl<'a> Matcher<'a> {
     fn repeat(
         &self,
         node: &'a Node,
+        counted: bool,
         min: u32,
         max: Option<u32>,
         kind: RepeatKind,
         done: u32,
+        // Where the iteration that has just finished BEGAN, so the greedy
+        // path can re-assert its group. `None` before any has run.
+        since: Option<usize>,
         pos: usize,
         caps: &mut Captures,
         cont: &Cont<'a>,
@@ -1680,6 +1745,7 @@ impl<'a> Matcher<'a> {
             }
             let next = Cont::Repeat {
                 node,
+                counted,
                 min,
                 max,
                 kind,
@@ -1715,8 +1781,7 @@ impl<'a> Matcher<'a> {
                     return None;
                 }
                 let end = *ends.last().expect("seeded with the start");
-                let mut probe = caps.clone();
-                let Some(next) = self.run(node, end, &mut probe, &Cont::Done) else {
+                let Some(next) = self.run(node, end, caps, &Cont::Done) else {
                     break;
                 };
                 if next == end {
@@ -1726,12 +1791,10 @@ impl<'a> Matcher<'a> {
                 taken += 1;
             }
             while taken >= min {
-                let saved = caps.clone();
                 let end = ends[taken as usize];
                 if let Some(matched) = self.resume(end, caps, cont) {
                     return Some(matched);
                 }
-                *caps = saved;
                 if taken == 0 {
                     break;
                 }
@@ -1747,23 +1810,73 @@ impl<'a> Matcher<'a> {
             RepeatKind::Greedy => {
                 let saved = caps.clone();
                 if let Some(end) = take_more(caps) {
+                    if counted {
+                        Self::unwrite_empty(node, &saved, caps);
+                    }
                     return Some(end);
                 }
-                *caps = saved;
-                self.resume(pos, caps, cont)
+                let landed = self.resume(pos, caps, cont);
+                // Only where an OPTIONAL iteration was taken. A fixed count
+                // (`(X){3}`) never reaches the backing-off loop that does
+                // this, and neither does a range that gave everything back.
+                if landed.is_some() && counted && done > min {
+                    Self::reassert(node, since, pos, caps);
+                }
+                landed
             }
             RepeatKind::Reluctant => {
-                let saved = caps.clone();
                 if let Some(end) = self.resume(pos, caps, cont) {
                     return Some(end);
                 }
-                *caps = saved;
                 take_more(caps)
             }
             // Possessive repeats never enter this path: `run` sends them to
             // `repeat_possessive`, and so no `Cont::Repeat` is ever built for
             // one. Resuming is the conservative fallback.
             RepeatKind::Possessive => self.resume(pos, caps, cont),
+        }
+    }
+
+    /// An OPTIONAL repetition of a capturing group that consumes nothing —
+    /// `((?!x))*`, `()*`, `(\b)*` — leaves the group UNSET where one that
+    /// merely could consume nothing (`(x?)*`) leaves it empty. The same
+    /// `GroupCurly` is behind both: a zero-length iteration writes the group,
+    /// stops the loop, and is then undone by the restore on the way out, so
+    /// only the iterations the MINIMUM required are still there.
+    fn unwrite_empty(node: &'a Node, before: &Captures, caps: &mut Captures) {
+        let Node::Group {
+            index: Some(index),
+            node: body,
+        } = node
+        else {
+            return;
+        };
+        if fixed_width(body) == Some(0) {
+            caps[*index] = before[*index];
+        }
+    }
+
+    /// A greedy `(X){m,n}` over a FIXED-WIDTH capturing group writes the
+    /// group's boundaries again once the rest of the pattern has matched —
+    /// `java.util.regex` compiles that shape to a `GroupCurly`, whose backing
+    /// off sets `groups[g] = [i - k, i)` AFTER its continuation returned true
+    /// — but only while it still has iterations it could give back.
+    /// So the loop that stopped EARLIEST has the last word, even though the
+    /// match ran on past it: `((.){1,3})*` over "abcde" ends with group 2 as
+    /// "c" — the third character, from the first pass — and not the "e" that
+    /// the second pass wrote. A variable-width body compiles to a `Loop`
+    /// instead, which does no such thing, so `fixed_width` decides.
+    fn reassert(node: &'a Node, since: Option<usize>, pos: usize, caps: &mut Captures) {
+        let Some(from) = since else { return };
+        let Node::Group {
+            index: Some(index),
+            node: body,
+        } = node
+        else {
+            return;
+        };
+        if fixed_width(body).is_some() {
+            caps[*index] = Some((from, pos));
         }
     }
 
@@ -1787,12 +1900,13 @@ impl<'a> Matcher<'a> {
                 return None;
             }
             // Each iteration matches on its own, with no continuation to
-            // backtrack into — that independence is the "atomic" part.
-            let mut trial = caps.clone();
-            let Some(end) = self.run(node, at, &mut trial, &Cont::Done) else {
+            // backtrack into — that independence is the "atomic" part. What
+            // it captures is written straight through, the FAILED last
+            // attempt included: `((a??a{2})?+x+?)*+` leaves the inner group
+            // as "aa" even though nothing after it matched.
+            let Some(end) = self.run(node, at, caps, &Cont::Done) else {
                 break;
             };
-            *caps = trial;
             done += 1;
             // A body that consumed nothing would repeat forever.
             if end == at {
@@ -1847,6 +1961,7 @@ impl<'a> Matcher<'a> {
             }
             Cont::Repeat {
                 node,
+                counted,
                 min,
                 max,
                 kind,
@@ -1854,12 +1969,31 @@ impl<'a> Matcher<'a> {
                 from,
                 parent,
             } => {
-                // A body that consumed nothing would loop forever; once the
-                // minimum is met, stop. (Java's engine does the same.)
-                if pos == *from && *done >= *min {
+                // A body that consumed nothing would loop forever, so the
+                // repetition stops there — and it stops even BELOW the
+                // minimum, because repeating an empty match again would
+                // change nothing, so one empty iteration stands for all the
+                // ones still required. That is `java.util.regex`'s own rule,
+                // and it decides which iteration a capture is left from:
+                // `(a??){3}b` over "aab" runs empty, backs into "a", runs
+                // empty, backs into "a", then runs empty and is DONE, so
+                // group 1 is "" — where a loop that filled the minimum with
+                // empty iterations first would leave "a" behind.
+                if pos == *from {
                     return self.resume(pos, caps, parent);
                 }
-                self.repeat(node, *min, *max, *kind, *done, pos, caps, parent)
+                self.repeat(
+                    node,
+                    *counted,
+                    *min,
+                    *max,
+                    *kind,
+                    *done,
+                    Some(*from),
+                    pos,
+                    caps,
+                    parent,
+                )
             }
         }
     }

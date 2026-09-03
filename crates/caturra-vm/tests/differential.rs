@@ -46680,3 +46680,107 @@ public class Specifiers {
 }
 "#
 );
+
+// `(?>X)` — the atomic group, real Java syntax this engine used to refuse.
+differential_test!(
+    an_atomic_group,
+    "Atomic",
+    r#"
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Atomic {
+    static void probe(String pattern, String text) {
+        Matcher m = Pattern.compile(pattern).matcher(text);
+        StringBuilder line = new StringBuilder(pattern + " ~ " + text + " => " + m.find());
+        if (m.find(0)) {
+            line.append(" [" + m.start() + "," + m.end() + ")");
+            for (int g = 1; g <= m.groupCount(); g++) {
+                line.append(" g" + g + "=" + (m.group(g) == null ? "null" : "\"" + m.group(g) + "\""));
+            }
+        }
+        System.out.println(line);
+    }
+
+    public static void main(String[] args) {
+        // What makes it atomic: the run is never given back.
+        probe("(?>a*)a", "aaa");
+        probe("(?>a*)b", "aaab");
+        probe("(?>a|ab)c", "abc");
+        probe("(?>a|ab)bc", "abc");
+        probe("(?>a+)+b", "aaab");
+        // It is a group like any other otherwise.
+        probe("x(?>y)?z", "xz");
+        probe("(?>(?i)AB)c", "abc");
+        probe("(?>[a-c]+)\\w", "abcd");
+        probe("\\b(?>\\d+)\\b", "x 123 y");
+        probe("(?>(a)(b))+", "abab");
+        probe("(?>)a", "a");
+    }
+}
+"#
+);
+
+// Which iteration of a loop a capturing group is left holding — the
+// arrangement `java.util.regex` reaches, not the tidier one.
+differential_test!(
+    what_a_group_is_left_holding,
+    "Leftover",
+    r#"
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Leftover {
+    static void probe(String pattern, String text) {
+        Matcher m = Pattern.compile(pattern).matcher(text);
+        StringBuilder line = new StringBuilder(pattern + " ~ " + text + " => " + m.find());
+        if (m.find(0)) {
+            line.append(" [" + m.start() + "," + m.end() + ")");
+            for (int g = 1; g <= m.groupCount(); g++) {
+                line.append(" g" + g + "=" + (m.group(g) == null ? "null" : "\"" + m.group(g) + "\""));
+            }
+        }
+        System.out.println(line);
+    }
+
+    public static void main(String[] args) {
+        // An EMPTY iteration ends the repetition, and stands for all the ones
+        // the minimum still wanted — so the last pass is the empty one.
+        probe("(x??){2}y", "xy");
+        probe("(|x){2}y", "xy");
+        probe("(a??){3}b", "aab");
+        probe("(a*?){3}b", "aab");
+        probe("(a|){3}b", "ab");
+        probe("(a?){3}b", "aab");
+        // A fixed-width body writes its group again once the REST of the
+        // pattern has matched, so the pass that stopped earliest wins.
+        probe("((.){1,3})*", "abcde");
+        probe("((.){1,3})*", "abcdef");
+        probe("((.){1,2})*", "abcde");
+        probe("(((.){1,2}){1,2})*", "abcdef");
+        // ... but a fixed COUNT never reaches that, and neither does a
+        // variable-width body.
+        probe("((.){3})*", "abcdef");
+        probe("((.|xy){1,3})*", "abcde");
+        probe("((a|bb){1,3})*", "abbabba");
+        // An optional repetition that consumes nothing leaves the group
+        // unset — where `?`, which is a branch and not a loop, does not.
+        probe("((?!x))*y", "y");
+        probe("((?!x))+y", "y");
+        probe("((?!x))?$", "a");
+        probe("((?!x)){0,1}$", "a");
+        probe("()*y", "y");
+        probe("(\\b)*y", "y");
+        probe("(x?)*y", "y");
+        // A capture a branch made is still readable after the branch failed.
+        probe("(?=(a))?b|a", "ab");
+        probe("(?!(a)*+z)x", "ax");
+        probe("(?!(a*)*+z)x", "x");
+        probe("(?:(a)*+z)|x", "ax");
+        probe("((a??a{2})?+x+?)*+a{1,3}", "aa");
+        probe("(?:(a)b|a)c", "ac");
+        probe("[^a](a*)?a?+z|.", "b");
+    }
+}
+"#
+);

@@ -12841,3 +12841,53 @@ hash, not the whole of it.
 Pinned by `which_complaint_a_bad_specifier_gets` in
 `crates/caturra-vm/tests/differential.rs`, and swept by `scripts/fuzz/format.py`
 — 2783 random probes over six seeds, all agreeing.
+
+## The atomic group, and what a group is left holding
+
+`(?>X)` is real Java 11 syntax and this engine refused it as "Unsupported
+group construct" while already having everything it needs: an atomic group
+matches `X` once and never reconsiders, which is one possessive repetition.
+`(?>a*)a` fails over "aaa" and `(?>a|ab)c` matches "abc" — the run is not
+given back. It parses to `Repeat { min: 1, max: 1, Possessive }` over a
+non-capturing group, so no node kind was added.
+
+The rest of this section is about a question a program can ask and a JDK
+answers with an implementation artifact: what is in a capturing group that
+did not participate in the match it reports, or that participated more than
+once. `java.util.regex` writes group boundaries into ONE array and puts them
+back in exactly two places — a `GroupTail` whose continuation failed, and a
+`GroupCurly`'s own restores — so everything else it wrote is still readable.
+This engine used to snapshot the whole capture set around a branch, a
+repetition and a lookaround, which is tidier and answers `null` where a JDK
+answers text. It does not any more; the only restore left is the one on a
+group's own tail, which is the JDK's.
+
+Four rules follow from that, each measured:
+
+- **An empty iteration ends a repetition** — and stands for every iteration
+  the minimum still wanted, because repeating an empty match again would
+  change nothing. So `(a??){3}b` over "aab" runs empty, backs into "a", runs
+  empty, backs into "a", and is then DONE: group 1 is "", not the "a" a loop
+  that filled its minimum with empty passes first would leave.
+- **A fixed-width body writes its group again on the way out.** A quantified
+  capturing group whose body always matches the same number of characters
+  compiles to a `GroupCurly`, whose backing-off sets the group AFTER its
+  continuation returned true. The pass that stopped EARLIEST therefore has
+  the last word: `((.){1,3})*` over "abcde" ends with group 2 as "c" — the
+  third character, from the first pass — and not the "e" the second pass
+  wrote. A fixed COUNT (`((.){3})*`) never reaches that code, and neither
+  does a variable-width body (`((.|xy){1,3})*`).
+- **An optional repetition that consumes nothing leaves its group unset.**
+  `((?!x))*y`, `()*y` and `(\b)*y` all report group 1 as `null`, where
+  `((?!x))+y` reports "". `?` is not a counted closure — a JDK compiles `X?`
+  to a branch and `X{0,1}` to a loop — so `((?!x))?$` says "" and
+  `((?!x)){0,1}$` says `null`.
+- **A capture a failed branch made is still readable.** `(?=(a))?b|a` over
+  "ab" matches "a" and reports group 1 as "a": the lookahead ran, captured,
+  and the branch it was in then failed. Same for a group inside a NEGATIVE
+  lookahead whose body matched, and for the last, failed iteration of a
+  possessive repetition.
+
+Pinned by `an_atomic_group` and `what_a_group_is_left_holding` in
+`crates/caturra-vm/tests/differential.rs`, and swept by `scripts/fuzz/regex.py`
+— 40 seeds, roughly 26000 pattern-against-input probes, all agreeing.
