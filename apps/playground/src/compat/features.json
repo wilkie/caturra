@@ -530,6 +530,36 @@
     "expected": "true\ntrue [a, c]\ntrue [a]\n[APPLE, FIG, PEAR]\ntrue [APPLE, PEAR]\ntrue true\nnull\n"
   },
   {
+    "id": "g-regex-properties",
+    "category": "Library",
+    "title": "The whole regex construct table",
+    "summary": "`\\p{...}` in all its spellings (POSIX, category, script, block, `java...`), the atomic group `(?>X)`, `\\X` for a grapheme cluster, `\\h`/`\\v`, `\\G`, and the `(?d)`/`(?U)` flags that change what the rest of them mean.",
+    "main": "Constructs",
+    "source": "import java.util.regex.Matcher;\nimport java.util.regex.Pattern;\n\npublic class Constructs {\n    static void show(String pattern, String text) {\n        Matcher m = Pattern.compile(pattern).matcher(text);\n        StringBuilder found = new StringBuilder(pattern + \" ->\");\n        while (m.find()) {\n            found.append(\" [\" + m.group() + \"]\");\n        }\n        System.out.println(found);\n    }\n\n    public static void main(String[] args) {\n        // The POSIX name is US-ASCII; the `Is` name is the Unicode class.\n        show(\"\\\\p{Alpha}+\", \"abc\\u00e9def\");\n        show(\"\\\\p{IsAlpha}+\", \"abc\\u00e9def\");\n        show(\"(?U)\\\\p{Alpha}+\", \"abc\\u00e9def\");\n        show(\"\\\\p{Lu}+\", \"aBCd\");\n        show(\"\\\\p{IsGreek}+\", \"a\\u03b1\\u03b2b\");\n        show(\"\\\\p{InBasicLatin}+\", \"ab\\u03b1\");\n        show(\"\\\\p{javaJavaIdentifierStart}+\", \"1ab\");\n        // Perl's two whitespace classes, which are not `\\\\s`.\n        show(\"\\\\h+\", \"a  b\");\n        show(\"\\\\v+\", \"a\\nb\");\n        // An atomic group never gives its run back.\n        show(\"(?>a*)a\", \"aaa\");\n        show(\"(?>a|ab)c\", \"abc\");\n        // A grapheme cluster is one character however many code points.\n        show(\"\\\\X\", \"\\u00e1b\");\n        // `\\\\G` only matches where the last match ended.\n        show(\"\\\\G[ab]\", \"abcab\");\n        // UNIX_LINES: only a newline ends a line, so `.` crosses a\n        // carriage return there and stops at one otherwise.\n        System.out.println(\"(?d).+ matches \"\n            + Pattern.compile(\"(?d).+\").matcher(\"a\\rb\").results().count()\n            + \" where .+ matches \"\n            + Pattern.compile(\".+\").matcher(\"a\\rb\").results().count());\n    }\n}\n",
+    "status": "supported",
+    "expected": "\\p{Alpha}+ -> [abc] [def]\n\\p{IsAlpha}+ -> [abc\u00e9def]\n(?U)\\p{Alpha}+ -> [abc\u00e9def]\n\\p{Lu}+ -> [BC]\n\\p{IsGreek}+ -> [\u03b1\u03b2]\n\\p{InBasicLatin}+ -> [ab]\n\\p{javaJavaIdentifierStart}+ -> [ab]\n\\h+ -> [  ]\n\\v+ -> [\n]\n(?>a*)a ->\n(?>a|ab)c ->\n\\X -> [\u00e1] [b]\n\\G[ab] -> [a] [b]\n(?d).+ matches 1 where .+ matches 2\n"
+  },
+  {
+    "id": "date-fields",
+    "category": "Library",
+    "title": "A date as a Temporal",
+    "summary": "`ChronoField` and the accessor surface \u2014 `isSupported`, `get`, `getLong`, `range`, `with(field, value)` \u2014 plus `TemporalAdjusters` and `plus(amount, unit)`.",
+    "main": "Fields",
+    "source": "import java.time.DayOfWeek;\nimport java.time.LocalDate;\nimport java.time.Period;\nimport java.time.temporal.ChronoField;\nimport java.time.temporal.ChronoUnit;\nimport java.time.temporal.TemporalAdjusters;\n\npublic class Fields {\n    public static void main(String[] args) {\n        LocalDate leap = LocalDate.of(2024, 2, 29);\n        System.out.println(leap.get(ChronoField.DAY_OF_YEAR)\n            + \" \" + leap.getLong(ChronoField.EPOCH_DAY)\n            + \" \" + leap.get(ChronoField.ALIGNED_WEEK_OF_MONTH));\n\n        // A range is FOUR numbers: February is 28 days some years and 29 others.\n        System.out.println(ChronoField.DAY_OF_MONTH.range()\n            + \" but this month \" + leap.range(ChronoField.DAY_OF_MONTH));\n\n        // A date has no hour.\n        System.out.println(leap.isSupported(ChronoField.HOUR_OF_DAY)\n            + \" \" + leap.isSupported(ChronoField.MONTH_OF_YEAR));\n\n        System.out.println(leap.with(ChronoField.DAY_OF_MONTH, 1)\n            + \" \" + leap.with(ChronoField.MONTH_OF_YEAR, 4));\n\n        // The adjusters: rules for moving a date.\n        System.out.println(leap.with(TemporalAdjusters.lastDayOfMonth())\n            + \" \" + leap.with(TemporalAdjusters.next(DayOfWeek.MONDAY))\n            + \" \" + leap.with(TemporalAdjusters.firstInMonth(DayOfWeek.FRIDAY)));\n\n        // Years and months go on together, so the 29th survives the trip.\n        System.out.println(leap.plus(Period.of(1, 2, 3))\n            + \" \" + leap.plus(3, ChronoUnit.DECADES)\n            + \" \" + ChronoUnit.MONTHS.between(leap, LocalDate.of(2025, 7, 4)));\n    }\n}\n",
+    "status": "supported",
+    "expected": "60 19782 5\n1 - 28/31 but this month 1 - 29\nfalse true\n2024-02-01 2024-04-29\n2024-02-29 2024-03-04 2024-02-02\n2025-05-02 2054-02-28 16\n"
+  },
+  {
+    "id": "code-units",
+    "category": "Library",
+    "title": "A string of code units",
+    "summary": "A `String` is a sequence of `char`, so an emoji is TWO of them \u2014 `length` and `codePointCount` disagree, `%.3s` counts chars, and `\\X` takes the whole cluster.",
+    "main": "Units",
+    "source": "import java.util.regex.Matcher;\nimport java.util.regex.Pattern;\n\npublic class Units {\n    public static void main(String[] args) {\n        String text = \"a\\ud83d\\ude00b\";\n        System.out.println(text.length() + \" chars, \"\n            + text.codePointCount(0, text.length()) + \" code points\");\n        System.out.println(text.codePointAt(1) + \" \" + text.codePointBefore(2));\n        System.out.println(Character.charCount(text.codePointAt(1))\n            + \" \" + Character.isSupplementaryCodePoint(text.codePointAt(1))\n            + \" \" + (int) Character.highSurrogate(text.codePointAt(1)));\n\n        // A precision counts CHARS, so three of them keep the whole pair.\n        System.out.println(\"[\" + String.format(\"%.3s\", text) + \"]\");\n        System.out.println(\"[\" + String.format(\"%6s\", text) + \"]\");\n\n        // One grapheme cluster is one character to a reader.\n        Matcher m = Pattern.compile(\"\\\\X\").matcher(text);\n        StringBuilder clusters = new StringBuilder();\n        while (m.find()) {\n            clusters.append(\"[\" + m.group() + \"]\");\n        }\n        System.out.println(clusters);\n\n        // The whole code point space, not only the plane a `char` holds.\n        System.out.println(Character.isLetter(0x10400)\n            + \" \" + Character.getType(0x10400)\n            + \" \" + Character.isJavaIdentifierStart('\\u00a3'));\n    }\n}\n",
+    "status": "supported",
+    "expected": "4 chars, 3 code points\n128512 55357\n2 true 55357\n[a\ud83d\ude00]\n[  a\ud83d\ude00b]\n[a][\ud83d\ude00][b]\ntrue 1 true\n"
+  },
+  {
     "id": "vector",
     "category": "Collections",
     "title": "Vector, Hashtable, EnumMap, EnumSet",

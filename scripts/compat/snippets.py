@@ -1795,6 +1795,153 @@ public class Bulk {
 }
 """,
     ),
+    dict(
+        id="g-regex-properties",
+        category="Library",
+        title="The whole regex construct table",
+        summary=(
+            "`\\p{...}` in all its spellings (POSIX, category, script, block, "
+            "`java...`), the atomic group `(?>X)`, `\\X` for a grapheme "
+            "cluster, `\\h`/`\\v`, `\\G`, and the `(?d)`/`(?U)` flags that "
+            "change what the rest of them mean."
+        ),
+        main="Constructs",
+        source=r"""
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Constructs {
+    static void show(String pattern, String text) {
+        Matcher m = Pattern.compile(pattern).matcher(text);
+        StringBuilder found = new StringBuilder(pattern + " ->");
+        while (m.find()) {
+            found.append(" [" + m.group() + "]");
+        }
+        System.out.println(found);
+    }
+
+    public static void main(String[] args) {
+        // The POSIX name is US-ASCII; the `Is` name is the Unicode class.
+        show("\\p{Alpha}+", "abc\u00e9def");
+        show("\\p{IsAlpha}+", "abc\u00e9def");
+        show("(?U)\\p{Alpha}+", "abc\u00e9def");
+        show("\\p{Lu}+", "aBCd");
+        show("\\p{IsGreek}+", "a\u03b1\u03b2b");
+        show("\\p{InBasicLatin}+", "ab\u03b1");
+        show("\\p{javaJavaIdentifierStart}+", "1ab");
+        // Perl's two whitespace classes, which are not `\\s`.
+        show("\\h+", "a  b");
+        show("\\v+", "a\nb");
+        // An atomic group never gives its run back.
+        show("(?>a*)a", "aaa");
+        show("(?>a|ab)c", "abc");
+        // A grapheme cluster is one character however many code points.
+        show("\\X", "\u00e1b");
+        // `\\G` only matches where the last match ended.
+        show("\\G[ab]", "abcab");
+        // UNIX_LINES: only a newline ends a line, so `.` crosses a
+        // carriage return there and stops at one otherwise.
+        System.out.println("(?d).+ matches "
+            + Pattern.compile("(?d).+").matcher("a\rb").results().count()
+            + " where .+ matches "
+            + Pattern.compile(".+").matcher("a\rb").results().count());
+    }
+}
+""",
+    ),
+    dict(
+        id="date-fields",
+        category="Library",
+        title="A date as a Temporal",
+        summary=(
+            "`ChronoField` and the accessor surface — `isSupported`, `get`, "
+            "`getLong`, `range`, `with(field, value)` — plus `TemporalAdjusters` "
+            "and `plus(amount, unit)`."
+        ),
+        main="Fields",
+        source=r"""
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.Period;
+import java.time.temporal.ChronoField;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAdjusters;
+
+public class Fields {
+    public static void main(String[] args) {
+        LocalDate leap = LocalDate.of(2024, 2, 29);
+        System.out.println(leap.get(ChronoField.DAY_OF_YEAR)
+            + " " + leap.getLong(ChronoField.EPOCH_DAY)
+            + " " + leap.get(ChronoField.ALIGNED_WEEK_OF_MONTH));
+
+        // A range is FOUR numbers: February is 28 days some years and 29 others.
+        System.out.println(ChronoField.DAY_OF_MONTH.range()
+            + " but this month " + leap.range(ChronoField.DAY_OF_MONTH));
+
+        // A date has no hour.
+        System.out.println(leap.isSupported(ChronoField.HOUR_OF_DAY)
+            + " " + leap.isSupported(ChronoField.MONTH_OF_YEAR));
+
+        System.out.println(leap.with(ChronoField.DAY_OF_MONTH, 1)
+            + " " + leap.with(ChronoField.MONTH_OF_YEAR, 4));
+
+        // The adjusters: rules for moving a date.
+        System.out.println(leap.with(TemporalAdjusters.lastDayOfMonth())
+            + " " + leap.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
+            + " " + leap.with(TemporalAdjusters.firstInMonth(DayOfWeek.FRIDAY)));
+
+        // Years and months go on together, so the 29th survives the trip.
+        System.out.println(leap.plus(Period.of(1, 2, 3))
+            + " " + leap.plus(3, ChronoUnit.DECADES)
+            + " " + ChronoUnit.MONTHS.between(leap, LocalDate.of(2025, 7, 4)));
+    }
+}
+""",
+    ),
+    dict(
+        id="code-units",
+        category="Library",
+        title="A string of code units",
+        summary=(
+            "A `String` is a sequence of `char`, so an emoji is TWO of them — "
+            "`length` and `codePointCount` disagree, `%.3s` counts chars, and "
+            "`\\X` takes the whole cluster."
+        ),
+        main="Units",
+        source=r"""
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Units {
+    public static void main(String[] args) {
+        String text = "a\ud83d\ude00b";
+        System.out.println(text.length() + " chars, "
+            + text.codePointCount(0, text.length()) + " code points");
+        System.out.println(text.codePointAt(1) + " " + text.codePointBefore(2));
+        System.out.println(Character.charCount(text.codePointAt(1))
+            + " " + Character.isSupplementaryCodePoint(text.codePointAt(1))
+            + " " + (int) Character.highSurrogate(text.codePointAt(1)));
+
+        // A precision counts CHARS, so three of them keep the whole pair.
+        System.out.println("[" + String.format("%.3s", text) + "]");
+        System.out.println("[" + String.format("%6s", text) + "]");
+
+        // One grapheme cluster is one character to a reader.
+        Matcher m = Pattern.compile("\\X").matcher(text);
+        StringBuilder clusters = new StringBuilder();
+        while (m.find()) {
+            clusters.append("[" + m.group() + "]");
+        }
+        System.out.println(clusters);
+
+        // The whole code point space, not only the plane a `char` holds.
+        System.out.println(Character.isLetter(0x10400)
+            + " " + Character.getType(0x10400)
+            + " " + Character.isJavaIdentifierStart('\u00a3'));
+    }
+}
+""",
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
