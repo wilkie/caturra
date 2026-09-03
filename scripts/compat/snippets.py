@@ -2626,4 +2626,75 @@ public class Formats {
                       '    interface F<T> { String apply(T t); }\n'
                       '    static class SF implements F<String> {\n'
                       '        public String apply(String s) { return "SF:" + s; }\n    }')),
+    dict(
+        id="time-positions",
+        category="Library",
+        title="A java.time value wherever a value goes",
+        summary="A library enum switches, fills an `EnumSet`, streams like any other and satisfies a `Comparable` bound; a date sorts and `Collections.max` reads it.",
+        main="Calendar",
+        source="""
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.Month;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class Calendar {
+    static <T extends Comparable<T>> T latest(List<T> values) {
+        T best = values.get(0);
+        for (T one : values) {
+            if (one.compareTo(best) > 0) {
+                best = one;
+            }
+        }
+        return best;
+    }
+
+    static String describe(Month month) {
+        switch (month) {
+            case DECEMBER:
+            case JANUARY:
+            case FEBRUARY:
+                return "winter";
+            default:
+                return "the rest of the year";
+        }
+    }
+
+    public static void main(String[] args) {
+        LocalDate exam = LocalDate.of(2024, 5, 15);
+
+        // A library enum is an enum: it switches, and it fills an EnumSet.
+        System.out.println(describe(exam.getMonth()) + " " + describe(Month.JANUARY));
+        System.out.println(EnumSet.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY));
+        System.out.println(EnumSet.range(Month.MARCH, Month.JUNE));
+
+        // ...and it streams, with its own methods on the far side.
+        System.out.println(Arrays.stream(Month.values())
+            .filter(m -> m.getValue() > 9)
+            .map(Month::name)
+            .collect(Collectors.toList()));
+
+        // A date is Comparable, so it sorts and `Collections.max` reads it.
+        List<LocalDate> dates = new ArrayList<>(List.of(
+            exam, LocalDate.of(2024, 7, 8), LocalDate.of(2023, 12, 25)));
+        Collections.sort(dates);
+        System.out.println(dates + " " + Collections.max(dates));
+
+        // ...and a generic `<T extends Comparable<T>>` helper takes any
+        // library enum, which compares to its own kind.
+        System.out.println(latest(new ArrayList<>(List.of(Month.MAY, Month.JANUARY))));
+
+        // A stream of the days between two dates.
+        System.out.println(exam.datesUntil(exam.plusDays(4))
+            .map(LocalDate::getDayOfWeek)
+            .collect(Collectors.toList()));
+    }
+}
+""",
+    ),
 ]

@@ -13169,3 +13169,73 @@ what it resolved instead ("Unable to obtain LocalTime from TemporalAccessor:
 pointing at an index.
 
 Pinned as `every_pattern_letter`.
+
+## A java.time value in every position
+
+Every `java.time` type placed where a program can put a value — a switch
+selector, an `EnumSet`, a stream's element, a `Comparable` bound, a sorted
+collection — measured against a JDK one construct at a time so a refusal of one
+did not hide the rest. Fifty-nine constructs; seventeen disagreed.
+
+They were not seventeen faults. Four causes account for all of them, and each
+is a fact that was written down twice.
+
+**A library enum is an enum.** `switch (date.getMonth()) { case FEBRUARY: … }`
+was "incompatible types: Month cannot be converted to int": the switch checked
+its selector against the classes the PROGRAM declares, and `Month` is not one.
+The same reading refused `EnumSet.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY)` —
+the line every EnumSet tutorial opens with — as "needs an enum type", and left
+`Arrays.stream(ChronoUnit.values())` with no element, so every lambda after it
+was "only allowed where a functional-interface type is expected". Which library
+types are enums is now ONE list (`LIBRARY_ENUMS`), read by the switch, by the
+`EnumSet` factories and by the lambda pass. The VM needed nothing: an enum set
+is built from the universe `values()` answers and reference identity, and the
+constants are interned.
+
+**A library call answers a type, and the emit side already knew which.** The
+lambda pass typed a library call from a hand-written table that stopped at
+`String` and the collections, so `LocalDate.of(2024, 2, 29)` had no type at all
+— and `Stream.of(LocalDate.of(…), …).map(LocalDate::getYear)` was "cannot find
+symbol: method getYear(), location: class Object" while the same dates through
+a declared `List<LocalDate>` had always worked. The emitter's own method tables
+carry a DESCRIPTOR per entry, and its return half is the answer; the pass reads
+that now, and the hand-written arms are only the generic answers a descriptor
+has erased (a stream's element, a receiver passed through). Overloads of one
+arity that disagree answer nothing, since the parameter types are what tell
+them apart and this pass has not resolved those.
+
+**An ordered value is `Comparable`.** `<T extends Comparable<T>> T biggest(
+List<T>)` — the first generic method a course writes — refused a list of dates,
+because no `java.time` type had the interface in caturra's type system, at the
+value level or the ELEMENT level. Both now do, for the ones a JDK orders. An
+amount does not: `Period` is not `Comparable` ("1 year 2 days" and "1 month 40
+days" have no order between them), nor is a `ValueRange`, and a `TreeSet` of
+either is a `ClassCastException` naming `java.lang.Comparable` — which caturra
+used to report as a gap in its own library, "unknown native member
+ValueRange.compareTo".
+
+**A method reference's qualifier and a functional interface's name are
+different questions.** Making every library class a legal method-reference
+qualifier had also made `Runnable` and `Supplier` read as classes the PROGRAM
+declared, so the erased `java.util.function` treatment was skipped for them and
+`Runnable r = () -> {};` was refused as "not a functional interface". The two
+sets are separate now.
+
+Two things fell out that had nothing to do with dates. A seeded fold over an
+object pipeline answered the UNBOXED number a functional call hands back, so
+`Stream.of(1, 2).reduce(0, Integer::sum)` assigned to anything was a
+`VerifyError` — an object stream's elements are references, and its fold
+answers an element. And `EnumSet.range(JUNE, MARCH)` said "from > to", naming
+the parameters of a method the program never wrote, where a JDK names the two
+constants.
+
+What still differs is three things, all understood. Extending `HashMap` is the
+documented refusal it always was. `groupingBy(LocalDate::getEra, …)` gathers
+into a `HashMap` keyed by an enum, whose iteration order is the identity hash
+a JDK gives that run — not reproducible by anything. And `Comparable<Month> c =
+aLocalDate;` is accepted where javac refuses it, which is the same hole
+`Comparable<Integer> c = "x";` has always had: the type ARGUMENT of a
+`Comparable` target is not read.
+
+Pinned as `java_time_in_every_position`, `an_object_folds_answer_a_reference`
+and `a_backwards_enum_range_names_its_ends`.

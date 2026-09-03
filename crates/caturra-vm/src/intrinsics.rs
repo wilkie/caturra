@@ -1257,6 +1257,16 @@ fn field_method(
     let info = crate::time::field_info(field);
     Ok(Some(match method {
         "ordinal" => JValue::Int(i32::from(field)),
+        // An enum's order is its ordinal's.
+        "compareTo" => match args.first() {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::Temporal(Temporal::Field(other))) => {
+                    JValue::Int(i32::from(field) - i32::from(*other))
+                }
+                _ => return Err(throw("java.lang.ClassCastException: not a ChronoField")),
+            },
+            _ => return Err(throw("java.lang.NullPointerException")),
+        },
         "range" => JValue::Ref(Some(
             heap.intern_temporal(Temporal::Range(crate::time::field_range(field))),
         )),
@@ -2297,6 +2307,15 @@ fn temporal_method(
         Temporal::Era(era) => {
             return match method {
                 "getValue" | "ordinal" => Ok(Some(JValue::Int(i32::from(era)))),
+                "compareTo" => match args.first() {
+                    Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                        Some(HeapObject::Temporal(Temporal::Era(other))) => {
+                            Ok(Some(JValue::Int(i32::from(era) - i32::from(*other))))
+                        }
+                        _ => Err(throw("java.lang.ClassCastException: not an IsoEra")),
+                    },
+                    _ => Err(throw("java.lang.NullPointerException")),
+                },
                 _ => Err(VmError::UnknownIntrinsic(format!(
                     "java/time/chrono/IsoEra.{method}"
                 ))),
@@ -9869,6 +9888,44 @@ pub fn invoke_static(
             };
             let made = Temporal::Adjuster(crate::time::Adjuster { kind, day, ordinal });
             Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
+        }
+        // `IsoEra.BCE` and `IsoEra.CE`, by ordinal — and the two an enum
+        // always answers.
+        "java/time/chrono/IsoEra" => {
+            let made = |heap: &mut Heap, ordinal: u8| {
+                JValue::Ref(Some(heap.intern_temporal(Temporal::Era(ordinal))))
+            };
+            match method {
+                "values" => {
+                    let constants = vec![made(heap, 0), made(heap, 1)];
+                    let array = heap.alloc(HeapObject::RefArray(String::from(class), constants));
+                    Ok(Some(JValue::Ref(Some(array))))
+                }
+                "valueOf" => {
+                    let name = match args.first() {
+                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        _ => None,
+                    }
+                    .unwrap_or_default();
+                    match name.as_str() {
+                        "BCE" => Ok(Some(made(heap, 0))),
+                        "CE" => Ok(Some(made(heap, 1))),
+                        _ => Err(throw(&*format!(
+                            "java.lang.IllegalArgumentException: No enum constant \
+                             java.time.chrono.IsoEra.{name}"
+                        ))),
+                    }
+                }
+                _ => {
+                    let ordinal = match args.first() {
+                        Some(JValue::Int(value)) => *value,
+                        _ => 0,
+                    };
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let ordinal = ordinal.clamp(0, 1) as u8;
+                    Ok(Some(made(heap, ordinal)))
+                }
+            }
         }
         "java/time/temporal/ChronoUnit" | "java/time/temporal/ChronoField" => {
             let is_unit = class.ends_with("ChronoUnit");

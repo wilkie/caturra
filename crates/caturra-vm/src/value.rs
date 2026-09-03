@@ -399,6 +399,18 @@ impl Temporal {
         }
     }
 
+    /// Whether this value is `Comparable`. An AMOUNT is not — "1 year and 2
+    /// days" and "1 month and 40 days" have no order between them — nor is a
+    /// field's range or an adjuster, so a `TreeSet` of any of the three is the
+    /// cast error a JDK raises rather than a set.
+    #[must_use]
+    pub fn is_ordered(self) -> bool {
+        !matches!(
+            self,
+            Temporal::Period(_) | Temporal::Range(_) | Temporal::Adjuster(_)
+        )
+    }
+
     /// What `toString()` gives.
     #[must_use]
     pub fn text(self) -> String {

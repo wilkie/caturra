@@ -3492,19 +3492,10 @@ impl MethodTable {
                     "File" => Some(JType::File),
                     "PrintWriter" | "FileWriter" => Some(JType::Writer),
                     "PrintStream" => Some(JType::PrintStream),
-                    "LocalDate" => Some(JType::LocalDate),
-                    "LocalTime" => Some(JType::LocalTime),
-                    "Duration" => Some(JType::Duration),
-                    "Period" => Some(JType::Period),
-                    "ChronoUnit" => Some(JType::ChronoUnit),
-                    "ChronoField" => Some(JType::ChronoField),
-                    "ValueRange" => Some(JType::ValueRange),
-                    "TemporalAdjuster" => Some(JType::TemporalAdjuster),
-                    "IsoEra" => Some(JType::IsoEra),
-                    "DateTimeFormatter" => Some(JType::DateFormat),
-                    "LocalDateTime" => Some(JType::LocalDateTime),
-                    "DayOfWeek" => Some(JType::DayOfWeek),
-                    "Month" => Some(JType::Month),
+                    // The `java.time` value types, read from the list the
+                    // lambda pass reads: what a name means cannot be two
+                    // answers.
+                    simple if library_time_type(simple).is_some() => library_time_type(simple),
                     // A `ByteArrayOutputStream` is the only `OutputStream`
                     // there is here, so the abstract name is a FACE of it —
                     // the way `List` is a face of `ArrayList`.
@@ -3820,6 +3811,7 @@ impl MethodTable {
                     JType::Month => ElemType::Month,
                     JType::ChronoUnit => ElemType::ChronoUnit,
                     JType::ChronoField => ElemType::ChronoField,
+                    JType::IsoEra => ElemType::IsoEra,
                     // A wrapper array (`Integer[]`) is a REFERENCE array of
                     // boxed elements, distinct from the primitive `int[]`.
                     JType::Boxed(elem) => match Prim::of(elem) {
@@ -4615,6 +4607,7 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::ChronoUnit => "java/time/temporal/ChronoUnit",
         ElemType::ChronoField => "java/time/temporal/ChronoField",
         ElemType::LocalDate => "java/time/LocalDate",
+        ElemType::IsoEra => "java/time/chrono/IsoEra",
         // A type variable erases to `Object`, like every other reference here.
         ElemType::TypeVar(_)
         | ElemType::Str
@@ -4892,6 +4885,7 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::ChronoUnit => String::from("ChronoUnit"),
         ElemType::ChronoField => String::from("ChronoField"),
         ElemType::LocalDate => String::from("LocalDate"),
+        ElemType::IsoEra => String::from("IsoEra"),
         ElemType::TypeVar(_) => String::from("Object"),
         ElemType::Builder => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
@@ -5479,8 +5473,24 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
             JType::Generic { class: inner, .. } | JType::Object(inner) => {
                 table.is_subtype(inner, class)
             }
+            // A `LocalTime`/`Duration` element rides interned (there is no
+            // element KIND for one), and it is ordered all the same.
+            ordered if library_comparable(ordered).is_some() => {
+                table.class_id("Comparable") == Some(class)
+            }
             _ => false,
         },
+        // A `java.time` element has one face past `Object`: the ordered ones
+        // are `Comparable`. That is the bound `<T extends Comparable<T>>`
+        // carries and what `List<? extends Comparable>` asks for, so without
+        // it a list of DATES could not be handed to either — while sorting the
+        // very same list in place had always worked.
+        ElemType::DayOfWeek
+        | ElemType::Month
+        | ElemType::ChronoUnit
+        | ElemType::ChronoField
+        | ElemType::IsoEra
+        | ElemType::LocalDate => table.class_id("Comparable") == Some(class),
         _ => false,
     }
 }
@@ -5568,6 +5578,10 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::File => Some(ElemType::File),
         JType::DayOfWeek => Some(ElemType::DayOfWeek),
         JType::Month => Some(ElemType::Month),
+        JType::ChronoUnit => Some(ElemType::ChronoUnit),
+        JType::ChronoField => Some(ElemType::ChronoField),
+        JType::LocalDate => Some(ElemType::LocalDate),
+        JType::IsoEra => Some(ElemType::IsoEra),
         JType::Exception(id) => Some(ElemType::Throwable(id)),
         // A wrapper array element is a boxed REFERENCE (`Integer[]`).
         JType::Boxed(elem) => Prim::of(elem).map(ElemType::Wrapper),
@@ -5869,6 +5883,143 @@ fn strip_local_suffix(name: &str) -> &str {
 /// factory call the program cannot write, which interns the constant so `==`
 /// works on it.
 #[allow(clippy::too_many_lines)] // one list per enum
+/// The constants of a library ENUM, in ordinal order — the five `java.time`
+/// enums a program can switch on.
+fn library_enum_constants(ty: JType) -> Option<&'static [&'static str]> {
+    time_constant_names(match ty {
+        JType::DayOfWeek => "DayOfWeek",
+        JType::Month => "Month",
+        JType::ChronoUnit => "ChronoUnit",
+        JType::ChronoField => "ChronoField",
+        JType::IsoEra => "IsoEra",
+        _ => return None,
+    })
+}
+
+/// The `java.time` value types, by the name a program writes. None of them can
+/// be shadowed by a program class, so the answer needs no table — which is what
+/// lets the LAMBDA pass ask the same question the emitter's resolver asks.
+fn library_time_type(simple: &str) -> Option<JType> {
+    Some(match simple {
+        "LocalDate" => JType::LocalDate,
+        "LocalTime" => JType::LocalTime,
+        "LocalDateTime" => JType::LocalDateTime,
+        "Duration" => JType::Duration,
+        "Period" => JType::Period,
+        "ChronoUnit" => JType::ChronoUnit,
+        "ChronoField" => JType::ChronoField,
+        "ValueRange" => JType::ValueRange,
+        "TemporalAdjuster" => JType::TemporalAdjuster,
+        "IsoEra" => JType::IsoEra,
+        "DateTimeFormatter" => JType::DateFormat,
+        "DayOfWeek" => JType::DayOfWeek,
+        "Month" => JType::Month,
+        _ => return None,
+    })
+}
+
+/// Whether a name is one of those `java.time` value types, which is all the
+/// lambda pass needs to know about them.
+pub(crate) fn names_library_time_type(simple: &str) -> bool {
+    library_time_type(simple).is_some()
+}
+
+/// The RETURN descriptor of a library method — the very string the emit side
+/// writes into the call. The lambda pass needs the type a call ANSWERS, and a
+/// table of its own would be this one copied out and left to drift; asking the
+/// real table is what keeps `LocalDate.of(…)` a `LocalDate` in both passes.
+pub(crate) fn library_answer_descriptor(
+    class: &str,
+    method: &str,
+    argc: usize,
+    on_class: bool,
+) -> Option<&'static str> {
+    let table = if on_class {
+        builtin_static_table(class).map(|(_, table)| table)
+    } else {
+        builtin_instance_table(library_time_type(class)?).map(|(_, table)| table)
+    }?;
+    // Overloads of the same arity are told apart by their PARAMETER types,
+    // which this pass has not resolved — `Math.max(int, int)` and
+    // `Math.max(double, double)` are both two-argument `max`. So the answer is
+    // only given when every candidate agrees on it.
+    let mut answer: Option<&'static str> = None;
+    for entry in table
+        .iter()
+        .filter(|entry| entry.name == method && entry.params.len() == argc)
+    {
+        let at = entry.descriptor.rfind(')')?;
+        let this = &entry.descriptor[at + 1..];
+        match answer {
+            Some(seen) if seen != this => return None,
+            _ => answer = Some(this),
+        }
+    }
+    answer
+}
+
+/// The `java.time` values that implement `Comparable`, and whether they do so
+/// with THEMSELVES as the type argument. The dates are ordered through a
+/// chronology interface — a `LocalDate` is a `Comparable<ChronoLocalDate>`, so
+/// `Comparable<LocalDate> c = date;` is the error javac calls it — while the
+/// enums and a `Duration` compare to their own kind. An amount (`Period`) and a
+/// range are not ordered at all.
+fn library_comparable(ty: JType) -> Option<bool> {
+    Some(match ty {
+        JType::LocalDate | JType::LocalDateTime => false,
+        JType::LocalTime
+        | JType::Duration
+        | JType::DayOfWeek
+        | JType::Month
+        | JType::ChronoUnit
+        | JType::ChronoField
+        | JType::IsoEra => true,
+        _ => return None,
+    })
+}
+
+/// The library types that ARE enums. Three passes ask this — an `EnumSet`'s
+/// universe, a `switch`'s arms, and the lambda pass typing `X.values()` — so
+/// it is one list, not three.
+const LIBRARY_ENUMS: &[(&str, JType)] = &[
+    ("DayOfWeek", JType::DayOfWeek),
+    ("Month", JType::Month),
+    ("ChronoUnit", JType::ChronoUnit),
+    ("ChronoField", JType::ChronoField),
+    ("IsoEra", JType::IsoEra),
+];
+
+/// A library enum NAMED — `Month.class`, the way `EnumSet.allOf` picks one.
+fn library_enum_type(class: &str) -> Option<JType> {
+    LIBRARY_ENUMS
+        .iter()
+        .find(|(name, _)| *name == class)
+        .map(|(_, ty)| *ty)
+}
+
+/// The same list for the lambda pass, which knows names and not [`JType`]s.
+pub(crate) fn library_enum_names() -> impl Iterator<Item = &'static str> {
+    LIBRARY_ENUMS.iter().map(|(name, _)| *name)
+}
+
+/// The constants of a library enum, by class name — what `Month.MAY` is one
+/// of, and the lambda pass's way to type it.
+pub(crate) fn library_enum_constant_names(class: &str) -> Option<&'static [&'static str]> {
+    library_enum_type(class).and_then(library_enum_constants)
+}
+
+/// The internal name of a library enum, for the `__of` call that names one of
+/// its constants.
+fn library_enum_class(ty: JType) -> &'static str {
+    match ty {
+        JType::DayOfWeek => "java/time/DayOfWeek",
+        JType::ChronoUnit => "java/time/temporal/ChronoUnit",
+        JType::ChronoField => "java/time/temporal/ChronoField",
+        JType::IsoEra => "java/time/chrono/IsoEra",
+        _ => "java/time/Month",
+    }
+}
+
 fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
     let [class, name] = path else {
         return None;
@@ -5876,7 +6027,36 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
     if table.has_class(class.as_str()) {
         return None;
     }
-    let names: &[&str] = match class.as_str() {
+    let names = time_constant_names(class.as_str())?;
+    let ordinal = names.iter().position(|known| known == name)?;
+    let ty = match class.as_str() {
+        "DayOfWeek" => JType::DayOfWeek,
+        "LocalTime" => JType::LocalTime,
+        "Duration" => JType::Duration,
+        "Period" => JType::Period,
+        "ChronoUnit" => JType::ChronoUnit,
+        "ChronoField" => JType::ChronoField,
+        "IsoEra" => JType::IsoEra,
+        "DateTimeFormatter" => JType::DateFormat,
+        _ => JType::Month,
+    };
+    // An ENUM's constants are its values, which start at one; everything else
+    // here is stored by its own ordinal (and `LocalTime.MIN` is midnight
+    // again, which is ordinal zero).
+    let ordinal = i32::try_from(ordinal).unwrap_or(0);
+    let ordinal = match ty {
+        JType::DayOfWeek | JType::Month => ordinal + 1,
+        JType::LocalTime => ordinal.min(3) % 3,
+        _ => ordinal,
+    };
+    Some((ty, ordinal))
+}
+
+/// The constant names of a library class, in the order the VM stores them —
+/// read both by `time_constant` and by the SWITCH that selects on one.
+#[allow(clippy::too_many_lines)] // one list per class
+fn time_constant_names(class: &str) -> Option<&'static [&'static str]> {
+    let names: &[&str] = match class {
         // `LocalTime`'s four constants are values rather than enum members,
         // and are asked for the same way.
         "LocalTime" => &["MIDNIGHT", "NOON", "MAX", "MIN"],
@@ -5913,6 +6093,8 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         ],
         // Likewise `ChronoField`, whose ordinals a program can print. The VM
         // stores a field by this position, so the two lists must agree.
+        // `IsoEra` has two constants, and BCE is the earlier one.
+        "IsoEra" => &["BCE", "CE"],
         "ChronoField" => &[
             "NANO_OF_SECOND",
             "NANO_OF_DAY",
@@ -5970,32 +6152,7 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         ],
         _ => return None,
     };
-    let ordinal = names.iter().position(|known| known == name)?;
-    let ty = match class.as_str() {
-        "DayOfWeek" => JType::DayOfWeek,
-        "LocalTime" => JType::LocalTime,
-        "Duration" => JType::Duration,
-        "Period" => JType::Period,
-        "ChronoUnit" => JType::ChronoUnit,
-        "ChronoField" => JType::ChronoField,
-        "ValueRange" => JType::ValueRange,
-        "TemporalAdjuster" => JType::TemporalAdjuster,
-        "IsoEra" => JType::IsoEra,
-        "DateTimeFormatter" => JType::DateFormat,
-        _ => JType::Month,
-    };
-    // A time's constants are ordinals 0..=2 (`MIN` is midnight again); an
-    // enum's are its values, which start at one.
-    let ordinal = i32::try_from(ordinal).unwrap_or(0);
-    // An ENUM's constants are its values, which start at one; everything else
-    // here is stored by its own ordinal (and `LocalTime.MIN` is midnight
-    // again, which is ordinal zero).
-    let ordinal = match ty {
-        JType::DayOfWeek | JType::Month => ordinal + 1,
-        JType::LocalTime => ordinal.min(3) % 3,
-        _ => ordinal,
-    };
-    Some((ty, ordinal))
+    Some(names)
 }
 
 fn standard_charset(path: &[String], table: &MethodTable) -> Option<&'static str> {
@@ -6639,6 +6796,24 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                         elem_matches(own, arg, table) || elem_matches(arg, own, table)
                     })
         )
+        // ...and every ORDERED `java.time` value, for the same reason. Without
+        // it `<T extends Comparable<T>> T biggest(List<T>)` — the first generic
+        // method a course writes — refused a list of dates outright, though
+        // sorting the very same list worked.
+        || matches!(
+            (from, to),
+            (f, JType::Object(id))
+                if table.class_id("Comparable") == Some(id) && library_comparable(f).is_some()
+        )
+        || matches!(
+            (from, to),
+            (f, JType::Generic { class: id, arg, .. })
+                if table.class_id("Comparable") == Some(id)
+                    && library_comparable(f) == Some(true)
+                    && elem_type_of(f).is_some_and(|own| {
+                        elem_matches(own, arg, table) || elem_matches(arg, own, table)
+                    })
+        )
         // A user class that implements `Iterator` IS one: it assigns to an
         // `Iterator<E>` variable, and a for-each drives it through the same
         // cursor calls a builtin one answers.
@@ -7115,6 +7290,8 @@ enum ElemType {
     ChronoField,
     /// `LocalDate` as an element — what `datesUntil` streams.
     LocalDate,
+    /// `IsoEra.values()`.
+    IsoEra,
     /// A throwable element (`Throwable[]` from `getSuppressed()`, or an
     /// array of any exception class), carrying its exception id.
     Throwable(u8),
@@ -7265,6 +7442,7 @@ impl ElemType {
             ElemType::ChronoUnit => String::from("Ljava/time/temporal/ChronoUnit;"),
             ElemType::ChronoField => String::from("Ljava/time/temporal/ChronoField;"),
             ElemType::LocalDate => String::from("Ljava/time/LocalDate;"),
+            ElemType::IsoEra => String::from("Ljava/time/chrono/IsoEra;"),
             ElemType::Throwable(id) => format!("L{};", exception_internal(id)),
             // A wildcard or nested element erases to its `read` class (Object,
             // unless a wildcard's modelled bound narrows it).
@@ -7338,6 +7516,7 @@ impl ElemType {
             ElemType::ChronoUnit => JType::ChronoUnit,
             ElemType::ChronoField => JType::ChronoField,
             ElemType::LocalDate => JType::LocalDate,
+            ElemType::IsoEra => JType::IsoEra,
             ElemType::Throwable(id) => JType::Exception(id),
             // A wildcard or nested element erases (table-free) to its `read`
             // class; the nesting-aware `elem_value_type` recovers the true
@@ -9888,8 +10067,9 @@ enum BRet {
     ValueRange,
     /// A `TemporalAdjuster`, which is what the factories answer.
     TemporalAdjuster,
-    /// A `java.time.chrono.IsoEra`.
+    /// A `java.time.chrono.IsoEra`, and an array of them.
     Era,
+    EraArray,
     /// `List<TemporalUnit>` — what `Duration.getUnits` and `Period.getUnits`
     /// answer, which is a fixed list of `ChronoUnit` constants.
     UnitList,
@@ -13935,6 +14115,12 @@ const CHRONO_FIELD_METHODS: &[BuiltinMethod] = &[
         BRet::ValueRange,
         "(Ljava/time/temporal/TemporalAccessor;)Ljava/time/temporal/ValueRange;",
     ),
+    bm(
+        "compareTo",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/ChronoField;)I",
+    ),
     bm("checkValidValue", &[BParam::Long], BRet::Long, "(J)J"),
     bm("checkValidIntValue", &[BParam::Long], BRet::Int, "(J)I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -14056,6 +14242,12 @@ const TEMPORAL_ADJUSTERS_METHODS: &[BuiltinMethod] = &[
 /// `java.time.chrono.IsoEra` — an enum with two constants.
 const ISO_ERA_METHODS: &[BuiltinMethod] = &[
     bm("getValue", &[], BRet::Int, "()I"),
+    bm(
+        "compareTo",
+        &[BParam::Temporal],
+        BRet::Int,
+        "(Ljava/time/chrono/IsoEra;)I",
+    ),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
@@ -14066,6 +14258,27 @@ const ISO_ERA_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)Z",
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+const ISO_ERA_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "valueOf",
+        &[BParam::Str],
+        BRet::Era,
+        "(Ljava/lang/String;)Ljava/time/chrono/IsoEra;",
+    ),
+    bm(
+        "values",
+        &[],
+        BRet::EraArray,
+        "()[Ljava/time/chrono/IsoEra;",
+    ),
+    bm(
+        "of",
+        &[BParam::Int],
+        BRet::Era,
+        "(I)Ljava/time/chrono/IsoEra;",
+    ),
 ];
 
 const CHRONO_UNIT_STATIC_METHODS: &[BuiltinMethod] = &[
@@ -18012,6 +18225,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
             "java/time/temporal/TemporalAdjusters",
             TEMPORAL_ADJUSTERS_METHODS,
         )),
+        "IsoEra" => Some(("java/time/chrono/IsoEra", ISO_ERA_STATIC_METHODS)),
         "Map.Entry" | "Entry" => Some(("java/util/Map$Entry", MAP_ENTRY_STATIC_METHODS)),
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
@@ -18783,6 +18997,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::ChronoField => Some(JType::ChronoField),
         BRet::TemporalAdjuster => Some(JType::TemporalAdjuster),
         BRet::Era => Some(JType::IsoEra),
+        BRet::EraArray => Some(JType::Array {
+            elem: ElemType::IsoEra,
+            dims: 1,
+        }),
         BRet::UnitList => Some(JType::library_list(ElemType::ChronoUnit)),
         BRet::ValueRange => Some(JType::ValueRange),
         BRet::Month => Some(JType::Month),
@@ -20162,7 +20380,15 @@ impl BodyGen<'_> {
             JType::Object(id) if self.table.is_enum(id) => Some(id),
             _ => None,
         };
-        if selector_ty != JType::Error && !is_string && !is_int && enum_class.is_none() {
+        // A `java.time` enum is an enum too: its constants are singletons the
+        // VM interns, so the same reference comparison decides an arm.
+        let library_enum = library_enum_constants(selector_ty);
+        if selector_ty != JType::Error
+            && !is_string
+            && !is_int
+            && enum_class.is_none()
+            && library_enum.is_none()
+        {
             // javac says nothing about switch here: a selector is CONVERTED
             // to `int`, so the message is the ordinary assignment one, lossy
             // where the type is numeric and plain otherwise. `long` was
@@ -20186,6 +20412,16 @@ impl BodyGen<'_> {
         // NPE. caturra compares constants by reference identity, which would
         // silently fall through to `default`, so force the same NPE by calling
         // `ordinal()` and discarding the result.
+        if let Some(names) = library_enum {
+            let _ = names;
+            self.emit_load(selector_slot, selector_ty);
+            let class = library_enum_class(selector_ty);
+            let ordinal = intern_method_ref(self.pool, class, "ordinal", "()I");
+            self.code.push_op_u16(op::INVOKEVIRTUAL, ordinal, 1);
+            self.code.drop_stack(1);
+            self.code.push_op(op::POP, 0);
+            self.code.drop_stack(1);
+        }
         if let Some(enum_id) = enum_class {
             self.emit_load(selector_slot, selector_ty);
             let enum_name = self.table.class_name(enum_id).to_owned();
@@ -20226,7 +20462,52 @@ impl BodyGen<'_> {
                     default_arm = Some(index);
                     continue;
                 };
-                if let Some(enum_id) = enum_class {
+                if let Some(names) = library_enum {
+                    // The same rule for a LIBRARY enum, whose constants are
+                    // not table fields: the label is the unqualified name of
+                    // one of them, and the constant is fetched the way any
+                    // `Month.JANUARY` is.
+                    let Expr::Name { path, .. } = value else {
+                        self.error(
+                            value.span(),
+                            "an enum switch case label must be the unqualified name of an \
+                             enumeration constant",
+                        );
+                        continue;
+                    };
+                    let [label_name] = path.as_slice() else {
+                        self.error(
+                            value.span(),
+                            "an enum switch case label must be the unqualified name of an \
+                             enumeration constant",
+                        );
+                        continue;
+                    };
+                    let Some(at) = names.iter().position(|known| known == label_name) else {
+                        self.error(
+                            value.span(),
+                            "an enum switch case label must be the unqualified name of an \
+                             enumeration constant",
+                        );
+                        continue;
+                    };
+                    let units: Vec<u16> = label_name.encode_utf16().collect();
+                    if seen_strings.contains(&units) {
+                        self.error(value.span(), "duplicate case label");
+                    }
+                    seen_strings.push(units);
+                    self.emit_load(selector_slot, selector_ty);
+                    // The two day/month enums are stored by their VALUE,
+                    // which starts at one; the rest by their own ordinal.
+                    let stored = i32::try_from(at).unwrap_or(0)
+                        + i32::from(matches!(selector_ty, JType::DayOfWeek | JType::Month));
+                    self.push_int(stored);
+                    let class = library_enum_class(selector_ty);
+                    let descriptor = format!("(I)L{class};");
+                    let made = intern_method_ref(self.pool, class, "__of", &descriptor);
+                    self.code.push_op_u16(op::INVOKESTATIC, made, 0);
+                    self.code.branch(op::IF_ACMPEQ, arm_labels[index], 2);
+                } else if let Some(enum_id) = enum_class {
                     // Enum switch: the case label is an unqualified
                     // constant name, compared by reference identity
                     // (constants are singletons).
@@ -27424,6 +27705,7 @@ impl BodyGen<'_> {
     /// call selects from it, so the VM builds the set by ordinal without ever
     /// asking a class for its constants.
     #[allow(clippy::option_option)] // the call-dispatch return shape
+    #[allow(clippy::too_many_lines)] // one arm per factory, plus the two kinds of enum
     fn emit_enum_set_call(
         &mut self,
         method: &str,
@@ -27455,25 +27737,66 @@ impl BodyGen<'_> {
             },
             _ => None,
         };
-        let Some(enum_id) =
-            enum_id.filter(|id| self.table.info_by_id(*id).is_some_and(|info| info.is_enum))
-        else {
-            self.error(
-                span,
-                format!("EnumSet.{method}(...) needs an enum type — caturra could not read one"),
-            );
-            return None;
+        let enum_id =
+            enum_id.filter(|id| self.table.info_by_id(*id).is_some_and(|info| info.is_enum));
+        // A `java.time` enum is an enum too, and `EnumSet.of(DayOfWeek.SATURDAY,
+        // DayOfWeek.SUNDAY)` is the textbook line. It has no class in the
+        // table, but it HAS a `values()` of its own — and the universe is all
+        // this call ever wanted.
+        let library = if enum_id.is_some() {
+            None
+        } else {
+            match (method, args) {
+                ("noneOf" | "allOf", [Expr::Field { object, name, .. }]) if name == "class" => {
+                    match object.as_ref() {
+                        Expr::Name { path, .. } => {
+                            library_enum_type(path.last().map_or("", String::as_str))
+                        }
+                        _ => None,
+                    }
+                }
+                (_, [first, ..]) => match self.type_of(first) {
+                    JType::Set { elem, .. }
+                    | JType::List { elem, .. }
+                    | JType::Collection(elem) => {
+                        Some(elem.base_type()).filter(|ty| library_enum_constants(*ty).is_some())
+                    }
+                    ty => Some(ty).filter(|ty| library_enum_constants(*ty).is_some()),
+                },
+                _ => None,
+            }
         };
-        let enum_name = self.table.class_name(enum_id).to_owned();
-        // The universe: `Day.values()`, an array of every constant in order.
-        let values = intern_method_ref(
-            self.pool,
-            &enum_name,
-            "values",
-            &format!("()[L{enum_name};"),
-        );
-        self.code.push_op_u16(op::INVOKESTATIC, values, 1);
-        let elem = ElemType::Object(enum_id);
+        let elem = match (enum_id, library) {
+            (Some(enum_id), _) => {
+                let enum_name = self.table.class_name(enum_id).to_owned();
+                // The universe: `Day.values()`, an array of every constant in
+                // order.
+                let values = intern_method_ref(
+                    self.pool,
+                    &enum_name,
+                    "values",
+                    &format!("()[L{enum_name};"),
+                );
+                self.code.push_op_u16(op::INVOKESTATIC, values, 1);
+                ElemType::Object(enum_id)
+            }
+            (None, Some(ty)) => {
+                let class = library_enum_class(ty);
+                let values =
+                    intern_method_ref(self.pool, class, "values", &format!("()[L{class};"));
+                self.code.push_op_u16(op::INVOKESTATIC, values, 1);
+                elem_type_of(ty)?
+            }
+            (None, None) => {
+                self.error(
+                    span,
+                    format!(
+                        "EnumSet.{method}(...) needs an enum type — caturra could not read one"
+                    ),
+                );
+                return None;
+            }
+        };
         let set = JType::Set {
             elem,
             face: CollFace::Concrete,
@@ -27509,8 +27832,8 @@ impl BodyGen<'_> {
                     self.code.push_op(op::DUP, 1);
                     self.push_int(i32::try_from(position).unwrap_or(0));
                     let got = self.expr(arg);
-                    self.convert_for_assignment(got, JType::Object(enum_id), arg.span());
-                    self.xastore(JType::Object(enum_id));
+                    self.convert_for_assignment(got, elem.base_type(), arg.span());
+                    self.xastore(elem.base_type());
                 }
                 String::from("([Ljava/lang/Object;[Ljava/lang/Object;)Ljava/util/Set;")
             }
@@ -33767,6 +34090,10 @@ impl BodyGen<'_> {
             ElemType::File => Some(String::from("java/io/File")),
             ElemType::DayOfWeek => Some(String::from("java/time/DayOfWeek")),
             ElemType::Month => Some(String::from("java/time/Month")),
+            ElemType::ChronoUnit => Some(String::from("java/time/temporal/ChronoUnit")),
+            ElemType::ChronoField => Some(String::from("java/time/temporal/ChronoField")),
+            ElemType::LocalDate => Some(String::from("java/time/LocalDate")),
+            ElemType::IsoEra => Some(String::from("java/time/chrono/IsoEra")),
             ElemType::StackFrame => Some(String::from("java/lang/StackTraceElement")),
             ElemType::Builder => Some(String::from("java/lang/StringBuilder")),
             ElemType::Throwable(id) => Some(exception_internal(id).to_owned()),
@@ -36787,6 +37114,7 @@ impl BodyGen<'_> {
             | ElemType::ChronoUnit
             | ElemType::ChronoField
             | ElemType::LocalDate
+            | ElemType::IsoEra
             | ElemType::Throwable(_)
             | ElemType::Wildcard { .. }
             | ElemType::Nested { .. }
@@ -37238,6 +37566,10 @@ impl BodyGen<'_> {
             // reference and implements Comparable (a boxed wrapper is boxed
             // above; a primitive is boxed by the autoboxing rule).
             (JType::Str, JType::Object(id)) if self.table.class_id("Comparable") == Some(id) => {}
+            // An ordered `java.time` value likewise: it IS a `Comparable`, so
+            // reaching one needs no code at all.
+            (from, JType::Object(_) | JType::Generic { .. })
+                if library_comparable(from).is_some() && widens(from, to, self.table) => {}
             // `String`/`StringBuilder` widening to `CharSequence` needs no
             // code (a widening reference conversion) — the same two-gate split
             // as every other widening (`widens` allows it; this matrix must

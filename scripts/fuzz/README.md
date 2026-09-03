@@ -57,13 +57,18 @@ Perl whitespace classes, `\X`, `\R`, `\b{g}`, `\G`, and the inline flags
 — the proleptic Gregorian rules, the month-end clamping, the epoch-day
 conversion both ways, the ISO text, the pattern engine — so it is exactly the
 kind of code that is right on the cases someone thought of and wrong two
-centuries out. Three generated programs (dates, times, formats), every answer
-printed, compared byte for byte. It found five divergences the hand-written
+centuries out. Four generated programs (dates, times, formats, and the
+POSITIONS a `java.time` value can be put in — a switch selector, an `EnumSet`,
+a stream's element, a `Comparable` bound), every answer printed, compared byte
+for byte. It found five divergences the hand-written
 batteries missed on its first run: `ChronoUnit.DAYS.between` overflowing a long
 two millennia out, `HOURS.between` on two DATES (which `java.time` refuses
 rather than treating as midnight), the text of a negative `Duration`
 (`PT-11H-59M-59.999999999S`, which signs every part), the year of the ERA (`y`
-is never negative — year -1 is the year 2), and the narrow text forms.
+is never negative — year -1 is the year 2), and the narrow text forms. The
+positions program prints no identity hash on purpose: the constants are
+singletons, and a hash-ordered collection of them is not comparable between two
+JVMs.
 
 **`programs.py` — typed random programs.** It tracks the type of every variable
 it declares and only builds an expression where its type fits, so javac's

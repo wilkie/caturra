@@ -47711,3 +47711,298 @@ public class Letters {
 }
 "##
 );
+
+differential_test!(
+    java_time_in_every_position,
+    "Everywhere",
+    r#"
+import java.time.DayOfWeek;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.Month;
+import java.time.Period;
+import java.time.chrono.IsoEra;
+import java.time.temporal.ChronoField;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.ValueRange;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/** Every java.time type in the positions an ordinary program puts one. */
+public class Everywhere {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    static <T extends Comparable<T>> T biggest(List<T> values) {
+        T best = values.get(0);
+        for (T one : values) {
+            if (one.compareTo(best) > 0) {
+                best = one;
+            }
+        }
+        return best;
+    }
+
+    static String sortedText(List<? extends Comparable> values) {
+        Collections.sort(values);
+        return values.toString();
+    }
+
+    static String season(Month month) {
+        switch (month) {
+            case DECEMBER:
+            case JANUARY:
+            case FEBRUARY:
+                return "winter";
+            case MARCH:
+                return "spring";
+            default:
+                return "other";
+        }
+    }
+
+    static String weekend(DayOfWeek day) {
+        switch (day) {
+            case SATURDAY:
+            case SUNDAY:
+                return "weekend";
+            default:
+                return "weekday";
+        }
+    }
+
+    static String scale(ChronoUnit unit) {
+        switch (unit) {
+            case NANOS:
+                return "tiny";
+            case DAYS:
+                return "day";
+            default:
+                return "other";
+        }
+    }
+
+    static String eraName(IsoEra era) {
+        switch (era) {
+            case CE:
+                return "common";
+            default:
+                return "before";
+        }
+    }
+
+    static String fieldKind(ChronoField field) {
+        switch (field) {
+            case YEAR:
+                return "year";
+            case NANO_OF_SECOND:
+                return "nano";
+            default:
+                return "other";
+        }
+    }
+
+    public static void main(String[] args) {
+        LocalDate date = LocalDate.of(2024, 2, 29);
+        LocalTime time = LocalTime.of(13, 45);
+        LocalDateTime stamp = LocalDateTime.of(date, time);
+
+        // A switch over each library enum, including a null selector and a
+        // grouped arm.
+        for (Month month : Month.values()) {
+            probe("season " + month, () -> season(month));
+        }
+        for (DayOfWeek day : DayOfWeek.values()) {
+            probe("weekend " + day, () -> weekend(day));
+        }
+        probe("scale nanos", () -> scale(ChronoUnit.NANOS));
+        probe("scale days", () -> scale(ChronoUnit.DAYS));
+        probe("scale hours", () -> scale(ChronoUnit.HOURS));
+        probe("era CE", () -> eraName(IsoEra.CE));
+        probe("era BCE", () -> eraName(IsoEra.BCE));
+        probe("era of date", () -> eraName(date.getEra()));
+        probe("field year", () -> fieldKind(ChronoField.YEAR));
+        probe("field other", () -> fieldKind(ChronoField.DAY_OF_MONTH));
+        probe("switch null month", () -> season(null));
+        probe("switch null day", () -> weekend(null));
+
+        // EnumSet over a library enum: every factory, and the errors.
+        probe("EnumSet.of", () -> EnumSet.of(Month.MAY, Month.JANUARY));
+        probe("EnumSet weekend", () -> EnumSet.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY));
+        probe("EnumSet.allOf day", () -> EnumSet.allOf(DayOfWeek.class).size());
+        probe("EnumSet.allOf field", () -> EnumSet.allOf(ChronoField.class).size());
+        probe("EnumSet.noneOf", () -> EnumSet.noneOf(Month.class));
+        probe("EnumSet.range", () -> EnumSet.range(Month.MARCH, Month.JUNE));
+        probe("EnumSet.range backwards", () -> EnumSet.range(Month.JUNE, Month.MARCH));
+        probe("EnumSet.complementOf",
+            () -> EnumSet.complementOf(EnumSet.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY)));
+        probe("EnumSet.copyOf", () -> EnumSet.copyOf(List.of(ChronoUnit.HOURS, ChronoUnit.DAYS)));
+        probe("EnumSet.allOf era", () -> EnumSet.allOf(IsoEra.class));
+        probe("EnumSet grows", () -> {
+            Set<DayOfWeek> days = EnumSet.of(DayOfWeek.FRIDAY);
+            days.add(DayOfWeek.MONDAY);
+            days.add(DayOfWeek.FRIDAY);
+            return days + " " + days.size() + " " + days.contains(DayOfWeek.MONDAY);
+        });
+
+        // A stream whose element is a library enum or a date, taken from
+        // `values()`, from a factory call, and from `datesUntil`.
+        probe("stream months", () -> Arrays.stream(Month.values())
+            .map(m -> m.getValue()).reduce(0, Integer::sum));
+        probe("stream month names", () -> Arrays.stream(Month.values())
+            .map(Month::name).limit(3).collect(Collectors.joining(",")));
+        probe("stream units", () -> Arrays.stream(ChronoUnit.values())
+            .map(ChronoUnit::name).limit(3).collect(Collectors.joining(",")));
+        probe("stream fields", () -> Arrays.stream(ChronoField.values())
+            .filter(ChronoField::isDateBased).count());
+        probe("stream eras", () -> Arrays.stream(IsoEra.values())
+            .map(IsoEra::getValue).collect(Collectors.toList()));
+        probe("stream days", () -> Arrays.stream(DayOfWeek.values())
+            .filter(d -> d.getValue() > 5).map(DayOfWeek::name).collect(Collectors.toList()));
+        probe("stream constants", () -> Stream.of(Month.MAY, Month.JUNE)
+            .map(m -> m.getValue()).collect(Collectors.toList()));
+        probe("stream dates", () -> date.datesUntil(date.plusDays(4))
+            .map(LocalDate::getDayOfMonth).collect(Collectors.toList()));
+        probe("stream date factory", () -> Stream.of(LocalDate.of(2024, 5, 1), LocalDate.of(2020, 1, 1))
+            .map(LocalDate::getYear).collect(Collectors.toList()));
+        probe("stream date eras", () -> Stream.of(LocalDate.of(2024, 1, 1), LocalDate.of(-44, 1, 1))
+            .map(LocalDate::getEra).map(IsoEra::name).collect(Collectors.toList()));
+        probe("stream chained", () -> Stream.of(LocalDate.of(2024, 5, 1))
+            .map(d -> d.plusDays(1)).map(LocalDate::toString).collect(Collectors.toList()));
+        probe("stream stamps", () -> Stream.of(LocalDateTime.of(2024, 1, 1, 1, 1))
+            .map(LocalDateTime::toLocalDate).collect(Collectors.toList()));
+        probe("stream durations", () -> Stream.of(Duration.ofHours(2))
+            .map(Duration::toMinutes).collect(Collectors.toList()));
+        probe("stream ranges", () -> Stream.of(ChronoField.YEAR)
+            .map(f -> f.range().getMaximum()).collect(Collectors.toList()));
+
+        // The `Comparable` bound, which every "biggest of" helper carries.
+        probe("biggest date", () -> biggest(new ArrayList<>(List.of(
+            LocalDate.of(2024, 5, 1), LocalDate.of(2020, 1, 1)))));
+        probe("biggest month", () -> biggest(new ArrayList<>(List.of(Month.MAY, Month.JANUARY))));
+        probe("biggest unit", () -> biggest(new ArrayList<>(
+            List.of(ChronoUnit.YEARS, ChronoUnit.NANOS))));
+        probe("biggest duration", () -> biggest(new ArrayList<>(
+            List.of(Duration.ofHours(2), Duration.ofMinutes(5)))));
+        probe("sorted dates", () -> sortedText(new ArrayList<>(List.of(
+            LocalDate.of(2024, 5, 1), LocalDate.of(2020, 1, 1)))));
+        probe("sorted fields", () -> sortedText(new ArrayList<>(List.of(
+            ChronoField.YEAR, ChronoField.NANO_OF_SECOND))));
+        probe("sorted eras", () -> sortedText(new ArrayList<>(List.of(IsoEra.CE, IsoEra.BCE))));
+        probe("sorted times", () -> sortedText(new ArrayList<>(List.of(
+            LocalTime.of(9, 0), LocalTime.of(1, 0)))));
+        probe("as Comparable date", () -> ((Comparable<?>) date).toString());
+        probe("as Comparable month", () -> ((Comparable<?>) Month.MAY).toString());
+        probe("date is Comparable", () -> ((Object) date) instanceof Comparable);
+        probe("period is Comparable", () -> ((Object) Period.ofDays(1)) instanceof Comparable);
+        probe("range is Comparable", () -> ((Object) date.range(ChronoField.DAY_OF_MONTH))
+            instanceof Comparable);
+        probe("stamp is Comparable", () -> ((Object) stamp) instanceof Comparable);
+
+        // ...and the values that are NOT ordered, which a sorted collection
+        // rejects with the cast natural ordering really is.
+        probe("TreeSet of ranges",
+            () -> new TreeSet<>(List.of(date.range(ChronoField.DAY_OF_MONTH))).size());
+        probe("TreeSet of periods",
+            () -> new TreeSet<>(List.of(Period.ofDays(1), Period.ofDays(2))).size());
+        probe("TreeSet of durations",
+            () -> new TreeSet<>(List.of(Duration.ofHours(2), Duration.ofMinutes(1))));
+        probe("TreeSet of dates", () -> new TreeSet<>(List.of(date, LocalDate.of(2020, 1, 1))));
+        probe("TreeSet of units",
+            () -> new TreeSet<>(List.of(ChronoUnit.YEARS, ChronoUnit.NANOS)));
+    }
+}
+"#
+);
+
+differential_test!(
+    an_object_folds_answer_a_reference,
+    "Folding",
+    r#"
+import java.util.List;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
+
+/** A seeded fold over an OBJECT pipeline answers an element, which is a
+ * reference — handing back the unboxed number a functional call gives is a
+ * `VerifyError` the moment anything holds it. */
+public class Folding {
+    static void probe(String label, Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        Object held = Stream.of(1, 2, 3).reduce(0, Integer::sum);
+        System.out.println(held + " " + held.getClass().getName());
+        probe("ints", () -> Stream.of(1, 2).reduce(0, Integer::sum));
+        probe("lengths", () -> Stream.of("a", "bb").map(String::length).reduce(0, Integer::sum));
+        probe("lambda", () -> Stream.of("a", "bb").map(s -> s.length()).reduce(0, Integer::sum));
+        probe("months", () -> java.util.Arrays.stream(java.time.Month.values())
+            .map(m -> m.getValue()).reduce(0, Integer::sum));
+        probe("doubles", () -> Stream.of(1.5, 2.5).reduce(0.0, Double::sum));
+        probe("longs", () -> Stream.of(1L, 2L).reduce(0L, Long::sum));
+        probe("strings", () -> Stream.of("a", "b").reduce("", String::concat));
+        probe("empty", () -> Stream.of().reduce(7, (a, b) -> a));
+        probe("chars", () -> Stream.of('a', 'b').reduce('z', (a, b) -> a));
+        probe("booleans", () -> Stream.of(true, false).reduce(true, (a, b) -> a && b));
+        probe("primitive pipeline", () -> List.of(1, 2).stream()
+            .mapToInt(Integer::intValue).reduce(0, (a, b) -> a + b));
+        probe("no identity", () -> Stream.of(1, 2).reduce(Integer::sum));
+        probe("no identity empty", () -> Stream.of(1, 2).filter(v -> v > 9).reduce(Integer::sum));
+    }
+}
+"#
+);
+
+differential_test!(
+    a_backwards_enum_range_names_its_ends,
+    "Backwards",
+    r#"
+import java.time.DayOfWeek;
+import java.time.Month;
+import java.time.temporal.ChronoUnit;
+import java.util.EnumSet;
+
+/** `EnumSet.range(to, from)` names the two CONSTANTS, not the parameters of a
+ * method the program never wrote — and an enum whose `toString` is not its
+ * name says the `toString`. */
+public class Backwards {
+    enum Day { MON, TUE, WED }
+
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        probe("user", () -> EnumSet.range(Day.WED, Day.MON));
+        probe("user ok", () -> EnumSet.range(Day.MON, Day.WED));
+        probe("user same", () -> EnumSet.range(Day.TUE, Day.TUE));
+        probe("month", () -> EnumSet.range(Month.JUNE, Month.MARCH));
+        probe("day", () -> EnumSet.range(DayOfWeek.SUNDAY, DayOfWeek.MONDAY));
+        probe("unit", () -> EnumSet.range(ChronoUnit.DAYS, ChronoUnit.NANOS));
+    }
+}
+"#
+);

@@ -5272,8 +5272,14 @@ impl<'run> Interpreter<'run> {
                 match (start, end) {
                     (Some(start), Some(end)) if start <= end => constants[start..=end].to_vec(),
                     (Some(_), Some(_)) => {
-                        return Err(VmError::UncaughtException(String::from(
-                            "java.lang.IllegalArgumentException: from > to",
+                        // A JDK names the two CONSTANTS — `JUNE > MARCH` — so
+                        // the message says which call was backwards. The
+                        // literal words "from > to" named the parameters of a
+                        // method the program never wrote.
+                        let from = self.string_value_of(JValue::Ref(Some(*from)), 0)?;
+                        let to = self.string_value_of(JValue::Ref(Some(*to)), 0)?;
+                        return Err(VmError::UncaughtException(format!(
+                            "java.lang.IllegalArgumentException: {from} > {to}"
                         )));
                     }
                     _ => Vec::new(),
@@ -11747,6 +11753,16 @@ impl<'run> Interpreter<'run> {
                 for element in elements {
                     total = self.call_apply_two(accumulator, total, element)?;
                 }
+                // An OBJECT pipeline's fold answers an ELEMENT, and the
+                // elements of one are references. A functional call hands back
+                // the UNBOXED number (the primitive pipelines are built on
+                // that representation), so returning it as it came put a bare
+                // `Int` where the compiler had typed an `Integer` — and the
+                // next use of it was a `VerifyError`, not an answer.
+                if descriptor.ends_with(")Ljava/lang/Object;") && !matches!(total, JValue::Ref(_)) {
+                    let boxed = self.box_primitive_value(total);
+                    total = JValue::Ref(Some(boxed));
+                }
                 return Ok(Answered::Value(total));
             }
             ("reduce", [JValue::Ref(Some(accumulator))]) => {
@@ -16220,6 +16236,18 @@ impl<'run> Interpreter<'run> {
             && let Some(crate::value::HeapObject::Temporal(value)) = self.heap.get(reference)
         {
             let class_name = value.class_name().to_owned();
+            // Not every `java.time` value is ORDERED: an amount ("1 year, 2
+            // days") and a field's range have no place in a line, and a JDK
+            // says so with the cast that natural ordering really is. caturra
+            // reached for a `compareTo` that does not exist and reported the
+            // gap in its own library instead of the program's error.
+            if !value.is_ordered() {
+                return Err(class_cast_error(
+                    self.classes,
+                    &class_name,
+                    "java/lang/Comparable",
+                ));
+            }
             return self.call_compare_to(reference, &class_name, b);
         }
         // A wrapper's `compareTo` takes its OWN type: `Integer.compareTo` casts
@@ -20242,7 +20270,19 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         "java/lang/StringBuilder" => &["java/lang/CharSequence", "java/lang/Comparable"],
         // Every array is `Cloneable` (and `Serializable`), whatever it holds.
         _ if class.starts_with('[') => &["java/lang/Cloneable"],
-        "java/io/File" => &["java/lang/Comparable"],
+        // A `File`, and the `java.time` values that are ORDERED. `Period` and
+        // `ValueRange` are not among the latter — an amount of "1 year 2 days"
+        // has no place in a line — and neither is a formatter.
+        "java/io/File"
+        | "java/time/LocalDate"
+        | "java/time/LocalTime"
+        | "java/time/LocalDateTime"
+        | "java/time/Duration"
+        | "java/time/DayOfWeek"
+        | "java/time/Month"
+        | "java/time/temporal/ChronoUnit"
+        | "java/time/temporal/ChronoField"
+        | "java/time/chrono/IsoEra" => &["java/lang/Comparable"],
         // A `Matcher` IS a `MatchResult` (it implements the interface), and so
         // is the frozen result it hands out — which a JDK calls
         // `Matcher$ImmutableMatchResult`.

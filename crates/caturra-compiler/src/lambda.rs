@@ -45,6 +45,13 @@ pub fn desugar_lambdas(
     let constructors = constructor_signatures(units);
     let static_methods = static_method_names(units);
     let class_names = class_name_set(units);
+    // The classes the PROGRAM declares, which is a different question from
+    // "does this name a class here": a level may write its own `Runnable`, and
+    // then the erased `java.util.function` treatment is not the right one.
+    let declared_classes: std::collections::HashSet<String> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter().map(|class| class.name.clone()))
+        .collect();
     let shapes = method_shapes(units);
     // Each class's DIRECT supertypes, for joining two elements at what they
     // have in common — the same reading codegen does for a ternary's branches.
@@ -198,6 +205,7 @@ pub fn desugar_lambdas(
                     constructors: &constructors,
                     static_methods: &static_methods,
                     class_names: &class_names,
+                    declared_classes: &declared_classes,
                     ret: ret.as_ref(),
                     new_classes: &mut new_classes,
                     counter: &mut counter,
@@ -238,6 +246,7 @@ pub fn desugar_lambdas(
                     constructors: &constructors,
                     static_methods: &static_methods,
                     class_names: &class_names,
+                    declared_classes: &declared_classes,
                     ret: None,
                     new_classes: &mut new_classes,
                     counter: &mut counter,
@@ -276,6 +285,7 @@ pub fn desugar_lambdas(
                         constructors: &constructors,
                         static_methods: &static_methods,
                         class_names: &class_names,
+                        declared_classes: &declared_classes,
                         ret: None,
                         new_classes: &mut new_classes,
                         counter: &mut counter,
@@ -338,6 +348,9 @@ struct Ctx<'a> {
     static_methods: &'a HashMap<String, std::collections::HashSet<String>>,
     /// All class/interface names (user + known library types).
     class_names: &'a std::collections::HashSet<String>,
+    /// The classes this PROGRAM declares — only those, so a library name that
+    /// merely resolves here does not read as one the program wrote.
+    declared_classes: &'a std::collections::HashSet<String>,
     ret: Option<&'a TypeRef>,
     new_classes: &'a mut Vec<ClassDecl>,
     counter: &'a mut usize,
@@ -751,6 +764,15 @@ fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::Hash
     .chain(LIBRARY_CONTAINERS)
     {
         set.insert(String::from(lib));
+    }
+    // ...and EVERY library class caturra models. This used to be the hand
+    // written list above and nothing else, so `LocalDate::getYear` — an
+    // ordinary way to read a list of dates — was not a class-qualified
+    // reference at all and compiled to a static call on a type that has no
+    // such static. One list of library classes already exists, in `imports`;
+    // asking it is what keeps the two from drifting apart.
+    for name in crate::imports::library_class_names() {
+        set.insert(String::from(name));
     }
     set
 }
@@ -1468,7 +1490,21 @@ fn library_call_type(owner: &Expr, method: &str, args: &[Expr], ctx: &Ctx) -> Op
             args: vec![boxed_element(static_type_of(&args[0], ctx)?)],
         });
     }
-    library_return(&static_type_of(owner, ctx)?, method, args.len())
+    if let Some(receiver) = static_type_of(owner, ctx) {
+        return library_return(&receiver, method, args.len());
+    }
+    // A STATIC call on a library class — `LocalDate.of(2024, 2, 29)`. There is
+    // no receiver VALUE to read a type from, so an inline `Stream.of(
+    // LocalDate.of(…), …)` had no element at all while the same date through a
+    // declared variable had always worked.
+    let Expr::Name { path, .. } = owner else {
+        return None;
+    };
+    let class = path.last()?;
+    if ctx.lookup(class).is_some() {
+        return None;
+    }
+    library_static_type(class, method, args.len())
 }
 
 /// What a method of the PROGRAM answers, on a receiver whose class the pass can
@@ -1597,6 +1633,14 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // functional-interface position. The parser keeps a dotted read as a
         // NAME, so both spellings arrive here.
         Expr::Field { object, name, .. } => field_of_object(object, name, ctx),
+        // `Month.MAY` — a library enum's CONSTANT, which has no declaration to
+        // look up. Without it `Stream.of(Month.MAY, Month.JUNE)` had an
+        // `Object` element and the lambda after it lost the constant's methods.
+        Expr::Name { path, .. }
+            if path.len() == 2 && library_enum_constant(&path[0], &path[1]).is_some() =>
+        {
+            library_enum_constant(&path[0], &path[1])
+        }
         Expr::Name { path, span } if path.len() == 2 => field_of_object(
             &Expr::Name {
                 path: vec![path[0].clone()],
@@ -4559,7 +4603,11 @@ fn user_defined_functional(target: &TypeRef, ctx: &Ctx) -> bool {
         _ => return false,
     };
     let simple = name.rsplit('.').next().unwrap_or(name);
-    ctx.class_names.contains(simple)
+    // The classes the PROGRAM wrote. Asking the wider "names a class here" set
+    // said yes to `Runnable` and every other library interface, so the erased
+    // `java.util.function` treatment was skipped for all of them and
+    // `Runnable r = () -> {};` was refused as "not a functional interface".
+    ctx.declared_classes.contains(simple)
 }
 
 /// The functional interfaces named WITHOUT type arguments: `Runnable`, and the
@@ -5525,12 +5573,15 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
                 path: vec![path[0].clone()],
                 span: *span,
             };
-            match body_type(&object, bound, ctx)? {
-                TypeRef::Named(class) | TypeRef::Generic { base: class, .. } => {
+            let read = match body_type(&object, bound, ctx) {
+                Some(TypeRef::Named(class) | TypeRef::Generic { base: class, .. }) => {
                     field_of_class(&class, &path[1], ctx)
                 }
                 _ => None,
-            }
+            };
+            // A dotted name whose head is not a value is a name a CLASS owns —
+            // `Month.MAY`, a static field — and the general reader knows those.
+            read.or_else(|| static_type_of(expr, ctx))
         }
         Expr::Field { object, name, .. } if !matches!(**object, Expr::This { .. }) => {
             match body_type(object, bound, ctx)? {
@@ -5712,7 +5763,20 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             }),
             _ => None,
         },
-        _ => None,
+        // `datesUntil` is the one `java.time` answer a descriptor cannot give:
+        // the stream it returns is erased there, and an element it no longer
+        // carries is the whole point of the call.
+        ("LocalDate", "datesUntil", 1 | 2) => Some(TypeRef::Generic {
+            base: String::from("Stream"),
+            args: vec![TypeRef::Named(String::from("LocalDate"))],
+        }),
+        // Everything else the EMIT side already knows, read off the descriptor
+        // it writes. The arms above are the answers a descriptor has ERASED —
+        // an element, a receiver passed through; a hand-written list of the
+        // rest was the same list twice, and the second copy stopped at
+        // `String`. `date.getEra()` was nothing here, so a stream of dates lost
+        // every method after it.
+        _ => library_descriptor_type(base, method, argc, false),
     }
 }
 
@@ -6297,7 +6361,11 @@ fn library_static_type(class: &str, method: &str, argc: usize) -> Option<TypeRef
             "hash" | "hashCode" => TypeRef::Int,
             _ => return None,
         },
-        _ => return None,
+        // Everything else the EMIT side already knows: its own descriptor says
+        // what the call answers. `LocalDate.of(2024, 2, 29)` was nothing here,
+        // so `Stream.of(LocalDate.of(…), …)` had no element and every method
+        // after it was "cannot find symbol … location: class Object".
+        _ => return library_descriptor_type(class, method, argc, true),
     };
     Some(answer)
 }
@@ -6356,12 +6424,71 @@ fn field_of_class(class: &str, name: &str, ctx: &Ctx) -> Option<TypeRef> {
 }
 
 /// The ENUM an expression names, when it names one: `Kind.values()`'s owner.
+/// A library method's answer, read off the descriptor the emit side writes.
+/// This is the general rule; the hand-written arms of [`library_return`] stay
+/// only for the GENERIC answers, whose element a descriptor has erased away.
+fn library_descriptor_type(
+    class: &str,
+    method: &str,
+    argc: usize,
+    on_class: bool,
+) -> Option<TypeRef> {
+    descriptor_type(crate::codegen::library_answer_descriptor(
+        class, method, argc, on_class,
+    )?)
+}
+
+/// One JVM field descriptor as a type this pass can name. `Ljava/util/…;` and
+/// the erased containers answer nothing on purpose: an element they no longer
+/// carry would be a wrong element, and `Object` is where they already stood.
+fn descriptor_type(descriptor: &str) -> Option<TypeRef> {
+    Some(match descriptor {
+        "I" => TypeRef::Int,
+        "J" => TypeRef::Long,
+        "D" => TypeRef::Double,
+        "F" => TypeRef::Float,
+        "S" => TypeRef::Short,
+        "B" => TypeRef::Byte,
+        "C" => TypeRef::Char,
+        "Z" => TypeRef::Boolean,
+        "Ljava/lang/String;" => TypeRef::Named(String::from("String")),
+        other => {
+            if let Some(elem) = other.strip_prefix('[') {
+                return Some(TypeRef::Array(Box::new(descriptor_type(elem)?)));
+            }
+            let name = other.strip_prefix('L')?.strip_suffix(';')?;
+            let simple = name.rsplit('/').next()?;
+            // Only the types this pass can then ASK something of: a
+            // `java.time` value or one of its enums.
+            if !crate::codegen::names_library_time_type(simple) {
+                return None;
+            }
+            TypeRef::Named(String::from(simple))
+        }
+    })
+}
+
+/// `Month.MAY` and its four siblings: a library enum named, then one of its
+/// constants. The constant list is codegen's, so the two cannot drift.
+fn library_enum_constant(class: &str, name: &str) -> Option<TypeRef> {
+    crate::codegen::library_enum_constant_names(class)?
+        .contains(&name)
+        .then(|| TypeRef::Named(String::from(class)))
+}
+
 fn enum_owner_name(owner: &Expr, ctx: &Ctx) -> Option<String> {
     let Expr::Name { path, .. } = owner else {
         return None;
     };
     let name = path.last()?;
-    ctx.enums.contains(name).then(|| name.clone())
+    // ...and a LIBRARY enum is an enum too. `ChronoUnit.values()` is an array
+    // of its constants exactly as `Kind.values()` is, so a stream over one had
+    // no element and every lambda after it was refused for standing where no
+    // functional interface was expected — while the same array through a
+    // declared variable had always worked.
+    let known = ctx.enums.contains(name)
+        || crate::codegen::library_enum_names().any(|library| library == name);
+    known.then(|| name.clone())
 }
 
 fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {

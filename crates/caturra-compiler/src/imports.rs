@@ -589,6 +589,14 @@ pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
 /// the simple name reported `Math` where a JDK reports `java.lang.Math`.
 /// `java.lang` is searched first, so a simple name that exists in both
 /// packages resolves the way an unqualified source reference would.
+/// Every library class caturra models, by its simple name. One list, so a
+/// class added to a package list is a class every pass knows about.
+pub(crate) fn library_class_names() -> impl Iterator<Item = &'static str> {
+    PACKAGES
+        .iter()
+        .flat_map(|(_, classes)| classes.iter().copied())
+}
+
 pub(crate) fn qualified_library_class(simple: &str) -> Option<String> {
     let mut packages: Vec<&(&str, &[&str])> = PACKAGES.iter().collect();
     packages.sort_by_key(|(package, _)| *package != "java.lang");
