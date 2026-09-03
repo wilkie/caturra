@@ -48175,3 +48175,210 @@ differential_wording!(
     "RejArg",
     "import java.time.Duration;\nimport java.time.LocalDate;\nimport java.time.LocalTime;\nimport java.time.Month;\npublic class RejArg { enum Kind { A, B } enum Other { X }\npublic static void main(String[] a) { Enum<Kind> c = Other.X; System.out.println(c); } }"
 );
+
+differential_test!(
+    a_factorys_argument_comes_from_the_target,
+    "Inferred",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/** A generic factory's type argument, taken from the target it is written for. */
+public class Inferred {
+    interface Shape { }
+
+    static class Circle implements Shape {
+        public String toString() {
+            return "circle";
+        }
+    }
+
+    static class Square implements Shape {
+        public String toString() {
+            return "square";
+        }
+    }
+
+    static class Box<T> {
+        T held;
+
+        Box(T held) {
+            this.held = held;
+        }
+
+        T get() {
+            return held;
+        }
+
+        public String toString() {
+            return "Box(" + held + ")";
+        }
+    }
+
+    static List<Number> numbers = List.of(1, 2);
+
+    static void takes(List<Number> values) {
+        System.out.println("took " + values);
+    }
+
+    static void two(List<Number> values) {
+        System.out.println("num " + values);
+    }
+
+    static void two(Set<Shape> values) {
+        System.out.println("set " + values.size());
+    }
+
+    static List<Shape> answers() {
+        return List.of(new Circle(), new Square());
+    }
+
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // The literal factories, each into a target whose argument is wider
+        // than what the call was given.
+        List<Number> ofNumbers = List.of(1, 2.5);
+        List<Shape> ofShapes = List.of(new Circle(), new Square());
+        List<Object> ofObjects = List.of(1, "a");
+        Set<Number> setOfNumbers = Set.of(1);
+        Set<Shape> setOfShapes = Set.of(new Circle());
+        Map<String, Number> mapValues = Map.of("k", 1);
+        Map<Number, String> mapKeys = Map.of(1, "k");
+        List<Number> asList = Arrays.asList(1, 2);
+        List<Shape> asShapes = Arrays.asList(new Circle());
+        List<Number> single = Collections.singletonList(1);
+        Set<Number> singleSet = Collections.singleton(1);
+        List<Number> none = Collections.emptyList();
+        Optional<Number> optional = Optional.of(1);
+        Optional<Shape> maybeShape = Optional.ofNullable(new Circle());
+        System.out.println(ofNumbers + " " + ofShapes + " " + ofObjects + " " + setOfNumbers
+            + " " + setOfShapes.size() + " " + mapValues + " " + mapKeys + " " + asList
+            + " " + asShapes + " " + single + " " + singleSet + " " + none + " " + optional
+            + " " + maybeShape);
+
+        // ...and a COPY, which is the mutable version of the same line.
+        List<Object> copied = new ArrayList<>(List.of(1));
+        List<Number> copiedNumbers = new ArrayList<>(List.of(1));
+        Set<Number> copiedSet = new HashSet<>(List.of(1));
+        List<Shape> copiedShapes = new ArrayList<>(List.of(new Circle()));
+        TreeSet<Number> sorted = new TreeSet<>(List.of(1));
+        Map<String, Number> copiedMap = new HashMap<>(Map.of("k", 1));
+        TreeMap<String, Number> sortedMap = new TreeMap<>(Map.of("k", 1));
+        LinkedList<Number> linked = new LinkedList<>(List.of(1));
+        System.out.println(copied + " " + copiedNumbers + " " + copiedSet + " " + copiedShapes
+            + " " + sorted + " " + copiedMap + " " + sortedMap + " " + linked);
+
+        // A user generic's diamond is the same poly expression.
+        Box<Shape> boxedShape = new Box<>(new Circle());
+        Box<Number> boxedNumber = new Box<>(1);
+        System.out.println(boxedShape + " " + boxedNumber.get().intValue());
+
+        // Every position the same call can sit in.
+        takes(List.of(1, 2));
+        takes(Arrays.asList(1, 2));
+        takes(new ArrayList<>(List.of(1)));
+        System.out.println(answers() + " " + numbers);
+        List<Number> assigned;
+        assigned = List.of(1, 2);
+        List<Number> conditional = args.length == 0 ? List.of(1) : List.of(2.5);
+        List<Number>[] holder = new List[1];
+        holder[0] = List.of(1);
+        System.out.println(assigned + " " + conditional + " " + holder[0]);
+
+        // An OVERLOAD is still chosen by the argument, not made ambiguous by it.
+        two(List.of(1));
+        two(Set.of(new Circle()));
+
+        // A stream's terminal builds its collection, and its argument comes
+        // from the target too.
+        List<Number> collected = Stream.of(1, 2).collect(Collectors.toList());
+        Set<Number> collectedSet = Stream.of(1).collect(Collectors.toSet());
+        List<Shape> collectedShapes = Stream.of(new Circle()).collect(Collectors.toList());
+        System.out.println(collected + " " + collectedSet + " " + collectedShapes);
+
+        // Reading back through the wider element, and writing through a
+        // MUTABLE one - the immutable factories refuse, as they always did.
+        probe("read", () -> ofNumbers.get(0).intValue() + " " + ofNumbers.get(1).doubleValue());
+        probe("iterate", () -> {
+            int total = 0;
+            for (Number value : asList) {
+                total += value.intValue();
+            }
+            return total;
+        });
+        probe("stream", () -> ofNumbers.stream().map(n -> n.doubleValue())
+            .collect(Collectors.toList()));
+        probe("write mutable", () -> {
+            List<Shape> shapes = new ArrayList<>(List.of(new Circle()));
+            shapes.add(new Square());
+            return shapes;
+        });
+        probe("write immutable", () -> {
+            ofShapes.add(new Square());
+            return ofShapes;
+        });
+        probe("map read", () -> mapValues.get("k").intValue());
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_factory_wrong_element,
+    "RejInfer",
+    "import java.util.*;\npublic class RejInfer {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  public static void main(String[] args) { List<Number> l = List.of(\"x\"); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_factory_wrong_map_value,
+    "RejInfer",
+    "import java.util.*;\npublic class RejInfer {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  public static void main(String[] args) { Map<String, Number> m = Map.of(\"k\", \"v\"); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_factory_wrong_set,
+    "RejInfer",
+    "import java.util.*;\npublic class RejInfer {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  public static void main(String[] args) { Set<Number> s = Set.of(new Circle()); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_factory_wrong_optional,
+    "RejInfer",
+    "import java.util.*;\npublic class RejInfer {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  public static void main(String[] args) { Optional<Number> o = Optional.of(\"x\"); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_diamond_wrong_argument,
+    "RejInfer",
+    "import java.util.*;\npublic class RejInfer {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  public static void main(String[] args) { Box<Number> b = new Box<>(\"x\"); System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_held_list_to_wider_element,
+    "RejInfer",
+    "import java.util.*;\npublic class RejInfer {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  public static void main(String[] args) { List<Circle> c = new ArrayList<>(); List<Shape> s = c; System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_held_list_to_object,
+    "RejInfer",
+    "import java.util.*;\npublic class RejInfer {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  public static void main(String[] args) { List<String> t = new ArrayList<>(List.of(\"x\")); List<Object> o = t; System.out.println(\"no\"); }\n}"
+);
+differential_reject!(
+    reject_held_map_to_wider_value,
+    "RejInfer",
+    "import java.util.*;\npublic class RejInfer {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  public static void main(String[] args) { Map<String, Integer> m = new HashMap<>(); Map<String, Number> w = m; System.out.println(\"no\"); }\n}"
+);

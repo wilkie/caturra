@@ -2627,6 +2627,68 @@ public class Formats {
                       '    static class SF implements F<String> {\n'
                       '        public String apply(String s) { return "SF:" + s; }\n    }')),
     dict(
+        id="target-typed-factories",
+        category="Declarations",
+        title="A factory fills the list you asked for",
+        summary="`List<Shape> shapes = List.of(new Circle());` — a diamond and a collection factory take their type argument from the variable they are written for, not from what they were handed.",
+        main="Inference",
+        source="""
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public class Inference {
+    interface Shape { }
+
+    static class Circle implements Shape {
+        public String toString() {
+            return "circle";
+        }
+    }
+
+    static class Square implements Shape {
+        public String toString() {
+            return "square";
+        }
+    }
+
+    static void report(List<Number> values) {
+        System.out.println("got " + values);
+    }
+
+    public static void main(String[] args) {
+        // The factory was handed circles; the variable asked for shapes.
+        List<Shape> shapes = List.of(new Circle(), new Square());
+        System.out.println(shapes);
+
+        // The same for a copy, which is the mutable version of that line.
+        List<Shape> more = new ArrayList<>(List.of(new Circle()));
+        more.add(new Square());
+        System.out.println(more);
+
+        // Numbers, a map's values, an Optional, a stream's collected list.
+        List<Number> numbers = List.of(1, 2.5);
+        Map<String, Number> scores = Map.of("ada", 100);
+        Optional<Number> maybe = Optional.of(7);
+        List<Number> collected = Stream.of(1, 2).collect(Collectors.toList());
+        System.out.println(numbers + " " + scores + " " + maybe + " " + collected);
+        System.out.println(numbers.get(0).intValue() + scores.get("ada").intValue());
+
+        // ...and in an argument, where the method says what it wants.
+        report(List.of(1, 2));
+
+        // A list someone already HOLDS keeps its own element type, which is
+        // why this is the only direction that works:
+        // List<Circle> circles = new ArrayList<>();
+        // List<Shape> wrong = circles;   // error, as in real Java
+    }
+}
+""",
+    ),
+    dict(
         id="time-positions",
         category="Library",
         title="A java.time value wherever a value goes",

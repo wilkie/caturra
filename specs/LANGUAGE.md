@@ -13288,3 +13288,53 @@ is target-typed inference, and it is its own unit.
 
 Pinned as `a_library_interfaces_type_argument`, plus eight refusals pinned by
 their WORDING, which javac's matches exactly.
+
+## A factory's argument comes from the target
+
+`List<Number> numbers = List.of(1, 2);` was refused — "List<Integer> cannot be
+converted to List<Number>" — and so was every other spelling of the same line.
+Forty-four of them, measured against a JDK: `Set.of`, `Map.of`, `Arrays.asList`,
+`Collections.singletonList`, `Optional.of`, `Stream.of`, a copy constructor, a
+stream's `collect`, in a variable, a field, a return, an argument, an array
+element, a conditional. Eleven agreed.
+
+The cause is JLS §15.9.1 and §18.5.1: a diamond and a call to a generic METHOD
+are POLY expressions, whose type argument comes from where the value is going
+rather than from what it was given. caturra knew this for the diamond — it had
+a rule for exactly that, added when `List<Shape> s = new ArrayList<>(squares)`
+was refused — and the rule tested only a `new` and only at a local declaration.
+It is one predicate now: an expression that MINTS a container takes the
+target's argument, wherever it is written.
+
+Minting is what makes the retype sound. javac reaches the same answer by
+inference; caturra reaches it by noticing that nothing else holds a reference to
+the value under the narrower type, so nothing can put a `Square` into what a
+`List<Circle>` variable still reads. A collection held in a VARIABLE is not
+minted, and `List<Shape> s = circles;` stays the error javac calls it — as do
+`List<Object> o = aStringList;` and `Map<String, Number> w = anIntegerMap;`,
+which are the whole reason the rule cannot simply be "elements widen".
+
+The element test grew to match. It compared two USER classes and nothing else,
+so `List<Shape> s = List.of(new Circle());` worked as soon as the predicate did,
+while `List<Number> n = List.of(1, 2);` — the plainest spelling — still did not:
+a wrapper reaching `Number`, a `java.time` value reaching `Comparable`, anything
+reaching `Object` all go through the same "does this element widen to that
+class" question, which was already written down elsewhere. And it now covers the
+containers a factory actually mints — an `Optional`, a `Stream`, a `TreeMap`, a
+`LinkedList`, and a USER generic (`Box<Shape> b = new Box<>(new Circle());`).
+
+An ARGUMENT is the one position that needs more than retyping: the call is
+chosen before the argument is converted, so applicability has to consider the
+poly form too. When nothing is applicable, resolution is tried once more with
+each minting argument retyped to what the parameter says — and only when that
+reaches exactly one candidate, so an ambiguity stays one.
+
+Two limits remain, both the same boundary. `List<List<Number>> l = List.of(
+List.of(1));` needs the inference to recurse through the nested factory, and a
+user generic METHOD (`static <T> Box<T> boxed(T v)`, `Box<Number> b = boxed(1);`)
+needs it to run over a signature rather than over a container. Both are refused,
+which is the safe direction.
+
+Pinned as `a_factorys_argument_comes_from_the_target`, with eight refusals
+beside it — five wrong arguments to a factory, and three collections held in a
+variable, which is what keeps the rule from being unsound.

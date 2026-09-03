@@ -60,6 +60,14 @@ EXPRS = [
  ("comparableUnbox", 'Comparable<Integer> c = 5;', '(int) c + 1'),
  ("enumFace", '', '((Enum<java.time.DayOfWeek>) java.time.DayOfWeek.MONDAY).ordinal()'),
  ("cloneableArray", 'Cloneable c = new int[] {1, 2};', '((int[]) c).length'),
+ # A generic FACTORY's type argument comes from the TARGET, so the same call
+ # has a different element in every position it is written into.
+ ("wideList", 'List<Number> w = List.of(1, 2.5);', 'w.get(0).intValue() + w.size()'),
+ ("wideCopy", 'List<Object> w = new ArrayList<>(List.of("a"));', 'w.size() + "" + w.get(0)'),
+ ("wideMap", 'Map<String, Number> w = Map.of("k", 1);', 'w.get("k").intValue()'),
+ ("wideOptional", 'Optional<Number> w = Optional.of(1);', 'w.get().doubleValue()'),
+ ("wideCollected", 'List<Number> w = Stream.of(1, 2).collect(Collectors.toList());',
+  'w.size() + w.get(1).intValue()'),
 ]
 
 POSITIONS = {

@@ -1163,6 +1163,16 @@
     "expected": "SBox.set typed\nSF:y\n"
   },
   {
+    "id": "target-typed-factories",
+    "category": "Declarations",
+    "title": "A factory fills the list you asked for",
+    "summary": "`List<Shape> shapes = List.of(new Circle());` \u2014 a diamond and a collection factory take their type argument from the variable they are written for, not from what they were handed.",
+    "main": "Inference",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\nimport java.util.Map;\nimport java.util.Optional;\nimport java.util.stream.Collectors;\nimport java.util.stream.Stream;\n\npublic class Inference {\n    interface Shape { }\n\n    static class Circle implements Shape {\n        public String toString() {\n            return \"circle\";\n        }\n    }\n\n    static class Square implements Shape {\n        public String toString() {\n            return \"square\";\n        }\n    }\n\n    static void report(List<Number> values) {\n        System.out.println(\"got \" + values);\n    }\n\n    public static void main(String[] args) {\n        // The factory was handed circles; the variable asked for shapes.\n        List<Shape> shapes = List.of(new Circle(), new Square());\n        System.out.println(shapes);\n\n        // The same for a copy, which is the mutable version of that line.\n        List<Shape> more = new ArrayList<>(List.of(new Circle()));\n        more.add(new Square());\n        System.out.println(more);\n\n        // Numbers, a map's values, an Optional, a stream's collected list.\n        List<Number> numbers = List.of(1, 2.5);\n        Map<String, Number> scores = Map.of(\"ada\", 100);\n        Optional<Number> maybe = Optional.of(7);\n        List<Number> collected = Stream.of(1, 2).collect(Collectors.toList());\n        System.out.println(numbers + \" \" + scores + \" \" + maybe + \" \" + collected);\n        System.out.println(numbers.get(0).intValue() + scores.get(\"ada\").intValue());\n\n        // ...and in an argument, where the method says what it wants.\n        report(List.of(1, 2));\n\n        // A list someone already HOLDS keeps its own element type, which is\n        // why this is the only direction that works:\n        // List<Circle> circles = new ArrayList<>();\n        // List<Shape> wrong = circles;   // error, as in real Java\n    }\n}\n",
+    "status": "supported",
+    "expected": "[circle, square]\n[circle, square]\n[1, 2.5] {ada=100} Optional[7] [1, 2]\n101\ngot [1, 2]\n"
+  },
+  {
     "id": "time-positions",
     "category": "Library",
     "title": "A java.time value wherever a value goes",

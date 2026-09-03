@@ -5988,6 +5988,54 @@ fn same_written_type(value: JType, arg: ElemType, table: &MethodTable) -> bool {
     matches!(arg, ElemType::Nested { inner, .. } if table.nested_type(inner) == value)
 }
 
+/// Whether an expression MINTS a container — a value nothing else holds a
+/// reference to. Only a fresh one may take its type argument from the target:
+/// retyping a container someone else still reads under a narrower element is
+/// exactly the hole `List<Object> o = aStringList;` must keep.
+///
+/// A diamond `new` and the library FACTORIES are the two ways to mint one, and
+/// `collect` is the third — a stream's terminal builds the collection it
+/// answers, and its own type argument is inferred from the target as well.
+fn mints_a_collection(expr: &Expr) -> bool {
+    match expr {
+        Expr::NewObject { type_args, .. } => type_args.is_empty(),
+        Expr::Call {
+            receiver, method, ..
+        } => {
+            if method == "collect" {
+                return true;
+            }
+            let Some(Expr::Name { path, .. }) = receiver.as_deref() else {
+                return false;
+            };
+            let class = path.last().map_or("", String::as_str);
+            matches!(
+                (class, method.as_str()),
+                ("List" | "Set", "of" | "copyOf")
+                    | ("Map", "of" | "ofEntries" | "copyOf" | "entry")
+                    | ("Arrays", "asList")
+                    | (
+                        "Collections",
+                        "singletonList"
+                            | "singleton"
+                            | "singletonMap"
+                            | "emptyList"
+                            | "emptySet"
+                            | "emptyMap"
+                            | "nCopies"
+                            | "unmodifiableList"
+                            | "unmodifiableSet"
+                            | "unmodifiableMap"
+                            | "unmodifiableCollection"
+                    )
+                    | ("Optional", "of" | "ofNullable" | "empty")
+                    | ("Stream", "of" | "empty" | "concat" | "iterate" | "generate")
+            )
+        }
+        _ => false,
+    }
+}
+
 /// The `java.time` values that implement `Comparable`, and whether they do so
 /// with THEMSELVES as the type argument. The dates are ordered through a
 /// chronology interface — a `LocalDate` is a `Comparable<ChronoLocalDate>`, so
@@ -21850,6 +21898,7 @@ impl BodyGen<'_> {
                     // the diamond form: writing the type out worked.
                     let init_ty = if self.diamond_adopts_target(init, init_ty, var_ty)
                         || self.ternary_adopts_target(init, init_ty, var_ty)
+                        || self.poly_adopts_target(init, init_ty, var_ty)
                     {
                         var_ty
                     } else {
@@ -21933,11 +21982,29 @@ impl BodyGen<'_> {
 
     fn expr_toward(&mut self, expr: &Expr, target: JType) -> JType {
         let actual = self.expr(expr);
-        if self.ternary_adopts_target(expr, actual, target) {
+        if self.ternary_adopts_target(expr, actual, target)
+            || self.poly_adopts_target(expr, actual, target)
+        {
             target
         } else {
             actual
         }
+    }
+
+    /// Whether a POLY expression takes its type argument from the target
+    /// instead of from what it holds. A diamond does (JLS §15.9.1) and so does
+    /// a call to a generic METHOD (§18.5.2), which is what every collection
+    /// factory is: `List<Shape> shapes = List.of(new Circle());` infers `T =
+    /// Shape` in javac, and reading the argument instead made it "List<Circle>
+    /// cannot be converted to List<Shape>" — ordinary Java, refused.
+    ///
+    /// Only where the value is FRESH. That is what makes the retype sound:
+    /// nobody else holds a reference to it under the narrower type, so nothing
+    /// can put a `Square` into what a `List<Circle>` variable still reads. A
+    /// list held in a VARIABLE is not fresh, and `List<Shape> s = circles;`
+    /// stays the error javac calls it.
+    fn poly_adopts_target(&mut self, init: &Expr, init_ty: JType, target: JType) -> bool {
+        mints_a_collection(init) && self.elements_widen(init_ty, target)
     }
 
     /// Whether a CONDITIONAL takes its type from the target instead of from
@@ -21976,6 +22043,11 @@ impl BodyGen<'_> {
         if ty == JType::Null || widens(ty, target, self.table) {
             return true;
         }
+        // A branch that MINTS a collection reaches the target the same way an
+        // initializer does: its type argument is the target's.
+        if mints_a_collection(branch) && self.elements_widen(ty, target) {
+            return true;
+        }
         match branch {
             Expr::Ternary { then, els, .. } => {
                 self.branch_reaches(then, target) && self.branch_reaches(els, target)
@@ -21991,8 +22063,20 @@ impl BodyGen<'_> {
         if !type_args.is_empty() {
             return false;
         }
+        self.elements_widen(init_ty, target)
+    }
+
+    /// Whether every element of `init_ty` widens to the matching element of
+    /// `target` — the test both poly forms need, and the whole of what makes
+    /// adopting the target sound.
+    fn elements_widen(&self, init_ty: JType, target: JType) -> bool {
         let widens = |from: ElemType, to: ElemType| match (from, to) {
-            (ElemType::Object(sub), ElemType::Object(sup)) => self.table.is_subtype(sub, sup),
+            // Any element reaching a NAMED class: a subclass, a wrapper
+            // reaching `Number`/`Comparable`/`Object`, a `java.time` value
+            // reaching `Comparable`. Only a user class reaching another was
+            // asked, so `List<Number> l = List.of(1, 2);` — the plainest
+            // spelling of the rule — was still refused after the shapes worked.
+            (from, ElemType::Object(sup)) => elem_widens_to_class(from, sup, self.table),
             // A PARAMETERIZED supertype element — `List<BaseRepo<String>> all
             // = new ArrayList<>(listOfNames)`, where the copy source holds a
             // subclass. The element rides as an interned nested type, so
@@ -22017,7 +22101,35 @@ impl BodyGen<'_> {
                 JType::Set { elem: to, .. } | JType::Collection(to),
             )
             | (JType::TreeSet(from, _), JType::TreeSet(to, _) | JType::Set { elem: to, .. })
-            | (JType::Collection(from), JType::Collection(to)) => widens(from, to),
+            | (JType::Collection(from), JType::Collection(to))
+            // The other containers one type argument reaches: a fresh
+            // `Optional`, a fresh pipeline, and the sequence kinds a factory or
+            // a copy constructor mints.
+            | (JType::Optional(from), JType::Optional(to))
+            | (JType::Stream(from), JType::Stream(to))
+            | (JType::Stack(from), JType::Stack(to))
+            | (
+                JType::LinkedList { elem: from, .. },
+                JType::LinkedList { elem: to, .. } | JType::Collection(to),
+            ) => widens(from, to),
+            // A USER generic class, whose diamond is a poly expression like
+            // any other: `Box<Shape> b = new Box<>(new Circle());` is the
+            // ordinary way to fill a container of a supertype, and reading the
+            // argument instead made it "Box<Circle> cannot be converted to
+            // Box<Shape>". Only the FIRST argument varies here; the rest have
+            // to match, since nothing widens two of them independently.
+            (
+                JType::Generic {
+                    class: from_class,
+                    arg: from_arg,
+                    rest: from_rest,
+                },
+                JType::Generic {
+                    class: to_class,
+                    arg: to_arg,
+                    rest: to_rest,
+                },
+            ) => from_class == to_class && from_rest == to_rest && widens(from_arg, to_arg),
             (
                 JType::Map {
                     key: from_key,
@@ -22025,6 +22137,18 @@ impl BodyGen<'_> {
                     ..
                 },
                 JType::Map {
+                    key: to_key,
+                    value: to_value,
+                    ..
+                },
+            )
+            | (
+                JType::TreeMap {
+                    key: from_key,
+                    value: from_value,
+                    ..
+                },
+                JType::TreeMap {
                     key: to_key,
                     value: to_value,
                     ..
@@ -28261,17 +28385,30 @@ impl BodyGen<'_> {
                 return None;
             }
             Resolution::NoneApplicable(candidates) => {
-                // javac names the class that DECLARES the method, not the
-                // receiver's: a `go(int)` inherited from `Base` is "method go
-                // in class Base" even when called on a `Sub`.
-                let described = format!(
-                    "class {}",
-                    self.table
-                        .declaring_class(&class_name, method)
-                        .unwrap_or_else(|| class_name.clone())
-                );
-                self.inapplicable_error(method, &described, &candidates, &arg_types, args, span);
-                return None;
+                if let Some(sig) =
+                    self.poly_retry(&class_name, method, &candidates, args, &arg_types)
+                {
+                    sig
+                } else {
+                    // javac names the class that DECLARES the method, not the
+                    // receiver's: a `go(int)` inherited from `Base` is "method
+                    // go in class Base" even when called on a `Sub`.
+                    let described = format!(
+                        "class {}",
+                        self.table
+                            .declaring_class(&class_name, method)
+                            .unwrap_or_else(|| class_name.clone())
+                    );
+                    self.inapplicable_error(
+                        method,
+                        &described,
+                        &candidates,
+                        &arg_types,
+                        args,
+                        span,
+                    );
+                    return None;
+                }
             }
             Resolution::Ambiguous(candidates) => {
                 self.error(span, ambiguous_message(method, &candidates));
@@ -29901,9 +30038,20 @@ impl BodyGen<'_> {
                 return None;
             }
             Resolution::NoneApplicable(candidates) => {
-                let described = format!("class {class}");
-                self.inapplicable_error(method, &described, &candidates, &arg_types, args, span);
-                return None;
+                if let Some(sig) = self.poly_retry(class, method, &candidates, args, &arg_types) {
+                    sig
+                } else {
+                    let described = format!("class {class}");
+                    self.inapplicable_error(
+                        method,
+                        &described,
+                        &candidates,
+                        &arg_types,
+                        args,
+                        span,
+                    );
+                    return None;
+                }
             }
             Resolution::Ambiguous(candidates) => {
                 self.error(span, ambiguous_message(method, &candidates));
@@ -31528,6 +31676,73 @@ impl BodyGen<'_> {
     /// Report an inapplicable call where javac points: at the ARGUMENT whose
     /// type is wrong when exactly one candidate has the right arity, and at
     /// the call itself otherwise.
+    /// The argument types to RE-resolve with when nothing was applicable: a
+    /// POLY argument — a fresh collection a factory or a diamond mints — takes
+    /// its type from the PARAMETER. That is javac's inference (JLS 18.5.1),
+    /// and reading the argument's own element instead made `f(List.of(1, 2))`
+    /// against `f(List<Number>)` the same "List<Integer> cannot be converted
+    /// to List<Number>" the assignment used to give.
+    ///
+    /// Answers `Some` only when exactly ONE candidate is reached that way, so
+    /// an ambiguity stays one rather than silently picking a winner.
+    fn poly_argument_types(
+        &self,
+        candidates: &[Vec<JType>],
+        args: &[Expr],
+        arg_types: &[JType],
+    ) -> Option<Vec<JType>> {
+        let adopts = |at: usize, param: JType| {
+            args.get(at).is_some_and(mints_a_collection)
+                && self.elements_widen(arg_types[at], param)
+        };
+        let mut reached: Option<Vec<JType>> = None;
+        for params in candidates {
+            if params.len() != args.len() {
+                continue;
+            }
+            let fits = params
+                .iter()
+                .enumerate()
+                .all(|(at, param)| widens(arg_types[at], *param, self.table) || adopts(at, *param));
+            if !fits {
+                continue;
+            }
+            if reached.is_some() {
+                return None;
+            }
+            reached = Some(
+                params
+                    .iter()
+                    .enumerate()
+                    .map(|(at, param)| {
+                        if adopts(at, *param) {
+                            *param
+                        } else {
+                            arg_types[at]
+                        }
+                    })
+                    .collect(),
+            );
+        }
+        reached
+    }
+
+    /// Resolve again with those adopted argument types, when they exist.
+    fn poly_retry(
+        &self,
+        class: &str,
+        method: &str,
+        candidates: &[Vec<JType>],
+        args: &[Expr],
+        arg_types: &[JType],
+    ) -> Option<MethodSig> {
+        let adopted = self.poly_argument_types(candidates, args, arg_types)?;
+        match self.table.resolve(class, method, &adopted) {
+            Resolution::Found(sig) => Some(sig.clone()),
+            _ => None,
+        }
+    }
+
     fn inapplicable_error(
         &mut self,
         method: &str,
