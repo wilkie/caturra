@@ -48582,3 +48582,164 @@ differential_reject!(
     "RejGeneric",
     "import java.util.*;\npublic class RejGeneric {\n  interface Shape { }\n  static class Circle implements Shape { }\n  static class Box<T> { T h; Box(T h) { this.h = h; } }\n  static <T> Box<T> boxed(T v) { return new Box<>(v); }\n  static <T> List<T> listOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }\n  static Box<Integer> intBox() { return new Box<>(1); }\n  static List<Integer> ints() { return new ArrayList<>(); }\n  public static void main(String[] args) { Box<Integer> a = boxed(1); Box<Number> b = a; System.out.println(\"no\"); }\n}"
 );
+
+differential_test!(
+    a_lambda_through_a_user_generic,
+    "Through",
+    r#"
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/** A lambda's parameter, read through a class the PROGRAM declares. */
+public class Through {
+    interface Shape {
+        double area();
+    }
+
+    static class Circle implements Shape {
+        public double area() {
+            return 3.0;
+        }
+
+        public String toString() {
+            return "circle";
+        }
+    }
+
+    static class Box<T> {
+        T held;
+
+        Box(T held) {
+            this.held = held;
+        }
+
+        T get() {
+            return held;
+        }
+
+        <R> Box<R> map(Function<T, R> f) {
+            return new Box<>(f.apply(held));
+        }
+
+        Box<T> filter(Predicate<T> p) {
+            return p.test(held) ? this : null;
+        }
+
+        void each(Consumer<T> c) {
+            c.accept(held);
+        }
+
+        <R> R fold(R seed, BiFunction<R, T, R> f) {
+            return f.apply(seed, held);
+        }
+
+        public String toString() {
+            return "Box(" + held + ")";
+        }
+    }
+
+    static class Bag<T> {
+        List<T> items = new ArrayList<>();
+
+        Bag<T> add(T value) {
+            items.add(value);
+            return this;
+        }
+
+        List<T> all() {
+            return items;
+        }
+
+        Stream<T> stream() {
+            return items.stream();
+        }
+
+        Optional<T> firstItem() {
+            return items.stream().findFirst();
+        }
+
+        Map<T, Integer> counts() {
+            Map<T, Integer> out = new LinkedHashMap<>();
+            for (T one : items) {
+                out.put(one, 1);
+            }
+            return out;
+        }
+    }
+
+    static class Names extends Bag<String> { }
+
+    static <T> Box<T> boxOf(T value) {
+        return new Box<>(value);
+    }
+
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // The receiver, written every way a program writes one.
+        Box<String> declared = new Box<>("ab");
+        probe("declared", () -> declared.map(s -> s.length()).get() + 1);
+        probe("diamond", () -> new Box<>("ab").map(s -> s.length()).get() + 1);
+        probe("written out", () -> new Box<String>("ab").map(s -> s.length()).get() + 1);
+        probe("factory", () -> boxOf("ab").map(s -> s.length()).get() + 1);
+        probe("chained", () -> new Box<>("ab").map(s -> s.length()).map(n -> n * 2).get());
+        probe("user method in body", () -> new Box<>(new Circle()).map(c -> c.area()).get());
+        probe("method reference", () -> new Box<>("ab").map(String::length).get() + 1);
+        probe("user method reference", () -> new Box<>(new Circle()).map(Circle::area).get());
+        probe("block body", () -> new Box<>("ab").map(s -> {
+            int n = s.length();
+            return n + 1;
+        }).get());
+        probe("nested lambda", () -> new Box<>("ab")
+            .map(s -> Stream.of(s).map(t -> t.length()).collect(Collectors.toList())).get());
+
+        // The other functional shapes on the same class.
+        probe("predicate", () -> new Box<>(5).filter(v -> v > 3));
+        probe("bifunction", () -> new Box<>(2).fold(10, (acc, v) -> acc + v));
+        new Box<>("ab").each(s -> System.out.println("consumer = " + s.length()));
+
+        // A generic class whose METHODS answer containers of its variable.
+        Bag<String> bag = new Bag<>();
+        bag.add("ab").add("c");
+        probe("bag list", () -> bag.all().stream().map(s -> s.length()).collect(Collectors.toList()));
+        probe("bag stream", () -> bag.stream().map(s -> s.length()).count());
+        probe("bag optional", () -> bag.firstItem().map(s -> s.length()).orElse(0));
+        probe("bag map", () -> bag.counts().keySet().stream().map(s -> s.length()).count());
+        probe("bag inline", () -> new Bag<String>().add("ab").all().stream()
+            .map(s -> s.length()).count());
+
+        // ...and a SUBCLASS that fixes the argument, which declares none of it.
+        Names names = new Names();
+        names.add("ab");
+        probe("subclass list", () -> names.all().stream().map(s -> s.length()).count());
+        probe("subclass stream", () -> names.stream().map(s -> s.length()).count());
+        probe("subclass optional", () -> names.firstItem().map(s -> s.length()).orElse(0));
+
+        // A class of a SHAPE, so the lambda calls a method of the program.
+        Bag<Circle> circles = new Bag<>();
+        circles.add(new Circle());
+        probe("shape stream", () -> circles.all().stream().map(c -> c.area())
+            .collect(Collectors.toList()));
+
+        // The identity map, whose answer is the receiver's own argument.
+        Box<Integer> identity = new Box<>(1).map(v -> v);
+        probe("identity", () -> identity.get() + 1);
+    }
+}
+"#
+);

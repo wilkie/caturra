@@ -1252,6 +1252,44 @@ fn inherited_arguments(
     })
 }
 
+/// A DIAMOND's type arguments, inferred from what the constructor was handed.
+/// `new Box<>("ab")` is a `Box<String>`; reading it as a raw `Box` left every
+/// lambda after it (`.map(s -> s.length())`) with an `Object` parameter, though
+/// the identical chain through a declared variable — or written out as
+/// `new Box<String>("ab")` — had always worked.
+///
+/// Only a variable a constructor parameter names OUTRIGHT is pinned. One that
+/// appears inside a parameter's own arguments is the collection copy the arm
+/// beside this already reads, and one nothing mentions cannot be pinned at all.
+fn diamond_arguments(class: &str, args: &[Expr], ctx: &Ctx) -> Option<Vec<TypeRef>> {
+    let info = ctx.hierarchy.get(class)?;
+    if info.params.is_empty() {
+        return None;
+    }
+    let signatures = ctx.constructors.get(class)?;
+    let mut matching = signatures
+        .iter()
+        .filter(|params| params.len() == args.len());
+    let params = matching.next()?;
+    // Two constructors of that arity: which one applies is an overload
+    // question this pass does not answer, so it answers none.
+    if matching.next().is_some() {
+        return None;
+    }
+    // A class's type variable reaches this pass as the parser's SENTINEL, not
+    // as the letter the program wrote — the erasure renames it, and the
+    // position is what says which variable it was.
+    let mut pinned: Vec<TypeRef> = Vec::new();
+    for index in 0..u8::try_from(info.params.len()).ok()? {
+        let at = params.iter().position(|param| {
+            matches!(param, TypeRef::Named(written)
+                if crate::parser::typevar_index(written) == Some(index))
+        })?;
+        pinned.push(boxed_element(static_type_of(args.get(at)?, ctx)?));
+    }
+    Some(pinned)
+}
+
 /// The type arguments the RECEIVER gives the class that declares the method
 /// being called: written on the receiver's own type where it names that class,
 /// and inherited from its `extends`/`implements` clause where it does not.
@@ -1525,18 +1563,80 @@ fn user_method_return(owner: &Expr, method: &str, argc: usize, ctx: &Ctx) -> Opt
         }
         _ => None,
     })?;
-    let answered = ctx
-        .shapes
-        .get(&class)?
-        .iter()
-        .find(|shape| shape.name == method && shape.takes(argc))
-        .map(|shape| shape.return_type.clone())?;
+    // A method a class INHERITS is called by its simple name like any other,
+    // so the search walks outward — and which class DECLARES it is what says
+    // whose type variables the return mentions.
+    let (declarer, answered) = declared_shape(&class, method, argc, ctx)?;
+    // ...with those variables replaced by what the receiver was written with.
+    // `Registry<String> r; r.all()` is a `List<String>`, and keeping the
+    // erasure's sentinel made it a list of nothing — so the stream after it
+    // had no element and the lambda saw an `Object`.
+    let answered = receiver_var_substitution(owner, &declarer, ctx)
+        .and_then(|bound| replace_typevars(&answered, &bound))
+        .unwrap_or(answered);
     // A bare type VARIABLE says nothing without the receiver's argument.
     match &answered {
         TypeRef::Named(name) if crate::parser::typevar_index(name).is_some() => None,
         TypeRef::Void => None,
         _ => Some(answered),
     }
+}
+
+/// The class that DECLARES `method` at that arity, walking outward from
+/// `class`, and the return type it writes. `Names extends Bag<String>` declares
+/// no `all()` of its own, and looking only at the class named left the call
+/// with no type at all.
+fn declared_shape(class: &str, method: &str, argc: usize, ctx: &Ctx) -> Option<(String, TypeRef)> {
+    let mut current = class.to_owned();
+    let mut seen: Vec<String> = Vec::new();
+    loop {
+        if let Some(shape) = ctx
+            .shapes
+            .get(&current)
+            .and_then(|shapes| shapes.iter().find(|s| s.name == method && s.takes(argc)))
+        {
+            return Some((current, shape.return_type.clone()));
+        }
+        if seen.contains(&current) {
+            return None;
+        }
+        seen.push(current.clone());
+        let parent = ctx.supers.get(&current)?.first()?;
+        current.clone_from(parent);
+    }
+}
+
+/// What each of `class`'s type variables is, seen through this receiver: the
+/// arguments its written type gives, by position. The erasure renames a
+/// variable to a sentinel that carries only its INDEX, so the answer is a list
+/// rather than a map of names.
+fn receiver_var_substitution(owner: &Expr, class: &str, ctx: &Ctx) -> Option<Vec<TypeRef>> {
+    let arity = ctx.hierarchy.get(class)?.params.len();
+    if arity == 0 {
+        return None;
+    }
+    let written = receiver_class_arguments(owner, class, ctx)?;
+    (written.len() == arity).then_some(written)
+}
+
+/// A written type with every type-variable SENTINEL replaced by the argument at
+/// its index. `None` when one of them has no argument to take.
+fn replace_typevars(ty: &TypeRef, bound: &[TypeRef]) -> Option<TypeRef> {
+    Some(match ty {
+        TypeRef::Named(name) => match crate::parser::typevar_index(name) {
+            Some(index) => bound.get(usize::from(index))?.clone(),
+            None => ty.clone(),
+        },
+        TypeRef::Generic { base, args } => TypeRef::Generic {
+            base: base.clone(),
+            args: args
+                .iter()
+                .map(|arg| replace_typevars(arg, bound))
+                .collect::<Option<Vec<_>>>()?,
+        },
+        TypeRef::Array(inner) => TypeRef::Array(Box::new(replace_typevars(inner, bound)?)),
+        other => other.clone(),
+    })
 }
 
 /// The type of a literal collection factory — `List.of(…)`, `Set.of(…)`,
@@ -1623,6 +1723,13 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             Literal::Null => return None,
         }))),
         Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0]),
+        // A call to one of the PROGRAM's own GENERIC methods, with its
+        // variables pinned. `body_type` already asked this; the general reader
+        // did not, so a lambda written on the RESULT of one — `boxOf("ab").map(
+        // s -> s.length())` — saw a receiver with no type argument at all.
+        Expr::Call { .. } if generic_call_return(expr, ctx).is_some() => {
+            generic_call_return(expr, ctx)
+        }
         Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
             ctx.lookup(name)
         }
@@ -1656,6 +1763,20 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             base: class.clone(),
             args: type_args.clone(),
         }),
+        // A DIAMOND of a class the PROGRAM declares, whose argument the
+        // constructor's own parameters say. The library diamonds fall through
+        // to the copy-constructor arm below, which is what they need.
+        Expr::NewObject {
+            class,
+            type_args,
+            args,
+            ..
+        } if type_args.is_empty() && diamond_arguments(class, args, ctx).is_some() => {
+            diamond_arguments(class, args, ctx).map(|args| TypeRef::Generic {
+                base: class.clone(),
+                args,
+            })
+        }
         // A DIAMOND over a collection — `new ArrayList<>(List.of(item))` —
         // takes its argument from the collection it copies. Written out this
         // is what `var` needs: the declaration says nothing, so the
@@ -5511,12 +5632,9 @@ fn call_body_type(
     let (TypeRef::Named(name) | TypeRef::Generic { base: name, .. }) = &on else {
         return None;
     };
-    let answered = ctx
-        .shapes
-        .get(name)?
-        .iter()
-        .find(|shape| shape.name == method && shape.takes(args.len()))
-        .map(|shape| shape.return_type.clone())?;
+    // Walked OUTWARD: a method a class INHERITS is called by its simple name
+    // like any other, and `Names extends Bag<String>` declares none of Bag's.
+    let (declarer, answered) = declared_shape(name, method, args.len(), ctx)?;
     // A method that answers its class's own TYPE VARIABLE — `Box<T>`'s
     // `get()` — answers the RECEIVER's argument. Erasure has already
     // replaced the variable with its positional sentinel, which is
@@ -5529,6 +5647,13 @@ fn call_body_type(
         && let Some(argument) = written.get(usize::from(index))
     {
         return Some(argument.clone());
+    }
+    // ...and the same substitution INSIDE a written return (`Stream<T>`,
+    // `List<T>`), which is what a user class's own `stream()` answers.
+    if let Some(bound) = receiver_var_substitution(receiver, &declarer, ctx)
+        && let Some(substituted) = replace_typevars(&answered, &bound)
+    {
+        return Some(substituted);
     }
     Some(answered)
 }
@@ -6843,12 +6968,13 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         args,
         ..
     } = receiver
-        && let Some(class) = declared_class_name(owner, ctx)
-        && let Some(shapes) = ctx.shapes.get(&class)
-        && let Some(shape) = shapes
-            .iter()
-            .find(|shape| shape.name == *method && shape.arity == args.len())
-        && let Some(elem) = element_of_declared(&shape.return_type)
+        // Read through the general reader, which substitutes the DECLARING
+        // class's type variables with the arguments the receiver was written
+        // with. Taking the declared return raw made `registry.all()` a list of
+        // the erasure's sentinel, and the lambda after it a parameter of a type
+        // nothing declares.
+        && let Some(ty) = user_method_return(owner, method, args.len(), ctx)
+        && let Some(elem) = element_of_declared(&ty)
     {
         return Some(elem);
     }

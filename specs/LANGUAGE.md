@@ -13372,3 +13372,45 @@ the safe answer is the refusal.
 Pinned as `a_generic_methods_variable_comes_from_the_target`, with six refusals
 beside it — a concrete return, an argument the target contradicts, one poly
 branch of a conditional and one not, and a result already held in a variable.
+
+## A lambda's parameter, through a class the program wrote
+
+`new Box<>("ab").map(s -> s.length())` was "bad operand types" — `s` was an
+`Object` — while `Box<String> b = new Box<>("ab"); b.map(s -> s.length())` one
+line above compiled. Twenty-four shapes of the same question against a JDK; half
+of them disagreed, and every one was the receiver's TYPE ARGUMENT not surviving
+the way the receiver was written.
+
+The lambda pass reads a receiver's argument to type the lambda it is about to
+be handed. It read a declared variable, and a `new Box<String>(…)` written out.
+It did not read:
+
+- a DIAMOND of a program class. `new Box<>("ab")` was a raw `Box`; the argument
+  is what the constructor was handed, and the erasure has already renamed the
+  variable to a sentinel that carries its INDEX, which is exactly what to match
+  a parameter against.
+- a call to one of the program's own GENERIC methods. `boxOf("ab")` was
+  nothing at all — the general reader never asked the question `body_type` had
+  been asking all along.
+- a method a class INHERITS. `Names extends Bag<String>` declares no `all()`,
+  and looking only at the class named left the call untyped. The search walks
+  outward now, and which class DECLARES the method is what says whose variables
+  its return mentions.
+- a variable INSIDE a written return. `Registry<String> r; r.all()` is a
+  `List<String>`, and keeping the sentinel made it a list of nothing — so the
+  stream after it had no element, and the lambda saw an `Object`.
+
+The last two are one substitution, written once and asked from the three places
+that need it: the general reader, the element reader a collection chain uses,
+and the body reader a lambda's own chain uses.
+
+Two limits are left, both refusals. A diamond with MORE THAN ONE type argument
+(`new Pair<>("ab", 2)`) infers none — the plan behind the inference joins its
+sources into a single answer, so a second variable has nowhere to go. And a
+class type variable in a PARAMETER position is still unchecked: `Bag<String> b;
+b.add(1);` compiles, where javac says "int cannot be converted to String". The
+erased signature says `Object`, and codegen cannot tell that parameter from one
+the program really wrote as `Object`.
+
+Pinned as `a_lambda_through_a_user_generic`; four expressions join the position
+mirror.

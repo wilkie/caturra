@@ -73,6 +73,14 @@ EXPRS = [
  ("genericWide", 'List<Number> w = pairOf(1, 2.5);', 'w.get(0).intValue() + w.size()'),
  ("genericEmpty", 'List<Number> w = none(); w.add(3);', 'w.get(0).intValue()'),
  ("genericExact", '', 'pairOf("a", "b").get(0).length()'),
+ # A lambda's parameter read through a class the PROGRAM declares: the
+ # receiver's type argument has to survive a diamond, a chain and a subclass.
+ ("userBoxDiamond", '', 'Box.of("ab").get().length()'),
+ ("userBagInline", '', 'new Bag<String>().put("ab").all().stream().map(s -> s.length()).count()'),
+ ("userBagStream", 'Bag<String> bag = new Bag<>(); bag.put("ab");',
+  'bag.stream().map(s -> s.length()).count()'),
+ ("userSubclass", 'Names names = new Names(); names.put("ab");',
+  'names.all().stream().map(s -> s.length()).count()'),
 ]
 
 POSITIONS = {
@@ -104,6 +112,13 @@ HELPERS = """    static class Node<T> {
     static void take(Object o) { System.out.println(o); }
     static <T> List<T> pairOf(T a, T b) { return new ArrayList<>(Arrays.asList(a, b)); }
     static <T> List<T> none() { return new ArrayList<>(); }
+    static class Bag<T> {
+        private final List<T> items = new ArrayList<>();
+        Bag<T> put(T v) { items.add(v); return this; }
+        List<T> all() { return items; }
+        Stream<T> stream() { return items.stream(); }
+    }
+    static class Names extends Bag<String> { }
 """
 
 out_dir = "cases"
