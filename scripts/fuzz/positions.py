@@ -81,6 +81,11 @@ EXPRS = [
   'bag.stream().map(s -> s.length()).count()'),
  ("userSubclass", 'Names names = new Names(); names.put("ab");',
   'names.all().stream().map(s -> s.length()).count()'),
+ # A parameter that is the class's own type VARIABLE takes what the receiver's
+ # argument says, in every position the call is written in.
+ ("typevarParam", 'Holder<String> h = new Holder<>(); h.set("ab");', 'h.get().length()'),
+ ("typevarBoxed", 'Holder<Integer> h = new Holder<>(); h.set(5);', 'h.get() + 1'),
+ ("typevarInherited", 'Names named = new Names(); named.put("ab");', 'named.all().get(0).length()'),
 ]
 
 POSITIONS = {
@@ -119,6 +124,7 @@ HELPERS = """    static class Node<T> {
         Stream<T> stream() { return items.stream(); }
     }
     static class Names extends Bag<String> { }
+    static class Holder<T> { private T v; void set(T x) { v = x; } T get() { return v; } }
 """
 
 out_dir = "cases"

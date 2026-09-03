@@ -48743,3 +48743,229 @@ public class Through {
 }
 "#
 );
+
+differential_test!(
+    a_type_variable_in_a_parameter,
+    "Variable",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+/** A type VARIABLE in a parameter position: what the receiver's argument lets
+ * a call hand it. */
+public class Variable {
+    interface Shape {
+        double area();
+    }
+
+    static class Circle implements Shape {
+        public double area() {
+            return 3.0;
+        }
+
+        public String toString() {
+            return "circle";
+        }
+    }
+
+    static class Square implements Shape {
+        public double area() {
+            return 4.0;
+        }
+
+        public String toString() {
+            return "square";
+        }
+    }
+
+    static class Bag<T> {
+        List<T> items = new ArrayList<>();
+
+        Bag<T> add(T value) {
+            items.add(value);
+            return this;
+        }
+
+        void addTwice(T value) {
+            add(value);
+            this.add(value);
+        }
+
+        void copyFrom(Bag<T> other) {
+            for (T one : other.items) {
+                add(one);
+            }
+        }
+
+        boolean has(T value) {
+            return items.contains(value);
+        }
+
+        public String toString() {
+            return items.toString();
+        }
+    }
+
+    static class Pair<A, B> {
+        A a;
+        B b;
+
+        Pair(A a, B b) {
+            this.a = a;
+            this.b = b;
+        }
+
+        void setFirst(A value) {
+            a = value;
+        }
+
+        void setSecond(B value) {
+            b = value;
+        }
+
+        public String toString() {
+            return "(" + a + ", " + b + ")";
+        }
+    }
+
+    static class Names extends Bag<String> {
+        void greet() {
+            add("hi");
+        }
+    }
+
+    static class Bounded<T extends Shape> {
+        List<T> held = new ArrayList<>();
+
+        void add(T value) {
+            held.add(value);
+        }
+
+        public String toString() {
+            return held.toString();
+        }
+    }
+
+    static <T> void give(Bag<T> bag, T value) {
+        bag.add(value);
+    }
+
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // What the receiver's argument DOES accept.
+        Bag<String> text = new Bag<>();
+        text.add("a").add("b");
+        text.addTwice("c");
+        text.add(null);
+        Bag<Shape> shapes = new Bag<>();
+        shapes.add(new Circle()).add(new Square());
+        Shape held = new Circle();
+        shapes.add(held);
+        Bag<Integer> counts = new Bag<>();
+        counts.add(1).add(2);
+        Bag<Double> reals = new Bag<>();
+        reals.add(1.5);
+        Bag<Character> letters = new Bag<>();
+        letters.add('z');
+        Bag<Object> anything = new Bag<>();
+        anything.add("x").add(1).add(new Circle());
+        Bag<List<String>> nested = new Bag<>();
+        nested.add(List.of("x"));
+        System.out.println(text + " " + shapes + " " + counts + " " + reals + " " + letters
+            + " " + anything + " " + nested);
+
+        // Inside the class, through a copy, through a subclass and through a
+        // generic method - the variable is not the receiver's argument there.
+        Bag<String> other = new Bag<>();
+        other.add("z");
+        text.copyFrom(other);
+        Names names = new Names();
+        names.greet();
+        names.add("ada");
+        Bounded<Circle> bounded = new Bounded<>();
+        bounded.add(new Circle());
+        give(text, "given");
+        System.out.println(text + " " + names + " " + bounded);
+
+        // A RAW receiver is unchecked, which is what raw means.
+        Bag raw = new Bag();
+        raw.add("x");
+        raw.add(1);
+        System.out.println(raw);
+
+        // The second variable of a two-parameter class.
+        Pair<String, Integer> pair = new Pair<>("a", 1);
+        pair.setFirst("b");
+        pair.setSecond(2);
+        System.out.println(pair);
+
+        probe("has", () -> text.has("a"));
+        probe("boxed identity", () -> counts.items.get(0).getClass().getName());
+        probe("char boxed", () -> letters.items.get(0).getClass().getName());
+    }
+}
+"#
+);
+
+differential_wording!(
+    reject_typevar_param_int,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); b.add(1); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_object,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); b.add(new Circle()); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_string,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Bag<Circle> b = new Bag<>(); b.add(\"x\"); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_supertype,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Bag<Circle> b = new Bag<>(); Shape s = new Square(); b.add(s); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_wrong_wrapper,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Bag<Integer> b = new Bag<>(); b.add(1.5); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_no_widening,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Bag<Double> b = new Bag<>(); b.add(1); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_second_of_two,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); b.addBoth(\"a\", 1); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_inherited,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Names n = new Names(); n.add(1); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_second_variable,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Pair<String, Integer> p = new Pair<>(\"a\", 1); p.setSecond(\"x\"); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_bounded,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { Bounded<Circle> s = new Bounded<>(); s.add(new Square()); System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_typevar_param_inline_receiver,
+    "RejVar",
+    "import java.util.*;\npublic class RejVar {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } boolean has(T v) { return items.contains(v); } void addBoth(T a, T b) { items.add(a); items.add(b); } }\n  static class Names extends Bag<String> { }\n  static class Bounded<T extends Shape> { void add(T v) { } }\n  static class Pair<A, B> { A a; B b; Pair(A a, B b) { this.a = a; this.b = b; } void setSecond(B v) { b = v; } }\n  public static void main(String[] args) { System.out.println(new Bag<String>().has(1)); System.out.println(\"no\"); }\n}"
+);

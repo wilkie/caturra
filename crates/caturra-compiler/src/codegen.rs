@@ -656,10 +656,15 @@ fn substitute_member_type(
     // An element slot holds a REFERENCE either way, so a wrapper argument
     // needs no adjustment here — unlike `substituted_read`, which answers a
     // VALUE type and must box.
-    let arg = |elem: ElemType| match elem {
+    substitute_member_elems(ty, |elem| match elem {
         ElemType::TypeVar(index) => table.type_arg(first, rest, index).unwrap_or(elem),
         other => other,
-    };
+    })
+}
+
+/// The same, over a substitution given directly — what a SUBCLASS that fixed
+/// its supertype's argument has, where nothing is interned to look up.
+fn substitute_member_elems(ty: JType, arg: impl Fn(ElemType) -> ElemType) -> JType {
     match ty {
         JType::List { elem, face } => JType::List {
             elem: arg(elem),
@@ -2872,7 +2877,15 @@ impl MethodTable {
     /// clause — so the walk up the chain is what supplies them. Without this,
     /// `new IntBox(5).get() + 1` was `Object + int`.
     fn inherited_type_var(&self, from: ClassId, method: &str, ret: JType) -> JType {
-        if !matches!(ret, JType::TypeVar(_)) {
+        // A bare variable, or one INSIDE a container: `Names extends
+        // Bag<String>` inherits both `T pick()` and `List<T> all()`, and only
+        // the first was substituted — the second came back as a list whose
+        // element is a variable no class declares ("location: class T").
+        let replaced = substitute_member_elems(ret, |elem| match elem {
+            ElemType::TypeVar(_) => ElemType::Object(self.object_id),
+            other => other,
+        });
+        if !matches!(ret, JType::TypeVar(_)) && replaced == ret {
             return ret;
         }
         let mut stack = vec![(from, Vec::new())];
@@ -2888,7 +2901,15 @@ impl MethodTable {
             // The class that DECLARES the method is where its return's type
             // variable belongs, so that is where the walk stops.
             if info.methods.iter().any(|m| m.name == method) && !subst.is_empty() {
-                return Self::substitute_type_var(ret, &subst);
+                let ret = Self::substitute_type_var(ret, &subst);
+                return substitute_member_elems(ret, |elem| match elem {
+                    ElemType::TypeVar(index) => subst
+                        .get(usize::from(index))
+                        .copied()
+                        .and_then(collection_elem_of)
+                        .unwrap_or(elem),
+                    other => other,
+                });
             }
             for parent in info
                 .superclass
@@ -28460,6 +28481,22 @@ impl BodyGen<'_> {
             );
             return None;
         }
+        // A SUBCLASS that fixed a generic supertype's argument — `Names
+        // extends Bag<String>` — records nothing on the receiver's own type,
+        // because the receiver IS a `Names`. The argument is written on its
+        // `extends` clause, and a parameter that is the supertype's variable
+        // has to be checked against it: `n.add(1)` is javac's "int cannot be
+        // converted to String".
+        let inherited = (self.receiver_args.is_none()
+            && sig.params.iter().any(|p| matches!(p, JType::TypeVar(_))))
+        .then(|| {
+            let declarer = self.table.declaring_class(&class_name, method)?;
+            let owner = self.table.class_id(&declarer)?;
+            self.table.generic_supertype_arg(class_id, owner)
+        })
+        .flatten()
+        .map(|arg| self.receiver_args.replace((arg, NO_TYPE_ARGS)));
+
         // `obj.staticMethod(...)`: legal if discouraged (javac warns under
         // `-Xlint:static`). The receiver expression is evaluated for its side
         // effects and then discarded, so a `null` receiver does NOT throw —
@@ -28468,6 +28505,9 @@ impl BodyGen<'_> {
             self.code.push_op(op::POP, 0);
             self.code.drop_stack(1);
             let args_width = self.emit_call_args(args, &sig, span);
+            if let Some(outer) = inherited {
+                self.receiver_args = outer;
+            }
             let descriptor = sig.descriptor(self.table);
             let method_ref = intern_method_ref(self.pool, &class_name, method, &descriptor);
             let ret_width = sig.ret.map_or(0, JType::width);
@@ -28478,6 +28518,9 @@ impl BodyGen<'_> {
         }
 
         let args_width = self.emit_call_args(args, &sig, span);
+        if let Some(outer) = inherited {
+            self.receiver_args = outer;
+        }
         let descriptor = sig.descriptor(self.table);
         let method_ref = intern_method_ref(self.pool, &class_name, method, &descriptor);
         let ret_width = sig.ret.map_or(0, JType::width);
@@ -37789,8 +37832,15 @@ impl BodyGen<'_> {
             // A primitive handed to a type variable (`new Box<Integer>(42)`,
             // `<T> T id(T)` called with `3`): box it, then the wrapper is the
             // reference `T` erases to.
-            if matches!(to, JType::TypeVar(_))
+            // ...but only when the RECEIVER's own argument accepts the boxed
+            // value. Boxing first and asking nothing let `Bag<String> b;
+            // b.add(1);` through: the wrapper is a reference, and every
+            // reference stores into a `T`.
+            if let JType::TypeVar(index) = to
                 && let Some(elem) = boxable_primitive(from)
+                && self.typevar_target(index).is_none_or(|want| {
+                    self.receiver_args.is_none() || widens(JType::Boxed(elem), want, self.table)
+                })
             {
                 self.emit_box(elem);
                 return;
@@ -37991,6 +38041,24 @@ impl BodyGen<'_> {
                 if self
                     .typevar_target(index)
                     .is_some_and(|want| widens(from, want, self.table)) => {}
+            // ...and REFUSES what it does not. The erasure says `Object`, and
+            // the permissive rule beside it (any reference stores into a `T`)
+            // then accepted every value in the language: `Bag<String> b;
+            // b.add(1);` compiled, where javac says "int cannot be converted to
+            // String". Only while a receiver's arguments are actually recorded
+            // — a RAW receiver is unchecked, which is what raw means, and a
+            // call inside the class has only the variable's bound to go on.
+            (_, JType::TypeVar(index)) if self.receiver_args.is_some() => {
+                let want = self.typevar_target(index).unwrap_or(to);
+                self.error(
+                    span,
+                    format!(
+                        "incompatible types: {} cannot be converted to {}",
+                        from.describe(self.table),
+                        want.describe(self.table)
+                    ),
+                );
+            }
             // A USER exception subclass (typed `Object(id)`) widening to its
             // bundled throwable superclass: `Exception e = new MyException()`.
             // `widens` allows it (via `library_throwable_ancestor`); this

@@ -13414,3 +13414,43 @@ the program really wrote as `Object`.
 
 Pinned as `a_lambda_through_a_user_generic`; four expressions join the position
 mirror.
+
+## A type variable in a parameter position
+
+`Bag<String> b = new Bag<>(); b.add(1);` compiled. So did `b.add(new Circle())`,
+`Bag<Circle> b; b.add("x")`, `Bag<Double> b; b.add(1)` — twenty-eight shapes
+against a JDK found fifteen of them accepted where javac refuses, all one fact:
+a parameter that is the class's own TYPE VARIABLE was checked against its
+ERASURE.
+
+Two rules said yes. Any reference stores into a `T` — true of the erasure, and
+of nothing else — and a primitive handed to a `T` boxes first, which made it a
+reference and then the first rule finished the job. The receiver's own argument
+was already recorded (a `T` RETURN has read it for a long time); the argument
+side simply never asked. It asks now, on both paths: the boxing happens only
+when the boxed value is what the receiver's argument accepts, and a value the
+argument does not accept is the error javac words identically —
+"incompatible types: int cannot be converted to String".
+
+Only while a receiver's arguments are actually known. A RAW receiver is
+unchecked, which is what raw means; a call inside the generic class itself has
+only the variable's bound to go on, and javac checks against the variable there,
+which this does not model. A SUBCLASS that fixed the argument records nothing on
+the receiver's own type — the receiver IS a `Names` — so the argument is read
+off its `extends` clause for the length of the call.
+
+Recording it there turned up the other half of the same omission: an inherited
+return was substituted only when it was a BARE variable, so `Names extends
+Bag<String>` read `T pick()` as a `String` and `List<T> all()` as a list of a
+variable no class declares ("cannot find symbol … location: class T"). The
+container substitution the parameterized-receiver path already had is asked from
+both now.
+
+Two limits remain, both accepting what javac refuses. A variable inside a
+PARAMETER's own arguments (`void addAll(List<T> more)`) is still erased, and a
+generic METHOD's own variable pinned by one argument is not checked against the
+others (`static <T> void give(Bag<T> bag, T value); give(bagOfStrings, 1)`).
+
+Pinned as `a_type_variable_in_a_parameter` — the shapes that must still compile,
+including a raw receiver and a call from inside the class — with eleven
+refusals pinned by their WORDING, which javac's matches exactly.
