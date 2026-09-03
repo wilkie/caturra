@@ -6953,10 +6953,9 @@ fn matcher_method(
         "group" => {
             let index = group_index(args)?;
             match group_span(index)? {
-                Some((start, end)) => {
-                    let text = String::from_utf16_lossy(&input[start..end]);
-                    Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
-                }
+                Some((start, end)) => Ok(Some(JValue::Ref(Some(
+                    heap.alloc_string_units(&input[start..end]),
+                )))),
                 // A group that took part in no match is `null`, not "".
                 None => Ok(Some(JValue::NULL)),
             }
@@ -7081,11 +7080,12 @@ fn matcher_method(
             let replacement = string_units(heap, args.first().unwrap_or(&JValue::NULL))?;
             // `reset()` restores the whole input as the region, and the two
             // bound modes survive it.
-            let full = crate::regex::Bounds {
+            let mut full = crate::regex::Bounds {
                 start: 0,
                 end: input.len(),
                 anchoring: state.anchoring,
                 transparent: state.transparent,
+                since: None,
             };
             let mut out: Vec<u16> = Vec::new();
             let (mut at, mut appended) = (0usize, 0usize);
@@ -7108,6 +7108,7 @@ fn matcher_method(
                 } else {
                     one.end
                 };
+                full.since = Some(one.end);
                 last = Some(one.groups);
                 if method == "replaceFirst" {
                     break;
@@ -7226,10 +7227,9 @@ fn match_result_method(
     };
     match method {
         "group" => match span()? {
-            Some((start, end)) => {
-                let text = String::from_utf16_lossy(&input[start..end]);
-                Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
-            }
+            Some((start, end)) => Ok(Some(JValue::Ref(Some(
+                heap.alloc_string_units(&input[start..end]),
+            )))),
             None => Ok(Some(JValue::NULL)),
         },
         "start" | "end" => {
@@ -7345,6 +7345,14 @@ impl MatcherState {
             end: self.region.1,
             anchoring: self.anchoring,
             transparent: self.transparent,
+            // `\G` matches where the PREVIOUS match ended, which is not
+            // always where the next search begins: after an empty match the
+            // search moves on by one and `\G` does not.
+            since: self
+                .last
+                .as_ref()
+                .and_then(|groups| groups.first().copied().flatten())
+                .map(|(_, end)| end),
         }
     }
 }
@@ -10372,9 +10380,12 @@ fn character_static(
 ) -> Result<Option<JValue>, VmError> {
     let z = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
     let c_of = |unit: &i32| char::from_u32(u32::try_from(*unit).unwrap_or(0)).unwrap_or('\u{FFFD}');
-    // The raw UTF-16 unit, which the category tables are keyed by — a
-    // surrogate has a category too, and `c_of` cannot hold one.
+    // The raw UTF-16 unit, which the case tables are keyed by — a surrogate
+    // has a mapping too (itself), and `c_of` cannot hold one.
     let unit_of = |unit: &i32| u16::try_from(*unit).unwrap_or(u16::MAX);
+    // The CODE POINT, for the predicates that take one: `Character.isLetter`
+    // has an `int` overload, and it is asked about the whole space.
+    let point_of = |point: &i32| u32::try_from(*point).unwrap_or(u32::MAX);
     let ch_ret = |c: char| {
         Ok(Some(JValue::Int(
             i32::try_from(u32::from(c) & 0xFFFF).unwrap_or(0),
@@ -10403,44 +10414,47 @@ fn character_static(
         // These come from the JDK 11 category table rather than from Rust's
         // Unicode data, which is a NEWER version and disagreed on 4761 BMP
         // units. See `crate::unicode`.
-        ("isDigit", [JValue::Int(v)]) => z(unicode::is_digit(unit_of(v))),
+        ("isDigit", [JValue::Int(v)]) => z(unicode::is_digit(point_of(v))),
         ("isLetterOrDigit", [JValue::Int(v)]) => {
-            let unit = unit_of(v);
+            let unit = point_of(v);
             z(unicode::is_letter(unit) || unicode::is_digit(unit))
         }
         // `isLetter` is the L* categories; `isAlphabetic` is L* plus
         // LETTER_NUMBER (Roman numerals and the CJK number letters) and the
         // `Other_Alphabetic` marks, which is where the two part company.
-        ("isLetter", [JValue::Int(v)]) => z(unicode::is_letter(unit_of(v))),
-        ("isAlphabetic", [JValue::Int(v)]) => z(unicode::is_alphabetic(unit_of(v))),
-        ("isUpperCase", [JValue::Int(v)]) => z(unicode::is_upper(unit_of(v))),
-        ("isLowerCase", [JValue::Int(v)]) => z(unicode::is_lower(unit_of(v))),
-        ("isWhitespace", [JValue::Int(v)]) => z(unicode::is_whitespace(unit_of(v))),
-        ("isSpaceChar", [JValue::Int(v)]) => z(unicode::is_space_char(unit_of(v))),
-        ("getType", [JValue::Int(v)]) => {
-            Ok(Some(JValue::Int(i32::from(unicode::category(unit_of(v))))))
-        }
+        ("isLetter", [JValue::Int(v)]) => z(unicode::is_letter(point_of(v))),
+        ("isAlphabetic", [JValue::Int(v)]) => z(unicode::is_alphabetic(point_of(v))),
+        ("isUpperCase", [JValue::Int(v)]) => z(unicode::is_upper(point_of(v))),
+        ("isLowerCase", [JValue::Int(v)]) => z(unicode::is_lower(point_of(v))),
+        ("isWhitespace", [JValue::Int(v)]) => z(unicode::is_whitespace(point_of(v))),
+        ("isSpaceChar", [JValue::Int(v)]) => z(unicode::is_space_char(point_of(v))),
+        ("getType", [JValue::Int(v)]) => Ok(Some(JValue::Int(i32::from(unicode::category_of(
+            point_of(v),
+        ))))),
+        // `$` and `_` are not a special case: they are a CURRENCY symbol and
+        // a CONNECTING punctuation, two whole categories that start an
+        // identifier. Reading the rule as "alphabetic, or one of those two
+        // characters" answered wrongly for every other currency sign.
         ("isJavaIdentifierStart", [JValue::Int(v)]) => {
-            let unit = unit_of(v);
-            z(unicode::is_alphabetic(unit) || *v == i32::from(b'_') || *v == i32::from(b'$'))
+            z(unicode::is_java_identifier_start(point_of(v)))
         }
         ("isJavaIdentifierPart", [JValue::Int(v)]) => {
-            let unit = unit_of(v);
-            z(unicode::is_alphabetic(unit)
-                || unicode::is_digit(unit)
-                || *v == i32::from(b'_')
-                || *v == i32::from(b'$'))
+            z(unicode::is_java_identifier_part(point_of(v)))
         }
-        ("isDefined", [JValue::Int(v)]) => z(unicode::is_defined(unit_of(v))),
-        ("isISOControl", [JValue::Int(v)]) => z(matches!(*v, 0..=0x1F | 0x7F..=0x9F)),
-        // A titlecase character is one that is its own TITLE form while
-        // having both an upper and a lower form of its own — the digraphs.
-        ("isTitleCase", [JValue::Int(v)]) => {
-            let unit = unit_of(v);
-            z(unicode::title_case(unit) == unit
-                && unicode::simple_upper(unit) != unit
-                && unicode::simple_lower(unit) != unit)
+        ("isUnicodeIdentifierStart", [JValue::Int(v)]) => {
+            z(unicode::is_unicode_identifier_start(point_of(v)))
         }
+        ("isUnicodeIdentifierPart", [JValue::Int(v)]) => {
+            z(unicode::is_unicode_identifier_part(point_of(v)))
+        }
+        ("isIdentifierIgnorable", [JValue::Int(v)]) => {
+            z(unicode::is_identifier_ignorable(point_of(v)))
+        }
+        ("isDefined", [JValue::Int(v)]) => z(unicode::is_defined(point_of(v))),
+        ("isISOControl", [JValue::Int(v)]) => z(unicode::is_iso_control(point_of(v))),
+        ("isMirrored", [JValue::Int(v)]) => z(unicode::is_mirrored(point_of(v))),
+        ("isIdeographic", [JValue::Int(v)]) => z(unicode::is_ideographic(point_of(v))),
+        ("isTitleCase", [JValue::Int(v)]) => z(unicode::is_title_case(point_of(v))),
         // A lone surrogate has no case mapping and comes back UNCHANGED.
         // `c_of` cannot hold one, so it hands over the replacement character
         // and these used to answer U+FFFD for all 2048 of them.

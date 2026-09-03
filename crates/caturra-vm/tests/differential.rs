@@ -46784,3 +46784,368 @@ public class Leftover {
 }
 "#
 );
+
+// Every row of `java.util.regex.Pattern`'s construct table, one probe each —
+// the escapes, the classes, the named properties, the boundaries, the
+// quantifiers and the inline flags.
+differential_test!(
+    every_construct_in_the_table,
+    "Constructs",
+    r#"
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Constructs {
+    static String show(String s) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x20 && c < 0x7f) {
+                b.append(c);
+            } else {
+                b.append(String.format("<%04x>", (int) c));
+            }
+        }
+        return b.toString();
+    }
+
+    static void probe(String pattern, String text) {
+        StringBuilder line = new StringBuilder(show(pattern) + " ~ " + show(text) + " => ");
+        try {
+            Matcher m = Pattern.compile(pattern).matcher(text);
+            boolean any = false;
+            while (m.find()) {
+                any = true;
+                line.append("[" + m.start() + "," + m.end() + ")" + show(m.group()));
+                for (int g = 1; g <= m.groupCount(); g++) {
+                    line.append(" g" + g + "=" + (m.group(g) == null ? "null" : show(m.group(g))));
+                }
+                line.append(" ");
+                if (m.end() == m.start() && m.end() >= text.length()) {
+                    break;
+                }
+            }
+            if (!any) {
+                line.append("no match");
+            }
+        } catch (Throwable e) {
+            line.append("! " + e.getClass().getName() + ": "
+                + String.valueOf(e.getMessage()).replace('\n', '/'));
+        }
+        System.out.println(line);
+    }
+
+    public static void main(String[] args) {
+        probe("a", "a");
+        probe("\\\\", "a\\b");
+        probe("\\07", "\u0007");
+        probe("\\052", "*");
+        probe("\\0101", "A");
+        probe("\\x41", "A");
+        probe("\\u0041", "A");
+        probe("\\x{1F600}", "\ud83d\ude00");
+        probe("\\t", "\t");
+        probe("\\n", "\n");
+        probe("\\r", "\r");
+        probe("\\f", "\u000c");
+        probe("\\a", "\u0007");
+        probe("\\e", "\u001b");
+        probe("\\cA", "\u0001");
+        probe("[abc]+", "xbcay");
+        probe("[^abc]+", "abXYab");
+        probe("[a-zA-Z]+", "12aZ9");
+        probe("[a-d[m-p]]+", "xacnpz");
+        probe("[a-z&&[def]]+", "abdefg");
+        probe("[a-z&&[^bc]]+", "abcde");
+        probe("[a-z&&[^m-p]]+", "klmnopq");
+        probe(".", "\n");
+        probe(".+", "a\nb");
+        probe("\\d+", "ab123cd");
+        probe("\\D+", "12ab34");
+        probe("\\h+", "a  b");
+        probe("\\H+", " ab ");
+        probe("\\s+", "a \t\nb");
+        probe("\\S+", " ab ");
+        probe("\\v+", "a\nb");
+        probe("\\V+", "\nab\n");
+        probe("\\w+", " a_1 ");
+        probe("\\W+", "a !? b");
+        probe("[\\h\\v]+", "a \nb");
+        probe("\\p{Lower}+", "ABabAB");
+        probe("\\p{Upper}+", "abABab");
+        probe("\\p{ASCII}+", "a\u00e9b");
+        probe("\\p{Alpha}+", "12ab34");
+        probe("\\p{Digit}+", "ab12cd");
+        probe("\\p{Alnum}+", " a1 ");
+        probe("\\p{Punct}+", "a!?.b");
+        probe("\\p{Graph}+", " ab ");
+        probe("\\p{Print}+", "\tab\t");
+        probe("\\p{Blank}+", "a \tb");
+        probe("\\p{Cntrl}+", "a\u0001\u0002b");
+        probe("\\p{XDigit}+", "gaf9z");
+        probe("\\p{Space}+", "a \nb");
+        probe("\\P{Lower}+", "abAB");
+        probe("\\p{javaLowerCase}+", "ABab");
+        probe("\\p{javaUpperCase}+", "abAB");
+        probe("\\p{javaWhitespace}+", "a b");
+        probe("\\p{javaMirrored}+", "a()b");
+        probe("\\p{javaDigit}+", "ab12");
+        probe("\\p{javaLetter}+", "12ab");
+        probe("\\p{javaLetterOrDigit}+", " a1 ");
+        probe("\\p{javaTitleCase}+", "a\u01c5b");
+        probe("\\p{javaDefined}+", "ab");
+        probe("\\p{javaIdeographic}+", "a\u4e00\u4e8cb");
+        probe("\\p{javaJavaIdentifierStart}+", "1ab");
+        probe("\\p{javaJavaIdentifierPart}+", " a1_ ");
+        probe("\\p{javaUnicodeIdentifierStart}+", "1ab");
+        probe("\\p{javaUnicodeIdentifierPart}+", " a1 ");
+        probe("\\p{javaIdentifierIgnorable}+", "a\u200bb");
+        probe("\\p{javaSpaceChar}+", "a b");
+        probe("\\p{javaISOControl}+", "a\u0001b");
+        probe("\\p{IsLatin}+", "\u0430abc");
+        probe("\\p{InGreek}+", "a\u03b1\u03b2b");
+        probe("\\p{Lu}+", "abAB");
+        probe("\\p{IsAlphabetic}+", "12ab");
+        probe("\\p{Sc}+", "a$\u00a3b");
+        probe("\\P{InGreek}+", "\u03b1ab");
+        probe("[\\p{L}&&[^\\p{Lu}]]+", "ABab");
+        probe("\\p{general_category=Lu}+", "abAB");
+        probe("\\p{gc=Nd}+", "ab12");
+        probe("\\p{script=Greek}+", "a\u03b1\u03b2");
+        probe("\\p{sc=Latn}+", "\u03b1abc");
+        probe("\\p{block=Greek}+", "a\u03b1\u03b2");
+        probe("\\p{blk=BASIC_LATIN}+", "ab\u03b1");
+        probe("\\p{IsAlpha}", "a");
+        probe("\\p{Nd}+", "ab12");
+        probe("\\p{L}+", "12ab");
+        probe("\\p{M}+", "ae\u0301b");
+        probe("\\p{N}+", "ab12");
+        probe("\\p{Z}+", "a b");
+        probe("\\p{C}+", "a\u0001b");
+        probe("\\p{P}+", "a,b");
+        probe("\\p{S}+", "a+b");
+        probe("\\p{LC}+", "12ab");
+        probe("\\p{L1}+", "a\u00e9\u4e00");
+        probe("\\p{all}+", "ab");
+        probe("\\pL+", "12ab");
+        probe("\\PL+", "ab12");
+        probe("\\p{IsHexDigit}+", "gaf9z");
+        probe("\\p{IsAssigned}+", "ab");
+        probe("\\p{IsControl}+", "a\u0001b");
+        probe("\\p{IsIdeographic}+", "a\u4e00b");
+        probe("\\p{IsJoinControl}+", "a\u200cb");
+        probe("\\p{IsLetter}+", "12ab");
+        probe("\\p{IsLowercase}+", "ABab");
+        probe("\\p{IsUppercase}+", "abAB");
+        probe("\\p{IsTitlecase}+", "a\u01c5b");
+        probe("\\p{IsPunctuation}+", "a,b");
+        probe("\\p{IsWhite_Space}+", "a b");
+        probe("\\p{IsWord}+", "a b");
+        probe("\\p{IsNoncharacterCodePoint}+", "ab");
+        probe("\\p{IsDigit}+", "ab12");
+        probe("\\p{IsGraph}+", " ab ");
+        probe("\\p{IsPrint}+", "\tab\t");
+        probe("\\p{IsBlank}+", "a \tb");
+        probe("\\p{IsAlnum}+", " a1 ");
+        probe("\\p{IsSpace}+", "a \nb");
+        probe("\\p{Nope}", "a");
+        probe("\\p{IsNope}", "a");
+        probe("\\p{InNope}", "a");
+        probe("\\p{nope=Lu}", "a");
+        probe("\\p{}", "a");
+        probe("\\p{Lu", "a");
+        probe("^a", "a");
+        probe("a$", "a");
+        probe("\\ba\\b", "x a x");
+        probe("\\Ba\\B", "xax");
+        probe("\\Aa", "a");
+        probe("a\\Z", "a\n");
+        probe("a\\z", "a");
+        probe("\\R", "a\r\nb");
+        probe("a\\Gb", "ab");
+        probe("\\Ga", "aab");
+        probe("\\G[ab]", "abcab");
+        probe("a?", "aa");
+        probe("a*", "aaa");
+        probe("a+", "aaa");
+        probe("a{2}", "aaa");
+        probe("a{2,}", "aaa");
+        probe("a{1,2}", "aaa");
+        probe("a??b", "ab");
+        probe("a*?b", "aab");
+        probe("a+?b", "aab");
+        probe("a{2}?", "aaa");
+        probe("a{2,}?", "aaa");
+        probe("a{1,2}?", "aaa");
+        probe("a?+a", "aa");
+        probe("a*+a", "aa");
+        probe("a++a", "aa");
+        probe("a{2}+", "aaa");
+        probe("a{2,}+", "aaa");
+        probe("a{1,2}+a", "aaa");
+        probe("ab", "ab");
+        probe("a|b", "b");
+        probe("(ab)+", "abab");
+        probe("(a+)\\1", "aaaa");
+        probe("(?<x>a+)\\k<x>", "aaaa");
+        probe("\\.", "a.b");
+        probe("\\Qa.b\\E", "a.b");
+        probe("a\\Q+\\E", "a+");
+        probe("(?<name>ab)c", "abc");
+        probe("(?:ab)+", "abab");
+        probe("(?i)AB", "ab");
+        probe("(?i:AB)c", "abC");
+        probe("(?m)^b", "a\nb");
+        probe("(?s).+", "a\nb");
+        probe("(?x) a  b", "ab");
+        probe("(?d)a$", "a\r\n");
+        probe("(?d)a$", "a\n");
+        probe("(?d)(?m)^b", "a\rb");
+        probe("(?d).+", "a\rb");
+        probe("(?d)a\\Z", "a\r\n");
+        probe("(?u)\\w+", "a\u00e9b");
+        probe("(?U)\\w+", "a\u00e9b");
+        probe("(?U)\\d+", "a\uff11\uff12b");
+        probe("(?U)\\s+", "a\u00a0b");
+        probe("(?U)\\W+", "a\u00e9b");
+        probe("(?U)\\bé\\b", "a\u00e9 b");
+        probe("(?U)\\p{Alpha}+", "12a\u00e9b");
+        probe("(?U)\\p{Punct}+", "a\u00ab\u00bbb");
+        probe("(?-i)a", "a");
+        probe("a(?=b)", "ab");
+        probe("a(?!b)", "ac");
+        probe("(?<=a)b", "ab");
+        probe("(?<!a)b", "cb");
+        probe("(?>a*)a", "aaa");
+    }
+}
+"#
+);
+
+// `\X` and `\b{g}` — the grapheme cluster, which is what a reader calls one
+// character however many code points it takes.
+differential_test!(
+    a_grapheme_is_one_character,
+    "Graph",
+    r#"
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Graph {
+    static String show(String s) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x20 && c < 0x7f) {
+                b.append(c);
+            } else {
+                b.append(String.format("<%04x>", (int) c));
+            }
+        }
+        return b.toString();
+    }
+
+    static void probe(String pattern, String text) {
+        StringBuilder line = new StringBuilder(show(pattern) + " ~ " + show(text) + " => ");
+        try {
+            Matcher m = Pattern.compile(pattern).matcher(text);
+            boolean any = false;
+            while (m.find()) {
+                any = true;
+                line.append("[" + m.start() + "," + m.end() + ")" + show(m.group()) + " ");
+                if (m.end() == m.start() && m.end() >= text.length()) {
+                    break;
+                }
+            }
+            if (!any) {
+                line.append("no match");
+            }
+        } catch (Throwable e) {
+            line.append("! " + e.getClass().getName() + ": "
+                + String.valueOf(e.getMessage()).replace('\n', '/'));
+        }
+        System.out.println(line);
+    }
+
+    public static void main(String[] args) {
+        String flagUS = "🇺🇸";
+        String family = "👨‍👩‍👦";
+        String thumbsUp = "👍🏽";
+        String hangul = "각";
+        String devanagari = "क्षि";
+        for (String text : new String[] {
+            "ab", "áb", "é̂", flagUS, flagUS + flagUS, family,
+            thumbsUp, hangul, "각", devanagari, "a\r\nb", "\r\n",
+            "a\nb", "a‍b", "", "x😀y", "กำ",
+        }) {
+            probe("\\X", text);
+            probe("\\X{2}", text);
+            probe("\\b{g}", text);
+            probe("a\\b{g}", text);
+            probe("(?:\\b{g}.)+", text);
+        }
+        probe("\\b{x}", "ab");
+        probe("\\b{", "ab");
+        probe("\\b{g", "ab");
+        probe("\\X+", "ábć");
+        probe("\\X?", "á");
+        probe("[\\X]", "aX");
+    }
+}
+"#
+);
+
+// Every general category and predicate `java.lang.Character` answers, over
+// the WHOLE code point space rather than only the units a `char` can hold.
+differential_test!(
+    every_category_over_the_whole_space,
+    "Cat",
+    r#"
+public class Cat {
+    public static void main(String[] args) {
+        // Every category and predicate over the WHOLE code point space,
+        // reduced to two hashes and a count each.
+        long types = 0;
+        long preds = 0;
+        int[] counts = new int[12];
+        for (int cp = 0; cp <= 0x10FFFF; cp++) {
+            types = types * 31 + Character.getType(cp);
+            int bits = 0;
+            if (Character.isLetter(cp)) { bits |= 1; counts[0]++; }
+            if (Character.isDigit(cp)) { bits |= 2; counts[1]++; }
+            if (Character.isAlphabetic(cp)) { bits |= 4; counts[2]++; }
+            if (Character.isUpperCase(cp)) { bits |= 8; counts[3]++; }
+            if (Character.isLowerCase(cp)) { bits |= 16; counts[4]++; }
+            if (Character.isWhitespace(cp)) { bits |= 32; counts[5]++; }
+            if (Character.isSpaceChar(cp)) { bits |= 64; counts[6]++; }
+            if (Character.isDefined(cp)) { bits |= 128; counts[7]++; }
+            if (Character.isMirrored(cp)) { bits |= 256; counts[8]++; }
+            if (Character.isIdeographic(cp)) { bits |= 512; counts[9]++; }
+            if (Character.isJavaIdentifierPart(cp)) { bits |= 1024; counts[10]++; }
+            if (Character.isTitleCase(cp)) { bits |= 2048; counts[11]++; }
+            preds = preds * 31 + bits;
+        }
+        StringBuilder b = new StringBuilder("types=" + types + " preds=" + preds);
+        for (int n : counts) {
+            b.append(" " + n);
+        }
+        System.out.println(b);
+
+        // The identifier predicates, which used to read "$ or _" for two
+        // whole categories.
+        System.out.println(Character.isJavaIdentifierStart('$')
+            + " " + Character.isJavaIdentifierStart('£')
+            + " " + Character.isJavaIdentifierStart('_')
+            + " " + Character.isUnicodeIdentifierStart('_')
+            + " " + Character.isUnicodeIdentifierPart('_')
+            + " " + Character.isIdentifierIgnorable(0x200B)
+            + " " + Character.isIdentifierIgnorable(0x00AD)
+            + " " + Character.isMirrored('(')
+            + " " + Character.isIdeographic(0x4E00)
+            + " " + Character.isTitleCase(0x01C5)
+            + " " + Character.getType(0x10400)
+            + " " + Character.isLetter(0x10400));
+    }
+}
+"#
+);

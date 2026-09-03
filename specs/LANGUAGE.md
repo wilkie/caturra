@@ -12891,3 +12891,67 @@ Four rules follow from that, each measured:
 Pinned by `an_atomic_group` and `what_a_group_is_left_holding` in
 `crates/caturra-vm/tests/differential.rs`, and swept by `scripts/fuzz/regex.py`
 — 40 seeds, roughly 26000 pattern-against-input probes, all agreeing.
+
+## Every construct in the table
+
+`java.util.regex.Pattern`'s javadoc opens with a table of every construct the
+engine knows — 103 rows, from `\\0n` to `(?>X)`. One probe per row, compared
+against a real JDK, found forty that caturra refused or answered differently.
+All but one are now closed, and the table is pinned as
+`every_construct_in_the_table`.
+
+What was missing, and what it took:
+
+- **`\\p{...}` and `\\P{...}`** — the whole named-property family, which is
+  the largest thing here. The names resolve exactly as `Pattern.family` does:
+  a `key=value` form (`gc`, `general_category`, `sc`, `script`, `blk`,
+  `block`), an `In`-prefixed block, an `Is`-prefixed binary property or
+  category or script, and otherwise a category or POSIX or `java...` name.
+  The POSIX names are **US-ASCII** — `\\p{Alpha}` is `[a-zA-Z]` and nothing
+  else — while `\\p{IsAlpha}` and, under `(?U)`, a bare `\\p{Alpha}` mean the
+  Unicode set. Those names are case SENSITIVE where the `Is` ones are not.
+- **`\\p{IsLatin}` and `\\p{InGreek}`** — scripts and blocks, recorded from a
+  real JDK: 913 script runs over the BMP, every script the enum knows
+  (including the ones with nothing in the BMP, since `\\p{IsDeseret}` still has
+  to compile), the ISO 15924 aliases, and the 162 blocks with every name
+  `UnicodeBlock.forName` answers to.
+- **`\\h \\H \\v \\V`** — Perl's horizontal and vertical whitespace, which are
+  not `\\s`.
+- **`\\cX`** — the control character, and **`\\x{...}`** above the BMP, which
+  used to become its high surrogate alone and match nothing.
+- **`\\G`** — where the previous match ended, which is not always where the
+  next search begins: after an EMPTY match the search moves on by one and
+  `\\G` does not.
+- **`(?d)`** — `UNIX_LINES`, where only `\\n` ends a line for `.`, `^`, `$`
+  and `\\Z`. It parsed and was ignored, so `(?d)a$` matched "a\\r\\n".
+- **`(?U)`** — `UNICODE_CHARACTER_CLASS`, where `\\w`, `\\d`, `\\s`, `\\b` and
+  the POSIX names mean their Unicode sets. It parsed and was ignored too.
+- **`\\X` and `\\b{g}`** — the extended grapheme cluster, which is what a
+  reader calls one character however many code points it takes: a flag is two
+  regional indicators, a family emoji is three people and two joiners, `\\X`
+  takes each in one bite. Annex #29's rules are derived from the general
+  category, so this needed no table of its own.
+
+The one still open is `\\N{LATIN SMALL LETTER A}`, which needs the Unicode
+NAME database — thirty thousand strings for a construct no program writes.
+caturra refuses it, in the JDK's own words.
+
+Underneath, `java.lang.Character` grew a supplementary half. Its category table
+covered the BMP, so `Character.getType` and every predicate derived from it
+answered for a `char` and guessed above it. The runs above the BMP are recorded
+too now — 844 of them — and the predicates take a CODE POINT. Two properties no
+category implies, `Bidi_Mirrored` and `Ideographic`, are recorded as ranges.
+`isJavaIdentifierStart` and its four relatives were reading "alphabetic, or `$`
+or `_`" where the rule is two whole categories (currency symbols and connecting
+punctuation), and `isTitleCase` was inferred from the case mappings rather than
+read from the category. All of it — every category and twelve predicates over
+all 1114112 code points — is pinned as `every_category_over_the_whole_space`.
+
+One JDK inconsistency is written down rather than smoothed over: U+9FEB..U+9FEF
+are `OTHER_LETTER` by `Character.getType` and are refused by
+`isJavaIdentifierStart`. They were assigned in Unicode 10, which JDK 11 carries,
+and the separate table behind the identifier predicates was not extended to
+cover them.
+
+And a lone surrogate now survives `Matcher.group()`: the text was going through
+a Rust `String`, where an unpaired surrogate becomes U+FFFD.

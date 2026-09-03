@@ -1508,6 +1508,13 @@ impl Heap {
         self.alloc(HeapObject::JavaString(text.encode_utf16().collect()))
     }
 
+    /// A string from UTF-16 units directly. Going through a Rust `String`
+    /// loses a LONE surrogate — `String::from_utf16_lossy` writes U+FFFD —
+    /// and a `char` in a Java string is allowed to be one.
+    pub fn alloc_string_units(&mut self, units: &[u16]) -> HeapRef {
+        self.alloc(HeapObject::JavaString(units.to_vec()))
+    }
+
     /// Box a primitive into its wrapper via the autoboxing cache (JLS §5.1.7):
     /// a value in the cached range shares one reference so `==` on two such
     /// boxings is true, while out-of-range values each get a fresh reference.

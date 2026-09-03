@@ -32,11 +32,26 @@ ATOMS = (
     ["a", "b", "c", "0", "1", " "] * 4
     + ["[abc]", "[a-c]", "[01]", "[^a]", ".", "\\\\d", "\\\\w", "\\\\s"] * 2
     + ["\\\\D", "\\\\W", "\\\\S", "[.]", "\\\\.", "x"]
+    # The named properties and the two Perl whitespace classes. The ASCII
+    # POSIX names and the Unicode ones of the same name mean DIFFERENT sets,
+    # which is most of what there is to get wrong here.
+    + [
+        "\\\\p{Alpha}", "\\\\p{Digit}", "\\\\p{Punct}", "\\\\p{Lower}",
+        "\\\\p{Alnum}", "\\\\p{Space}", "\\\\p{XDigit}", "\\\\p{Graph}",
+        "\\\\p{L}", "\\\\p{Lu}", "\\\\p{Nd}", "\\\\p{P}", "\\\\P{L}",
+        "\\\\p{IsAlphabetic}", "\\\\p{IsLatin}", "\\\\p{InBasicLatin}",
+        "\\\\p{javaLowerCase}", "\\\\p{javaJavaIdentifierPart}",
+        "[\\\\p{L}&&[^\\\\p{Lu}]]", "[\\\\p{Alpha}\\\\d]",
+        "\\\\h", "\\\\v", "\\\\H", "\\\\V", "\\\\X", "\\\\R",
+    ]
 )
 QUANTIFIERS = [
     "", "", "", "?", "*", "+", "{2}", "{1,3}", "{2,}", "??", "*?", "+?", "*+", "++", "?+", "{1,2}+",
 ]
-ANCHORS = ["^", "$", "\\\\b", "\\\\B"]
+ANCHORS = ["^", "$", "\\\\b", "\\\\B", "\\\\b{g}", "\\\\G"]
+
+# The inline flags, which change what the classes above MEAN.
+FLAGS = ["", "", "", "", "(?i)", "(?m)", "(?s)", "(?d)", "(?U)", "(?U)(?i)", "(?dm)"]
 
 
 def atom(rng, depth):
@@ -55,6 +70,7 @@ def atom(rng, depth):
 
 def pattern(rng):
     body = "".join(atom(rng, 2) for _ in range(rng.randint(1, 3)))
+    body = rng.choice(FLAGS) + body
     # An anchor belongs at the END it anchors: `$` in front matches nothing at
     # all, and a pattern nothing can match tests only the failure path.
     if rng.random() < 0.12:

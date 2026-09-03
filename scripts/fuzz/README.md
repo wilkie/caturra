@@ -48,6 +48,11 @@ repetition's last, failed attempt writing through. The spec section "The
 atomic group, and what a group is left holding" writes the rules down. Forty
 seeds and roughly 26000 probes now agree.
 
+Its atoms now include the named properties (`\p{Alpha}` and `\p{IsAlpha}`
+mean different sets, which is most of what there is to get wrong), the two
+Perl whitespace classes, `\X`, `\R`, `\b{g}`, `\G`, and the inline flags
+`(?d)` and `(?U)` that change what all of them mean.
+
 **`time.py` — `java.time` at scale.** The calendar is arithmetic caturra WROTE
 — the proleptic Gregorian rules, the month-end clamping, the epoch-day
 conversion both ways, the ISO text, the pattern engine — so it is exactly the

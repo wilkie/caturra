@@ -20,6 +20,8 @@
 //! reported as a `PatternSyntaxException`, never silently mis-parsed — the
 //! failure mode this module exists to remove.
 
+use crate::unicode;
+
 /// A parsed pattern, ready to match.
 #[derive(Debug, Clone)]
 pub struct Regex {
@@ -70,8 +72,8 @@ enum Node {
     /// Matches at the current position without consuming.
     Empty,
     Literal(u16),
-    /// `.` — any character except a line terminator.
-    AnyChar,
+    /// `.` — any character except a line terminator, under `(?d)` or not.
+    AnyChar(bool),
     /// `.` under `(?s)` (DOTALL) — any character at all.
     AnyCharDotAll,
     Class(CharClass),
@@ -101,20 +103,29 @@ enum Node {
     },
     /// `^`
     Start,
-    /// `$`
-    End,
+    /// `$`. The flag is `(?d)` — `UNIX_LINES`, where only `\n` ends a line.
+    End(bool),
     /// `^` under `(?m)` (MULTILINE) — the start of any line.
-    LineStart,
+    LineStart(bool),
     /// `$` under `(?m)` — the end of any line.
-    LineEnd,
-    /// `\b` (true) and `\B` (false).
-    WordBoundary(bool),
+    LineEnd(bool),
+    /// `\b` (true) and `\B` (false). The second flag is `(?U)`, where a word
+    /// character is the Unicode set rather than `[a-zA-Z_0-9]`.
+    WordBoundary(bool, bool),
     /// `\A`
     InputStart,
     /// `\z`
     InputEnd,
+    /// `\G` — where the PREVIOUS match ended, which for the first attempt of
+    /// a search is where the search began.
+    PreviousEnd,
+    /// `\X` — one extended grapheme cluster: what a reader would call one
+    /// character, however many code points it takes.
+    Grapheme,
+    /// `\b{g}` — a grapheme cluster boundary, consuming nothing.
+    GraphemeBound,
     /// `\Z` — end of input, but before a final line terminator.
-    InputEndBeforeFinalTerminator,
+    InputEndBeforeFinalTerminator(bool),
     /// `(?=X)`, `(?!X)`, `(?<=X)`, `(?<!X)` — match without consuming.
     Look {
         direction: Look,
@@ -157,15 +168,17 @@ fn max_width(node: &Node) -> Option<Width> {
         // A lookaround inside a lookbehind consumes nothing itself.
         Node::Empty
         | Node::Start
-        | Node::End
-        | Node::WordBoundary(_)
+        | Node::End(_)
+        | Node::WordBoundary(..)
         | Node::InputStart
         | Node::InputEnd
-        | Node::InputEndBeforeFinalTerminator
-        | Node::LineStart
-        | Node::LineEnd
+        | Node::PreviousEnd
+        | Node::GraphemeBound
+        | Node::InputEndBeforeFinalTerminator(_)
+        | Node::LineStart(_)
+        | Node::LineEnd(_)
         | Node::Look { .. } => Some(Width::Fixed(0)),
-        Node::Literal(_) | Node::AnyChar | Node::AnyCharDotAll | Node::Class(_) => {
+        Node::Literal(_) | Node::AnyChar(_) | Node::AnyCharDotAll | Node::Class(_) => {
             Some(Width::Fixed(1))
         }
         Node::Concat(nodes) => nodes.iter().try_fold(Width::Fixed(0), |total, node| {
@@ -179,7 +192,9 @@ fn max_width(node: &Node) -> Option<Width> {
             (Width::Fixed(width), Some(max)) => Some(Width::Fixed(width * max as usize)),
             _ => Some(Width::Unbounded),
         },
-        Node::BackRef { .. } => None,
+        // A cluster is one code point or a dozen — never a knowable width,
+        // which is also why a JDK will not put one inside a lookbehind.
+        Node::Grapheme | Node::BackRef { .. } => None,
     }
 }
 
@@ -195,15 +210,17 @@ fn fixed_width(node: &Node) -> Option<usize> {
     match node {
         Node::Empty
         | Node::Start
-        | Node::End
-        | Node::WordBoundary(_)
+        | Node::End(_)
+        | Node::WordBoundary(..)
         | Node::InputStart
         | Node::InputEnd
-        | Node::InputEndBeforeFinalTerminator
-        | Node::LineStart
-        | Node::LineEnd
+        | Node::PreviousEnd
+        | Node::GraphemeBound
+        | Node::InputEndBeforeFinalTerminator(_)
+        | Node::LineStart(_)
+        | Node::LineEnd(_)
         | Node::Look { .. } => Some(0),
-        Node::Literal(_) | Node::AnyChar | Node::AnyCharDotAll | Node::Class(_) => Some(1),
+        Node::Literal(_) | Node::AnyChar(_) | Node::AnyCharDotAll | Node::Class(_) => Some(1),
         Node::Concat(nodes) => nodes
             .iter()
             .try_fold(0, |total, node| Some(total + fixed_width(node)?)),
@@ -217,7 +234,7 @@ fn fixed_width(node: &Node) -> Option<usize> {
         Node::Repeat { node, min, max, .. } => {
             (Some(*min) == *max).then(|| fixed_width(node).map(|width| width * *min as usize))?
         }
-        Node::BackRef { .. } => None,
+        Node::Grapheme | Node::BackRef { .. } => None,
     }
 }
 
@@ -244,10 +261,18 @@ struct CharClass {
 
 #[derive(Debug, Clone)]
 enum ClassItem {
-    Single(u16),
-    Range(u16, u16),
+    /// A CODE POINT, not a unit: `[\x{1F600}]` is one item, and the class is
+    /// asked about code points because the engine decodes a surrogate pair
+    /// before it consults one.
+    Single(u32),
+    Range(u32, u32),
     /// A predefined class such as `\d`, usable inside `[...]` too.
     Predefined(Predefined),
+    /// `\p{...}`, and `\P{...}` with `negated` set.
+    Named {
+        property: Property,
+        negated: bool,
+    },
     Nested(CharClass),
 }
 
@@ -259,6 +284,12 @@ enum Predefined {
     NotSpace,
     Word,
     NotWord,
+    /// `\h` — Perl's HORIZONTAL whitespace, which is not Java's `\s`.
+    Horizontal,
+    NotHorizontal,
+    /// `\v` — Perl's VERTICAL whitespace: the line terminators.
+    Vertical,
+    NotVertical,
 }
 
 /// Java's `\s` is exactly these six, NOT Unicode whitespace.
@@ -286,8 +317,12 @@ fn is_java_word(unit: u32) -> bool {
         || unit == 0x5F
 }
 
-/// The line terminators `.` refuses to match.
-fn is_line_terminator(unit: u32) -> bool {
+/// The line terminators `.` refuses to match — and under `(?d)`, `UNIX_LINES`,
+/// the ONE that `.`, `^` and `$` recognise there.
+fn is_line_terminator(unit: u32, unix_lines: bool) -> bool {
+    if unix_lines {
+        return unit == 0x0A;
+    }
     matches!(unit, 0x0A | 0x0D | 0x85 | 0x2028 | 0x2029)
 }
 
@@ -300,8 +335,372 @@ impl Predefined {
             Predefined::NotSpace => !is_java_space(unit),
             Predefined::Word => is_java_word(unit),
             Predefined::NotWord => !is_java_word(unit),
+            Predefined::Horizontal => is_horizontal_space(unit),
+            Predefined::NotHorizontal => !is_horizontal_space(unit),
+            Predefined::Vertical => is_vertical_space(unit),
+            Predefined::NotVertical => !is_vertical_space(unit),
         }
     }
+}
+
+/// `\p{...}` — a NAMED character property. Every arm is one case of the
+/// JDK's own `CharPredicates.forProperty`, which is where the surprises live:
+/// the POSIX names are US-ASCII only, and the same name means something wider
+/// under `(?U)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Property {
+    /// A set of `Character.getType` categories, one bit each.
+    Categories(u32),
+    /// A code point range, which several POSIX classes simply are.
+    Range(u32, u32),
+    /// One of `Character`'s own predicates, or a Unicode binary property.
+    Of(Pred),
+    /// `\p{IsLatin}` and `\p{script=Latin}`.
+    Script(u8),
+    /// `\p{InGreek}` and `\p{block=Greek}`.
+    Block(u16),
+    /// `\p{all}`.
+    All,
+}
+
+/// The properties that are a predicate rather than a set of categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pred {
+    // The US-ASCII POSIX classes that are not one range.
+    AsciiAlnum,
+    AsciiAlpha,
+    AsciiBlank,
+    AsciiCntrl,
+    AsciiGraph,
+    AsciiPunct,
+    AsciiSpace,
+    AsciiXDigit,
+    // The Unicode binary properties — and what a POSIX name means under `(?U)`.
+    Alphabetic,
+    Assigned,
+    HexDigit,
+    Ideographic,
+    JoinControl,
+    Letter,
+    LetterOrDigit,
+    Lowercase,
+    Uppercase,
+    Titlecase,
+    NonCharacter,
+    WhiteSpace,
+    Word,
+    Digit,
+    Blank,
+    Graph,
+    Print,
+    Alnum,
+    // `Character`'s own, where they are not one of the above.
+    JavaWhitespace,
+    SpaceChar,
+    IsoControl,
+    Mirrored,
+    JavaIdentifierStart,
+    JavaIdentifierPart,
+    UnicodeIdentifierStart,
+    UnicodeIdentifierPart,
+    IdentifierIgnorable,
+}
+
+/// Every `Character.getType` value, as a bit.
+const fn category_bit(category: u8) -> u32 {
+    1 << category
+}
+
+const CATEGORY_LETTER: u32 =
+    category_bit(1) | category_bit(2) | category_bit(3) | category_bit(4) | category_bit(5);
+const CATEGORY_MARK: u32 = category_bit(6) | category_bit(7) | category_bit(8);
+const CATEGORY_NUMBER: u32 = category_bit(9) | category_bit(10) | category_bit(11);
+const CATEGORY_SEPARATOR: u32 = category_bit(12) | category_bit(13) | category_bit(14);
+const CATEGORY_OTHER: u32 =
+    category_bit(15) | category_bit(16) | category_bit(18) | category_bit(19) | category_bit(0);
+const CATEGORY_PUNCTUATION: u32 = category_bit(20)
+    | category_bit(21)
+    | category_bit(22)
+    | category_bit(23)
+    | category_bit(24)
+    | category_bit(29)
+    | category_bit(30);
+const CATEGORY_SYMBOL: u32 =
+    category_bit(25) | category_bit(26) | category_bit(27) | category_bit(28);
+
+impl Property {
+    /// A property is asked about a CODE POINT.
+    fn matches(self, point: u32) -> bool {
+        match self {
+            Property::All => true,
+            Property::Categories(mask) => mask & category_bit(unicode::category_of(point)) != 0,
+            Property::Range(low, high) => low <= point && point <= high,
+            // Scripts and blocks are recorded over the BMP, which is where
+            // every script a program is likely to name lives; above it a code
+            // point belongs to no block and to the unknown script.
+            Property::Script(script) => {
+                u16::try_from(point).is_ok_and(|unit| unicode::script_of(unit) == script)
+            }
+            Property::Block(block) => {
+                u16::try_from(point).is_ok_and(|unit| unicode::block_of(unit) == Some(block))
+            }
+            Property::Of(pred) => pred.matches(point),
+        }
+    }
+}
+
+impl Pred {
+    #[allow(clippy::too_many_lines)] // one arm per named property
+    fn matches(self, point: u32) -> bool {
+        let ascii = u8::try_from(point).unwrap_or(0xFF);
+        let category = unicode::category_of(point);
+        let in_categories = |mask: u32| mask & category_bit(category) != 0;
+        match self {
+            // US-ASCII, from the JDK's own `ASCII.ctype` table.
+            Pred::AsciiAlnum => ascii.is_ascii_alphanumeric(),
+            Pred::AsciiAlpha => ascii.is_ascii_alphabetic(),
+            Pred::AsciiBlank => matches!(point, 0x09 | 0x20),
+            Pred::AsciiCntrl => matches!(point, 0x00..=0x1F | 0x7F),
+            Pred::AsciiGraph => (0x21..=0x7E).contains(&point),
+            Pred::AsciiPunct => (0x21..=0x7E).contains(&point) && !ascii.is_ascii_alphanumeric(),
+            Pred::AsciiSpace => matches!(point, 0x09..=0x0D | 0x20),
+            Pred::AsciiXDigit => ascii.is_ascii_hexdigit(),
+            // Unicode.
+            Pred::Alphabetic => unicode::is_alphabetic(point),
+            Pred::Assigned => unicode::is_defined(point),
+            Pred::HexDigit => {
+                unicode::is_digit(point)
+                    || matches!(
+                        point,
+                        0x30..=0x39
+                            | 0x41..=0x46
+                            | 0x61..=0x66
+                            | 0xFF10..=0xFF19
+                            | 0xFF21..=0xFF26
+                            | 0xFF41..=0xFF46
+                    )
+            }
+            Pred::Ideographic => unicode::is_ideographic(point),
+            Pred::JoinControl => matches!(point, 0x200C | 0x200D),
+            Pred::Letter => unicode::is_letter(point),
+            Pred::LetterOrDigit => unicode::is_letter(point) || unicode::is_digit(point),
+            Pred::Lowercase => unicode::is_lower(point),
+            Pred::Uppercase => unicode::is_upper(point),
+            Pred::Titlecase => unicode::is_title_case(point),
+            Pred::NonCharacter => point & 0xFFFE == 0xFFFE || (0xFDD0..=0xFDEF).contains(&point),
+            // `\p{IsWhite_Space}` is NOT `Character.isWhitespace`: it keeps
+            // the no-break spaces the latter drops.
+            Pred::WhiteSpace => {
+                in_categories(CATEGORY_SEPARATOR) || (0x9..=0xD).contains(&point) || point == 0x85
+            }
+            Pred::Word => {
+                unicode::is_alphabetic(point)
+                    || in_categories(CATEGORY_MARK | category_bit(9) | category_bit(23))
+                    || matches!(point, 0x200C | 0x200D)
+            }
+            Pred::Digit => unicode::is_digit(point),
+            Pred::Blank => category == 12 || point == 0x09,
+            Pred::Graph => {
+                !in_categories(CATEGORY_SEPARATOR | category_bit(15) | category_bit(19) | 1)
+            }
+            Pred::Print => {
+                (Pred::Graph.matches(point) || Pred::Blank.matches(point)) && category != 15
+            }
+            Pred::Alnum => unicode::is_alphabetic(point) || unicode::is_digit(point),
+            Pred::JavaWhitespace => unicode::is_whitespace(point),
+            Pred::SpaceChar => unicode::is_space_char(point),
+            Pred::IsoControl => unicode::is_iso_control(point),
+            Pred::Mirrored => unicode::is_mirrored(point),
+            Pred::JavaIdentifierStart => unicode::is_java_identifier_start(point),
+            Pred::JavaIdentifierPart => unicode::is_java_identifier_part(point),
+            Pred::UnicodeIdentifierStart => unicode::is_unicode_identifier_start(point),
+            Pred::UnicodeIdentifierPart => unicode::is_unicode_identifier_part(point),
+            Pred::IdentifierIgnorable => unicode::is_identifier_ignorable(point),
+        }
+    }
+}
+
+/// What a JDK complains about when a property name is not one it knows.
+fn property_error(name: &str) -> String {
+    if let Some((key, value)) = name.split_once('=') {
+        return format!(
+            "Unknown Unicode property {{name=<{}>, value=<{}>}}",
+            key.to_ascii_lowercase(),
+            value
+        );
+    }
+    // For `\p{IsFoo}` the "Is" is stripped before the message is built, and
+    // for `\p{InFoo}` it is not — so both read "{In/Is...}".
+    let shown = name.strip_prefix("Is").unwrap_or(name);
+    format!("Unknown character property name {{In/Is{shown}}}")
+}
+
+/// The JDK's `Pattern.family` dispatch, name for name.
+fn resolve_property(name: &str, unicode_classes: bool) -> Option<Property> {
+    if let Some((key, value)) = name.split_once('=') {
+        return match key.to_ascii_lowercase().as_str() {
+            "sc" | "script" => unicode::script_by_name(value).map(Property::Script),
+            "blk" | "block" => unicode::block_by_name(value).map(Property::Block),
+            "gc" | "general_category" => named_property(value),
+            _ => None,
+        };
+    }
+    if let Some(rest) = name.strip_prefix("In") {
+        return unicode::block_by_name(rest).map(Property::Block);
+    }
+    if let Some(rest) = name.strip_prefix("Is") {
+        return unicode_property(rest)
+            .or_else(|| named_property(rest))
+            .or_else(|| unicode::script_by_name(rest).map(Property::Script));
+    }
+    // Under `(?U)` a bare POSIX name means the UNICODE class of that name,
+    // and only falls back to the US-ASCII one if it is not a POSIX name.
+    if unicode_classes && let Some(property) = posix_property(name) {
+        return Some(property);
+    }
+    named_property(name)
+}
+
+/// `\p{IsAlphabetic}` and the other binary properties, matched without
+/// regard to case; the POSIX names answer here too.
+fn unicode_property(name: &str) -> Option<Property> {
+    let upper = name.to_ascii_uppercase();
+    let pred = match upper.as_str() {
+        "ALPHABETIC" => Pred::Alphabetic,
+        "ASSIGNED" => Pred::Assigned,
+        "CONTROL" => return Some(Property::Categories(category_bit(15))),
+        "HEXDIGIT" | "HEX_DIGIT" => Pred::HexDigit,
+        "IDEOGRAPHIC" => Pred::Ideographic,
+        "JOINCONTROL" | "JOIN_CONTROL" => Pred::JoinControl,
+        "LETTER" => Pred::Letter,
+        "LOWERCASE" => Pred::Lowercase,
+        "NONCHARACTERCODEPOINT" | "NONCHARACTER_CODE_POINT" => Pred::NonCharacter,
+        "TITLECASE" => Pred::Titlecase,
+        "PUNCTUATION" => return Some(Property::Categories(CATEGORY_PUNCTUATION)),
+        "UPPERCASE" => Pred::Uppercase,
+        "WHITESPACE" | "WHITE_SPACE" => Pred::WhiteSpace,
+        "WORD" => Pred::Word,
+        _ => return posix_property(&upper),
+    };
+    Some(Property::Of(pred))
+}
+
+/// The POSIX names as `(?U)` and `\p{Is...}` read them — Unicode-wide, not
+/// the US-ASCII sets the bare names mean.
+fn posix_property(name: &str) -> Option<Property> {
+    let pred = match name.to_ascii_uppercase().as_str() {
+        "ALPHA" => Pred::Alphabetic,
+        "LOWER" => Pred::Lowercase,
+        "UPPER" => Pred::Uppercase,
+        "SPACE" => Pred::WhiteSpace,
+        "PUNCT" => return Some(Property::Categories(CATEGORY_PUNCTUATION)),
+        "XDIGIT" => Pred::HexDigit,
+        "ALNUM" => Pred::Alnum,
+        "CNTRL" => return Some(Property::Categories(category_bit(15))),
+        "DIGIT" => Pred::Digit,
+        "BLANK" => Pred::Blank,
+        "GRAPH" => Pred::Graph,
+        "PRINT" => Pred::Print,
+        _ => return None,
+    };
+    Some(Property::Of(pred))
+}
+
+/// `CharPredicates.forProperty` — the categories, the US-ASCII POSIX classes,
+/// and `Character`'s own predicates. These names are CASE SENSITIVE.
+fn named_property(name: &str) -> Option<Property> {
+    let categories = match name {
+        "Cn" => category_bit(0),
+        "Lu" => category_bit(1),
+        "Ll" => category_bit(2),
+        "Lt" => category_bit(3),
+        "Lm" => category_bit(4),
+        "Lo" => category_bit(5),
+        "Mn" => category_bit(6),
+        "Me" => category_bit(7),
+        "Mc" => category_bit(8),
+        "Nd" => category_bit(9),
+        "Nl" => category_bit(10),
+        "No" => category_bit(11),
+        "Zs" => category_bit(12),
+        "Zl" => category_bit(13),
+        "Zp" => category_bit(14),
+        "Cc" => category_bit(15),
+        "Cf" => category_bit(16),
+        "Co" => category_bit(18),
+        "Cs" => category_bit(19),
+        "Pd" => category_bit(20),
+        "Ps" => category_bit(21),
+        "Pe" => category_bit(22),
+        "Pc" => category_bit(23),
+        "Po" => category_bit(24),
+        "Sm" => category_bit(25),
+        "Sc" => category_bit(26),
+        "Sk" => category_bit(27),
+        "So" => category_bit(28),
+        "Pi" => category_bit(29),
+        "Pf" => category_bit(30),
+        "L" => CATEGORY_LETTER,
+        "M" => CATEGORY_MARK,
+        "N" => CATEGORY_NUMBER,
+        "Z" => CATEGORY_SEPARATOR,
+        "C" => CATEGORY_OTHER,
+        "P" => CATEGORY_PUNCTUATION,
+        "S" => CATEGORY_SYMBOL,
+        "LC" => category_bit(1) | category_bit(2) | category_bit(3),
+        "LD" => CATEGORY_LETTER | category_bit(9),
+        "L1" => return Some(Property::Range(0x00, 0xFF)),
+        "all" => return Some(Property::All),
+        // The POSIX classes, US-ASCII only, which is what these names mean
+        // WITHOUT `(?U)`.
+        "ASCII" => return Some(Property::Range(0x00, 0x7F)),
+        "Digit" => return Some(Property::Range(0x30, 0x39)),
+        "Lower" => return Some(Property::Range(0x61, 0x7A)),
+        "Upper" => return Some(Property::Range(0x41, 0x5A)),
+        "Print" => return Some(Property::Range(0x20, 0x7E)),
+        "Alnum" => return Some(Property::Of(Pred::AsciiAlnum)),
+        "Alpha" => return Some(Property::Of(Pred::AsciiAlpha)),
+        "Blank" => return Some(Property::Of(Pred::AsciiBlank)),
+        "Cntrl" => return Some(Property::Of(Pred::AsciiCntrl)),
+        "Graph" => return Some(Property::Of(Pred::AsciiGraph)),
+        "Punct" => return Some(Property::Of(Pred::AsciiPunct)),
+        "Space" => return Some(Property::Of(Pred::AsciiSpace)),
+        "XDigit" => return Some(Property::Of(Pred::AsciiXDigit)),
+        // `Character`'s own.
+        "javaLowerCase" => return Some(Property::Of(Pred::Lowercase)),
+        "javaUpperCase" => return Some(Property::Of(Pred::Uppercase)),
+        "javaAlphabetic" => return Some(Property::Of(Pred::Alphabetic)),
+        "javaIdeographic" => return Some(Property::Of(Pred::Ideographic)),
+        "javaTitleCase" => return Some(Property::Of(Pred::Titlecase)),
+        "javaDigit" => return Some(Property::Of(Pred::Digit)),
+        "javaDefined" => return Some(Property::Of(Pred::Assigned)),
+        "javaLetter" => return Some(Property::Of(Pred::Letter)),
+        "javaLetterOrDigit" => return Some(Property::Of(Pred::LetterOrDigit)),
+        "javaJavaIdentifierStart" => return Some(Property::Of(Pred::JavaIdentifierStart)),
+        "javaJavaIdentifierPart" => return Some(Property::Of(Pred::JavaIdentifierPart)),
+        "javaUnicodeIdentifierStart" => return Some(Property::Of(Pred::UnicodeIdentifierStart)),
+        "javaUnicodeIdentifierPart" => return Some(Property::Of(Pred::UnicodeIdentifierPart)),
+        "javaIdentifierIgnorable" => return Some(Property::Of(Pred::IdentifierIgnorable)),
+        "javaSpaceChar" => return Some(Property::Of(Pred::SpaceChar)),
+        "javaWhitespace" => return Some(Property::Of(Pred::JavaWhitespace)),
+        "javaISOControl" => return Some(Property::Of(Pred::IsoControl)),
+        "javaMirrored" => return Some(Property::Of(Pred::Mirrored)),
+        _ => return None,
+    };
+    Some(Property::Categories(categories))
+}
+
+/// `\h` — a tab, a space, and the Unicode spaces beside them.
+fn is_horizontal_space(unit: u32) -> bool {
+    matches!(
+        unit,
+        0x09 | 0x20 | 0xA0 | 0x1680 | 0x180E | 0x2000..=0x200A | 0x202F | 0x205F | 0x3000
+    )
+}
+
+/// `\v` — the line terminators.
+fn is_vertical_space(unit: u32) -> bool {
+    matches!(unit, 0x0A..=0x0D | 0x85 | 0x2028 | 0x2029)
 }
 
 /// The other case of an ASCII letter, or the unit unchanged. Java's
@@ -329,9 +728,10 @@ impl CharClass {
     /// `matches` without the case folding, negation included.
     fn matches_exactly(&self, unit: u32) -> bool {
         let mut hit = self.items.iter().any(|item| match item {
-            ClassItem::Single(single) => u32::from(*single) == unit,
-            ClassItem::Range(low, high) => u32::from(*low) <= unit && unit <= u32::from(*high),
+            ClassItem::Single(single) => *single == unit,
+            ClassItem::Range(low, high) => *low <= unit && unit <= *high,
             ClassItem::Predefined(predefined) => predefined.matches(unit),
+            ClassItem::Named { property, negated } => property.matches(unit) != *negated,
             ClassItem::Nested(nested) => nested.matches(unit),
         });
         // The INTERSECTION binds tighter than the negation: `[^a-c&&[^b]]` is
@@ -382,6 +782,11 @@ struct Flags {
     /// part of the pattern. This changes LEXING rather than matching, so it is
     /// applied when reading each token instead of baked into a node.
     comments: bool,
+    /// `U` — `UNICODE_CHARACTER_CLASS`: `\w`, `\d`, `\s`, `\b` and the POSIX
+    /// names mean their UNICODE sets rather than the ASCII ones.
+    unicode_classes: bool,
+    /// `d` — `UNIX_LINES`: only `\n` ends a line, for `.`, `^` and `$`.
+    unix_lines: bool,
 }
 
 type ParseResult<T> = Result<T, SyntaxError>;
@@ -452,7 +857,7 @@ impl Parser<'_> {
             }
             if unit == u16::from(b'#') {
                 while let Some(unit) = self.units.get(self.at).copied() {
-                    if is_line_terminator(u32::from(unit)) {
+                    if is_line_terminator(u32::from(unit), false) {
                         break;
                     }
                     self.at += 1;
@@ -500,19 +905,26 @@ impl Parser<'_> {
                 counted = false;
                 (0, Some(1))
             }
-            Some(unit) if unit == u16::from(b'{') => match self.parse_bounds()? {
-                Some(bounds) => bounds,
-                // A `{` after a quantifiable atom must open a repetition: the
-                // JDK's `closure` says "Illegal repetition" for anything else.
-                // (A `{` in atom position IS a literal brace, which
-                // `parse_atom` handles.) Treating this one as a literal
-                // accepted `a{x`, which no JDK compiles.
-                None => return Err(self.error("Illegal repetition", start)),
-            },
+            Some(unit) if unit == u16::from(b'{') => {
+                // The JDK points one BEFORE the brace, which is the atom's
+                // last character and not its first — the two are the same
+                // only while the atom is one character long, so `\b{x}` used
+                // to answer 0 where a JDK answers 1.
+                let before_brace = self.at.saturating_sub(1);
+                match self.parse_bounds()? {
+                    Some(bounds) => bounds,
+                    // A `{` after a quantifiable atom must open a repetition:
+                    // the JDK's `closure` says "Illegal repetition" for
+                    // anything else. (A `{` in atom position IS a literal
+                    // brace, which `parse_atom` handles.) Treating this one as
+                    // a literal accepted `a{x`, which no JDK compiles.
+                    None => return Err(self.error("Illegal repetition", before_brace)),
+                }
+            }
             _ => return Ok(atom),
         };
         // A quantifier must follow something quantifiable.
-        if matches!(atom, Node::Start | Node::End | Node::WordBoundary(_)) {
+        if matches!(atom, Node::Start | Node::End(_) | Node::WordBoundary(..)) {
             // The JDK names the offending character: "Dangling meta
             // character '+' near index 0".
             let meta = self
@@ -621,17 +1033,17 @@ impl Parser<'_> {
             u if u == u16::from(b'.') => Ok(if self.flags.dotall {
                 Node::AnyCharDotAll
             } else {
-                Node::AnyChar
+                Node::AnyChar(self.flags.unix_lines)
             }),
             u if u == u16::from(b'^') => Ok(if self.flags.multiline {
-                Node::LineStart
+                Node::LineStart(self.flags.unix_lines)
             } else {
                 Node::Start
             }),
             u if u == u16::from(b'$') => Ok(if self.flags.multiline {
-                Node::LineEnd
+                Node::LineEnd(self.flags.unix_lines)
             } else {
-                Node::End
+                Node::End(self.flags.unix_lines)
             }),
             u if u == u16::from(b'(') => self.parse_group(start),
             u if u == u16::from(b'[') => Ok(Node::Class(self.parse_class(start)?)),
@@ -659,7 +1071,7 @@ impl Parser<'_> {
             return Node::Class(CharClass {
                 fold: true,
                 negated: false,
-                items: vec![ClassItem::Single(unit)],
+                items: vec![ClassItem::Single(u32::from(unit))],
                 intersections: Vec::new(),
             });
         }
@@ -877,7 +1289,11 @@ impl Parser<'_> {
                 // patterns this engine sees they select behaviour it already
                 // has. `x` genuinely changes parsing, so it is refused.
                 b'x' => flags.comments = on,
-                b'u' | b'U' | b'd' => {}
+                b'U' => flags.unicode_classes = on,
+                b'd' => flags.unix_lines = on,
+                // `u` (UNICODE_CASE) widens `(?i)` beyond ASCII; the folding
+                // this engine does is ASCII either way.
+                b'u' => {}
                 _ => return Err(self.error("Unsupported group construct", open)),
             }
         }
@@ -912,7 +1328,7 @@ impl Parser<'_> {
         };
         // A `]` in first position is a literal, not the terminator.
         if self.eat(u16::from(b']')) {
-            class.items.push(ClassItem::Single(u16::from(b']')));
+            class.items.push(ClassItem::Single(u32::from(b']')));
         }
         loop {
             self.skip_ignorable();
@@ -971,10 +1387,13 @@ impl Parser<'_> {
                 ClassEscape::Predefined(predefined) => {
                     return Ok(ClassItem::Predefined(predefined));
                 }
+                ClassEscape::Named { property, negated } => {
+                    return Ok(ClassItem::Named { property, negated });
+                }
                 ClassEscape::Literal(literal) => literal,
             }
         } else {
-            unit
+            u32::from(unit)
         };
         // A range, unless the `-` is last (`[a-]`) or starts one (`[-a]`).
         // A `-` opens a RANGE unless what follows ends the class. `[a-]` and
@@ -998,12 +1417,12 @@ impl Parser<'_> {
             let high = if high_unit == u16::from(b'\\') {
                 match self.parse_class_escape(high_start)? {
                     ClassEscape::Literal(literal) => literal,
-                    ClassEscape::Predefined(_) => {
+                    ClassEscape::Predefined(_) | ClassEscape::Named { .. } => {
                         return Err(self.error("Illegal character range", high_start));
                     }
                 }
             } else {
-                high_unit
+                u32::from(high_unit)
             };
             if high < low {
                 return Err(self.error("Illegal character range", high_start));
@@ -1026,11 +1445,27 @@ impl Parser<'_> {
         match unit {
             u if u == u16::from(b'b') => {
                 self.at += 1;
-                Ok(Node::WordBoundary(true))
+                // `\b{g}` — a GRAPHEME boundary, which is a different
+                // assertion that happens to be spelled with a `\b`. Anything
+                // else after the brace is not an error here: the JDK winds
+                // back and lets `{...}` fail as the quantifier it looks like.
+                if self.peek() == Some(u16::from(b'{')) {
+                    let open = self.at;
+                    if self.units.get(open + 1) == Some(&u16::from(b'g')) {
+                        self.at = open + 2;
+                        if self.eat(u16::from(b'}')) {
+                            return Ok(Node::GraphemeBound);
+                        }
+                        return Err(
+                            self.error("Illegal/unsupported escape sequence", self.units.len())
+                        );
+                    }
+                }
+                Ok(Node::WordBoundary(true, self.flags.unicode_classes))
             }
             u if u == u16::from(b'B') => {
                 self.at += 1;
-                Ok(Node::WordBoundary(false))
+                Ok(Node::WordBoundary(false, self.flags.unicode_classes))
             }
             u if u == u16::from(b'A') => {
                 self.at += 1;
@@ -1040,9 +1475,17 @@ impl Parser<'_> {
                 self.at += 1;
                 Ok(Node::InputEnd)
             }
+            u if u == u16::from(b'G') => {
+                self.at += 1;
+                Ok(Node::PreviousEnd)
+            }
+            u if u == u16::from(b'X') => {
+                self.at += 1;
+                Ok(Node::Grapheme)
+            }
             u if u == u16::from(b'Z') => {
                 self.at += 1;
-                Ok(Node::InputEndBeforeFinalTerminator)
+                Ok(Node::InputEndBeforeFinalTerminator(self.flags.unix_lines))
             }
             // `\R` — ANY line terminator (JDK 8+): a CRLF pair, or one of the
             // single terminators. The pair must be tried first, or `\R` splits
@@ -1148,9 +1591,28 @@ impl Parser<'_> {
                     items: vec![ClassItem::Predefined(predefined)],
                     intersections: Vec::new(),
                 })),
-                ClassEscape::Literal(literal) => Ok(self.literal(literal)),
+                ClassEscape::Literal(literal) => Ok(self.code_point(literal)),
+                ClassEscape::Named { property, negated } => Ok(Node::Class(CharClass {
+                    fold: false,
+                    negated: false,
+                    items: vec![ClassItem::Named { property, negated }],
+                    intersections: Vec::new(),
+                })),
             },
         }
+    }
+
+    /// One code point as a node: a unit, or the SURROGATE PAIR a
+    /// supplementary one is written as, since the engine walks UTF-16.
+    fn code_point(&self, point: u32) -> Node {
+        if let Ok(unit) = u16::try_from(point) {
+            return self.literal(unit);
+        }
+        let above = point - 0x1_0000;
+        Node::Concat(vec![
+            Node::Literal(u16::try_from(0xD800 + (above >> 10)).unwrap_or(u16::MAX)),
+            Node::Literal(u16::try_from(0xDC00 + (above & 0x3FF)).unwrap_or(u16::MAX)),
+        ])
     }
 
     /// The escapes meaningful both inside and outside a character class.
@@ -1161,37 +1623,60 @@ impl Parser<'_> {
             let _ = start;
             return Err(self.error("Unclosed character class", self.units.len()));
         };
-        let literal = match unit {
+        let literal: u32 = match unit {
+            // Under `(?U)` these three mean their UNICODE sets: `\w` becomes
+            // the Word property, `\d` every decimal digit, `\s` every
+            // whitespace — which is a different answer, not a wider spelling.
+            u if matches!(u8::try_from(u), Ok(b'd' | b'D' | b's' | b'S' | b'w' | b'W'))
+                && self.flags.unicode_classes =>
+            {
+                let letter = u8::try_from(u).unwrap_or(b'w');
+                let property = match letter.to_ascii_lowercase() {
+                    b'd' => Property::Of(Pred::Digit),
+                    b's' => Property::Of(Pred::WhiteSpace),
+                    _ => Property::Of(Pred::Word),
+                };
+                return Ok(ClassEscape::Named {
+                    property,
+                    negated: letter.is_ascii_uppercase(),
+                });
+            }
             u if u == u16::from(b'd') => return Ok(ClassEscape::Predefined(Predefined::Digit)),
             u if u == u16::from(b'D') => return Ok(ClassEscape::Predefined(Predefined::NotDigit)),
             u if u == u16::from(b's') => return Ok(ClassEscape::Predefined(Predefined::Space)),
             u if u == u16::from(b'S') => return Ok(ClassEscape::Predefined(Predefined::NotSpace)),
             u if u == u16::from(b'w') => return Ok(ClassEscape::Predefined(Predefined::Word)),
             u if u == u16::from(b'W') => return Ok(ClassEscape::Predefined(Predefined::NotWord)),
+            u if u == u16::from(b'h') => {
+                return Ok(ClassEscape::Predefined(Predefined::Horizontal));
+            }
+            u if u == u16::from(b'H') => {
+                return Ok(ClassEscape::Predefined(Predefined::NotHorizontal));
+            }
+            u if u == u16::from(b'p') || u == u16::from(b'P') => {
+                let negated = u == u16::from(b'P');
+                let property = self.parse_property(start)?;
+                return Ok(ClassEscape::Named { property, negated });
+            }
+            u if u == u16::from(b'v') => return Ok(ClassEscape::Predefined(Predefined::Vertical)),
+            u if u == u16::from(b'V') => {
+                return Ok(ClassEscape::Predefined(Predefined::NotVertical));
+            }
+            // `\cX` — the control character X stands for, which is X with bit
+            // 6 flipped. A JDK reads the NEXT character whatever it is.
+            u if u == u16::from(b'c') => {
+                let Some(letter) = self.next() else {
+                    return Err(self.error("Illegal control escape sequence", start));
+                };
+                u32::from(letter ^ 64)
+            }
             u if u == u16::from(b'n') => 0x0A,
             u if u == u16::from(b'r') => 0x0D,
             u if u == u16::from(b't') => 0x09,
             u if u == u16::from(b'f') => 0x0C,
             u if u == u16::from(b'a') => 0x07,
             u if u == u16::from(b'e') => 0x1B,
-            u if u == u16::from(b'0') => {
-                // `\0n`, `\0nn`, `\0mnn` — octal.
-                let mut value: u32 = 0;
-                let mut digits = 0;
-                while digits < 3 {
-                    let Some(next) = self.peek() else { break };
-                    if !(0x30..=0x37).contains(&next) {
-                        break;
-                    }
-                    value = value * 8 + u32::from(next - 0x30);
-                    self.at += 1;
-                    digits += 1;
-                }
-                if digits == 0 {
-                    return Err(self.error("Illegal octal escape sequence", start));
-                }
-                u16::try_from(value).unwrap_or(u16::MAX)
-            }
+            u if u == u16::from(b'0') => self.parse_octal(start)?,
             // `\x{...}` — a code point in braces (JDK 7+), beside the
             // two-digit `\xhh`.
             u if u == u16::from(b'x') && self.peek() == Some(u16::from(b'{')) => {
@@ -1214,13 +1699,10 @@ impl Parser<'_> {
                 if digits == 0 || !self.eat(u16::from(b'}')) {
                     return Err(self.error("Unclosed hexadecimal escape sequence", start));
                 }
-                // The engine walks UTF-16 units, so a supplementary code point
-                // becomes its high surrogate here; the low half follows as a
-                // literal only for a pattern that spells the pair out.
-                u16::try_from(value).unwrap_or(u16::MAX)
+                value
             }
-            u if u == u16::from(b'x') => self.parse_hex(2, start)?,
-            u if u == u16::from(b'u') => self.parse_hex(4, start)?,
+            u if u == u16::from(b'x') => u32::from(self.parse_hex(2, start)?),
+            u if u == u16::from(b'u') => u32::from(self.parse_hex(4, start)?),
             // A letter or digit after a backslash with no meaning is an error
             // in Java, not a literal — being permissive here would accept
             // patterns a real JDK refuses.
@@ -1230,9 +1712,64 @@ impl Parser<'_> {
                     self.at.saturating_sub(1),
                 ));
             }
-            other => other,
+            other => u32::from(other),
         };
         Ok(ClassEscape::Literal(literal))
+    }
+
+    /// `\0n`, `\0nn`, `\0mnn` — an octal escape. The cursor sits past the `0`.
+    fn parse_octal(&mut self, start: usize) -> ParseResult<u32> {
+        let mut value: u32 = 0;
+        let mut digits = 0;
+        while digits < 3 {
+            let Some(next) = self.peek() else { break };
+            if !(0x30..=0x37).contains(&next) {
+                break;
+            }
+            value = value * 8 + u32::from(next - 0x30);
+            self.at += 1;
+            digits += 1;
+        }
+        if digits == 0 {
+            return Err(self.error("Illegal octal escape sequence", start));
+        }
+        Ok(value)
+    }
+
+    /// `\p{Name}`, `\p{key=value}`, or the one-letter `\pL`. The cursor sits
+    /// just past the `p`.
+    fn parse_property(&mut self, start: usize) -> ParseResult<Property> {
+        let name = if self.peek() == Some(u16::from(b'{')) {
+            self.at += 1;
+            let from = self.at;
+            while let Some(next) = self.peek() {
+                if next == u16::from(b'}') {
+                    break;
+                }
+                self.at += 1;
+            }
+            if self.peek().is_none() {
+                return Err(self.error("Unclosed character family", self.units.len()));
+            }
+            if self.at == from {
+                return Err(self.error("Empty character family", self.at));
+            }
+            let name = String::from_utf16_lossy(&self.units[from..self.at]);
+            self.at += 1; // the `}`
+            name
+        } else {
+            // `\pL` — one character IS the name.
+            let Some(letter) = self.next() else {
+                return Err(self.error("Unclosed character family", self.units.len()));
+            };
+            String::from_utf16_lossy(&[letter])
+        };
+        let _ = start;
+        // The JDK reports the LAST character of the family — the `}`, or the
+        // single letter — not the one after it.
+        let at = self.at.saturating_sub(1);
+        resolve_property(&name, self.flags.unicode_classes)
+            .ok_or_else(|| self.error(&property_error(&name), at))
     }
 
     fn parse_hex(&mut self, count: usize, start: usize) -> ParseResult<u16> {
@@ -1252,8 +1789,13 @@ impl Parser<'_> {
 }
 
 enum ClassEscape {
-    Literal(u16),
+    /// A CODE POINT — `\x{1F600}` is one, above the BMP.
+    Literal(u32),
     Predefined(Predefined),
+    Named {
+        property: Property,
+        negated: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1328,6 +1870,8 @@ struct Matcher<'a> {
     /// A ceiling on backtracking steps. A pathological pattern must fail
     /// rather than hang the browser tab the engine runs in.
     steps: std::cell::Cell<u64>,
+    /// Where `\G` matches.
+    since: usize,
 }
 
 impl<'a> Matcher<'a> {
@@ -1337,6 +1881,7 @@ impl<'a> Matcher<'a> {
         end: usize,
         anchoring: bool,
         transparent: bool,
+        since: usize,
     ) -> Matcher<'a> {
         Matcher {
             input,
@@ -1349,6 +1894,7 @@ impl<'a> Matcher<'a> {
             hit_end: std::cell::Cell::new(false),
             require_end: std::cell::Cell::new(false),
             steps: std::cell::Cell::new(STEP_LIMIT),
+            since,
         }
     }
 
@@ -1423,6 +1969,20 @@ impl<'a> Matcher<'a> {
         Some(u32::from(high))
     }
 
+    /// The code point ENDING at `at`, which is a pair when `at` sits just
+    /// after a low surrogate.
+    fn point_before(&self, at: usize) -> Option<u32> {
+        let low = *self.input.get(at.checked_sub(1)?)?;
+        if (0xDC00..0xE000).contains(&low)
+            && at >= 2
+            && let Some(&high) = self.input.get(at - 2)
+            && (0xD800..0xDC00).contains(&high)
+        {
+            return Some(0x1_0000 + ((u32::from(high) - 0xD800) << 10) + (u32::from(low) - 0xDC00));
+        }
+        Some(u32::from(low))
+    }
+
     /// What a boundary can SEE. A boundary reads, so it stops where a read
     /// stops — outside the region the text is not there at all, which is what
     /// makes a region behave like a substring. Under transparent bounds it is
@@ -1436,7 +1996,7 @@ impl<'a> Matcher<'a> {
         }
     }
 
-    fn at_word(&self, at: usize) -> bool {
+    fn at_word(&self, at: usize, unicode: bool) -> bool {
         // A boundary at the end of the input READ the end, and that counts
         // twice: `"dog\b"` against "dog" reports BOTH `hitEnd()` and
         // `requireEnd()` on a JDK — the engine had to look past the g to
@@ -1450,13 +2010,19 @@ impl<'a> Matcher<'a> {
         if at >= limit || at < floor {
             return false;
         }
-        self.point_at(at).is_some_and(is_java_word)
+        self.point_at(at).is_some_and(|point| {
+            if unicode {
+                Property::Of(Pred::Word).matches(point)
+            } else {
+                is_java_word(point)
+            }
+        })
     }
 
-    fn is_boundary(&self, at: usize) -> bool {
+    fn is_boundary(&self, at: usize, unicode: bool) -> bool {
         let (floor, _) = self.word_window();
-        let before = at > floor && self.at_word(at - 1);
-        let after = self.at_word(at);
+        let before = at > floor && self.at_word(at - 1, unicode);
+        let after = self.at_word(at, unicode);
         before != after
     }
 
@@ -1491,8 +2057,8 @@ impl<'a> Matcher<'a> {
                 }
                 None
             }
-            Node::AnyChar => match self.code_point_at(pos) {
-                Some((point, width)) if !is_line_terminator(point) => {
+            Node::AnyChar(unix_lines) => match self.code_point_at(pos) {
+                Some((point, width)) if !is_line_terminator(point, *unix_lines) => {
                     self.resume(pos + width, caps, cont)
                 }
                 _ => None,
@@ -1585,16 +2151,65 @@ impl<'a> Matcher<'a> {
                 }
                 None
             }
-            Node::End => {
+            Node::End(unix_lines) => {
                 // Java's `$` (without MULTILINE) also matches before a final
                 // line terminator. Reaching one is what `requireEnd` reports:
                 // more input could have changed the answer.
                 self.hit_end.set(true);
-                if pos == self.anchor_end() || self.at_final_terminator(pos) {
+                if pos == self.anchor_end() || self.at_final_terminator(pos, *unix_lines) {
                     self.require_end.set(true);
                     return self.resume(pos, caps, cont);
                 }
                 None
+            }
+            Node::PreviousEnd => {
+                if pos == self.since {
+                    return self.resume(pos, caps, cont);
+                }
+                None
+            }
+            // `\X` — take one code point, then every following one that does
+            // NOT start a new cluster. It never gives any of them back.
+            Node::Grapheme => {
+                let Some((first, width)) = self.code_point_at(pos) else {
+                    self.hit_end.set(true);
+                    return None;
+                };
+                let mut before = first;
+                let mut at = pos + width;
+                while let Some((next, width)) = self.code_point_at(at) {
+                    if unicode::grapheme_boundary(before, next) {
+                        break;
+                    }
+                    before = next;
+                    at += width;
+                }
+                self.resume(at, caps, cont)
+            }
+            Node::GraphemeBound => {
+                let (floor, limit) = self.word_window();
+                if pos == floor {
+                    return self.resume(pos, caps, cont);
+                }
+                if pos < limit {
+                    // Never INSIDE a surrogate pair, and never where the two
+                    // code points belong to one cluster.
+                    let inside = pos >= 1
+                        && (0xD800..0xDC00).contains(&self.input[pos - 1])
+                        && (0xDC00..0xE000).contains(&self.input[pos]);
+                    let (Some(before), Some((after, _))) =
+                        (self.point_before(pos), self.code_point_at(pos))
+                    else {
+                        return None;
+                    };
+                    if inside || !unicode::grapheme_boundary(before, after) {
+                        return None;
+                    }
+                } else {
+                    self.hit_end.set(true);
+                    self.require_end.set(true);
+                }
+                self.resume(pos, caps, cont)
             }
             Node::InputEnd => {
                 self.hit_end.set(true);
@@ -1604,9 +2219,9 @@ impl<'a> Matcher<'a> {
                 }
                 None
             }
-            Node::InputEndBeforeFinalTerminator => {
+            Node::InputEndBeforeFinalTerminator(unix_lines) => {
                 self.hit_end.set(true);
-                if pos == self.anchor_end() || self.at_final_terminator(pos) {
+                if pos == self.anchor_end() || self.at_final_terminator(pos, *unix_lines) {
                     self.require_end.set(true);
                     return self.resume(pos, caps, cont);
                 }
@@ -1615,7 +2230,7 @@ impl<'a> Matcher<'a> {
             // `(?m)`: a line starts at the input's start and just after any
             // terminator; it ends at the input's end and just before one. A
             // CRLF pair is ONE terminator, so `$` sits before the CR.
-            Node::LineStart => {
+            Node::LineStart(unix_lines) => {
                 // Java's own comment: "Perl does not match ^ at end of input
                 // even after newline". So the END of the input is never a line
                 // start — which for an EMPTY input is position 0 too, and
@@ -1624,7 +2239,7 @@ impl<'a> Matcher<'a> {
                     return None;
                 }
                 let after_terminator = pos > self.anchor_start()
-                    && is_line_terminator(u32::from(self.input[pos - 1]))
+                    && is_line_terminator(u32::from(self.input[pos - 1]), *unix_lines)
                     // NOT between a CR and its LF: the pair is ONE terminator.
                     && !(self.input[pos - 1] == 0x0D && self.input.get(pos) == Some(&0x0A));
                 if pos == self.anchor_start() || after_terminator {
@@ -1632,11 +2247,11 @@ impl<'a> Matcher<'a> {
                 }
                 None
             }
-            Node::LineEnd => {
+            Node::LineEnd(unix_lines) => {
                 let before_terminator = self
                     .input
                     .get(pos)
-                    .is_some_and(|unit| is_line_terminator(u32::from(*unit)))
+                    .is_some_and(|unit| is_line_terminator(u32::from(*unit), *unix_lines))
                     // A CRLF pair is ONE terminator: the line ends before the
                     // CR, not again between the CR and the LF.
                     && !(self.input[pos] == 0x0A && pos > 0 && self.input[pos - 1] == 0x0D);
@@ -1649,8 +2264,8 @@ impl<'a> Matcher<'a> {
                 }
                 None
             }
-            Node::WordBoundary(wanted) => {
-                if self.is_boundary(pos) == *wanted {
+            Node::WordBoundary(wanted, unicode) => {
+                if self.is_boundary(pos, *unicode) == *wanted {
                     return self.resume(pos, caps, cont);
                 }
                 None
@@ -1705,18 +2320,18 @@ impl<'a> Matcher<'a> {
 
     /// Whether `pos` sits just before the input's final line terminator
     /// (`\n`, `\r\n`, or a lone `\r`).
-    fn at_final_terminator(&self, pos: usize) -> bool {
+    fn at_final_terminator(&self, pos: usize, unix_lines: bool) -> bool {
         let len = self.anchor_end();
         if pos == len {
             return false;
         }
-        if pos + 1 == len && is_line_terminator(u32::from(self.input[pos])) {
+        if pos + 1 == len && is_line_terminator(u32::from(self.input[pos]), unix_lines) {
             // NOT between a final CR and LF: the pair is ONE terminator, so
             // `$` fires before the CR and nowhere else. Treating the LF as its
             // own terminator gave `"a\r\n".replaceAll("$", "X")` an extra X.
             return !(pos >= 1 && self.input[pos] == 0x0A && self.input[pos - 1] == 0x0D);
         }
-        pos + 2 == len && self.input[pos] == 0x0D && self.input[pos + 1] == 0x0A
+        !unix_lines && pos + 2 == len && self.input[pos] == 0x0D && self.input[pos + 1] == 0x0A
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1772,7 +2387,7 @@ impl<'a> Matcher<'a> {
         // trying position 0 and answered false.
         if kind == RepeatKind::Greedy
             && done == 0
-            && matches!(node, Node::Literal(_) | Node::Class(_) | Node::AnyChar)
+            && matches!(node, Node::Literal(_) | Node::Class(_) | Node::AnyChar(_))
         {
             let mut ends = vec![pos];
             let mut taken = 0u32;
@@ -2011,6 +2626,9 @@ pub struct Bounds {
     pub end: usize,
     pub anchoring: bool,
     pub transparent: bool,
+    /// Where the PREVIOUS match ended — what `\G` matches at. `None` means
+    /// there was none, and `\G` falls back to where the search begins.
+    pub since: Option<usize>,
 }
 
 impl Bounds {
@@ -2021,6 +2639,7 @@ impl Bounds {
             end: input.len(),
             anchoring: true,
             transparent: false,
+            since: None,
         }
     }
 }
@@ -2098,6 +2717,7 @@ impl Regex {
             bounds.end,
             bounds.anchoring,
             bounds.transparent,
+            bounds.since.unwrap_or(from),
         );
         // ONE set of captures for the whole search, not one per start
         // position. `java.util.regex` clears its group array once per
@@ -2138,6 +2758,7 @@ impl Regex {
             bounds.end,
             bounds.anchoring,
             bounds.transparent,
+            bounds.since.unwrap_or(bounds.start),
         );
         let mut caps: Captures = vec![None; self.group_count + 1];
         let landed = matcher.run(&self.node, bounds.start, &mut caps, &Cont::Done);
@@ -2168,6 +2789,7 @@ impl Regex {
             // anchoring mode says, since it is the region it must fill.
             true,
             bounds.transparent,
+            bounds.since.unwrap_or(bounds.start),
         );
         let mut caps: Captures = vec![None; self.group_count + 1];
         let landed = matcher
