@@ -8965,6 +8965,21 @@ counting catches: a divergence that stopped being one.
   as well; all four are modeled now, and so are `EnumMap`/`EnumSet` and, since
   2026-09-04, `Vector`/`Hashtable`/`Enumeration`. What is left is the
   `Abstract*` skeletons. (`strict_abstract_list_is_refused_by_name`)
+- `Properties p;` — and every other real `java.*` class in a modeled package
+  that caturra does not implement. The whole surface was swept (2026-09-04, see
+  **Every class this engine does not have**), so this is now exhaustive rather
+  than whichever names somebody had happened to hit.
+  (`strict_unmodelled_java_classes_name_themselves`)
+- `Instant i;` — the `java.time` values that carry an INSTANT or a ZONE, which
+  need a timezone database caturra does not vendor.
+  (`strict_an_instant_names_itself`)
+- `import java.security.*;` — and every other real JDK PACKAGE caturra does not
+  model. "package java.security does not exist" is a false statement about the
+  JDK; a package that really does not exist still gets javac's own wording.
+  (`strict_unmodelled_java_packages_name_themselves`)
+- `Collectors c;` — a class caturra models only as a namespace for its members
+  cannot name a variable, and now says exactly that instead of claiming the
+  class is unsupported. (`stricter_namespace_class_says_what_is_missing`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -14063,3 +14078,68 @@ by caturra" wherever they are written, rather than "cannot find symbol", which
 reads as a typo for a class the student can see in the documentation. Pinned as
 `strict_the_old_date_classes_are_refused_by_name` and
 `strict_simple_date_format_is_refused_by_name`.
+
+## Every class this engine does not have
+
+The last of the four lanes, and the one that is about the MESSAGE rather than
+the code: a real Java class caturra does not model should say so by name.
+"cannot find symbol" is a statement about the PROGRAM — the student mistyped
+something — and about a real class it is simply false. The student spelled
+`Properties` correctly; this engine is the thing that is missing, and only one
+of the two of us knows that.
+
+The sweep was measured, not guessed. A Java 11 module image was walked for
+every class in the thirteen packages caturra models — `java.lang`, `java.util`,
+`java.io`, `java.math`, `java.text`, `java.time` (+ `format`/`temporal`),
+`java.util.regex`, `java.util.function`, `java.util.stream`,
+`java.nio.charset`, `java.lang.reflect` — 571 names, of which javac itself
+accepts 455 as a variable type. Each was compiled here and its answer bucketed.
+Before: 208 supported, 46 honest, **201 "cannot find symbol"**. After: 212
+supported, 227 honest refusals, 16 that name what is really missing, and
+**zero** that read as a typo.
+
+Then the same sweep one level up, over every `java.*`/`javax.*` package the
+module image holds (166 of them): 138 said "package java.security does not
+exist", which is a false statement about the JDK. `KNOWN_UNSUPPORTED_PACKAGES`
+held four names — whichever ones somebody had happened to hit — and is the
+whole recorded list now. A package that really does NOT exist (`java.foo`)
+still gets javac's own wording, which is what makes the honest one honest.
+
+Three things the sweep found that were not the thing it was looking for:
+
+- **A class in both tables.** `java.io.Reader` and `java.io.FileWriter` were
+  listed as unsupported AND modelled: each worked written under a wildcard
+  import and was refused by its own single import — one fact answered two ways,
+  the defect class this repo keeps meeting. Four tests in `imports.rs` now
+  assert the tables cannot say both things at once.
+- **A modelled class that could not be imported by name.** The package tables
+  say what a package OFFERS, and twenty-two names were missing from theirs —
+  so `import java.lang.InterruptedException;` was "cannot find symbol: class
+  InterruptedException in package java.lang", about a class that works on the
+  very next line. The format-exception family (`MissingFormatWidthException`
+  and five siblings) was the same: thrown by name from `String.format`, and not
+  importable to catch.
+- **A refusal that was false.** `Math m;` said "java.lang.Math is not supported
+  by caturra" — about the class every program has used, in the one place a
+  student reads a message as authoritative. What is missing is a VALUE of the
+  type, which is all a variable could hold, and the message says that now:
+  "java.lang.Math cannot name a variable in caturra: its members work (written
+  out, as Math.…), but no value of the type is modelled". Sixteen classes reach
+  it — `Math`, `System`, `Arrays`, `Collections`, `Objects`, `Collectors`,
+  `Locale`, `Base64`, `TextStyle`, `FormatStyle` and the rest of the
+  namespaces.
+
+Raw `LinkedHashMap`, `LinkedHashSet`, `EnumMap` and `EnumSet` were refused
+outright as well — the raw-arity table had every other collection and not these
+four, so `LinkedHashMap m = new LinkedHashMap();` (ordinary pre-generics Java)
+did not compile.
+
+Pinned as `real_java_classes_caturra_lacks_name_themselves`,
+`real_jdk_packages_caturra_lacks_name_themselves` and
+`a_modelled_class_can_be_imported_by_name`, plus the four strictness entries
+listed above. The consistency of the tables themselves is guarded by
+`no_class_is_both_offered_and_refused`,
+`no_package_is_both_modelled_and_refused`,
+`every_refused_class_sits_in_a_modelled_package` and
+`every_refused_package_is_a_real_jdk_one` — because a hand-written list that
+drifts is the thing this whole lane was cleaning up after.

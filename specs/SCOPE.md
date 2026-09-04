@@ -91,6 +91,17 @@ grep of the source.
 | `java.math.BigDecimal` (+ `RoundingMode`, `MathContext`)                               | The answer to `0.1 + 0.2`, and the type every money exercise should be written in. The scale is observable, so it teaches something a `double` cannot.                                                                                                                                                                                                                                                                                   |
 | `java.math.BigInteger`                                                                 | Exact arithmetic past `long` — factorials, RSA-shaped exercises, and the "why did my number go negative?" lesson that overflow teaches. Its own bignum core (`crates/caturra-vm/src/bigint.rs`), for the same reason the regex engine and the float formatter are our own.                                                                                                                                                               |
 
+### What this engine does not have, and how it says so
+
+A real Java class caturra does not model is refused BY NAME —
+"java.util.Properties is not supported by caturra (the class library covers the
+AP CS A subset)" — wherever it is written, and so is a real JDK package. The
+whole surface was swept against a Java 11 module image on 2026-09-04 (see
+"Every class this engine does not have" in `specs/LANGUAGE.md`), so the answer
+is exhaustive rather than a list of whichever names somebody had happened to
+hit. A package that really does not exist keeps javac's own "does not exist",
+which is what makes the honest message honest.
+
 ## Non-goals (for now)
 
 Threads (`synchronized` parses and runs — on one thread a monitor is never

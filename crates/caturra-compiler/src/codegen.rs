@@ -5875,9 +5875,10 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
 /// types whose parameterized form `resolve_type` already models.
 fn raw_generic_arity(simple: &str) -> Option<usize> {
     match simple {
-        "List" | "ArrayList" | "Set" | "HashSet" | "TreeSet" | "SortedSet" | "NavigableSet"
-        | "Collection" | "LinkedList" | "Queue" | "Deque" | "ArrayDeque" | "PriorityQueue"
-        | "Stack" | "Vector" | "Enumeration" | "Iterator" | "Optional" => Some(1),
+        "List" | "ArrayList" | "Set" | "HashSet" | "LinkedHashSet" | "EnumSet" | "TreeSet"
+        | "SortedSet" | "NavigableSet" | "Collection" | "LinkedList" | "Queue" | "Deque"
+        | "ArrayDeque" | "PriorityQueue" | "Stack" | "Vector" | "Enumeration" | "Iterator"
+        | "Optional" => Some(1),
         // `Map.Entry` is here for the RAW spelling —
         // `for (Map.Entry e : m.entrySet())`, how a program that predates
         // generics walks a map, and how plenty of ordinary code still does.
@@ -5885,6 +5886,8 @@ fn raw_generic_arity(simple: &str) -> Option<usize> {
         // type for the for-each variable".
         "Map"
         | "HashMap"
+        | "LinkedHashMap"
+        | "EnumMap"
         | "TreeMap"
         | "SortedMap"
         | "NavigableMap"

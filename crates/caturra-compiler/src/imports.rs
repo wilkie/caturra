@@ -85,6 +85,16 @@ const JAVA_UTIL: &[&str] = &[
     "MissingFormatArgumentException",
     "IllegalFormatConversionException",
     "IllegalFormatCodePointException",
+    // The rest of the family a bad format string throws. Every one of these is
+    // raised BY NAME from `String.format` already; they were simply not
+    // importable, so a program that caught one under its own single import was
+    // told the class does not exist in java.util.
+    "DuplicateFormatFlagsException",
+    "FormatFlagsConversionMismatchException",
+    "IllegalFormatFlagsException",
+    "IllegalFormatPrecisionException",
+    "IllegalFormatWidthException",
+    "MissingFormatWidthException",
     // `Locale` is usable only as the leading argument of a format call, which
     // is where a program actually reaches for it: caturra formats in the
     // US/root locale, so `String.format(Locale.US, …)` is exact and the
@@ -115,6 +125,14 @@ const JAVA_IO: &[&str] = &[
     // narrower `throws`), so a resource class may implement the one every
     // I/O tutorial names.
     "Closeable",
+    // Modelled, and absent from this list — so each worked written under a
+    // wildcard import and was "cannot find symbol ... in package java.io"
+    // under its own. `Reader` is the face the three readers share, and
+    // `FileWriter` writes one.
+    "Reader",
+    "FileWriter",
+    "UncheckedIOException",
+    "UnsupportedEncodingException",
 ];
 /// `java.nio.file` — the modeled slice: build a `Path` and read/write it through
 /// `Files`. The rest of `java.nio` stays unsupported.
@@ -301,6 +319,34 @@ const JAVA_LANG: &[&str] = &[
     // thread, in one WASM instance) and refusing `Runnable` beside it also
     // refused the lambda target every callback example uses.
     "Runnable",
+    // Modelled, and reachable unqualified because `java.lang` is imported on
+    // its own — but ABSENT here, so the redundant single import a program is
+    // entitled to write (`import java.lang.InterruptedException;`) was
+    // "cannot find symbol: class InterruptedException in package java.lang",
+    // about a class that works one line later. The list is what the package
+    // OFFERS, not what a program has to import to use.
+    "Class",
+    "Enum",
+    "Cloneable",
+    "AutoCloseable",
+    "StackTraceElement",
+    "AssertionError",
+    "ArrayStoreException",
+    "UnsupportedOperationException",
+    "ClassNotFoundException",
+    "CloneNotSupportedException",
+    "InterruptedException",
+    "IllegalAccessException",
+    "InstantiationException",
+    "NoSuchFieldException",
+    "NoSuchMethodException",
+    "ReflectiveOperationException",
+    "ExceptionInInitializerError",
+    "LinkageError",
+    "NoClassDefFoundError",
+    "OutOfMemoryError",
+    "VerifyError",
+    "VirtualMachineError",
 ];
 
 /// Real Java classes students may reach for that caturra doesn't
@@ -356,13 +402,295 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     ("java.lang", &["Runtime", "Process", "ProcessBuilder"]),
     (
         "java.io",
+        // `Reader` and `FileWriter` used to sit here, and were MODELLED all
+        // along: a class listed in both tables resolves fine written under a
+        // wildcard import and is refused by its own single import, which is
+        // the same fact answered two ways.
+        &["Serializable", "BufferedWriter", "InputStream", "Writer"],
+    ),
+    // The rest of `java.lang`: the JVM's own errors (a program can CATCH one,
+    // and naming it should say what it is), the class-loading and module
+    // machinery, the security manager, and the thread-group half of the
+    // threading model — plus the five standard ANNOTATION types, which are
+    // interfaces a program may name as a type even though it never does. They
+    // are listed for the TYPE position only: `@Override` is parsed as an
+    // annotation and never reaches this table.
+    (
+        "java.lang",
         &[
-            "Serializable",
-            "BufferedWriter",
-            "FileWriter",
-            "InputStream",
-            "Reader",
-            "Writer",
+            "Override",
+            "Deprecated",
+            "SafeVarargs",
+            "FunctionalInterface",
+            "SuppressWarnings",
+            "AbstractMethodError",
+            "Appendable",
+            "BootstrapMethodError",
+            "ClassCircularityError",
+            "ClassFormatError",
+            "ClassLoader",
+            "ClassValue",
+            "Compiler",
+            "EnumConstantNotPresentException",
+            "IllegalAccessError",
+            "IllegalCallerException",
+            "IllegalMonitorStateException",
+            "IllegalThreadStateException",
+            "IncompatibleClassChangeError",
+            "InheritableThreadLocal",
+            "InstantiationError",
+            "InternalError",
+            "LayerInstantiationException",
+            "Module",
+            "ModuleLayer",
+            "NoSuchFieldError",
+            "NoSuchMethodError",
+            "Package",
+            "ProcessHandle",
+            "Readable",
+            "RuntimePermission",
+            "SecurityException",
+            "SecurityManager",
+            "StackWalker",
+            "ThreadDeath",
+            "ThreadGroup",
+            "TypeNotPresentException",
+            "UnknownError",
+            "UnsatisfiedLinkError",
+            "UnsupportedClassVersionError",
+            "Void",
+        ],
+    ),
+    // The rest of `java.lang.reflect`. caturra models the READ-ONLY surface a
+    // program uses to look at itself — `getClass`, `getDeclaredFields`,
+    // `Method`, `Constructor`, `Modifier` — and none of the machinery that
+    // CHANGES anything (`Proxy`, `AccessibleObject`, `Array`) or describes a
+    // generic signature.
+    (
+        "java.lang.reflect",
+        &[
+            "AccessibleObject",
+            "AnnotatedArrayType",
+            "AnnotatedElement",
+            "AnnotatedParameterizedType",
+            "AnnotatedType",
+            "AnnotatedTypeVariable",
+            "AnnotatedWildcardType",
+            "Array",
+            "Executable",
+            "GenericArrayType",
+            "GenericDeclaration",
+            "GenericSignatureFormatError",
+            "InaccessibleObjectException",
+            "InvocationHandler",
+            "MalformedParameterizedTypeException",
+            "MalformedParametersException",
+            "Member",
+            "Parameter",
+            "Proxy",
+            "ReflectPermission",
+            "TypeVariable",
+            "UndeclaredThrowableException",
+            "WildcardType",
+        ],
+    ),
+    // The rest of `java.io`. caturra models the READER/WRITER side a program
+    // reads text with, and the streams `System.out`/`System.in` already are —
+    // not the byte-stream hierarchy, object serialization, pipes, or the
+    // random-access file. Each is real Java, so each says so by name.
+    (
+        "java.io",
+        &[
+            "BufferedInputStream",
+            "BufferedOutputStream",
+            "ByteArrayInputStream",
+            "CharArrayReader",
+            "CharArrayWriter",
+            "CharConversionException",
+            "Console",
+            "DataInput",
+            "DataInputStream",
+            "DataOutput",
+            "DataOutputStream",
+            "EOFException",
+            "Externalizable",
+            "FileDescriptor",
+            "FileFilter",
+            "FileInputStream",
+            "FileOutputStream",
+            "FilePermission",
+            "FilenameFilter",
+            "FilterInputStream",
+            "FilterOutputStream",
+            "FilterReader",
+            "FilterWriter",
+            "Flushable",
+            "IOError",
+            "InterruptedIOException",
+            "InvalidClassException",
+            "InvalidObjectException",
+            "LineNumberInputStream",
+            "LineNumberReader",
+            "NotActiveException",
+            "NotSerializableException",
+            "ObjectInput",
+            "ObjectInputFilter",
+            "ObjectInputStream",
+            "ObjectInputValidation",
+            "ObjectOutput",
+            "ObjectOutputStream",
+            "ObjectStreamClass",
+            "ObjectStreamConstants",
+            "ObjectStreamException",
+            "ObjectStreamField",
+            "OptionalDataException",
+            "OutputStreamWriter",
+            "PipedInputStream",
+            "PipedOutputStream",
+            "PipedReader",
+            "PipedWriter",
+            "PushbackInputStream",
+            "PushbackReader",
+            "RandomAccessFile",
+            "SequenceInputStream",
+            "SerializablePermission",
+            "StreamCorruptedException",
+            "StreamTokenizer",
+            "StringBufferInputStream",
+            "SyncFailedException",
+            "UTFDataFormatException",
+            "WriteAbortedException",
+        ],
+    ),
+    // The rest of `java.util`. `Properties`, `ResourceBundle` and `Currency`
+    // are locale and configuration machinery caturra has no host for; the
+    // format-exception family belongs to a `Formatter` object caturra does not
+    // expose (the exceptions themselves are THROWN, by their real names, from
+    // `String.format`); `Timer`, `Observable` and `ServiceLoader` need a
+    // runtime this one is not.
+    (
+        "java.util",
+        &[
+            "AbstractQueue",
+            "Currency",
+            "Dictionary",
+            "EventListener",
+            "EventListenerProxy",
+            "EventObject",
+            "Formattable",
+            "FormattableFlags",
+            "Formatter",
+            "FormatterClosedException",
+            "IdentityHashMap",
+            "IllformedLocaleException",
+            "InvalidPropertiesFormatException",
+            "ListResourceBundle",
+            "MissingResourceException",
+            "Observable",
+            "Observer",
+            "Properties",
+            "PropertyPermission",
+            "PropertyResourceBundle",
+            "ResourceBundle",
+            "ServiceConfigurationError",
+            "ServiceLoader",
+            "SplittableRandom",
+            "Timer",
+            "TimerTask",
+            "TooManyListenersException",
+            "UnknownFormatFlagsException",
+            "WeakHashMap",
+        ],
+    ),
+    // `BaseStream` is the interface `Stream`/`IntStream` share, and
+    // `StreamSupport` builds one from a `Spliterator` — which caturra does not
+    // model either.
+    ("java.util.stream", &["BaseStream", "StreamSupport"]),
+    // The rest of `java.text`. `DecimalFormat`/`NumberFormat` are modelled;
+    // collation, bidi, break iteration and message formatting each need the
+    // locale data caturra deliberately does not vendor.
+    (
+        "java.text",
+        &[
+            "Annotation",
+            "AttributedCharacterIterator",
+            "AttributedString",
+            "Bidi",
+            "BreakIterator",
+            "CharacterIterator",
+            "ChoiceFormat",
+            "CollationElementIterator",
+            "CollationKey",
+            "Collator",
+            "DecimalFormatSymbols",
+            "FieldPosition",
+            "Format",
+            "MessageFormat",
+            "Normalizer",
+            "ParsePosition",
+            "RuleBasedCollator",
+            "StringCharacterIterator",
+        ],
+    ),
+    // The rest of `java.time`: every one of these carries an INSTANT or a ZONE.
+    // caturra models the arithmetic slice — the local dates and times, which
+    // are pure arithmetic — and answering a zone honestly needs a timezone
+    // database it does not vendor (see specs/SCOPE.md).
+    (
+        "java.time",
+        &[
+            "Clock",
+            "Instant",
+            "OffsetDateTime",
+            "OffsetTime",
+            "ZoneId",
+            "ZoneOffset",
+            "ZonedDateTime",
+        ],
+    ),
+    // `DateTimeFormatter` is modelled from a PATTERN; the builder, the resolver
+    // style and the sign/decimal styles that shape one are not.
+    (
+        "java.time.format",
+        &[
+            "DateTimeFormatterBuilder",
+            "DecimalStyle",
+            "ResolverStyle",
+            "SignStyle",
+        ],
+    ),
+    // `ChronoField`, `ChronoUnit` and `TemporalAdjusters` are modelled — the
+    // INTERFACES behind them are not, so a program cannot write its own
+    // `TemporalField` or query.
+    (
+        "java.time.temporal",
+        &[
+            "IsoFields",
+            "JulianFields",
+            "Temporal",
+            "TemporalAccessor",
+            "TemporalAmount",
+            "TemporalField",
+            "TemporalQueries",
+            "TemporalQuery",
+            "TemporalUnit",
+            "WeekFields",
+        ],
+    ),
+    // The six standard charsets encode and decode exactly as a JDK's; the
+    // incremental coder objects behind them, and the exceptions only they
+    // throw, are not modelled.
+    (
+        "java.nio.charset",
+        &[
+            "CharacterCodingException",
+            "CharsetDecoder",
+            "CharsetEncoder",
+            "CoderMalfunctionError",
+            "CoderResult",
+            "CodingErrorAction",
+            "MalformedInputException",
+            "UnmappableCharacterException",
         ],
     ),
     // `Thread` and friends are real Java that caturra will not be growing: a
@@ -385,10 +713,159 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Real JDK packages we don't model at all (for wildcard/unknown-class
-/// imports of them, an honest message beats "does not exist").
-const KNOWN_UNSUPPORTED_PACKAGES: &[&str] =
-    &["java.net", "java.nio", "java.sql", "java.util.concurrent"];
+/// Every real JDK package caturra does not model, recorded from a Java 11
+/// module image. A wildcard import of one, or a qualified name inside it,
+/// gets "package java.security is not supported by caturra" — where "package
+/// java.security does not exist" is a false statement about the JDK, and reads
+/// as a typo for a package the student can see in the documentation.
+///
+/// The list is exhaustive rather than the four names it used to hold, because
+/// the four were whichever ones somebody had happened to hit. A package NOT
+/// here and not modelled really does not exist, and still says so.
+const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
+    "java.applet",
+    "java.awt.color",
+    "java.awt.datatransfer",
+    "java.awt.desktop",
+    "java.awt.dnd",
+    "java.awt.dnd.peer",
+    "java.awt.font",
+    "java.awt.geom",
+    "java.awt.im",
+    "java.awt.im.spi",
+    "java.awt.image",
+    "java.awt.image.renderable",
+    "java.awt.peer",
+    "java.awt.print",
+    "java.beans",
+    "java.beans.beancontext",
+    "java.lang.annotation",
+    "java.lang.instrument",
+    "java.lang.invoke",
+    "java.lang.management",
+    "java.lang.module",
+    "java.lang.ref",
+    "java.net",
+    "java.net.http",
+    "java.net.spi",
+    "java.nio",
+    "java.nio.channels",
+    "java.nio.channels.spi",
+    "java.nio.charset.spi",
+    "java.nio.file.attribute",
+    "java.nio.file.spi",
+    "java.rmi",
+    "java.rmi.activation",
+    "java.rmi.dgc",
+    "java.rmi.registry",
+    "java.rmi.server",
+    "java.security",
+    "java.security.acl",
+    "java.security.cert",
+    "java.security.interfaces",
+    "java.security.spec",
+    "java.sql",
+    "java.text.spi",
+    "java.time.zone",
+    "java.util.concurrent",
+    "java.util.concurrent.atomic",
+    "java.util.concurrent.locks",
+    "java.util.jar",
+    "java.util.logging",
+    "java.util.prefs",
+    "java.util.spi",
+    "java.util.zip",
+    "javax.annotation.processing",
+    "javax.crypto",
+    "javax.crypto.interfaces",
+    "javax.crypto.spec",
+    "javax.imageio",
+    "javax.imageio.event",
+    "javax.imageio.metadata",
+    "javax.imageio.plugins.bmp",
+    "javax.imageio.plugins.jpeg",
+    "javax.imageio.plugins.tiff",
+    "javax.imageio.spi",
+    "javax.imageio.stream",
+    "javax.lang.model",
+    "javax.lang.model.element",
+    "javax.lang.model.type",
+    "javax.lang.model.util",
+    "javax.management",
+    "javax.management.loading",
+    "javax.management.modelmbean",
+    "javax.management.monitor",
+    "javax.management.openmbean",
+    "javax.management.relation",
+    "javax.management.remote",
+    "javax.management.remote.rmi",
+    "javax.management.timer",
+    "javax.naming",
+    "javax.naming.directory",
+    "javax.naming.event",
+    "javax.naming.ldap",
+    "javax.naming.spi",
+    "javax.net",
+    "javax.net.ssl",
+    "javax.print",
+    "javax.print.attribute",
+    "javax.print.attribute.standard",
+    "javax.print.event",
+    "javax.rmi.ssl",
+    "javax.script",
+    "javax.security.auth",
+    "javax.security.auth.callback",
+    "javax.security.auth.kerberos",
+    "javax.security.auth.login",
+    "javax.security.auth.spi",
+    "javax.security.auth.x500",
+    "javax.security.cert",
+    "javax.security.sasl",
+    "javax.smartcardio",
+    "javax.sound.midi",
+    "javax.sound.midi.spi",
+    "javax.sound.sampled",
+    "javax.sound.sampled.spi",
+    "javax.sql",
+    "javax.sql.rowset",
+    "javax.sql.rowset.serial",
+    "javax.sql.rowset.spi",
+    "javax.swing.colorchooser",
+    "javax.swing.filechooser",
+    "javax.swing.plaf",
+    "javax.swing.plaf.basic",
+    "javax.swing.plaf.metal",
+    "javax.swing.plaf.multi",
+    "javax.swing.plaf.nimbus",
+    "javax.swing.plaf.synth",
+    "javax.swing.text.html",
+    "javax.swing.text.html.parser",
+    "javax.swing.text.rtf",
+    "javax.swing.undo",
+    "javax.tools",
+    "javax.transaction.xa",
+    "javax.xml",
+    "javax.xml.catalog",
+    "javax.xml.crypto",
+    "javax.xml.crypto.dom",
+    "javax.xml.crypto.dsig",
+    "javax.xml.crypto.dsig.dom",
+    "javax.xml.crypto.dsig.keyinfo",
+    "javax.xml.crypto.dsig.spec",
+    "javax.xml.datatype",
+    "javax.xml.namespace",
+    "javax.xml.parsers",
+    "javax.xml.stream",
+    "javax.xml.stream.events",
+    "javax.xml.stream.util",
+    "javax.xml.transform",
+    "javax.xml.transform.dom",
+    "javax.xml.transform.sax",
+    "javax.xml.transform.stax",
+    "javax.xml.transform.stream",
+    "javax.xml.validation",
+    "javax.xml.xpath",
+];
 
 /// Library type names whose use requires an import.
 const REQUIRES_IMPORT: &[&str] = &[
@@ -679,7 +1156,18 @@ pub(crate) fn unusable_library_type_reason(simple: &str) -> Option<String> {
         .iter()
         .filter(|(package, _)| package.starts_with("java."))
         .find(|(_, classes)| classes.contains(&simple))
-        .map(|(package, _)| not_supported(&format!("{package}.{simple}")))
+        .map(|(package, _)| {
+            // NOT `not_supported`: these classes ARE supported — `Math.abs`,
+            // `Collectors.toList`, `TextStyle.SHORT` all work — and saying
+            // "java.lang.Math is not supported by caturra" about the class
+            // every program has used is a false statement, in the one place a
+            // student would read it as authoritative. What is missing is a
+            // VALUE of the type, which is all a variable could hold.
+            format!(
+                "{package}.{simple} cannot name a variable in caturra: its members work \
+                 (written out, as {simple}.…), but no value of the type is modelled"
+            )
+        })
 }
 
 /// The honest reason a real Java 11 class caturra does not model cannot
@@ -1443,6 +1931,71 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                 }
                 self.expr(value);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KNOWN_UNSUPPORTED, KNOWN_UNSUPPORTED_PACKAGES, PACKAGES};
+
+    /// A class listed in BOTH tables is one fact answered two ways: it
+    /// resolves fine written under a wildcard import and is refused by its own
+    /// single import. `java.io.Reader` and `java.io.FileWriter` sat like that
+    /// for months — modelled all along, and told they were not supported.
+    #[test]
+    fn no_class_is_both_offered_and_refused() {
+        for (package, refused) in KNOWN_UNSUPPORTED {
+            let Some((_, offered)) = PACKAGES.iter().find(|(name, _)| name == package) else {
+                continue;
+            };
+            for name in *refused {
+                assert!(
+                    !offered.contains(name),
+                    "{package}.{name} is both offered and refused"
+                );
+            }
+        }
+    }
+
+    /// ...and a package listed in both is the same mistake one level up: the
+    /// whole package would be refused, and the per-class list under it would
+    /// never be read.
+    #[test]
+    fn no_package_is_both_modelled_and_refused() {
+        for (package, _) in PACKAGES {
+            assert!(
+                !KNOWN_UNSUPPORTED_PACKAGES.contains(package),
+                "package {package} is both modelled and refused"
+            );
+        }
+    }
+
+    /// A per-class refusal only reaches a program if the PACKAGE is modelled —
+    /// otherwise the package's own refusal answers first and the class list is
+    /// dead weight that will drift unnoticed.
+    #[test]
+    fn every_refused_class_sits_in_a_modelled_package() {
+        for (package, names) in KNOWN_UNSUPPORTED {
+            assert!(
+                PACKAGES.iter().any(|(name, _)| name == package),
+                "{package} lists {names:?} as refused, but the package is not modelled"
+            );
+        }
+    }
+
+    /// The package refusal list is recorded from a real Java 11 module image,
+    /// so every entry is a package that EXISTS. A name with no dot could not
+    /// be one, and a `javax.` or `java.` prefix is what makes the honest
+    /// message honest.
+    #[test]
+    fn every_refused_package_is_a_real_jdk_one() {
+        for package in KNOWN_UNSUPPORTED_PACKAGES {
+            assert!(
+                package.starts_with("java.") || package.starts_with("javax."),
+                "{package} is not a JDK package"
+            );
+            assert!(package.contains('.'), "{package} is not a package name");
         }
     }
 }

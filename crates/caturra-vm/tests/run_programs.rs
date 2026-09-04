@@ -6722,7 +6722,7 @@ fn stage6_compile_errors_match_javac_wording() {
         // 'Math'", about a class every program has used.
         (
             "class M { static void f() { Math m = null; } }",
-            "java.lang.Math is not supported by caturra",
+            "java.lang.Math cannot name a variable in caturra",
         ),
         // The bundled erased interfaces are an implementation detail: a
         // message naming `__Comparator` reads as caturra's bug rather than
@@ -6940,7 +6940,7 @@ fn stage6_compile_errors_match_javac_wording() {
         ),
         (
             "import java.util.stream.*; class M { static void f() { Collectors c = null; } }",
-            "java.util.stream.Collectors is not supported by caturra",
+            "java.util.stream.Collectors cannot name a variable in caturra",
         ),
         // Every object HAS `toString`, so "cannot find symbol" was a false
         // statement about a Scanner. What caturra does not model is its TEXT:
@@ -11652,6 +11652,151 @@ fn unresolvable_qualified_names_reject_like_javac() {
 }
 
 /// A real Java 11 class caturra does not model says so by name, wherever it
+/// Every real `java.*` class in a MODELLED package that caturra does not
+/// implement names itself. The alternative — "cannot find symbol" — is a
+/// statement about the program, and it is false: the class exists, the student
+/// spelled it right, and this engine is the thing that is missing.
+///
+/// One name per package, drawn from the sweep that recorded the whole surface
+/// (455 real classes across thirteen packages, measured against a JDK 11
+/// module image). The sweep itself is not a test — it needs a JDK — but its
+/// conclusion is: a package here that stops answering by name has drifted.
+#[test]
+fn real_java_classes_caturra_lacks_name_themselves() {
+    for (package, class) in [
+        ("java.lang", "ClassLoader"),
+        ("java.lang", "SecurityManager"),
+        ("java.lang", "ThreadGroup"),
+        ("java.lang.reflect", "Proxy"),
+        ("java.lang.reflect", "Array"),
+        ("java.io", "RandomAccessFile"),
+        ("java.io", "ObjectOutputStream"),
+        ("java.io", "DataInputStream"),
+        ("java.util", "Properties"),
+        ("java.util", "IdentityHashMap"),
+        ("java.util", "WeakHashMap"),
+        ("java.util", "Formatter"),
+        ("java.util.stream", "StreamSupport"),
+        ("java.text", "Collator"),
+        ("java.text", "MessageFormat"),
+        ("java.text", "DecimalFormatSymbols"),
+        ("java.time", "Instant"),
+        ("java.time", "ZonedDateTime"),
+        ("java.time", "ZoneId"),
+        ("java.time.format", "DateTimeFormatterBuilder"),
+        ("java.time.temporal", "TemporalQueries"),
+        ("java.nio.charset", "CharsetDecoder"),
+    ] {
+        let text =
+            format!("import {package}.*;\nclass M {{ static void r() {{ {class} x = null; }} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "{package}.{class} compiled");
+        let wanted = format!("{package}.{class} is not supported by caturra");
+        assert!(
+            compilation
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains(&wanted)),
+            "{package}.{class}: expected {wanted:?}, got {:?}",
+            compilation.diagnostics
+        );
+    }
+}
+
+/// ...and every real JDK PACKAGE caturra does not model says so too. "package
+/// java.security does not exist" is a false statement about the JDK; a package
+/// that really does not exist still gets it.
+#[test]
+fn real_jdk_packages_caturra_lacks_name_themselves() {
+    for package in [
+        "java.security",
+        "java.util.zip",
+        "java.util.logging",
+        "java.util.concurrent.atomic",
+        "java.awt.geom",
+        "java.lang.annotation",
+        "java.lang.invoke",
+        "java.nio.channels",
+        "java.rmi",
+        "java.time.zone",
+        "javax.crypto",
+        "javax.imageio",
+    ] {
+        let text = format!("import {package}.*;\nclass M {{ }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "{package} compiled");
+        let wanted = format!("package {package} is not supported by caturra");
+        assert!(
+            compilation
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains(&wanted)),
+            "{package}: expected {wanted:?}, got {:?}",
+            compilation.diagnostics
+        );
+    }
+    // A package that really does not exist keeps javac's own wording.
+    for package in ["java.foo", "java.util.nope", "zzz.made.up"] {
+        let text = format!("import {package}.*;\nclass M {{ }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        let wanted = format!("package {package} does not exist");
+        assert!(
+            compilation
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains(&wanted)),
+            "{package}: expected {wanted:?}, got {:?}",
+            compilation.diagnostics
+        );
+    }
+}
+
+/// A modelled class must be importable BY ITS OWN NAME, not only under a
+/// wildcard. The package tables say what a package OFFERS, and a name missing
+/// from one was "cannot find symbol: class `InterruptedException` in package
+/// java.lang" about a class that works on the very next line.
+#[test]
+fn a_modelled_class_can_be_imported_by_name() {
+    for (package, class) in [
+        ("java.lang", "InterruptedException"),
+        ("java.lang", "UnsupportedOperationException"),
+        ("java.lang", "Class"),
+        ("java.lang", "Enum"),
+        ("java.lang", "Cloneable"),
+        ("java.lang", "AutoCloseable"),
+        ("java.lang", "StackTraceElement"),
+        ("java.lang", "AssertionError"),
+        ("java.io", "Reader"),
+        ("java.io", "FileWriter"),
+        ("java.io", "UncheckedIOException"),
+        ("java.io", "UnsupportedEncodingException"),
+        ("java.util", "MissingFormatWidthException"),
+        ("java.util", "IllegalFormatPrecisionException"),
+    ] {
+        let text = format!(
+            "import {package}.{class};\nclass M {{ static void r() {{ {class} x = null; }} }}"
+        );
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(
+            compilation.success(),
+            "import {package}.{class}: {:?}",
+            compilation.diagnostics
+        );
+    }
+}
+
 /// is written. Until 2026-07-09 only `import` and `new` gave the honest
 /// reason: a declaration said "this type cannot be used for a variable", a
 /// field "unknown type for field 'items'", and `extends` "cannot find
@@ -11691,7 +11836,7 @@ fn unmodeled_library_classes_explain_themselves_in_every_position() {
         ),
         (
             "qualified",
-            "class M { static void r() { java.util.AbstractMap<Integer, Integer> m; } }",
+            "class M { static void r() { java.util.AbstractCollection<Integer> m; } }",
         ),
     ] {
         let text = format!("import java.util.*;\n{source}");

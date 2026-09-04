@@ -50967,3 +50967,38 @@ public class AltPoint {
 }
 "#
 );
+
+// A real Java class in a MODELLED package that caturra does not implement is
+// refused BY NAME. javac compiles every one of these, so the strictness is
+// caturra's — and saying so is the whole point: "cannot find symbol" is a
+// statement about the PROGRAM, and it is false.
+stricter_than_javac!(
+    strict_unmodelled_java_classes_name_themselves,
+    "StrictSurface",
+    "import java.util.*;\npublic class StrictSurface { static void r() { Properties p; } }"
+);
+
+stricter_than_javac!(
+    strict_an_instant_names_itself,
+    "StrictInstant",
+    "import java.time.*;\npublic class StrictInstant { static void r() { Instant i; } }"
+);
+
+// ...and so does a real JDK PACKAGE. "package java.security does not exist" is
+// a false statement about the JDK; a package that really does not exist keeps
+// javac's own wording, which is why the list is recorded rather than guessed.
+stricter_than_javac!(
+    strict_unmodelled_java_packages_name_themselves,
+    "StrictPackage",
+    "import java.security.*;\npublic class StrictPackage { }"
+);
+
+// A class caturra models only as a namespace for its members cannot name a
+// variable. It used to say "java.lang.Math is not supported by caturra" —
+// false about the class every program has used, in the one place a student
+// reads it as authoritative.
+stricter_than_javac!(
+    stricter_namespace_class_says_what_is_missing,
+    "NamespaceWording",
+    "import java.util.stream.*;\npublic class NamespaceWording { static void r() { Collectors c; } }"
+);
