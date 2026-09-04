@@ -532,12 +532,12 @@ macro_rules! stricter_than_javac {
 /// A program javac refuses and caturra accepts. This is the direction that
 /// hurts: it compiles in the playground and fails on a real JDK.
 ///
-/// **There are currently no such programs**, which is why this macro has no
-/// callers. The last three — `Collections.sort`/`max`/`binarySearch` over a
-/// non-`Comparable` element — were closed on 2026-07-09 and became
-/// `differential_reject!` cases. Keep the macro: it is how the next one gets
-/// recorded, and a case asserted here is a case that cannot be forgotten.
-#[allow(unused_macros)]
+/// Every one is enumerated in `specs/LANGUAGE.md` under **Divergences from
+/// javac**, and the test asserts BOTH halves — that javac still refuses it
+/// (or the program is no divergence at all) and that caturra still accepts it
+/// (or the note should be deleted). The comment here used to say there were
+/// none and that the macro had no callers; it had four by the time anyone
+/// read it again, which is what counting the pins against the bullets is for.
 macro_rules! looser_than_javac {
     ($name:ident, $class:literal, $source:literal) => {
         #[test]
@@ -49318,4 +49318,73 @@ differential_wording!(
     reject_pinned_poly_container,
     "RejPin",
     "import java.util.*;\npublic class RejPin {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } }\n  static <T> void give(Bag<T> b, T v) { b.add(v); }\n  static <T> void giveAll(List<T> into, T v) { into.add(v); }\n  static <T> void pairUp(Bag<T> b, List<T> more) { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); pairUp(b, List.of(1)); System.out.println(\"no\"); }\n}"
+);
+
+stricter_than_javac!(
+    stricter_a_factory_inside_a_factory,
+    "StrictNested",
+    "import java.util.*;\n\
+public class StrictNested {\n\
+  public static void main(String[] args) {\n\
+    List<List<Number>> rows = List.of(List.of(1));\n\
+    Map<String, List<Number>> named = Map.of(\"k\", List.of(1));\n\
+    System.out.println(rows + \" \" + named);\n\
+  }\n}"
+);
+
+looser_than_javac!(
+    loose_a_variable_pinned_by_a_map_parameter,
+    "LooseMapVar",
+    "import java.util.*;\n\
+public class LooseMapVar {\n\
+  static <K, V> void put(Map<K, V> into, K key, V value) { into.put(key, value); }\n\
+  public static void main(String[] args) {\n\
+    Map<String, Integer> m = new HashMap<>();\n\
+    put(m, 1, 2);\n\
+    System.out.println(m);\n\
+  }\n}"
+);
+
+looser_than_javac!(
+    loose_a_type_variable_inside_its_own_class,
+    "LooseOwnVar",
+    "import java.util.*;\n\
+public class LooseOwnVar {\n\
+  static class Bag<T> {\n\
+    List<T> items = new ArrayList<>();\n\
+    void add(T value) { items.add(value); }\n\
+    void seed() { add(1); }\n\
+  }\n\
+  public static void main(String[] args) {\n\
+    Bag<String> b = new Bag<>();\n\
+    b.seed();\n\
+    System.out.println(b.items);\n\
+  }\n}"
+);
+
+stricter_than_javac!(
+    stricter_extending_a_builtin_collection,
+    "StrictExtendMap",
+    "import java.util.*;\n\
+public class StrictExtendMap {\n\
+  static class Counts extends HashMap<String, Integer> { int total() { return size(); } }\n\
+  public static void main(String[] args) {\n\
+    Counts c = new Counts();\n\
+    c.put(\"k\", 1);\n\
+    System.out.println(c.total());\n\
+  }\n}"
+);
+
+stricter_than_javac!(
+    stricter_a_diamond_with_two_arguments,
+    "StrictTwoArgDiamond",
+    "public class StrictTwoArgDiamond {\n\
+  static class Pair<A, B> {\n\
+    A a; B b;\n\
+    Pair(A a, B b) { this.a = a; this.b = b; }\n\
+    A first() { return a; }\n\
+  }\n\
+  public static void main(String[] args) {\n\
+    System.out.println(new Pair<>(\"ab\", 2).first().length());\n\
+  }\n}"
 );

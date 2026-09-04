@@ -8942,6 +8942,17 @@ the count honest. A stale claim was corrected in the same pass: a functional
 interface parameterized on a method's own type variable had been fixed two
 entries after it was written down.
 
+Audited again on 2026-09-03, after six units of type-system work, by counting
+the pins against the bullets — the half that finds omissions. Nineteen
+divergence pins, fourteen bullets: three had been recorded in the prose of
+later entries and never counted (a qualified library name a class shadows, a
+primitive stream's cursor, and a nested argument widening between variables),
+and this session's own work added five more, four of them found by re-running
+the shapes the entries called "still open" rather than by reading them. Two of
+those turned out to be CLOSED — `Comparable<Integer> c = "x";` and
+`Comparable<Month> c = aLocalDate;` are refused now — which is the other thing
+counting catches: a divergence that stopped being one.
+
 - `Arrays.fill(new String[1], 5)` — javac erases to `fill(Object[], Object)`
   and throws `ArrayStoreException` at run time. (`strict_fill_checks_the_element_type_of_a_reference_array`)
 - `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
@@ -9002,6 +9013,37 @@ entries after it was written down.
   printing statements in a single method; javac takes about 3,000 of them.
   Until this was written it was a compiler PANIC.
   (`strict_a_method_that_outgrows_a_class_file`)
+- A fully qualified LIBRARY name that a program's own class shadows —
+  `java.util.List` in a program that declares a `List` of its own. javac
+  resolves a qualified name without consulting what is in scope; caturra reads
+  the simple name, so the qualified spelling is unusable. Written down in the
+  prose of the scoping entry when it was measured and never counted here.
+  (`strict_a_qualified_library_name_a_class_shadows`)
+- `PrimitiveIterator.OfInt c = IntStream.range(0, 3).iterator();` — a nested
+  type of a class caturra does not model. It is refused BY NAME (rather than
+  as a missing package, which is what it used to say), and javac accepts it.
+  The same omission: explained in prose, never counted here.
+  (`strict_a_primitive_stream_cursor`)
+- A class that EXTENDS a builtin collection — `class Counts extends
+  HashMap<String, Integer>`. caturra's collections are the VM's own objects,
+  not classes compiled from source, so there is nothing to inherit from; the
+  refusal says exactly that rather than pretending the name is unknown. Every
+  other way of holding one (a field, a wrapper, composition) works.
+  (`stricter_extending_a_builtin_collection`)
+- A DIAMOND of a class with more than one type parameter, used inline:
+  `new Pair<>("ab", 2).first().length()`. The plan behind diamond inference
+  joins its sources into a single answer, so a second variable has nowhere to
+  go and the whole thing reads raw. Writing the arguments out
+  (`new Pair<String, Integer>(…)`) or assigning to a declared variable first —
+  which is how a pair is nearly always used — compiles in both.
+  (`stricter_a_diamond_with_two_arguments`)
+- A factory INSIDE a factory: `List<List<Number>> rows = List.of(List.of(1));`
+  and `Map<String, List<Number>> named = Map.of("k", List.of(1));`. A poly
+  expression takes its type argument from the target, and the rule does not
+  recurse — reaching a level down needs to know the inner call is poly as
+  well, and refusing is the safe answer. Assigning the inner list to a
+  `List<Number>` variable first compiles in both.
+  (`stricter_a_factory_inside_a_factory`)
 - `Map.Entry.comparingByValue().reversed()` with no type witness. javac
   infers `Comparator<Entry<Object, V>>` for the bare factory call, and
   `.reversed()` freezes that before the target type can correct it, so javac
@@ -9025,6 +9067,26 @@ entries after it was written down.
   wrong REJECTION would be worse than the missing check. The provable cases —
   a primitive against the one wrapper it boxes to, and one concrete final
   library type against another — ARE refused. (`a_witness_naming_the_wrong_user_class`)
+
+- `Optional<ArrayList<Pet>>` assigned to an `Optional<List<Pet>>` between two
+  declared VARIABLES. Generics are invariant and javac refuses it; caturra's
+  rule — the value written as the class where the variable says the interface
+  — is stated on the types alone, and the types cannot tell an inference site
+  from an assignment. Explained where it was introduced and never counted
+  here. (`loose_a_nested_argument_widens_between_variables`)
+- A generic method's variable pinned by a TWO-argument container:
+  `static <K, V> void put(Map<K, V> into, K key, V value)` called as
+  `put(mapOfStringInteger, 1, 2)`. A container parameter pins its variable
+  exactly, and the check reads that pin — but the plan the parser records
+  names a variable only for a container with ONE argument, so a map pins
+  nothing and the key goes unchecked. Refusing on a guess would be worse than
+  the missing check. (`loose_a_variable_pinned_by_a_map_parameter`)
+- A type variable used INSIDE its own class: `class Bag<T> { void add(T v);
+  void seed() { add(1); } }`. There is no receiver to read an argument from,
+  so the variable stands for its BOUND, and a `T` whose bound is `Object`
+  takes anything. javac checks against the variable itself, which admits only
+  a `T`. Every call from OUTSIDE the class is checked against the receiver's
+  own argument. (`loose_a_type_variable_inside_its_own_class`)
 
 It held a worse one on 2026-08-13: a cast to `String` accepted ANY reference
 source, so `(String) Integer.valueOf(1)`, `(String) aStringBuilder` and
