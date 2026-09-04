@@ -784,6 +784,12 @@ fn is_library_static(class: &str, method: &str) -> bool {
     // NAME alone below, which is why `Arrays::stream` — the ordinary way to
     // flatten a grid — read as an instance call on a row and was "cannot find
     // symbol: method stream() in variable __p0 of type String[]".
+    // A library VALUE type answers from its own tables, which is the only way
+    // `BigInteger::signum` (an instance method) is told apart from
+    // `Integer::signum` (a static of the same name).
+    if let Some(answer) = crate::codegen::library_value_method_is_static(class, method) {
+        return answer;
+    }
     let by_class = match class {
         "Arrays" => matches!(
             method,
@@ -6585,7 +6591,7 @@ fn descriptor_type(descriptor: &str) -> Option<TypeRef> {
             let simple = name.rsplit('/').next()?;
             // Only the types this pass can then ASK something of: a
             // `java.time` value or one of its enums.
-            if !crate::codegen::names_library_time_type(simple) {
+            if !crate::codegen::names_library_value_type(simple) {
                 return None;
             }
             TypeRef::Named(String::from(simple))

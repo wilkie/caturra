@@ -16185,6 +16185,9 @@ impl<'run> Interpreter<'run> {
                 // pathname — so a list of them sorts, and a `TreeSet` of them
                 // is a set rather than a cast error.
                 Some(HeapObject::File(_)) => Some("java.io.File"),
+                // `BigInteger implements Comparable<BigInteger>` — so a list
+                // of them sorts and a `TreeSet` of them is a set.
+                Some(HeapObject::BigInteger(_)) => Some("java.math.BigInteger"),
                 // `LocalDate implements Comparable<ChronoLocalDate>`, and the
                 // two enums are `Comparable` as every enum is — so a list of
                 // dates sorts and a `TreeSet` of them is a set.
@@ -16870,6 +16873,9 @@ impl<'run> Interpreter<'run> {
                 match (self.heap.get(*ra), self.heap.get(*rb)) {
                     (Some(HeapObject::JavaString(sa)), Some(HeapObject::JavaString(sb))) => {
                         sa.cmp(sb)
+                    }
+                    (Some(HeapObject::BigInteger(one)), Some(HeapObject::BigInteger(other))) => {
+                        one.compare(other)
                     }
                     (
                         Some(HeapObject::Boxed { value: va, .. }),
@@ -20303,6 +20309,8 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         // names is the interface (or the abstract class) above them.
         // An EnumMap is a Map and an EnumSet a Set, like the sorted
         // collections they are made of here.
+        // A `BigInteger` is a `Number` and orders itself.
+        "java/math/BigInteger" => &["java/lang/Number", "java/lang/Comparable"],
         "java/util/EnumMap" => &["java/util/Map"],
         "java/util/RegularEnumSet" => &["java/util/Set", "java/util/Collection"],
         "sun/nio/fs/UnixPath" => &[
@@ -20439,6 +20447,7 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         Some(HeapObject::Path(_)) => String::from("sun/nio/fs/UnixPath"),
         // A charset is a class PER CHARSET in a JDK, named after the canonical
         // name with its dashes as underscores.
+        Some(HeapObject::BigInteger(_)) => String::from("java/math/BigInteger"),
         Some(HeapObject::Charset(name)) => format!("sun/nio/cs/{}", name.replace('-', "_")),
         Some(HeapObject::SummaryStats { .. }) => String::from("java/util/IntSummaryStatistics"),
         // The regex trio. A frozen match is an INNER class of Matcher in a

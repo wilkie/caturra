@@ -3731,10 +3731,10 @@ impl MethodTable {
                     "File" => Some(JType::File),
                     "PrintWriter" | "FileWriter" => Some(JType::Writer),
                     "PrintStream" => Some(JType::PrintStream),
-                    // The `java.time` value types, read from the list the
-                    // lambda pass reads: what a name means cannot be two
-                    // answers.
-                    simple if library_time_type(simple).is_some() => library_time_type(simple),
+                    // The library VALUE types — `java.time` and `BigInteger`
+                    // — read from the list the lambda pass reads: what a name
+                    // means cannot be two answers.
+                    simple if library_value_type(simple).is_some() => library_value_type(simple),
                     // A `ByteArrayOutputStream` is the only `OutputStream`
                     // there is here, so the abstract name is a FACE of it —
                     // the way `List` is a face of `ArrayList`.
@@ -4073,6 +4073,7 @@ impl MethodTable {
                     JType::StackFrame => ElemType::StackFrame,
                     JType::MatchResult => ElemType::MatchResult,
                     JType::File => ElemType::File,
+                    JType::BigInteger => ElemType::BigInteger,
                     JType::DayOfWeek => ElemType::DayOfWeek,
                     JType::Month => ElemType::Month,
                     JType::ChronoUnit => ElemType::ChronoUnit,
@@ -4868,6 +4869,7 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::StackFrame => "java/lang/StackTraceElement",
         ElemType::MatchResult => "java/util/regex/MatchResult",
         ElemType::File => "java/io/File",
+        ElemType::BigInteger => "java/math/BigInteger",
         ElemType::DayOfWeek => "java/time/DayOfWeek",
         ElemType::Month => "java/time/Month",
         ElemType::ChronoUnit => "java/time/temporal/ChronoUnit",
@@ -5209,6 +5211,7 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::StackFrame => String::from("StackTraceElement"),
         ElemType::MatchResult => String::from("MatchResult"),
         ElemType::File => String::from("File"),
+        ElemType::BigInteger => String::from("BigInteger"),
         ElemType::DayOfWeek => String::from("DayOfWeek"),
         ElemType::Month => String::from("Month"),
         ElemType::ChronoUnit => String::from("ChronoUnit"),
@@ -5820,6 +5823,11 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
         | ElemType::ChronoField
         | ElemType::IsoEra
         | ElemType::LocalDate => table.class_id("Comparable") == Some(class),
+        // A `BigInteger` element wears the wrappers' two faces: it orders
+        // itself, and it is a `Number`.
+        ElemType::BigInteger => {
+            table.class_id("Comparable") == Some(class) || table.class_id("Number") == Some(class)
+        }
         _ => false,
     }
 }
@@ -5905,6 +5913,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::StackFrame => Some(ElemType::StackFrame),
         JType::MatchResult => Some(ElemType::MatchResult),
         JType::File => Some(ElemType::File),
+        JType::BigInteger => Some(ElemType::BigInteger),
         JType::DayOfWeek => Some(ElemType::DayOfWeek),
         JType::Month => Some(ElemType::Month),
         JType::ChronoUnit => Some(ElemType::ChronoUnit),
@@ -6228,8 +6237,9 @@ fn library_enum_constants(ty: JType) -> Option<&'static [&'static str]> {
 /// The `java.time` value types, by the name a program writes. None of them can
 /// be shadowed by a program class, so the answer needs no table — which is what
 /// lets the LAMBDA pass ask the same question the emitter's resolver asks.
-fn library_time_type(simple: &str) -> Option<JType> {
+fn library_value_type(simple: &str) -> Option<JType> {
     Some(match simple {
+        "BigInteger" => JType::BigInteger,
         "LocalDate" => JType::LocalDate,
         "LocalTime" => JType::LocalTime,
         "LocalDateTime" => JType::LocalDateTime,
@@ -6247,10 +6257,24 @@ fn library_time_type(simple: &str) -> Option<JType> {
     })
 }
 
-/// Whether a name is one of those `java.time` value types, which is all the
-/// lambda pass needs to know about them.
-pub(crate) fn names_library_time_type(simple: &str) -> bool {
-    library_time_type(simple).is_some()
+/// Whether a name is one of those library VALUE types — the `java.time` ones
+/// and `BigInteger` — which is all the lambda pass needs to know about them.
+pub(crate) fn names_library_value_type(simple: &str) -> bool {
+    library_value_type(simple).is_some()
+}
+
+/// Whether `method` on the library VALUE type `class` is a static rather than
+/// one of its instance methods — asked of the real tables. The lambda pass used
+/// to judge this by NAME against a hand-written list, so `BigInteger::signum`
+/// (an instance method, and a name `Integer.signum` owns statically) desugared
+/// to a static call that does not exist. `None` when the class has no instance
+/// table here, which leaves the caller's own answer standing.
+pub(crate) fn library_value_method_is_static(class: &str, method: &str) -> Option<bool> {
+    let instance = builtin_instance_table(library_value_type(class)?)?;
+    let is_instance = instance.1.iter().any(|entry| entry.name == method);
+    let is_static = builtin_static_table(class)
+        .is_some_and(|(_, table)| table.iter().any(|entry| entry.name == method));
+    (is_instance || is_static).then_some(is_static && !is_instance)
 }
 
 /// The RETURN descriptor of a library method — the very string the emit side
@@ -6266,7 +6290,7 @@ pub(crate) fn library_answer_descriptor(
     let table = if on_class {
         builtin_static_table(class).map(|(_, table)| table)
     } else {
-        builtin_instance_table(library_time_type(class)?).map(|(_, table)| table)
+        builtin_instance_table(library_value_type(class)?).map(|(_, table)| table)
     }?;
     // Overloads of the same arity are told apart by their PARAMETER types,
     // which this pass has not resolved — `Math.max(int, int)` and
@@ -6357,6 +6381,7 @@ fn library_comparable(ty: JType) -> Option<bool> {
     Some(match ty {
         JType::LocalDate | JType::LocalDateTime => false,
         JType::LocalTime
+        | JType::BigInteger
         | JType::Duration
         | JType::DayOfWeek
         | JType::Month
@@ -6614,6 +6639,25 @@ fn standard_charset(path: &[String], table: &MethodTable) -> Option<&'static str
         "UTF_16" => "UTF-16",
         "UTF_16BE" => "UTF-16BE",
         "UTF_16LE" => "UTF-16LE",
+        _ => return None,
+    })
+}
+
+/// `BigInteger.ZERO` and the three constants beside it. A JDK caches those
+/// four objects, but `==` on a `BigInteger` is not a promise a program may
+/// lean on, so each one here simply lowers to the `valueOf` that mints it.
+fn big_integer_constant(path: &[String], table: &MethodTable) -> Option<i64> {
+    let [.., owner, constant] = path else {
+        return None;
+    };
+    if owner != "BigInteger" || table.has_class(owner) {
+        return None;
+    }
+    Some(match constant.as_str() {
+        "ZERO" => 0,
+        "ONE" => 1,
+        "TWO" => 2,
+        "TEN" => 10,
         _ => return None,
     })
 }
@@ -7694,6 +7738,15 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Object(id),
             ) if wrapper_face(wrapper_elem_of(from), id, table)
         )
+        // A `BigInteger` is a `Number` and a `Comparable` — the only library
+        // value that wears the wrappers' two faces.
+        || matches!(
+            (from, to),
+            (JType::BigInteger, JType::Object(id))
+                if id == table.object_id
+                    || table.class_id("Number") == Some(id)
+                    || table.class_id("Comparable") == Some(id)
+        )
 }
 
 /// The declared access level of a method: 3 public, 2 protected, 1
@@ -7757,6 +7810,9 @@ enum ElemType {
     MatchResult,
     /// `java.io.File` (element of `File.listFiles()`).
     File,
+    /// `java.math.BigInteger` — the element of the pair `divideAndRemainder`
+    /// answers, and of any collection a program keeps them in.
+    BigInteger,
     /// A `java.time` ENUM as an element — what `DayOfWeek.values()` and
     /// `Month.values()` answer, which is how a program loops over one.
     DayOfWeek,
@@ -7913,6 +7969,7 @@ impl ElemType {
             ElemType::StackFrame => String::from("Ljava/lang/StackTraceElement;"),
             ElemType::MatchResult => String::from("Ljava/util/regex/MatchResult;"),
             ElemType::File => String::from("Ljava/io/File;"),
+            ElemType::BigInteger => String::from("Ljava/math/BigInteger;"),
             ElemType::DayOfWeek => String::from("Ljava/time/DayOfWeek;"),
             ElemType::Month => String::from("Ljava/time/Month;"),
             ElemType::ChronoUnit => String::from("Ljava/time/temporal/ChronoUnit;"),
@@ -7987,6 +8044,7 @@ impl ElemType {
             ElemType::StackFrame => JType::StackFrame,
             ElemType::MatchResult => JType::MatchResult,
             ElemType::File => JType::File,
+            ElemType::BigInteger => JType::BigInteger,
             ElemType::DayOfWeek => JType::DayOfWeek,
             ElemType::Month => JType::Month,
             ElemType::ChronoUnit => JType::ChronoUnit,
@@ -8171,6 +8229,9 @@ enum JType {
     /// `toMatchResult()` hands out and what a `results()` stream carries. It
     /// answers a Matcher's four reading questions and never moves.
     MatchResult,
+    /// `java.math.BigInteger` (intrinsic) — an integer of any size. Immutable,
+    /// compared by VALUE, and a `Number` and a `Comparable` like the wrappers.
+    BigInteger,
     /// `java.nio.charset.Charset` (intrinsic) — `StandardCharsets.UTF_8` and
     /// the names beside it, which a program passes to `getBytes`, to
     /// `new String(bytes, …)` and to the `Files` readers. The object carries
@@ -8693,6 +8754,7 @@ impl JType {
             JType::ByteStream => String::from("ByteArrayOutputStream"),
             JType::Reader => String::from("BufferedReader"),
             JType::Path => String::from("Path"),
+            JType::BigInteger => String::from("BigInteger"),
             JType::Charset => String::from("Charset"),
             JType::Pattern => String::from("Pattern"),
             JType::Matcher => String::from("Matcher"),
@@ -8752,6 +8814,7 @@ impl JType {
                 | JType::Reader
                 | JType::Path
                 | JType::Charset
+                | JType::BigInteger
                 | JType::Pattern
                 | JType::Matcher
                 | JType::MatchResult
@@ -8905,6 +8968,7 @@ impl JType {
             JType::ByteStream => String::from("Ljava/io/ByteArrayOutputStream;"),
             JType::Reader => String::from("Ljava/io/BufferedReader;"),
             JType::Path => String::from("Ljava/nio/file/Path;"),
+            JType::BigInteger => String::from("Ljava/math/BigInteger;"),
             JType::Charset => String::from("Ljava/nio/charset/Charset;"),
             JType::Pattern => String::from("Ljava/util/regex/Pattern;"),
             JType::Matcher => String::from("Ljava/util/regex/Matcher;"),
@@ -10445,6 +10509,8 @@ enum BParam {
     Boolean,
     Char,
     Str,
+    /// `java.math.BigInteger`, which is what every two-operand method takes.
+    BigInteger,
     /// `java.lang.CharSequence` — a `String`, `StringBuilder`, or
     /// `CharSequence`-typed value (`append(CharSequence, int, int)`).
     CharSeq,
@@ -10532,6 +10598,9 @@ enum BParam {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BRet {
     Void,
+    /// `java.math.BigInteger`, and the pair `divideAndRemainder` answers.
+    BigInteger,
+    BigIntegerArray,
     /// `java.io.PrintStream` — what `append`/`printf` answer, for chaining.
     PrintStream,
     /// The `java.time` values.
@@ -14624,6 +14693,199 @@ const CHRONO_FIELD_METHODS: &[BuiltinMethod] = &[
     bm("hashCode", &[], BRet::Int, "()I"),
 ];
 
+/// `java.math.BigInteger` — an integer of any size. Every two-operand method
+/// takes another `BigInteger` (never an `int`), which is the first thing a
+/// program written against `long` gets wrong.
+const BIG_INTEGER_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "add",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "subtract",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "multiply",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "divide",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "remainder",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "mod",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "divideAndRemainder",
+        &[BParam::BigInteger],
+        BRet::BigIntegerArray,
+        "(Ljava/math/BigInteger;)[Ljava/math/BigInteger;",
+    ),
+    bm(
+        "gcd",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "min",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "max",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "pow",
+        &[BParam::Int],
+        BRet::BigInteger,
+        "(I)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "modPow",
+        &[BParam::BigInteger, BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "modInverse",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm("sqrt", &[], BRet::BigInteger, "()Ljava/math/BigInteger;"),
+    bm("negate", &[], BRet::BigInteger, "()Ljava/math/BigInteger;"),
+    bm("abs", &[], BRet::BigInteger, "()Ljava/math/BigInteger;"),
+    bm("not", &[], BRet::BigInteger, "()Ljava/math/BigInteger;"),
+    bm(
+        "and",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "or",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "xor",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "andNot",
+        &[BParam::BigInteger],
+        BRet::BigInteger,
+        "(Ljava/math/BigInteger;)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "setBit",
+        &[BParam::Int],
+        BRet::BigInteger,
+        "(I)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "clearBit",
+        &[BParam::Int],
+        BRet::BigInteger,
+        "(I)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "flipBit",
+        &[BParam::Int],
+        BRet::BigInteger,
+        "(I)Ljava/math/BigInteger;",
+    ),
+    bm("testBit", &[BParam::Int], BRet::Boolean, "(I)Z"),
+    bm(
+        "shiftLeft",
+        &[BParam::Int],
+        BRet::BigInteger,
+        "(I)Ljava/math/BigInteger;",
+    ),
+    bm(
+        "shiftRight",
+        &[BParam::Int],
+        BRet::BigInteger,
+        "(I)Ljava/math/BigInteger;",
+    ),
+    bm("signum", &[], BRet::Int, "()I"),
+    bm("bitLength", &[], BRet::Int, "()I"),
+    bm("bitCount", &[], BRet::Int, "()I"),
+    bm("getLowestSetBit", &[], BRet::Int, "()I"),
+    bm("isProbablePrime", &[BParam::Int], BRet::Boolean, "(I)Z"),
+    bm(
+        "nextProbablePrime",
+        &[],
+        BRet::BigInteger,
+        "()Ljava/math/BigInteger;",
+    ),
+    bm("intValue", &[], BRet::Int, "()I"),
+    bm("longValue", &[], BRet::Long, "()J"),
+    bm("shortValue", &[], BRet::Short, "()S"),
+    bm("byteValue", &[], BRet::Byte, "()B"),
+    bm("doubleValue", &[], BRet::Double, "()D"),
+    bm("floatValue", &[], BRet::Float, "()F"),
+    bm("intValueExact", &[], BRet::Int, "()I"),
+    bm("longValueExact", &[], BRet::Long, "()J"),
+    bm("shortValueExact", &[], BRet::Short, "()S"),
+    bm("byteValueExact", &[], BRet::Byte, "()B"),
+    bm(
+        "compareTo",
+        &[BParam::BigInteger],
+        BRet::Int,
+        "(Ljava/math/BigInteger;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "toString",
+        &[BParam::Int],
+        BRet::Str,
+        "(I)Ljava/lang/String;",
+    ),
+];
+
+/// `BigInteger.valueOf(n)` — the only static, and the one every program uses
+/// to get a `BigInteger` out of an `int`.
+const BIG_INTEGER_STATIC_METHODS: &[BuiltinMethod] = &[bm(
+    "valueOf",
+    &[BParam::Long],
+    BRet::BigInteger,
+    "(J)Ljava/math/BigInteger;",
+)];
+
 /// `java.time.temporal.ValueRange` — four numbers, and the questions asked
 /// of them.
 const VALUE_RANGE_METHODS: &[BuiltinMethod] = &[
@@ -17921,6 +18183,7 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::Reader
             | JType::Path
             | JType::Charset
+            | JType::BigInteger
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -17971,6 +18234,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::ByteStream => Some(("java/io/ByteArrayOutputStream", BYTE_STREAM_METHODS)),
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
+        JType::BigInteger => Some(("java/math/BigInteger", BIG_INTEGER_METHODS)),
         JType::Charset => Some(("java/nio/charset/Charset", CHARSET_METHODS)),
         JType::Pattern => Some(("java/util/regex/Pattern", PATTERN_METHODS)),
         JType::Matcher => Some(("java/util/regex/Matcher", MATCHER_METHODS)),
@@ -18739,6 +19003,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "Class" => Some(("java/lang/Class", CLASS_STATIC_METHODS)),
         // `Charset.forName(name)` / `defaultCharset()`, and the
         // `StandardCharsets` constants, which lower to the same call.
+        "BigInteger" => Some(("java/math/BigInteger", BIG_INTEGER_STATIC_METHODS)),
         "Charset" => Some(("java/nio/charset/Charset", CHARSET_STATIC_METHODS)),
         "Pattern" => Some(("java/util/regex/Pattern", PATTERN_STATIC_METHODS)),
         "Matcher" => Some(("java/util/regex/Matcher", MATCHER_STATIC_METHODS)),
@@ -19049,6 +19314,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
             .first
             .map_or(JType::Error, |elem| elem_value_type(elem, table)),
         BParam::Class => JType::Class,
+        BParam::BigInteger => JType::BigInteger,
         BParam::Charset => JType::Charset,
         BParam::Pattern => JType::Pattern,
         BParam::Path => JType::Path,
@@ -19494,6 +19760,11 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::ValueRange => Some(JType::ValueRange),
         BRet::Month => Some(JType::Month),
         BRet::Path => Some(JType::Path),
+        BRet::BigInteger => Some(JType::BigInteger),
+        BRet::BigIntegerArray => Some(JType::Array {
+            elem: ElemType::BigInteger,
+            dims: 1,
+        }),
         BRet::Charset => Some(JType::Charset),
         BRet::Pattern => Some(JType::Pattern),
         BRet::Matcher => Some(JType::Matcher),
@@ -24419,6 +24690,7 @@ impl BodyGen<'_> {
             "String" => JType::Str,
             "StringBuilder" => JType::StringBuilder,
             "Scanner" => JType::Scanner,
+            "BigInteger" => JType::BigInteger,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
             "PrintStream" => JType::PrintStream,
@@ -24807,6 +25079,7 @@ impl BodyGen<'_> {
                 "LinkedList" => return self.new_linked_list(type_args, args, span),
                 "ArrayDeque" => return self.new_array_deque(type_args, args, span),
                 "PriorityQueue" => return self.new_priority_queue(type_args, args, span),
+                "BigInteger" => return self.new_big_integer(args, span),
                 "File" => return self.new_file(args, span),
                 // A `FileWriter` is the same thing this engine calls a
                 // writer, plus the APPEND flag: `new FileWriter(path, true)`
@@ -25530,6 +25803,51 @@ impl BodyGen<'_> {
     }
 
     /// `new File(pathString)`.
+    /// `new BigInteger(text)` / `new BigInteger(text, radix)` — the only way
+    /// to build one from digits a program read.
+    fn new_big_integer(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class = intern_class(self.pool, "java/math/BigInteger");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let descriptor = match args {
+            [text] => {
+                let text_ty = self.expr(text);
+                if text_ty == JType::Error {
+                    self.error_bail(span, "BigInteger text");
+                    return JType::Error;
+                }
+                (text_ty == JType::Str || text_ty == JType::Null).then_some("(Ljava/lang/String;)V")
+            }
+            [text, radix] => {
+                let text_ty = self.expr(text);
+                let radix_ty = self.expr(radix);
+                if text_ty == JType::Error || radix_ty == JType::Error {
+                    self.error_bail(span, "BigInteger text");
+                    return JType::Error;
+                }
+                ((text_ty == JType::Str || text_ty == JType::Null)
+                    && matches!(
+                        radix_ty,
+                        JType::Int | JType::Short | JType::Byte | JType::Char
+                    ))
+                .then_some("(Ljava/lang/String;I)V")
+            }
+            _ => None,
+        };
+        let Some(descriptor) = descriptor else {
+            self.error(
+                span,
+                String::from("new BigInteger takes the digits as a String, and optionally a radix"),
+            );
+            return JType::Error;
+        };
+        let init_ref = intern_method_ref(self.pool, "java/math/BigInteger", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        self.code
+            .drop_stack(2 + u16::from(descriptor.contains(";I)")));
+        JType::BigInteger
+    }
+
     fn new_file(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let file_class = intern_class(self.pool, "java/io/File");
         self.code.push_op_u16(op::NEW, file_class, 1);
@@ -27016,6 +27334,7 @@ impl BodyGen<'_> {
             | JType::Reader
             | JType::Path
             | JType::Charset
+            | JType::BigInteger
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -28050,6 +28369,7 @@ impl BodyGen<'_> {
                 | JType::ChronoUnit
                 | JType::ChronoField
                 | JType::ValueRange
+                | JType::BigInteger
                 | JType::IsoEra => {
                     tags.push_str("Ljava/lang/Object;");
                     width += 1;
@@ -29113,6 +29433,7 @@ impl BodyGen<'_> {
             JType::Exception(id) => exception_internal(id).to_owned(),
             JType::File => String::from("java/io/File"),
             JType::Path => String::from("java/nio/file/Path"),
+            JType::BigInteger => String::from("java/math/BigInteger"),
             JType::Charset => String::from("java/nio/charset/Charset"),
             JType::Pattern => String::from("java/util/regex/Pattern"),
             JType::Matcher => String::from("java/util/regex/Matcher"),
@@ -32893,6 +33214,7 @@ impl BodyGen<'_> {
             | JType::Type
             | JType::Constructor
             | JType::Charset
+            | JType::BigInteger
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -33108,6 +33430,11 @@ impl BodyGen<'_> {
             // class whose only role is to hold them.
             Expr::Name { path, .. } if standard_charset(path, self.table).is_some() => {
                 JType::Charset
+            }
+            // `BigInteger.ZERO` and its three siblings — typed here as well as
+            // emitted, or an argument of this type has no type at all.
+            Expr::Name { path, .. } if big_integer_constant(path, self.table).is_some() => {
+                JType::BigInteger
             }
             Expr::Name { path, .. }
                 if path.len() == 2
@@ -35138,6 +35465,7 @@ impl BodyGen<'_> {
             ElemType::Class => Some(String::from("java/lang/Class")),
             ElemType::MatchResult => Some(String::from("java/util/regex/MatchResult")),
             ElemType::File => Some(String::from("java/io/File")),
+            ElemType::BigInteger => Some(String::from("java/math/BigInteger")),
             ElemType::DayOfWeek => Some(String::from("java/time/DayOfWeek")),
             ElemType::Month => Some(String::from("java/time/Month")),
             ElemType::ChronoUnit => Some(String::from("java/time/temporal/ChronoUnit")),
@@ -35580,6 +35908,19 @@ impl BodyGen<'_> {
         }
         // `StandardCharsets.UTF_8` — a constant whose value is a Charset, built
         // by the same call `Charset.forName` makes.
+        if let Some(value) = big_integer_constant(path, self.table) {
+            let index = self.pool.intern(Constant::Long(value));
+            self.code.push_op_u16(op::LDC2_W, index, 2);
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/math/BigInteger",
+                "valueOf",
+                "(J)Ljava/math/BigInteger;",
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+            self.code.drop_stack(1);
+            return JType::BigInteger;
+        }
         if let Some(name) = standard_charset(path, self.table) {
             let utf8 = self.pool.intern_utf8(name);
             let index = self.pool.intern(Constant::String { string_index: utf8 });
@@ -37950,6 +38291,7 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Path
             | JType::Charset
+            | JType::BigInteger
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -38202,6 +38544,7 @@ impl BodyGen<'_> {
             | ElemType::StackFrame
             | ElemType::MatchResult
             | ElemType::File
+            | ElemType::BigInteger
             | ElemType::DayOfWeek
             | ElemType::Month
             | ElemType::ChronoUnit
@@ -38371,6 +38714,7 @@ impl BodyGen<'_> {
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
+            | JType::BigInteger
             | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
@@ -38411,6 +38755,7 @@ impl BodyGen<'_> {
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
+            | JType::BigInteger
             | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };

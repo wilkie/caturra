@@ -75,13 +75,30 @@ additions:
   student's textbook uses it" is the bar.
 - Notable additions get recorded in `specs/` (this file or a linked one).
 
+### What has been added, and why
+
+Each of these went past the exam surface for the reason beside it. The list is
+kept current as things land, so "is X in scope?" has an answer that is not a
+grep of the source.
+
+| Addition               | Why                                                                                                                                                                                                                                                                        |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `java.math.BigInteger` | Exact arithmetic past `long` — factorials, RSA-shaped exercises, and the "why did my number go negative?" lesson that overflow teaches. Its own bignum core (`crates/caturra-vm/src/bigint.rs`), for the same reason the regex engine and the float formatter are our own. |
+
 ## Non-goals (for now)
 
-Threads and `synchronized` semantics, reflection, class loading of user-supplied
-`.class`/`.jar` binaries, JNI, security manager, modules, generics _erasure
-corner cases_ beyond what `ArrayList<E>` needs, floating-point `strictfp`
-distinctions, and full `java.time` / `java.net` / charset support. If one of
-these becomes needed, it gets its own spec first.
+Threads (`synchronized` parses and runs — on one thread a monitor is never
+contended — but nothing is concurrent), class loading of user-supplied
+`.class`/`.jar` binaries, JNI, security manager, modules, floating-point
+`strictfp` distinctions, and `java.net`. If one of these becomes needed, it gets
+its own spec first.
+
+Two entries that used to sit here have since been built and are no longer
+non-goals: `java.time` (the arithmetic slice — see `specs/LANGUAGE.md`; what
+needs a time ZONE is still out) and `java.nio.charset` (the six standard
+charsets, encoding and decoding exactly as a JDK's do). Reflection has likewise
+grown past "non-goal" into the read-only surface `getClass`, `getDeclaredFields`
+and friends give.
 
 ## Licensing rule
 

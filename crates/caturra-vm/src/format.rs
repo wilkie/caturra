@@ -1080,15 +1080,20 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<Vec<u16>, VmError>
             Ok(pad(spec, &text))
         }
         'd' => {
-            let value = match arg {
-                FormatArg::Int(v) => i64::from(v),
-                FormatArg::Short(v) => i64::from(v),
-                FormatArg::Byte(v) => i64::from(v),
-                FormatArg::Long(v) => v,
-                other => return Err(conversion_mismatch(heap, conversion, other)),
+            // A `BigInteger` is an integral argument like any other, and the
+            // only one whose digits do not fit a `long`.
+            let (negative, mut magnitude) = if let Some(value) = big_integer_of(heap, arg) {
+                (value.signum() < 0, value.abs().to_text(10))
+            } else {
+                let value = match arg {
+                    FormatArg::Int(v) => i64::from(v),
+                    FormatArg::Short(v) => i64::from(v),
+                    FormatArg::Byte(v) => i64::from(v),
+                    FormatArg::Long(v) => v,
+                    other => return Err(conversion_mismatch(heap, conversion, other)),
+                };
+                (value < 0, value.unsigned_abs().to_string())
             };
-            let negative = value < 0;
-            let mut magnitude = value.unsigned_abs().to_string();
             if spec.grouping {
                 magnitude = group_digits(&magnitude);
             }
@@ -1115,6 +1120,53 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<Vec<u16>, VmError>
             Ok(pad_numeric(spec, sign, &magnitude))
         }
         'o' | 'x' => {
+            // A `BigInteger` prints in SIGN-MAGNITUDE — `%x` of -255 is
+            // `-ff`, not the two's complement a `long` gives — so the signed
+            // flags mean something here and are allowed.
+            if let Some(value) = big_integer_of(heap, arg) {
+                let lower = conversion.to_ascii_lowercase();
+                if spec.grouping {
+                    return Err(throw(
+                        "java.util.FormatFlagsConversionMismatchException",
+                        &format!("Conversion = {lower}, Flags = ,"),
+                    ));
+                }
+                let radix = if lower == 'o' { 8 } else { 16 };
+                let mut text = value.abs().to_text(radix);
+                if conversion == 'X' {
+                    text = text.to_uppercase();
+                }
+                let prefix = if spec.alternate {
+                    match conversion {
+                        'o' | 'O' => "0",
+                        'X' => "0X",
+                        _ => "0x",
+                    }
+                } else {
+                    ""
+                };
+                let negative = value.signum() < 0;
+                if negative && spec.parentheses {
+                    let width = spec.width.unwrap_or(0);
+                    let body = format!("{prefix}{text}");
+                    let body_len = 2 + body.chars().count();
+                    if spec.zero_pad && !spec.left_justify && body_len < width {
+                        let zeros = "0".repeat(width - body_len);
+                        return Ok(units_of(&format!("({prefix}{zeros}{text})")));
+                    }
+                    return Ok(pad(spec, &format!("({body})")));
+                }
+                let sign = if negative {
+                    "-"
+                } else if spec.plus {
+                    "+"
+                } else if spec.space {
+                    " "
+                } else {
+                    ""
+                };
+                return Ok(pad_numeric(spec, &format!("{sign}{prefix}"), &text));
+            }
             let value = match arg {
                 FormatArg::Int(v) => u64::from(v.cast_unsigned()),
                 FormatArg::Short(v) => u64::from(v.cast_unsigned()),
@@ -1846,4 +1898,17 @@ pub fn args_from_descriptor(
         values: args,
         all_null,
     })
+}
+
+/// The `BigInteger` a reference argument points at, if it is one. Every
+/// integral conversion takes one, and it is the only argument whose value does
+/// not fit a `long`.
+fn big_integer_of(heap: &Heap, arg: FormatArg) -> Option<crate::bigint::BigInt> {
+    let FormatArg::Str(Some(reference)) = arg else {
+        return None;
+    };
+    match heap.get(reference) {
+        Some(HeapObject::BigInteger(value)) => Some(value.clone()),
+        _ => None,
+    }
 }

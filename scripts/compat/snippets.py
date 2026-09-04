@@ -792,6 +792,48 @@ public class Numbers {
 ''',
     ),
     dict(
+        id="bigintegers",
+        category="Library",
+        title="Integers of any size",
+        summary="BigInteger: exact arithmetic past what a long can hold.",
+        main="Big",
+        source='''
+import java.math.BigInteger;
+
+public class Big {
+    public static void main(String[] args) {
+        // A `long` overflows at 21!; a BigInteger does not.
+        long overflowed = 1;
+        BigInteger exact = BigInteger.ONE;
+        for (int i = 1; i <= 30; i++) {
+            overflowed *= i;
+            exact = exact.multiply(BigInteger.valueOf(i));
+        }
+        System.out.println(overflowed);
+        System.out.println(exact);
+
+        // Every operation takes another BigInteger, never an int.
+        BigInteger a = new BigInteger("123456789012345678901234567890");
+        BigInteger b = BigInteger.valueOf(97);
+        System.out.println(a.add(b) + " " + a.subtract(b) + " " + a.multiply(b));
+        System.out.println(a.divide(b) + " " + a.remainder(b) + " " + a.mod(b));
+
+        // `mod` is not `remainder`: a modulus is never negative.
+        BigInteger negative = BigInteger.valueOf(-7);
+        System.out.println(negative.remainder(BigInteger.valueOf(5))
+            + " " + negative.mod(BigInteger.valueOf(5)));
+
+        // It compares, so it sorts; and it formats like any other integer.
+        System.out.println(a.compareTo(b) + " " + a.max(b).equals(a));
+        System.out.println(String.format("%,d and %x", b, b));
+        System.out.println(a.pow(2).sqrt().equals(a) + " " + a.bitLength());
+        System.out.println(BigInteger.valueOf(7).modPow(BigInteger.valueOf(128),
+            BigInteger.valueOf(13)));
+    }
+}
+''',
+    ),
+    dict(
         id="charsets",
         category="Library",
         title="Text to bytes and back",

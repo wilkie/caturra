@@ -2532,6 +2532,9 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             entries: Vec::new(),
             comparator: None,
         }),
+        // Every constructor sets the value; a `BigInteger` starts at zero only
+        // because the object must exist before `<init>` runs.
+        "java/math/BigInteger" => Some(HeapObject::BigInteger(crate::bigint::BigInt::zero())),
         "java/io/File" => Some(HeapObject::File(String::new())),
         "java/io/ByteArrayOutputStream" => Some(HeapObject::ByteStream(Vec::new())),
         // Where it writes is decided by the constructor; standard out until
@@ -2588,6 +2591,19 @@ pub fn invoke_special(
             _ => Err(throw("java.lang.VerifyError: expected a String argument")),
         }
     };
+    // `new BigInteger(text)` / `new BigInteger(text, radix)`.
+    if class == "java/math/BigInteger" && method == "<init>" {
+        let text = string_arg(heap, &args[0])?;
+        let radix = match args.get(1) {
+            Some(JValue::Int(radix)) => *radix,
+            _ => 10,
+        };
+        let value = parse_big_integer(&text, radix)?;
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::BigInteger(value);
+        }
+        return Ok(());
+    }
     let file_arg = |heap: &Heap, value: &JValue| -> Result<String, VmError> {
         match value {
             JValue::Ref(Some(reference)) => match heap.get(*reference) {
@@ -3499,6 +3515,7 @@ pub fn invoke_virtual(
             };
             Ok(Some(JValue::Int(i32::from(equal))))
         }
+        (HeapObject::BigInteger(_), _) => big_integer_method(heap, receiver, method, args),
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method, args),
         (HeapObject::Path(_), _) => path_method(heap, receiver, method, args),
         // A `Charset` is its NAME: `toString`, `name` and `displayName` all
@@ -6604,6 +6621,9 @@ pub(crate) fn native_equals(heap: &Heap, a: JValue, b: JValue) -> bool {
                     }
                     (Some(HeapObject::File(sx)), Some(HeapObject::File(sy)))
                     | (Some(HeapObject::Charset(sx)), Some(HeapObject::Charset(sy))) => sx == sy,
+                    (Some(HeapObject::BigInteger(bx)), Some(HeapObject::BigInteger(by))) => {
+                        bx == by
+                    }
                     // A `java.time` value compares by its FIELDS, which is
                     // what makes `dates.contains(LocalDate.of(...))` answer
                     // the way a JDK's does.
@@ -6643,6 +6663,7 @@ pub(crate) fn native_hash(heap: &Heap, value: JValue) -> i32 {
             // name.
             Some(HeapObject::File(path)) => java_string_hash(path) ^ 0x0012_d591,
             Some(HeapObject::Charset(name)) => java_string_hash(name),
+            Some(HeapObject::BigInteger(value)) => value.java_hash(),
             // Identity hash (arbitrary in Java too).
             _ => reference.cast_signed(),
         },
@@ -10329,6 +10350,21 @@ pub fn invoke_static(
             }
             _ => Err(VmError::UnknownIntrinsic(format!("Matcher.{method}"))),
         },
+        // `BigInteger.valueOf(n)`, which the compiler also lowers `ZERO`,
+        // `ONE`, `TWO` and `TEN` to — a JDK caches those four, but `==` on a
+        // `BigInteger` is not a promise a program may lean on, so nothing here
+        // has to.
+        "java/math/BigInteger" => match method {
+            "valueOf" => {
+                let JValue::Long(value) = args[0] else {
+                    return Err(throw("java.lang.VerifyError: expected a long"));
+                };
+                Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::BigInteger(
+                    crate::bigint::BigInt::from_i64(value),
+                ))))))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("BigInteger.{method}"))),
+        },
         // `Charset.forName(name)` — and the `StandardCharsets` constants, which
         // the compiler lowers to the same call. An unknown name is the JDK's
         // `UnsupportedCharsetException`, whose message is the name itself.
@@ -12741,6 +12777,7 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
                 text.clone()
             }
             Some(HeapObject::Temporal(value)) => value.text(),
+            Some(HeapObject::BigInteger(value)) => value.to_text(10),
             Some(HeapObject::Collector(_)) => collector_text(reference),
             Some(HeapObject::SummaryStats {
                 count,
@@ -13088,6 +13125,303 @@ pub(crate) fn sorted_view_pairs(heap: &Heap, view: HeapRef) -> Vec<(JValue, JVal
         slice.reverse();
     }
     slice
+}
+
+/// Parse the text of `new BigInteger(text)` / `new BigInteger(text, radix)`,
+/// with a JDK's own four refusals — which say four different things, and a
+/// student reads them.
+fn parse_big_integer(text: &str, radix: i32) -> Result<crate::bigint::BigInt, VmError> {
+    if !(2..=36).contains(&radix) {
+        return Err(throw("java.lang.NumberFormatException: Radix out of range"));
+    }
+    // A sign is legal only as the FIRST character, and only one of them: a JDK
+    // looks for the LAST of each, so `5-` and `--5` are both "embedded".
+    let minus = text.rfind('-');
+    let plus = text.rfind('+');
+    let digits = match (minus, plus) {
+        (Some(0), None) | (None, Some(0)) => &text[1..],
+        (None, None) => text,
+        _ => {
+            return Err(throw(
+                "java.lang.NumberFormatException: Illegal embedded sign character",
+            ));
+        }
+    };
+    if digits.is_empty() {
+        return Err(throw(
+            "java.lang.NumberFormatException: Zero length BigInteger",
+        ));
+    }
+    // The complaint names the DIGITS, not the whole text: `new BigInteger("-1a")`
+    // says `For input string: "1a"`.
+    crate::bigint::BigInt::parse(text, u32::try_from(radix).unwrap_or(10)).ok_or_else(|| {
+        throw(format!(
+            "java.lang.NumberFormatException: For input string: \"{digits}\""
+        ))
+    })
+}
+
+/// `java.math.BigInteger` — every question asked of one value, or of two.
+#[allow(clippy::too_many_lines)]
+fn big_integer_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    use crate::bigint::{BigInt, BitOp};
+    let value = match heap.get(receiver) {
+        Some(HeapObject::BigInteger(value)) => value.clone(),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    // The other operand, when there is one. Every two-argument method takes a
+    // `BigInteger`, and a null is the JDK's bare NullPointerException.
+    let other = |heap: &Heap| -> Result<BigInt, VmError> {
+        match args.first() {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::BigInteger(value)) => Ok(value.clone()),
+                _ => Err(throw("java.lang.ClassCastException: not a BigInteger")),
+            },
+            _ => Err(throw("java.lang.NullPointerException")),
+        }
+    };
+    let bit_address = || -> Result<u32, VmError> {
+        match args.first() {
+            Some(JValue::Int(n)) if *n >= 0 => Ok(n.cast_unsigned()),
+            _ => Err(throw("java.lang.ArithmeticException: Negative bit address")),
+        }
+    };
+    let shift = || -> i32 {
+        match args.first() {
+            Some(JValue::Int(n)) => *n,
+            _ => 0,
+        }
+    };
+    let answer = |heap: &mut Heap, value: BigInt| {
+        Ok(Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::BigInteger(value)),
+        ))))
+    };
+    match method {
+        "add" => {
+            let sum = value.add(&other(heap)?);
+            answer(heap, sum)
+        }
+        "subtract" => {
+            let difference = value.subtract(&other(heap)?);
+            answer(heap, difference)
+        }
+        "multiply" => {
+            let product = value.multiply(&other(heap)?);
+            answer(heap, product)
+        }
+        "divide" | "remainder" => {
+            let (quotient, rest) = value
+                .divide_and_remainder(&other(heap)?)
+                .ok_or_else(|| throw("java.lang.ArithmeticException: BigInteger divide by zero"))?;
+            answer(heap, if method == "divide" { quotient } else { rest })
+        }
+        "divideAndRemainder" => {
+            let (quotient, rest) = value
+                .divide_and_remainder(&other(heap)?)
+                .ok_or_else(|| throw("java.lang.ArithmeticException: BigInteger divide by zero"))?;
+            let quotient = heap.alloc(HeapObject::BigInteger(quotient));
+            let rest = heap.alloc(HeapObject::BigInteger(rest));
+            let pair = heap.alloc(HeapObject::RefArray(
+                String::from("[Ljava/math/BigInteger;"),
+                vec![JValue::Ref(Some(quotient)), JValue::Ref(Some(rest))],
+            ));
+            Ok(Some(JValue::Ref(Some(pair))))
+        }
+        "mod" => {
+            let rest = value.modulus(&other(heap)?).ok_or_else(|| {
+                throw("java.lang.ArithmeticException: BigInteger: modulus not positive")
+            })?;
+            answer(heap, rest)
+        }
+        "gcd" => {
+            let divisor = value.gcd(&other(heap)?);
+            answer(heap, divisor)
+        }
+        "min" | "max" => {
+            let them = other(heap)?;
+            let smaller = value.compare(&them) != std::cmp::Ordering::Greater;
+            let kept = if (method == "min") == smaller {
+                value
+            } else {
+                them
+            };
+            answer(heap, kept)
+        }
+        "pow" => {
+            let Some(JValue::Int(exponent)) = args.first() else {
+                return Err(throw("java.lang.VerifyError: expected an int"));
+            };
+            if *exponent < 0 {
+                return Err(throw("java.lang.ArithmeticException: Negative exponent"));
+            }
+            let raised = value.pow(exponent.cast_unsigned());
+            answer(heap, raised)
+        }
+        "modPow" => {
+            let exponent = other(heap)?;
+            let modulus = match args.get(1) {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::BigInteger(value)) => value.clone(),
+                    _ => return Err(throw("java.lang.ClassCastException: not a BigInteger")),
+                },
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            // A negative exponent raises the INVERSE to its magnitude, which
+            // is what a JDK does — and it fails the same way when there is no
+            // inverse.
+            let base = if exponent.signum() < 0 {
+                value.mod_inverse(&modulus).map_err(invertible_error)?
+            } else {
+                value
+            };
+            let raised = base
+                .mod_pow(&exponent.abs(), &modulus)
+                .ok_or_else(modulus_error)?;
+            answer(heap, raised)
+        }
+        "modInverse" => {
+            let modulus = other(heap)?;
+            let inverse = value.mod_inverse(&modulus).map_err(invertible_error)?;
+            answer(heap, inverse)
+        }
+        "sqrt" => {
+            let root = value
+                .sqrt()
+                .ok_or_else(|| throw("java.lang.ArithmeticException: Negative BigInteger"))?;
+            answer(heap, root)
+        }
+        "negate" => {
+            let negated = value.negated();
+            answer(heap, negated)
+        }
+        "abs" => {
+            let magnitude = value.abs();
+            answer(heap, magnitude)
+        }
+        "not" => {
+            let complement = value.not();
+            answer(heap, complement)
+        }
+        "and" | "or" | "xor" | "andNot" => {
+            let them = other(heap)?;
+            let folded = match method {
+                "and" => value.bit_op(&them, BitOp::And),
+                "or" => value.bit_op(&them, BitOp::Or),
+                "xor" => value.bit_op(&them, BitOp::Xor),
+                _ => value.bit_op(&them.not(), BitOp::And),
+            };
+            answer(heap, folded)
+        }
+        "setBit" | "clearBit" | "flipBit" => {
+            let at = bit_address()?;
+            let how = match method {
+                "setBit" => BitOp::Or,
+                "clearBit" => BitOp::And,
+                _ => BitOp::Xor,
+            };
+            let changed = value.with_bit(at, how);
+            answer(heap, changed)
+        }
+        "testBit" => Ok(Some(JValue::Int(i32::from(value.test_bit(bit_address()?))))),
+        "shiftLeft" | "shiftRight" => {
+            // A negative distance shifts the OTHER way, and `-Integer.MIN_VALUE`
+            // does not fit an int — but a shift that far is zero (or -1) either
+            // way, so the magnitude is clamped.
+            let by = shift();
+            let left = (method == "shiftLeft") == (by >= 0);
+            let by = by.unsigned_abs();
+            let moved = if left {
+                value.shifted_left(by)
+            } else {
+                value.shifted_right(by)
+            };
+            answer(heap, moved)
+        }
+        "signum" => Ok(Some(JValue::Int(value.signum()))),
+        "bitLength" => Ok(Some(JValue::Int(value.bit_length().cast_signed()))),
+        "bitCount" => Ok(Some(JValue::Int(value.bit_count().cast_signed()))),
+        "getLowestSetBit" => Ok(Some(JValue::Int(
+            value.lowest_set_bit().map_or(-1, u32::cast_signed),
+        ))),
+        "isProbablePrime" => Ok(Some(JValue::Int(i32::from(value.is_probable_prime())))),
+        "nextProbablePrime" => {
+            let next = value.next_probable_prime();
+            answer(heap, next)
+        }
+        "intValue" => Ok(Some(JValue::Int(value.to_i32()))),
+        "longValue" => Ok(Some(JValue::Long(value.to_i64()))),
+        // The narrow reads TRUNCATE, exactly as a cast does.
+        "shortValue" => Ok(Some(JValue::Int(i32::from(value.to_i32() as i16)))),
+        "byteValue" => Ok(Some(JValue::Int(i32::from(value.to_i32() as i8)))),
+        "doubleValue" => Ok(Some(JValue::Double(value.to_f64()))),
+        "floatValue" => Ok(Some(JValue::Float(value.to_f32()))),
+        "intValueExact" | "longValueExact" | "shortValueExact" | "byteValueExact" => {
+            let wide = value.to_i64_exact().ok_or_else(|| exact_error(method))?;
+            let narrowed = match method {
+                "longValueExact" => return Ok(Some(JValue::Long(wide))),
+                "intValueExact" => i64::from(i32::try_from(wide).map_err(|_| exact_error(method))?),
+                "shortValueExact" => {
+                    i64::from(i16::try_from(wide).map_err(|_| exact_error(method))?)
+                }
+                _ => i64::from(i8::try_from(wide).map_err(|_| exact_error(method))?),
+            };
+            Ok(Some(JValue::Int(narrowed as i32)))
+        }
+        "compareTo" => {
+            let them = other(heap)?;
+            Ok(Some(JValue::Int(match value.compare(&them) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })))
+        }
+        "equals" => {
+            let same = matches!(args.first(), Some(JValue::Ref(Some(reference)))
+                if matches!(heap.get(*reference), Some(HeapObject::BigInteger(theirs)) if *theirs == value));
+            Ok(Some(JValue::Int(i32::from(same))))
+        }
+        "hashCode" => Ok(Some(JValue::Int(value.java_hash()))),
+        "toString" => {
+            let radix = match args.first() {
+                Some(JValue::Int(radix)) => *radix,
+                _ => 10,
+            };
+            // A radix out of range prints in base ten rather than complaining,
+            // which is `toString`'s documented behaviour (and not the
+            // constructor's).
+            let radix = u32::try_from(radix).unwrap_or(10);
+            let text = value.to_text(radix);
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("BigInteger.{method}"))),
+    }
+}
+
+/// The two ways `modInverse` refuses.
+fn invertible_error(not_invertible: bool) -> VmError {
+    if not_invertible {
+        throw("java.lang.ArithmeticException: BigInteger not invertible.")
+    } else {
+        modulus_error()
+    }
+}
+
+fn modulus_error() -> VmError {
+    throw("java.lang.ArithmeticException: BigInteger: modulus not positive")
+}
+
+/// `intValueExact` and its siblings each name their own width.
+fn exact_error(method: &str) -> VmError {
+    let width = method.trim_end_matches("ValueExact");
+    throw(format!(
+        "java.lang.ArithmeticException: BigInteger out of {width} range"
+    ))
 }
 
 #[cfg(test)]

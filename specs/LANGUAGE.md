@@ -13675,3 +13675,61 @@ Box<String>" — named a type the program never wrote. Writing the argument out
 Pinned as `what_a_longer_fuzz_run_found`, with five refusals beside it. The
 lesson is the running, not the finding: three real defects sat behind seeds
 nobody had drawn.
+
+## An integer of any size
+
+`java.math.BigInteger` — the first thing past `long`, and the first addition
+under the widened scope (see `specs/SCOPE.md`). A CSA program reaches for it the
+day `long` overflows: factorials, the running total of a big simulation, the
+"why did my number go negative?" lesson.
+
+The arithmetic is caturra's own, in `crates/caturra-vm/src/bigint.rs` —
+sign-and-magnitude over base-2³² limbs, no dependency. That follows the repo's
+existing practice (the regex engine, the float formatter and the Unicode tables
+are all written here) and its two constraints: the release profile optimizes for
+WASM SIZE, and every answer has to be a JDK's exactly anyway, which a general
+library would not give for free. `mod` is not `remainder`, the bit operations
+run over an infinitely sign-extended two's complement the magnitude does not
+hold, and six exceptions have to say the words a JDK says.
+
+**What was measured.** A twelve-value grid (zero, ±1, ±7, two twenty-digit
+values, 10³⁰, 255, 2³², 2⁶⁴) crossed with eleven binary operations and twenty-two
+unary ones — 2029 lines of a real JDK's answers, including 91 exceptions. The
+core agreed on 2013 of them on its first run; the sixteen that differed were the
+harness's own wording and its float formatting. Then 87,378 randomized checks
+against Python's own bignums, extended to 118,186 once the primality and bit
+setters were in.
+
+**The one real defect the fuzz found.** `doubleValue` was folding limb by limb —
+`value * 2³² + limb` — which rounds at every step. Past three limbs the
+accumulated error shows up as a one-ulp answer, and 40 of 4000 random values
+were wrong. A JDK rounds ONCE, half to even, from the top 54 bits with
+everything below folded into a sticky bit; `floatValue` does the same from the
+top 25. Both are exact now.
+
+**What the wiring found.** Four things, each the same shape: a fact that lived
+in a hand-written list rather than in the table that already knew it.
+
+- The lambda pass judged "is this method static?" by NAME against a list that
+  includes `signum`, `abs`, `max`, `min`, `pow` and `sqrt` — true of
+  `Integer.signum`, false of `BigInteger::signum`, which desugared to a static
+  call that does not exist. It asks the real method tables now, for every
+  library value type.
+- `descriptor_type` in the lambda pass admitted only `java.time` names, so a
+  method reference could not answer a `BigInteger`. The list it consults is now
+  "library value types", the same one `resolve_type` reads.
+- A `BigInteger` is a `Number` and a `Comparable` — the only library value that
+  wears both wrapper faces — in the widening rule, in the bound a `<T extends
+  Comparable<T>>` parameter carries, and at runtime where a sort asks.
+- `%d`, `%x`, `%X` and `%o` take one. It prints in SIGN-MAGNITUDE there, unlike
+  an `int`'s two's complement: `%x` of -255 is `-ff`, and the signed flags
+  (`+`, `(`, a space) that a `long`'s hex refuses are legal here.
+
+Pinned as four programs: `big_integer_arithmetic_is_exact`,
+`big_integer_bits_and_conversions`, `big_integer_text_and_formatting`, and
+`a_big_integer_in_every_position` — the last of which puts one in a field, a
+parameter, an array, a `List`, a `TreeMap` key, a `TreeSet`, a cast, an
+`instanceof`, a bounded type variable, a stream, four method references, a
+`Comparator.comparing`, a `StringBuilder`, and a `Number` and `Comparable`
+variable. The bignum core carries seven unit tests of its own for the parts a
+program cannot reach directly.

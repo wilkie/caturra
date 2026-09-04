@@ -143,6 +143,10 @@ const JAVA_TIME_FORMAT: &[&str] = &[
     "TextStyle",
     "FormatStyle",
 ];
+/// `java.math` — arbitrary-precision arithmetic: the integers a `long`
+/// overflows on.
+const JAVA_MATH: &[&str] = &["BigInteger"];
+
 /// `java.nio.charset` — the charsets a program names when it turns text into
 /// bytes and back. `Charset` is the type; `StandardCharsets` holds the
 /// constants; the exceptions are what an unknown name throws.
@@ -698,6 +702,7 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("java.time.temporal", JAVA_TIME_TEMPORAL),
     ("java.time.chrono", JAVA_TIME_CHRONO),
     ("java.nio.charset", JAVA_NIO_CHARSET),
+    ("java.math", JAVA_MATH),
     ("java.lang", JAVA_LANG),
     ("java.lang.reflect", JAVA_LANG_REFLECT),
     ("org.code.neighborhood", ORG_CODE_NEIGHBORHOOD),

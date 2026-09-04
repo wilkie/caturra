@@ -49615,3 +49615,222 @@ differential_wording!(
     "RejArg2",
     "import java.util.*;\npublic class RejArg2 {\n  static class Box<T> { T v; }\n  static void go(Box<int> b) { }\n  public static void main(String[] args) { System.out.println(\"no\"); }\n}"
 );
+
+differential_test!(
+    big_integer_arithmetic_is_exact,
+    "BigArith",
+    r#"
+import java.math.BigInteger;
+
+public class BigArith {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        BigInteger big = new BigInteger("12345678901234567890");
+        BigInteger neg = new BigInteger("-98765432109876543210");
+        BigInteger small = BigInteger.valueOf(7);
+        probe("add", () -> big.add(neg));
+        probe("subtract", () -> big.subtract(neg));
+        probe("multiply", () -> big.multiply(neg));
+        probe("divide", () -> neg.divide(big));
+        probe("remainder", () -> neg.remainder(big));
+        probe("mod", () -> neg.mod(big));
+        probe("mod of a negative modulus", () -> big.mod(neg));
+        probe("divide by zero", () -> big.divide(BigInteger.ZERO));
+        probe("divideAndRemainder", () -> java.util.Arrays.toString(neg.divideAndRemainder(small)));
+        probe("gcd", () -> big.gcd(neg));
+        probe("pow", () -> small.pow(30));
+        probe("negative exponent", () -> small.pow(-1));
+        probe("sqrt", () -> big.multiply(big).sqrt());
+        probe("sqrt of a negative", () -> neg.sqrt());
+        probe("modPow", () -> small.modPow(BigInteger.valueOf(128), BigInteger.valueOf(13)));
+        probe("modInverse", () -> BigInteger.valueOf(3).modInverse(BigInteger.valueOf(11)));
+        probe("no inverse", () -> BigInteger.valueOf(4).modInverse(BigInteger.valueOf(8)));
+        probe("compareTo", () -> big.compareTo(neg) + " " + neg.compareTo(big) + " " + big.compareTo(big));
+        probe("equals and hash", () -> big.equals(new BigInteger("12345678901234567890"))
+            + " " + big.hashCode() + " " + neg.hashCode());
+        probe("min and max", () -> big.min(neg) + " " + big.max(neg));
+        BigInteger factorial = BigInteger.ONE;
+        for (int i = 1; i <= 40; i++) {
+            factorial = factorial.multiply(BigInteger.valueOf(i));
+        }
+        System.out.println("40! = " + factorial);
+        System.out.println("constants = " + BigInteger.ZERO + " " + BigInteger.ONE
+            + " " + BigInteger.TWO + " " + BigInteger.TEN);
+    }
+}
+"#
+);
+
+differential_test!(
+    big_integer_bits_and_conversions,
+    "BigBits",
+    r#"
+import java.math.BigInteger;
+
+public class BigBits {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        BigInteger big = new BigInteger("18446744073709551616");
+        BigInteger neg = BigInteger.valueOf(-7);
+        // A negative value's bits are its INFINITE two's complement, which is
+        // not the magnitude's: -7 is ...11111001.
+        probe("bitLength", () -> neg.bitLength() + " " + big.bitLength()
+            + " " + BigInteger.valueOf(-1).bitLength() + " " + BigInteger.ZERO.bitLength());
+        probe("bitCount", () -> neg.bitCount() + " " + big.bitCount()
+            + " " + BigInteger.valueOf(-1).bitCount() + " " + BigInteger.valueOf(255).bitCount());
+        probe("testBit", () -> neg.testBit(0) + " " + neg.testBit(1) + " " + neg.testBit(64)
+            + " " + big.testBit(64));
+        probe("lowest set bit", () -> BigInteger.valueOf(12).getLowestSetBit()
+            + " " + BigInteger.ZERO.getLowestSetBit());
+        probe("negative bit address", () -> neg.testBit(-1));
+        probe("shifts", () -> neg.shiftLeft(5) + " " + neg.shiftRight(1)
+            + " " + big.shiftRight(64) + " " + neg.shiftLeft(-2));
+        probe("and or xor not", () -> BigInteger.valueOf(12).and(BigInteger.TEN)
+            + " " + BigInteger.valueOf(12).or(BigInteger.TEN)
+            + " " + BigInteger.valueOf(12).xor(BigInteger.TEN)
+            + " " + BigInteger.valueOf(12).not()
+            + " " + BigInteger.valueOf(12).andNot(BigInteger.valueOf(3)));
+        probe("set clear flip", () -> neg.setBit(4) + " " + neg.clearBit(1) + " " + neg.flipBit(0));
+        // The narrowing reads TRUNCATE; the exact ones refuse, each naming its
+        // own width.
+        probe("narrowing", () -> big.intValue() + " " + big.longValue()
+            + " " + big.shortValue() + " " + big.byteValue());
+        probe("floating", () -> big.doubleValue() + " " + big.floatValue()
+            + " " + new BigInteger("1" + "0".repeat(400)).doubleValue());
+        probe("intValueExact", () -> BigInteger.valueOf(5).intValueExact());
+        probe("intValueExact refused", () -> big.intValueExact());
+        probe("longValueExact refused", () -> big.longValueExact());
+        probe("shortValueExact refused", () -> BigInteger.valueOf(99999).shortValueExact());
+        probe("byteValueExact refused", () -> BigInteger.valueOf(999).byteValueExact());
+        probe("primes", () -> BigInteger.valueOf(7).isProbablePrime(20)
+            + " " + BigInteger.valueOf(9).isProbablePrime(20)
+            + " " + BigInteger.valueOf(7).nextProbablePrime()
+            + " " + new BigInteger("1000000000000").nextProbablePrime());
+        probe("radix", () -> neg.toString(2) + " " + big.toString(16) + " " + big.toString(36)
+            + " " + neg.toString(37));
+    }
+}
+"#
+);
+
+differential_test!(
+    big_integer_text_and_formatting,
+    "BigText",
+    r#"
+import java.math.BigInteger;
+
+public class BigText {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // The four refusals a JDK's parser has, which say four different things.
+        probe("plain", () -> new BigInteger("000123"));
+        probe("plus sign", () -> new BigInteger("+42"));
+        probe("radix", () -> new BigInteger("ff", 16) + " " + new BigInteger("-1010", 2));
+        probe("bad digit", () -> new BigInteger("12x"));
+        probe("bad digit after a sign", () -> new BigInteger("-1a"));
+        probe("bad digit in a radix", () -> new BigInteger("xyz", 16));
+        probe("empty", () -> new BigInteger(""));
+        probe("a sign alone", () -> new BigInteger("-"));
+        probe("two signs", () -> new BigInteger("--5"));
+        probe("a sign at the end", () -> new BigInteger("5-"));
+        probe("leading space", () -> new BigInteger(" 5"));
+        probe("radix out of range", () -> new BigInteger("10", 1));
+        BigInteger neg = new BigInteger("-255");
+        BigInteger pos = new BigInteger("255");
+        // A `BigInteger` prints in SIGN-MAGNITUDE under %x and %o, unlike an
+        // int's two's complement, so the signed flags mean something there.
+        probe("d", () -> String.format("[%d][%,d][%+d][%(d][% d][%08d][%-8d]",
+            neg, new BigInteger("1234567"), pos, neg, pos, neg, neg));
+        probe("x and o", () -> String.format("[%x][%X][%o][%+x][%(x][%#x][%#o][%08x]",
+            neg, neg, neg, pos, neg, neg, neg, neg));
+        probe("s and h", () -> String.format("[%s][%S][%10s][%b][%h]", neg, neg, neg, neg, neg));
+        probe("the alternate flag on a d", () -> String.format("%#d", pos));
+        probe("grouping on an x", () -> String.format("%,x", pos));
+        probe("a float conversion", () -> String.format("%e", pos));
+        probe("concatenation", () -> "n=" + pos);
+    }
+}
+"#
+);
+
+differential_test!(
+    a_big_integer_in_every_position,
+    "BigWhere",
+    r#"
+import java.math.BigInteger;
+import java.util.*;
+import java.util.stream.*;
+
+public class BigWhere {
+    static BigInteger field = BigInteger.ONE;
+    static BigInteger doubled(BigInteger n) { return n.multiply(BigInteger.TWO); }
+    static <T extends Comparable<T>> T biggest(List<T> items) { return Collections.max(items); }
+    static class Box<T> { T held; Box(T held) { this.held = held; } T get() { return held; } }
+
+    public static void main(String[] args) {
+        BigInteger a = new BigInteger("123456789012345678901234567890");
+        BigInteger b = BigInteger.valueOf(97);
+        System.out.println(field + " " + doubled(a));
+        BigInteger[] arr = { a, b, BigInteger.ZERO };
+        Arrays.sort(arr);
+        System.out.println(Arrays.toString(arr));
+        List<BigInteger> list = new ArrayList<>(Arrays.asList(arr));
+        System.out.println(list.contains(b) + " " + list.indexOf(b));
+        Map<String, BigInteger> map = new HashMap<>();
+        map.put("a", a);
+        System.out.println(map.get("a").mod(b));
+        TreeMap<BigInteger, String> tree = new TreeMap<>();
+        tree.put(b, "small");
+        tree.put(a, "big");
+        System.out.println(tree.firstKey() + " " + tree.lastEntry().getValue());
+        System.out.println(new TreeSet<>(list));
+        Object o = a;
+        System.out.println((o instanceof BigInteger) + " " + ((BigInteger) o).equals(a));
+        System.out.println(biggest(list) + " " + new Box<>(a).get().bitLength());
+        System.out.println(list.stream().map(BigInteger::toString).collect(Collectors.joining("/")));
+        System.out.println(list.stream().reduce(BigInteger.ZERO, BigInteger::add));
+        System.out.println(list.stream().mapToInt(BigInteger::signum).sum());
+        list.sort(Comparator.comparing(BigInteger::bitLength));
+        System.out.println(list);
+        for (BigInteger each : list) {
+            System.out.print(each.signum());
+        }
+        System.out.println();
+        StringBuilder sb = new StringBuilder();
+        sb.append(a).append('|').append(b);
+        System.out.println(sb);
+        System.out.println(Objects.equals(a, new BigInteger("123456789012345678901234567890"))
+            + " " + Objects.hash(b) + " " + b.hashCode());
+        System.out.println(list.get(0).getClass().getSimpleName()
+            + " " + list.get(0).getClass().getName());
+        System.out.println(list.stream().collect(Collectors.partitioningBy(x -> x.testBit(0))));
+        System.out.println(Stream.of(a, b).max(Comparator.naturalOrder()).get());
+        Number n = a;
+        Comparable<BigInteger> c = b;
+        System.out.println(n.longValue() + " " + c.compareTo(a));
+        System.out.println(new HashSet<>(List.of(b, BigInteger.valueOf(97))).size());
+    }
+}
+"#
+);

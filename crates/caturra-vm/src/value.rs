@@ -861,6 +861,11 @@ pub enum HeapObject {
     /// A `java.nio.file.Path`: a filesystem path (from `Path.of`/`Paths.get`),
     /// read and written through `Files`.
     Path(String),
+    /// A `java.math.BigInteger`: an integer of any size, immutable and
+    /// compared BY VALUE. It is not interned — the small ones are cached by a
+    /// JDK, but `==` on them is not a promise any program may lean on, so
+    /// caturra allocates each one.
+    BigInteger(crate::bigint::BigInt),
     /// A `java.nio.charset.Charset` — `StandardCharsets.UTF_8` and the names
     /// beside it. It carries its canonical NAME and nothing else, which is all
     /// `getBytes`, `new String(bytes, …)` and its own `toString` need.
@@ -1181,6 +1186,7 @@ impl HeapObject {
             | HeapObject::File(_)
             | HeapObject::Path(_)
             | HeapObject::Charset(_)
+            | HeapObject::BigInteger(_)
             | HeapObject::Pattern { .. }
             | HeapObject::MatchResult { .. }
             | HeapObject::Writer { .. }

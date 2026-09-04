@@ -7,6 +7,7 @@
 //! `Math`, console IO via `System.out` / `Scanner`, and `java.io.File`
 //! backed by the in-memory [`vfs::VirtualFileSystem`].
 
+pub mod bigint;
 pub mod debug;
 pub(crate) mod floatdec;
 pub(crate) mod format;
