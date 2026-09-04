@@ -5432,13 +5432,30 @@ impl<'run> Interpreter<'run> {
             ("groupingBy", [JValue::Ref(Some(classifier))]) => CollectorKind::GroupingBy {
                 classifier: *classifier,
                 downstream: None,
+                factory: None,
             },
             ("groupingBy", [JValue::Ref(Some(classifier)), JValue::Ref(Some(downstream))]) => {
                 CollectorKind::GroupingBy {
                     classifier: *classifier,
                     downstream: Some(*downstream),
+                    factory: None,
                 }
             }
+            // `groupingBy(f, mapFactory, downstream)` — the map the groups go
+            // into is the program's, which is how it asks for them in key
+            // order rather than in the hash order a `HashMap` gives.
+            (
+                "groupingBy",
+                [
+                    JValue::Ref(Some(classifier)),
+                    JValue::Ref(Some(factory)),
+                    JValue::Ref(Some(downstream)),
+                ],
+            ) => CollectorKind::GroupingBy {
+                classifier: *classifier,
+                downstream: Some(*downstream),
+                factory: Some(*factory),
+            },
             ("partitioningBy", [JValue::Ref(Some(predicate))]) => CollectorKind::PartitioningBy {
                 predicate: *predicate,
                 downstream: None,
@@ -5460,6 +5477,7 @@ impl<'run> Interpreter<'run> {
                     key: *key,
                     value: *value,
                     merge: None,
+                    factory: None,
                 }))
             }
             (
@@ -5473,11 +5491,13 @@ impl<'run> Interpreter<'run> {
                 key: *key,
                 value: *value,
                 merge: Some(*merge),
+                factory: None,
             })),
             ("toMap", [JValue::Ref(Some(key)), JValue::Ref(Some(value))]) => CollectorKind::ToMap {
                 key: *key,
                 value: *value,
                 merge: None,
+                factory: None,
             },
             (
                 "toMap",
@@ -5490,6 +5510,23 @@ impl<'run> Interpreter<'run> {
                 key: *key,
                 value: *value,
                 merge: Some(*merge),
+                factory: None,
+            },
+            // `toMap(k, v, merge, mapFactory)` — the same, gathered into the
+            // map the program asked for.
+            (
+                "toMap",
+                [
+                    JValue::Ref(Some(key)),
+                    JValue::Ref(Some(value)),
+                    JValue::Ref(Some(merge)),
+                    JValue::Ref(Some(factory)),
+                ],
+            ) => CollectorKind::ToMap {
+                key: *key,
+                value: *value,
+                merge: Some(*merge),
+                factory: Some(*factory),
             },
             ("summingInt" | "summingLong" | "summingDouble", [JValue::Ref(Some(mapper))]) => {
                 use crate::value::SumKind;
@@ -11530,6 +11567,24 @@ impl<'run> Interpreter<'run> {
         Ok(())
     }
 
+    /// The map a `toMap`/`groupingBy` gathers into: the one its FACTORY makes,
+    /// or the `HashMap` the shorter forms promise. A factory that answers
+    /// something that is not a map is the `ClassCastException` a JDK raises
+    /// the moment it tries to put an entry in.
+    fn collector_map(&mut self, factory: Option<HeapRef>) -> Result<HeapRef, VmError> {
+        let Some(factory) = factory else {
+            return Ok(self.heap.alloc(crate::value::HeapObject::HashMap(
+                crate::map::JavaHashMap::new(),
+            )));
+        };
+        match self.call_apply_supplier(factory)? {
+            JValue::Ref(Some(made)) if self.is_map_like(made) => Ok(made),
+            _ => Err(VmError::UncaughtException(String::from(
+                "java.lang.ClassCastException: the map factory did not answer a Map",
+            ))),
+        }
+    }
+
     fn call_apply_supplier(&mut self, supplier: HeapRef) -> Result<JValue, VmError> {
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(supplier)
         else {
@@ -12412,10 +12467,9 @@ impl<'run> Interpreter<'run> {
             CollectorKind::GroupingBy {
                 classifier,
                 downstream,
+                factory,
             } => {
-                let map = self
-                    .heap
-                    .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
+                let map = self.collector_map(factory)?;
                 let mut groups: Vec<(JValue, Vec<JValue>)> = Vec::new();
                 for element in elements {
                     let key = self.call_apply(classifier, element)?;
@@ -12573,10 +12627,13 @@ impl<'run> Interpreter<'run> {
                 }
                 Ok(JValue::Ref(Some(map)))
             }
-            CollectorKind::ToMap { key, value, merge } => {
-                let map = self
-                    .heap
-                    .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
+            CollectorKind::ToMap {
+                key,
+                value,
+                merge,
+                factory,
+            } => {
+                let map = self.collector_map(factory)?;
                 for element in elements {
                     let k = self.call_apply(key, element)?;
                     let v = self.call_apply(value, element)?;
@@ -16435,6 +16492,8 @@ impl<'run> Interpreter<'run> {
                     crate::value::Temporal::Range(_) => "java.time.temporal.ValueRange",
                     crate::value::Temporal::Adjuster(_) => "java.time.temporal.TemporalAdjusters",
                     crate::value::Temporal::Era(_) => "java.time.chrono.IsoEra",
+                    crate::value::Temporal::TextStyle(_) => "java.time.format.TextStyle",
+                    crate::value::Temporal::FormatStyle(_) => "java.time.format.FormatStyle",
                     crate::value::Temporal::Year(_) => "java.time.Year",
                     crate::value::Temporal::YearMonth(_, _) => "java.time.YearMonth",
                     crate::value::Temporal::MonthDay(_, _) => "java.time.MonthDay",
@@ -20591,6 +20650,10 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         | "java/time/temporal/ChronoUnit"
         | "java/time/temporal/ChronoField"
         | "java/time/chrono/IsoEra"
+        // ...and the two formatting STYLES, which are enums like the rest of
+        // `java.time` and were modelled only as constants read where written.
+        | "java/time/format/TextStyle"
+        | "java/time/format/FormatStyle"
         // ...and `java.math.RoundingMode`, which is an enum for the same reason.
         | "java/math/RoundingMode" => &["java/lang/Comparable", "java/lang/Enum"],
         // A `Matcher` IS a `MatchResult` (it implements the interface), and so
@@ -20660,6 +20723,8 @@ pub(crate) fn is_library_enum(internal: &str) -> bool {
             | "java/time/temporal/ChronoUnit"
             | "java/time/temporal/ChronoField"
             | "java/time/chrono/IsoEra"
+            | "java/time/format/TextStyle"
+            | "java/time/format/FormatStyle"
             | "java/math/RoundingMode"
     )
 }

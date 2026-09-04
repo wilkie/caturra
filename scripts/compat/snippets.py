@@ -2145,6 +2145,77 @@ public class Units {
 """,
     ),
     dict(
+        id="writer-and-collector",
+        category="Library",
+        title="A Writer, a style, and a collector of one's own",
+        summary=(
+            "The abstract java.io.Writer both writers wear, the java.time "
+            "formatting styles as values, and a Collector factored out into "
+            "a variable."
+        ),
+        main="Faces",
+        source='''
+import java.io.StringWriter;
+import java.io.Writer;
+import java.time.LocalDate;
+import java.time.Month;
+import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
+import java.time.format.TextStyle;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.TreeMap;
+import java.util.stream.Collector;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public class Faces {
+    // `Writer` is the abstract class both writers wear, so a method takes
+    // either one.
+    static void greet(Writer out, String name) throws Exception {
+        out.write("hello, ");
+        out.append(name).append('!');
+    }
+
+    public static void main(String[] args) throws Exception {
+        StringWriter buffer = new StringWriter();
+        greet(buffer, "world");
+        System.out.println(buffer);
+
+        Writer held = new StringWriter();
+        held.write("abcdef", 1, 3);
+        System.out.println(held + " " + (held instanceof StringWriter));
+
+        // The formatting styles are ENUMS: values to hold, sort and switch on.
+        TextStyle style = TextStyle.SHORT;
+        System.out.println(Month.MAY.getDisplayName(style, Locale.US));
+        System.out.println(Arrays.toString(TextStyle.values()));
+        System.out.println(TextStyle.FULL.isStandalone()
+            + " " + TextStyle.FULL.asStandalone()
+            + " " + TextStyle.valueOf("NARROW").ordinal());
+
+        FormatStyle shortDate = FormatStyle.SHORT;
+        System.out.println(DateTimeFormatter.ofLocalizedDate(shortDate)
+            .format(LocalDate.of(2024, 5, 15)));
+
+        // A collector can be named, held, and reused.
+        Collector<String, ?, TreeMap<Integer, Long>> byLength = Collectors.groupingBy(
+            String::length, TreeMap::new, Collectors.counting());
+        System.out.println(Stream.of("a", "bb", "cc", "ddd").collect(byLength));
+
+        Collector<CharSequence, ?, String> dashed = Collectors.joining("-");
+        System.out.println(Stream.of("one", "two").collect(dashed));
+
+        // ...and `toMap` can say how to merge, and what map to gather into.
+        TreeMap<Integer, String> joined = Stream.of("bb", "a", "cc")
+            .collect(Collectors.toMap(String::length, word -> word,
+                (first, second) -> first + "/" + second, TreeMap::new));
+        System.out.println(joined);
+    }
+}
+''',
+    ),
+    dict(
         id="legacy-collections",
         category="Collections",
         title="Vector, Hashtable and Enumeration",

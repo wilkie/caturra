@@ -9040,13 +9040,6 @@ counting catches: a divergence that stopped being one.
   as a missing package, which is what it used to say), and javac accepts it.
   The same omission: explained in prose, never counted here.
   (`strict_a_primitive_stream_cursor`)
-- A `TextStyle` or a `FormatStyle` held in a VARIABLE:
-  `TextStyle style = TextStyle.FULL;`. Both are read where they are WRITTEN —
-  `Month.getDisplayName(TextStyle.FULL, Locale.US)` and
-  `DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)` compile and answer a
-  JDK's own text — so there is no value of either to hold, and naming the type
-  says so rather than reading as a typo. `Locale` was already this, and is
-  covered by the namespace bullet above. (`stricter_a_style_held_in_a_variable`)
 - A locale that is not an English one: `Month.getDisplayName(TextStyle.FULL,
   Locale.FRANCE)`. caturra ships one text, en-US, and answering a French
   program in English would be a WRONG answer rather than a missing one — so the
@@ -14143,3 +14136,78 @@ listed above. The consistency of the tables themselves is guarded by
 `every_refused_class_sits_in_a_modelled_package` and
 `every_refused_package_is_a_real_jdk_one` — because a hand-written list that
 drifts is the thing this whole lane was cleaning up after.
+
+## Four refusals of ordinary Java
+
+The honest-refusal sweep found more than it went looking for: four bits of
+perfectly ordinary Java that caturra turned away. A refusal of code javac
+accepts is the same defect as a misleading message — worse, in fact, because
+the student cannot work around it.
+
+**`java.io.Writer` is a type a program names.** A `PrintWriter` and a
+`StringWriter` are distinct types here (they answer different methods), and
+`Writer` is the abstract class both wear — what a variable holding either is
+declared as, what a parameter takes, what a `List<Writer>` holds. It was
+"unknown type 'Writer'". It is a FACE now, offering exactly what
+`java.io.Writer` declares: `write`, `append`, `flush`, `close`. Not a
+`PrintWriter`'s `println`, and not a `StringWriter`'s `getBuffer` — making the
+face wide enough to hold either must not make it wide enough to call both, and
+both refusals are pinned.
+
+**`TextStyle` and `FormatStyle` are enums.** They were modelled as constants
+the compiler read where they were WRITTEN: `Month.MAY.getDisplayName(
+TextStyle.SHORT, Locale.US)` worked and there was no value of the type to
+hold, so a variable, a `values()`, a `valueOf`, a switch, a sort or a
+`TreeMap` key was refused. They are real library enums now, interned like
+`Month` and `DayOfWeek` beside them, and `getDisplayName` takes either form —
+a written constant is still folded to its ordinal while compiling, and a value
+is emitted and asked for its own. `TextStyle.isStandalone`/`asStandalone`/
+`asNormal` came with them: a standalone style is the odd ordinal of each pair.
+
+**The `Collectors` overloads that name a map.** `toMap(k, v, merge)` was
+refused with a method reference (`Integer::sum`) and mistyped with a lambda —
+the merge folds two VALUES, and both parameters were erased to `Object`, so
+`(p, q) -> p + q` was "bad operand types". The value type is what the second
+argument answers, read once that argument has been erased into its synthesized
+class. `toMap(k, v, merge, TreeMap::new)` and `groupingBy(f, TreeMap::new,
+downstream)` were not modelled at all; both gather into the map the program
+asked for, which is how it gets its result in key order rather than a
+`HashMap`'s.
+
+**`Collector<T, A, R>` as a written type.** Factoring a collector out into a
+variable is ordinary Java, and the accumulator nobody ever writes out — the
+`?` in the middle — read as an unknown class: "cannot find symbol: class
+Wildcard ?". The type carries what it GATHERS (`R`), because that is the only
+place the answer survives once the factory call is behind a name; a
+parameterized one rides as a nested type, so `collect(c).get(0)` finds `get`
+on a `List<String>` rather than on an `Object`. Its own lambdas are typed from
+the element the declared type names (`T`), which the enclosing `collect` used
+to be the only source of.
+
+Two things fell out on the way, neither about the four:
+
+- **`new List<>()` said "cannot find symbol: class List".** Every library type
+  caturra models as an abstract face — `List`, `Map`, `Reader`, `Writer`,
+  `Stream`, `Iterator` — was reported as a class that does not exist, when the
+  reason `new List<>()` will not do is that no such object can be made. It is
+  javac's "List is abstract; cannot be instantiated" now.
+- **`new TextStyle[2]` crashed the compiler.** The one-dimensional array
+  emitter listed its reference element kinds by hand and fell through to the
+  primitive match's `unreachable!` for anything new. There is a catch-all now:
+  any reference element is the same instruction over the class its own
+  descriptor names. A crash prints no diagnostic at all, which reads as a clean
+  compile — see **Engine must not crash**.
+
+`Collector<T, A, R>` and the `Writer` face are the seventh and eighth types to
+need an arm in BOTH `widens` and the assignment matrix. The trap is in the
+model, not in anyone's attention.
+
+Pinned as `a_writer_is_a_type_a_program_names`,
+`the_formatting_styles_are_enums`, `a_collector_of_ones_own`,
+`the_four_refusals_in_every_position`, and four reject pins for the negative
+direction.
+
+Left refused, and honestly: `BufferedWriter`, `InputStream` and `Serializable`
+as declared types, and `OutputStream o = System.out` (caturra models
+`ByteArrayOutputStream` and the abstract name as one type, so the face cannot
+tell them apart). Each says so by name.

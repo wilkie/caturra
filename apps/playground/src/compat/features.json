@@ -600,6 +600,16 @@
     "expected": "4 chars, 3 code points\n128512 55357\n2 true 55357\n[a\ud83d\ude00]\n[  a\ud83d\ude00b]\n[a][\ud83d\ude00][b]\ntrue 1 true\n"
   },
   {
+    "id": "writer-and-collector",
+    "category": "Library",
+    "title": "A Writer, a style, and a collector of one's own",
+    "summary": "The abstract java.io.Writer both writers wear, the java.time formatting styles as values, and a Collector factored out into a variable.",
+    "main": "Faces",
+    "source": "import java.io.StringWriter;\nimport java.io.Writer;\nimport java.time.LocalDate;\nimport java.time.Month;\nimport java.time.format.DateTimeFormatter;\nimport java.time.format.FormatStyle;\nimport java.time.format.TextStyle;\nimport java.util.Arrays;\nimport java.util.Locale;\nimport java.util.TreeMap;\nimport java.util.stream.Collector;\nimport java.util.stream.Collectors;\nimport java.util.stream.Stream;\n\npublic class Faces {\n    // `Writer` is the abstract class both writers wear, so a method takes\n    // either one.\n    static void greet(Writer out, String name) throws Exception {\n        out.write(\"hello, \");\n        out.append(name).append('!');\n    }\n\n    public static void main(String[] args) throws Exception {\n        StringWriter buffer = new StringWriter();\n        greet(buffer, \"world\");\n        System.out.println(buffer);\n\n        Writer held = new StringWriter();\n        held.write(\"abcdef\", 1, 3);\n        System.out.println(held + \" \" + (held instanceof StringWriter));\n\n        // The formatting styles are ENUMS: values to hold, sort and switch on.\n        TextStyle style = TextStyle.SHORT;\n        System.out.println(Month.MAY.getDisplayName(style, Locale.US));\n        System.out.println(Arrays.toString(TextStyle.values()));\n        System.out.println(TextStyle.FULL.isStandalone()\n            + \" \" + TextStyle.FULL.asStandalone()\n            + \" \" + TextStyle.valueOf(\"NARROW\").ordinal());\n\n        FormatStyle shortDate = FormatStyle.SHORT;\n        System.out.println(DateTimeFormatter.ofLocalizedDate(shortDate)\n            .format(LocalDate.of(2024, 5, 15)));\n\n        // A collector can be named, held, and reused.\n        Collector<String, ?, TreeMap<Integer, Long>> byLength = Collectors.groupingBy(\n            String::length, TreeMap::new, Collectors.counting());\n        System.out.println(Stream.of(\"a\", \"bb\", \"cc\", \"ddd\").collect(byLength));\n\n        Collector<CharSequence, ?, String> dashed = Collectors.joining(\"-\");\n        System.out.println(Stream.of(\"one\", \"two\").collect(dashed));\n\n        // ...and `toMap` can say how to merge, and what map to gather into.\n        TreeMap<Integer, String> joined = Stream.of(\"bb\", \"a\", \"cc\")\n            .collect(Collectors.toMap(String::length, word -> word,\n                (first, second) -> first + \"/\" + second, TreeMap::new));\n        System.out.println(joined);\n    }\n}\n",
+    "status": "supported",
+    "expected": "hello, world!\nbcd true\nMay\n[FULL, FULL_STANDALONE, SHORT, SHORT_STANDALONE, NARROW, NARROW_STANDALONE]\nfalse FULL_STANDALONE 4\n5/15/24\n{1=1, 2=2, 3=1}\none-two\n{1=a, 2=bb/cc}\n"
+  },
+  {
     "id": "legacy-collections",
     "category": "Collections",
     "title": "Vector, Hashtable and Enumeration",

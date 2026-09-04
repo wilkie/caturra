@@ -2130,6 +2130,24 @@ fn assign_target_type(target: &crate::ast::AssignTarget, ctx: &Ctx) -> Option<Ty
 
 #[allow(clippy::too_many_lines)] // one arm per expression kind
 fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
+    // A collector assigned to a VARIABLE — `Collector<String, ?, List<String>>
+    // c = Collectors.toMap(x -> x, String::length);`. Its lambdas see the
+    // element the declared type names, exactly as a `collect` receiver's would;
+    // read only from the enclosing `collect`, they had no target at all here
+    // and were refused as "only allowed where a functional-interface type is
+    // expected".
+    if let Some(TypeRef::Generic {
+        base,
+        args: written,
+    }) = expected
+        && simple_base(base) == "Collector"
+        && let [elem, ..] = written.as_slice()
+        && is_collectors_call(expr)
+    {
+        let elem = elem.clone();
+        desugar_collector(expr, &elem, ctx);
+        return;
+    }
     // A target the identity arm below synthesizes for itself; see there.
     let mut identity_target: Option<TypeRef> = None;
     // `Function.identity()` IS the lambda `x -> x`, and saying so here is the
@@ -4282,12 +4300,14 @@ fn collector_map_types(collector: &Expr, source: &Expr, ctx: &Ctx) -> Option<(Ty
 /// the element: a supplier that takes nothing, a predicate of the element, a
 /// merge of two values, a finisher of what was gathered. `true` when this
 /// argument was one of them and has been erased.
+#[allow(clippy::too_many_lines)] // one arm per collector callback shape
 fn desugar_collector_shape(
     method: &str,
     args: &mut [Expr],
     index: usize,
     is_lambda: bool,
     elem: &TypeRef,
+    merged: Option<&TypeRef>,
     ctx: &mut Ctx,
 ) -> bool {
     if !is_lambda {
@@ -4331,15 +4351,53 @@ fn desugar_collector_shape(
         );
         return true;
     }
-    // `toMap`'s third argument merges two VALUES, whose type this pass
-    // cannot see, so both parameters erase to `Object`.
+    // `toMap`'s third argument merges two VALUES — of the type the SECOND
+    // argument answers, which the caller read before erasing it. A method
+    // reference (`Integer::sum`) becomes the equivalent lambda first, exactly
+    // as a supplier or a finisher does; without that step it reached the
+    // erasure unconverted and was refused as "only allowed where a
+    // functional-interface type is expected".
     if matches!(method, "toMap" | "toUnmodifiableMap") && index == 2 {
+        let value = merged.cloned().unwrap_or_else(|| object.clone());
+        if matches!(&args[index], Expr::MethodRef { .. }) {
+            let synth = Sam {
+                method: String::from("apply"),
+                params: vec![value.clone(), value.clone()],
+                ret: value.clone(),
+            };
+            args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+        }
         args[index] = build_erased_lambda(
             &mut args[index],
             "__BiFunction",
             "apply",
             &object,
-            &[object.clone(), object.clone()],
+            &[value.clone(), value],
+            None,
+            ctx,
+        );
+        return true;
+    }
+    // The MAP a `toMap`/`groupingBy` gathers into — a supplier, like
+    // `toCollection`'s. `toMap` takes it fourth; `groupingBy` takes it
+    // second, between the classifier and the downstream collector.
+    if (matches!(method, "toMap" | "toUnmodifiableMap") && index == 3)
+        || (method == "groupingBy" && index == 1 && args.len() == 3)
+    {
+        if matches!(&args[index], Expr::MethodRef { .. }) {
+            let synth = Sam {
+                method: String::from("get"),
+                params: Vec::new(),
+                ret: object.clone(),
+            };
+            args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+        }
+        args[index] = build_erased_lambda(
+            &mut args[index],
+            "__Supplier",
+            "get",
+            &object,
+            &[],
             None,
             ctx,
         );
@@ -6261,7 +6319,19 @@ fn desugar_collector(expr: &mut Expr, elem: &TypeRef, ctx: &mut Ctx) {
             );
             continue;
         }
-        if desugar_collector_shape(method, args, index, is_lambda, elem, ctx) {
+        // `toMap`'s merge folds two VALUES, and the value type is what its
+        // SECOND argument answers — asked once that argument has been erased
+        // into its synthesized class, which is the form `mapped_element_type`
+        // reads. Erasing the merge to `Object` instead made `(p, q) -> p + q`
+        // "bad operand types for binary operator '+'", about a fold over two
+        // `Integer`s.
+        let merged = if index == 2 && matches!(method.as_str(), "toMap" | "toUnmodifiableMap") {
+            let value = args[1].clone();
+            mapped_element_type(std::slice::from_ref(&value), ctx).map(boxed_name)
+        } else {
+            None
+        };
+        if desugar_collector_shape(method, args, index, is_lambda, elem, merged.as_ref(), ctx) {
             continue;
         }
         if desugar_extreme_or_reducing(method, args, index, is_lambda, elem, ctx) {

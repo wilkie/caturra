@@ -3742,6 +3742,10 @@ impl MethodTable {
                     "CharSequence" => Some(JType::CharSequence),
                     "File" => Some(JType::File),
                     "PrintWriter" | "FileWriter" => Some(JType::Writer),
+                    // `java.io.Writer` is the FACE both writers wear — the
+                    // abstract class a variable is declared as, which is
+                    // ordinary Java and was "unknown type 'Writer'".
+                    "Writer" => Some(JType::WriterFace),
                     "PrintStream" => Some(JType::PrintStream),
                     // The library VALUE types — `java.time` and `BigInteger`
                     // — read from the list the lambda pass reads: what a name
@@ -3916,6 +3920,16 @@ impl MethodTable {
                     // variable, a field, or a parameter — before this a stream
                     // existed only as a chained expression.
                     elem_from_type_arg(&args[0], self).map(JType::Stream)
+                } else if simple == "Collector" && args.len() == 3 && !self.has_class(simple) {
+                    // `Collector<T, A, R>` — the RESULT is the third argument,
+                    // and the accumulator between them is the `?` no program
+                    // ever writes out. Held in a variable is how a collector
+                    // gets reused, and it was refused outright: the wildcard
+                    // in the middle read as an unknown class.
+                    Some(JType::Collector(
+                        elem_from_type_arg(&args[2], self)
+                            .unwrap_or(ElemType::Object(self.object_id)),
+                    ))
                 } else if matches!(
                     simple,
                     "LinkedList" | "ArrayDeque" | "Queue" | "Deque" | "PriorityQueue"
@@ -4033,6 +4047,8 @@ impl MethodTable {
                         | ElemType::ChronoUnit
                         | ElemType::ChronoField
                         | ElemType::IsoEra
+                        | ElemType::TextStyle
+                        | ElemType::FormatStyle
                         | ElemType::LocalDate
                         // A parameterized argument (`Pair<String, Pair<…>>`)
                         // rides as an interned nested type, so the inner
@@ -4101,6 +4117,8 @@ impl MethodTable {
                     JType::ChronoUnit => ElemType::ChronoUnit,
                     JType::ChronoField => ElemType::ChronoField,
                     JType::IsoEra => ElemType::IsoEra,
+                    JType::TextStyle => ElemType::TextStyle,
+                    JType::FormatStyle => ElemType::FormatStyle,
                     // A wrapper array (`Integer[]`) is a REFERENCE array of
                     // boxed elements, distinct from the primitive `int[]`.
                     JType::Boxed(elem) => match Prim::of(elem) {
@@ -4621,6 +4639,49 @@ fn cast_target_name(ty: &TypeRef) -> Option<&str> {
     Some(name.rsplit('.').next().unwrap_or(name))
 }
 
+/// The library types caturra models as an abstract FACE — the interfaces and
+/// abstract classes a program NAMES but cannot make. Each is real Java, so
+/// `new List<>()` is javac's "List is abstract; cannot be instantiated" rather
+/// than a claim that the class does not exist.
+fn abstract_library_face(name: &str) -> bool {
+    matches!(
+        crate::imports::canonical_library_class(name).unwrap_or(name),
+        "List"
+            | "Map"
+            | "Set"
+            | "Collection"
+            | "Queue"
+            | "Deque"
+            | "SortedSet"
+            | "NavigableSet"
+            | "SortedMap"
+            | "NavigableMap"
+            | "Iterator"
+            | "ListIterator"
+            | "Iterable"
+            | "Enumeration"
+            | "Comparable"
+            | "Comparator"
+            | "CharSequence"
+            | "Appendable"
+            | "Reader"
+            | "Writer"
+            | "InputStream"
+            | "OutputStream"
+            | "Closeable"
+            | "AutoCloseable"
+            | "Cloneable"
+            | "RandomAccess"
+            | "Stream"
+            | "IntStream"
+            | "LongStream"
+            | "DoubleStream"
+            | "Collector"
+            | "Entry"
+            | "Map.Entry"
+    )
+}
+
 fn raw_library_internal(name: &str) -> Option<&'static str> {
     let simple = crate::imports::canonical_library_class(name).unwrap_or(name);
     // An INTERFACE must map to the interface's own name, never to a concrete class:
@@ -4904,6 +4965,8 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::ChronoField => "java/time/temporal/ChronoField",
         ElemType::LocalDate => "java/time/LocalDate",
         ElemType::IsoEra => "java/time/chrono/IsoEra",
+        ElemType::TextStyle => "java/time/format/TextStyle",
+        ElemType::FormatStyle => "java/time/format/FormatStyle",
         // A type variable erases to `Object`, like every other reference here.
         ElemType::TypeVar(_)
         | ElemType::Str
@@ -5249,6 +5312,8 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::ChronoField => String::from("ChronoField"),
         ElemType::LocalDate => String::from("LocalDate"),
         ElemType::IsoEra => String::from("IsoEra"),
+        ElemType::TextStyle => String::from("TextStyle"),
+        ElemType::FormatStyle => String::from("FormatStyle"),
         ElemType::TypeVar(_) => String::from("Object"),
         ElemType::Builder => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
@@ -5853,6 +5918,8 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
         | ElemType::ChronoUnit
         | ElemType::ChronoField
         | ElemType::IsoEra
+        | ElemType::TextStyle
+        | ElemType::FormatStyle
         // A `RoundingMode` is an enum like those, so it is ordered too.
         | ElemType::RoundingMode
         // ...and a UUID, which orders itself too.
@@ -5879,6 +5946,11 @@ fn raw_generic_arity(simple: &str) -> Option<usize> {
         | "SortedSet" | "NavigableSet" | "Collection" | "LinkedList" | "Queue" | "Deque"
         | "ArrayDeque" | "PriorityQueue" | "Stack" | "Vector" | "Enumeration" | "Iterator"
         | "Optional" => Some(1),
+        // `Collector<T, A, R>` — the type a program names when it factors a
+        // collector out into a variable. Its ACCUMULATOR is always written
+        // `?`, which is why the arity has to be known here: two arguments is
+        // a real mistake and three is the ordinary shape.
+        "Collector" => Some(3),
         // `Map.Entry` is here for the RAW spelling —
         // `for (Map.Entry e : m.entrySet())`, how a program that predates
         // generics walks a map, and how plenty of ordinary code still does.
@@ -5962,6 +6034,8 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::ChronoField => Some(ElemType::ChronoField),
         JType::LocalDate => Some(ElemType::LocalDate),
         JType::IsoEra => Some(ElemType::IsoEra),
+        JType::TextStyle => Some(ElemType::TextStyle),
+        JType::FormatStyle => Some(ElemType::FormatStyle),
         JType::Exception(id) => Some(ElemType::Throwable(id)),
         // A wrapper array element is a boxed REFERENCE (`Integer[]`).
         JType::Boxed(elem) => Prim::of(elem).map(ElemType::Wrapper),
@@ -6288,6 +6362,8 @@ fn library_enum_constants(ty: JType) -> Option<&'static [&'static str]> {
         JType::ChronoUnit => "ChronoUnit",
         JType::ChronoField => "ChronoField",
         JType::IsoEra => "IsoEra",
+        JType::TextStyle => "TextStyle",
+        JType::FormatStyle => "FormatStyle",
         JType::RoundingMode => "RoundingMode",
         _ => return None,
     })
@@ -6323,6 +6399,8 @@ fn library_value_type(simple: &str) -> Option<JType> {
         "MonthDay" => JType::MonthDay,
         "TemporalAdjuster" => JType::TemporalAdjuster,
         "IsoEra" => JType::IsoEra,
+        "TextStyle" => JType::TextStyle,
+        "FormatStyle" => JType::FormatStyle,
         "DateTimeFormatter" => JType::DateFormat,
         "DayOfWeek" => JType::DayOfWeek,
         "Month" => JType::Month,
@@ -6467,7 +6545,9 @@ fn library_comparable(ty: JType) -> Option<bool> {
         | JType::Month
         | JType::ChronoUnit
         | JType::ChronoField
-        | JType::IsoEra => true,
+        | JType::IsoEra
+        | JType::TextStyle
+        | JType::FormatStyle => true,
         _ => return None,
     })
 }
@@ -6481,6 +6561,8 @@ const LIBRARY_ENUMS: &[(&str, JType)] = &[
     ("ChronoUnit", JType::ChronoUnit),
     ("ChronoField", JType::ChronoField),
     ("IsoEra", JType::IsoEra),
+    ("TextStyle", JType::TextStyle),
+    ("FormatStyle", JType::FormatStyle),
     ("RoundingMode", JType::RoundingMode),
 ];
 
@@ -6564,6 +6646,8 @@ fn library_enum_class(ty: JType) -> &'static str {
         JType::ChronoUnit => "java/time/temporal/ChronoUnit",
         JType::ChronoField => "java/time/temporal/ChronoField",
         JType::IsoEra => "java/time/chrono/IsoEra",
+        JType::TextStyle => "java/time/format/TextStyle",
+        JType::FormatStyle => "java/time/format/FormatStyle",
         JType::RoundingMode => "java/math/RoundingMode",
         _ => "java/time/Month",
     }
@@ -6586,6 +6670,8 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         "ChronoUnit" => JType::ChronoUnit,
         "ChronoField" => JType::ChronoField,
         "IsoEra" => JType::IsoEra,
+        "TextStyle" => JType::TextStyle,
+        "FormatStyle" => JType::FormatStyle,
         "RoundingMode" => JType::RoundingMode,
         "DateTimeFormatter" => JType::DateFormat,
         _ => JType::Month,
@@ -6611,6 +6697,17 @@ fn time_constant_names(class: &str) -> Option<&'static [&'static str]> {
         // and are asked for the same way.
         "LocalTime" => &["MIDNIGHT", "NOON", "MAX", "MIN"],
         "Duration" | "Period" => &["ZERO"],
+        // The two formatting styles, in the enum's own order — which is also
+        // `ordinal()`, and the number `getDisplayName` reads.
+        "TextStyle" => &[
+            "FULL",
+            "FULL_STANDALONE",
+            "SHORT",
+            "SHORT_STANDALONE",
+            "NARROW",
+            "NARROW_STANDALONE",
+        ],
+        "FormatStyle" => &["FULL", "LONG", "MEDIUM", "SHORT"],
         // `java.math.RoundingMode`, in the enum's own order — which is also
         // `ordinal()`, and the deprecated `BigDecimal.ROUND_*` ints.
         "RoundingMode" => &[
@@ -7574,6 +7671,23 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                     | JType::Vector(b),
             ) if elem_matches(a, b, table)
         )
+        // A `PrintWriter`, a `FileWriter` and a `StringWriter` are each a
+        // `java.io.Writer`, which is the abstract class a variable holding
+        // either is declared as.
+        || matches!(
+            (from, to),
+            (
+                JType::Writer | JType::StringWriter | JType::WriterFace,
+                JType::WriterFace,
+            )
+        )
+        // A COLLECTOR is erased: what it gathers is a fact about the factory
+        // that made it, not about the object, so any collector assigns to any
+        // collector variable. Without this `Collector<String, ?, List<String>>
+        // c = Collectors.toList();` was "Collector cannot be converted to
+        // Collector" — the two spellings of an erased result printing alike
+        // and comparing unequal.
+        || matches!((from, to), (JType::Collector(_), JType::Collector(_)))
         // ...and a Hashtable is a Map of its key and value.
         || matches!(
             (from, to),
@@ -7981,6 +8095,10 @@ enum ElemType {
     LocalDate,
     /// `IsoEra.values()`.
     IsoEra,
+    /// `TextStyle.values()` and `FormatStyle.values()` — the two formatting
+    /// enums, as a collection or array element.
+    TextStyle,
+    FormatStyle,
     /// A throwable element (`Throwable[]` from `getSuppressed()`, or an
     /// array of any exception class), carrying its exception id.
     Throwable(u8),
@@ -8136,6 +8254,8 @@ impl ElemType {
             ElemType::ChronoField => String::from("Ljava/time/temporal/ChronoField;"),
             ElemType::LocalDate => String::from("Ljava/time/LocalDate;"),
             ElemType::IsoEra => String::from("Ljava/time/chrono/IsoEra;"),
+            ElemType::TextStyle => String::from("Ljava/time/format/TextStyle;"),
+            ElemType::FormatStyle => String::from("Ljava/time/format/FormatStyle;"),
             ElemType::Throwable(id) => format!("L{};", exception_internal(id)),
             // A wildcard or nested element erases to its `read` class (Object,
             // unless a wildcard's modelled bound narrows it).
@@ -8214,6 +8334,8 @@ impl ElemType {
             ElemType::ChronoField => JType::ChronoField,
             ElemType::LocalDate => JType::LocalDate,
             ElemType::IsoEra => JType::IsoEra,
+            ElemType::TextStyle => JType::TextStyle,
+            ElemType::FormatStyle => JType::FormatStyle,
             ElemType::Throwable(id) => JType::Exception(id),
             // A wildcard or nested element erases (table-free) to its `read`
             // class; the nesting-aware `elem_value_type` recovers the true
@@ -8368,6 +8490,12 @@ enum JType {
     TemporalAdjuster,
     /// `java.time.chrono.IsoEra`, which `LocalDate.getEra` answers.
     IsoEra,
+    /// `java.time.format.TextStyle` and `FormatStyle` — the two formatting
+    /// ENUMS. They were modelled only as constants the compiler read where
+    /// they were written, so a variable, a `values()` or a switch over one was
+    /// refused; they are values like every other `java.time` enum now.
+    TextStyle,
+    FormatStyle,
     /// The three PARTIAL dates: a year on its own, a month of a year, and a
     /// day of a year that has no year.
     Year,
@@ -8433,6 +8561,11 @@ enum JType {
     Base64Decoder,
     /// `java.util.BitSet` — a set of small non-negative integers.
     BitSet,
+    /// `java.io.Writer` — the abstract FACE both writers wear. A
+    /// `PrintWriter` and a `StringWriter` are distinct types here (they answer
+    /// different methods), and this is what a variable holding either is
+    /// declared as. It offers only what `Writer` itself declares.
+    WriterFace,
     /// `java.io.StringWriter` — a writer that keeps what was written, which is
     /// how a program tests its own output.
     StringWriter,
@@ -8462,8 +8595,12 @@ enum JType {
     /// VM). `map` erases the element to `Object`; `collect` adopts the result
     /// element from the assignment context.
     Stream(ElemType),
-    /// A `java.util.stream.Collectors` recipe, the argument to `Stream.collect`.
-    Collector,
+    /// `java.util.stream.Collector<T, A, R>` — what a `collect` is handed.
+    /// The element is what it GATHERS (`R`), which a written type carries and
+    /// a factory call does not: `Collectors.toList()` says what it makes
+    /// through `collector_result_type`, and a `Collector<String, ?,
+    /// List<String>>` variable says it here.
+    Collector(ElemType),
     /// `java.util.stream.IntStream` — a stream of primitive `int`s (the VM
     /// models it as a `Stream` of unboxed ints). Adds numeric terminals
     /// (`sum`/`toArray`) the object `Stream` lacks.
@@ -8860,7 +8997,7 @@ impl JType {
                 table,
             ),
             JType::Stream(elem) => parameterized("Stream", &[elem], table),
-            JType::Collector => String::from("Collector"),
+            JType::Collector(_) => String::from("Collector"),
             JType::IntStream => String::from("IntStream"),
             JType::SummaryStats(flavour) => String::from(flavour.simple_name()),
             JType::DoubleStream => String::from("DoubleStream"),
@@ -8971,6 +9108,8 @@ impl JType {
             JType::ChronoField => String::from("ChronoField"),
             JType::TemporalAdjuster => String::from("TemporalAdjuster"),
             JType::IsoEra => String::from("IsoEra"),
+            JType::TextStyle => String::from("TextStyle"),
+            JType::FormatStyle => String::from("FormatStyle"),
             JType::Year => String::from("Year"),
             JType::YearMonth => String::from("YearMonth"),
             JType::MonthDay => String::from("MonthDay"),
@@ -8992,6 +9131,7 @@ impl JType {
             JType::Base64Decoder => String::from("Base64.Decoder"),
             JType::BitSet => String::from("BitSet"),
             JType::StringWriter => String::from("StringWriter"),
+            JType::WriterFace => String::from("Writer"),
             JType::DecimalFormat => String::from("DecimalFormat"),
             JType::NumberFormat => String::from("NumberFormat"),
             JType::Charset => String::from("Charset"),
@@ -9046,6 +9186,8 @@ impl JType {
                 | JType::ChronoField
                 | JType::TemporalAdjuster
                 | JType::IsoEra
+                | JType::TextStyle
+                | JType::FormatStyle
                 | JType::Year
                 | JType::YearMonth
                 | JType::MonthDay
@@ -9068,6 +9210,7 @@ impl JType {
                 | JType::Base64Decoder
                 | JType::BitSet
                 | JType::StringWriter
+                | JType::WriterFace
                 | JType::Pattern
                 | JType::Matcher
                 | JType::MatchResult
@@ -9082,7 +9225,7 @@ impl JType {
                 | JType::Set { .. }
                 | JType::TreeSet(_, _)
                 | JType::Stream(_)
-                | JType::Collector
+                | JType::Collector(_)
                 // All THREE primitive pipelines are references. Only the `int`
                 // one was written down here, so a `LongStream` or a
                 // `DoubleStream` could not be passed as an `Object`, held in a
@@ -9166,7 +9309,7 @@ impl JType {
             JType::TreeSet(_, role) => format!("L{};", role.set_internal()),
             JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
             JType::CharSequence => String::from("Ljava/lang/CharSequence;"),
-            JType::Collector => String::from("Ljava/util/stream/Collector;"),
+            JType::Collector(_) => String::from("Ljava/util/stream/Collector;"),
             JType::IntStream => String::from("Ljava/util/stream/IntStream;"),
             JType::SummaryStats(flavour) => format!("L{};", flavour.internal_name()),
             JType::DoubleStream => String::from("Ljava/util/stream/DoubleStream;"),
@@ -9216,6 +9359,8 @@ impl JType {
             JType::ChronoField => String::from("Ljava/time/temporal/ChronoField;"),
             JType::TemporalAdjuster => String::from("Ljava/time/temporal/TemporalAdjuster;"),
             JType::IsoEra => String::from("Ljava/time/chrono/IsoEra;"),
+            JType::TextStyle => String::from("Ljava/time/format/TextStyle;"),
+            JType::FormatStyle => String::from("Ljava/time/format/FormatStyle;"),
             JType::Year => String::from("Ljava/time/Year;"),
             JType::YearMonth => String::from("Ljava/time/YearMonth;"),
             JType::MonthDay => String::from("Ljava/time/MonthDay;"),
@@ -9237,6 +9382,7 @@ impl JType {
             JType::Base64Decoder => String::from("Ljava/util/Base64$Decoder;"),
             JType::BitSet => String::from("Ljava/util/BitSet;"),
             JType::StringWriter => String::from("Ljava/io/StringWriter;"),
+            JType::WriterFace => String::from("Ljava/io/Writer;"),
             JType::DecimalFormat => String::from("Ljava/text/DecimalFormat;"),
             JType::NumberFormat => String::from("Ljava/text/NumberFormat;"),
             JType::Charset => String::from("Ljava/nio/charset/Charset;"),
@@ -10560,6 +10706,8 @@ fn method_descriptor(
                     // signature javac accepts. Same divergence class as
                     // `type_of` versus emit, one layer down.
                     out.push_str("Ljava/util/Iterator;");
+                } else if simple == "Collector" && args.len() == 3 && !table.has_class(simple) {
+                    out.push_str("Ljava/util/stream/Collector;");
                 } else if matches!(simple, "Stream") && !table.has_class(lookup) {
                     out.push_str("Ljava/util/stream/Stream;");
                 } else if !table.has_class(lookup) && simple == "Class" {
@@ -10903,6 +11051,7 @@ enum BRet {
     /// A `java.util.UUID` and a `java.io.StringWriter`.
     Uuid,
     StringWriter,
+    WriterFace,
     /// A `java.util.Enumeration` over the receiver's element, its keys, or
     /// its values.
     Enumeration,
@@ -10949,6 +11098,10 @@ enum BRet {
     /// A `java.time.chrono.IsoEra`, and an array of them.
     Era,
     EraArray,
+    TextStyle,
+    TextStyleArray,
+    FormatStyle,
+    FormatStyleArray,
     /// `List<TemporalUnit>` — what `Duration.getUnits` and `Period.getUnits`
     /// answer, which is a fixed list of `ChronoUnit` constants.
     UnitList,
@@ -16152,6 +16305,50 @@ const UUID_STATIC_METHODS: &[BuiltinMethod] = &[
 ];
 
 /// `java.io.StringWriter` — a writer whose output a program reads back.
+/// `java.io.Writer` — the abstract class, and so exactly the methods a
+/// variable declared as one may call. A `PrintWriter`'s `println` family and a
+/// `StringWriter`'s `toString` are each their own class's, and neither is
+/// reachable through this face — which is what a JDK's compiler says too.
+const WRITER_FACE_METHODS: &[BuiltinMethod] = &[
+    bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
+    bm("write", &[BParam::Char], BRet::Void, "(I)V"),
+    bm(
+        "write",
+        &[BParam::Str, BParam::Int, BParam::Int],
+        BRet::Void,
+        "(Ljava/lang/String;II)V",
+    ),
+    bm(
+        "append",
+        &[BParam::CharSeq],
+        BRet::WriterFace,
+        "(Ljava/lang/CharSequence;)Ljava/io/Writer;",
+    ),
+    bm(
+        "append",
+        &[BParam::Char],
+        BRet::WriterFace,
+        "(C)Ljava/io/Writer;",
+    ),
+    bm(
+        "append",
+        &[BParam::CharSeq, BParam::Int, BParam::Int],
+        BRet::WriterFace,
+        "(Ljava/lang/CharSequence;II)Ljava/io/Writer;",
+    ),
+    bm("flush", &[], BRet::Void, "()V"),
+    bm("close", &[], BRet::Void, "()V"),
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
 const STRING_WRITER_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm(
@@ -16523,6 +16720,91 @@ const ISO_ERA_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)Z",
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+/// What both formatting styles answer: an enum, and nothing else. Written
+/// once because the two differ only in the class each names.
+const STYLE_METHODS: &[BuiltinMethod] = &[
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("ordinal", &[], BRet::Int, "()I"),
+    bm(
+        "compareTo",
+        &[BParam::Temporal],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+/// ...and the three a `TextStyle` declares beyond them. A STANDALONE style is
+/// the odd ordinal of each pair, which is what `isStandalone` reads.
+const TEXT_STYLE_METHODS: &[BuiltinMethod] = &[
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("ordinal", &[], BRet::Int, "()I"),
+    bm(
+        "compareTo",
+        &[BParam::Temporal],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("isStandalone", &[], BRet::Boolean, "()Z"),
+    bm(
+        "asStandalone",
+        &[],
+        BRet::TextStyle,
+        "()Ljava/time/format/TextStyle;",
+    ),
+    bm(
+        "asNormal",
+        &[],
+        BRet::TextStyle,
+        "()Ljava/time/format/TextStyle;",
+    ),
+];
+
+const TEXT_STYLE_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "valueOf",
+        &[BParam::Str],
+        BRet::TextStyle,
+        "(Ljava/lang/String;)Ljava/time/format/TextStyle;",
+    ),
+    bm(
+        "values",
+        &[],
+        BRet::TextStyleArray,
+        "()[Ljava/time/format/TextStyle;",
+    ),
+];
+
+const FORMAT_STYLE_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "valueOf",
+        &[BParam::Str],
+        BRet::FormatStyle,
+        "(Ljava/lang/String;)Ljava/time/format/FormatStyle;",
+    ),
+    bm(
+        "values",
+        &[],
+        BRet::FormatStyleArray,
+        "()[Ljava/time/format/FormatStyle;",
+    ),
 ];
 
 const ISO_ERA_STATIC_METHODS: &[BuiltinMethod] = &[
@@ -19713,6 +19995,8 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::TextStyle
+            | JType::FormatStyle
             | JType::Year
             | JType::YearMonth
             | JType::MonthDay
@@ -19735,6 +20019,7 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::Base64Decoder
             | JType::BitSet
             | JType::StringWriter
+            | JType::WriterFace
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -19777,6 +20062,8 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::ChronoUnit => Some(("java/time/temporal/ChronoUnit", CHRONO_UNIT_METHODS)),
         JType::ChronoField => Some(("java/time/temporal/ChronoField", CHRONO_FIELD_METHODS)),
         JType::IsoEra => Some(("java/time/chrono/IsoEra", ISO_ERA_METHODS)),
+        JType::TextStyle => Some(("java/time/format/TextStyle", TEXT_STYLE_METHODS)),
+        JType::FormatStyle => Some(("java/time/format/FormatStyle", STYLE_METHODS)),
         JType::Year => Some(("java/time/Year", YEAR_METHODS)),
         JType::YearMonth => Some(("java/time/YearMonth", YEAR_MONTH_METHODS)),
         JType::MonthDay => Some(("java/time/MonthDay", MONTH_DAY_METHODS)),
@@ -19798,6 +20085,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Base64Decoder => Some(("java/util/Base64$Decoder", BASE64_DECODER_METHODS)),
         JType::BitSet => Some(("java/util/BitSet", BITSET_METHODS)),
         JType::StringWriter => Some(("java/io/StringWriter", STRING_WRITER_METHODS)),
+        JType::WriterFace => Some(("java/io/Writer", WRITER_FACE_METHODS)),
         JType::DecimalFormat => Some(("java/text/DecimalFormat", DECIMAL_FORMAT_METHODS)),
         JType::NumberFormat => Some(("java/text/NumberFormat", NUMBER_FORMAT_METHODS)),
         JType::Charset => Some(("java/nio/charset/Charset", CHARSET_METHODS)),
@@ -19821,7 +20109,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         // `OBJECT_METHODS` is mixed into every OTHER receiver's — a `toString`
         // added there would override the honest refusals that name it (a
         // `Scanner`'s text is one).
-        JType::Collector => Some(("java/util/stream/Collector", COLLECTOR_METHODS)),
+        JType::Collector(_) => Some(("java/util/stream/Collector", COLLECTOR_METHODS)),
         JType::SummaryStats(flavour) => Some((
             flavour.internal_name(),
             match flavour {
@@ -20230,6 +20518,14 @@ const COLLECTORS_METHODS: &[BuiltinMethod] = &[
         BRet::Collector,
         "(Ljava/util/function/Function;Ljava/util/stream/Collector;)Ljava/util/stream/Collector;",
     ),
+    // ...and with the MAP named between the two, which is the form that puts
+    // the groups in key order.
+    bm(
+        "groupingBy",
+        &[BParam::UnaryOperator, BParam::Supplier, BParam::Collector],
+        BRet::Collector,
+        "(Ljava/util/function/Function;Ljava/util/function/Supplier;Ljava/util/stream/Collector;)Ljava/util/stream/Collector;",
+    ),
     bm(
         "partitioningBy",
         &[BParam::Predicate],
@@ -20344,6 +20640,20 @@ const COLLECTORS_METHODS: &[BuiltinMethod] = &[
         ],
         BRet::Collector,
         "(Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;",
+    ),
+    // ...and the four-argument form, which names the MAP to gather into.
+    // `Collectors` declares it, and it is how a program asks for its result
+    // in key order rather than in a `HashMap`'s.
+    bm(
+        "toMap",
+        &[
+            BParam::UnaryOperator,
+            BParam::UnaryOperator,
+            BParam::BiFunction,
+            BParam::Supplier,
+        ],
+        BRet::Collector,
+        "(Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/BinaryOperator;Ljava/util/function/Supplier;)Ljava/util/stream/Collector;",
     ),
     // `toUnmodifiableMap` takes the same two shapes `toMap` does; only the
     // finish differs.
@@ -20549,6 +20859,8 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
             TEMPORAL_ADJUSTERS_METHODS,
         )),
         "IsoEra" => Some(("java/time/chrono/IsoEra", ISO_ERA_STATIC_METHODS)),
+        "TextStyle" => Some(("java/time/format/TextStyle", TEXT_STYLE_STATIC_METHODS)),
+        "FormatStyle" => Some(("java/time/format/FormatStyle", FORMAT_STYLE_STATIC_METHODS)),
         "Map.Entry" | "Entry" => Some(("java/util/Map$Entry", MAP_ENTRY_STATIC_METHODS)),
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
@@ -20958,7 +21270,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
             (Some(key), Some(value)) => JType::library_map(key, value),
             _ => JType::Error,
         },
-        BParam::Collector => JType::Collector,
+        BParam::Collector => JType::Collector(ElemType::Object(table.object_id)),
     }
 }
 
@@ -21020,7 +21332,7 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
                     (JType::Object(id), Some(target)) if table.is_subtype(id, target)
                 )
         }
-        BParam::Collector => matches!(arg, JType::Collector | JType::Null),
+        BParam::Collector => matches!(arg, JType::Collector(_) | JType::Null),
         // A collection whose elements are assignable to the receiver's — a
         // `List`, `Set` or `Collection` of a widening element type. `null`
         // is a Collection too.
@@ -21370,6 +21682,16 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             elem: ElemType::IsoEra,
             dims: 1,
         }),
+        BRet::TextStyle => Some(JType::TextStyle),
+        BRet::TextStyleArray => Some(JType::Array {
+            elem: ElemType::TextStyle,
+            dims: 1,
+        }),
+        BRet::FormatStyle => Some(JType::FormatStyle),
+        BRet::FormatStyleArray => Some(JType::Array {
+            elem: ElemType::FormatStyle,
+            dims: 1,
+        }),
         BRet::UnitList => Some(JType::library_list(ElemType::ChronoUnit)),
         BRet::ValueRange => Some(JType::ValueRange),
         BRet::Month => Some(JType::Month),
@@ -21396,6 +21718,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             dims: 1,
         }),
         BRet::StringWriter => Some(JType::StringWriter),
+        BRet::WriterFace => Some(JType::WriterFace),
         // `NumberFormat.parse` answers a `Number` — a Long or a Double, and
         // the program asks it which with `intValue()`/`doubleValue()`.
         BRet::Number => table.class_id("Number").map(JType::Object),
@@ -21521,7 +21844,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             Some(ElemType::Long) => JType::OptionalLong,
             _ => JType::OptionalInt,
         }),
-        BRet::Collector => Some(JType::Collector),
+        // A factory's collector carries no RESULT of its own: what it gathers
+        // is read from the factory CALL (`collector_result_type`), and a
+        // written `Collector<T, A, R>` carries `R` instead.
+        BRet::Collector => Some(JType::Collector(ElemType::Object(table.object_id))),
         // A program that never NAMES a comparator has no bundled `__Comparator`
         // class to point at — and `sortedSet.comparator()` is exactly such a
         // program, since a natural-ordering collection answers null. Typing it
@@ -26348,6 +26674,7 @@ impl BodyGen<'_> {
             "UUID" => JType::Uuid,
             "BitSet" => JType::BitSet,
             "StringWriter" => JType::StringWriter,
+            "Writer" => JType::WriterFace,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
             "PrintStream" => JType::PrintStream,
@@ -26857,6 +27184,21 @@ impl BodyGen<'_> {
             None => class_name,
         };
         let Some(class_id) = self.table.class_id(class_name) else {
+            // A library type caturra models as a FACE — `List`, `Map`,
+            // `Reader`, `Writer` — is abstract in the JDK, and javac says so.
+            // Saying "cannot find symbol: class List" instead named the
+            // program's mistake wrongly: the class exists, and the reason
+            // `new List<>()` will not do is that no such object can be made.
+            if abstract_library_face(class_name) && !self.table.has_class(class_name) {
+                self.error(
+                    span,
+                    format!(
+                        "{} is abstract; cannot be instantiated",
+                        source_type_name(class_name)
+                    ),
+                );
+                return JType::Error;
+            }
             let classlib = ["String", "Object", "Integer", "Double", "StringBuilder"];
             if classlib.contains(&class_name) {
                 self.error(
@@ -27887,7 +28229,7 @@ impl BodyGen<'_> {
             let descriptor = match (target_ty, appends) {
                 // A `PrintWriter` over a `StringWriter` writes into memory,
                 // which is how a program builds text with `printf`.
-                (JType::StringWriter, false) => Some("(Ljava/io/Writer;)V"),
+                (JType::StringWriter | JType::WriterFace, false) => Some("(Ljava/io/Writer;)V"),
                 (JType::Str, false) => Some("(Ljava/lang/String;)V"),
                 (JType::Str, true) => Some("(Ljava/lang/String;Z)V"),
                 (JType::File, false) => Some("(Ljava/io/File;)V"),
@@ -28490,8 +28832,27 @@ impl BodyGen<'_> {
     /// Set/List of the stream's element — but once `map` has erased the element
     /// to `Object`, a `null` that adopts the assignment context (like a diamond
     /// `new`), so `List<R> r = ....map(...).collect(toList())` still type-checks.
+    #[allow(clippy::too_many_lines)] // one arm per collector factory
     fn collector_result_type(&mut self, collector: &Expr, stream_elem: ElemType) -> JType {
         let erased = matches!(stream_elem, ElemType::Object(id) if id == self.table.object_id);
+        // A collector held in a VARIABLE says what it gathers in its own
+        // written type — `Collector<String, ?, List<String>>` — which is the
+        // only place the answer survives once the factory call is behind a
+        // name. Read before the factory shapes below, which see a call and
+        // answer `null` for anything else, so `collect(c).get(0)` was
+        // "<null> cannot be dereferenced".
+        if let JType::Collector(gathered) = self.type_of(collector)
+            && !matches!(gathered, ElemType::Object(id) if id == self.table.object_id)
+        {
+            // A PARAMETERIZED result (`List<String>`) rides as a nested type,
+            // whose `base_type` is the erased `Object` — so the arena is asked
+            // for what it really is, or `collect(c).get(0)` finds `get` on an
+            // `Object`.
+            return match gathered {
+                ElemType::Nested { inner, .. } => self.table.nested_type(inner),
+                other => other.base_type(),
+            };
+        }
         let (factory, args) = match collector {
             Expr::Call {
                 receiver: Some(receiver),
@@ -28584,7 +28945,7 @@ impl BodyGen<'_> {
             }
             "toMap" if args.len() >= 2 => {
                 match (self.collector_key(&args[0]), self.collector_key(&args[1])) {
-                    (Some(key), Some(value)) => JType::library_map(key, value),
+                    (Some(key), Some(value)) => self.gathered_map(key, value, args.get(3)),
                     _ => JType::Null,
                 }
             }
@@ -28594,7 +28955,11 @@ impl BodyGen<'_> {
                 } else {
                     self.collector_key(&args[0])
                 };
-                let value = match args.get(1) {
+                // `groupingBy(f, mapFactory, downstream)` names the map
+                // between the two, so the DOWNSTREAM is the last argument
+                // either way.
+                let factory = (args.len() == 3).then(|| &args[1]);
+                let value = match args.last().filter(|_| args.len() > 1) {
                     Some(downstream) => {
                         let ty = self.collector_result_type(downstream, stream_elem);
                         value_elem_of(ty, self.table)
@@ -28602,11 +28967,29 @@ impl BodyGen<'_> {
                     None => value_elem_of(JType::library_list(stream_elem), self.table),
                 };
                 match (key, value) {
-                    (Some(key), Some(value)) => JType::library_map(key, value),
+                    (Some(key), Some(value)) => self.gathered_map(key, value, factory),
                     _ => JType::Null,
                 }
             }
             _ => JType::Null,
+        }
+    }
+
+    /// The map a `toMap`/`groupingBy` answers: the one its FACTORY makes, with
+    /// the key and value the functions decided. The JDK declares the
+    /// four-argument form as `Collector<T, ?, M>` for the supplier's own `M`,
+    /// so `collect(toMap(…, TreeMap::new))` really is a `TreeMap` — reading
+    /// only `Map` here made assigning the result to one "incompatible types:
+    /// `Map` cannot be converted to `TreeMap`".
+    fn gathered_map(&mut self, key: ElemType, value: ElemType, factory: Option<&Expr>) -> JType {
+        let made = factory
+            .map(|factory| self.type_of(factory))
+            .and_then(|ty| lambda_produces(ty, self.table));
+        match made {
+            Some(JType::TreeMap { role, .. }) => JType::TreeMap { key, value, role },
+            Some(JType::Hashtable { .. }) => JType::Hashtable { key, value },
+            Some(JType::Map { face, .. }) => JType::Map { key, value, face },
+            _ => JType::library_map(key, value),
         }
     }
 
@@ -29350,6 +29733,8 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::TextStyle
+            | JType::FormatStyle
             | JType::Year
             | JType::YearMonth
             | JType::MonthDay
@@ -29372,6 +29757,7 @@ impl BodyGen<'_> {
             | JType::Base64Decoder
             | JType::BitSet
             | JType::StringWriter
+            | JType::WriterFace
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -29383,7 +29769,7 @@ impl BodyGen<'_> {
             | JType::Set { .. }
             | JType::TreeSet(_, _)
             | JType::Stream(_)
-            | JType::Collector
+            | JType::Collector(_)
             | JType::IntStream
             | JType::SummaryStats(_)
             | JType::DoubleStream
@@ -30426,7 +30812,10 @@ impl BodyGen<'_> {
                 | JType::Base64Decoder
                 | JType::BitSet
                 | JType::StringWriter
-                | JType::IsoEra => {
+                | JType::WriterFace
+                | JType::IsoEra
+                | JType::TextStyle
+                | JType::FormatStyle => {
                     tags.push_str("Ljava/lang/Object;");
                     width += 1;
                 }
@@ -30732,7 +31121,14 @@ impl BodyGen<'_> {
             self.code.discard();
             return None;
         };
-        let index = self.constant_style(style, "TextStyle", text_style_index)?;
+        // A written constant is folded; a VALUE is emitted and asked for its
+        // ordinal. The locale is checked either way, and before either is
+        // pushed, so a bad one is the only complaint.
+        let written = self.constant_style_index(style, "TextStyle", text_style_index);
+        if written.is_none() && self.type_of(style) != JType::TextStyle {
+            self.constant_style(style, "TextStyle", text_style_index)?;
+            return None;
+        }
         if !english_locale(locale) {
             self.error(
                 locale.span(),
@@ -30745,7 +31141,14 @@ impl BodyGen<'_> {
             self.code.discard();
             return None;
         }
-        self.push_int(index);
+        match written {
+            Some(index) => self.push_int(index),
+            None => {
+                if !self.style_value_ordinal(style, JType::TextStyle) {
+                    return None;
+                }
+            }
+        }
         let internal = if receiver_ty == JType::Month {
             "java/time/Month"
         } else {
@@ -30782,35 +31185,55 @@ impl BodyGen<'_> {
                 return None;
             }
         };
-        // One style, or two for the date-time form written out.
-        let styles: Vec<i32> = match (args, wants) {
-            ([one], _) => match self.constant_style(one, "FormatStyle", format_style_index) {
-                Some(style) => vec![style],
-                None => return None,
-            },
-            ([date, time], (true, true)) => {
-                match (
-                    self.constant_style(date, "FormatStyle", format_style_index),
-                    self.constant_style(time, "FormatStyle", format_style_index),
-                ) {
-                    (Some(d), Some(t)) => vec![d, t],
-                    _ => return None,
-                }
-            }
+        // One style, or two for the date-time form written out. Each is either
+        // a constant folded here or a `FormatStyle` VALUE emitted and asked
+        // for its ordinal — both reach the VM as the same number.
+        let written: Vec<&Expr> = match (args, wants) {
+            ([one], _) => vec![one],
+            ([date, time], (true, true)) => vec![date, time],
             _ => {
                 self.no_suitable_library_method("DateTimeFormatter", method, args, span);
                 return None;
             }
         };
-        let (date, time) = match (wants, styles.as_slice()) {
-            ((true, false), [only]) => (*only, -1),
-            ((false, true), [only]) => (-1, *only),
-            (_, [only]) => (*only, *only),
-            (_, [d, t]) => (*d, *t),
-            _ => (-1, -1),
+        for style in &written {
+            if self
+                .constant_style_index(style, "FormatStyle", format_style_index)
+                .is_none()
+                && self.type_of(style) != JType::FormatStyle
+            {
+                self.constant_style(style, "FormatStyle", format_style_index)?;
+                return None;
+            }
+        }
+        // Which of the two slots each written style fills. A form that names
+        // one style uses it for whichever half it has, and for BOTH halves of
+        // the date-time form written with a single style.
+        let slots: [Option<&Expr>; 2] = match (wants, written.as_slice()) {
+            ((true, false), [only]) => [Some(only), None],
+            ((false, true), [only]) => [None, Some(only)],
+            (_, [only]) => [Some(only), Some(only)],
+            (_, [date, time]) => [Some(date), Some(time)],
+            _ => [None, None],
         };
-        self.push_int(date);
-        self.push_int(time);
+        for slot in slots {
+            match slot {
+                None => self.push_int(-1),
+                Some(style) => {
+                    match self.constant_style_index(style, "FormatStyle", format_style_index) {
+                        Some(index) => self.push_int(index),
+                        // The same value twice (the one-style date-time form)
+                        // is evaluated twice, as javac's own desugaring of a
+                        // repeated argument would be — it is a constant read.
+                        None => {
+                            if !self.style_value_ordinal(style, JType::FormatStyle) {
+                                return None;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let method_ref = intern_method_ref(
             self.pool,
             "java/time/format/DateTimeFormatter",
@@ -30825,6 +31248,26 @@ impl BodyGen<'_> {
     /// The index of a style CONSTANT written inline — `FormatStyle.MEDIUM`,
     /// `TextStyle.SHORT`. Anything else is refused where it stands, because
     /// the alternative is reading a value caturra does not model.
+    /// The style a written constant names, without complaining when the
+    /// argument is not one — the caller may still accept a VALUE.
+    #[allow(clippy::unused_self)] // reads the written form, like its neighbours
+    fn constant_style_index(
+        &self,
+        arg: &Expr,
+        class: &str,
+        index_of: fn(&str) -> Option<i32>,
+    ) -> Option<i32> {
+        match arg {
+            Expr::Name { path, .. } if path.len() >= 2 => {
+                let owner = &path[path.len() - 2];
+                (owner == class)
+                    .then(|| path[path.len() - 1].as_str())
+                    .and_then(index_of)
+            }
+            _ => None,
+        }
+    }
+
     fn constant_style(
         &mut self,
         arg: &Expr,
@@ -30849,6 +31292,22 @@ impl BodyGen<'_> {
             ),
         );
         None
+    }
+
+    /// The same style as a VALUE: `getDisplayName(t, …)` where `t` is a
+    /// `TextStyle` variable. The constant form above is folded while compiling
+    /// (which is how a JDK's `getDisplayName` reaches the VM as one number);
+    /// this one emits the value and asks it for its ordinal, so both paths
+    /// hand the VM the same thing. Answers whether it emitted anything.
+    fn style_value_ordinal(&mut self, arg: &Expr, class: JType) -> bool {
+        if self.type_of(arg) != class {
+            return false;
+        }
+        self.expr(arg);
+        let internal = library_enum_class(class);
+        let method_ref = intern_method_ref(self.pool, internal, "ordinal", "()I");
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 0);
+        true
     }
 
     /// `EnumSet.of/noneOf/allOf/range/complementOf/copyOf`. Every one of them
@@ -31499,6 +31958,7 @@ impl BodyGen<'_> {
             JType::Base64Decoder => String::from("java/util/Base64$Decoder"),
             JType::BitSet => String::from("java/util/BitSet"),
             JType::StringWriter => String::from("java/io/StringWriter"),
+            JType::WriterFace => String::from("java/io/Writer"),
             JType::DecimalFormat => String::from("java/text/DecimalFormat"),
             JType::NumberFormat => String::from("java/text/NumberFormat"),
             JType::Charset => String::from("java/nio/charset/Charset"),
@@ -31517,6 +31977,8 @@ impl BodyGen<'_> {
             JType::ChronoField => String::from("java/time/temporal/ChronoField"),
             JType::TemporalAdjuster => String::from("java/time/temporal/TemporalAdjuster"),
             JType::IsoEra => String::from("java/time/chrono/IsoEra"),
+            JType::TextStyle => String::from("java/time/format/TextStyle"),
+            JType::FormatStyle => String::from("java/time/format/FormatStyle"),
             JType::Year => String::from("java/time/Year"),
             JType::YearMonth => String::from("java/time/YearMonth"),
             JType::MonthDay => String::from("java/time/MonthDay"),
@@ -35304,7 +35766,7 @@ impl BodyGen<'_> {
             | JType::Set { .. }
             | JType::TreeSet(_, _)
             | JType::Stream(_)
-            | JType::Collector
+            | JType::Collector(_)
             | JType::IntStream
             | JType::SummaryStats(_)
             | JType::DoubleStream
@@ -35339,6 +35801,7 @@ impl BodyGen<'_> {
             | JType::Base64Decoder
             | JType::BitSet
             | JType::StringWriter
+            | JType::WriterFace
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -35369,6 +35832,8 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::TextStyle
+            | JType::FormatStyle
             | JType::Year
             | JType::YearMonth
             | JType::MonthDay
@@ -37648,6 +38113,21 @@ impl BodyGen<'_> {
             // `new Integer[n]` — a reference array, null-filled (Java's
             // default for references; the old int[] model zero-filled it).
             ElemType::Wrapper(prim) => Some(wrapper_internal(prim.elem()).to_owned()),
+            // Any OTHER reference element is the same instruction over the
+            // class its own descriptor names, which is all the arms above
+            // spell out by hand. Without this catch-all a new element kind
+            // fell through to the primitive match below and hit its
+            // `unreachable` — `new TextStyle[2]` crashed the compiler, and a
+            // crash prints no diagnostic at all.
+            other if other.base_type().is_reference() => {
+                let descriptor = other.base_type().descriptor(self.table);
+                Some(
+                    descriptor
+                        .strip_prefix('L')
+                        .and_then(|d| d.strip_suffix(';'))
+                        .map_or_else(|| String::from("java/lang/Object"), String::from),
+                )
+            }
             _ => None,
         };
         if let Some(internal) = internal {
@@ -38047,6 +38527,8 @@ impl BodyGen<'_> {
                 JType::ChronoField => "java/time/temporal/ChronoField",
                 JType::TemporalAdjuster => "java/time/temporal/TemporalAdjuster",
                 JType::IsoEra => "java/time/chrono/IsoEra",
+                JType::TextStyle => "java/time/format/TextStyle",
+                JType::FormatStyle => "java/time/format/FormatStyle",
                 JType::RoundingMode => "java/math/RoundingMode",
                 JType::ValueRange => "java/time/temporal/ValueRange",
                 JType::DateFormat => "java/time/format/DateTimeFormatter",
@@ -38738,7 +39220,7 @@ impl BodyGen<'_> {
             | JType::IntStream
             | JType::LongStream
             | JType::DoubleStream
-            | JType::Collector => CastFace::Interface,
+            | JType::Collector(_) => CastFace::Interface,
             _ => CastFace::Class,
         }
     }
@@ -40422,7 +40904,7 @@ impl BodyGen<'_> {
             | JType::Set { .. }
             | JType::TreeSet(_, _)
             | JType::Stream(_)
-            | JType::Collector
+            | JType::Collector(_)
             | JType::IntStream
             | JType::SummaryStats(_)
             | JType::DoubleStream
@@ -40475,6 +40957,7 @@ impl BodyGen<'_> {
             | JType::Base64Decoder
             | JType::BitSet
             | JType::StringWriter
+            | JType::WriterFace
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -40488,6 +40971,8 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::TextStyle
+            | JType::FormatStyle
             | JType::Year
             | JType::YearMonth
             | JType::MonthDay
@@ -40740,6 +41225,8 @@ impl BodyGen<'_> {
             | ElemType::ChronoField
             | ElemType::LocalDate
             | ElemType::IsoEra
+            | ElemType::TextStyle
+            | ElemType::FormatStyle
             | ElemType::Throwable(_)
             | ElemType::Wildcard { .. }
             | ElemType::Nested { .. }
@@ -40892,6 +41379,8 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::TextStyle
+            | JType::FormatStyle
             | JType::Year
             | JType::YearMonth
             | JType::MonthDay
@@ -40918,6 +41407,7 @@ impl BodyGen<'_> {
             | JType::Base64Decoder
             | JType::BitSet
             | JType::StringWriter
+            | JType::WriterFace
             | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
@@ -40947,6 +41437,8 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::TextStyle
+            | JType::FormatStyle
             | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
@@ -40970,6 +41462,7 @@ impl BodyGen<'_> {
             | JType::Base64Decoder
             | JType::BitSet
             | JType::StringWriter
+            | JType::WriterFace
             | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };
@@ -41218,6 +41711,13 @@ impl BodyGen<'_> {
             // erased type-variable element accepts any). The two gates again:
             // `widens` allowing it is not enough, this matrix has to agree.
             (JType::Optional(_), JType::Optional(_)) if widens(from, to, self.table) => {}
+            // A COLLECTOR is erased: what it gathers is a fact about the
+            // factory that made it, not about the object. The two gates AGAIN
+            // — the seventh type to need both arms.
+            (JType::Collector(_), JType::Collector(_)) => {}
+            // ...and the writers wearing their abstract face. The two gates
+            // AGAIN — the eighth type to need both arms.
+            (JType::Writer | JType::StringWriter | JType::WriterFace, JType::WriterFace) => {}
             // A PARAMETERIZED value assigned to a supertype, raw or
             // parameterized: `Iterable<String> it = bag` for a
             // `class Bag<T> implements Iterable<T>`. Nothing here matched a

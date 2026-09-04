@@ -154,6 +154,10 @@ pub enum CollectorKind {
     GroupingBy {
         classifier: HeapRef,
         downstream: Option<HeapRef>,
+        /// The MAP to gather into, when the three-argument form named one —
+        /// `groupingBy(f, TreeMap::new, downstream)`, which is how a program
+        /// asks for its groups in key order.
+        factory: Option<HeapRef>,
     },
     /// `Collectors.partitioningBy(predicate)` — a two-entry map, `false` then
     /// `true`, each holding the `List` of elements on that side. `downstream`
@@ -169,6 +173,10 @@ pub enum CollectorKind {
         key: HeapRef,
         value: HeapRef,
         merge: Option<HeapRef>,
+        /// The MAP to gather into, when the four-argument form named one —
+        /// `toMap(k, v, merge, TreeMap::new)`. Without it the result is the
+        /// `HashMap` the two- and three-argument forms promise.
+        factory: Option<HeapRef>,
     },
     /// `Collectors.summingInt(f)` / `summingLong` / `summingDouble` — the sum
     /// of the mapped values, and `averagingInt`/… their mean (always a
@@ -388,6 +396,13 @@ pub enum Temporal {
     Adjuster(crate::time::Adjuster),
     /// `java.time.chrono.IsoEra` — 0 is BCE and 1 is CE.
     Era(u8),
+    /// `java.time.format.TextStyle`, by its own ordinal. It is an ENUM like
+    /// the ones above it, and was modelled only as a constant the compiler
+    /// read where it was written — so `TextStyle.values()`, a `TextStyle`
+    /// variable and a switch over one were all refused.
+    TextStyle(u8),
+    /// `java.time.format.FormatStyle`, likewise.
+    FormatStyle(u8),
     /// `java.time.Year` — a year on its own, which is a value a program keeps
     /// when the month and day would be a lie.
     Year(i32),
@@ -396,6 +411,20 @@ pub enum Temporal {
     /// `java.time.MonthDay` — a day of a year that has no year: a birthday.
     MonthDay(u8, u8),
 }
+
+/// `java.time.format.TextStyle`'s constants, in the enum's own order — which
+/// is `ordinal()`, and the order `values()` answers in.
+pub const TEXT_STYLE_NAMES: [&str; 6] = [
+    "FULL",
+    "FULL_STANDALONE",
+    "SHORT",
+    "SHORT_STANDALONE",
+    "NARROW",
+    "NARROW_STANDALONE",
+];
+
+/// ...and `java.time.format.FormatStyle`'s.
+pub const FORMAT_STYLE_NAMES: [&str; 4] = ["FULL", "LONG", "MEDIUM", "SHORT"];
 
 impl Temporal {
     /// The class a `getClass()` reports, and the name an exception mentions.
@@ -416,6 +445,8 @@ impl Temporal {
             // synthetic one; a program never prints it usefully.
             Temporal::Adjuster(_) => "java/time/temporal/TemporalAdjusters",
             Temporal::Era(_) => "java/time/chrono/IsoEra",
+            Temporal::TextStyle(_) => "java/time/format/TextStyle",
+            Temporal::FormatStyle(_) => "java/time/format/FormatStyle",
             Temporal::Year(_) => "java/time/Year",
             Temporal::YearMonth(_, _) => "java/time/YearMonth",
             Temporal::MonthDay(_, _) => "java/time/MonthDay",
@@ -450,6 +481,10 @@ impl Temporal {
             Temporal::Range(range) => range.text(),
             Temporal::Adjuster(adjuster) => format!("{adjuster:?}"),
             Temporal::Era(era) => String::from(if era == 0 { "BCE" } else { "CE" }),
+            // An enum's default `toString` IS its constant, and neither of
+            // these overrides it.
+            Temporal::TextStyle(style) => String::from(TEXT_STYLE_NAMES[usize::from(style)]),
+            Temporal::FormatStyle(style) => String::from(FORMAT_STYLE_NAMES[usize::from(style)]),
             // A year is written as at least four digits, and a month-day with
             // the two leading dashes that say it has no year.
             Temporal::Year(year) => format!("{year:04}"),
@@ -1104,10 +1139,14 @@ impl CollectorKind {
             CollectorKind::GroupingBy {
                 classifier,
                 downstream,
+                factory,
             } => {
                 visit(*classifier);
                 if let Some(downstream) = downstream {
                     visit(*downstream);
+                }
+                if let Some(factory) = factory {
+                    visit(*factory);
                 }
             }
             CollectorKind::Summing { mapper: f, .. }
@@ -1161,8 +1200,16 @@ impl CollectorKind {
                 visit(*mapper);
                 visit(*downstream);
             }
-            CollectorKind::ToMap { key, value, merge } => {
+            CollectorKind::ToMap {
+                key,
+                value,
+                merge,
+                factory,
+            } => {
                 visit(*key);
+                if let Some(factory) = factory {
+                    visit(*factory);
+                }
                 visit(*value);
                 if let Some(merge) = merge {
                     visit(*merge);
@@ -1577,6 +1624,8 @@ impl Heap {
             Temporal::Month(month) => (1u8, month),
             Temporal::Field(field) => (3u8, field),
             Temporal::Era(era) => (4u8, era),
+            Temporal::TextStyle(style) => (6u8, style),
+            Temporal::FormatStyle(style) => (7u8, style),
         };
         if let Some(existing) = self.enum_pool.get(&key) {
             return *existing;

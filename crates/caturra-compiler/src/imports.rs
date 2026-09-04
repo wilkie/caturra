@@ -130,6 +130,10 @@ const JAVA_IO: &[&str] = &[
     // under its own. `Reader` is the face the three readers share, and
     // `FileWriter` writes one.
     "Reader",
+    // The abstract FACE both writers wear — a `PrintWriter` and a
+    // `StringWriter` are each one, and a variable holding either is declared
+    // as this.
+    "Writer",
     "FileWriter",
     "UncheckedIOException",
     "UnsupportedEncodingException",
@@ -402,11 +406,11 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     ("java.lang", &["Runtime", "Process", "ProcessBuilder"]),
     (
         "java.io",
-        // `Reader` and `FileWriter` used to sit here, and were MODELLED all
-        // along: a class listed in both tables resolves fine written under a
-        // wildcard import and is refused by its own single import, which is
-        // the same fact answered two ways.
-        &["Serializable", "BufferedWriter", "InputStream", "Writer"],
+        // `Reader`, `FileWriter` and `Writer` used to sit here: a class
+        // listed in both tables resolves fine written under a wildcard import
+        // and is refused by its own single import, which is the same fact
+        // answered two ways.
+        &["Serializable", "BufferedWriter", "InputStream"],
     ),
     // The rest of `java.lang`: the JVM's own errors (a program can CATCH one,
     // and naming it should say what it is), the class-loading and module

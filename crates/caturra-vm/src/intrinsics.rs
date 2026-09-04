@@ -109,6 +109,10 @@ fn temporal_hash(value: Temporal) -> i32 {
         Temporal::Field(field) => i32::from(field),
         Temporal::Adjuster(adjuster) => i32::from(adjuster.day),
         Temporal::Era(era) => i32::from(era),
+        // An enum's `hashCode` is its identity hash in a JDK, and caturra
+        // interns these — so hashing the ordinal is the same promise: equal
+        // values hash alike, and the number itself is never printed.
+        Temporal::TextStyle(style) | Temporal::FormatStyle(style) => i32::from(style),
         // A `Year` hashes as itself; the two pairs fold the way a JDK folds
         // them, so two equal values hash alike wherever the program looks.
         Temporal::Year(year) => year,
@@ -156,8 +160,15 @@ fn temporal_object_method(
         // English one — so what arrives is the style alone. caturra's text is
         // en-US throughout, where a STANDALONE form is the plain one.
         "getDisplayName" if matches!(value, Temporal::DayOfWeek(_) | Temporal::Month(_)) => {
+            // The style arrives either as an ordinal the compiler read out of
+            // a written constant, or — now that `TextStyle` is a real enum —
+            // as the value itself.
             let style = match args.first() {
                 Some(JValue::Int(style)) => *style,
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::Temporal(Temporal::TextStyle(style))) => i32::from(*style),
+                    _ => 0,
+                },
                 _ => 0,
             };
             let text = match (value, style) {
@@ -179,7 +190,9 @@ fn temporal_object_method(
         // their text is not: `HALF_DAYS` prints as "HalfDays", and
         // `NANO_OF_SECOND` as "NanoOfSecond".
         "name" => match value {
-            Temporal::Era(_) => JValue::Ref(Some(heap.alloc_string(&value.text()))),
+            Temporal::Era(_) | Temporal::TextStyle(_) | Temporal::FormatStyle(_) => {
+                JValue::Ref(Some(heap.alloc_string(&value.text())))
+            }
             Temporal::Unit(unit) => JValue::Ref(Some(
                 heap.alloc_string(crate::time::UNIT_CONSTANTS[usize::from(unit)]),
             )),
@@ -2419,6 +2432,39 @@ fn temporal_method(
         Temporal::Unit(unit) => return unit_method(unit, heap, method, args),
         Temporal::Field(field) => return field_method(field, heap, method, args),
         Temporal::Range(range) => return range_method(range, method, args),
+        // The two format styles answer only what an enum answers, and their
+        // `name`/`toString`/`equals`/`hashCode` are handled above with the
+        // rest — an enum's default `toString` IS its constant.
+        Temporal::TextStyle(style) | Temporal::FormatStyle(style) => {
+            let class = value.class_name();
+            return match method {
+                "ordinal" => Ok(Some(JValue::Int(i32::from(style)))),
+                "compareTo" => match args.first() {
+                    Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                        Some(HeapObject::Temporal(
+                            Temporal::TextStyle(other) | Temporal::FormatStyle(other),
+                        )) => Ok(Some(JValue::Int(i32::from(style) - i32::from(*other)))),
+                        _ => Err(throw(format!(
+                            "java.lang.ClassCastException: not a {}",
+                            class.rsplit('/').next().unwrap_or(class)
+                        ))),
+                    },
+                    _ => Err(throw("java.lang.NullPointerException")),
+                },
+                // `TextStyle.isStandalone()` and `asStandalone`/`asNormal` —
+                // the only three methods the enum declares beyond an enum's.
+                "isStandalone" => Ok(Some(JValue::Int(i32::from(
+                    matches!(value, Temporal::TextStyle(_)) && style % 2 == 1,
+                )))),
+                "asStandalone" if matches!(value, Temporal::TextStyle(_)) => Ok(Some(JValue::Ref(
+                    Some(heap.intern_temporal(Temporal::TextStyle(style | 1))),
+                ))),
+                "asNormal" if matches!(value, Temporal::TextStyle(_)) => Ok(Some(JValue::Ref(
+                    Some(heap.intern_temporal(Temporal::TextStyle(style & !1))),
+                ))),
+                _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
+            };
+        }
         // An era answers only what an enum answers.
         Temporal::Era(era) => {
             return match method {
@@ -10473,6 +10519,56 @@ pub fn invoke_static(
             };
             let made = Temporal::Adjuster(crate::time::Adjuster { kind, day, ordinal });
             Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
+        }
+        // `TextStyle` and `FormatStyle` — the two an enum always answers, and
+        // the constants themselves, which the compiler asks for by ordinal.
+        "java/time/format/TextStyle" | "java/time/format/FormatStyle" => {
+            let text = class.ends_with("TextStyle");
+            let names: &[&str] = if text {
+                &crate::value::TEXT_STYLE_NAMES
+            } else {
+                &crate::value::FORMAT_STYLE_NAMES
+            };
+            let made = |heap: &mut Heap, ordinal: u8| {
+                let value = if text {
+                    Temporal::TextStyle(ordinal)
+                } else {
+                    Temporal::FormatStyle(ordinal)
+                };
+                JValue::Ref(Some(heap.intern_temporal(value)))
+            };
+            match method {
+                "values" => {
+                    let constants: Vec<JValue> = (0..names.len())
+                        .map(|at| made(heap, u8::try_from(at).unwrap_or(0)))
+                        .collect();
+                    let array = heap.alloc(HeapObject::RefArray(String::from(class), constants));
+                    Ok(Some(JValue::Ref(Some(array))))
+                }
+                "valueOf" => {
+                    let name = match args.first() {
+                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        _ => None,
+                    }
+                    .unwrap_or_default();
+                    match names.iter().position(|constant| *constant == name) {
+                        Some(at) => Ok(Some(made(heap, u8::try_from(at).unwrap_or(0)))),
+                        None => Err(throw(&*format!(
+                            "java.lang.IllegalArgumentException: No enum constant {}.{name}",
+                            class.replace('/', ".")
+                        ))),
+                    }
+                }
+                // The constant itself, by ordinal — how the compiler reads
+                // `TextStyle.SHORT`, exactly as it reads `Month.MAY`.
+                _ => {
+                    let ordinal = match args.first() {
+                        Some(JValue::Int(value)) => *value,
+                        _ => 0,
+                    };
+                    Ok(Some(made(heap, u8::try_from(ordinal).unwrap_or(0))))
+                }
+            }
         }
         // `IsoEra.BCE` and `IsoEra.CE`, by ordinal — and the two an enum
         // always answers.

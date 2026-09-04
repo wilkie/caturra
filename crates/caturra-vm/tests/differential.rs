@@ -49390,19 +49390,6 @@ stricter_than_javac!(
 );
 
 stricter_than_javac!(
-    stricter_a_style_held_in_a_variable,
-    "StrictStyleVar",
-    "import java.time.Month;\n\
-import java.time.format.TextStyle;\n\
-import java.util.Locale;\n\
-public class StrictStyleVar {\n\
-  public static void main(String[] args) {\n\
-    TextStyle style = TextStyle.FULL;\n\
-    System.out.println(Month.MAY.getDisplayName(style, Locale.US));\n\
-  }\n}"
-);
-
-stricter_than_javac!(
     stricter_a_locale_that_is_not_english,
     "StrictFrenchLocale",
     "import java.time.Month;\n\
@@ -51001,4 +50988,285 @@ stricter_than_javac!(
     stricter_namespace_class_says_what_is_missing,
     "NamespaceWording",
     "import java.util.stream.*;\npublic class NamespaceWording { static void r() { Collectors c; } }"
+);
+
+// `java.io.Writer` is the abstract FACE both writers wear, and what a
+// variable holding either is declared as. Written out it was "unknown type
+// 'Writer'" — about the class every I/O tutorial names.
+differential_test!(
+    a_writer_is_a_type_a_program_names,
+    "Wr1",
+    r#"
+import java.io.*;
+import java.util.*;
+public class Wr1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static String drain(Reader r) throws IOException { StringBuilder o = new StringBuilder(); int c; while ((c = r.read()) >= 0) o.append((char) c); return o.toString(); }
+  static void put(Writer w, String t) throws IOException { w.write(t); }
+  public static void main(String[] a) {
+    // --- Writer as a declared type
+    s("writer local", () -> { Writer w = new StringWriter(); w.write("hi"); return w.toString(); });
+    s("writer append", () -> { Writer w = new StringWriter(); w.append('a').append("bc"); return w.toString(); });
+    s("writer param", () -> { StringWriter sw = new StringWriter(); put(sw, "xy"); return sw.toString(); });
+    s("writer of printwriter", () -> { Writer w = new PrintWriter(new StringWriter()); w.write("p"); w.flush(); return "ok"; });
+    s("writer close", () -> { Writer w = new StringWriter(); w.close(); return "closed"; });
+    s("writer flush", () -> { Writer w = new StringWriter(); w.write("f"); w.flush(); return w.toString(); });
+    s("writer in a list", () -> { List<Writer> ws = new ArrayList<>(); ws.add(new StringWriter()); return ws.size(); });
+    s("writer instanceof", () -> { Object o = new StringWriter(); return (o instanceof Writer) + " " + (o instanceof StringWriter); });
+    s("writer cast", () -> { Object o = new StringWriter(); return ((Writer) o).getClass().getName(); });
+    s("writer null", () -> { Writer w = null; return w == null; });
+    s("writer try with", () -> { try (Writer w = new StringWriter()) { w.write("t"); return w.toString(); } });
+    // --- Reader as a declared type (already works?)
+    s("reader local", () -> { Reader r = new StringReader("hi"); return drain(r); });
+    s("reader param", () -> drain(new StringReader("zz")));
+    s("reader instanceof", () -> { Object o = new StringReader("x"); return (o instanceof Reader); });
+    // --- InputStream / OutputStream
+    s("outputstream", () -> { OutputStream o = new ByteArrayOutputStream(); o.write(65); return o.toString(); });
+    // --- Serializable
+  }
+}
+"#
+);
+
+// `TextStyle` and `FormatStyle` were read where they were WRITTEN and
+// modelled as no value at all, so a variable, a `values()`, a switch or a
+// sort over one was refused. They are enums like the rest of `java.time`.
+differential_test!(
+    the_formatting_styles_are_enums,
+    "St1",
+    r#"
+import java.time.*;
+import java.time.format.*;
+import java.util.*;
+import java.util.stream.*;
+public class St1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static String show(Month m, TextStyle t) { return m.getDisplayName(t, Locale.US); }
+  public static void main(String[] a) {
+    // --- TextStyle / FormatStyle as values
+    s("textstyle local", () -> { TextStyle t = TextStyle.SHORT; return Month.MAY.getDisplayName(t, Locale.US); });
+    s("textstyle param", () -> show(Month.MAY, TextStyle.FULL));
+    s("textstyle name", () -> TextStyle.SHORT + " " + TextStyle.SHORT.name() + " " + TextStyle.SHORT.ordinal());
+    s("textstyle values", () -> Arrays.toString(TextStyle.values()));
+    s("textstyle valueOf", () -> TextStyle.valueOf("FULL"));
+    s("textstyle compare", () -> TextStyle.FULL.compareTo(TextStyle.SHORT) + " " + TextStyle.FULL.equals(TextStyle.FULL));
+    s("textstyle switch", () -> { TextStyle t = TextStyle.NARROW; switch (t) { case NARROW: return "n"; default: return "?"; } });
+    s("textstyle in a list", () -> { List<TextStyle> l = new ArrayList<>(List.of(TextStyle.FULL, TextStyle.SHORT)); return l.toString(); });
+    s("textstyle class", () -> TextStyle.FULL.getClass().getName() + " " + (TextStyle.FULL instanceof Enum));
+    s("formatstyle local", () -> { FormatStyle f = FormatStyle.SHORT; return DateTimeFormatter.ofLocalizedDate(f).format(LocalDate.of(2024, 5, 15)); });
+    s("formatstyle name", () -> FormatStyle.MEDIUM + " " + FormatStyle.MEDIUM.ordinal());
+    s("formatstyle values", () -> Arrays.toString(FormatStyle.values()));
+    s("textstyle standalone", () -> Month.MAY.getDisplayName(TextStyle.FULL_STANDALONE, Locale.US) + " " + Month.MAY.getDisplayName(TextStyle.SHORT_STANDALONE, Locale.US) + " " + Month.MAY.getDisplayName(TextStyle.NARROW_STANDALONE, Locale.US));
+    s("textstyle stream", () -> Stream.of(TextStyle.values()).map(Enum::name).collect(Collectors.joining(",")));
+  }
+}
+"#
+);
+
+// The `Collectors` overloads that name the MAP to gather into, and
+// `Collector<T, ?, R>` as a type a program writes — which is how a collector
+// gets factored out and reused.
+differential_test!(
+    a_collector_of_ones_own,
+    "Cl1",
+    r#"
+import java.time.*;
+import java.time.format.*;
+import java.util.*;
+import java.util.stream.*;
+public class Cl1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static String show(Month m, TextStyle t) { return m.getDisplayName(t, Locale.US); }
+  public static void main(String[] a) {
+    // --- Collectors.toMap with a supplier, and the other 4-arg collectors
+    s("toMap supplier", () -> IntStream.range(0, 4).boxed().collect(Collectors.toMap(i -> i, i -> i * i, (x, y) -> x, TreeMap::new)));
+    s("toMap supplier lhm", () -> Stream.of("bb", "a").collect(Collectors.toMap(x -> x, String::length, (x, y) -> x, LinkedHashMap::new)));
+    s("toMap merge only", () -> Stream.of("a", "a").collect(Collectors.toMap(x -> x, x -> 1, Integer::sum)));
+    s("groupingBy supplier", () -> Stream.of("a", "bb", "cc").collect(Collectors.groupingBy(String::length, TreeMap::new, Collectors.toList())));
+    s("toCollection", () -> Stream.of(3, 1).collect(Collectors.toCollection(TreeSet::new)));
+    // --- a wildcard in a three-argument type-argument list
+    s("collector variable", () -> { Collector<String, ?, List<String>> c = Collectors.toList(); return Stream.of("a", "b").collect(c); });
+    s("collector joining", () -> { Collector<CharSequence, ?, String> c = Collectors.joining("-"); return Stream.of("a", "b").collect(c); });
+    s("collector counting", () -> { Collector<Object, ?, Long> c = Collectors.counting(); return Stream.of(1, 2, 3).collect(c); });
+    s("map wildcard", () -> { Map<String, ? extends Number> m = new HashMap<String, Integer>(); return m.size(); });
+  }
+}
+"#
+);
+
+// The same four in every position a type can take: a field, an array, a map
+// value, a ternary, a return, a parameter, a `TreeSet`, an `EnumMap` and a
+// stream.
+differential_test!(
+    the_four_refusals_in_every_position,
+    "Rf1",
+    r#"
+import java.io.*;
+import java.time.*;
+import java.time.format.*;
+import java.util.*;
+import java.util.stream.*;
+public class Rf1 {
+  interface Body { Object get() throws Exception; }
+  static Writer field = new StringWriter();
+  static TextStyle style = TextStyle.SHORT;
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static <T> T pick(Collector<String, ?, T> c, String... xs) { return Stream.of(xs).collect(c); }
+  static String named(TextStyle t) { return Month.MAY.getDisplayName(t, Locale.US); }
+  public static void main(String[] a) {
+    // --- Writer in every position
+    s("field", () -> { field.write("f"); return field.toString(); });
+    s("array", () -> { Writer[] ws = new Writer[2]; ws[0] = new StringWriter(); ws[0].write("q"); return ws[0].toString(); });
+    s("map value", () -> { Map<String, Writer> m = new HashMap<>(); m.put("k", new StringWriter()); m.get("k").write("v"); return m.get("k").toString(); });
+    s("ternary", () -> { Writer w = true ? new StringWriter() : new PrintWriter(new StringWriter()); w.write("t"); return w.toString(); });
+    s("return", () -> { Writer w = make(); w.write("m"); return w.toString(); });
+    s("chained append", () -> { Writer w = new StringWriter(); w.append("a").append("b"); return w.toString(); });
+    s("write range", () -> { Writer w = new StringWriter(); w.write("abcdef", 1, 3); return w.toString(); });
+    s("append range", () -> { Writer w = new StringWriter(); w.append("abcdef", 1, 3); return w.toString(); });
+    s("equals hash", () -> { Writer w = new StringWriter(); return w.equals(w) + " " + (w.hashCode() == w.hashCode()); });
+    s("stream of", () -> Stream.of(new StringWriter(), new StringWriter()).count());
+    // --- the two styles in every position
+    s("style field", () -> named(style));
+    s("style array sort", () -> { TextStyle[] ts = { TextStyle.NARROW, TextStyle.FULL }; Arrays.sort(ts); return Arrays.toString(ts); });
+    s("style set", () -> { Set<TextStyle> set = new HashSet<>(List.of(TextStyle.FULL, TextStyle.FULL)); return set.size(); });
+    s("style treeset", () -> new TreeSet<>(List.of(TextStyle.NARROW, TextStyle.FULL)).toString());
+    s("style map", () -> { Map<TextStyle, String> m = new TreeMap<>(); m.put(TextStyle.SHORT, "s"); m.put(TextStyle.FULL, "f"); return m.toString(); });
+    s("style enumset", () -> EnumSet.of(TextStyle.FULL, TextStyle.NARROW).toString());
+    s("style enummap", () -> { EnumMap<TextStyle, Integer> m = new EnumMap<>(TextStyle.class); m.put(TextStyle.SHORT, 1); return m.toString(); });
+    s("style identity", () -> (TextStyle.FULL == TextStyle.valueOf("FULL")) + " " + TextStyle.FULL.equals(TextStyle.FULL));
+    s("style standalone", () -> TextStyle.FULL.isStandalone() + " " + TextStyle.FULL_STANDALONE.isStandalone() + " " + TextStyle.FULL.asStandalone() + " " + TextStyle.SHORT_STANDALONE.asNormal());
+    s("style bad valueOf", () -> TextStyle.valueOf("NOPE"));
+    s("style stream sorted", () -> Stream.of(TextStyle.values()).sorted().map(TextStyle::name).limit(3).collect(Collectors.joining(",")));
+    s("formatstyle datetime", () -> DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT, FormatStyle.SHORT).format(LocalDateTime.of(2024, 5, 15, 13, 45)));
+    s("formatstyle var both", () -> { FormatStyle f = FormatStyle.SHORT; return DateTimeFormatter.ofLocalizedDateTime(f).format(LocalDateTime.of(2024, 5, 15, 13, 45)); });
+    s("style enum face", () -> { Enum<TextStyle> e = TextStyle.FULL; return e.name() + e.ordinal(); });
+    s("style compare list", () -> { List<TextStyle> l = new ArrayList<>(List.of(TextStyle.NARROW, TextStyle.FULL)); Collections.sort(l); return l.toString(); });
+    // --- collectors
+    s("collector param", () -> pick(Collectors.toList(), "a", "b"));
+    s("collector param joining", () -> Stream.of("a", "b").collect(Collectors.joining("+")));
+    s("collector field-ish", () -> { Collector<String, ?, Map<String, Integer>> c = Collectors.toMap(x -> x, String::length); return Stream.of("aa").collect(c); });
+    s("toMap treemap", () -> Stream.of("bb", "a").collect(Collectors.toMap(x -> x, String::length, (p, q) -> p, TreeMap::new)));
+    s("groupingBy treemap counting", () -> Stream.of("a", "bb", "cc").collect(Collectors.groupingBy(String::length, TreeMap::new, Collectors.counting())));
+    s("toMap duplicate", () -> Stream.of("a", "a").collect(Collectors.toMap(x -> x, x -> 1)));
+    s("toMap merge keeps first", () -> Stream.of("a", "a").collect(Collectors.toMap(x -> x, x -> x.length(), (p, q) -> p)));
+    s("groupingBy linked", () -> Stream.of("bb", "a").collect(Collectors.groupingBy(String::length, LinkedHashMap::new, Collectors.toList())));
+  }
+  static Writer make() { return new StringWriter(); }
+}
+"#
+);
+
+// A library type caturra models as an abstract FACE cannot be instantiated,
+// and now says what javac says: "List is abstract; cannot be instantiated".
+// It used to say "cannot find symbol: class List", about a class the program
+// had spelled correctly and used correctly one line above.
+differential_reject!(
+    reject_new_of_an_abstract_library_face,
+    "NewAbstractList",
+    "import java.util.*;\npublic class NewAbstractList { static void r() { List<String> l = new List<>(); } }"
+);
+
+differential_reject!(
+    reject_new_of_an_abstract_writer,
+    "NewAbstractWriter",
+    "import java.io.*;\npublic class NewAbstractWriter { static void r() { Writer w = new Writer(); } }"
+);
+
+// A `Writer` variable offers only what `java.io.Writer` declares — not a
+// `PrintWriter`'s `println` nor a `StringWriter`'s `getBuffer`. Making the
+// face wide enough to hold either must not make it wide enough to call both.
+differential_reject!(
+    reject_println_through_a_writer_face,
+    "WriterFaceNarrow",
+    "import java.io.*;\npublic class WriterFaceNarrow { static void r() throws Exception { Writer w = new PrintWriter(new StringWriter()); w.println(\"x\"); } }"
+);
+
+differential_reject!(
+    reject_get_buffer_through_a_writer_face,
+    "WriterFaceBuffer",
+    "import java.io.*;\npublic class WriterFaceBuffer { static void r() { Writer w = new StringWriter(); w.getBuffer(); } }"
+);
+
+// The map a four-argument `toMap` (or a three-argument `groupingBy`) gathers
+// into is the SUPPLIER's own — `Collector<T, ?, M>` for the `M` it makes — so
+// the result really is a `TreeMap` and assigns to one. Reading only `Map` here
+// made that "incompatible types: Map cannot be converted to TreeMap".
+differential_test!(
+    the_map_a_collector_gathers_into,
+    "GatheredMap",
+    r#"
+import java.io.StringWriter;
+import java.io.Writer;
+import java.time.LocalDate;
+import java.time.Month;
+import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
+import java.time.format.TextStyle;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.TreeMap;
+import java.util.stream.Collector;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public class GatheredMap {
+    // `Writer` is the abstract class both writers wear, so a method takes
+    // either one.
+    static void greet(Writer out, String name) throws Exception {
+        out.write("hello, ");
+        out.append(name).append('!');
+    }
+
+    public static void main(String[] args) throws Exception {
+        StringWriter buffer = new StringWriter();
+        greet(buffer, "world");
+        System.out.println(buffer);
+
+        Writer held = new StringWriter();
+        held.write("abcdef", 1, 3);
+        System.out.println(held + " " + (held instanceof StringWriter));
+
+        // The formatting styles are ENUMS: values to hold, sort and switch on.
+        TextStyle style = TextStyle.SHORT;
+        System.out.println(Month.MAY.getDisplayName(style, Locale.US));
+        System.out.println(Arrays.toString(TextStyle.values()));
+        System.out.println(TextStyle.FULL.isStandalone()
+            + " " + TextStyle.FULL.asStandalone()
+            + " " + TextStyle.valueOf("NARROW").ordinal());
+
+        FormatStyle shortDate = FormatStyle.SHORT;
+        System.out.println(DateTimeFormatter.ofLocalizedDate(shortDate)
+            .format(LocalDate.of(2024, 5, 15)));
+
+        // A collector can be named, held, and reused.
+        Collector<String, ?, TreeMap<Integer, Long>> byLength = Collectors.groupingBy(
+            String::length, TreeMap::new, Collectors.counting());
+        System.out.println(Stream.of("a", "bb", "cc", "ddd").collect(byLength));
+
+        Collector<CharSequence, ?, String> dashed = Collectors.joining("-");
+        System.out.println(Stream.of("one", "two").collect(dashed));
+
+        // ...and `toMap` can say how to merge, and what map to gather into.
+        TreeMap<Integer, String> joined = Stream.of("bb", "a", "cc")
+            .collect(Collectors.toMap(String::length, word -> word,
+                (first, second) -> first + "/" + second, TreeMap::new));
+        System.out.println(joined);
+    }
+}
+"#
 );
