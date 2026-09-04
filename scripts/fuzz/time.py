@@ -236,6 +236,30 @@ def position_program(rng):
             '        probe("treeset %s", () -> new TreeSet<>('
             'Arrays.asList(%s.values())).size());' % (simple, simple)
         )
+    for style in ("FULL", "FULL_STANDALONE", "SHORT", "SHORT_STANDALONE",
+                  "NARROW", "NARROW_STANDALONE"):
+        checks.append(
+            '        probe("month name %s", () -> Month.MAY.getDisplayName('
+            'TextStyle.%s, Locale.US));' % (style, style)
+        )
+        checks.append(
+            '        probe("day name %s", () -> DayOfWeek.FRIDAY.getDisplayName('
+            'TextStyle.%s, Locale.ENGLISH));' % (style, style)
+        )
+    for style in ("FULL", "LONG", "MEDIUM", "SHORT"):
+        checks.append(
+            '        probe("localized date %s", () -> LocalDate.of(2024, 9, 5)'
+            '.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.%s)));' % (style, style)
+        )
+        checks.append(
+            '        probe("localized time %s", () -> java.time.LocalTime.of(13, 45, 30)'
+            '.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.%s)));' % (style, style)
+        )
+        checks.append(
+            '        probe("localized stamp %s", () -> java.time.LocalDateTime.of(2024, 9, 5,'
+            ' 13, 45, 30).format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.%s)));'
+            % (style, style)
+        )
     for year, month, day in dates(rng, 24):
         checks.append(
             '        probe("date %d-%d-%d", () -> { LocalDate d = LocalDate.of(%d, %d, %d); '
@@ -274,6 +298,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
+import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
+import java.time.format.TextStyle;
+import java.util.Locale;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
 

@@ -49388,3 +49388,126 @@ stricter_than_javac!(
     System.out.println(new Pair<>(\"ab\", 2).first().length());\n\
   }\n}"
 );
+
+stricter_than_javac!(
+    stricter_a_style_held_in_a_variable,
+    "StrictStyleVar",
+    "import java.time.Month;\n\
+import java.time.format.TextStyle;\n\
+import java.util.Locale;\n\
+public class StrictStyleVar {\n\
+  public static void main(String[] args) {\n\
+    TextStyle style = TextStyle.FULL;\n\
+    System.out.println(Month.MAY.getDisplayName(style, Locale.US));\n\
+  }\n}"
+);
+
+stricter_than_javac!(
+    stricter_a_locale_that_is_not_english,
+    "StrictFrenchLocale",
+    "import java.time.Month;\n\
+import java.time.format.TextStyle;\n\
+import java.util.Locale;\n\
+public class StrictFrenchLocale {\n\
+  public static void main(String[] args) {\n\
+    System.out.println(Month.MAY.getDisplayName(TextStyle.FULL, Locale.FRANCE));\n\
+  }\n}"
+);
+
+differential_test!(
+    the_name_of_a_day_and_a_month,
+    "Named",
+    r#"
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.Month;
+import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
+import java.time.format.TextStyle;
+import java.util.Locale;
+
+/** The NAME of a day and a month, and the date a locale asks for. */
+public class Named {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // Every month, in every style a JDK distinguishes.
+        for (int at = 1; at <= 12; at++) {
+            Month month = Month.of(at);
+            System.out.println(month.getDisplayName(TextStyle.FULL, Locale.US)
+                + " " + month.getDisplayName(TextStyle.SHORT, Locale.US)
+                + " " + month.getDisplayName(TextStyle.NARROW, Locale.US)
+                + " " + month.getDisplayName(TextStyle.FULL_STANDALONE, Locale.ENGLISH)
+                + " " + month.getDisplayName(TextStyle.SHORT_STANDALONE, Locale.UK)
+                + " " + month.getDisplayName(TextStyle.NARROW_STANDALONE, Locale.getDefault()));
+        }
+        for (DayOfWeek day : DayOfWeek.values()) {
+            System.out.println(day.getDisplayName(TextStyle.FULL, Locale.US)
+                + " " + day.getDisplayName(TextStyle.SHORT, Locale.US)
+                + " " + day.getDisplayName(TextStyle.NARROW, Locale.US));
+        }
+        LocalDate date = LocalDate.of(2024, 9, 5);
+        System.out.println(date.getMonth().getDisplayName(TextStyle.FULL, Locale.US)
+            + " " + date.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.US));
+
+        // ...and the four localized formatters, over a date, a time and both.
+        LocalTime time = LocalTime.of(13, 45, 30);
+        LocalDateTime stamp = LocalDateTime.of(date, time);
+        probe("date FULL", () -> date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)));
+        probe("date LONG", () -> date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG)));
+        probe("date MEDIUM",
+            () -> date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)));
+        probe("date SHORT",
+            () -> date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.SHORT)));
+        probe("time FULL", () -> time.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.FULL)));
+        probe("time LONG", () -> time.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.LONG)));
+        probe("time MEDIUM",
+            () -> time.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.MEDIUM)));
+        probe("time SHORT",
+            () -> time.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)));
+        probe("stamp FULL",
+            () -> stamp.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.FULL)));
+        probe("stamp MEDIUM",
+            () -> stamp.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)));
+        probe("stamp SHORT",
+            () -> stamp.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)));
+        probe("stamp both",
+            () -> stamp.format(
+                DateTimeFormatter.ofLocalizedDateTime(FormatStyle.FULL, FormatStyle.SHORT)));
+
+        // The two shapes that ask a value for a field it has not got.
+        probe("date-time on a date",
+            () -> date.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)));
+        probe("date on a time",
+            () -> time.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.SHORT)));
+
+        // A formatter names its STYLES, not the pattern it prints through.
+        probe("toString date", () -> DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL));
+        probe("toString time", () -> DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT));
+        probe("toString stamp", () -> DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM));
+        probe("toString both",
+            () -> DateTimeFormatter.ofLocalizedDateTime(FormatStyle.FULL, FormatStyle.SHORT));
+
+        // ...and it reads a date back through the same styles.
+        probe("parse", () -> LocalDate.parse("5/15/24",
+            DateTimeFormatter.ofLocalizedDate(FormatStyle.SHORT)));
+        probe("held", () -> {
+            DateTimeFormatter pretty = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM);
+            return pretty.format(date) + " " + pretty.format(LocalDate.of(-44, 3, 5));
+        });
+        probe("edges", () -> LocalTime.of(0, 5)
+            .format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT))
+            + " " + LocalTime.of(12, 0)
+                .format(DateTimeFormatter.ofLocalizedTime(FormatStyle.MEDIUM)));
+    }
+}
+"#
+);

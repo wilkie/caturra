@@ -2255,6 +2255,48 @@ pub fn iso_time_text(time: Time) -> String {
     out
 }
 
+/// The en-US pattern a `FormatStyle` names, for a date, a time, or both.
+/// Recorded from a real JDK 11: caturra's own pattern engine then prints and
+/// parses through it, and every failure a localized formatter can have — the
+/// missing zone of a FULL or LONG time, the missing field of a value that has
+/// no date or no time — is the pattern's own.
+#[must_use]
+pub fn localized_pattern(date: Option<u8>, time: Option<u8>) -> String {
+    let date_part = date.map(|style| match style {
+        0 => "EEEE, MMMM d, y",
+        1 => "MMMM d, y",
+        2 => "MMM d, y",
+        _ => "M/d/yy",
+    });
+    // FULL and LONG name the zone, which no `LocalTime` has — a JDK fails
+    // there rather than printing, and so does this.
+    let time_part = time.map(|style| match style {
+        0 => "h:mm:ss a zzzz",
+        1 => "h:mm:ss a z",
+        2 => "h:mm:ss a",
+        _ => "h:mm a",
+    });
+    match (date_part, time_part) {
+        (Some(d), Some(t)) => format!("{d}, {t}"),
+        (Some(d), None) => d.to_owned(),
+        (None, Some(t)) => t.to_owned(),
+        (None, None) => String::new(),
+    }
+}
+
+/// What `FormatStyle`'s constant is called, for the formatter's own
+/// `toString` — `Localized(FULL,)`, which names the styles and not the
+/// pattern.
+#[must_use]
+pub fn format_style_name(style: u8) -> &'static str {
+    match style {
+        0 => "FULL",
+        1 => "LONG",
+        2 => "MEDIUM",
+        _ => "SHORT",
+    }
+}
+
 /// How a JDK describes each ISO formatter — read off a real one, brackets and
 /// all (an optional section prints in brackets).
 #[must_use]

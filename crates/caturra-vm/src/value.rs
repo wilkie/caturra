@@ -345,6 +345,13 @@ pub enum StdStream {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DateFormatKind {
     Pattern(String),
+    /// `ofLocalizedDate`/`ofLocalizedTime`/`ofLocalizedDateTime` — a date
+    /// style, a time style, or both, by `FormatStyle`'s own ordinal (0 FULL,
+    /// 1 LONG, 2 MEDIUM, 3 SHORT). It prints through an ordinary PATTERN, the
+    /// one en-US gives that style; what it cannot be is a pattern in the first
+    /// place, because a JDK's `toString` says `Localized(FULL,)` and because a
+    /// localized TIME reports a missing zone with a chronology beside it.
+    Localized(Option<u8>, Option<u8>),
     /// One of `ISO_LOCAL_DATE` (0), `ISO_LOCAL_TIME` (1) and
     /// `ISO_LOCAL_DATE_TIME` (2). `ISO_DATE`/`ISO_TIME`/`ISO_DATE_TIME` are
     /// the same three for a value with no zone in it.

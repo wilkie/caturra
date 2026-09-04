@@ -9024,6 +9024,17 @@ counting catches: a divergence that stopped being one.
   as a missing package, which is what it used to say), and javac accepts it.
   The same omission: explained in prose, never counted here.
   (`strict_a_primitive_stream_cursor`)
+- A `TextStyle` or a `FormatStyle` held in a VARIABLE:
+  `TextStyle style = TextStyle.FULL;`. Both are read where they are WRITTEN —
+  `Month.getDisplayName(TextStyle.FULL, Locale.US)` and
+  `DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)` compile and answer a
+  JDK's own text — so there is no value of either to hold, and naming the type
+  says so rather than reading as a typo. `Locale` was already this, and is
+  covered by the namespace bullet above. (`stricter_a_style_held_in_a_variable`)
+- A locale that is not an English one: `Month.getDisplayName(TextStyle.FULL,
+  Locale.FRANCE)`. caturra ships one text, en-US, and answering a French
+  program in English would be a WRONG answer rather than a missing one — so the
+  locale is checked where it is written. (`stricter_a_locale_that_is_not_english`)
 - A class that EXTENDS a builtin collection — `class Counts extends
   HashMap<String, Integer>`. caturra's collections are the VM's own objects,
   not classes compiled from source, so there is nothing to inherit from; the
@@ -13588,3 +13599,43 @@ and explains nothing — so the table keeps that too, for the message alone.
 
 Pinned as `a_generic_methods_variable_answers_every_argument`, with five
 refusals beside it.
+
+## The name of a day, and the date a locale asks for
+
+`month.getDisplayName(TextStyle.FULL, Locale.US)` and
+`DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)` were both "cannot find
+symbol" — the two ways a program asks for a date in words rather than in
+pattern letters. Everything they need was already here: the month and day text
+the formatter prints, and a pattern engine exact enough that the four localized
+date formats ARE patterns.
+
+`ofLocalizedDate(FULL)` is `EEEE, MMMM d, y`; LONG is `MMMM d, y`, MEDIUM
+`MMM d, y`, SHORT `M/d/yy`; a localized time is `h:mm:ss a` or `h:mm a`, and
+FULL and LONG name a ZONE, which no `LocalTime` has — so a JDK fails there
+rather than printing, and formatting through the equivalent pattern fails in
+the same words. Every one of these was checked against a JDK before it was
+written down, including the two shapes that ask a value for a field it has not
+got (a date-time format over a `LocalDate` is "Unsupported field:
+ClockHourOfAmPm", a date format over a `LocalTime` "Unsupported field:
+MonthOfYear"). Two things a pattern cannot say are stored beside it: the
+formatter's own `toString` is `Localized(FULL,)` rather than the pattern, and a
+localized TIME reports its missing zone with the chronology beside it.
+
+Neither style is a VALUE here. `TextStyle` and `FormatStyle` are read where
+they are written — the call site is the only place either has ever appeared —
+so the compiler resolves the constant while compiling and hands the VM an int,
+the way a `printStackTrace(System.out)` stream is already handed one. A style
+held in a variable is refused by name, which is what `Locale` beside them
+already did.
+
+And the locale is CHECKED. caturra ships one text, en-US, so
+`Locale.FRANCE` is refused where it is written rather than answered in English:
+a wrong answer is worse than a missing one, and every English spelling
+(`US`, `ENGLISH`, `UK`, `CANADA`, `ROOT`, `getDefault()`) gives the text a JDK
+gives.
+
+Pinned as `the_name_of_a_day_and_a_month` — every month and day in every style,
+the four localized formats over a date, a time and both, the two missing-field
+failures, the four `toString`s and a parse back through one — with the two new
+strictnesses beside it in the divergence list. The `java.time` fuzzer's
+positions program asks for all twenty-four of them each run.

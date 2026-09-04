@@ -132,7 +132,17 @@ const JAVA_TIME_TEMPORAL: &[&str] = &[
 
 /// `java.time.format` — only the exception, so far: `LocalDate.parse` throws
 /// it and a program may catch it by name.
-const JAVA_TIME_FORMAT: &[&str] = &["DateTimeFormatter", "DateTimeParseException"];
+/// `TextStyle` and `FormatStyle` name a style, and caturra reads the constant
+/// where it is written — `Month.getDisplayName(TextStyle.FULL, Locale.US)`,
+/// `DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)`. Like `Locale`
+/// beside them they are usable as a QUALIFIER and not as a variable's type:
+/// there is no value of either to hold, and naming one says so.
+const JAVA_TIME_FORMAT: &[&str] = &[
+    "DateTimeFormatter",
+    "DateTimeParseException",
+    "TextStyle",
+    "FormatStyle",
+];
 /// `java.nio.charset` — the charsets a program names when it turns text into
 /// bytes and back. `Charset` is the type; `StandardCharsets` holds the
 /// constants; the exceptions are what an unknown name throws.

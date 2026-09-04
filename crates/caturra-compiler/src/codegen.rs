@@ -6296,6 +6296,59 @@ const LIBRARY_ENUMS: &[(&str, JType)] = &[
     ("IsoEra", JType::IsoEra),
 ];
 
+/// Whether a locale ARGUMENT names one caturra can answer. `Locale` is not a
+/// value here either: the constant is read where it is written, and every
+/// English one gives the same text.
+fn english_locale(arg: &Expr) -> bool {
+    match arg {
+        Expr::Name { path, .. } if path.len() >= 2 => {
+            path[path.len() - 2] == "Locale"
+                && matches!(
+                    path[path.len() - 1].as_str(),
+                    "US" | "ENGLISH" | "UK" | "CANADA" | "ROOT"
+                )
+        }
+        // `Locale.getDefault()` — caturra's own locale, which is en-US.
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } => {
+            method == "getDefault"
+                && args.is_empty()
+                && matches!(owner.as_ref(), Expr::Name { path, .. }
+                    if path.last().is_some_and(|name| name == "Locale"))
+        }
+        _ => false,
+    }
+}
+
+/// `java.time.format.FormatStyle`, by its own ordinal.
+fn format_style_index(name: &str) -> Option<i32> {
+    Some(match name {
+        "FULL" => 0,
+        "LONG" => 1,
+        "MEDIUM" => 2,
+        "SHORT" => 3,
+        _ => return None,
+    })
+}
+
+/// `java.time.format.TextStyle`, by its own ordinal. The STANDALONE forms are
+/// the plain ones in en-US, which is the only text caturra ships.
+fn text_style_index(name: &str) -> Option<i32> {
+    Some(match name {
+        "FULL" => 0,
+        "FULL_STANDALONE" => 1,
+        "SHORT" => 2,
+        "SHORT_STANDALONE" => 3,
+        "NARROW" => 4,
+        "NARROW_STANDALONE" => 5,
+        _ => return None,
+    })
+}
+
 /// A library enum NAMED — `Month.class`, the way `EnumSet.allOf` picks one.
 fn library_enum_type(class: &str) -> Option<JType> {
     LIBRARY_ENUMS
@@ -27011,6 +27064,11 @@ impl BodyGen<'_> {
     /// The return type of a builtin instance call, for `type_of`. Mirrors the
     /// lookup the emitting path does, without emitting or reporting.
     fn type_of_builtin_call(&mut self, receiver_ty: JType, method: &str, args: &[Expr]) -> JType {
+        // The one call whose arguments are CONSTANTS rather than values, so no
+        // table describes it — the emit path reads them, and this has to agree.
+        if matches!(receiver_ty, JType::Month | JType::DayOfWeek) && method == "getDisplayName" {
+            return JType::Str;
+        }
         let elem = TypeArgs::of(receiver_ty);
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         let Some((_, methods)) = builtin_instance_table(receiver_ty) else {
@@ -27224,6 +27282,13 @@ impl BodyGen<'_> {
                 ),
             );
             return None;
+        }
+        // `getDisplayName(TextStyle, Locale)` on a day or a month. Its two
+        // arguments are CONSTANTS rather than values — the style enums are
+        // read while compiling — so no method table can describe the call, and
+        // both this and `type_of` have to say the same thing about it.
+        if matches!(receiver_ty, JType::Month | JType::DayOfWeek) && method == "getDisplayName" {
+            return self.emit_display_name(receiver_ty, args, span);
         }
         // The reflective lookups take `Class<?>...`, and everybody writes them
         // that way: `getDeclaredConstructor()`, `getDeclaredConstructor(String.class,
@@ -28152,6 +28217,150 @@ impl BodyGen<'_> {
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
         self.code.drop_stack(descriptor_arg_width(&descriptor));
         Some(ret_ty)
+    }
+
+    /// `month.getDisplayName(TextStyle.FULL, Locale.US)`. The style is read
+    /// while compiling; the LOCALE is checked to be an English one, because
+    /// the only month and day text caturra ships is en-US and answering a
+    /// French program in English would be a wrong answer, not a missing one.
+    #[allow(clippy::option_option)] // the call-dispatch return shape
+    fn emit_display_name(
+        &mut self,
+        receiver_ty: JType,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let [style, locale] = args else {
+            self.no_suitable_library_method(
+                if receiver_ty == JType::Month {
+                    "Month"
+                } else {
+                    "DayOfWeek"
+                },
+                "getDisplayName",
+                args,
+                span,
+            );
+            self.code.discard();
+            return None;
+        };
+        let index = self.constant_style(style, "TextStyle", text_style_index)?;
+        if !english_locale(locale) {
+            self.error(
+                locale.span(),
+                String::from(
+                    "caturra ships only the en-US month and day names, so the locale here has \
+                     to be an English one — `Locale.US`, `Locale.ENGLISH`, `Locale.UK` or \
+                     `Locale.getDefault()`",
+                ),
+            );
+            self.code.discard();
+            return None;
+        }
+        self.push_int(index);
+        let internal = if receiver_ty == JType::Month {
+            "java/time/Month"
+        } else {
+            "java/time/DayOfWeek"
+        };
+        let method_ref = intern_method_ref(
+            self.pool,
+            internal,
+            "getDisplayName",
+            "(I)Ljava/lang/String;",
+        );
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+        self.code.drop_stack(2);
+        Some(Some(JType::Str))
+    }
+
+    /// `DateTimeFormatter.ofLocalizedDate/Time/DateTime(FormatStyle…)`. The
+    /// styles are read from the SOURCE, because that is the only place they
+    /// are ever written: a `FormatStyle` is not a value caturra models, and a
+    /// variable holding one is refused by name rather than silently.
+    #[allow(clippy::option_option)] // the call-dispatch return shape
+    fn emit_localized_formatter(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let wants = match method {
+            "ofLocalizedDate" => (true, false),
+            "ofLocalizedTime" => (false, true),
+            "ofLocalizedDateTime" => (true, true),
+            _ => {
+                self.no_suitable_library_method("DateTimeFormatter", method, args, span);
+                return None;
+            }
+        };
+        // One style, or two for the date-time form written out.
+        let styles: Vec<i32> = match (args, wants) {
+            ([one], _) => match self.constant_style(one, "FormatStyle", format_style_index) {
+                Some(style) => vec![style],
+                None => return None,
+            },
+            ([date, time], (true, true)) => {
+                match (
+                    self.constant_style(date, "FormatStyle", format_style_index),
+                    self.constant_style(time, "FormatStyle", format_style_index),
+                ) {
+                    (Some(d), Some(t)) => vec![d, t],
+                    _ => return None,
+                }
+            }
+            _ => {
+                self.no_suitable_library_method("DateTimeFormatter", method, args, span);
+                return None;
+            }
+        };
+        let (date, time) = match (wants, styles.as_slice()) {
+            ((true, false), [only]) => (*only, -1),
+            ((false, true), [only]) => (-1, *only),
+            (_, [only]) => (*only, *only),
+            (_, [d, t]) => (*d, *t),
+            _ => (-1, -1),
+        };
+        self.push_int(date);
+        self.push_int(time);
+        let method_ref = intern_method_ref(
+            self.pool,
+            "java/time/format/DateTimeFormatter",
+            "__ofLocalized",
+            "(II)Ljava/time/format/DateTimeFormatter;",
+        );
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(2);
+        Some(Some(JType::DateFormat))
+    }
+
+    /// The index of a style CONSTANT written inline — `FormatStyle.MEDIUM`,
+    /// `TextStyle.SHORT`. Anything else is refused where it stands, because
+    /// the alternative is reading a value caturra does not model.
+    fn constant_style(
+        &mut self,
+        arg: &Expr,
+        class: &str,
+        index_of: fn(&str) -> Option<i32>,
+    ) -> Option<i32> {
+        let named = match arg {
+            Expr::Name { path, .. } if path.len() >= 2 => {
+                let owner = &path[path.len() - 2];
+                (owner == class).then(|| path[path.len() - 1].as_str())
+            }
+            _ => None,
+        };
+        if let Some(index) = named.and_then(index_of) {
+            return Some(index);
+        }
+        self.error(
+            arg.span(),
+            format!(
+                "a {class} has to be written out here ({class}.FULL and the rest) — caturra \
+                 reads it while compiling and models no value of that type"
+            ),
+        );
+        None
     }
 
     /// `EnumSet.of/noneOf/allOf/range/complementOf/copyOf`. Every one of them
@@ -30075,6 +30284,16 @@ impl BodyGen<'_> {
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
             self.code.drop_stack(want.width());
             return Some(Some(kind));
+        }
+        // The LOCALIZED formatters, before the ordinary static table: each is
+        // named by a `FormatStyle` constant, which caturra reads at COMPILE
+        // time — the two style enums are only ever written inline, and
+        // modelling them as values would buy nothing a call site cannot say.
+        if class == "DateTimeFormatter"
+            && !self.table.has_class(class)
+            && method.starts_with("ofLocalized")
+        {
+            return self.emit_localized_formatter(method, args, span);
         }
         if !self.table.has_class(class) && builtin_static_table(class).is_some() {
             return self.builtin_static_call(class, method, args, span);
@@ -33218,6 +33437,14 @@ impl BodyGen<'_> {
                                 "OptionalDouble" => JType::OptionalDouble,
                                 _ => JType::OptionalInt,
                             };
+                        }
+                        // The LOCALIZED formatters, which the emit path
+                        // intercepts before the table: their argument is a
+                        // style CONSTANT rather than a value, so the table
+                        // cannot describe them and this has to say the same
+                        // thing the emitter does.
+                        if path[0] == "DateTimeFormatter" && method.starts_with("ofLocalized") {
+                            return JType::DateFormat;
                         }
                         // Intrinsic static (Math.abs, ...).
                         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();

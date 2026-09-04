@@ -2689,6 +2689,47 @@ public class Inference {
 """,
     ),
     dict(
+        id="date-names",
+        category="Library",
+        title="The name of a day and a month",
+        summary="`month.getDisplayName(TextStyle.FULL, Locale.US)` and `DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)` — the text a JDK gives for en-US, which is the only locale caturra ships.",
+        main="Names",
+        source="""
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.Month;
+import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
+import java.time.format.TextStyle;
+import java.util.Locale;
+
+public class Names {
+    public static void main(String[] args) {
+        LocalDate exam = LocalDate.of(2024, 5, 15);
+        Month month = exam.getMonth();
+        DayOfWeek day = exam.getDayOfWeek();
+
+        // The three widths a JDK distinguishes.
+        System.out.println(month.getDisplayName(TextStyle.FULL, Locale.US));
+        System.out.println(month.getDisplayName(TextStyle.SHORT, Locale.US));
+        System.out.println(month.getDisplayName(TextStyle.NARROW, Locale.US));
+        System.out.println(day.getDisplayName(TextStyle.FULL, Locale.US)
+            + " " + day.getDisplayName(TextStyle.SHORT, Locale.US));
+
+        // ...and the four ready-made date formats.
+        System.out.println(exam.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)));
+        System.out.println(exam.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG)));
+        System.out.println(exam.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)));
+        System.out.println(exam.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.SHORT)));
+
+        // A style is written where it is used: caturra reads it while
+        // compiling, so there is no TextStyle or FormatStyle value to hold.
+        // The text is en-US, which is the only one caturra ships.
+    }
+}
+""",
+    ),
+    dict(
         id="time-positions",
         category="Library",
         title="A java.time value wherever a value goes",

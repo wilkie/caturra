@@ -1173,6 +1173,16 @@
     "expected": "[circle, square]\n[circle, square]\n[1, 2.5] {ada=100} Optional[7] [1, 2]\n101\ngot [1, 2]\n"
   },
   {
+    "id": "date-names",
+    "category": "Library",
+    "title": "The name of a day and a month",
+    "summary": "`month.getDisplayName(TextStyle.FULL, Locale.US)` and `DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)` \u2014 the text a JDK gives for en-US, which is the only locale caturra ships.",
+    "main": "Names",
+    "source": "import java.time.DayOfWeek;\nimport java.time.LocalDate;\nimport java.time.Month;\nimport java.time.format.DateTimeFormatter;\nimport java.time.format.FormatStyle;\nimport java.time.format.TextStyle;\nimport java.util.Locale;\n\npublic class Names {\n    public static void main(String[] args) {\n        LocalDate exam = LocalDate.of(2024, 5, 15);\n        Month month = exam.getMonth();\n        DayOfWeek day = exam.getDayOfWeek();\n\n        // The three widths a JDK distinguishes.\n        System.out.println(month.getDisplayName(TextStyle.FULL, Locale.US));\n        System.out.println(month.getDisplayName(TextStyle.SHORT, Locale.US));\n        System.out.println(month.getDisplayName(TextStyle.NARROW, Locale.US));\n        System.out.println(day.getDisplayName(TextStyle.FULL, Locale.US)\n            + \" \" + day.getDisplayName(TextStyle.SHORT, Locale.US));\n\n        // ...and the four ready-made date formats.\n        System.out.println(exam.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)));\n        System.out.println(exam.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG)));\n        System.out.println(exam.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)));\n        System.out.println(exam.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.SHORT)));\n\n        // A style is written where it is used: caturra reads it while\n        // compiling, so there is no TextStyle or FormatStyle value to hold.\n        // The text is en-US, which is the only one caturra ships.\n    }\n}\n",
+    "status": "supported",
+    "expected": "May\nMay\nM\nWednesday Wed\nWednesday, May 15, 2024\nMay 15, 2024\nMay 15, 2024\n5/15/24\n"
+  },
+  {
     "id": "time-positions",
     "category": "Library",
     "title": "A java.time value wherever a value goes",

@@ -146,6 +146,30 @@ fn temporal_object_method(
         "name" if matches!(value, Temporal::DayOfWeek(_) | Temporal::Month(_)) => {
             JValue::Ref(Some(heap.alloc_string(&value.text())))
         }
+        // `getDisplayName(TextStyle, Locale)`. The compiler has already read
+        // the two constants — the style as an int, the locale checked to be an
+        // English one — so what arrives is the style alone. caturra's text is
+        // en-US throughout, where a STANDALONE form is the plain one.
+        "getDisplayName" if matches!(value, Temporal::DayOfWeek(_) | Temporal::Month(_)) => {
+            let style = match args.first() {
+                Some(JValue::Int(style)) => *style,
+                _ => 0,
+            };
+            let text = match (value, style) {
+                (Temporal::Month(month), s) => match s {
+                    2 | 3 => crate::time::month_text(month, true),
+                    4 | 5 => crate::time::month_text(month, false)[..1].to_owned(),
+                    _ => crate::time::month_text(month, false),
+                },
+                (Temporal::DayOfWeek(day), s) => match s {
+                    2 | 3 => crate::time::day_text(day, true),
+                    4 | 5 => crate::time::day_text(day, false)[..1].to_owned(),
+                    _ => crate::time::day_text(day, false),
+                },
+                _ => return None,
+            };
+            JValue::Ref(Some(heap.alloc_string(&text)))
+        }
         // A `ChronoUnit`'s and a `ChronoField`'s name is the CONSTANT, which
         // their text is not: `HALF_DAYS` prints as "HalfDays", and
         // `NANO_OF_SECOND` as "NanoOfSecond".
@@ -756,9 +780,14 @@ fn formatter_pieces(
             "java.lang.ClassCastException: not a DateTimeFormatter",
         ));
     };
+    let localized;
     let pattern = match kind {
         crate::value::DateFormatKind::Iso(which) => return Ok(Err(*which)),
         crate::value::DateFormatKind::Pattern(pattern) => pattern,
+        crate::value::DateFormatKind::Localized(date, time) => {
+            localized = crate::time::localized_pattern(*date, *time);
+            &localized
+        }
     };
     match crate::time::parse_pattern(pattern) {
         Ok(pieces) => Ok(Ok(pieces)),
@@ -800,11 +829,24 @@ fn format_temporal(
                 )));
             }
             // A ZONE is not a missing field but a missing zone, and a JDK
-            // names the value it could not find one in.
+            // names the value it could not find one in — with the CHRONOLOGY
+            // beside it when the formatter is a localized one, which overrides
+            // the chronology and so has one to name.
             Err(crate::time::FormatFail::Zone) => {
+                let chronology = matches!(
+                    heap.get(formatter),
+                    Some(HeapObject::DateFormat(
+                        crate::value::DateFormatKind::Localized(_, Some(_))
+                    ))
+                ) && matches!(value, Temporal::Time(_));
                 return Err(VmError::UncaughtException(format!(
-                    "java.time.DateTimeException: Unable to extract ZoneId from temporal {}",
-                    value.text()
+                    "java.time.DateTimeException: Unable to extract ZoneId from temporal {}{}",
+                    value.text(),
+                    if chronology {
+                        " with chronology ISO"
+                    } else {
+                        ""
+                    }
                 )));
             }
         },
@@ -3194,6 +3236,15 @@ pub fn invoke_virtual(
                 }
                 crate::value::DateFormatKind::Iso(which) => {
                     crate::time::iso_description(*which).to_owned()
+                }
+                // A localized formatter names its STYLES, not the pattern it
+                // prints through: `Localized(FULL,)`, `Localized(,SHORT)`,
+                // `Localized(MEDIUM,MEDIUM)`.
+                crate::value::DateFormatKind::Localized(date, time) => {
+                    let name = |style: &Option<u8>| {
+                        style.map_or("", |s| crate::time::format_style_name(s))
+                    };
+                    format!("Localized({},{})", name(date), name(time))
                 }
             };
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
@@ -9639,6 +9690,20 @@ pub fn invoke_static(
             // The three zone-less shapes are a date, a time and both;
             // `ISO_DATE`, `ISO_TIME` and `ISO_DATE_TIME` are those same three
             // for a value that carries no zone.
+            // `__ofLocalized(date, time)` — the compiler has read the two
+            // `FormatStyle` constants; -1 stands for "this half is absent".
+            "__ofLocalized" => {
+                let style = |at: usize| match args.get(at) {
+                    Some(JValue::Int(index)) if *index >= 0 => {
+                        u8::try_from(*index % 4).ok().or(Some(0))
+                    }
+                    _ => None,
+                };
+                let formatter = heap.alloc(HeapObject::DateFormat(
+                    crate::value::DateFormatKind::Localized(style(0), style(1)),
+                ));
+                Ok(Some(JValue::Ref(Some(formatter))))
+            }
             "__of" => {
                 let which = match args.first() {
                     Some(JValue::Int(index)) => (*index % 3).clamp(0, 2),
