@@ -963,6 +963,12 @@ pub enum HeapObject {
     BitSet(Vec<u64>),
     /// A `java.io.StringWriter` — the characters written into it so far.
     StringWriter(Vec<u16>),
+    /// A `Collections.synchronized*` wrapper. On one thread a monitor is never
+    /// contended, so it is a live view that writes THROUGH and refuses
+    /// nothing — the only reason it is an object of its own is that
+    /// `getClass()` names the wrapper, and wrapping must not change what the
+    /// original answers.
+    SynchronizedView(HeapRef),
     /// A `java.io.BufferedWriter` over another writer. It really BUFFERS —
     /// what a program writes is not in the target until a `flush` or a
     /// `close`, and a JDK lets it see that: `sw.toString()` is empty in
@@ -1358,6 +1364,9 @@ impl HeapObject {
             HeapObject::Instance { fields, .. } => values(fields, visit),
             HeapObject::UnmodifiableList(inner)
             | HeapObject::ArrayBackedList(inner)
+            // A synchronized wrapper holds what it wraps, exactly as an
+            // unmodifiable one does.
+            | HeapObject::SynchronizedView(inner)
             | HeapObject::UnmodifiableSet(inner)
             | HeapObject::UnmodifiableMap(inner)
             | HeapObject::SubList { backing: inner, .. }

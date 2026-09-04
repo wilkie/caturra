@@ -6070,6 +6070,59 @@ fn scanner_method(
                 .is_some_and(|t| t.parse::<i64>().is_ok());
             Ok(Some(JValue::Int(i32::from(ok))))
         }
+        // The two BIG numbers. They were refused with "BigInteger is not
+        // supported by caturra" — true when the message was written, and false
+        // from the moment the bignum core landed. A token is exactly what each
+        // type's own parser takes.
+        "nextBigInteger" => {
+            let token = scanner_take_msg(heap, console, receiver, |t| {
+                let digits = scanner_ungroup(t).ok_or(None)?;
+                if crate::bigint::BigInt::parse(&digits, 10).is_some() {
+                    Ok(digits)
+                } else {
+                    Err(scanner_numeric_token(&digits, 10)
+                        .then(|| format!("For input string: \"{digits}\"")))
+                }
+            })?;
+            let value = crate::bigint::BigInt::parse(&token, 10)
+                .ok_or_else(|| throw("java.util.InputMismatchException"))?;
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::BigInteger(value)),
+            ))))
+        }
+        "hasNextBigInteger" => {
+            let token = scanner_peek_token(heap, console, receiver)?;
+            let ok = token
+                .and_then(|t| scanner_ungroup(&t))
+                .is_some_and(|t| crate::bigint::BigInt::parse(&t, 10).is_some());
+            Ok(Some(JValue::Int(i32::from(ok))))
+        }
+        "nextBigDecimal" => {
+            let token = scanner_take_msg(heap, console, receiver, |t| {
+                let digits = scanner_ungroup(t).ok_or(None)?;
+                if crate::decimal::BigDec::parse(&digits).is_ok() {
+                    Ok(digits)
+                } else {
+                    // A `nextBigDecimal` that meets a non-number is a bare
+                    // `InputMismatchException`, with no message at all — where
+                    // `nextInt` names the string it could not parse. Measured,
+                    // because the two read alike in the javadoc.
+                    Err(None)
+                }
+            })?;
+            let value = crate::decimal::BigDec::parse(&token)
+                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::BigDecimal(value)),
+            ))))
+        }
+        "hasNextBigDecimal" => {
+            let token = scanner_peek_token(heap, console, receiver)?;
+            let ok = token
+                .and_then(|t| scanner_ungroup(&t))
+                .is_some_and(|t| crate::decimal::BigDec::parse(&t).is_ok());
+            Ok(Some(JValue::Int(i32::from(ok))))
+        }
         "nextFloat" => {
             let value = scanner_take(heap, console, receiver, |t| {
                 is_java_float_token(t)

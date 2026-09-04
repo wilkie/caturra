@@ -14275,3 +14275,63 @@ Pinned as `which_reader_a_reader_is` and
 `readers_and_writers_in_every_position`, with four reject pins for the
 direction that matters: `readLine` and `lines` on a plain reader, `newLine` on
 a plain writer, and one reader assigned to another.
+
+## The methods a measurement found
+
+Four units in a row were chosen from whatever a probe happened to stumble into.
+This one was chosen by `scripts/coverage/measure.py`, which had not run since
+seven units before it: **286 → 364 nameable classes, 995/1213 → 1354/1552
+method names (87.2%)**.
+
+The first thing it found was a refusal of caturra's own making.
+`Scanner.nextBigInteger()` said "BigInteger is not supported by caturra" — true
+when the message was written, and false from the moment the bignum core landed
+hours earlier in the same session. A refusal that outlives its reason is a
+worse answer than no method at all, and it is exactly the shape of the stale
+"Vector is a gap" card the legacy-collections unit caught. Both big-number
+readers and their `hasNext` twins work now.
+
+The rest of the low scores split cleanly. `java.lang.System` (36%) and
+`DateTimeFormatter` (20%) are almost entirely host facilities and
+locale/chronology machinery caturra deliberately does not have. What was left
+was real:
+
+- **The `Collections` wrappers.** `synchronizedList`/`Set`/`Map`/`Collection`
+  and their four sorted spellings: on one thread a monitor is never contended,
+  so each IS the collection it wraps — the same argument `synchronized` itself
+  already uses. It gets an object of its own only so `getClass()` names the
+  wrapper and wrapping does not change what the original answers; everything
+  else delegates, and the delegation is TRANSITIVE because wrapping a wrapper
+  is legal. A JDK picks `SynchronizedRandomAccessList` over `SynchronizedList`
+  by whether what it wraps is `RandomAccess`, exactly as `unmodifiableList`
+  does.
+- **The four sorted `unmodifiable*` wrappers**, which caturra had for the plain
+  set and map and not for the sorted ones.
+- **The seven empty factories.** `emptySortedSet`/`SortedMap` and their
+  navigable twins are built from the unmodifiable navigable wrapper (their
+  class names say so), and `emptyIterator`/`emptyListIterator`/
+  `emptyEnumeration` are cursors over nothing.
+- **`Arrays.parallelSort`/`parallelSetAll`/`parallelPrefix`.** The first two
+  ARE their serial twins here — on one thread the only difference is how the
+  work is divided, and dividing it one way gives the same array — so they are
+  written as delegations rather than second implementations, in the bundled
+  `Arrays` where the serial ones live. `parallelPrefix` is a running fold in
+  place, which has no serial name to borrow.
+- **`Objects.checkFromToIndex`/`checkFromIndexSize`.** Their messages name the
+  whole range, and `checkFromIndexSize` prints the sum UNEVALUATED —
+  "Range [3, 3 + 2) out of bounds for length 4" — which only a capture tells
+  you.
+
+Two more measured answers that could not have been guessed:
+`new BigDecimal` from a `Scanner` keeps its scale (`1.500` has scale 3), and
+`nextBigDecimal` on a non-number is a BARE `InputMismatchException` where
+`nextInt` names the string it could not parse.
+
+`Collections.synchronizedSet(s)` handed to a `Collection<?>` parameter was
+"cannot determine the type of an argument": the emit path knew the wrapper
+answers its argument's own type and the `type_of` mirror did not — the
+emit/typing split again, in a unit that added fourteen wrapper names at once.
+
+Pinned as `the_methods_a_measurement_found` and
+`the_measured_methods_in_every_position`, with two reject pins for the sorted
+wrappers that must still refuse an unsorted argument.

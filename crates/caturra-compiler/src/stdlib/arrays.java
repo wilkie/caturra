@@ -82,6 +82,26 @@ class Arrays {
   public static void sort(int[] a) {
     sort(a, 0, a.length);
   }
+  // `parallelSort` IS `sort` here: caturra runs on one thread, so the only
+  // difference a JDK's parallel form has is how it divides the work, and
+  // dividing it one way gives the same array back. Written as a delegation
+  // rather than a second implementation, so the two cannot drift apart.
+  public static void parallelSort(int[] a) { sort(a, 0, a.length); }
+  public static void parallelSort(int[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
+  public static void parallelSort(double[] a) { sort(a, 0, a.length); }
+  public static void parallelSort(double[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
+  public static void parallelSort(long[] a) { sort(a, 0, a.length); }
+  public static void parallelSort(long[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
+  public static void parallelSort(char[] a) { sort(a, 0, a.length); }
+  public static void parallelSort(char[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
+  public static void parallelSort(float[] a) { sort(a, 0, a.length); }
+  public static void parallelSort(float[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
+  public static void parallelSort(short[] a) { sort(a, 0, a.length); }
+  public static void parallelSort(short[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
+  public static void parallelSort(byte[] a) { sort(a, 0, a.length); }
+  public static void parallelSort(byte[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
+  public static void parallelSort(String[] a) { sort(a, 0, a.length); }
+  public static void parallelSort(String[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
   // Sort a[fromIndex..toIndex).
   public static void sort(int[] a, int fromIndex, int toIndex) {
     rangeCheck(a.length, fromIndex, toIndex);

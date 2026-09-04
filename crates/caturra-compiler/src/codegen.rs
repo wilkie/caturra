@@ -6514,6 +6514,14 @@ fn mints_a_collection(expr: &Expr) -> bool {
                             | "unmodifiableSet"
                             | "unmodifiableMap"
                             | "unmodifiableCollection"
+                            | "unmodifiableSortedSet"
+                            | "unmodifiableNavigableSet"
+                            | "unmodifiableSortedMap"
+                            | "unmodifiableNavigableMap"
+                            | "emptySortedSet"
+                            | "emptyNavigableSet"
+                            | "emptySortedMap"
+                            | "emptyNavigableMap"
                     )
                     | ("Optional", "of" | "ofNullable" | "empty")
                     | ("Stream", "of" | "empty" | "concat" | "iterate" | "generate")
@@ -9511,6 +9519,31 @@ fn is_collections_method(method: &str) -> bool {
             | "unmodifiableSet"
             | "unmodifiableMap"
             | "unmodifiableCollection"
+            // The synchronized wrappers: on one thread each IS the collection
+            // it wraps, the same argument `synchronized` itself already uses.
+            | "synchronizedList"
+            | "synchronizedSet"
+            | "synchronizedMap"
+            | "synchronizedCollection"
+            | "synchronizedSortedSet"
+            | "synchronizedNavigableSet"
+            | "synchronizedSortedMap"
+            | "synchronizedNavigableMap"
+            // The SORTED spellings of the same wrapper, which `Collections`
+            // declares beside them and caturra did not have.
+            | "unmodifiableSortedSet"
+            | "unmodifiableNavigableSet"
+            | "unmodifiableSortedMap"
+            | "unmodifiableNavigableMap"
+            // The empty factories the sorted collections have too, and the
+            // three empty CURSORS.
+            | "emptySortedSet"
+            | "emptyNavigableSet"
+            | "emptySortedMap"
+            | "emptyNavigableMap"
+            | "emptyIterator"
+            | "emptyListIterator"
+            | "emptyEnumeration"
             | "enumeration"
             | "list"
             | "rotate"
@@ -11970,8 +12003,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Scanner", "skip", "caturra's Scanner reads whole tokens and cannot skip by pattern"),
     ("Scanner", "tokens", "caturra's Scanner does not expose its tokens as a stream"),
     ("Scanner", "findAll", "caturra's Scanner does not expose matches as a stream"),
-    ("Scanner", "nextBigInteger", "BigInteger is not supported by caturra"),
-    ("Scanner", "nextBigDecimal", "BigDecimal is not supported by caturra"),
     // A `Spliterator` is a parallel-decomposition handle. caturra runs on one
     // thread and models no such type, so there is nothing honest to answer —
     // and "cannot find symbol" would read as a bug for a method the
@@ -12105,6 +12136,24 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         needs: TableFace::Sorted,
     },
     bm("nextLong", &[], BRet::Long, "()J"),
+    // The two BIG numbers. They were refused as "BigInteger is not supported
+    // by caturra" — true when that was written, and false from the moment the
+    // bignum core landed. A refusal that outlives its reason is a worse answer
+    // than no method at all.
+    bm(
+        "nextBigInteger",
+        &[],
+        BRet::BigInteger,
+        "()Ljava/math/BigInteger;",
+    ),
+    bm("hasNextBigInteger", &[], BRet::Boolean, "()Z"),
+    bm(
+        "nextBigDecimal",
+        &[],
+        BRet::BigDecimal,
+        "()Ljava/math/BigDecimal;",
+    ),
+    bm("hasNextBigDecimal", &[], BRet::Boolean, "()Z"),
     bm("nextFloat", &[], BRet::Float, "()F"),
     bm("nextShort", &[], BRet::Short, "()S"),
     bm("hasNextShort", &[], BRet::Boolean, "()Z"),
@@ -21611,6 +21660,8 @@ const OBJECTS_METHOD_NAMES: &[&str] = &[
     "toString",
     "compare",
     "checkIndex",
+    "checkFromToIndex",
+    "checkFromIndexSize",
     "requireNonNull",
     "requireNonNullElse",
     "requireNonNullElseGet",
@@ -28578,6 +28629,17 @@ impl BodyGen<'_> {
     /// not. It used to be `JType::Null`, which assigns to ANY reference — so
     /// `Integer x = new ArrayList<>();` compiled, and a typo that javac
     /// catches ran here instead.
+    /// The element an EMPTY factory answers: an erased type VARIABLE, so it
+    /// assigns to a collection of any element the way `null` does, and — unlike
+    /// `null` — is a thing a for-each can walk. The same marker `emptyList`
+    /// already used.
+    fn erased_elem(&self) -> ElemType {
+        ElemType::Wildcard {
+            read: self.table.object_id,
+            bound: WildcardBound::TypeVar(self.table.object_id),
+        }
+    }
+
     fn diamond_elem(&self) -> ElemType {
         ElemType::Wildcard {
             read: self.table.object_id,
@@ -33734,8 +33796,14 @@ impl BodyGen<'_> {
         }
         // `Arrays.setAll(array, i -> ...)` fills the array from a generator of
         // the index; the generator is already the erased `__UnaryOperator`.
-        if class == "Arrays" && method == "setAll" {
+        // `parallelSetAll` is `setAll` here: caturra runs on one thread, so
+        // the only difference a JDK's parallel form has is how it divides the
+        // work, and dividing it one way gives the same array back.
+        if class == "Arrays" && matches!(method, "setAll" | "parallelSetAll") {
             return self.emit_arrays_set_all(args, span);
+        }
+        if class == "Arrays" && method == "parallelPrefix" {
+            return self.emit_arrays_parallel_prefix(args, span);
         }
         // `Collections.reverse/swap` are generic over the list element type;
         // emit the (uniform-at-runtime) list argument(s) and call the bundle,
@@ -34062,6 +34130,64 @@ impl BodyGen<'_> {
             self.code.drop_stack(value_ty.width());
             return Some(Some(JType::library_list(elem)));
         }
+        // The three empty CURSORS, and the empty SORTED collections. Each is
+        // the same shape as `emptySet`: no arguments, and an element the
+        // assignment context decides.
+        if matches!(
+            method,
+            "emptyIterator"
+                | "emptyListIterator"
+                | "emptyEnumeration"
+                | "emptySortedSet"
+                | "emptyNavigableSet"
+                | "emptySortedMap"
+                | "emptyNavigableMap"
+        ) {
+            if !args.is_empty() {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            }
+            let (descriptor, answer) = match method {
+                "emptyIterator" => (
+                    "()Ljava/util/Iterator;",
+                    JType::Iterator(self.erased_elem()),
+                ),
+                "emptyListIterator" => (
+                    "()Ljava/util/ListIterator;",
+                    JType::ListIterator(self.erased_elem()),
+                ),
+                "emptyEnumeration" => (
+                    "()Ljava/util/Enumeration;",
+                    JType::Enumeration(self.erased_elem()),
+                ),
+                "emptySortedSet" | "emptyNavigableSet" => (
+                    "()Ljava/util/SortedSet;",
+                    JType::TreeSet(
+                        self.erased_elem(),
+                        if method == "emptySortedSet" {
+                            TableFace::Sorted
+                        } else {
+                            TableFace::Navigable
+                        },
+                    ),
+                ),
+                _ => (
+                    "()Ljava/util/SortedMap;",
+                    JType::TreeMap {
+                        key: self.erased_elem(),
+                        value: self.erased_elem(),
+                        role: if method == "emptySortedMap" {
+                            TableFace::Sorted
+                        } else {
+                            TableFace::Navigable
+                        },
+                    },
+                ),
+            };
+            let method_ref = intern_method_ref(self.pool, "Collections", method, descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            return Some(Some(answer));
+        }
         // `emptySet()`/`emptyMap()` — immutable empty collections whose element
         // type comes from the assignment context, so they type as `null`.
         if method == "emptySet" || method == "emptyMap" {
@@ -34200,13 +34326,94 @@ impl BodyGen<'_> {
         }
         // `unmodifiableSet(set)` / `unmodifiableMap(map)` — an immutable view of
         // the argument, keeping its own set/map type.
-        if method == "unmodifiableSet" || method == "unmodifiableMap" {
+        // ...and the SORTED spellings, which take (and answer) a sorted one.
+        // `Collections` declares six of these, and only two were here.
+        // The SYNCHRONIZED wrappers. On one thread a monitor is never
+        // contended, so each is the collection it wraps — a live view that
+        // writes through, which is what a JDK's is too. The refusals the
+        // unmodifiable ones make are the only difference, and these make none.
+        if matches!(
+            method,
+            "synchronizedList"
+                | "synchronizedSet"
+                | "synchronizedMap"
+                | "synchronizedCollection"
+                | "synchronizedSortedSet"
+                | "synchronizedNavigableSet"
+                | "synchronizedSortedMap"
+                | "synchronizedNavigableMap"
+        ) {
             let [collection] = args else {
                 self.no_suitable_library_method("Collections", method, args, span);
                 return None;
             };
             let collection_ty = self.expr(collection);
-            let wants_set = method == "unmodifiableSet";
+            let wants = method.trim_start_matches("synchronized");
+            let ok = match wants {
+                "List" => {
+                    matches!(collection_ty, JType::List { .. } | JType::Vector(_))
+                        || matches!(
+                            collection_ty,
+                            JType::LinkedList {
+                                role: SeqRole::Full,
+                                ..
+                            }
+                        )
+                }
+                "Set" => matches!(collection_ty, JType::Set { .. } | JType::TreeSet(_, _)),
+                "Map" => matches!(collection_ty, JType::Map { .. } | JType::TreeMap { .. }),
+                "SortedSet" | "NavigableSet" => matches!(collection_ty, JType::TreeSet(_, _)),
+                "SortedMap" | "NavigableMap" => matches!(collection_ty, JType::TreeMap { .. }),
+                _ => any_collection_elem(collection_ty, self.table).is_some(),
+            };
+            if !ok {
+                self.error(
+                    collection.span(),
+                    format!("Collections.{method} takes a {wants}"),
+                );
+                self.code.discard();
+                return None;
+            }
+            let descriptor = match wants {
+                "List" => "(Ljava/util/ArrayList;)Ljava/util/ArrayList;",
+                "Set" | "SortedSet" | "NavigableSet" => "(Ljava/util/Set;)Ljava/util/Set;",
+                "Map" | "SortedMap" | "NavigableMap" => "(Ljava/util/Map;)Ljava/util/Map;",
+                _ => "(Ljava/util/Collection;)Ljava/util/Collection;",
+            };
+            let method_ref = intern_method_ref(self.pool, "Collections", method, descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(1);
+            return Some(Some(collection_ty));
+        }
+        if matches!(
+            method,
+            "unmodifiableSet"
+                | "unmodifiableMap"
+                | "unmodifiableSortedSet"
+                | "unmodifiableNavigableSet"
+                | "unmodifiableSortedMap"
+                | "unmodifiableNavigableMap"
+        ) {
+            let [collection] = args else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let collection_ty = self.expr(collection);
+            let wants_set = method.ends_with("Set");
+            let wants_sorted = method != "unmodifiableSet" && method != "unmodifiableMap";
+            if wants_sorted
+                && !matches!(collection_ty, JType::TreeSet(_, _) | JType::TreeMap { .. })
+            {
+                self.error(
+                    collection.span(),
+                    format!(
+                        "Collections.{method} takes a {}",
+                        if wants_set { "SortedSet" } else { "SortedMap" }
+                    ),
+                );
+                self.code.discard();
+                return None;
+            }
             let ok = if wants_set {
                 matches!(collection_ty, JType::Set { .. } | JType::TreeSet(_, _))
             } else {
@@ -34805,6 +35012,18 @@ impl BodyGen<'_> {
                 let length_ty = self.expr(length);
                 self.numeric_conversion(length_ty, JType::Int);
                 self.invoke_objects("checkIndex", "(II)I", 2, 1);
+                Some(Some(JType::Int))
+            }
+            // `checkFromToIndex(from, to, length)` and
+            // `checkFromIndexSize(from, size, length)` — the RANGE forms of
+            // the same check, and the two names `Objects` has that caturra
+            // did not.
+            ("checkFromToIndex" | "checkFromIndexSize", [first, second, length]) => {
+                for argument in [first, second, length] {
+                    let ty = self.expr(argument);
+                    self.numeric_conversion(ty, JType::Int);
+                }
+                self.invoke_objects(method, "(III)I", 3, 1);
                 Some(Some(JType::Int))
             }
             // `compare(a, b, cmp)` — 0 when the arguments are the same object
@@ -35728,6 +35947,44 @@ impl BodyGen<'_> {
             array_ty.descriptor(self.table)
         );
         let method_ref = intern_method_ref(self.pool, "Arrays", "setAll", &descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+        self.code.drop_stack(2);
+        Some(None)
+    }
+
+    /// `Arrays.parallelPrefix(a, op)` — the array replaced by its RUNNING
+    /// fold, so `{1,2,3,4}` under `+` becomes `{1,3,6,10}`. On one thread the
+    /// order is simply left to right.
+    #[allow(clippy::option_option)] // call-dispatch return shape
+    fn emit_arrays_parallel_prefix(
+        &mut self,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let [array_arg, operator_arg] = args else {
+            self.no_suitable_library_method("Arrays", "parallelPrefix", args, span);
+            return None;
+        };
+        let array_ty = self.expr(array_arg);
+        let supported = match array_ty {
+            JType::Array { dims, .. } if dims > 1 => true,
+            JType::Array { elem, .. } => {
+                matches!(elem.base_type(), JType::Int | JType::Long | JType::Double)
+                    || elem.base_type().is_reference()
+            }
+            _ => false,
+        };
+        if !supported {
+            self.no_suitable_library_method("Arrays", "parallelPrefix", args, span);
+            self.code.discard();
+            return None;
+        }
+        self.expr(operator_arg);
+        let descriptor = format!(
+            "({}Ljava/util/function/BinaryOperator;)V",
+            array_ty.descriptor(self.table)
+        );
+        let method_ref = intern_method_ref(self.pool, "Arrays", "parallelPrefix", &descriptor);
         self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
         self.code.drop_stack(2);
         Some(None)
@@ -37036,7 +37293,24 @@ impl BodyGen<'_> {
                                 _ => JType::Error,
                             };
                         }
-                        "unmodifiableSet" | "unmodifiableMap" => {
+                        // Every wrapper that answers its ARGUMENT's own type.
+                        // The two gates again: the emit path knew this and
+                        // this mirror did not, so `size(synchronizedSet(s))`
+                        // was "cannot determine the type of an argument".
+                        "unmodifiableSet"
+                        | "unmodifiableMap"
+                        | "unmodifiableSortedSet"
+                        | "unmodifiableNavigableSet"
+                        | "unmodifiableSortedMap"
+                        | "unmodifiableNavigableMap"
+                        | "synchronizedList"
+                        | "synchronizedSet"
+                        | "synchronizedMap"
+                        | "synchronizedCollection"
+                        | "synchronizedSortedSet"
+                        | "synchronizedNavigableSet"
+                        | "synchronizedSortedMap"
+                        | "synchronizedNavigableMap" => {
                             return args.first().map_or(JType::Error, |a| self.type_of(a));
                         }
                         _ => {}

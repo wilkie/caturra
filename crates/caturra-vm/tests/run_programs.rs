@@ -8486,9 +8486,14 @@ fn try_catch_compile_errors_match_javac() {
         // it had to start working, because `CharSequence` declares `chars()`
         // and a builder IS one, so the two spellings of a single call were
         // answering differently.
+        // `s.nextBigInteger()` is no longer here either: it WORKS now. The
+        // refusal said "BigInteger is not supported by caturra", which was
+        // true when it was written and false from the moment the bignum core
+        // landed — a refusal that outlives its reason is a worse answer than
+        // no method at all.
         (
-            "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.nextBigInteger(); } }",
-            "Scanner.nextBigInteger exists in Java, but BigInteger is not supported by caturra",
+            "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.findInLine(\"x\"); } }",
+            "caturra's Scanner reads whole tokens and cannot search within a line",
         ),
     ];
     for (source, expected) in cases {

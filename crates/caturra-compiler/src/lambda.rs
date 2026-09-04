@@ -3012,7 +3012,9 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             }
             // `Arrays.setAll(array, i -> ...)`: the generator's parameter is the
             // int index, its result the array's element type.
-            if method == "setAll"
+            // `parallelSetAll` is the same call: on one thread the only
+            // difference a JDK's parallel form has is how it divides the work.
+            if matches!(method.as_str(), "setAll" | "parallelSetAll")
                 && args.len() == 2
                 && receiver
                     .as_deref()
@@ -3028,6 +3030,29 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     "apply",
                     &object,
                     &[TypeRef::Int],
+                    Some(&elem),
+                    ctx,
+                );
+                return;
+            }
+            // `Arrays.parallelPrefix(array, (a, b) -> ...)`: the operator
+            // folds two ELEMENTS and answers one.
+            if method == "parallelPrefix"
+                && args.len() == 2
+                && receiver
+                    .as_deref()
+                    .is_some_and(|r| names_library_class(r, "Arrays"))
+                && matches!(&args[1], Expr::Lambda { params, .. } if params.len() == 2)
+                && let Some(elem) = array_elem_type(&args[0], ctx)
+            {
+                desugar_expr(&mut args[0], None, ctx);
+                let object = TypeRef::Named(String::from("Object"));
+                args[1] = build_erased_lambda(
+                    &mut args[1],
+                    "__BiFunction",
+                    "apply",
+                    &object,
+                    &[elem.clone(), elem.clone()],
                     Some(&elem),
                     ctx,
                 );

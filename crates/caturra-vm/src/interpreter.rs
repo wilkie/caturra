@@ -4740,6 +4740,66 @@ impl<'run> Interpreter<'run> {
                 return Ok(true);
             }
             // Immutable empty / single-element set and map views.
+            // The SORTED empty collections. A JDK builds them from the
+            // unmodifiable navigable wrapper (their class names say so), and
+            // the same object each time.
+            ("emptySortedSet" | "emptyNavigableSet", []) => {
+                let inner = self.heap.alloc(HeapObject::TreeSet {
+                    values: Vec::new(),
+                    comparator: None,
+                });
+                let view = self.heap.alloc(HeapObject::UnmodifiableSet(inner));
+                self.heap.set_view_class(
+                    view,
+                    "java/util/Collections$UnmodifiableNavigableSet$EmptyNavigableSet",
+                );
+                self.checked_cursor_views.insert(view);
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
+            ("emptySortedMap" | "emptyNavigableMap", []) => {
+                let inner = self.heap.alloc(HeapObject::TreeMap {
+                    entries: Vec::new(),
+                    comparator: None,
+                });
+                let view = self.heap.alloc(HeapObject::UnmodifiableMap(inner));
+                self.heap.set_view_class(
+                    view,
+                    "java/util/Collections$UnmodifiableNavigableMap$EmptyNavigableMap",
+                );
+                self.checked_cursor_views.insert(view);
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
+            // The three empty CURSORS. Each is a cursor over an empty list —
+            // `hasNext` false, `next` a `NoSuchElementException` — and each
+            // reports its own class.
+            ("emptyIterator" | "emptyListIterator" | "emptyEnumeration", []) => {
+                let empty = self.heap.alloc(HeapObject::ArrayList(Vec::new()));
+                let cursor = self.heap.alloc(HeapObject::Iterator {
+                    source: empty,
+                    index: 0,
+                    last: None,
+                    expected_len: 0,
+                    writes: if method_name == "emptyEnumeration" {
+                        IteratorWrites::Enumerator
+                    } else {
+                        IteratorWrites::NoneChecked
+                    },
+                    list: method_name == "emptyListIterator",
+                    descending: false,
+                });
+                self.heap.set_view_class(
+                    cursor,
+                    match method_name {
+                        "emptyIterator" => "java/util/Collections$EmptyIterator",
+                        "emptyListIterator" => "java/util/Collections$EmptyListIterator",
+                        _ => "java/util/Collections$EmptyEnumeration",
+                    },
+                );
+                frame.stack.push(JValue::Ref(Some(cursor)));
+                return Ok(true);
+            }
             ("emptySet", []) => {
                 let inner = self
                     .heap
@@ -4789,6 +4849,15 @@ impl<'run> Interpreter<'run> {
 
         let Some(JValue::Ref(Some(list))) = args.first().copied() else {
             return Ok(false);
+        };
+        // A `Collections` algorithm handed a synchronized wrapper works on
+        // what it wraps — `Collections.sort(synchronizedList(l))` sorts `l`.
+        // The instance path unwraps at its own dispatch; this one has to as
+        // well, or the algorithm reads a view it does not know how to walk.
+        let list = if method_name.starts_with("synchronized") {
+            list
+        } else {
+            self.unwrap_synchronized(list)
         };
         // The two bridges between a `Collection` and an `Enumeration`. An
         // enumeration IS a cursor here — the legacy names alias `hasNext` and
@@ -4844,27 +4913,63 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
-        if method_name == "unmodifiableSet" || method_name == "unmodifiableSortedSet" {
-            let view = self.heap.alloc(HeapObject::UnmodifiableSet(list));
+        // A SYNCHRONIZED wrapper is a live view that writes through, and on
+        // one thread that is all it is. It gets its own object so `getClass()`
+        // names the wrapper rather than what it wraps, and so wrapping does
+        // not change what the original answers.
+        if let Some(wrapped) = method_name.strip_prefix("synchronized") {
+            let view = self.heap.alloc(HeapObject::SynchronizedView(list));
             self.heap.set_view_class(
                 view,
-                if method_name == "unmodifiableSet" {
-                    "java/util/Collections$UnmodifiableSet"
-                } else {
-                    "java/util/Collections$UnmodifiableSortedSet"
+                match wrapped {
+                    // A JDK picks the RandomAccess variant by whether the list
+                    // it wraps is one, exactly as `unmodifiableList` does.
+                    "List" => {
+                        if matches!(self.heap.get(list), Some(HeapObject::LinkedList(_))) {
+                            "java/util/Collections$SynchronizedList"
+                        } else {
+                            "java/util/Collections$SynchronizedRandomAccessList"
+                        }
+                    }
+                    "Set" => "java/util/Collections$SynchronizedSet",
+                    "Map" => "java/util/Collections$SynchronizedMap",
+                    "SortedSet" => "java/util/Collections$SynchronizedSortedSet",
+                    "NavigableSet" => "java/util/Collections$SynchronizedNavigableSet",
+                    "SortedMap" => "java/util/Collections$SynchronizedSortedMap",
+                    "NavigableMap" => "java/util/Collections$SynchronizedNavigableMap",
+                    _ => "java/util/Collections$SynchronizedCollection",
                 },
             );
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
-        if method_name == "unmodifiableMap" || method_name == "unmodifiableSortedMap" {
+        if matches!(
+            method_name,
+            "unmodifiableSet" | "unmodifiableSortedSet" | "unmodifiableNavigableSet"
+        ) {
+            let view = self.heap.alloc(HeapObject::UnmodifiableSet(list));
+            self.heap.set_view_class(
+                view,
+                match method_name {
+                    "unmodifiableSet" => "java/util/Collections$UnmodifiableSet",
+                    "unmodifiableSortedSet" => "java/util/Collections$UnmodifiableSortedSet",
+                    _ => "java/util/Collections$UnmodifiableNavigableSet",
+                },
+            );
+            frame.stack.push(JValue::Ref(Some(view)));
+            return Ok(true);
+        }
+        if matches!(
+            method_name,
+            "unmodifiableMap" | "unmodifiableSortedMap" | "unmodifiableNavigableMap"
+        ) {
             let view = self.heap.alloc(HeapObject::UnmodifiableMap(list));
             self.heap.set_view_class(
                 view,
-                if method_name == "unmodifiableMap" {
-                    "java/util/Collections$UnmodifiableMap"
-                } else {
-                    "java/util/Collections$UnmodifiableSortedMap"
+                match method_name {
+                    "unmodifiableMap" => "java/util/Collections$UnmodifiableMap",
+                    "unmodifiableSortedMap" => "java/util/Collections$UnmodifiableSortedMap",
+                    _ => "java/util/Collections$UnmodifiableNavigableMap",
                 },
             );
             frame.stack.push(JValue::Ref(Some(view)));
@@ -5685,6 +5790,34 @@ impl<'run> Interpreter<'run> {
                 }
                 JValue::Int(*index)
             }
+            // The two RANGE checks. Their message names the whole range and
+            // the length, and `checkFromIndexSize` prints the SUM unevaluated
+            // — "Range [3, 3 + 2) out of bounds for length 4" — which is a
+            // thing only a capture tells you.
+            (
+                "checkFromToIndex" | "checkFromIndexSize",
+                [JValue::Int(first), JValue::Int(second), JValue::Int(length)],
+            ) => {
+                let from_to = method_name == "checkFromToIndex";
+                let end = if from_to {
+                    i64::from(*second)
+                } else {
+                    i64::from(*first) + i64::from(*second)
+                };
+                if *first < 0 || end > i64::from(*length) || i64::from(*first) > end || *length < 0
+                {
+                    let range = if from_to {
+                        format!("[{first}, {second})")
+                    } else {
+                        format!("[{first}, {first} + {second})")
+                    };
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: Range {range} out of bounds for \
+                         length {length}"
+                    )));
+                }
+                JValue::Int(*first)
+            }
             // `compare(a, b, cmp)`: identical arguments are equal WITHOUT
             // consulting the comparator, which is what makes two nulls 0.
             ("compare", [a, b, comparator]) => {
@@ -5891,6 +6024,48 @@ impl<'run> Interpreter<'run> {
                 .heap
                 .alloc(crate::value::HeapObject::ArrayBackedList(backing));
             frame.stack.push(JValue::Ref(Some(list)));
+            return Ok(true);
+        }
+        // `parallelPrefix(array, op)` replaces the array by its RUNNING fold:
+        // `{1,2,3,4}` under `+` becomes `{1,3,6,10}`. On one thread the order
+        // is simply left to right, which is the answer a JDK's parallel
+        // decomposition is required to agree with (the operator must be
+        // associative).
+        if let ("parallelPrefix", [JValue::Ref(Some(array)), JValue::Ref(Some(operator))]) =
+            (method_name, args)
+        {
+            use crate::value::HeapObject;
+            let (array, operator) = (*array, *operator);
+            let mut values = self.array_elements(array).unwrap_or_default();
+            for index in 1..values.len() {
+                values[index] = self.call_apply_two(operator, values[index - 1], values[index])?;
+            }
+            for (index, value) in values.into_iter().enumerate() {
+                match self.heap.get_mut(array) {
+                    Some(HeapObject::IntArray(_, slots)) => {
+                        if let JValue::Int(n) = value {
+                            slots[index] = n;
+                        }
+                    }
+                    Some(HeapObject::DoubleArray(slots)) => {
+                        slots[index] = match value {
+                            JValue::Double(d) => d,
+                            JValue::Int(n) => f64::from(n),
+                            JValue::Float(f) => f64::from(f),
+                            _ => 0.0,
+                        };
+                    }
+                    Some(HeapObject::LongArray(slots)) => {
+                        slots[index] = match value {
+                            JValue::Long(n) => n,
+                            JValue::Int(n) => i64::from(n),
+                            _ => 0,
+                        };
+                    }
+                    Some(HeapObject::RefArray(_, slots)) => slots[index] = value,
+                    _ => {}
+                }
+            }
             return Ok(true);
         }
         // `setAll(array, generator)` stores `generator.apply(i)` at each index i;
@@ -6819,6 +6994,19 @@ impl<'run> Interpreter<'run> {
             self.heap.get(reference),
             Some(crate::value::HeapObject::UnmodifiableList(_))
         )
+    }
+
+    /// The collection a `Collections.synchronized*` wrapper ultimately names.
+    /// Wrapping a wrapper is legal and does nothing, so the walk is a loop.
+    fn unwrap_synchronized(&self, reference: HeapRef) -> HeapRef {
+        let mut current = reference;
+        for _ in 0..MAX_RENDER_DEPTH {
+            match self.heap.get(current) {
+                Some(crate::value::HeapObject::SynchronizedView(inner)) => current = *inner,
+                _ => break,
+            }
+        }
+        current
     }
 
     /// The list a reference ultimately names, unwrapping unmodifiable views.
@@ -15017,6 +15205,17 @@ impl<'run> Interpreter<'run> {
             // followed by `.equals(...)`/`.toString()`. Box it and dispatch on
             // the wrapper.
             primitive => Some(self.box_primitive_value(primitive)),
+        };
+        // A `Collections.synchronized*` wrapper delegates EVERYTHING but its
+        // own class: on one thread there is no monitor to take, so the wrapper
+        // is the collection. Unwrapping here rather than in each accessor is
+        // what makes every method work at once — and `getClass` is left alone,
+        // because naming the wrapper is the one thing the object is for.
+        let receiver = match receiver {
+            Some(reference) if method_name != "getClass" => {
+                Some(self.unwrap_synchronized(reference))
+            }
+            _ => receiver,
         };
         // `getStackTrace()` — answered here, for the same reason
         // `printStackTrace` is: the trace lives on the interpreter, not in

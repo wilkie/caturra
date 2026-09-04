@@ -51439,3 +51439,143 @@ public class LooserCollectorElement {
 }
 "#
 );
+
+// Guided by `scripts/coverage/measure.py` rather than by whatever a probe
+// stumbled into: the `Collections` wrappers (synchronized and the sorted
+// unmodifiable ones), the empty factories, `Arrays`' parallel family,
+// `Objects`' range checks, and the `Scanner` big numbers that had been refused
+// with "BigInteger is not supported by caturra" since long after it was.
+differential_test!(
+    the_methods_a_measurement_found,
+    "Mg1",
+    r#"
+import java.math.*;
+import java.util.*;
+public class Mg1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    // --- Collections.synchronized*
+    s("sync list", () -> { List<String> l = Collections.synchronizedList(new ArrayList<>(List.of("a"))); l.add("b"); return l + " " + l.size() + " " + l.get(0); });
+    s("sync list class", () -> Collections.synchronizedList(new ArrayList<String>()).getClass().getName());
+    s("sync list writes through", () -> { List<String> base = new ArrayList<>(); List<String> l = Collections.synchronizedList(base); l.add("x"); return base.toString(); });
+    s("sync set", () -> { Set<String> t = Collections.synchronizedSet(new HashSet<>(List.of("a"))); t.add("b"); return t.size(); });
+    s("sync map", () -> { Map<String,Integer> m = Collections.synchronizedMap(new HashMap<>()); m.put("k", 1); return m.toString(); });
+    s("sync collection", () -> Collections.synchronizedCollection(new ArrayList<>(List.of(1,2))).size());
+    s("sync sorted set", () -> Collections.synchronizedSortedSet(new TreeSet<>(List.of("b","a"))).toString());
+    s("sync sorted map", () -> { SortedMap<String,Integer> m = Collections.synchronizedSortedMap(new TreeMap<>()); m.put("z", 1); return m.firstKey(); });
+    s("sync navigable set", () -> Collections.synchronizedNavigableSet(new TreeSet<>(List.of("b","a"))).first());
+    s("sync navigable map", () -> { NavigableMap<String,Integer> m = Collections.synchronizedNavigableMap(new TreeMap<>()); m.put("z", 1); return m.firstKey(); });
+    s("sync equals", () -> Collections.synchronizedList(new ArrayList<>(List.of("a"))).equals(List.of("a")));
+    s("sync iterate", () -> { StringBuilder o = new StringBuilder(); for (String x : Collections.synchronizedList(new ArrayList<>(List.of("p","q")))) o.append(x); return o.toString(); });
+    // --- the sorted unmodifiable wrappers
+    s("unmod sorted set", () -> { SortedSet<String> t = Collections.unmodifiableSortedSet(new TreeSet<>(List.of("b","a"))); return t + " " + t.first(); });
+    s("unmod sorted set refuses", () -> { SortedSet<String> t = Collections.unmodifiableSortedSet(new TreeSet<>(List.of("a"))); t.add("z"); return "?"; });
+    s("unmod sorted map", () -> { SortedMap<String,Integer> m = Collections.unmodifiableSortedMap(new TreeMap<>(Map.of("b",2,"a",1))); return m + " " + m.firstKey(); });
+    s("unmod navigable set", () -> Collections.unmodifiableNavigableSet(new TreeSet<>(List.of("b","a"))).descendingSet().toString());
+    s("unmod navigable map", () -> Collections.unmodifiableNavigableMap(new TreeMap<>(Map.of("a",1))).lastKey());
+    s("unmod sorted classes", () -> Collections.unmodifiableSortedSet(new TreeSet<String>()).getClass().getName());
+    // --- the empty factories
+    s("empty iterator", () -> { Iterator<String> it = Collections.emptyIterator(); return it.hasNext(); });
+    s("empty iterator next", () -> { Iterator<String> it = Collections.emptyIterator(); return it.next(); });
+    s("empty list iterator", () -> { ListIterator<String> it = Collections.emptyListIterator(); return it.hasNext() + " " + it.hasPrevious(); });
+    s("empty enumeration", () -> Collections.emptyEnumeration().hasMoreElements());
+    s("empty sorted set", () -> { SortedSet<String> t = Collections.emptySortedSet(); return t.size() + " " + t; });
+    s("empty sorted map", () -> { SortedMap<String,Integer> m = Collections.emptySortedMap(); return m.size() + " " + m; });
+    s("empty navigable set", () -> Collections.emptyNavigableSet().size());
+    s("empty navigable map", () -> Collections.emptyNavigableMap().size());
+    // --- Arrays' parallel family
+    s("parallel sort", () -> { int[] x = {3,1,2}; Arrays.parallelSort(x); return Arrays.toString(x); });
+    s("parallel sort range", () -> { int[] x = {5,4,3,2}; Arrays.parallelSort(x, 1, 3); return Arrays.toString(x); });
+    s("parallel sort strings", () -> { String[] x = {"b","a"}; Arrays.parallelSort(x); return Arrays.toString(x); });
+    s("parallel setAll", () -> { int[] x = new int[4]; Arrays.parallelSetAll(x, i -> i * i); return Arrays.toString(x); });
+    s("setAll", () -> { int[] x = new int[3]; Arrays.setAll(x, i -> i + 1); return Arrays.toString(x); });
+    s("parallel prefix", () -> { int[] x = {1,2,3,4}; Arrays.parallelPrefix(x, (p,q) -> p + q); return Arrays.toString(x); });
+    // --- Objects' range checks
+    s("checkIndex", () -> Objects.checkIndex(1, 3));
+    s("checkFromToIndex", () -> Objects.checkFromToIndex(1, 2, 3));
+    s("checkFromToIndex bad", () -> Objects.checkFromToIndex(2, 1, 3));
+    s("checkFromIndexSize", () -> Objects.checkFromIndexSize(1, 2, 4));
+    s("checkFromIndexSize bad", () -> Objects.checkFromIndexSize(3, 2, 4));
+    // --- Scanner and the big numbers
+    s("scanner bigint", () -> { Scanner sc = new Scanner("123456789012345678901234567890 3.5"); return sc.nextBigInteger().add(BigInteger.ONE); });
+    s("scanner has bigint", () -> { Scanner sc = new Scanner("42 x"); return sc.hasNextBigInteger() + " " + sc.nextBigInteger() + " " + sc.hasNextBigInteger(); });
+    s("scanner bigdec", () -> { Scanner sc = new Scanner("2.50"); return sc.nextBigDecimal().add(new BigDecimal("0.5")); });
+    s("scanner has bigdec", () -> { Scanner sc = new Scanner("nope"); return sc.hasNextBigDecimal(); });
+  }
+}
+"#
+);
+
+// The same in every position, and at the edges: a wrapper of a wrapper, a
+// wrapper handed to an algorithm, the sorted navigation a sorted wrapper keeps,
+// and what each `Scanner` refusal says.
+differential_test!(
+    the_measured_methods_in_every_position,
+    "Mg2",
+    r#"
+import java.math.*;
+import java.util.*;
+import java.util.stream.*;
+public class Mg2 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static int size(Collection<?> c) { return c.size(); }
+  public static void main(String[] a) {
+    // --- the wrappers in every position
+    s("sync in a field-ish", () -> { List<String> l = Collections.synchronizedList(new ArrayList<>()); l.addAll(List.of("a","b")); return l.stream().collect(Collectors.joining("+")); });
+    s("sync as collection param", () -> size(Collections.synchronizedSet(new HashSet<>(List.of(1,2,3)))));
+    s("sync sorted navigation", () -> { NavigableSet<Integer> t = Collections.synchronizedNavigableSet(new TreeSet<>(List.of(1,5,9))); return t.floor(6) + " " + t.headSet(5) + " " + t.descendingSet(); });
+    s("sync map views", () -> { Map<String,Integer> m = Collections.synchronizedMap(new HashMap<>()); m.put("a",1); return m.keySet() + " " + m.values() + " " + m.entrySet(); });
+    s("sync sort", () -> { List<Integer> l = Collections.synchronizedList(new ArrayList<>(List.of(3,1,2))); Collections.sort(l); return l.toString(); });
+    s("sync remove", () -> { List<String> l = Collections.synchronizedList(new ArrayList<>(List.of("a","b"))); l.remove("a"); return l.toString(); });
+    s("sync toString", () -> Collections.synchronizedList(new ArrayList<>(List.of(1,2))).toString());
+    s("sync hash", () -> Collections.synchronizedList(new ArrayList<>(List.of(1))).hashCode() == List.of(1).hashCode());
+    s("sync of sync", () -> Collections.synchronizedList(Collections.synchronizedList(new ArrayList<>(List.of("z")))).get(0));
+    s("sync does not change base class", () -> { ArrayList<String> base = new ArrayList<>(); Collections.synchronizedList(base); return base.getClass().getName(); });
+    s("unmod sorted in a map", () -> { Map<String, SortedSet<String>> m = new HashMap<>(); m.put("k", Collections.unmodifiableSortedSet(new TreeSet<>(List.of("b","a")))); return m.toString(); });
+    s("unmod navigable sub", () -> { NavigableSet<Integer> t = Collections.unmodifiableNavigableSet(new TreeSet<>(List.of(1,5,9))); return t.subSet(1, true, 5, true).toString(); });
+    s("unmod sorted map views", () -> { SortedMap<String,Integer> m = Collections.unmodifiableSortedMap(new TreeMap<>(Map.of("b",2,"a",1))); return m.headMap("b") + " " + m.lastKey(); });
+    s("empty sorted set immutable", () -> { SortedSet<String> t = Collections.emptySortedSet(); t.add("x"); return "?"; });
+    s("empty iterator in a loop", () -> { Iterator<String> it = Collections.emptyIterator(); int n = 0; while (it.hasNext()) { it.next(); n++; } return n; });
+    s("empty enumeration in a loop", () -> { Enumeration<String> e = Collections.emptyEnumeration(); return e.hasMoreElements(); });
+    s("empty sorted map assigned", () -> { SortedMap<String,Integer> m = Collections.emptySortedMap(); return m.isEmpty() + " " + m.size(); });
+    // --- Arrays' parallel family in more shapes
+    s("parallel prefix strings", () -> { String[] x = {"a","b","c"}; Arrays.parallelPrefix(x, (p,q) -> p + q); return Arrays.toString(x); });
+    s("parallel prefix one", () -> { int[] x = {7}; Arrays.parallelPrefix(x, (p,q) -> p * q); return Arrays.toString(x); });
+    s("parallel prefix empty", () -> { int[] x = {}; Arrays.parallelPrefix(x, (p,q) -> p + q); return Arrays.toString(x); });
+    s("parallel setAll strings", () -> { String[] x = new String[3]; Arrays.parallelSetAll(x, i -> "s" + i); return Arrays.toString(x); });
+    s("parallel sort doubles", () -> { double[] x = {2.5, 1.5}; Arrays.parallelSort(x); return Arrays.toString(x); });
+    s("parallel sort longs", () -> { long[] x = {9L, 2L}; Arrays.parallelSort(x); return Arrays.toString(x); });
+    // --- Scanner's big numbers in more shapes
+    s("scanner mixed", () -> { Scanner sc = new Scanner("7 2.5 big 99999999999999999999"); return sc.nextInt() + " " + sc.nextBigDecimal() + " " + sc.next() + " " + sc.nextBigInteger(); });
+    s("scanner bigint negative", () -> new Scanner("-42").nextBigInteger());
+    s("scanner bigint mismatch", () -> new Scanner("abc").nextBigInteger());
+    s("scanner bigdec mismatch", () -> new Scanner("abc").nextBigDecimal());
+    s("scanner bigint empty", () -> new Scanner("").nextBigInteger());
+    s("scanner bigdec scale", () -> new Scanner("1.500").nextBigDecimal().scale());
+    s("scanner bigint in a list", () -> { List<BigInteger> l = new ArrayList<>(); Scanner sc = new Scanner("1 2"); while (sc.hasNextBigInteger()) l.add(sc.nextBigInteger()); return l.toString(); });
+  }
+}
+"#
+);
+
+// A sorted wrapper takes a SORTED collection: `Collections` declares it that
+// way, and accepting a `HashSet` would answer a `first()` that has no meaning.
+differential_reject!(
+    reject_a_sorted_wrapper_of_an_unsorted_set,
+    "SortedWrapperNarrow",
+    "import java.util.*;\npublic class SortedWrapperNarrow { static void r() { Collections.unmodifiableSortedSet(new HashSet<String>()); } }"
+);
+
+differential_reject!(
+    reject_a_synchronized_list_of_a_set,
+    "SyncListNarrow",
+    "import java.util.*;\npublic class SyncListNarrow { static void r() { Collections.synchronizedList(new HashSet<String>()); } }"
+);

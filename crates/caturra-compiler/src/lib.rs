@@ -731,8 +731,13 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // bundled `__Consumer`/`__Predicate` too.
             || s.text.contains(".ifPresent(")
             || s.text.contains(".filter(")
-            // `Arrays.setAll(a, i -> ...)` uses the bundled `__UnaryOperator`.
+            // `Arrays.setAll(a, i -> ...)` uses the bundled `__UnaryOperator`,
+            // and so does the `parallelSetAll` that is the same call here —
+            // which spells none of the other words, so without its own line
+            // the interface the desugaring targets did not exist.
             || s.text.contains(".setAll(")
+            || s.text.contains(".parallelSetAll(")
+            || s.text.contains(".parallelPrefix(")
             // `optional.map(x -> ...)` / `orElseGet(() -> ...)` use the bundled
             // `__UnaryOperator` / `__Supplier`.
             || s.text.contains(".map(")
