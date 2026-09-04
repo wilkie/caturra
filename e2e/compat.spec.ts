@@ -69,14 +69,14 @@ test.describe('java compatibility page', () => {
 
   test('a gap is honest: it is refused, and the page prints the reason', async ({ page }) => {
     await page.goto('/compat.html');
-    const card = page.locator('[data-feature="vector"]');
+    const card = page.locator('[data-feature="abstract-collections"]');
     await expect(card).toBeVisible();
     await expect(card).toContainText('caturra says:');
 
     await expect(page.locator('[data-run-all]')).toBeEnabled({ timeout: 30_000 });
-    await card.locator('[data-run="vector"]').click();
+    await card.locator('[data-run="abstract-collections"]').click();
 
-    await expect(card.locator('[data-verdict="vector"]')).toHaveText(
+    await expect(card.locator('[data-verdict="abstract-collections"]')).toHaveText(
       'declined, exactly as documented',
       { timeout: 60_000 },
     );

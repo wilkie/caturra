@@ -3503,6 +3503,15 @@ impl MethodTable {
             JType::Set { face, .. } => JType::Set { elem: raw, face },
             JType::Collection(_) => JType::Collection(raw),
             JType::Stack(_) => JType::Stack(raw),
+            // The legacy trio is raw-able like every other collection: a bare
+            // `Vector` / `Hashtable` / `Enumeration` is exactly the shape a
+            // program written before generics uses.
+            JType::Vector(_) => JType::Vector(raw),
+            JType::Hashtable { .. } => JType::Hashtable {
+                key: raw,
+                value: raw,
+            },
+            JType::Enumeration(_) => JType::Enumeration(raw),
             JType::TreeSet(_, role) => JType::TreeSet(raw, role),
             JType::LinkedList { role, .. } => JType::LinkedList { elem: raw, role },
             JType::Map { face, .. } => JType::Map {
@@ -3825,6 +3834,14 @@ impl MethodTable {
                     elem_from_type_arg(&args[0], self).map(|elem| JType::List { elem, face })
                 } else if simple == "Stack" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::Stack)
+                } else if simple == "Vector" && args.len() == 1 && !self.has_class(simple) {
+                    elem_from_type_arg(&args[0], self).map(JType::Vector)
+                } else if simple == "Enumeration" && args.len() == 1 && !self.has_class(simple) {
+                    elem_from_type_arg(&args[0], self).map(JType::Enumeration)
+                } else if simple == "Hashtable" && args.len() == 2 && !self.has_class(simple) {
+                    let key = elem_from_type_arg(&args[0], self)?;
+                    let value = elem_from_type_arg(&args[1], self)?;
+                    Some(JType::Hashtable { key, value })
                 } else if simple == "HashMap" && args.len() == 2 && !self.has_class(simple) {
                     let key = elem_from_type_arg(&args[0], self)?;
                     let value = elem_from_type_arg(&args[1], self)?;
@@ -3838,7 +3855,7 @@ impl MethodTable {
                     Some(JType::TreeMap {
                         key,
                         value,
-                        role: SortedRole::of_name(simple),
+                        role: TableFace::of_name(simple),
                     })
                 } else if simple == "Set" && args.len() == 1 && !self.has_class(simple) {
                     // `Set<Map.Entry<K, V>>` is what `entrySet()` returns —
@@ -3870,7 +3887,7 @@ impl MethodTable {
                     && !self.has_class(simple)
                 {
                     elem_from_type_arg(&args[0], self)
-                        .map(|elem| JType::TreeSet(elem, SortedRole::of_name(simple)))
+                        .map(|elem| JType::TreeSet(elem, TableFace::of_name(simple)))
                 } else if simple == "ListIterator"
                     && args.len() == 1
                     && !self.has_user_class(simple)
@@ -4625,6 +4642,9 @@ fn raw_library_internal(name: &str) -> Option<&'static str> {
         "LinkedList" => "java/util/LinkedList",
         "ArrayDeque" => "java/util/ArrayDeque",
         "Stack" => "java/util/Stack",
+        "Vector" => "java/util/Vector",
+        "Hashtable" => "java/util/Hashtable",
+        "Enumeration" => "java/util/Enumeration",
         "PriorityQueue" => "java/util/PriorityQueue",
         "Queue" => "java/util/Queue",
         "Deque" => "java/util/Deque",
@@ -5857,7 +5877,7 @@ fn raw_generic_arity(simple: &str) -> Option<usize> {
     match simple {
         "List" | "ArrayList" | "Set" | "HashSet" | "TreeSet" | "SortedSet" | "NavigableSet"
         | "Collection" | "LinkedList" | "Queue" | "Deque" | "ArrayDeque" | "PriorityQueue"
-        | "Stack" | "Iterator" | "Optional" => Some(1),
+        | "Stack" | "Vector" | "Enumeration" | "Iterator" | "Optional" => Some(1),
         // `Map.Entry` is here for the RAW spelling —
         // `for (Map.Entry e : m.entrySet())`, how a program that predates
         // generics walks a map, and how plenty of ordinary code still does.
@@ -5868,6 +5888,7 @@ fn raw_generic_arity(simple: &str) -> Option<usize> {
         | "TreeMap"
         | "SortedMap"
         | "NavigableMap"
+        | "Hashtable"
         | "Map.Entry"
         | "Entry"
         | "java.util.Map.Entry" => Some(2),
@@ -6005,8 +6026,23 @@ fn stream_element_of(ty: JType, table: &MethodTable) -> Option<ElemType> {
 /// declared over `Collection<E>` accepts.
 fn any_collection_elem(ty: JType, table: &MethodTable) -> Option<ElemType> {
     match ty {
-        JType::Stack(elem) => Some(elem),
+        JType::Stack(elem) | JType::Vector(elem) => Some(elem),
         other => collection_element_type(other, table),
+    }
+}
+
+/// The element of anything the `List` algorithms accept — the interface, the
+/// class, and the two legacy spellings of the same storage.
+fn list_like_elem(ty: JType) -> Option<ElemType> {
+    match ty {
+        JType::List { elem, .. }
+        | JType::Stack(elem)
+        | JType::Vector(elem)
+        | JType::LinkedList {
+            elem,
+            role: SeqRole::Full,
+        } => Some(elem),
+        _ => None,
     }
 }
 
@@ -6016,6 +6052,7 @@ fn any_collection_elem(ty: JType, table: &MethodTable) -> Option<ElemType> {
 fn collection_element_type(ty: JType, table: &MethodTable) -> Option<ElemType> {
     match ty {
         JType::List { elem, .. }
+        | JType::Vector(elem)
         | JType::Set { elem, .. }
         | JType::TreeSet(elem, _)
         | JType::Collection(elem)
@@ -7521,16 +7558,30 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 }
         )
         // A Stack is a List (it extends Vector), and so a Collection, of its
-        // element type: `List<E> l = new Stack<>()`.
+        // element type: `List<E> l = new Stack<>()`. So is a Vector — and a
+        // Stack is a Vector, which is where the class actually comes from.
         || matches!(
             (from, to),
             (
-                JType::Stack(a),
+                JType::Stack(a) | JType::Vector(a),
                 JType::List {
                     elem: b,
                     face: CollFace::Iface,
-                } | JType::Collection(b),
+                } | JType::Collection(b)
+                    | JType::Vector(b),
             ) if elem_matches(a, b, table)
+        )
+        // ...and a Hashtable is a Map of its key and value.
+        || matches!(
+            (from, to),
+            (
+                JType::Hashtable { key: a, value: b },
+                JType::Map {
+                    key: c,
+                    value: d,
+                    face: CollFace::Iface,
+                } | JType::Hashtable { key: c, value: d },
+            ) if elem_matches(a, c, table) && elem_matches(b, d, table)
         )
         // A TreeSet is a Set (and a Collection) of its element type.
         || matches!(
@@ -7596,6 +7647,8 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (JType::Stack(a), JType::Stack(b))
+                | (JType::Vector(a), JType::Vector(b))
+                | (JType::Enumeration(a), JType::Enumeration(b))
                 // `Optional<T>` was left off this list, so a generic method
                 // could not even hold its own result: `<T> Optional<T> f(T v)`
                 // assigning `Optional.of(v)` was "Optional<Object> cannot be
@@ -8178,7 +8231,7 @@ impl ElemType {
 /// cast to an unrelated class is an error from a class where it is legal from
 /// an interface (some subclass could implement both).
 ///
-/// This is the role `SortedRole` gives the sorted collections and `SeqRole`
+/// This is the role `TableFace` gives the sorted collections and `SeqRole`
 /// gives the queues, applied to the last pair of types without one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CollFace {
@@ -8356,6 +8409,19 @@ enum JType {
     /// `java.util.StringTokenizer` — the pre-`split` way to walk words, and an
     /// `Enumeration` while it does.
     StringTokenizer,
+    /// `java.util.Vector<E>` — the synchronized list `Stack` is built on, and
+    /// the same storage here. What differs is the class it names and the five
+    /// top-of-stack methods it does NOT offer.
+    Vector(ElemType),
+    /// `java.util.Hashtable<K, V>` — the synchronized map, with an iteration
+    /// order all its own and no tolerance of a null.
+    Hashtable {
+        key: ElemType,
+        value: ElemType,
+    },
+    /// `java.util.Enumeration<E>` — the cursor `Iterator` replaced, which a
+    /// `Vector` and a `Hashtable` still hand out.
+    Enumeration(ElemType),
     /// `java.util.UUID` — two longs and a canonical spelling.
     Uuid,
     /// `java.util.Base64.Encoder` and `.Decoder` — the two halves of the
@@ -8462,7 +8528,7 @@ enum JType {
     /// `java.util.TreeSet<E>` (also its `SortedSet`/`NavigableSet` faces): a
     /// sorted set, backed by an ordered vector. Distinct from `Set` because it
     /// adds the sorted navigation (`first`/`last`/`floor`/`ceiling`/…).
-    TreeSet(ElemType, SortedRole),
+    TreeSet(ElemType, TableFace),
     /// `java.util.TreeMap<K, V>` (also its `SortedMap`/`NavigableMap` faces): a
     /// sorted map. Distinct from `Map` because it adds the key navigation
     /// (`firstKey`/`lastKey`/`floorKey`/`ceilingKey`/…).
@@ -8470,7 +8536,7 @@ enum JType {
         key: ElemType,
         value: ElemType,
         /// Which of `SortedMap`/`NavigableMap`/`TreeMap` this presents.
-        role: SortedRole,
+        role: TableFace,
     },
     /// `java.util.Collection<E>` — a map's `values()` view.
     Collection(ElemType),
@@ -8528,59 +8594,72 @@ enum JType {
 /// which answers a `SortedSet`, cannot be polled while `headSet(E, boolean)`,
 /// which answers a `NavigableSet`, can.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum SortedRole {
-    /// `SortedSet` / `SortedMap` — the ordering and the range views.
+enum TableFace {
+    /// `SortedSet` / `SortedMap` — the ordering and the range views. Also the
+    /// DEFAULT a method carries, so every ordinary member is visible to every
+    /// face of its table.
     Sorted,
     /// `NavigableSet` / `NavigableMap` — adds the navigation, the polls, and
     /// the descending views.
     Navigable,
-    /// The class itself (`TreeSet` / `TreeMap`) — adds `clone`.
+    /// A `Vector`, which shares the `Stack` table and hides the five methods
+    /// that act on the TOP (`push`, `pop`, `peek`, `empty`, `search`) — a
+    /// `Stack` is a `Vector` and not the other way round.
+    Vector,
+    /// The class itself (`TreeSet` / `TreeMap` / `Stack`) — adds `clone` and
+    /// the stack operations.
     Concrete,
+    /// A `Hashtable`, which shares the `HashMap` table and adds the three
+    /// members a `HashMap` has not got: `keys`, `elements` and `contains`.
+    Hashtable,
 }
 
-impl Default for SortedRole {
-    /// Everything that is not a sorted collection offers every member of its
-    /// own table, so the default has to be the WIDEST face — deriving it would
-    /// have picked the narrowest and quietly hidden half of every table.
+impl Default for TableFace {
+    /// Everything that is not a narrowed face offers every member of its own
+    /// table, so the default has to be a WIDE face — deriving it would have
+    /// picked the narrowest and quietly hidden half of every table. Not the
+    /// widest: `Hashtable`'s three extra members stay hidden from a `HashMap`.
     fn default() -> Self {
-        SortedRole::Concrete
+        TableFace::Concrete
     }
 }
 
-impl SortedRole {
+impl TableFace {
     /// The face a written TYPE NAME asks for: `SortedSet`/`SortedMap` are the
     /// narrow ones, `NavigableSet`/`NavigableMap` the middle, and the class
     /// itself everything.
-    fn of_name(name: &str) -> SortedRole {
+    fn of_name(name: &str) -> TableFace {
         match name {
-            "SortedSet" | "SortedMap" => SortedRole::Sorted,
-            "NavigableSet" | "NavigableMap" => SortedRole::Navigable,
-            _ => SortedRole::Concrete,
+            "SortedSet" | "SortedMap" => TableFace::Sorted,
+            "NavigableSet" | "NavigableMap" => TableFace::Navigable,
+            _ => TableFace::Concrete,
         }
     }
 
     /// Whether this face offers a member declared for `needed`. The faces
     /// nest, so it is an ordering: a `TreeSet` has everything a
     /// `NavigableSet` does, which has everything a `SortedSet` does.
-    fn offers(self, needed: SortedRole) -> bool {
+    fn offers(self, needed: TableFace) -> bool {
         self >= needed
     }
 
     /// The JVM internal name of the SET face this role presents.
     fn set_internal(self) -> &'static str {
         match self {
-            SortedRole::Sorted => "java/util/SortedSet",
-            SortedRole::Navigable => "java/util/NavigableSet",
-            SortedRole::Concrete => "java/util/TreeSet",
+            TableFace::Sorted => "java/util/SortedSet",
+            TableFace::Navigable => "java/util/NavigableSet",
+            // The other two faces never name a set.
+            _ => "java/util/TreeSet",
         }
     }
 
     /// The JVM internal name of the MAP face this role presents.
     fn map_internal(self) -> &'static str {
         match self {
-            SortedRole::Sorted => "java/util/SortedMap",
-            SortedRole::Navigable => "java/util/NavigableMap",
-            SortedRole::Concrete => "java/util/TreeMap",
+            TableFace::Sorted => "java/util/SortedMap",
+            TableFace::Navigable => "java/util/NavigableMap",
+            TableFace::Hashtable => "java/util/Hashtable",
+            _ => "java/util/TreeMap",
         }
     }
 }
@@ -8784,6 +8863,9 @@ impl JType {
             JType::DoubleStream => String::from("DoubleStream"),
             JType::LongStream => String::from("LongStream"),
             JType::Iterator(elem) => parameterized("Iterator", &[elem], table),
+            JType::Enumeration(elem) => parameterized("Enumeration", &[elem], table),
+            JType::Vector(elem) => parameterized("Vector", &[elem], table),
+            JType::Hashtable { key, value } => parameterized("Hashtable", &[key, value], table),
             JType::ListIterator(elem) => parameterized("ListIterator", &[elem], table),
             JType::EntryIterator { key, value } => format!(
                 "Iterator<Map.Entry<{},{}>>",
@@ -8988,6 +9070,9 @@ impl JType {
                 | JType::MatchResult
                 | JType::List { .. }
                 | JType::Stack(_)
+                | JType::Vector(_)
+                | JType::Hashtable { .. }
+                | JType::Enumeration(_)
                 | JType::LinkedList { .. }
                 | JType::Map { .. }
                 | JType::TreeMap { .. }
@@ -9157,6 +9242,9 @@ impl JType {
             JType::MatchResult => String::from("Ljava/util/regex/MatchResult;"),
             JType::List { .. } => String::from("Ljava/util/ArrayList;"),
             JType::Stack(_) => String::from("Ljava/util/Stack;"),
+            JType::Vector(_) => String::from("Ljava/util/Vector;"),
+            JType::Hashtable { .. } => String::from("Ljava/util/Hashtable;"),
+            JType::Enumeration(_) => String::from("Ljava/util/Enumeration;"),
             // Only reachable for methods that already produced a
             // diagnostic; the descriptor keeps the class file coherent.
             JType::TypeVar(_) | JType::Unsupported | JType::Error => {
@@ -9208,6 +9296,8 @@ fn is_collections_method(method: &str) -> bool {
             | "unmodifiableSet"
             | "unmodifiableMap"
             | "unmodifiableCollection"
+            | "enumeration"
+            | "list"
             | "rotate"
             | "fill"
             | "copy"
@@ -10427,6 +10517,9 @@ fn method_descriptor(
                         | "PriorityQueue"
                         | "ArrayDeque"
                         | "Stack"
+                        | "Vector"
+                        | "Hashtable"
+                        | "Enumeration"
                         | "Optional"
                 ) && !table.has_class(simple)
                 {
@@ -10807,6 +10900,11 @@ enum BRet {
     /// A `java.util.UUID` and a `java.io.StringWriter`.
     Uuid,
     StringWriter,
+    /// A `java.util.Enumeration` over the receiver's element, its keys, or
+    /// its values.
+    Enumeration,
+    KeyEnumeration,
+    ValueEnumeration,
     /// The three partial dates.
     Year,
     YearMonth,
@@ -11039,9 +11137,9 @@ struct BuiltinMethod {
     /// One table serves `TreeSet`, `NavigableSet` and `SortedSet` — they are
     /// nested interfaces, not three unrelated types — and this is what a
     /// receiver's own face is measured against. Every other table's entries
-    /// sit at [`SortedRole::Sorted`], which every receiver offers, so nothing
+    /// sit at [`TableFace::Sorted`], which every receiver offers, so nothing
     /// else is filtered.
-    needs: SortedRole,
+    needs: TableFace,
 }
 
 /// Which of the three summary-statistics classes a [`JType::SummaryStats`] is.
@@ -11082,7 +11180,7 @@ const fn bm(
         params,
         ret,
         descriptor,
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     }
 }
 
@@ -11093,7 +11191,7 @@ const fn bm_at(
     params: &'static [BParam],
     ret: BRet,
     descriptor: &'static str,
-    needs: SortedRole,
+    needs: TableFace,
 ) -> BuiltinMethod {
     BuiltinMethod {
         name,
@@ -11138,42 +11236,42 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Int,
         descriptor: "()I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "isEmpty",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "charAt",
         params: &[BParam::Int],
         ret: BRet::Char,
         descriptor: "(I)C",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "substring",
         params: &[BParam::Int],
         ret: BRet::Str,
         descriptor: "(I)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "substring",
         params: &[BParam::Int, BParam::Int],
         ret: BRet::Str,
         descriptor: "(II)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "indexOf",
         params: &[BParam::Str],
         ret: BRet::Int,
         descriptor: "(Ljava/lang/String;)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         // `String.equals(Object)` — an `Object`, not just a `String`, so
@@ -11183,161 +11281,161 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Object],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/Object;)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "equalsIgnoreCase",
         params: &[BParam::Str],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/String;)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "compareTo",
         params: &[BParam::Str],
         ret: BRet::Int,
         descriptor: "(Ljava/lang/String;)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "contains",
         params: &[BParam::Str],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/CharSequence;)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "startsWith",
         params: &[BParam::Str],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/String;)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "endsWith",
         params: &[BParam::Str],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/String;)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "split",
         params: &[BParam::Str],
         ret: BRet::StrArray,
         descriptor: "(Ljava/lang/String;)[Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "replace",
         params: &[BParam::Char, BParam::Char],
         ret: BRet::Str,
         descriptor: "(CC)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "replace",
         params: &[BParam::Str, BParam::Str],
         ret: BRet::Str,
         descriptor: "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "matches",
         params: &[BParam::Str],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/String;)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "replaceAll",
         params: &[BParam::Str, BParam::Str],
         ret: BRet::Str,
         descriptor: "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "replaceFirst",
         params: &[BParam::Str, BParam::Str],
         ret: BRet::Str,
         descriptor: "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "toUpperCase",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "toLowerCase",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "trim",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "strip",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "stripLeading",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "stripTrailing",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "isBlank",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "repeat",
         params: &[BParam::Int],
         ret: BRet::Str,
         descriptor: "(I)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "concat",
         params: &[BParam::Str],
         ret: BRet::Str,
         descriptor: "(Ljava/lang/String;)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "lines",
         params: &[],
         ret: BRet::StreamString,
         descriptor: "()Ljava/util/stream/Stream;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "chars",
         params: &[],
         ret: BRet::IntStream,
         descriptor: "()Ljava/util/stream/IntStream;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `codePoints()` — like `chars()`, but a surrogate PAIR counts once.
     BuiltinMethod {
@@ -11345,14 +11443,14 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::IntStream,
         descriptor: "()Ljava/util/stream/IntStream;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "compareToIgnoreCase",
         params: &[BParam::Str],
         ret: BRet::Int,
         descriptor: "(Ljava/lang/String;)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // ONE overload, over the JDK's actual parameter type: a `String`, a
     // `StringBuilder`, a `CharSequence`-typed value and `null` all fit. Two
@@ -11363,91 +11461,91 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::CharSeq],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/CharSequence;)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "hashCode",
         params: &[],
         ret: BRet::Int,
         descriptor: "()I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "indexOf",
         params: &[BParam::Int],
         ret: BRet::Int,
         descriptor: "(I)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "indexOf",
         params: &[BParam::Int, BParam::Int],
         ret: BRet::Int,
         descriptor: "(II)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "indexOf",
         params: &[BParam::Str, BParam::Int],
         ret: BRet::Int,
         descriptor: "(Ljava/lang/String;I)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "lastIndexOf",
         params: &[BParam::Int],
         ret: BRet::Int,
         descriptor: "(I)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "lastIndexOf",
         params: &[BParam::Int, BParam::Int],
         ret: BRet::Int,
         descriptor: "(II)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "lastIndexOf",
         params: &[BParam::Str],
         ret: BRet::Int,
         descriptor: "(Ljava/lang/String;)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "lastIndexOf",
         params: &[BParam::Str, BParam::Int],
         ret: BRet::Int,
         descriptor: "(Ljava/lang/String;I)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "split",
         params: &[BParam::Str, BParam::Int],
         ret: BRet::StrArray,
         descriptor: "(Ljava/lang/String;I)[Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "startsWith",
         params: &[BParam::Str, BParam::Int],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/String;I)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "subSequence",
         params: &[BParam::Int, BParam::Int],
         ret: BRet::Str,
         descriptor: "(II)Ljava/lang/CharSequence;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "toCharArray",
         params: &[],
         ret: BRet::CharArray,
         descriptor: "()[C",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `getBytes()` is the string's UTF-8 encoding, which is what a JDK on a
     // UTF-8 default charset answers. The refusal said "byte arrays are not
@@ -11474,49 +11572,49 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Int, BParam::Int, BParam::CharArray, BParam::Int],
         ret: BRet::Void,
         descriptor: "(II[CI)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "toString",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "intern",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "codePointAt",
         params: &[BParam::Int],
         ret: BRet::Int,
         descriptor: "(I)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "codePointBefore",
         params: &[BParam::Int],
         ret: BRet::Int,
         descriptor: "(I)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "codePointCount",
         params: &[BParam::Int, BParam::Int],
         ret: BRet::Int,
         descriptor: "(II)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "offsetByCodePoints",
         params: &[BParam::Int, BParam::Int],
         ret: BRet::Int,
         descriptor: "(II)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
 ];
 
@@ -11527,49 +11625,49 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Int],
         ret: BRet::Str,
         descriptor: "(I)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "valueOf",
         params: &[BParam::Long],
         ret: BRet::Str,
         descriptor: "(J)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "valueOf",
         params: &[BParam::Float],
         ret: BRet::Str,
         descriptor: "(F)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "valueOf",
         params: &[BParam::Double],
         ret: BRet::Str,
         descriptor: "(D)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "valueOf",
         params: &[BParam::Char],
         ret: BRet::Str,
         descriptor: "(C)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "valueOf",
         params: &[BParam::Boolean],
         ret: BRet::Str,
         descriptor: "(Z)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "valueOf",
         params: &[BParam::CharArray],
         ret: BRet::Str,
         descriptor: "([C)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `valueOf(String)` — the identity overload javac resolves for a String
     // argument (`valueOf(Object)` would box the receiver's text the same way,
@@ -11579,7 +11677,7 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Str],
         ret: BRet::Str,
         descriptor: "(Ljava/lang/String;)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `valueOf(Object)`: the object's own toString, or "null" — exactly what
     // concatenation does (JLS §5.1.11), answered at the interpreter level so a
@@ -11589,28 +11687,28 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Object],
         ret: BRet::Str,
         descriptor: "(Ljava/lang/Object;)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "valueOf",
         params: &[BParam::CharArray, BParam::Int, BParam::Int],
         ret: BRet::Str,
         descriptor: "([CII)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "copyValueOf",
         params: &[BParam::CharArray, BParam::Int, BParam::Int],
         ret: BRet::Str,
         descriptor: "([CII)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "copyValueOf",
         params: &[BParam::CharArray],
         ret: BRet::Str,
         descriptor: "([C)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
 ];
 
@@ -11698,7 +11796,7 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Int,
         descriptor: "()I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `nextInt(radix)` / `hasNextInt(radix)` read the token in that radix.
     bm("nextInt", &[I], BRet::Int, "(I)I"),
@@ -11708,28 +11806,28 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Double,
         descriptor: "()D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "next",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "nextLine",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "hasNext",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `hasNext(pattern)` / `next(pattern)` — the token has to MATCH the
     // pattern in full, which is what the bundled regex engine already answers
@@ -11752,21 +11850,21 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "hasNextDouble",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "hasNextLine",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     bm("nextLong", &[], BRet::Long, "()J"),
     bm("nextFloat", &[], BRet::Float, "()F"),
@@ -11936,7 +12034,7 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         &[],
         BRet::Object,
         "()Ljava/lang/Object;",
-        SortedRole::Concrete,
+        TableFace::Concrete,
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
@@ -11974,7 +12072,7 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Int,
         descriptor: "()I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `forEach(Consumer)` walks the list; `removeIf(Predicate)` walks it and
     // drops elements the predicate accepts, returning whether any went.
@@ -11983,14 +12081,14 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Consumer],
         ret: BRet::Void,
         descriptor: "(Ljava/lang/Object;)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "removeIf",
         params: &[BParam::Predicate],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/Object;)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `replaceAll(UnaryOperator)` applies the operator to each element in
     // place.
@@ -11999,7 +12097,7 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::UnaryOperator],
         ret: BRet::Void,
         descriptor: "(Ljava/lang/Object;)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `sort(Comparator)` — a stable sort by the comparator.
     BuiltinMethod {
@@ -12007,49 +12105,49 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Comparator],
         ret: BRet::Void,
         descriptor: "(Ljava/lang/Object;)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "isEmpty",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "add",
         params: &[BParam::Elem],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/Object;)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "add",
         params: &[BParam::Int, BParam::Elem],
         ret: BRet::Void,
         descriptor: "(ILjava/lang/Object;)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "get",
         params: &[BParam::Int],
         ret: BRet::Elem,
         descriptor: "(I)Ljava/lang/Object;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "set",
         params: &[BParam::Int, BParam::Elem],
         ret: BRet::Elem,
         descriptor: "(ILjava/lang/Object;)Ljava/lang/Object;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "remove",
         params: &[BParam::Int],
         ret: BRet::Elem,
         descriptor: "(I)Ljava/lang/Object;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     bm("clear", &[], BRet::Void, "()V"),
     bm(
@@ -12157,20 +12255,126 @@ const STACK_METHODS: &[BuiltinMethod] = &[
         "()Ljava/util/stream/Stream;",
     ),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
+    // A `Vector` is a `List`, so it hands back the two-way cursor too.
     bm(
+        "listIterator",
+        &[],
+        BRet::ListIterator,
+        "()Ljava/util/ListIterator;",
+    ),
+    bm(
+        "listIterator",
+        &[BParam::Int],
+        BRet::ListIterator,
+        "(I)Ljava/util/ListIterator;",
+    ),
+    // The five that act on the TOP are a `Stack`'s alone: a `Stack` IS a
+    // `Vector` and not the other way round, so a `Vector` variable hides them.
+    bm_at(
         "push",
         &[BParam::Elem],
         BRet::Elem,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
+        TableFace::Concrete,
     ),
-    bm("pop", &[], BRet::Elem, "()Ljava/lang/Object;"),
-    bm("peek", &[], BRet::Elem, "()Ljava/lang/Object;"),
-    bm("empty", &[], BRet::Boolean, "()Z"),
-    bm(
+    bm_at(
+        "pop",
+        &[],
+        BRet::Elem,
+        "()Ljava/lang/Object;",
+        TableFace::Concrete,
+    ),
+    bm_at(
+        "peek",
+        &[],
+        BRet::Elem,
+        "()Ljava/lang/Object;",
+        TableFace::Concrete,
+    ),
+    bm_at("empty", &[], BRet::Boolean, "()Z", TableFace::Concrete),
+    bm_at(
         "search",
         &[BParam::Elem],
         BRet::Int,
         "(Ljava/lang/Object;)I",
+        TableFace::Concrete,
+    ),
+    // ...and the names a `Vector` had before `List` existed, which a `Stack`
+    // inherits and so answers too.
+    bm(
+        "addElement",
+        &[BParam::Elem],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "elementAt",
+        &[BParam::Int],
+        BRet::Elem,
+        "(I)Ljava/lang/Object;",
+    ),
+    bm("firstElement", &[], BRet::Elem, "()Ljava/lang/Object;"),
+    bm("lastElement", &[], BRet::Elem, "()Ljava/lang/Object;"),
+    bm(
+        "insertElementAt",
+        &[BParam::Elem, BParam::Int],
+        BRet::Void,
+        "(Ljava/lang/Object;I)V",
+    ),
+    bm(
+        "setElementAt",
+        &[BParam::Elem, BParam::Int],
+        BRet::Void,
+        "(Ljava/lang/Object;I)V",
+    ),
+    bm(
+        "removeElement",
+        &[BParam::Probe],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("removeElementAt", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("removeAllElements", &[], BRet::Void, "()V"),
+    bm("capacity", &[], BRet::Int, "()I"),
+    // `clone()` is the CLASS's member, and both classes here are one — a
+    // `Vector` declares it and a `Stack` inherits it.
+    bm_at(
+        "clone",
+        &[],
+        BRet::Object,
+        "()Ljava/lang/Object;",
+        TableFace::Vector,
+    ),
+    // The rest of the pre-`List` surface: a `Vector` sizes and copies itself
+    // through the array it is, where an `ArrayList` hides that it has one.
+    bm(
+        "copyInto",
+        &[BParam::RefArray],
+        BRet::Void,
+        "([Ljava/lang/Object;)V",
+    ),
+    bm("setSize", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("ensureCapacity", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("trimToSize", &[], BRet::Void, "()V"),
+    // The two searches that start part way along — declared on `Vector`
+    // alone, and absent from `List`.
+    bm(
+        "indexOf",
+        &[BParam::Probe, BParam::Int],
+        BRet::Int,
+        "(Ljava/lang/Object;I)I",
+    ),
+    bm(
+        "lastIndexOf",
+        &[BParam::Probe, BParam::Int],
+        BRet::Int,
+        "(Ljava/lang/Object;I)I",
+    ),
+    bm(
+        "elements",
+        &[],
+        BRet::Enumeration,
+        "()Ljava/util/Enumeration;",
     ),
     // The `List`/`Vector` surface.
     bm("size", &[], BRet::Int, "()I"),
@@ -12701,7 +12905,7 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
         &[],
         BRet::Object,
         "()Ljava/lang/Object;",
-        SortedRole::Concrete,
+        TableFace::Concrete,
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
@@ -13628,42 +13832,42 @@ const FILE_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "isFile",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "isDirectory",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "delete",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "mkdir",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "createNewFile",
         params: &[],
         ret: BRet::Boolean,
         descriptor: "()Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // Java returns long; caturra has no long surface, so int (documented
     // deviation — virtual files are small).
@@ -13672,21 +13876,21 @@ const FILE_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Int,
         descriptor: "()J",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "getName",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "getPath",
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // The path half of `File`, which the VFS could always answer and this
     // table never asked it to. `getAbsolutePath` hangs a relative path off
@@ -15893,6 +16097,13 @@ const BITSET_STATIC_METHODS: &[BuiltinMethod] = &[bm(
     "([J)Ljava/util/BitSet;",
 )];
 
+/// `java.util.Enumeration<E>` — two questions, and the cursor `Iterator`
+/// replaced. A `Vector` and a `Hashtable` still hand one out.
+const ENUMERATION_METHODS: &[BuiltinMethod] = &[
+    bm("hasMoreElements", &[], BRet::Boolean, "()Z"),
+    bm("nextElement", &[], BRet::Elem, "()Ljava/lang/Object;"),
+];
+
 /// `java.util.StringTokenizer` — four questions, and it answers the two an
 /// `Enumeration` asks as well as its own.
 const TOKENIZER_METHODS: &[BuiltinMethod] = &[
@@ -16785,77 +16996,77 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Void,
         descriptor: "()V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "println",
         params: &[BParam::Str],
         ret: BRet::Void,
         descriptor: "(Ljava/lang/String;)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "println",
         params: &[BParam::Int],
         ret: BRet::Void,
         descriptor: "(I)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "println",
         params: &[BParam::Double],
         ret: BRet::Void,
         descriptor: "(D)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "println",
         params: &[BParam::Boolean],
         ret: BRet::Void,
         descriptor: "(Z)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "println",
         params: &[BParam::Char],
         ret: BRet::Void,
         descriptor: "(C)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "print",
         params: &[BParam::Str],
         ret: BRet::Void,
         descriptor: "(Ljava/lang/String;)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "print",
         params: &[BParam::Int],
         ret: BRet::Void,
         descriptor: "(I)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "print",
         params: &[BParam::Double],
         ret: BRet::Void,
         descriptor: "(D)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "print",
         params: &[BParam::Boolean],
         ret: BRet::Void,
         descriptor: "(Z)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "print",
         params: &[BParam::Char],
         ret: BRet::Void,
         descriptor: "(C)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `write(String)` writes the whole string; `write(int)` writes a single
     // character (its low 16 bits), NOT the decimal — the VM keys on the
@@ -16865,14 +17076,14 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Str],
         ret: BRet::Void,
         descriptor: "(Ljava/lang/String;)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "write",
         params: &[BParam::Int],
         ret: BRet::Void,
         descriptor: "(I)V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `append` returns the writer, for chaining. `append(char)` writes the
     // character; `append(CharSequence)` writes the text.
@@ -16881,28 +17092,28 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Char],
         ret: BRet::Writer,
         descriptor: "(C)Ljava/io/PrintWriter;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "append",
         params: &[BParam::Str],
         ret: BRet::Writer,
         descriptor: "(Ljava/lang/String;)Ljava/io/PrintWriter;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "close",
         params: &[],
         ret: BRet::Void,
         descriptor: "()V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "flush",
         params: &[],
         ret: BRet::Void,
         descriptor: "()V",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
 ];
 
@@ -16929,35 +17140,35 @@ macro_rules! throwable_methods {
             params: &[],
             ret: BRet::Class,
             descriptor: "()Ljava/lang/Class;",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
         BuiltinMethod {
             name: "getMessage",
             params: &[],
             ret: BRet::Str,
             descriptor: "()Ljava/lang/String;",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
         BuiltinMethod {
             name: "toString",
             params: &[],
             ret: BRet::Str,
             descriptor: "()Ljava/lang/String;",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
         BuiltinMethod {
             name: "printStackTrace",
             params: &[],
             ret: BRet::Void,
             descriptor: "()V",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
         BuiltinMethod {
             name: "getLocalizedMessage",
             params: &[],
             ret: BRet::Str,
             descriptor: "()Ljava/lang/String;",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
         // `getCause()` — the chained cause, or null.
         BuiltinMethod {
@@ -16965,7 +17176,7 @@ macro_rules! throwable_methods {
             params: &[],
             ret: BRet::Throwable,
             descriptor: "()Ljava/lang/Throwable;",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
         // `getSuppressed()` — the real suppressed exceptions, typed as `Object[]`
         // because `ElemType` has no exception variant, so `.length` and iteration
@@ -16975,7 +17186,7 @@ macro_rules! throwable_methods {
             params: &[],
             ret: BRet::ThrowableArray,
             descriptor: "()[Ljava/lang/Throwable;",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
         // `addSuppressed(t)` — used by the try-with-resources desugaring, and
         // available to programs that manage suppression themselves.
@@ -16984,7 +17195,7 @@ macro_rules! throwable_methods {
             params: &[BParam::Throwable],
             ret: BRet::Void,
             descriptor: "(Ljava/lang/Throwable;)V",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
         // `fillInStackTrace()` re-records the trace AT THE CALL and returns
         // `this`, so a throwable rethrown elsewhere can be made to point at the
@@ -16994,7 +17205,7 @@ macro_rules! throwable_methods {
             params: &[],
             ret: BRet::Throwable,
             descriptor: "()Ljava/lang/Throwable;",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
         // `initCause(t)` sets the cause and returns `this` (for chaining).
         BuiltinMethod {
@@ -17002,7 +17213,7 @@ macro_rules! throwable_methods {
             params: &[BParam::Throwable],
             ret: BRet::Throwable,
             descriptor: "(Ljava/lang/Throwable;)Ljava/lang/Throwable;",
-            needs: SortedRole::Sorted,
+            needs: TableFace::Sorted,
         },
             $($extra,)*
         ]
@@ -17017,49 +17228,49 @@ const MATH_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Int],
         ret: BRet::Int,
         descriptor: "(I)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "abs",
         params: &[BParam::Double],
         ret: BRet::Double,
         descriptor: "(D)D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "pow",
         params: &[BParam::Double, BParam::Double],
         ret: BRet::Double,
         descriptor: "(DD)D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "sqrt",
         params: &[BParam::Double],
         ret: BRet::Double,
         descriptor: "(D)D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "random",
         params: &[],
         ret: BRet::Double,
         descriptor: "()D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "floor",
         params: &[BParam::Double],
         ret: BRet::Double,
         descriptor: "(D)D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "ceil",
         params: &[BParam::Double],
         ret: BRet::Double,
         descriptor: "(D)D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `Math.round(double)` returns `long`, `Math.round(float)` returns `int`
     // (JLS / the JDK). Surfacing the double form as `int` was LOOSER than
@@ -17070,42 +17281,42 @@ const MATH_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Double],
         ret: BRet::Long,
         descriptor: "(D)J",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "round",
         params: &[BParam::Float],
         ret: BRet::Int,
         descriptor: "(F)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "max",
         params: &[BParam::Int, BParam::Int],
         ret: BRet::Int,
         descriptor: "(II)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "max",
         params: &[BParam::Double, BParam::Double],
         ret: BRet::Double,
         descriptor: "(DD)D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "min",
         params: &[BParam::Int, BParam::Int],
         ret: BRet::Int,
         descriptor: "(II)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "min",
         params: &[BParam::Double, BParam::Double],
         ret: BRet::Double,
         descriptor: "(DD)D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     bm("sin", &[D], BRet::Double, "(D)D"),
     bm("cos", &[D], BRet::Double, "(D)D"),
@@ -17193,14 +17404,14 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Str],
         ret: BRet::Int,
         descriptor: "(Ljava/lang/String;)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "toString",
         params: &[BParam::Int],
         ret: BRet::Str,
         descriptor: "(I)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     bm("toString", &[I, I], BRet::Str, "(II)Ljava/lang/String;"),
     bm("parseInt", &[S, I], BRet::Int, "(Ljava/lang/String;I)I"),
@@ -17279,14 +17490,14 @@ const DOUBLE_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Str],
         ret: BRet::Double,
         descriptor: "(Ljava/lang/String;)D",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "toString",
         params: &[BParam::Double],
         ret: BRet::Str,
         descriptor: "(D)Ljava/lang/String;",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     bm(
         "valueOf",
@@ -17320,14 +17531,14 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Char],
         ret: BRet::Boolean,
         descriptor: "(C)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "isLetter",
         params: &[BParam::Char],
         ret: BRet::Boolean,
         descriptor: "(C)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     // `getType` answers the general CATEGORY, which the JDK 11 table now
     // carries directly — every other predicate is derived from it.
@@ -17336,49 +17547,49 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Char],
         ret: BRet::Int,
         descriptor: "(C)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "getType",
         params: &[BParam::Int],
         ret: BRet::Int,
         descriptor: "(I)I",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "isLetterOrDigit",
         params: &[BParam::Char],
         ret: BRet::Boolean,
         descriptor: "(C)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "isUpperCase",
         params: &[BParam::Char],
         ret: BRet::Boolean,
         descriptor: "(C)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "isLowerCase",
         params: &[BParam::Char],
         ret: BRet::Boolean,
         descriptor: "(C)Z",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "toUpperCase",
         params: &[BParam::Char],
         ret: BRet::Char,
         descriptor: "(C)C",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     BuiltinMethod {
         name: "toLowerCase",
         params: &[BParam::Char],
         ret: BRet::Char,
         descriptor: "(C)C",
-        needs: SortedRole::Sorted,
+        needs: TableFace::Sorted,
     },
     bm("isAlphabetic", &[C], BRet::Boolean, "(I)Z"),
     bm("isWhitespace", &[C], BRet::Boolean, "(C)Z"),
@@ -18317,6 +18528,29 @@ const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
 /// in the descriptors, as javac erases them; the compiler autoboxes at the
 /// boundary so that a missing key can hand back a real `null`.
 const MAP_METHODS: &[BuiltinMethod] = &[
+    // The three a `Hashtable` has and a `HashMap` has not: the two
+    // enumerations, and the value search `containsValue` renamed.
+    bm_at(
+        "keys",
+        &[],
+        BRet::KeyEnumeration,
+        "()Ljava/util/Enumeration;",
+        TableFace::Hashtable,
+    ),
+    bm_at(
+        "elements",
+        &[],
+        BRet::ValueEnumeration,
+        "()Ljava/util/Enumeration;",
+        TableFace::Hashtable,
+    ),
+    bm_at(
+        "contains",
+        &[BParam::Probe],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+        TableFace::Hashtable,
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `clone()` — a SHALLOW copy, which is exactly what the copy
     // constructors already build. It was refused as "clone is not supported
@@ -18330,7 +18564,7 @@ const MAP_METHODS: &[BuiltinMethod] = &[
         &[],
         BRet::Object,
         "()Ljava/lang/Object;",
-        SortedRole::Concrete,
+        TableFace::Concrete,
     ),
     bm("size", &[], BRet::Int, "()I"),
     // `forEach(BiConsumer)`: the VM walks the entries in iteration order and
@@ -18472,7 +18706,7 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
         &[],
         BRet::Object,
         "()Ljava/lang/Object;",
-        SortedRole::Concrete,
+        TableFace::Concrete,
     ),
     bm("size", &[], BRet::Int, "()I"),
     bm(
@@ -18623,7 +18857,7 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
         &[BParam::Key, BParam::Boolean],
         BRet::NavigableMapFace,
         "(Ljava/lang/Object;Z)Ljava/util/NavigableMap;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm(
         "tailMap",
@@ -18636,7 +18870,7 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
         &[BParam::Key, BParam::Boolean],
         BRet::NavigableMapFace,
         "(Ljava/lang/Object;Z)Ljava/util/NavigableMap;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm(
         "subMap",
@@ -18649,28 +18883,28 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
         &[BParam::Key, BParam::Boolean, BParam::Key, BParam::Boolean],
         BRet::NavigableMapFace,
         "(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableMap;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "descendingMap",
         &[],
         BRet::NavigableMapFace,
         "()Ljava/util/NavigableMap;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "navigableKeySet",
         &[],
         BRet::NavigableSetFace,
         "()Ljava/util/NavigableSet;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "descendingKeySet",
         &[],
         BRet::NavigableSetFace,
         "()Ljava/util/NavigableSet;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     // The four key navigations, as ENTRIES.
     bm_at(
@@ -18678,84 +18912,84 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
         &[BParam::Key],
         BRet::Entry,
         "(Ljava/lang/Object;)Ljava/util/Map$Entry;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "ceilingEntry",
         &[BParam::Key],
         BRet::Entry,
         "(Ljava/lang/Object;)Ljava/util/Map$Entry;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "lowerEntry",
         &[BParam::Key],
         BRet::Entry,
         "(Ljava/lang/Object;)Ljava/util/Map$Entry;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "higherEntry",
         &[BParam::Key],
         BRet::Entry,
         "(Ljava/lang/Object;)Ljava/util/Map$Entry;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "firstEntry",
         &[],
         BRet::Entry,
         "()Ljava/util/Map$Entry;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "lastEntry",
         &[],
         BRet::Entry,
         "()Ljava/util/Map$Entry;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "pollFirstEntry",
         &[],
         BRet::Entry,
         "()Ljava/util/Map$Entry;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "pollLastEntry",
         &[],
         BRet::Entry,
         "()Ljava/util/Map$Entry;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "floorKey",
         &[BParam::Key],
         BRet::Key,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "ceilingKey",
         &[BParam::Key],
         BRet::Key,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "lowerKey",
         &[BParam::Key],
         BRet::Key,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "higherKey",
         &[BParam::Key],
         BRet::Key,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
 ];
 
@@ -18896,7 +19130,7 @@ const SET_METHODS: &[BuiltinMethod] = &[
         &[],
         BRet::Object,
         "()Ljava/lang/Object;",
-        SortedRole::Concrete,
+        TableFace::Concrete,
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
@@ -19002,7 +19236,7 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
         &[],
         BRet::Object,
         "()Ljava/lang/Object;",
-        SortedRole::Concrete,
+        TableFace::Concrete,
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `parallelStream()` is the same pipeline: a JDK is allowed to answer a
@@ -19020,7 +19254,7 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
         &[],
         BRet::Iterator,
         "()Ljava/util/Iterator;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
@@ -19088,28 +19322,28 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
         &[BParam::Key],
         BRet::BoxedElem,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "ceiling",
         &[BParam::Key],
         BRet::BoxedElem,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "lower",
         &[BParam::Key],
         BRet::BoxedElem,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "higher",
         &[BParam::Key],
         BRet::BoxedElem,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     // The VIEWS. `headSet`/`tailSet` take the JDK's default inclusivity
     // (a head excludes its bound, a tail includes it) or say which; `subSet`
@@ -19130,7 +19364,7 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
         &[BParam::Key, BParam::Boolean],
         BRet::NavigableSetFace,
         "(Ljava/lang/Object;Z)Ljava/util/NavigableSet;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm(
         "tailSet",
@@ -19143,7 +19377,7 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
         &[BParam::Key, BParam::Boolean],
         BRet::NavigableSetFace,
         "(Ljava/lang/Object;Z)Ljava/util/NavigableSet;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm(
         "subSet",
@@ -19156,28 +19390,28 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
         &[BParam::Key, BParam::Boolean, BParam::Key, BParam::Boolean],
         BRet::NavigableSetFace,
         "(Ljava/lang/Object;ZLjava/lang/Object;Z)Ljava/util/NavigableSet;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "descendingSet",
         &[],
         BRet::NavigableSetFace,
         "()Ljava/util/NavigableSet;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "pollFirst",
         &[],
         BRet::BoxedElem,
         "()Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm_at(
         "pollLast",
         &[],
         BRet::BoxedElem,
         "()Ljava/lang/Object;",
-        SortedRole::Navigable,
+        TableFace::Navigable,
     ),
     bm(
         "removeIf",
@@ -19571,6 +19805,10 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::ListIterator(_) => Some(("java/util/ListIterator", LIST_ITERATOR_METHODS)),
         JType::CharSequence => Some(("java/lang/CharSequence", CHAR_SEQUENCE_METHODS)),
         JType::Stack(_) => Some(("java/util/Stack", STACK_METHODS)),
+        // A `Vector` shares the `Stack` table under a narrower face, and a
+        // `Hashtable` the `HashMap` table under a wider one.
+        JType::Vector(_) => Some(("java/util/Vector", STACK_METHODS)),
+        JType::Enumeration(_) => Some(("java/util/Enumeration", ENUMERATION_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
         // A double/long pipeline shares the int surface; only the numeric
@@ -19604,6 +19842,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
             SeqRole::Deque => ("java/util/Deque", DEQUE_METHODS),
         }),
         JType::Map { .. } => Some(("java/util/HashMap", MAP_METHODS)),
+        JType::Hashtable { .. } => Some(("java/util/Hashtable", MAP_METHODS)),
         JType::TreeMap { .. } => Some(("java/util/TreeMap", TREEMAP_METHODS)),
         JType::Set { .. } => Some(("java/util/Set", SET_METHODS)),
         JType::TreeSet(_, role) => Some((role.set_internal(), TREESET_METHODS)),
@@ -20478,7 +20717,7 @@ struct TypeArgs {
     /// Which face of a SORTED collection the receiver presents. Every other
     /// receiver is `Concrete`, which offers everything — the filter only ever
     /// narrows a `SortedSet`/`SortedMap` or a `NavigableSet`/`NavigableMap`.
-    role: SortedRole,
+    role: TableFace,
     /// A list's element type, or a map's key type.
     first: Option<ElemType>,
     /// A map's value type.
@@ -20494,6 +20733,9 @@ impl TypeArgs {
         // that was forgotten would silently offer the whole table.
         let role = match receiver {
             JType::TreeSet(_, role) | JType::TreeMap { role, .. } => role,
+            // The two legacy collections are faces of tables they share.
+            JType::Vector(_) => TableFace::Vector,
+            JType::Hashtable { .. } => TableFace::Hashtable,
             // A hash collection's face is the same distinction with two values
             // instead of three: the INTERFACE offers what `List`/`Set`/`Map`
             // declare, and the class adds its own (`clone`, which only
@@ -20517,14 +20759,16 @@ impl TypeArgs {
             | JType::LinkedList {
                 role: SeqRole::Queue | SeqRole::Deque,
                 ..
-            } => SortedRole::Sorted,
-            _ => SortedRole::Concrete,
+            } => TableFace::Sorted,
+            _ => TableFace::Concrete,
         };
         let args = match receiver {
             // A list's element, and a view's own element, are the first
             // type argument; a map's key and value are the two.
             JType::List { elem, .. }
             | JType::Stack(elem)
+            | JType::Vector(elem)
+            | JType::Enumeration(elem)
             | JType::Set { elem, .. }
             | JType::TreeSet(elem, _)
             | JType::Stream(elem)
@@ -20563,6 +20807,7 @@ impl TypeArgs {
                 ..Self::default()
             },
             JType::Map { key, value, .. }
+            | JType::Hashtable { key, value }
             | JType::TreeMap { key, value, .. }
             | JType::EntrySet { key, value }
             | JType::EntryIterator { key, value }
@@ -21130,6 +21375,13 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::BigDecimal => Some(JType::BigDecimal),
         BRet::NumberFormat => Some(JType::NumberFormat),
         BRet::Uuid => Some(JType::Uuid),
+        // A `Hashtable`'s `keys()` enumerates its KEYS and `elements()` its
+        // values, which are its two type arguments — and a collection's own
+        // `elements()` enumerates the one argument it has.
+        BRet::Enumeration | BRet::KeyEnumeration => {
+            Some(args.first.map_or(JType::Error, JType::Enumeration))
+        }
+        BRet::ValueEnumeration => Some(args.second.map_or(JType::Error, JType::Enumeration)),
         BRet::Year => Some(JType::Year),
         BRet::YearMonth => Some(JType::YearMonth),
         BRet::MonthDay => Some(JType::MonthDay),
@@ -21283,20 +21535,21 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         // A map key and a queue/deque nullable element both box the first arg.
         BRet::Key | BRet::BoxedElem => Some(boxed_or_nested(args.first, table)),
         BRet::Wrapper(elem) => Some(JType::Boxed(elem)),
-        BRet::SortedSetFace => Some(args.first.map_or(JType::Error, |elem| {
-            JType::TreeSet(elem, SortedRole::Sorted)
-        })),
+        BRet::SortedSetFace => Some(
+            args.first
+                .map_or(JType::Error, |elem| JType::TreeSet(elem, TableFace::Sorted)),
+        ),
         BRet::NavigableSetFace => Some(args.first.map_or(JType::Error, |elem| {
-            JType::TreeSet(elem, SortedRole::Navigable)
+            JType::TreeSet(elem, TableFace::Navigable)
         })),
         BRet::SortedMapFace | BRet::NavigableMapFace => Some(match (args.first, args.second) {
             (Some(key), Some(value)) => JType::TreeMap {
                 key,
                 value,
                 role: if matches!(ret, BRet::SortedMapFace) {
-                    SortedRole::Sorted
+                    TableFace::Sorted
                 } else {
-                    SortedRole::Navigable
+                    TableFace::Navigable
                 },
             },
             _ => JType::Error,
@@ -23780,7 +24033,7 @@ impl BodyGen<'_> {
                                 "TreeMap" | "SortedMap" | "NavigableMap" => Some(JType::TreeMap {
                                     key,
                                     value,
-                                    role: SortedRole::of_name(class),
+                                    role: TableFace::of_name(class),
                                 }),
                                 // A `new` makes the CLASS, whichever of the two names it wrote.
                                 "HashMap" | "Map" => Some(JType::Map {
@@ -25999,7 +26252,9 @@ impl BodyGen<'_> {
             return None;
         };
         match self.type_of(source) {
-            JType::Map { key, value, .. } | JType::TreeMap { key, value, .. } => Some((key, value)),
+            JType::Map { key, value, .. }
+            | JType::TreeMap { key, value, .. }
+            | JType::Hashtable { key, value } => Some((key, value)),
             _ => None,
         }
     }
@@ -26116,10 +26371,45 @@ impl BodyGen<'_> {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Stack),
                 _ => JType::Null,
             },
+            "Vector" => match type_args {
+                [arg] => JType::Vector(
+                    elem_from_type_arg(arg, self.table).unwrap_or_else(|| self.diamond_elem()),
+                ),
+                // A diamond `new Vector<>(other)` takes its element from what
+                // it COPIES, the way `new ArrayList<>(other)` does.
+                _ => JType::Vector(
+                    self.copy_source_element(args)
+                        .unwrap_or_else(|| self.diamond_elem()),
+                ),
+            },
             // `LinkedHashMap`/`LinkedHashSet` are the same TYPE as the plain
             // ones — only the object's iteration order differs — and the
             // emission path remaps them. This table did not, so `new
             // LinkedHashMap<>()` typed as an error while it emitted a map.
+            "Hashtable" => {
+                // A diamond `new Hashtable<>(other)` takes its key and value
+                // from what it COPIES, exactly as the emit path does — read
+                // only there, `new Hashtable<>(map).hashCode()` had no type at
+                // all while it emitted fine.
+                let pair = if let [key, value] = type_args {
+                    (
+                        elem_from_type_arg(key, self.table),
+                        elem_from_type_arg(value, self.table),
+                    )
+                } else {
+                    match self.copy_source_entry(args) {
+                        Some((key, value)) => (Some(key), Some(value)),
+                        None => (None, None),
+                    }
+                };
+                match pair {
+                    (Some(key), Some(value)) => JType::Hashtable { key, value },
+                    _ => JType::Hashtable {
+                        key: self.diamond_elem(),
+                        value: self.diamond_elem(),
+                    },
+                }
+            }
             "HashMap" | "Map" | "LinkedHashMap" | "EnumMap" => {
                 let (key, value) = if let [key, value] = type_args {
                     (
@@ -26191,12 +26481,12 @@ impl BodyGen<'_> {
             "TreeSet" => match type_args {
                 [arg] => JType::TreeSet(
                     elem_from_type_arg(arg, self.table).unwrap_or_else(|| self.diamond_elem()),
-                    SortedRole::Concrete,
+                    TableFace::Concrete,
                 ),
                 _ => JType::TreeSet(
                     self.copy_source_element(args)
                         .unwrap_or_else(|| self.diamond_elem()),
-                    SortedRole::Concrete,
+                    TableFace::Concrete,
                 ),
             },
             "TreeMap" => {
@@ -26212,7 +26502,7 @@ impl BodyGen<'_> {
                 JType::TreeMap {
                     key: key.unwrap_or_else(|| self.diamond_elem()),
                     value: value.unwrap_or_else(|| self.diamond_elem()),
-                    role: SortedRole::Concrete,
+                    role: TableFace::Concrete,
                 }
             }
             _ => JType::Error,
@@ -26455,6 +26745,10 @@ impl BodyGen<'_> {
                 }
                 "ArrayList" => return self.new_array_list(type_args, args, span),
                 "Stack" => return self.new_stack(type_args, args, span),
+                "Vector" => return self.new_vector(type_args, args, span),
+                "Hashtable" => {
+                    return self.new_hash_map("java/util/Hashtable", type_args, args, span);
+                }
                 "HashMap" => {
                     return self.new_hash_map("java/util/HashMap", type_args, args, span);
                 }
@@ -27797,6 +28091,71 @@ impl BodyGen<'_> {
         }
     }
 
+    /// `new Vector<E>()`, `new Vector<>(capacity)`, or the copy constructor.
+    /// The storage is a `Stack`'s; only the class it names and the face it
+    /// shows differ.
+    fn new_vector(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+        let elem = match type_args {
+            [] => None,
+            [arg] => {
+                let Some(elem) = elem_from_type_arg(arg, self.table) else {
+                    self.error(
+                        span,
+                        "Vector element type must be Integer, Double, Boolean, \
+                         Character, String, or a class",
+                    );
+                    return JType::Error;
+                };
+                Some(elem)
+            }
+            _ => {
+                self.error(span, "Vector takes one type argument");
+                return JType::Error;
+            }
+        };
+        let class = intern_class(self.pool, "java/util/Vector");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        // The capacity HINT and the copy constructor take one argument each,
+        // and only the argument's type tells them apart.
+        let descriptor = match args {
+            [] => "()V",
+            [only] => {
+                let ty = self.expr(only);
+                if ty == JType::Error {
+                    self.error_bail(span, "Vector argument");
+                    return JType::Error;
+                }
+                if matches!(ty, JType::Int | JType::Short | JType::Byte | JType::Char) {
+                    "(I)V"
+                } else {
+                    "(Ljava/util/Collection;)V"
+                }
+            }
+            // `new Vector<>(capacity, increment)` — the growth STEP, which is
+            // what makes a `Vector`'s capacity different from an
+            // `ArrayList`'s: a positive increment adds that many slots where
+            // the default doubles. `capacity()` reports the difference.
+            [capacity, increment] => {
+                for argument in [capacity, increment] {
+                    let ty = self.expr(argument);
+                    self.numeric_conversion(ty, JType::Int);
+                }
+                "(II)V"
+            }
+            _ => {
+                self.error(span, "Vector takes a capacity or a collection to copy");
+                return JType::Error;
+            }
+        };
+        let init = intern_method_ref(self.pool, "java/util/Vector", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code
+            .drop_stack(1 + u16::try_from(args.len()).unwrap_or(0));
+        let elem = elem.unwrap_or_else(|| self.diamond_elem());
+        JType::Vector(elem)
+    }
+
     /// `new HashMap<K, V>()`, `new HashMap<>(initialCapacity)`, or the copy
     /// constructor `new HashMap<>(otherMap)`.
     /// The static type of `new AbstractMap.SimpleEntry<…>` from its type
@@ -27943,7 +28302,8 @@ impl BodyGen<'_> {
                 // SORTED map is a Map too — `new HashMap<>(treeMap)` used to be
                 // refused as neither.
                 let descriptor = if let JType::Map { key, value, .. }
-                | JType::TreeMap { key, value, .. } = source_ty
+                | JType::TreeMap { key, value, .. }
+                | JType::Hashtable { key, value } = source_ty
                 {
                     if entry.is_none() {
                         entry = Some((key, value));
@@ -27966,18 +28326,16 @@ impl BodyGen<'_> {
             }
             _ => unreachable!("arg count checked above"),
         }
-        // The `new` makes the CLASS.
-        match entry {
-            Some((key, value)) => JType::Map {
-                key,
-                value,
-                face: CollFace::Concrete,
-            },
-            None => JType::Map {
-                key: self.diamond_elem(),
-                value: self.diamond_elem(),
-                face: CollFace::Concrete,
-            },
+        // The `new` makes the CLASS — and a `Hashtable` is its own type, not
+        // a face of the hash map it shares a table with.
+        let (key, value) = entry.unwrap_or_else(|| (self.diamond_elem(), self.diamond_elem()));
+        if class == "java/util/Hashtable" {
+            return JType::Hashtable { key, value };
+        }
+        JType::Map {
+            key,
+            value,
+            face: CollFace::Concrete,
         }
     }
 
@@ -28616,8 +28974,8 @@ impl BodyGen<'_> {
             _ => unreachable!("arg count checked above"),
         }
         match elem {
-            Some(elem) => JType::TreeSet(elem, SortedRole::Concrete),
-            None => JType::TreeSet(self.diamond_elem(), SortedRole::Concrete),
+            Some(elem) => JType::TreeSet(elem, TableFace::Concrete),
+            None => JType::TreeSet(self.diamond_elem(), TableFace::Concrete),
         }
     }
 
@@ -28690,12 +29048,12 @@ impl BodyGen<'_> {
             Some((key, value)) => JType::TreeMap {
                 key,
                 value,
-                role: SortedRole::Concrete,
+                role: TableFace::Concrete,
             },
             None => JType::TreeMap {
                 key: self.diamond_elem(),
                 value: self.diamond_elem(),
-                role: SortedRole::Concrete,
+                role: TableFace::Concrete,
             },
         }
     }
@@ -29042,6 +29400,11 @@ impl BodyGen<'_> {
             | JType::Method
             | JType::Type
             | JType::Constructor
+            // The legacy collections dispatch through their own tables, like
+            // every other intrinsic.
+            | JType::Vector(_)
+            | JType::Hashtable { .. }
+            | JType::Enumeration(_)
             | JType::Exception(_) => {
                 return self.builtin_instance_call(receiver_ty, method, args, span);
             }
@@ -31459,7 +31822,10 @@ impl BodyGen<'_> {
         // Every intrinsic collection compiles to the same index loop: caturra
         // has no iterators, so each exposes a positional accessor instead.
         let indexed = match iterable_ty {
-            JType::List { elem, .. } | JType::Stack(elem) | JType::LinkedList { elem, .. } => {
+            JType::List { elem, .. }
+            | JType::Stack(elem)
+            | JType::Vector(elem)
+            | JType::LinkedList { elem, .. } => {
                 // An erased type VARIABLE as the element, with an explicit
                 // WITNESS at the call that says what it is:
                 // `for (String s : Collections.<String>emptyList())`. A
@@ -33188,6 +33554,45 @@ impl BodyGen<'_> {
             return Some(Some(JType::library_list(elem)));
         }
 
+        // The two bridges between a `Collection` and an `Enumeration`, and the
+        // only pair here whose argument and answer are different families:
+        // `enumeration(c)` walks a collection the legacy way, `list(e)` reads
+        // an enumeration back into a list.
+        if matches!(method, "enumeration" | "list") {
+            let [source] = args else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let source_ty = self.type_of(source);
+            let elem = if method == "enumeration" {
+                any_collection_elem(source_ty, self.table)
+            } else if let JType::Enumeration(elem) = source_ty {
+                Some(elem)
+            } else {
+                None
+            };
+            let Some(elem) = elem else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            self.expr(source);
+            let (descriptor, answer) = if method == "enumeration" {
+                (
+                    "(Ljava/util/ArrayList;)Ljava/util/Enumeration;",
+                    JType::Enumeration(elem),
+                )
+            } else {
+                (
+                    "(Ljava/util/Enumeration;)Ljava/util/ArrayList;",
+                    JType::library_list(elem),
+                )
+            };
+            let method_ref = intern_method_ref(self.pool, "Collections", method, descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(1);
+            return Some(Some(answer));
+        }
+
         // `Collections.max(list, cmp)` / `min(list, cmp)` /
         // `binarySearch(list, key, cmp)` — the ordering comes from the
         // comparator, so (as with `sort`) the element need not be Comparable.
@@ -33199,7 +33604,9 @@ impl BodyGen<'_> {
                 self.is_comparator_type(last_ty)
             }
         {
-            let JType::List { elem, .. } = self.type_of(&args[0]) else {
+            // A `Vector` and a `Stack` are lists too, and the algorithms are
+            // declared over `List`.
+            let Some(elem) = list_like_elem(self.type_of(&args[0])) else {
                 self.no_suitable_library_method("Collections", method, args, span);
                 return None;
             };
@@ -33296,6 +33703,7 @@ impl BodyGen<'_> {
                 match first {
                     JType::List { elem, .. }
                     | JType::Stack(elem)
+                    | JType::Vector(elem)
                     | JType::LinkedList {
                         elem,
                         role: SeqRole::Full,
@@ -33367,7 +33775,9 @@ impl BodyGen<'_> {
         // `Collections.sort(list, comparator)` — the comparator is a
         // desugared `__Comparator`, and the element need not be Comparable.
         if method == "sort" && args.len() == 2 {
-            let JType::List { elem, .. } = self.type_of(&args[0]) else {
+            // A `Vector` and a `Stack` are lists too, and the algorithms are
+            // declared over `List`.
+            let Some(elem) = list_like_elem(self.type_of(&args[0])) else {
                 self.no_suitable_library_method("Collections", method, args, span);
                 return None;
             };
@@ -33432,15 +33842,7 @@ impl BodyGen<'_> {
         let elem = if over_collection {
             any_collection_elem(list_ty, self.table)
         } else {
-            match list_ty {
-                JType::List { elem, .. }
-                | JType::Stack(elem)
-                | JType::LinkedList {
-                    elem,
-                    role: SeqRole::Full,
-                } => Some(elem),
-                _ => None,
-            }
+            list_like_elem(list_ty)
         };
         let Some(elem) = elem else {
             // javac reports this as overload resolution failing, not as one
@@ -34887,6 +35289,9 @@ impl BodyGen<'_> {
                 dims: 1,
             } => Some(String::from("([C)V")),
             JType::Generic { .. }
+            | JType::Vector(_)
+            | JType::Hashtable { .. }
+            | JType::Enumeration(_)
             | JType::StringBuilder
             | JType::CharSequence
             | JType::TypeVar(_)
@@ -35833,6 +36238,19 @@ impl BodyGen<'_> {
                             return any_collection_elem(source, self.table)
                                 .map_or(JType::Error, ElemType::base_type);
                         }
+                        // The `Enumeration` bridges — the emit path answers
+                        // these, and this mirror has to say the same.
+                        "enumeration" => {
+                            let source = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            return any_collection_elem(source, self.table)
+                                .map_or(JType::Error, JType::Enumeration);
+                        }
+                        "list" => {
+                            return match args.first().map(|a| self.type_of(a)) {
+                                Some(JType::Enumeration(elem)) => JType::library_list(elem),
+                                _ => JType::Error,
+                            };
+                        }
                         // An unmodifiable wrapper is its source's own face.
                         "unmodifiableCollection" => {
                             let source = args.first().map_or(JType::Error, |a| self.type_of(a));
@@ -36659,7 +37077,12 @@ impl BodyGen<'_> {
             // `x instanceof ArrayList<…>` — a runtime list check.
             JType::List { .. } => String::from("java/util/ArrayList"),
             JType::Stack(_) => String::from("java/util/Stack"),
+            // A `Stack` IS a `Vector`, so the test is a real one, and the VM
+            // answers it from the view class the object reports.
+            JType::Vector(_) => String::from("java/util/Vector"),
             JType::Map { .. } => String::from("java/util/HashMap"),
+            JType::Hashtable { .. } => String::from("java/util/Hashtable"),
+            JType::Enumeration(_) => String::from("java/util/Enumeration"),
             // `it instanceof Iterator` — the VM answers for a cursor whatever
             // collection made it.
             JType::Iterator(_) => String::from("java/util/Iterator"),
@@ -38285,9 +38708,9 @@ impl BodyGen<'_> {
             // The same for the collections whose role already records it: a
             // `TreeSet`/`TreeMap` written as its concrete name, a `Stack`
             // (which has no interface at all), and the two concrete deques.
-            | JType::TreeSet(_, SortedRole::Concrete)
+            | JType::TreeSet(_, TableFace::Concrete)
             | JType::TreeMap {
-                role: SortedRole::Concrete,
+                role: TableFace::Concrete,
                 ..
             }
             | JType::Stack(_)
@@ -38408,6 +38831,8 @@ impl BodyGen<'_> {
                     | JType::LinkedList { .. }
                     | JType::Collection(_)
                     | JType::Stack(_)
+                    | JType::Vector(_)
+                    | JType::Hashtable { .. }
                     | JType::Optional(_)
             )
             && let Some(written) = cast_target_name(ty)
@@ -40000,6 +40425,9 @@ impl BodyGen<'_> {
             | JType::DoubleStream
             | JType::LongStream
             | JType::Iterator(_)
+            | JType::Vector(_)
+            | JType::Hashtable { .. }
+            | JType::Enumeration(_)
             | JType::ListIterator(_)
             | JType::EntryIterator { .. }
             | JType::Optional(_)
@@ -40927,6 +41355,9 @@ impl BodyGen<'_> {
                 | JType::List { .. }
                 | JType::Set { .. }
                 | JType::Stack(_)
+                | JType::Vector(_)
+                | JType::Hashtable { .. }
+                | JType::Enumeration(_)
                 | JType::Map { .. }
                 // A map's VIEWS are collections too, and are the ones a
                 // for-each usually walks: they widen wherever a list does.

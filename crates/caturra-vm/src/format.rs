@@ -1568,7 +1568,11 @@ fn format_float(spec: &Spec, value: f64) -> String {
         }
         'e' => {
             let precision = spec.precision.unwrap_or(6);
-            scientific_digits(value.abs(), precision)
+            let text = scientific_digits(value.abs(), precision);
+            // The `#` flag forces a decimal point even at precision 0, the
+            // same as it does for `%f` — and here it lands BEFORE the
+            // exponent: `%#.0e` of 1e-10 is `1.e-10`.
+            alternate_point(text, spec.alternate && precision == 0)
         }
         _ => {
             // %g: precision counts significant digits.
@@ -1739,6 +1743,20 @@ fn render_fixed(digits: &[u8], point: i32, precision: usize) -> String {
 
 /// `%e`: scientific with `precision` fraction digits and a two-digit
 /// (minimum) exponent.
+/// The `#` flag's forced decimal point on a SCIENTIFIC result, which sits
+/// before the exponent rather than at the end: `%#.0e` of 1e-10 is `1.e-10`.
+/// `%#.0f` pushes its point onto the end, and reading that rule for both is
+/// what left `%#.0e` printing `1e-10`.
+fn alternate_point(text: String, wanted: bool) -> String {
+    if !wanted {
+        return text;
+    }
+    match text.find(['e', 'E']) {
+        Some(at) => format!("{}.{}", &text[..at], &text[at..]),
+        None => text + ".",
+    }
+}
+
 fn scientific_digits(value: f64, precision: usize) -> String {
     let (digits, point) = shortest_decimal(value);
     scientific_from_digits(digits, point, precision)
@@ -1987,7 +2005,11 @@ fn format_big_decimal(spec: &Spec, value: &crate::decimal::BigDec) -> String {
             }
             text
         }
-        'e' => scientific_from_digits(digits, point, spec.precision.unwrap_or(6)),
+        'e' => {
+            let precision = spec.precision.unwrap_or(6);
+            let text = scientific_from_digits(digits, point, precision);
+            alternate_point(text, spec.alternate && precision == 0)
+        }
         _ => {
             let precision = match spec.precision {
                 Some(0) => 1,

@@ -7023,9 +7023,9 @@ differential_reject!(
 );
 
 stricter_than_javac!(
-    strict_vector_is_refused_by_name,
-    "StrictVector",
-    "import java.util.*;\npublic class StrictVector { static void r() { Vector<Integer> v; } }"
+    strict_abstract_list_is_refused_by_name,
+    "StrictSkeleton",
+    "import java.util.*;\npublic class StrictSkeleton { static void r() { AbstractList<Integer> v; } }"
 );
 
 differential_test!(
@@ -50585,6 +50585,384 @@ public class U7 {
     System.out.println(Year.isLeap(1900) + " " + Year.isLeap(2000));
     System.out.println(billing.plusMonths(11) + " " + billing.minusYears(1) + " " + billing.atDay(15) + " " + billing.isValidDay(30));
     System.out.println(FOUNDED.plusYears(2) + " " + FOUNDED.atDay(60) + " " + FOUNDED.atMonth(2) + " " + FOUNDED.atMonthDay(leapDay));
+  }
+}
+"#
+);
+
+// A Vector, a Hashtable and an Enumeration — the collections that
+// predate the collections framework, and are still on every reading list.
+differential_test!(
+    the_legacy_collections,
+    "Lg1",
+    r#"
+import java.util.*;
+public class Lg1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    // --- Vector
+    s("vector basic", () -> { Vector<String> v = new Vector<>(); v.add("a"); v.addElement("b"); v.insertElementAt("c", 1); return v + " " + v.size() + " " + v.elementAt(2) + " " + v.firstElement() + " " + v.lastElement(); });
+    s("vector as list", () -> { List<String> v = new Vector<>(List.of("x", "y")); v.add("z"); return v + " " + v.get(1) + " " + v.indexOf("z") + " " + v.contains("y"); });
+    s("vector remove", () -> { Vector<Integer> v = new Vector<>(List.of(1, 2, 3)); v.removeElement(2); v.removeElementAt(0); return v + " " + v.isEmpty(); });
+    s("vector capacity", () -> { Vector<String> v = new Vector<>(); return v.capacity() + " " + new Vector<String>(5).capacity() + " " + v.size(); });
+    s("vector enumeration", () -> { Vector<String> v = new Vector<>(List.of("p", "q")); Enumeration<String> e = v.elements(); StringBuilder o = new StringBuilder(); while (e.hasMoreElements()) o.append(e.nextElement()).append('.'); return o.toString(); });
+    s("vector equals", () -> new Vector<>(List.of(1, 2)).equals(new ArrayList<>(List.of(1, 2))) + " " + (new Vector<>(List.of(1, 2)).hashCode() == new ArrayList<>(List.of(1, 2)).hashCode()));
+    s("vector sort stream", () -> { Vector<Integer> v = new Vector<>(List.of(3, 1, 2)); Collections.sort(v); return v + " " + v.stream().mapToInt(Integer::intValue).sum() + " " + (v instanceof RandomAccess); });
+    s("vector class", () -> new Vector<String>().getClass().getName());
+    s("vector bad index", () -> new Vector<String>().elementAt(0));
+    // --- Stack over Vector
+    s("stack is vector", () -> { Stack<String> st = new Stack<>(); st.push("one"); return (st instanceof Vector) + " " + st.elementAt(0); });
+    // --- Hashtable
+    s("hashtable basic", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); h.put("b", 2); return h.get("a") + " " + h.size() + " " + h.containsKey("b") + " " + h.containsValue(2); });
+    s("hashtable null", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put(null, 1); return h.toString(); });
+    s("hashtable null value", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", null); return h.toString(); });
+    s("hashtable order", () -> { Hashtable<String, Integer> h = new Hashtable<>(); for (String k : new String[] {"one", "two", "three", "four", "five"}) h.put(k, k.length()); return h.toString(); });
+    s("hashtable keys", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("x", 1); h.put("y", 2); Enumeration<String> e = h.keys(); StringBuilder o = new StringBuilder(); while (e.hasMoreElements()) o.append(e.nextElement()); return o.toString(); });
+    s("hashtable as map", () -> { Map<String, Integer> m = new Hashtable<>(); m.put("k", 9); return m.get("k") + " " + m.getOrDefault("z", 0) + " " + m.keySet() + " " + m.values() + " " + m.entrySet(); });
+    s("hashtable remove", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); h.remove("a"); return h.isEmpty() + " " + h.get("a"); });
+    s("hashtable class", () -> new Hashtable<String, Integer>().getClass().getName());
+    s("hashtable equals", () -> new Hashtable<>(Map.of("a", 1)).equals(new HashMap<>(Map.of("a", 1))));
+    // --- Enumeration by itself
+    s("collections enumeration", () -> { Enumeration<String> e = Collections.enumeration(List.of("m", "n")); return e.nextElement() + e.nextElement(); });
+    s("collections list", () -> Collections.list(new Vector<>(List.of("g", "h")).elements()));
+  }
+}
+"#
+);
+
+// A `Vector` words its out-of-range complaint differently for almost
+// every method: `elementAt(5)` on a vector of two says "5 >= 2", `get(5)`
+// says "Array index out of range: 5", and a NEGATIVE index reaches the
+// array and reports the CAPACITY.
+differential_test!(
+    what_a_vector_says_when_it_refuses,
+    "Lg2",
+    r#"
+import java.util.*;
+public class Lg2 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    Vector<String> two = new Vector<>(List.of("a", "b"));
+    s("elementAt over", () -> two.elementAt(5));
+    s("elementAt neg", () -> two.elementAt(-1));
+    s("get over", () -> two.get(5));
+    s("get neg", () -> two.get(-1));
+    s("removeElementAt over", () -> { two.removeElementAt(5); return "?"; });
+    s("removeElementAt neg", () -> { two.removeElementAt(-1); return "?"; });
+    s("insertElementAt over", () -> { two.insertElementAt("z", 9); return "?"; });
+    s("insertElementAt neg", () -> { two.insertElementAt("z", -1); return "?"; });
+    s("setElementAt over", () -> { two.setElementAt("z", 9); return "?"; });
+    s("setElementAt neg", () -> { two.setElementAt("z", -1); return "?"; });
+    s("firstElement empty", () -> new Vector<String>().firstElement());
+    s("lastElement empty", () -> new Vector<String>().lastElement());
+    s("set over", () -> two.set(9, "z"));
+    s("add over", () -> { two.add(9, "z"); return "?"; });
+    s("random access", () -> (two instanceof RandomAccess) + " " + (two instanceof Cloneable) + " " + (two instanceof List));
+    s("stack faces", () -> { Stack<String> st = new Stack<>(); return (st instanceof Vector) + " " + (st instanceof List) + " " + (st instanceof RandomAccess); });
+    s("subList", () -> two.subList(0, 1));
+    s("copyInto", () -> { String[] to = new String[3]; two.copyInto(to); return Arrays.toString(to); });
+    s("setSize", () -> { Vector<String> v = new Vector<>(List.of("a")); v.setSize(3); return v + " " + v.size(); });
+    s("setSize down", () -> { Vector<String> v = new Vector<>(List.of("a","b","c")); v.setSize(1); return v.toString(); });
+    s("ensureCapacity", () -> { Vector<String> v = new Vector<>(); v.ensureCapacity(30); return v.capacity(); });
+    s("trimToSize", () -> { Vector<String> v = new Vector<>(); v.add("a"); v.trimToSize(); return v.capacity(); });
+    s("capacity growth", () -> { Vector<String> v = new Vector<>(2); v.add("a"); v.add("b"); v.add("c"); return v.capacity(); });
+    s("capacity increment", () -> { Vector<String> v = new Vector<>(2, 5); v.add("a"); v.add("b"); v.add("c"); return v.capacity(); });
+    s("indexOf from", () -> two.indexOf("b", 0) + " " + two.lastIndexOf("a", 1));
+    s("hashtable null key", () -> { Hashtable<String,Integer> h = new Hashtable<>(); h.put(null, 1); return "?"; });
+    s("hashtable null value", () -> { Hashtable<String,Integer> h = new Hashtable<>(); h.put("a", null); return "?"; });
+    s("hashtable get null", () -> { Hashtable<String,Integer> h = new Hashtable<>(); return h.get(null); });
+    s("hashtable containsKey null", () -> { Hashtable<String,Integer> h = new Hashtable<>(); return h.containsKey(null); });
+    s("hashtable contains null", () -> { Hashtable<String,Integer> h = new Hashtable<>(); return h.contains(null); });
+    s("hashtable copy", () -> new Hashtable<>(Map.of("a", 1)).toString());
+    s("hashtable equals map", () -> new Hashtable<>(Map.of("a", 1)).equals(new HashMap<>(Map.of("a", 1))));
+    s("hashtable hash", () -> new Hashtable<>(Map.of("a", 1)).hashCode() == new HashMap<>(Map.of("a", 1)).hashCode());
+    s("enumeration of set", () -> { Enumeration<String> e = Collections.enumeration(new TreeSet<>(List.of("b","a"))); return e.nextElement() + e.nextElement(); });
+    s("enumeration empty", () -> { Enumeration<String> e = Collections.enumeration(List.of()); return e.hasMoreElements(); });
+    s("enumeration past end", () -> { Enumeration<String> e = Collections.enumeration(List.of("a")); e.nextElement(); return e.nextElement(); });
+    s("list of enumeration", () -> Collections.list(Collections.enumeration(List.of("g","h"))));
+    s("vector class faces", () -> new Vector<String>().getClass().getName() + " " + new Stack<String>().getClass().getName());
+    s("vector toString", () -> new Vector<>(List.of(1,2)).toString());
+    s("vector equals list", () -> new Vector<>(List.of(1,2)).equals(new ArrayList<>(List.of(1,2))));
+    s("hashtable keySet", () -> { Hashtable<String,Integer> h = new Hashtable<>(); h.put("a",1); return h.keySet() + " " + h.values() + " " + h.entrySet(); });
+    s("hashtable iterate", () -> { Hashtable<String,Integer> h = new Hashtable<>(); h.put("a",1); h.put("b",2); StringBuilder o = new StringBuilder(); for (Map.Entry<String,Integer> e : h.entrySet()) o.append(e.getKey()); return o.toString(); });
+  }
+}
+"#
+);
+
+// A `Vector`, a `Hashtable` and an `Enumeration` in every position a type
+// can take — field, parameter, type argument, array, cast, for-each,
+// stream — and through every `Collections` algorithm.
+differential_test!(
+    the_legacy_collections_in_every_position,
+    "Lg3",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class Lg3 {
+  interface Body { Object get() throws Exception; }
+  static Vector<String> field = new Vector<>(List.of("f1", "f2"));
+  static Hashtable<String, Integer> table = new Hashtable<>();
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static int total(Vector<Integer> v) { int t = 0; for (int x : v) t += x; return t; }
+  static String walk(Enumeration<String> e) { StringBuilder o = new StringBuilder(); while (e.hasMoreElements()) o.append(e.nextElement()); return o.toString(); }
+  static <T> int count(Vector<T> v) { return v.size(); }
+  public static void main(String[] a) {
+    s("field", () -> field + " " + field.size());
+    s("parameter", () -> total(new Vector<>(List.of(1, 2, 3))));
+    s("generic parameter", () -> count(new Vector<>(List.of("a"))));
+    s("for each", () -> { StringBuilder o = new StringBuilder(); for (String x : field) o.append(x); return o.toString(); });
+    s("iterator", () -> { Iterator<String> it = field.iterator(); return it.next() + it.hasNext(); });
+    s("stream", () -> field.stream().map(String::toUpperCase).collect(Collectors.joining(",")));
+    s("as list arg", () -> { List<String> l = field; return l.get(0); });
+    s("as collection", () -> { Collection<String> c = field; return c.size(); });
+    s("in a list", () -> { List<Vector<String>> outer = new ArrayList<>(); outer.add(new Vector<>(List.of("q"))); return outer.toString(); });
+    s("array of", () -> { Vector<?>[] many = new Vector<?>[2]; many[0] = field; return many[0].size(); });
+    s("cast", () -> { Object o = field; return ((Vector<?>) o).size(); });
+    s("cast to list", () -> { Object o = field; return ((List<?>) o).size(); });
+    s("clone", () -> { Vector<String> v = new Vector<>(List.of("c")); Object c = v.clone(); return c + " " + (c == v); });
+    s("sort", () -> { Vector<Integer> v = new Vector<>(List.of(3, 1, 2)); Collections.sort(v); return v.toString(); });
+    s("sort comparator", () -> { Vector<String> v = new Vector<>(List.of("bb", "a")); v.sort(Comparator.comparingInt(String::length)); return v.toString(); });
+    s("reverse", () -> { Vector<Integer> v = new Vector<>(List.of(1, 2, 3)); Collections.reverse(v); return v.toString(); });
+    s("max min", () -> { Vector<Integer> v = new Vector<>(List.of(4, 9, 2)); return Collections.max(v) + " " + Collections.min(v); });
+    s("shuffle swap", () -> { Vector<Integer> v = new Vector<>(List.of(1, 2, 3)); Collections.swap(v, 0, 2); return v.toString(); });
+    s("fill", () -> { Vector<String> v = new Vector<>(List.of("a", "b")); Collections.fill(v, "z"); return v.toString(); });
+    s("binarySearch", () -> { Vector<Integer> v = new Vector<>(List.of(1, 3, 5)); return Collections.binarySearch(v, 3); });
+    s("frequency", () -> Collections.frequency(new Vector<>(List.of(1, 1, 2)), 1));
+    s("addAll", () -> { Vector<String> v = new Vector<>(); Collections.addAll(v, "x", "y"); return v.toString(); });
+    s("unmodifiable", () -> { List<String> u = Collections.unmodifiableList(new Vector<>(List.of("a"))); try { u.add("b"); return "?"; } catch (UnsupportedOperationException e) { return "refused " + u; } });
+    s("copy into arraylist", () -> new ArrayList<>(field).toString());
+    s("vector of vector", () -> new Vector<>(List.of(field)).toString());
+    s("cme", () -> { Vector<String> v = new Vector<>(List.of("a", "b")); try { for (String x : v) v.add(x); return "?"; } catch (ConcurrentModificationException e) { return "cme"; } });
+    s("enumeration param", () -> walk(field.elements()));
+    s("enumeration of hashtable", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("k", 1); return walk(h.keys()); });
+    s("hashtable putAll", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.putAll(Map.of("z", 26)); return h.toString(); });
+    s("hashtable many", () -> { Hashtable<Integer, Integer> h = new Hashtable<>(); for (int i = 0; i < 12; i++) h.put(i, i * i); return h.toString(); });
+    s("hashtable as map param", () -> { Map<String, Integer> m = table; m.put("t", 1); return m.toString(); });
+    s("hashtable for each", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); h.put("b", 2); StringBuilder o = new StringBuilder(); h.forEach((k, v) -> o.append(k).append(v)); return o.toString(); });
+    s("hashtable stream", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); return h.entrySet().stream().map(Map.Entry::getKey).collect(Collectors.joining()); });
+    s("hashtable getClass", () -> new Hashtable<>().getClass() + " " + new Vector<>().getClass());
+    s("hashtable merge", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.merge("a", 1, Integer::sum); h.merge("a", 2, Integer::sum); return h.toString(); });
+    s("hashtable remove missing", () -> { Hashtable<String, Integer> h = new Hashtable<>(); return h.remove("nope"); });
+    s("hashtable clear size", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); h.clear(); return h.size() + " " + h.isEmpty() + " " + h; });
+    s("vector in switch", () -> { Vector<String> v = new Vector<>(); switch (v.size()) { case 0: return "empty"; default: return "full"; } });
+    s("vector ternary", () -> { List<String> l = true ? field : new ArrayList<String>(); return l.size(); });
+    s("enumeration to list", () -> Collections.list(field.elements()));
+    s("vector retain", () -> { Vector<String> v = new Vector<>(List.of("a", "b", "c")); v.retainAll(List.of("a", "c")); return v.toString(); });
+    s("vector removeIf", () -> { Vector<Integer> v = new Vector<>(List.of(1, 2, 3, 4)); v.removeIf(x -> x % 2 == 0); return v.toString(); });
+    s("vector subList write", () -> { Vector<String> v = new Vector<>(List.of("a", "b", "c")); v.subList(0, 2).set(0, "z"); return v.toString(); });
+    s("vector listIterator", () -> { Vector<String> v = new Vector<>(List.of("a", "b")); ListIterator<String> it = v.listIterator(); it.next(); it.set("z"); return v.toString(); });
+    s("vector toArray", () -> Arrays.toString(field.toArray()) + " " + Arrays.toString(field.toArray(new String[0])));
+    s("vector equals hash", () -> field.equals(new ArrayList<>(List.of("f1", "f2"))) + " " + (field.hashCode() == new ArrayList<>(List.of("f1", "f2")).hashCode()));
+    s("vector containsAll", () -> field.containsAll(List.of("f1")));
+    s("stack legacy", () -> { Stack<String> st = new Stack<>(); st.addElement("a"); st.push("b"); return st + " " + st.peek() + " " + st.elementAt(0) + " " + st.capacity(); });
+    s("vector null element", () -> { Vector<String> v = new Vector<>(); v.add(null); return v + " " + v.contains(null) + " " + v.indexOf(null); });
+  }
+}
+"#
+);
+
+// A `Hashtable` has TWO traversal orders: `forEach` and `replaceAll` walk
+// the bucket array upward, and everything else walks it downward. Within a
+// bucket the chain reads head-first either way, so one is not the reverse
+// of the other.
+differential_test!(
+    which_way_a_hashtable_walks,
+    "Lg4",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class Lg4 {
+  static Hashtable<String, Integer> make() {
+    Hashtable<String, Integer> h = new Hashtable<>();
+    for (String k : new String[] {"one", "two", "three", "four", "five", "six"}) h.put(k, k.length());
+    return h;
+  }
+  public static void main(String[] a) {
+    System.out.println("toString = " + make());
+    StringBuilder o = new StringBuilder();
+    make().forEach((k, v) -> o.append(k).append(' '));
+    System.out.println("forEach = " + o);
+    System.out.println("keySet = " + make().keySet());
+    System.out.println("values = " + make().values());
+    System.out.println("entrySet = " + make().entrySet());
+    System.out.println("keys enum = " + Collections.list(make().keys()));
+    System.out.println("elements enum = " + Collections.list(make().elements()));
+    System.out.println("stream = " + make().entrySet().stream().map(Map.Entry::getKey).collect(Collectors.joining(" ")));
+    StringBuilder f = new StringBuilder();
+    for (Map.Entry<String, Integer> e : make().entrySet()) f.append(e.getKey()).append(' ');
+    System.out.println("for each = " + f);
+    Hashtable<String, Integer> r = make();
+    r.replaceAll((k, v) -> v * 2);
+    System.out.println("replaceAll = " + r);
+    StringBuilder p = new StringBuilder();
+    Hashtable<String, Integer> q = make();
+    q.replaceAll((k, v) -> { p.append(k).append(' '); return v; });
+    System.out.println("replaceAll order = " + p);
+    System.out.println("keySet stream = " + make().keySet().stream().collect(Collectors.joining(" ")));
+    System.out.println("copy = " + new HashMap<>(make()));
+  }
+}
+"#
+);
+
+// The corners: a bad capacity, growth past the default, a user-defined
+// element, self-reference, and the sizes a `Vector` can be told to be.
+differential_test!(
+    the_legacy_collections_at_their_edges,
+    "Lg5",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class Lg5 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static class Counted { final int n; Counted(int n) { this.n = n; } public String toString() { return "C" + n; }
+    public boolean equals(Object o) { return o instanceof Counted && ((Counted) o).n == n; }
+    public int hashCode() { return n; } }
+  public static void main(String[] a) {
+    s("bad capacity", () -> new Vector<String>(-1));
+    s("bad hashtable capacity", () -> new Hashtable<String, Integer>(-1));
+    s("zero hashtable capacity", () -> { Hashtable<String, Integer> h = new Hashtable<>(0); h.put("a", 1); return h.toString(); });
+    s("grow past ten", () -> { Vector<Integer> v = new Vector<>(); for (int i = 0; i < 25; i++) v.add(i); return v.size() + " " + v.capacity(); });
+    s("grow with increment", () -> { Vector<Integer> v = new Vector<>(3, 2); for (int i = 0; i < 10; i++) v.add(i); return v.capacity(); });
+    s("user element", () -> { Vector<Counted> v = new Vector<>(); v.add(new Counted(1)); return v + " " + v.contains(new Counted(1)) + " " + v.indexOf(new Counted(1)); });
+    s("user key", () -> { Hashtable<Counted, String> h = new Hashtable<>(); h.put(new Counted(3), "x"); return h.get(new Counted(3)) + " " + h.containsKey(new Counted(3)); });
+    s("nested", () -> { Hashtable<String, Vector<Integer>> h = new Hashtable<>(); h.put("k", new Vector<>(List.of(1, 2))); return h + " " + h.get("k").elementAt(1); });
+    s("enumeration var", () -> { var e = new Vector<>(List.of("a", "b")).elements(); return e.nextElement(); });
+    s("vector var", () -> { var v = new Vector<String>(); v.add("z"); return v.getClass().getSimpleName() + v; });
+    s("enumeration in a list", () -> { List<Enumeration<String>> es = new ArrayList<>(); es.add(new Vector<>(List.of("p")).elements()); return es.get(0).nextElement(); });
+    s("vector map values", () -> { Map<String, Vector<String>> m = new HashMap<>(); m.computeIfAbsent("k", k -> new Vector<>()).add("v"); return m.toString(); });
+    s("sort vector of user", () -> { Vector<String> v = new Vector<>(List.of("b", "a")); v.sort(null); return v.toString(); });
+    s("hashtable of vectors equal", () -> new Hashtable<>(Map.of("k", new Vector<>(List.of(1)))).equals(Map.of("k", List.of(1))));
+    s("vector stream sorted", () -> new Vector<>(List.of(3, 1, 2)).stream().sorted().map(String::valueOf).collect(Collectors.joining("")));
+    s("hashtable values stream", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); h.put("b", 2); return h.values().stream().mapToInt(Integer::intValue).sum(); });
+    s("hashtable keySet remove", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); h.keySet().remove("a"); return h.toString(); });
+    s("enumeration after change", () -> { Vector<String> v = new Vector<>(List.of("a")); Enumeration<String> e = v.elements(); v.add("b"); return e.nextElement() + e.hasMoreElements(); });
+    s("vector iterator cme", () -> { Vector<String> v = new Vector<>(List.of("a", "b")); Iterator<String> it = v.iterator(); it.next(); v.add("c"); try { it.next(); return "?"; } catch (ConcurrentModificationException e) { return "cme"; } });
+    s("hashtable entry set value", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); for (Map.Entry<String, Integer> e : h.entrySet()) e.setValue(9); return h.toString(); });
+    s("hashtable entry null value", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); for (Map.Entry<String, Integer> e : h.entrySet()) e.setValue(null); return h.toString(); });
+    s("vector set size zero", () -> { Vector<String> v = new Vector<>(List.of("a", "b")); v.setSize(0); return v + " " + v.size() + " " + v.capacity(); });
+    s("vector negative setSize", () -> { Vector<String> v = new Vector<>(); v.setSize(-1); return "?"; });
+    s("copyInto too small", () -> { Vector<String> v = new Vector<>(List.of("a", "b")); String[] to = new String[1]; v.copyInto(to); return "?"; });
+    s("vector toString self", () -> { Vector<Object> v = new Vector<>(); v.add(v); return v.toString(); });
+    s("hashtable toString self", () -> { Hashtable<String, Object> h = new Hashtable<>(); h.put("k", h); return h.toString(); });
+  }
+}
+"#
+);
+
+// A `Vector`'s `elements()` and a `Hashtable`'s `keys()` predate
+// `modCount`: a change made mid-walk is simply seen. `Collections.enumeration`
+// wraps an ITERATOR, so that one throws — and each names itself when it runs out.
+differential_test!(
+    an_enumeration_is_not_fail_fast,
+    "Lg6",
+    r#"
+import java.util.*;
+public class Lg6 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("vector enum past end", () -> { Enumeration<String> e = new Vector<>(List.of("a")).elements(); e.nextElement(); return e.nextElement(); });
+    s("vector enum after add", () -> { Vector<String> v = new Vector<>(List.of("a")); Enumeration<String> e = v.elements(); v.add("b"); return e.nextElement() + e.nextElement() + e.hasMoreElements(); });
+    s("vector enum after remove", () -> { Vector<String> v = new Vector<>(List.of("a", "b")); Enumeration<String> e = v.elements(); v.remove(0); return e.nextElement() + e.hasMoreElements(); });
+    s("hashtable keys after put", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); Enumeration<String> e = h.keys(); h.put("b", 2); StringBuilder o = new StringBuilder(); while (e.hasMoreElements()) o.append(e.nextElement()); return o.toString(); });
+    s("hashtable keys past end", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); Enumeration<String> e = h.keys(); e.nextElement(); return e.nextElement(); });
+    s("hashtable keySet cme", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); Iterator<String> it = h.keySet().iterator(); h.put("b", 2); try { it.next(); return "?"; } catch (ConcurrentModificationException e) { return "cme"; } });
+    s("collections enum past end", () -> { Enumeration<String> e = Collections.enumeration(List.of("a")); e.nextElement(); return e.nextElement(); });
+    s("collections enum of vector after add", () -> { Vector<String> v = new Vector<>(List.of("a")); Enumeration<String> e = Collections.enumeration(v); v.add("b"); return e.nextElement(); });
+    s("vector iterator not enum", () -> { Vector<String> v = new Vector<>(List.of("a")); Iterator<String> it = v.iterator(); v.add("b"); try { return it.next(); } catch (ConcurrentModificationException e) { return "cme"; } });
+    s("setSize negative", () -> { Vector<String> v = new Vector<>(); v.setSize(-1); return "?"; });
+    s("setSize negative sized", () -> { Vector<String> v = new Vector<>(3); v.setSize(-1); return "?"; });
+    s("ensureCapacity negative", () -> { Vector<String> v = new Vector<>(); v.ensureCapacity(-5); return v.capacity(); });
+    s("copyInto small", () -> { Vector<String> v = new Vector<>(List.of("a", "b", "c")); String[] to = new String[1]; v.copyInto(to); return "?"; });
+    s("copyInto null", () -> { new Vector<>(List.of("a")).copyInto(null); return "?"; });
+    s("vector bad capacity", () -> new Vector<String>(-1));
+    s("vector bad increment", () -> new Vector<String>(-1, 2));
+    s("hashtable bad capacity", () -> new Hashtable<String, Integer>(-1));
+    s("entry setValue null", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); for (Map.Entry<String, Integer> e : h.entrySet()) e.setValue(null); return h.toString(); });
+    s("entry setValue", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", 1); for (Map.Entry<String, Integer> e : h.entrySet()) e.setValue(7); return h.toString(); });
+  }
+}
+"#
+);
+
+// What a `Vector` and a `Hashtable` say about THEMSELVES: a `Hashtable`
+// extends the abstract `Dictionary` a `Map` replaced, which is the one place
+// that class is still visible.
+differential_test!(
+    what_the_legacy_collections_say_they_are,
+    "Lg7",
+    r#"
+import java.util.*;
+public class Lg7 {
+  public static void main(String[] a) {
+    for (Object o : new Object[] { new Vector<String>(), new Hashtable<String, Integer>(), new Stack<String>() }) {
+      Class<?> c = o.getClass();
+      System.out.println(c.getName() + " | " + c.getSimpleName() + " | " + c.getSuperclass() + " | " + Arrays.toString(c.getInterfaces()));
+    }
+    System.out.println(new Vector<String>().toString() + new Hashtable<String, Integer>());
+    Object v = new Vector<String>();
+    System.out.println((v instanceof Iterable) + " " + (v instanceof Cloneable) + " " + (v instanceof RandomAccess));
+    Object h = new Hashtable<String, Integer>();
+    System.out.println((h instanceof Map) + " " + (h instanceof Cloneable));
+  }
+}
+"#
+);
+
+// The old date-and-time classes are a MEASURED non-goal, not an oversight:
+// each is shaped around the default time zone, and answering that honestly
+// needs a timezone database caturra does not vendor. So each says so BY NAME,
+// wherever it is written — which is what tells a student "this engine does not
+// have it" from "you mistyped something".
+stricter_than_javac!(
+    strict_the_old_date_classes_are_refused_by_name,
+    "StrictDate",
+    "import java.util.*;\npublic class StrictDate { static void r() { Date d; Calendar c; TimeZone z; } }"
+);
+
+stricter_than_javac!(
+    strict_simple_date_format_is_refused_by_name,
+    "StrictDateFormat",
+    "import java.text.*;\npublic class StrictDateFormat { static void r() { SimpleDateFormat f; } }"
+);
+
+// Found by a fresh seed of the format fuzzer, and nothing to do with the
+// collections beside it: the `#` flag forces a decimal point at precision 0,
+// and on a SCIENTIFIC result it lands BEFORE the exponent (`1.e-10`) where on
+// a fixed one it lands at the end. `%#.0f` had the rule and `%#.0e` did not.
+differential_test!(
+    the_alternate_flag_at_precision_zero,
+    "AltPoint",
+    r#"
+import java.math.BigDecimal;
+public class AltPoint {
+  public static void main(String[] a) {
+    Object[] vs = { 1e-10, 0.0, 123.456, -2.5, new BigDecimal("123.456"), new BigDecimal("0"), new BigDecimal("-2.5") };
+    String[] fs = { "%#.0e", "%#.0E", "%#20.0e", "%#.0f", "%#.1e", "%#.0g", "%#(.0e", "%#-20.0e" };
+    for (String f : fs) for (Object v : vs) {
+      try { System.out.println(f + " " + v + " => [" + String.format(f, v) + "]"); }
+      catch (Throwable e) { System.out.println(f + " " + v + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
   }
 }
 "#

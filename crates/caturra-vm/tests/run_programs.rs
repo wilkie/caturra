@@ -6690,8 +6690,8 @@ fn stage6_compile_errors_match_javac_wording() {
             "package foo.bar does not exist",
         ),
         (
-            "import java.util.Vector; class M { }",
-            "java.util.Vector is not supported by caturra (the class library covers the AP CS A subset)",
+            "import java.util.AbstractList; class M { }",
+            "java.util.AbstractList is not supported by caturra (the class library covers the AP CS A subset)",
         ),
         (
             // java.awt / javax.swing (and java.awt.event listeners) are
@@ -6712,8 +6712,8 @@ fn stage6_compile_errors_match_javac_wording() {
         // A qualified name for a class caturra genuinely does not model still
         // gives its honest reason.
         (
-            "class M { static void f() { java.util.Vector x = null; } }",
-            "java.util.Vector is not supported by caturra",
+            "class M { static void f() { java.util.AbstractList x = null; } }",
+            "java.util.AbstractList is not supported by caturra",
         ),
         // A class caturra models only as a namespace for its statics cannot
         // name a variable. javac accepts `Math m;` — `Math` is an ordinary
@@ -11661,35 +11661,37 @@ fn unresolvable_qualified_names_reject_like_javac() {
 #[test]
 fn unmodeled_library_classes_explain_themselves_in_every_position() {
     let reason = "is not supported by caturra";
+    // The example has to be a class caturra really does not model. `Vector`
+    // and `Hashtable` carried these positions until they were built; the
+    // `Abstract*` skeletons carry them now, and the whole point of one is the
+    // dozen concrete methods a subclass inherits.
     for (label, source) in [
         (
             "local",
-            "class M { static void r() { Vector<Integer> l; } }",
+            "class M { static void r() { AbstractList<Integer> l; } }",
         ),
-        ("raw local", "class M { static void r() { Vector l; } }"),
-        ("field", "class M { Vector<Integer> items; }"),
+        (
+            "raw local",
+            "class M { static void r() { AbstractList l; } }",
+        ),
+        ("field", "class M { AbstractList<Integer> items; }"),
         (
             "parameter",
-            "class M { static void f(Vector<Integer> l) {} }",
+            "class M { static void f(AbstractList<Integer> l) {} }",
         ),
-        ("array", "class M { static void r() { Vector[] l; } }"),
+        ("array", "class M { static void r() { AbstractList[] l; } }"),
         (
             "new",
-            "class M { static void r() { Object o = new Vector<Integer>(); } }",
+            "class M { static void r() { Object o = new AbstractSet<Integer>() {}; } }",
         ),
-        ("extends", "class D extends Vector {} class M {}"),
-        // `Runnable` used to be the case here; it is SUPPORTED now (a
-        // functional interface, not a threading one), so `Enumeration` — a
-        // real java.util interface caturra does not model — carries the
-        // implements position instead.
-        ("implements", "class D implements Enumeration {} class M {}"),
+        ("extends", "class D extends AbstractList {} class M {}"),
         (
             "type argument",
-            "class M { static void r() { ArrayList<Vector> l; } }",
+            "class M { static void r() { ArrayList<AbstractList> l; } }",
         ),
         (
             "qualified",
-            "class M { static void r() { java.util.Hashtable<Integer, Integer> m; } }",
+            "class M { static void r() { java.util.AbstractMap<Integer, Integer> m; } }",
         ),
     ] {
         let text = format!("import java.util.*;\n{source}");

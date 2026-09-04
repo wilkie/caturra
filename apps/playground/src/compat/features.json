@@ -600,14 +600,24 @@
     "expected": "4 chars, 3 code points\n128512 55357\n2 true 55357\n[a\ud83d\ude00]\n[  a\ud83d\ude00b]\n[a][\ud83d\ude00][b]\ntrue 1 true\n"
   },
   {
-    "id": "vector",
+    "id": "legacy-collections",
     "category": "Collections",
-    "title": "Vector, Hashtable, EnumMap, EnumSet",
-    "summary": "The legacy synchronized collections, and the enum-keyed ones. ArrayList and HashMap replace the first two; a TreeMap or TreeSet keyed by the enum iterates in the very same order as the others, an enum's natural ordering being its ordinal.",
+    "title": "Vector, Hashtable and Enumeration",
+    "summary": "The collections that predate the collections framework \u2014 still on every AP exam's reading list, and still what half the Java written before 1998 uses.",
     "main": "Legacy",
-    "source": "import java.util.Vector;\n\npublic class Legacy {\n    public static void main(String[] args) {\n        Vector<String> items = new Vector<>();\n        items.add(\"one\");\n        System.out.println(items);\n    }\n}\n",
+    "source": "import java.util.Collections;\nimport java.util.Enumeration;\nimport java.util.Hashtable;\nimport java.util.Vector;\n\npublic class Legacy {\n    public static void main(String[] args) {\n        // A Vector is an ArrayList that also remembers its capacity, and\n        // answers to the names it had before `List` existed.\n        Vector<String> items = new Vector<>();\n        items.addElement(\"one\");\n        items.add(\"two\");\n        items.insertElementAt(\"zero\", 0);\n        System.out.println(items + \" \" + items.elementAt(1) + \" \" + items.capacity());\n\n        // Growth is observable: the default doubles, an explicit increment steps.\n        Vector<Integer> stepped = new Vector<>(2, 5);\n        for (int i = 0; i < 3; i++) {\n            stepped.add(i);\n        }\n        System.out.println(stepped.capacity() + \" \" + new Vector<Integer>(2).capacity());\n\n        // ...and it is a List, so every algorithm written for one works.\n        Vector<Integer> numbers = new Vector<>();\n        Collections.addAll(numbers, 3, 1, 2);\n        Collections.sort(numbers);\n        System.out.println(numbers + \" \" + (numbers instanceof java.util.RandomAccess));\n\n        // An Enumeration is the cursor they hand back.\n        Enumeration<String> walk = items.elements();\n        StringBuilder joined = new StringBuilder();\n        while (walk.hasMoreElements()) {\n            joined.append(walk.nextElement()).append(' ');\n        }\n        System.out.println(joined.toString().trim());\n        System.out.println(Collections.list(Collections.enumeration(items)));\n\n        // A Hashtable is a HashMap that takes no null and walks its buckets\n        // the other way round \u2014 the order is its own, and it is exact here.\n        Hashtable<String, Integer> lengths = new Hashtable<>();\n        for (String word : new String[] {\"one\", \"two\", \"three\", \"four\", \"five\"}) {\n            lengths.put(word, word.length());\n        }\n        System.out.println(lengths);\n        System.out.println(Collections.list(lengths.keys()));\n        try {\n            lengths.put(\"six\", null);\n        } catch (NullPointerException e) {\n            System.out.println(\"a Hashtable stores no null\");\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "[zero, one, two] one 10\n7 2\n[1, 2, 3] true\nzero one two\n[zero, one, two]\n{five=4, two=3, one=3, three=5, four=4}\n[five, two, one, three, four]\na Hashtable stores no null\n"
+  },
+  {
+    "id": "abstract-collections",
+    "category": "Collections",
+    "title": "The AbstractCollection skeletons",
+    "summary": "AbstractList, AbstractSet, AbstractCollection and AbstractSequentialList. Extending one means inheriting a dozen concrete methods written in terms of the two the subclass supplies, and caturra's collections are native rather than written in Java. Implement the interface instead.",
+    "main": "Skeleton",
+    "source": "import java.util.AbstractList;\n\npublic class Skeleton {\n    public static void main(String[] args) {\n        AbstractList<String> squares = new AbstractList<String>() {\n            public String get(int index) {\n                return String.valueOf(index * index);\n            }\n\n            public int size() {\n                return 4;\n            }\n        };\n        System.out.println(squares);\n    }\n}\n",
     "status": "unsupported",
-    "reason": "java.util.Vector is not supported by caturra (the class library covers the AP CS A subset)"
+    "reason": "java.util.AbstractList is not supported by caturra (the class library covers the AP CS A subset)"
   },
   {
     "id": "threads",

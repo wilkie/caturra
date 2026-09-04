@@ -2144,6 +2144,71 @@ public class Units {
 }
 """,
     ),
+    dict(
+        id="legacy-collections",
+        category="Collections",
+        title="Vector, Hashtable and Enumeration",
+        summary=(
+            "The collections that predate the collections framework — still "
+            "on every AP exam's reading list, and still what half the Java "
+            "written before 1998 uses."
+        ),
+        main="Legacy",
+        source='''
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.Hashtable;
+import java.util.Vector;
+
+public class Legacy {
+    public static void main(String[] args) {
+        // A Vector is an ArrayList that also remembers its capacity, and
+        // answers to the names it had before `List` existed.
+        Vector<String> items = new Vector<>();
+        items.addElement("one");
+        items.add("two");
+        items.insertElementAt("zero", 0);
+        System.out.println(items + " " + items.elementAt(1) + " " + items.capacity());
+
+        // Growth is observable: the default doubles, an explicit increment steps.
+        Vector<Integer> stepped = new Vector<>(2, 5);
+        for (int i = 0; i < 3; i++) {
+            stepped.add(i);
+        }
+        System.out.println(stepped.capacity() + " " + new Vector<Integer>(2).capacity());
+
+        // ...and it is a List, so every algorithm written for one works.
+        Vector<Integer> numbers = new Vector<>();
+        Collections.addAll(numbers, 3, 1, 2);
+        Collections.sort(numbers);
+        System.out.println(numbers + " " + (numbers instanceof java.util.RandomAccess));
+
+        // An Enumeration is the cursor they hand back.
+        Enumeration<String> walk = items.elements();
+        StringBuilder joined = new StringBuilder();
+        while (walk.hasMoreElements()) {
+            joined.append(walk.nextElement()).append(' ');
+        }
+        System.out.println(joined.toString().trim());
+        System.out.println(Collections.list(Collections.enumeration(items)));
+
+        // A Hashtable is a HashMap that takes no null and walks its buckets
+        // the other way round — the order is its own, and it is exact here.
+        Hashtable<String, Integer> lengths = new Hashtable<>();
+        for (String word : new String[] {"one", "two", "three", "four", "five"}) {
+            lengths.put(word, word.length());
+        }
+        System.out.println(lengths);
+        System.out.println(Collections.list(lengths.keys()));
+        try {
+            lengths.put("six", null);
+        } catch (NullPointerException e) {
+            System.out.println("a Hashtable stores no null");
+        }
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -2151,24 +2216,32 @@ public class Units {
 # them with a reason that says so.
 GAPS = [
     dict(
-        id="vector",
+        id="abstract-collections",
         category="Collections",
-        title="Vector, Hashtable, EnumMap, EnumSet",
+        title="The AbstractCollection skeletons",
         summary=(
-            "The legacy synchronized collections, and the enum-keyed ones. "
-            "ArrayList and HashMap replace the first two; a TreeMap or TreeSet "
-            "keyed by the enum iterates in the very same order as the others, "
-            "an enum's natural ordering being its ordinal."
+            "AbstractList, AbstractSet, AbstractCollection and "
+            "AbstractSequentialList. Extending one means inheriting a dozen "
+            "concrete methods written in terms of the two the subclass "
+            "supplies, and caturra's collections are native rather than "
+            "written in Java. Implement the interface instead."
         ),
-        main="Legacy",
+        main="Skeleton",
         source='''
-import java.util.Vector;
+import java.util.AbstractList;
 
-public class Legacy {
+public class Skeleton {
     public static void main(String[] args) {
-        Vector<String> items = new Vector<>();
-        items.add("one");
-        System.out.println(items);
+        AbstractList<String> squares = new AbstractList<String>() {
+            public String get(int index) {
+                return String.valueOf(index * index);
+            }
+
+            public int size() {
+                return 4;
+            }
+        };
+        System.out.println(squares);
     }
 }
 ''',

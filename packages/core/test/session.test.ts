@@ -89,12 +89,14 @@ describe('javac (compile)', () => {
   it('gives friendly diagnostics for not-yet-supported Java', async () => {
     const session = await createJvmSession();
     // The sample has to be something caturra really does not model: this test
-    // used `"hi".matches(…)` until the regex engine landed, and then asserted
-    // a refusal that no longer happened. `Vector` is the scope limit itself.
+    // used `"hi".matches(…)` until the regex engine landed, and `Vector` until
+    // that was modelled too. An `Abstract*` skeleton is the scope limit itself
+    // — extending one means inheriting a dozen methods written in Java, and
+    // caturra's collections are native.
     const result = session.compile([
       {
         path: 'Main.java',
-        text: 'import java.util.Vector;\nclass Main { static int f() { Vector<Integer> v = new Vector<>(); return v.size(); } }',
+        text: 'import java.util.AbstractList;\nclass Main { static int f() { AbstractList<Integer> v = null; return v.size(); } }',
       },
     ]);
     expect(result.success).toBe(false);

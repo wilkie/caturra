@@ -88,6 +88,12 @@ pub struct JavaHashMap {
     /// bucket order is derived on top for a `HashMap` — so the whole
     /// difference between the two classes is whether that derivation runs.
     linked: bool,
+    /// A `java.util.Hashtable`: a table of 11 buckets growing by `2n + 1`,
+    /// walked from the LAST bucket DOWN, each chain newest first. Nothing like
+    /// a `HashMap`'s order, and just as observable.
+    hashtable: bool,
+    /// What `new Hashtable<>(capacity)` asked for, which shifts every bucket.
+    hashtable_capacity: usize,
 }
 
 impl JavaHashMap {
@@ -103,6 +109,37 @@ impl JavaHashMap {
             linked: true,
             ..Self::default()
         }
+    }
+
+    /// A `java.util.Hashtable`, over a table of `capacity` buckets.
+    #[must_use]
+    pub fn hashtable(capacity: usize) -> Self {
+        Self {
+            hashtable: true,
+            hashtable_capacity: capacity.max(1),
+            ..Self::default()
+        }
+    }
+
+    /// Whether this map iterates a `Hashtable`'s way.
+    #[must_use]
+    pub fn is_hashtable(&self) -> bool {
+        self.hashtable
+    }
+
+    /// The table width now: 11 buckets, doubling to `2n + 1` whenever the
+    /// count reaches three quarters of it. Replayed from the size, since the
+    /// entries themselves carry the insertion order.
+    fn hashtable_width(&self) -> usize {
+        let mut capacity = self.hashtable_capacity;
+        let mut threshold = capacity * 3 / 4;
+        for filled in 0..self.entries.len() {
+            if filled >= threshold {
+                capacity = capacity * 2 + 1;
+                threshold = capacity * 3 / 4;
+            }
+        }
+        capacity
     }
 
     /// Whether this map iterates in insertion order.
@@ -276,6 +313,20 @@ impl JavaHashMap {
             if self.linked {
                 return (0..self.entries.len()).collect();
             }
+            // A `Hashtable` walks its buckets from the LAST down, and each
+            // chain newest first — the opposite of a `HashMap` on both counts.
+            if self.hashtable {
+                let width = self.hashtable_width();
+                let mut order: Vec<usize> = (0..self.entries.len()).collect();
+                order.sort_by_key(|at| {
+                    let hash = self.entries[*at].hash & 0x7fff_ffff;
+                    (
+                        std::cmp::Reverse(usize::try_from(hash).unwrap_or(0) % width),
+                        std::cmp::Reverse(*at),
+                    )
+                });
+                return order;
+            }
             let mask = self.table_len.saturating_sub(1);
             let mut order: Vec<usize> = (0..self.entries.len()).collect();
             // Sorting by (bucket, chain sequence) reproduces each bucket's
@@ -287,6 +338,37 @@ impl JavaHashMap {
             });
             order
         })
+    }
+
+    /// A `Hashtable`'s entries in the order `forEach` and `replaceAll` visit
+    /// them: those two walk the bucket array from index 0 UPWARD, where every
+    /// other traversal (`keys()`, `toString`, the views, the streams) walks it
+    /// downward. Within a bucket the chain is read head-first either way, so
+    /// this is NOT the reverse of `iteration_order` — two entries that share a
+    /// bucket keep their order while the buckets swap ends.
+    #[must_use]
+    pub fn action_order(&self) -> Vec<usize> {
+        if !self.hashtable {
+            return self.iteration_order().to_vec();
+        }
+        let width = self.hashtable_width();
+        let mut order: Vec<usize> = (0..self.entries.len()).collect();
+        order.sort_by_key(|at| {
+            let hash = self.entries[*at].hash & 0x7fff_ffff;
+            (
+                usize::try_from(hash).unwrap_or(0) % width,
+                std::cmp::Reverse(*at),
+            )
+        });
+        order
+    }
+
+    /// The key/value pair at a STORAGE index, for a caller that has already
+    /// picked its own order (`action_order`).
+    #[must_use]
+    pub fn entry_at_index(&self, at: usize) -> Option<(JValue, JValue)> {
+        let entry = self.entries.get(at)?;
+        Some((entry.key, entry.value))
     }
 
     /// The key/value pair at a position in iteration order.

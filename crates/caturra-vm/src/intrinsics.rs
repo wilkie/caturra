@@ -2593,7 +2593,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
         "java/util/LinkedList" => Some(HeapObject::LinkedList(Vec::new())),
         "java/util/ArrayDeque" => Some(HeapObject::ArrayDeque(Vec::new())),
-        "java/util/Stack" => Some(HeapObject::Stack(Vec::new())),
+
         "java/util/HashMap" => Some(HeapObject::HashMap(JavaHashMap::new())),
         "java/util/HashSet" => Some(HeapObject::HashSet(JavaHashMap::new())),
         // A LinkedHashMap/LinkedHashSet is the same structure iterated in
@@ -2606,6 +2606,10 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         // EnumMap/EnumSet iterate. What they do not share is the class they
         // report and their tolerance of a null probe, and the interpreter
         // records both when it builds one.
+        // A `Vector` is a `Stack`'s storage under another name, and a
+        // `Hashtable` a hash map with its own bucket order and no nulls.
+        "java/util/Stack" | "java/util/Vector" => Some(HeapObject::Stack(Vec::new())),
+        "java/util/Hashtable" => Some(HeapObject::HashMap(JavaHashMap::hashtable(11))),
         "java/util/TreeSet" | "java/util/EnumSet" => Some(HeapObject::TreeSet {
             values: Vec::new(),
             comparator: None,
@@ -2960,6 +2964,26 @@ pub fn invoke_special(
             }
             Ok(())
         }
+        // `new Vector<>(capacity)` / `new Vector<>(capacity, increment)` /
+        // `new Hashtable<>(capacity)`. The two classes predate the collections
+        // framework and word a negative capacity their own way — `HashMap`
+        // says "Illegal initial capacity", these say "Illegal Capacity".
+        ("<init>", "(I)V" | "(II)V")
+            if matches!(args.first(), Some(JValue::Int(capacity)) if *capacity < 0)
+                && (matches!(heap.get(receiver), Some(HeapObject::Stack(_)))
+                    || matches!(heap.get(receiver), Some(HeapObject::HashMap(map))
+                        if map.is_hashtable())) =>
+        {
+            let Some(JValue::Int(capacity)) = args.first() else {
+                return Ok(());
+            };
+            Err(throw(format!(
+                "java.lang.IllegalArgumentException: Illegal Capacity: {capacity}"
+            )))
+        }
+        // The two figures are recorded by the interpreter (which owns the side
+        // map); nothing else to do.
+        ("<init>", "(II)V") if matches!(heap.get(receiver), Some(HeapObject::Stack(_))) => Ok(()),
         ("<init>", "(I)V") => {
             let JValue::Int(capacity) = args[0] else {
                 return Err(throw("java.lang.VerifyError: expected an int argument"));
@@ -3727,10 +3751,20 @@ pub fn invoke_virtual(
         // the five LIFO operations, whose `top`-end semantics and
         // `EmptyStackException` differ from the deque/list methods of the same
         // spelling.
-        (HeapObject::Stack(_), _) => match stack_method(heap, receiver, method, args)? {
-            Some(value) => Ok(Some(value)),
-            None => list_method(heap, receiver, method, descriptor, args),
-        },
+        (HeapObject::Stack(_), _) => {
+            let renamed = legacy_vector_call(method, descriptor, args);
+            let (method, descriptor, args) = match &renamed {
+                Some((method, descriptor, args)) => (*method, *descriptor, args.as_slice()),
+                None => (method, descriptor, args),
+            };
+            match vector_method(heap, receiver, method, args)? {
+                Some(value) => Ok(Some(value)),
+                None => match stack_method(heap, receiver, method, args)? {
+                    Some(value) => Ok(Some(value)),
+                    None => list_method(heap, receiver, method, descriptor, args),
+                },
+            }
+        }
         // A comparator built by `naturalOrder`/`comparing`/a lambda has no
         // text a program can depend on: a real JDK prints its LAMBDA class,
         // `Main$$Lambda$14/0x00000008000c9440@2f4d3709`, which differs between
@@ -7308,6 +7342,18 @@ fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
     if let Some(values) = heap.list_values(source) {
         return values.get(index).copied().unwrap_or(JValue::NULL);
     }
+    // An unmodifiable wrapper reads the collection it wraps — the mirror of
+    // the arm `iterated_len` already had. Present in only one of the two, a
+    // cursor built straight over a `List.of` view knew its LENGTH and handed
+    // back a null for every element of it.
+    if let Some(
+        HeapObject::UnmodifiableList(inner)
+        | HeapObject::UnmodifiableSet(inner)
+        | HeapObject::UnmodifiableMap(inner),
+    ) = heap.get(source)
+    {
+        return iterated_get(heap, *inner, index);
+    }
     if let Some((backing, from, len)) = sublist_target(heap, source) {
         if index >= len {
             return JValue::NULL;
@@ -7460,6 +7506,13 @@ fn iterator_method(
     };
     let (source, index, last, expected_len, writes, descending) =
         (*source, *index, *last, *expected_len, *writes, *descending);
+    // An `Enumeration` is the same cursor under the two names it had before
+    // `Iterator` existed, so the answers come from exactly the same code.
+    let method = match method {
+        "hasMoreElements" => "hasNext",
+        "nextElement" => "next",
+        other => other,
+    };
     // A cursor over a read-only view refuses the same mutators the view does —
     // `set` survives on a FIXED-SIZE `Arrays.asList`, whose element write goes
     // through to the array. The JDK reaches this by having `Itr.remove` call
@@ -7501,6 +7554,9 @@ fn iterator_method(
         // comparison either way, which is what lets removing the
         // second-to-last element end a for-each silently rather than throw.
         "hasNext" if descending => Ok(Some(JValue::Int(i32::from(index != 0)))),
+        "hasNext" if writes == IteratorWrites::Enumerator => Ok(Some(JValue::Int(i32::from(
+            index != iterated_len(heap, source),
+        )))),
         "hasNext" => Ok(Some(JValue::Int(i32::from(if hash_like(heap, source) {
             // A HASH or TREE cursor's `hasNext` is `next != null` — a pointer
             // the LAST `next()` computed, before any later insertion. So
@@ -7530,9 +7586,25 @@ fn iterator_method(
             Ok(Some(element))
         }
         "next" => {
-            check_comodification(heap, source, expected_len)?;
-            if index >= iterated_len(heap, source) {
-                return Err(throw("java.util.NoSuchElementException"));
+            // An ENUMERATION checks nothing: it predates `modCount`, so it
+            // simply reads whatever is at its position now, and names the
+            // collection when it runs out.
+            if writes == IteratorWrites::Enumerator {
+                if index >= iterated_len(heap, source) {
+                    return Err(throw(format!(
+                        "java.util.NoSuchElementException: {}",
+                        if matches!(heap.get(source), Some(HeapObject::Stack(_))) {
+                            "Vector Enumeration"
+                        } else {
+                            "Hashtable Enumerator"
+                        }
+                    )));
+                }
+            } else {
+                check_comodification(heap, source, expected_len)?;
+                if index >= iterated_len(heap, source) {
+                    return Err(throw("java.util.NoSuchElementException"));
+                }
             }
             // An `entrySet()` iterator returns a `Map.Entry` — a reference to the
             // map and the key at this position — resolved live like the entries a
@@ -15576,6 +15648,295 @@ fn missing_partial_field(value: Temporal, pieces: &[crate::time::Piece]) -> Opti
         _ => return None,
     };
     walk(pieces, allowed).map(|letter| crate::time::field_name(letter).to_owned())
+}
+
+/// A `Vector`'s capacity: what its constructor asked for, grown as often as
+/// its contents needed. A positive `capacityIncrement` adds that many slots at
+/// a time where the default DOUBLES, which is the whole reason a program can
+/// tell one `Vector` from another by asking.
+///
+/// Nothing but the initial figure has to be remembered — every growth since is
+/// a function of the size — except where `trimToSize`/`ensureCapacity`/
+/// `setSize` moved it, and those write the new figure back.
+pub(crate) fn vector_capacity(heap: &Heap, receiver: HeapRef, for_size: usize) -> usize {
+    let (mut capacity, increment) = heap.vector_capacity_of(receiver).unwrap_or((10, 0));
+    while capacity < for_size {
+        capacity = if increment > 0 {
+            capacity + increment
+        } else {
+            (capacity * 2).max(1)
+        };
+    }
+    capacity
+}
+
+/// A `Vector`'s out-of-range wording — which is its own, and different for
+/// almost every method. `Vector` indexes a bare array, so the class is
+/// `ArrayIndexOutOfBoundsException` throughout; what varies is the message,
+/// because each method checks the bound itself and then lets the array check
+/// the rest. `elementAt(5)` on a vector of two says "5 >= 2"; `get(5)` says
+/// "Array index out of range: 5"; a NEGATIVE index reaches the array and
+/// reports the CAPACITY, not the size.
+///
+/// Answered here, before the legacy names are renamed to their `List`
+/// spellings: the rename is what would otherwise collapse four wordings into
+/// one.
+pub(crate) fn vector_index_error(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Option<VmError> {
+    let size = match heap.get(receiver) {
+        Some(HeapObject::Stack(values)) => values.len(),
+        _ => return None,
+    };
+    // Which argument carries the index, and which bound it must respect. The
+    // two that INSERT accept `size` itself; the rest do not.
+    let (index, inserting) = match (method, args) {
+        ("elementAt" | "removeElementAt" | "get", [JValue::Int(index)])
+        | ("set", [JValue::Int(index), _])
+        | ("setElementAt", [_, JValue::Int(index)]) => (*index, false),
+        ("remove", [JValue::Int(index)]) if descriptor.starts_with("(I)") => (*index, false),
+        ("insertElementAt", [_, JValue::Int(index)]) | ("add", [JValue::Int(index), _]) => {
+            (*index, true)
+        }
+        _ => return None,
+    };
+    let limit = i32::try_from(size).unwrap_or(i32::MAX);
+    if index >= 0 && (index < limit || (inserting && index == limit)) {
+        return None;
+    }
+    let throw = |message: String| {
+        Some(VmError::UncaughtException(format!(
+            "java.lang.ArrayIndexOutOfBoundsException: {message}"
+        )))
+    };
+    // A negative index is never caught by the method's own test — it reaches
+    // the array, which reports the capacity. An insertion has already GROWN
+    // the array by then, so it reports the capacity it would have had.
+    if index < 0 {
+        return match method {
+            "removeElementAt" => throw(format!("Array index out of range: {index}")),
+            "insertElementAt" | "add" => {
+                // The insertion GREW the array before it reached the copy that
+                // failed, and the new length is what the message reports — and
+                // what `capacity()` answers afterwards.
+                let grown = vector_capacity(heap, receiver, size + 1);
+                let (_, increment) = heap.vector_capacity_of(receiver).unwrap_or((10, 0));
+                heap.set_vector_capacity(receiver, grown, increment);
+                throw(format!(
+                    "arraycopy: source index {index} out of bounds for object array[{grown}]"
+                ))
+            }
+            _ => throw(format!(
+                "Index {index} out of bounds for length {}",
+                vector_capacity(heap, receiver, size)
+            )),
+        };
+    }
+    match method {
+        "elementAt" | "setElementAt" | "removeElementAt" => throw(format!("{index} >= {size}")),
+        "insertElementAt" | "add" => throw(format!("{index} > {size}")),
+        _ => throw(format!("Array index out of range: {index}")),
+    }
+}
+
+/// The three `Vector` methods that MOVE the capacity — the figure is no longer
+/// a function of the size alone once one of them has run, so each writes the
+/// new one back.
+fn vector_sizing(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+    size: usize,
+) -> Result<Option<JValue>, VmError> {
+    match method {
+        "trimToSize" => {
+            let (_, increment) = heap.vector_capacity_of(receiver).unwrap_or((10, 0));
+            heap.set_vector_capacity(receiver, size, increment);
+            Ok(Some(JValue::NULL))
+        }
+        "ensureCapacity" => {
+            let Some(JValue::Int(wanted)) = args.first() else {
+                return Ok(None);
+            };
+            let wanted = usize::try_from(*wanted).unwrap_or(0);
+            let (capacity, increment) = heap.vector_capacity_of(receiver).unwrap_or((10, 0));
+            if wanted > capacity {
+                // One growth step, or the request itself when the step falls
+                // short — `ensureCapacity(30)` on a fresh vector answers 30,
+                // not the 20 that doubling would give.
+                let stepped = if increment > 0 {
+                    capacity + increment
+                } else {
+                    (capacity * 2).max(1)
+                };
+                heap.set_vector_capacity(receiver, stepped.max(wanted), increment);
+            }
+            Ok(Some(JValue::NULL))
+        }
+        // `setSize(n)` pads with nulls or truncates — the one method that
+        // changes a list's LENGTH without naming an element.
+        "setSize" => {
+            let Some(JValue::Int(wanted)) = args.first() else {
+                return Ok(None);
+            };
+            let Ok(wanted) = usize::try_from(*wanted) else {
+                // A negative size reaches the array, which reports the
+                // CAPACITY — the same wording every other negative index into
+                // a `Vector` gets.
+                return Err(throw(format!(
+                    "java.lang.ArrayIndexOutOfBoundsException: Index {wanted} out of bounds \
+                     for length {}",
+                    vector_capacity(heap, receiver, size)
+                )));
+            };
+            if wanted > size {
+                let (capacity, increment) = heap.vector_capacity_of(receiver).unwrap_or((10, 0));
+                if wanted > capacity {
+                    let stepped = if increment > 0 {
+                        capacity + increment
+                    } else {
+                        (capacity * 2).max(1)
+                    };
+                    heap.set_vector_capacity(receiver, stepped.max(wanted), increment);
+                }
+            }
+            if let Some(HeapObject::Stack(values)) = heap.get_mut(receiver) {
+                values.resize(wanted, JValue::NULL);
+            }
+            Ok(Some(JValue::NULL))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn vector_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    use crate::value::IteratorWrites;
+    let size = match heap.get(receiver) {
+        Some(HeapObject::Stack(values)) => values.len(),
+        _ => return Ok(None),
+    };
+    match method {
+        "firstElement" | "lastElement" => {
+            let Some(HeapObject::Stack(values)) = heap.get(receiver) else {
+                return Ok(None);
+            };
+            let value = if method == "firstElement" {
+                values.first()
+            } else {
+                values.last()
+            };
+            match value {
+                Some(value) => Ok(Some(*value)),
+                None => Err(throw("java.util.NoSuchElementException")),
+            }
+        }
+        "capacity" => Ok(Some(JValue::Int(
+            i32::try_from(vector_capacity(heap, receiver, size)).unwrap_or(i32::MAX),
+        ))),
+        "trimToSize" | "ensureCapacity" | "setSize" => {
+            vector_sizing(heap, receiver, method, args, size)
+        }
+        // `copyInto(array)` writes the elements into an array the caller owns.
+        "copyInto" => {
+            let Some(JValue::Ref(Some(target))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let target = *target;
+            let _ = &target;
+            let Some(HeapObject::Stack(values)) = heap.get(receiver) else {
+                return Ok(None);
+            };
+            let values = values.clone();
+            let Some(HeapObject::RefArray(_, slots)) = heap.get_mut(target) else {
+                return Err(throw("java.lang.ArrayStoreException"));
+            };
+            if values.len() > slots.len() {
+                // `copyInto` is one `System.arraycopy`, and the complaint is
+                // the array copy's own — it names the LAST index it would have
+                // written, not the first one that did not fit.
+                let (needed, room) = (values.len(), slots.len());
+                return Err(throw(format!(
+                    "java.lang.ArrayIndexOutOfBoundsException: arraycopy: last destination \
+                     index {needed} out of bounds for object array[{room}]"
+                )));
+            }
+            slots[..values.len()].copy_from_slice(&values);
+            Ok(Some(JValue::NULL))
+        }
+        "elements" => {
+            let cursor = heap.alloc(HeapObject::Iterator {
+                source: receiver,
+                index: 0,
+                last: None,
+                expected_len: size,
+                // `Vector.elements()` predates `modCount` and never checks it.
+                writes: IteratorWrites::Enumerator,
+                list: false,
+                descending: false,
+            });
+            Ok(Some(JValue::Ref(Some(cursor))))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// The three `Vector` methods that are not a `List`'s under another name.
+/// A `Vector`'s pre-`List` method names are the SAME operations under older
+/// spellings — and two of them take their arguments the other way round, which
+/// is the only real difference. Answers the modern call, or `None` when the
+/// name already is one.
+///
+/// This lives in one place because BOTH dispatch layers need it: `remove(o)`
+/// and `indexOf` compare elements, so they are answered by the interpreter
+/// (a user `equals` may run), and the rest by the list intrinsics here. Read
+/// in only one of the two, `removeElement` reached a list that had never heard
+/// of it.
+pub(crate) fn legacy_vector_call<'a>(
+    method: &'a str,
+    descriptor: &'a str,
+    args: &[JValue],
+) -> Option<(&'a str, &'a str, Vec<JValue>)> {
+    let (method, args): (&str, Vec<JValue>) = match method {
+        "addElement" => ("add", args.to_vec()),
+        "elementAt" => ("get", args.to_vec()),
+        "removeElementAt" | "removeElement" => ("remove", args.to_vec()),
+        "removeAllElements" => ("clear", args.to_vec()),
+        "insertElementAt" | "setElementAt" => (
+            if method == "insertElementAt" {
+                "add"
+            } else {
+                "set"
+            },
+            vec![
+                args.get(1).copied().unwrap_or(JValue::NULL),
+                args.first().copied().unwrap_or(JValue::NULL),
+            ],
+        ),
+        _ => return None,
+    };
+    // The legacy spellings carry their own descriptors, and the list layer
+    // reads them: `removeElement` removes by VALUE (where `removeElementAt`
+    // keeps its `(I)V` and removes by index), and the two that swap their
+    // arguments swap their descriptor with them.
+    let descriptor = match method {
+        "remove" if descriptor.starts_with("(Ljava") => "(Ljava/lang/Object;)Z",
+        "add" if descriptor == "(Ljava/lang/Object;I)V" => "(ILjava/lang/Object;)V",
+        "set" if descriptor == "(Ljava/lang/Object;I)V" => {
+            "(ILjava/lang/Object;)Ljava/lang/Object;"
+        }
+        _ => descriptor,
+    };
+    Some((method, descriptor, args))
 }
 
 #[cfg(test)]

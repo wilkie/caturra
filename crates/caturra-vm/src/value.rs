@@ -332,6 +332,12 @@ pub enum IteratorWrites {
     /// Nothing — an unmodifiable or immutable view's own cursor, which refuses
     /// outright rather than looking at its state or asking the collection.
     None,
+    /// Nothing, and NOT fail-fast: a `Vector`'s `elements()` and a
+    /// `Hashtable`'s `keys()`/`elements()` predate `modCount`, so a change
+    /// made mid-walk is simply seen rather than thrown at. Its past-the-end
+    /// complaint carries the JDK's own text, which names the collection:
+    /// "Vector Enumeration", "Hashtable Enumerator".
+    Enumerator,
 }
 
 /// Which standard stream an intrinsic `PrintStream` writes to.
@@ -1440,6 +1446,10 @@ pub struct Heap {
     /// message was answering the generic name while `getClass()` answered the
     /// real one.
     view_class: std::collections::HashMap<HeapRef, &'static str>,
+    /// What `new Vector<>(n)` asked for. A JDK's `capacity()` is that figure
+    /// doubled as often as the contents needed, and nothing else can observe
+    /// it — so the initial number is all there is to remember.
+    vector_capacity: std::collections::HashMap<HeapRef, (usize, usize)>,
     /// What an object RENDERS TO in a format call. Only the interpreter can
     /// run a user `toString`, so `String.format`'s arguments are rendered
     /// ahead of the formatter — but the formatter still has to name the
@@ -1488,6 +1498,7 @@ impl Default for Heap {
             wrapper_cache: std::collections::HashMap::new(),
             enum_pool: std::collections::HashMap::new(),
             view_class: std::collections::HashMap::new(),
+            vector_capacity: std::collections::HashMap::new(),
             format_text: std::collections::HashMap::new(),
             builder_capacity: std::collections::HashMap::new(),
         }
@@ -1593,6 +1604,20 @@ impl Heap {
         self.view_class.insert(reference, class);
     }
 
+    /// Record what a `Vector`'s constructor asked for: the capacity, and the
+    /// growth STEP beside it — a positive increment adds that many slots where
+    /// the default doubles, and `capacity()` is where the difference shows.
+    pub fn set_vector_capacity(&mut self, reference: HeapRef, capacity: usize, increment: usize) {
+        self.vector_capacity
+            .insert(reference, (capacity, increment));
+    }
+
+    /// ...and read it back.
+    #[must_use]
+    pub fn vector_capacity_of(&self, reference: HeapRef) -> Option<(usize, usize)> {
+        self.vector_capacity.get(&reference).copied()
+    }
+
     /// The class a view answers to, if it is one.
     #[must_use]
     pub fn view_class_of(&self, reference: HeapRef) -> Option<&'static str> {
@@ -1602,6 +1627,8 @@ impl Heap {
     /// Drop the views whose objects the collector swept.
     pub fn retain_views(&mut self, alive: impl Fn(HeapRef) -> bool) {
         self.view_class.retain(|reference, _| alive(*reference));
+        self.vector_capacity
+            .retain(|reference, _| alive(*reference));
     }
 
     /// The interned library ENUM constants — `java.time`'s and

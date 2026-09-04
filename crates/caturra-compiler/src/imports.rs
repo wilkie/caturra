@@ -44,6 +44,14 @@ const JAVA_UTIL: &[&str] = &[
     "PriorityQueue",
     "ArrayDeque",
     "Stack",
+    // The pre-collections trio: the synchronized list and map every textbook
+    // written before 1998 uses, and the cursor they hand back.
+    "Vector",
+    "Hashtable",
+    "Enumeration",
+    // A `Vector` and an `ArrayList` are `RandomAccess`, and an algorithm that
+    // asks is asking about a real interface.
+    "RandomAccess",
     "Collection",
     "Comparator",
     "Iterator",
@@ -307,18 +315,32 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     (
         "java.util",
         &[
-            "Vector",
-            "Hashtable",
             "AbstractList",
             "AbstractCollection",
             "AbstractSet",
             "AbstractSequentialList",
         ],
     ),
-    // `Enumeration` is the pre-collections cursor: `Collections.enumeration`
-    // and `Collections.list` are its only real uses today, and neither is
-    // modelled.
-    ("java.util", &["Enumeration"]),
+    // The old date-and-time classes. `java.time` replaced all of them, and
+    // caturra models the arithmetic slice of it — but these five are shaped
+    // around the DEFAULT TIME ZONE, and `new Date().toString()` prints a
+    // zone abbreviation with daylight saving applied. Answering that needs a
+    // real timezone database, which caturra deliberately does not vendor (see
+    // specs/SCOPE.md), so they are refused by name rather than approximated.
+    (
+        "java.util",
+        &[
+            "Date",
+            "Calendar",
+            "GregorianCalendar",
+            "TimeZone",
+            "SimpleTimeZone",
+        ],
+    ),
+    (
+        "java.text",
+        &["SimpleDateFormat", "DateFormat", "DateFormatSymbols"],
+    ),
     // `PrimitiveIterator` (and its `OfInt`/`OfLong`/`OfDouble` members) is what
     // a PRIMITIVE stream's `iterator()` answers. The object streams' cursor is
     // modelled; this one is not, and a program that names the type deserves to
@@ -408,6 +430,10 @@ const REQUIRES_IMPORT: &[&str] = &[
     "PriorityQueue",
     "ArrayDeque",
     "Stack",
+    "Vector",
+    "Hashtable",
+    "Enumeration",
+    "RandomAccess",
     "Collection",
     "Comparator",
     "Iterator",

@@ -1330,8 +1330,9 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Deferred at the time: `subList` was not a live view (it was refused, by
     that name, on every list face) — it is one now, see **subList as a live
     view** — and `java.util.Enumeration`, with it
-    `Collections.enumeration`/`list`, is refused by name rather than
-    reported as a missing symbol.
+    `Collections.enumeration`/`list`, was refused by name rather than
+    reported as a missing symbol. All three are built now; see **The
+    collections that came first**.
   - Pinned by `diff_collections_over_any_collection` and
     `diff_collection_view_messages`.
 - **Inner classes: the qualifier, the chain, and the name**
@@ -8958,12 +8959,12 @@ counting catches: a divergence that stopped being one.
 - `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
   and it answers 0. (`strict_frequency_demands_the_lists_element_type`)
 - `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`. (`strict_contains_all_demands_the_lists_element_type`)
-- `Vector<Integer> v;` and the rest of the unmodeled library — a scope
+- `AbstractList<Integer> v;` and the rest of the unmodeled library — a scope
   limit, reported by name wherever written rather than as a missing symbol.
   This bullet used to name `LinkedList`, `HashSet`, `TreeMap` and `TreeSet`
-  as well; all four are modeled now, and so are `EnumMap`/`EnumSet`. What is
-  left is `Vector`/`Hashtable` and the `Abstract*` skeletons.
-  (`strict_vector_is_refused_by_name`)
+  as well; all four are modeled now, and so are `EnumMap`/`EnumSet` and, since
+  2026-09-04, `Vector`/`Hashtable`/`Enumeration`. What is left is the
+  `Abstract*` skeletons. (`strict_abstract_list_is_refused_by_name`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -13962,3 +13963,103 @@ Pinned as `a_year_a_month_and_a_day` and
 field, an array that sorts, a `List` that sorts, a `TreeMap` key, a `HashSet`,
 a bounded type variable, a stream, a `StringBuilder` and a `Comparable`
 variable, and running each one's text, fields and refusals.
+
+## The collections that came first
+
+`java.util.Vector`, `java.util.Hashtable` and `java.util.Enumeration` — the
+legacy tour, and the last of the four lanes this session widened into. They are
+still on every AP reading list, and half the Java written before 1998 is built
+on them: a student who meets one in real code should be able to run it here.
+
+Underneath, each shares its storage with the modern collection it was replaced
+by: a `Vector` IS the element vector a `Stack` already used (`HeapObject::Stack`
+reporting `java.util.Vector` through the view-class map), and a `Hashtable` is
+the same `JavaHashMap` a `HashMap` uses with one extra flag. What makes them
+worth having is precisely what is NOT shared, and every one of the following was
+measured against a real JDK before a line was written:
+
+- **A capacity a program can see.** `new Vector<>()` reports 10, `new Vector<>(2)`
+  grows 2 → 4 → 8, and `new Vector<>(2, 5)` grows 2 → 7 → 12: a positive
+  `capacityIncrement` STEPS where the default doubles. `trimToSize`,
+  `ensureCapacity` and `setSize` move the figure, so it is stored rather than
+  derived from the size alone. An `ArrayList` has a capacity too and no way to
+  ask about it; a `Vector` does, and that is the difference a lesson uses.
+- **The pre-`List` names.** `addElement`, `elementAt`, `insertElementAt`,
+  `setElementAt`, `removeElement`, `removeElementAt`, `removeAllElements` — the
+  same operations, and two of them take their arguments the other way round.
+  They are renamed to their `List` spellings in ONE place
+  (`legacy_vector_call`), because both dispatch layers need the mapping:
+  `removeElement(o)` becomes `remove(Object)`, which compares elements and so is
+  answered by the interpreter, while the rest are answered by the list
+  intrinsics. Read in only one of the two, `removeElement` reached a list that
+  had never heard of it.
+- **A complaint per method.** A `Vector` indexes a bare array, so the class is
+  `ArrayIndexOutOfBoundsException` throughout — but `elementAt(5)` on a vector of
+  two says `5 >= 2`, `get(5)` says `Array index out of range: 5`,
+  `insertElementAt(x, 9)` says `9 > 2`, and a NEGATIVE index reaches the array
+  and reports the CAPACITY (`Index -1 out of bounds for length 4`) — after the
+  insertion has already grown it. `new Vector<>(-1)` is
+  `Illegal Capacity: -1`, where a `HashMap` says "Illegal initial capacity".
+- **A `Hashtable` takes no null**, in either position, and `get`/`containsKey`/
+  `remove`/`contains` refuse one too — it predates the null-tolerant `Map`
+  contract, hashes its key without checking, and tests its value outright.
+  `entry.setValue(null)` through its entry set is the one way back in that does
+  not pass through `put`, and it refuses as well.
+- **TWO traversal orders.** `keys()`, `elements()`, `toString`, the views and
+  the streams walk the bucket array DOWNWARD; `forEach` and `replaceAll` walk it
+  UPWARD. Within a bucket the chain reads head-first either way, so one is not
+  the reverse of the other — two entries that share a bucket keep their order
+  while the buckets swap ends. `action_order()` is that second order.
+- **An `Enumeration` is not fail-fast.** `Vector.elements()` and
+  `Hashtable.keys()` predate `modCount`: a change made mid-walk is simply seen,
+  and running off the end names the collection —
+  `NoSuchElementException: Vector Enumeration`,
+  `NoSuchElementException: Hashtable Enumerator`. The very same walk through
+  `Collections.enumeration(v)` DOES throw a `ConcurrentModificationException`,
+  because that one wraps an iterator. Two enumerations over one vector, and only
+  one of them checks.
+- **`Collections.enumeration` and `Collections.list`** are the bridges between
+  the two eras, and the only `Collections` pair whose argument and answer are
+  different families.
+
+A `Stack` IS a `Vector` (that is where its `List` face comes from), so
+`st instanceof Vector` is true and `st.elementAt(0)` works — and the `Vector`
+face HIDES the five LIFO methods, which is why `push`/`pop`/`peek`/`empty`/
+`search` are marked at `TableFace::Concrete` while `clone` is marked at
+`TableFace::Vector`.
+
+Widening the three cost the usual toll of lists that had drifted: the
+`Collections` algorithms' element gates (now one `list_like_elem`), the
+`instanceof` target table, `is_reference`, `mark_raw`, the syntax-side
+descriptor builder, the for-each accessor table, the cast-target families, the
+copy-constructor sources, the runtime face table, and eight separate name lists
+in the lambda pass. One of those turned up a defect with nothing to do with the
+legacy collections at all: `iterated_get` had no arm for an unmodifiable
+wrapper where `iterated_len` did, so a cursor built straight over a `List.of`
+view knew its LENGTH and handed back a null for every element of it.
+
+A fresh seed of the FORMAT fuzzer, run beside this unit's own, turned up one
+more thing with nothing to do with the collections: the `#` flag forces a
+decimal point at precision 0, and on a SCIENTIFIC result it lands BEFORE the
+exponent — `%#.0e` of 1e-10 is `1.e-10` — where on a fixed one it lands at the
+end. `%#.0f` had the rule and `%#.0e` did not (pinned as
+`the_alternate_flag_at_precision_zero`).
+
+Pinned as `the_legacy_collections`, `what_a_vector_says_when_it_refuses`,
+`the_legacy_collections_in_every_position`, `which_way_a_hashtable_walks`,
+`the_legacy_collections_at_their_edges` and `an_enumeration_is_not_fail_fast`.
+
+**Deliberately not built: `Date`, `Calendar`, `SimpleDateFormat`.** They were
+measured too, and the measurement is why they are out: `new Date().toString()`
+prints a timezone abbreviation with daylight saving applied (`PST`/`PDT` on the
+machine this was measured on), and `Calendar` and `SimpleDateFormat` are shaped
+around the same default zone. Answering those honestly needs a real timezone
+database, which caturra deliberately does not vendor (see "java.time" above).
+They stay named refusals rather than approximations that would be wrong by an
+hour twice a year — and named is the point: `Date`, `Calendar`,
+`GregorianCalendar`, `TimeZone`, `SimpleTimeZone`, `SimpleDateFormat`,
+`DateFormat` and `DateFormatSymbols` each say "java.util.Date is not supported
+by caturra" wherever they are written, rather than "cannot find symbol", which
+reads as a typo for a class the student can see in the documentation. Pinned as
+`strict_the_old_date_classes_are_refused_by_name` and
+`strict_simple_date_format_is_refused_by_name`.

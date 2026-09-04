@@ -678,8 +678,11 @@ fn static_method_names(
 /// gets `String`: the functional interface supplies the element type with its
 /// type arguments intact, and the bare name would be the raw type, whose every
 /// method answers `Object`.
-const LIBRARY_CONTAINERS: [&str; 16] = [
+const LIBRARY_CONTAINERS: [&str; 19] = [
     "ArrayList",
+    "Vector",
+    "Hashtable",
+    "Enumeration",
     "LinkedList",
     "List",
     "Collection",
@@ -4650,7 +4653,7 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
     };
     if !matches!(
         simple_base(base.as_str()),
-        "Map" | "HashMap" | "TreeMap" | "SortedMap" | "NavigableMap" | "EnumMap"
+        "Map" | "HashMap" | "Hashtable" | "TreeMap" | "SortedMap" | "NavigableMap" | "EnumMap"
     ) || args.len() != 2
     {
         return None;
@@ -5771,11 +5774,13 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         "List"
             | "ArrayList"
             | "LinkedList"
+            | "Vector"
             | "Set"
             | "HashSet"
             | "TreeSet"
             | "Map"
             | "HashMap"
+            | "Hashtable"
             | "TreeMap"
             | "EnumMap"
             | "EnumSet"
@@ -5823,7 +5828,10 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         // that stream took an `Object` and could not call a `String` method.
         ("String", "split", _) => Some(TypeRef::Array(Box::new(string()))),
         ("String", "toCharArray", 0) => Some(TypeRef::Array(Box::new(TypeRef::Char))),
-        ("List" | "ArrayList" | "LinkedList", "get", 1) => element_of_declared(receiver),
+        ("List" | "ArrayList" | "Vector" | "LinkedList", "get" | "elementAt", 1)
+        | ("TreeSet" | "SortedSet" | "NavigableSet", "first" | "last", 0) => {
+            element_of_declared(receiver)
+        }
         // A collection's own `stream()`, so a lambda that ANSWERS one carries
         // its element: `flatMap(inner -> inner.stream())` is the whole reason
         // `flatMap` exists, and codegen reads the answer off this class.
@@ -5858,10 +5866,7 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[1].clone()),
             _ => None,
         },
-        ("TreeSet" | "SortedSet" | "NavigableSet", "first" | "last", 0) => {
-            element_of_declared(receiver)
-        }
-        ("Map" | "HashMap" | "TreeMap", "get", 1) => match receiver {
+        ("Map" | "HashMap" | "Hashtable" | "TreeMap", "get", 1) => match receiver {
             TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[1].clone()),
             _ => None,
         },
@@ -5920,6 +5925,7 @@ fn map_half(receiver: &TypeRef, at: usize) -> Option<TypeRef> {
                     simple_base(base),
                     "Map"
                         | "HashMap"
+                        | "Hashtable"
                         | "LinkedHashMap"
                         | "TreeMap"
                         | "SortedMap"
@@ -6841,13 +6847,16 @@ fn is_collection_class(simple: &str) -> bool {
             | "Queue"
             | "Deque"
             | "PriorityQueue"
+            | "Vector"
             | "Collection"
             // An `EnumSet<E>` is a set of its enum, like any other.
             | "EnumSet"
             // A cursor declared `Iterator<E>` walks `E`s, for
-            // `forEachRemaining`.
+            // `forEachRemaining`; an `Enumeration<E>` is that cursor under its
+            // older name.
             | "Iterator"
             | "ListIterator"
+            | "Enumeration"
     )
 }
 
@@ -7016,8 +7025,8 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     {
         let read = match (simple_base(&base), method.as_str(), written.len()) {
             (
-                "Map" | "HashMap" | "LinkedHashMap" | "TreeMap" | "SortedMap" | "NavigableMap"
-                | "EnumMap",
+                "Map" | "HashMap" | "Hashtable" | "LinkedHashMap" | "TreeMap" | "SortedMap"
+                | "NavigableMap" | "EnumMap",
                 "get" | "getOrDefault" | "remove" | "put" | "putIfAbsent" | "computeIfAbsent"
                 | "compute" | "computeIfPresent" | "merge" | "replace",
                 2,

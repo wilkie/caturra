@@ -1264,10 +1264,15 @@ mod tests {
         // Valid Java the engine does not implement says so, which is how the
         // corpus tooling tells an engine gap from a mistake in the source.
         // (`synchronized` was the example here until it became a no-op with a
-        // null check, which is what it means on one thread.)
+        // null check, which is what it means on one thread; `Vector` until it
+        // was modelled. The example has to be something caturra really does
+        // not have — an `Abstract*` skeleton, whose whole point is the dozen
+        // concrete methods a subclass inherits.)
         let result = compile(&[SourceFile {
             path: String::from("Main.java"),
-            text: String::from("class Main { static void run() { java.util.Vector<Integer> v; } }"),
+            text: String::from(
+                "class Main { static void run() { java.util.AbstractList<Integer> v; } }",
+            ),
         }]);
         assert!(!result.success());
         assert!(result.classes.is_empty());

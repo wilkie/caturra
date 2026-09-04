@@ -20,7 +20,8 @@ use crate::debug::{
 };
 use crate::format::ArgNeed;
 use crate::intrinsics::{
-    self, IntrinsicStatics, check_comodification, iterated_len_of, regex_predicate,
+    self, IntrinsicStatics, check_comodification, iterated_len_of, legacy_vector_call,
+    regex_predicate, vector_index_error,
 };
 use crate::io::ConsoleIo;
 use crate::value::{Heap, HeapRef, IteratorWrites, JValue, MapViewKind};
@@ -3228,7 +3229,7 @@ impl<'run> Interpreter<'run> {
         // ClassCastException — or, for a TreeMap receiver, silently nothing.
         if matches!(
             target_class,
-            "java/util/HashMap" | "java/util/LinkedHashMap"
+            "java/util/HashMap" | "java/util/LinkedHashMap" | "java/util/Hashtable"
         ) && descriptor == "(Ljava/util/Map;)V"
         {
             use crate::value::HeapObject;
@@ -3245,20 +3246,55 @@ impl<'run> Interpreter<'run> {
             // CLASS being constructed that decides it, not the source's.
             let linked = target_class == "java/util/LinkedHashMap";
             if let Some(HeapObject::HashMap(map)) = self.heap.get_mut(receiver) {
-                *map = crate::map::JavaHashMap::with_capacity_hint(hint).as_linked(linked);
+                // `Hashtable(Map t)` is `this(max(2 * t.size(), 11), 0.75f)`,
+                // and the table WIDTH is what its iteration order is read
+                // from — so the copy has to be built as a hashtable, not as a
+                // HashMap that later claims to be one.
+                *map = if target_class == "java/util/Hashtable" {
+                    crate::map::JavaHashMap::hashtable(std::cmp::max(entries.len() * 2, 11))
+                } else {
+                    crate::map::JavaHashMap::with_capacity_hint(hint).as_linked(linked)
+                };
             }
             for (key, value) in entries {
                 self.map_put(receiver, key, value)?;
             }
             return Ok(None);
         }
+        if matches!(target_class, "java/util/Vector" | "java/util/Hashtable") {
+            let name = if target_class == "java/util/Vector" {
+                "java/util/Vector"
+            } else {
+                "java/util/Hashtable"
+            };
+            self.heap.set_view_class(receiver, name);
+        }
+        // A `Vector`'s capacity is what its constructor asked for: ten by
+        // default, the number given, or the size of the collection copied.
+        if target_class == "java/util/Vector" {
+            let capacity = match (descriptor, args.first()) {
+                ("(I)V" | "(II)V", Some(JValue::Int(hint))) => usize::try_from(*hint).unwrap_or(0),
+                ("(Ljava/util/Collection;)V", Some(JValue::Ref(Some(source)))) => {
+                    self.materialized_elements(*source).len()
+                }
+                _ => 10,
+            };
+            // `new Vector<>(capacity, increment)`.
+            let increment = match (descriptor, args.get(1)) {
+                ("(II)V", Some(JValue::Int(step))) => usize::try_from(*step).unwrap_or(0),
+                _ => 0,
+            };
+            self.heap.set_vector_capacity(receiver, capacity, increment);
+        }
         // `new ArrayList<>(collection)` copies the elements. Handled HERE for
         // the same reason the map copy is: the source may be any
         // collection-shaped object (an `emptyList`, an `nCopies`, a set, a map
         // view), where the heap-only arm read a list's own vector and threw
         // "ClassCastException: not a Collection" for everything else.
-        if matches!(target_class, "java/util/ArrayList" | "java/util/LinkedList")
-            && descriptor == "(Ljava/util/Collection;)V"
+        if matches!(
+            target_class,
+            "java/util/ArrayList" | "java/util/LinkedList" | "java/util/Vector"
+        ) && descriptor == "(Ljava/util/Collection;)V"
         {
             use crate::value::HeapObject;
             let JValue::Ref(Some(source)) = args[0] else {
@@ -3268,7 +3304,11 @@ impl<'run> Interpreter<'run> {
             };
             let items = self.materialized_elements(source);
             match self.heap.get_mut(receiver) {
-                Some(HeapObject::ArrayList(target) | HeapObject::LinkedList(target)) => {
+                Some(
+                    HeapObject::ArrayList(target)
+                    | HeapObject::LinkedList(target)
+                    | HeapObject::Stack(target),
+                ) => {
                     *target = items;
                     return Ok(None);
                 }
@@ -3388,6 +3428,8 @@ impl<'run> Interpreter<'run> {
                 return Ok(None);
             }
         }
+        // A `Vector` and a `Hashtable` are the storage of a `Stack` and a hash
+        // map under their own names, and each has to say which it is.
         // `new EnumMap<>(Day.class)` — the key type, which caturra does not
         // need: the order an EnumMap iterates in is its keys' natural one,
         // which is what the sorted map underneath already gives. The COPY
@@ -4728,6 +4770,43 @@ impl<'run> Interpreter<'run> {
         let Some(JValue::Ref(Some(list))) = args.first().copied() else {
             return Ok(false);
         };
+        // The two bridges between a `Collection` and an `Enumeration`. An
+        // enumeration IS a cursor here — the legacy names alias `hasNext` and
+        // `next` — so `enumeration` hands back the collection's own iterator,
+        // and `list` drains one into a list.
+        if method_name == "enumeration" {
+            // The cursor is built here rather than asked for: the source may
+            // be an immutable `List.of` view, which has no `iterator` of its
+            // own to call.
+            let expected_len = iterated_len_of(&self.heap, list);
+            let cursor = self.heap.alloc(HeapObject::Iterator {
+                source: list,
+                index: 0,
+                last: None,
+                expected_len,
+                writes: IteratorWrites::None,
+                list: false,
+                descending: false,
+            });
+            frame.stack.push(JValue::Ref(Some(cursor)));
+            return Ok(true);
+        }
+        if method_name == "list" {
+            let mut elements = Vec::new();
+            loop {
+                let has_next = self.call_zero_arg(list, "hasNext", "()Z")?;
+                if !matches!(has_next, Some(JValue::Int(flag)) if flag != 0) {
+                    break;
+                }
+                elements.push(
+                    self.call_zero_arg(list, "next", "()Ljava/lang/Object;")?
+                        .unwrap_or(JValue::NULL),
+                );
+            }
+            let made = self.heap.alloc(HeapObject::ArrayList(elements));
+            frame.stack.push(JValue::Ref(Some(made)));
+            return Ok(true);
+        }
         if method_name == "unmodifiableList" {
             // The JDK picks the wrapper by whether the wrapped list is
             // `RandomAccess`: an ArrayList gets
@@ -7416,6 +7495,41 @@ impl<'run> Interpreter<'run> {
                 JValue::Int(i32::from(self.list_index_of(receiver, *probe, false)? >= 0))
             }
             ("indexOf", _, [probe]) => JValue::Int(self.list_index_of(receiver, *probe, false)?),
+            // `Vector`'s two searches that start part way along — declared on
+            // `Vector` and on no interface, so they reach only a vector.
+            ("indexOf" | "lastIndexOf", _, [probe, JValue::Int(from)]) => {
+                let items = self.list_items(receiver);
+                let forwards = method_name == "indexOf";
+                if forwards && *from < 0 {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: fromIndex = {from}"
+                    )));
+                }
+                if !forwards && usize::try_from(*from).is_ok_and(|at| at >= items.len()) {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: {from} >= {}",
+                        items.len()
+                    )));
+                }
+                let start = usize::try_from(*from).unwrap_or(0);
+                let positions: Vec<usize> = if forwards {
+                    (start.min(items.len())..items.len()).collect()
+                } else if *from < 0 {
+                    Vec::new()
+                } else {
+                    (0..=start.min(items.len().saturating_sub(1)))
+                        .rev()
+                        .collect()
+                };
+                let mut found = -1;
+                for at in positions {
+                    if self.java_equals(*probe, items[at])? {
+                        found = i32::try_from(at).unwrap_or(-1);
+                        break;
+                    }
+                }
+                JValue::Int(found)
+            }
             ("lastIndexOf", _, [probe]) => JValue::Int(self.list_index_of(receiver, *probe, true)?),
             // `Stack.search(o)`: the 1-based distance from the top (the end) of
             // the topmost matching element, or -1 if absent. Java's uses
@@ -7871,7 +7985,7 @@ impl<'run> Interpreter<'run> {
         descriptor: &str,
         args: &[JValue],
     ) -> Result<Answered, VmError> {
-        use crate::value::HeapObject;
+        use crate::value::{HeapObject, IteratorWrites, MapViewKind};
         // `Object`'s `equals`/`hashCode` for the kinds routed from here that do
         // NOT override them (a PriorityQueue does not — `AbstractCollection`
         // leaves both alone). Answered before the routing, because each
@@ -7893,6 +8007,44 @@ impl<'run> Interpreter<'run> {
                     return Ok(Answered::Value(JValue::Int(i32::from(equal))));
                 }
                 _ => {}
+            }
+        }
+        // A `Hashtable` takes no null, in either position: it predates the
+        // null-tolerant `Map` contract, and hashes its key without checking
+        // (so a null KEY is a NullPointerException from `key.hashCode()`)
+        // while testing its value outright. Every method below would
+        // otherwise have STORED one, and a program that meets the JDK's
+        // refusal here is meeting the reason `HashMap` exists.
+        if let Some(HeapObject::HashMap(map)) = self.heap.get(receiver)
+            && map.is_hashtable()
+        {
+            let null_key = matches!(
+                (method_name, args),
+                (
+                    "put"
+                        | "get"
+                        | "containsKey"
+                        | "remove"
+                        | "getOrDefault"
+                        | "putIfAbsent"
+                        | "replace"
+                        | "merge"
+                        | "compute"
+                        | "computeIfAbsent"
+                        | "computeIfPresent",
+                    [JValue::NULL, ..]
+                )
+            );
+            let null_value = matches!(
+                (method_name, args),
+                ("contains" | "containsValue", [JValue::NULL])
+                    | ("put" | "putIfAbsent", [_, JValue::NULL])
+                    | ("replace", [_, JValue::NULL] | [_, _, JValue::NULL])
+            );
+            if null_key || null_value {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
             }
         }
         // A TreeMap flows through the same arms: its methods reach the map
@@ -8164,8 +8316,36 @@ impl<'run> Interpreter<'run> {
             ("containsKey", [key]) => {
                 JValue::Int(i32::from(self.map_find(receiver, *key)?.is_some()))
             }
-            ("containsValue", [value]) => {
+            // `contains` is a `Hashtable`'s name for `containsValue` — which
+            // is the trap that made `Map` rename it, and a program that meets
+            // it deserves the answer a JDK gives.
+            ("containsValue" | "contains", [value]) => {
                 JValue::Int(i32::from(self.map_contains_value(receiver, *value)?))
+            }
+            // ...and the two enumerations, which walk the keys and the values.
+            ("keys" | "elements", []) => {
+                let length = self.map_len(receiver);
+                let view = self.heap.alloc(HeapObject::MapView {
+                    map: receiver,
+                    kind: if method_name == "keys" {
+                        MapViewKind::Keys
+                    } else {
+                        MapViewKind::Values
+                    },
+                    read_only: false,
+                });
+                let cursor = self.heap.alloc(HeapObject::Iterator {
+                    source: view,
+                    index: 0,
+                    last: None,
+                    expected_len: length,
+                    // A `Hashtable`'s `Enumerator` is not fail-fast: it holds
+                    // the table array, not a `modCount`.
+                    writes: IteratorWrites::Enumerator,
+                    list: false,
+                    descending: false,
+                });
+                JValue::Ref(Some(cursor))
             }
             ("get", [key]) => self.map_entry_value(receiver, *key)?,
             ("getOrDefault", [key, fallback]) => match self.map_find(receiver, *key)? {
@@ -8256,7 +8436,7 @@ impl<'run> Interpreter<'run> {
                 }
             }
             ("replaceAll", [JValue::Ref(Some(function))]) => {
-                let entries = self.map_entries(receiver);
+                let entries = self.map_entries_in_action_order(receiver);
                 let expected = entries.len();
                 for (key, value) in entries {
                     let replaced = self.call_apply_two(*function, key, value)?;
@@ -13040,6 +13220,19 @@ impl<'run> Interpreter<'run> {
                     "java.lang.UnsupportedOperationException",
                 )));
             }
+            // A `Hashtable`'s entry refuses a null value the way the table
+            // itself does — `setValue` is the one way back into the map that
+            // does not pass through `put`.
+            ("setValue", [JValue::NULL])
+                if matches!(
+                    self.heap.get(map),
+                    Some(crate::value::HeapObject::HashMap(table)) if table.is_hashtable()
+                ) =>
+            {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
             ("setValue", [value]) => self.map_put(map, key, *value)?,
             // `Map.Entry.hashCode` is the key's hash XOR the value's.
             ("hashCode", []) => {
@@ -15650,10 +15843,44 @@ impl<'run> Interpreter<'run> {
             };
             if let Some(copy) = copy {
                 let cloned = self.heap.alloc(copy);
+                // A `Vector`'s clone is a `Vector`, and a `Hashtable`'s a
+                // `Hashtable` — the class each reports rides in the side maps,
+                // not in the object, so it has to be carried across.
+                if let Some(class) = self.heap.view_class_of(receiver) {
+                    self.heap.set_view_class(cloned, class);
+                }
+                if let Some((capacity, increment)) = self.heap.vector_capacity_of(receiver) {
+                    self.heap.set_vector_capacity(cloned, capacity, increment);
+                }
                 frame.stack.push(JValue::Ref(Some(cloned)));
                 return Ok(None);
             }
         }
+        // A `Vector`'s pre-`List` spellings are renamed HERE, before anything
+        // reads them: `removeElement(o)` is `remove(Object)`, which compares
+        // elements and so is answered below rather than by the list
+        // intrinsics. Renaming only in the intrinsic layer left this call
+        // arriving there as a `remove` the list had no arm for.
+        let renamed = if matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::Stack(_))
+        ) {
+            // The bound is checked BEFORE the rename, because a `Vector` words
+            // its complaint differently for almost every one of these names
+            // and the rename would collapse them into one.
+            if let Some(error) =
+                vector_index_error(&mut self.heap, receiver, method_name, descriptor, &args)
+            {
+                return Err(error);
+            }
+            legacy_vector_call(method_name, descriptor, &args)
+        } else {
+            None
+        };
+        let (method_name, descriptor, args) = match renamed {
+            Some((method_name, descriptor, args)) => (method_name, descriptor, args),
+            None => (method_name, descriptor, args),
+        };
         // Likewise for comparing elements or keys, which may call a user
         // `equals` and `hashCode`.
         let compared = match self.stream_dispatch(receiver, method_name, descriptor, &args)? {
@@ -16463,8 +16690,26 @@ impl<'run> Interpreter<'run> {
     /// and be visited too). Reproducing that would mean reproducing `HashMap`'s
     /// resize mid-iteration; the observable that matters — that the program
     /// throws rather than quietly finishing — does match.
+    /// A `Hashtable`'s entries in the order its `forEach` and `replaceAll`
+    /// visit them — which is the REVERSE of every other traversal it has.
+    /// Both walk the bucket array from index 0 upward, where the `Enumerator`
+    /// behind `keys()`, `toString`, the views and the streams walks it
+    /// DOWNWARD. Two orders, one table, and a program sees both.
+    fn map_entries_in_action_order(&mut self, receiver: HeapRef) -> Vec<(JValue, JValue)> {
+        if let Some(crate::value::HeapObject::HashMap(map)) = self.heap.get(receiver)
+            && map.is_hashtable()
+        {
+            return map
+                .action_order()
+                .into_iter()
+                .filter_map(|at| map.entry_at_index(at))
+                .collect();
+        }
+        self.map_entries(receiver)
+    }
+
     fn map_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
-        let entries = self.map_entries(receiver);
+        let entries = self.map_entries_in_action_order(receiver);
         let expected = entries.len();
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
         else {
@@ -19638,6 +19883,10 @@ fn library_superclass(internal: &str) -> Option<&'static str> {
         ("java/util/PriorityQueue", "java/util/AbstractQueue"),
         ("java/util/Stack", "java/util/Vector"),
         ("java/util/Vector", "java/util/AbstractList"),
+        // A `Hashtable` extends the abstract `Dictionary` a `Map` replaced —
+        // the one place that class is still visible.
+        ("java/util/Hashtable", "java/util/Dictionary"),
+        ("java/util/Dictionary", "java/lang/Object"),
         ("java/util/AbstractSequentialList", "java/util/AbstractList"),
         ("java/util/AbstractList", "java/util/AbstractCollection"),
         ("java/util/AbstractSet", "java/util/AbstractCollection"),
@@ -20124,7 +20373,7 @@ fn library_direct_interfaces(internal: &str) -> &'static [&'static str] {
             "java/lang/Cloneable",
             "java/io/Serializable",
         ],
-        "java/util/HashMap" => &[
+        "java/util/HashMap" | "java/util/Hashtable" => &[
             "java/util/Map",
             "java/lang/Cloneable",
             "java/io/Serializable",
@@ -20223,8 +20472,17 @@ fn library_faces(class: &str) -> &'static [&'static str] {
     ];
     const ENTRY: &[&str] = &["java/util/Map$Entry", "java/util/Map.Entry"];
     match class {
-        // A `Stack` IS a `Vector`, which is where its `List` face comes from.
-        "java/util/ArrayList" | "java/util/Stack" => CLONEABLE_LIST,
+        // A `Stack` IS a `Vector`, which is where its `List` face comes from
+        // — and so a `Stack` answers to `Vector` as well.
+        "java/util/ArrayList" | "java/util/Vector" => CLONEABLE_LIST,
+        "java/util/Stack" => &[
+            "java/util/Vector",
+            "java/util/List",
+            "java/util/Collection",
+            "java/lang/Cloneable",
+            "java/util/RandomAccess",
+            "RandomAccess",
+        ],
         // `Arrays.asList`'s list, a sub-list and a wrapper are views: none of
         // them is `Cloneable`, though the list each views may be.
         "java/util/Arrays$ArrayList"
@@ -20284,7 +20542,9 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         | "java/util/LinkedHashMap$LinkedValues"
         | "java/util/TreeMap$Values"
         | "java/util/AbstractMap$2" => &["java/util/Collection"],
-        "java/util/HashMap" => &["java/util/Map", "java/lang/Cloneable"],
+        "java/util/HashMap" | "java/util/Hashtable" => &["java/util/Map", "java/lang/Cloneable"],
+        // An `Enumeration` here IS a cursor, so it answers to both names.
+        "java/util/Enumeration" => &["java/util/Iterator"],
         "java/util/LinkedHashMap" => &["java/util/HashMap", "java/util/Map", "java/lang/Cloneable"],
         "java/util/Collections$UnmodifiableMap"
         | "java/util/Collections$SingletonMap"
@@ -20418,6 +20678,11 @@ fn is_comparable(target: &str) -> bool {
 #[allow(clippy::too_many_lines)] // one arm per heap object kind
 pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
     use crate::value::HeapObject;
+    // A VIEW class wins: an `EnumMap` is a sorted map underneath and a `Vector`
+    // is the same storage a `Stack` uses, and each still has to name itself.
+    if let Some(view) = heap.view_class_of(receiver) {
+        return String::from(view);
+    }
     match heap.get(receiver) {
         Some(HeapObject::Instance { class_name, .. } | HeapObject::Boxed { class_name, .. }) => {
             class_name.to_string()
