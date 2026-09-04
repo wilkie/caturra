@@ -834,6 +834,57 @@ public class Big {
 ''',
     ),
     dict(
+        id="decimalformats",
+        category="Library",
+        title="Numbers for a person to read",
+        summary="DecimalFormat: a pattern applied to a number, and read back.",
+        main="Pretty",
+        source='''
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
+import java.text.ParseException;
+import java.math.RoundingMode;
+
+public class Pretty {
+    public static void main(String[] args) throws ParseException {
+        // A pattern is a handful of counts: how few integer digits to insist
+        // on, how many fraction digits to allow, and where the groups fall.
+        DecimalFormat money = new DecimalFormat("#,##0.00");
+        System.out.println(money.format(1234.5) + " " + money.format(-7));
+        System.out.println(new DecimalFormat("0.##").format(3.14159));
+        System.out.println(new DecimalFormat("000").format(7));
+        System.out.println(new DecimalFormat("0.0%").format(0.756));
+        System.out.println(new DecimalFormat("#.##;(#.##)").format(-42.5));
+        System.out.println(new DecimalFormat("0.###E0").format(123456.0));
+
+        // The factories, for when no pattern is wanted.
+        System.out.println(NumberFormat.getInstance().format(1234.5678));
+        System.out.println(NumberFormat.getIntegerInstance().format(1234.5678));
+        System.out.println(NumberFormat.getPercentInstance().format(0.5));
+
+        // The limits can be changed after the fact, and so can the rounding.
+        NumberFormat two = NumberFormat.getInstance();
+        two.setMaximumFractionDigits(2);
+        two.setMinimumFractionDigits(2);
+        two.setGroupingUsed(false);
+        System.out.println(two.format(1234.5));
+        DecimalFormat down = new DecimalFormat("0.0");
+        down.setRoundingMode(RoundingMode.FLOOR);
+        System.out.println(down.format(2.55) + " " + new DecimalFormat("0.0").format(2.55));
+
+        // ...and a formatter reads a number back as well as writing one.
+        Number read = money.parse("1,234.56");
+        System.out.println(read + " " + read.intValue());
+        try {
+            money.parse("not a number");
+        } catch (ParseException e) {
+            System.out.println("refused: " + e.getMessage());
+        }
+    }
+}
+''',
+    ),
+    dict(
         id="bigdecimals",
         category="Library",
         title="Decimals that add up",

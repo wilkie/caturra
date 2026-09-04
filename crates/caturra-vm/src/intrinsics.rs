@@ -2536,6 +2536,9 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         // because the object must exist before `<init>` runs.
         "java/math/BigInteger" => Some(HeapObject::BigInteger(crate::bigint::BigInt::zero())),
         "java/math/BigDecimal" => Some(HeapObject::BigDecimal(crate::decimal::BigDec::zero())),
+        // Every constructor applies a pattern; the default is the one a bare
+        // `new DecimalFormat()` keeps.
+        "java/text/DecimalFormat" => Some(HeapObject::NumberFormat(Box::default())),
         // A default context is a JDK's `UNLIMITED`; every constructor replaces
         // it.
         "java/math/MathContext" => Some(HeapObject::MathContext {
@@ -2608,6 +2611,22 @@ pub fn invoke_special(
         let value = parse_big_integer(&text, radix)?;
         if let Some(slot) = heap.get_mut(receiver) {
             *slot = HeapObject::BigInteger(value);
+        }
+        return Ok(());
+    }
+    // `new DecimalFormat(pattern)` / `new DecimalFormat()`.
+    if class == "java/text/DecimalFormat" && method == "<init>" {
+        let pattern = match args.first() {
+            Some(value) => {
+                let text = string_arg(heap, value)?;
+                crate::numfmt::NumberPattern::parse(&text).map_err(|reason| {
+                    throw(format!("java.lang.IllegalArgumentException: {reason}"))
+                })?
+            }
+            None => crate::numfmt::NumberPattern::default(),
+        };
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::NumberFormat(Box::new(pattern));
         }
         return Ok(());
     }
@@ -3579,6 +3598,7 @@ pub fn invoke_virtual(
         }
         (HeapObject::BigInteger(_), _) => big_integer_method(heap, receiver, method, args),
         (HeapObject::BigDecimal(_), _) => big_decimal_method(heap, receiver, method, args),
+        (HeapObject::NumberFormat(_), _) => number_format_method(heap, receiver, method, args),
         (HeapObject::RoundingMode(_), _) => rounding_mode_method(heap, receiver, method, args),
         (HeapObject::MathContext { .. }, _) => math_context_method(heap, receiver, method, args),
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method, args),
@@ -10452,6 +10472,28 @@ pub fn invoke_static(
             }
             _ => Err(VmError::UnknownIntrinsic(format!("BigInteger.{method}"))),
         },
+        // `NumberFormat.getInstance()` and the four factories beside it. Each
+        // is a `DecimalFormat` over the pattern the locale would give — and
+        // the locale here has no COUNTRY, so its currency sign is the generic
+        // one, exactly as a JDK with `LANG=en` answers.
+        "java/text/NumberFormat" => {
+            let pattern = match method {
+                "getIntegerInstance" => "#,##0",
+                "getCurrencyInstance" => "\u{00a4}#,##0.00",
+                "getPercentInstance" => "#,##0%",
+                _ => "#,##0.###",
+            };
+            let mut parsed = crate::numfmt::NumberPattern::parse(pattern)
+                .unwrap_or_else(|_| crate::numfmt::NumberPattern::default());
+            if method == "getIntegerInstance" {
+                // The integer instance rounds half-EVEN to a whole number,
+                // which is the one factory whose mode is not the default.
+                parsed.rounding = crate::decimal::Rounding::HalfEven;
+            }
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::NumberFormat(Box::new(parsed))),
+            ))))
+        }
         // `BigDecimal.valueOf(...)`, and the three constants the compiler
         // lowers to it. `valueOf(double)` goes through `Double.toString`, which
         // is why it answers `0.1` where the constructor answers the exact
@@ -12945,6 +12987,11 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::Temporal(value)) => value.text(),
             Some(HeapObject::BigInteger(value)) => value.to_text(10),
             Some(HeapObject::BigDecimal(value)) => value.to_text(),
+            // A JDK's `Format.toString` is the default one; the identity hash
+            // in it is normalized away by every comparison that reads this.
+            Some(HeapObject::NumberFormat(_)) => {
+                format!("java.text.DecimalFormat@{:x}", identity_hash(reference))
+            }
             Some(HeapObject::RoundingMode(ordinal)) => rounding_name(*ordinal),
             Some(HeapObject::MathContext { precision, mode }) => {
                 format!(
@@ -13663,6 +13710,187 @@ fn big_decimal_method(
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
         }
         _ => Err(VmError::UnknownIntrinsic(format!("BigDecimal.{method}"))),
+    }
+}
+
+/// `java.text.DecimalFormat` — apply a pattern to a number, or read one back.
+#[allow(clippy::too_many_lines)]
+fn number_format_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    use crate::decimal::BigDec;
+    let pattern = match heap.get(receiver) {
+        Some(HeapObject::NumberFormat(pattern)) => pattern.clone(),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    let int_arg = || match args.first() {
+        Some(JValue::Int(value)) => *value,
+        _ => 0,
+    };
+    // Writing a limit back needs the object again; every setter goes through
+    // here so the clone above stays the only read.
+    let store = |heap: &mut Heap, changed: crate::numfmt::NumberPattern| {
+        if let Some(HeapObject::NumberFormat(slot)) = heap.get_mut(receiver) {
+            **slot = changed;
+        }
+        Ok(None)
+    };
+    match method {
+        "format" => {
+            // The value, and — when it came from a `double` — the exact one it
+            // really held, which is what breaks a tie.
+            // A `double` is multiplied by the percent factor in DOUBLE
+            // arithmetic, as a JDK does — the product's own rounding shows.
+            #[allow(clippy::cast_precision_loss)] // 1, 100 or 1000
+            let factor = pattern.multiplier() as f64;
+            let from_double = |number: f64| {
+                let scaled = number * factor;
+                (
+                    BigDec::parse(&crate::floatdec::java_double_to_string(scaled.abs()))
+                        .unwrap_or_else(|_| BigDec::zero()),
+                    Some(BigDec::from_f64_exactly(scaled.abs())),
+                    scaled.is_sign_negative(),
+                )
+            };
+            let (value, exact, negative) = match args.first() {
+                Some(JValue::Double(number)) => from_double(*number),
+                Some(JValue::Float(number)) => from_double(f64::from(*number)),
+                Some(JValue::Long(number)) => (BigDec::from_i64(number.abs()), None, *number < 0),
+                Some(JValue::Int(number)) => {
+                    (BigDec::from_i64(i64::from(number.abs())), None, *number < 0)
+                }
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::BigDecimal(value)) => (value.abs(), None, value.signum() < 0),
+                    Some(HeapObject::BigInteger(value)) => {
+                        (BigDec::new(value.abs(), 0), None, value.signum() < 0)
+                    }
+                    Some(HeapObject::Boxed { value, .. }) => match value {
+                        JValue::Double(number) => from_double(*number),
+                        JValue::Long(number) => (BigDec::from_i64(number.abs()), None, *number < 0),
+                        JValue::Int(number) => {
+                            (BigDec::from_i64(i64::from(number.abs())), None, *number < 0)
+                        }
+                        _ => {
+                            return Err(throw(
+                                "java.lang.IllegalArgumentException: Cannot format given Object as a Number",
+                            ));
+                        }
+                    },
+                    _ => {
+                        return Err(throw(
+                            "java.lang.IllegalArgumentException: Cannot format given Object as a Number",
+                        ));
+                    }
+                },
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            // A double arrives already multiplied; everything else is exact
+            // and takes the factor in decimal.
+            let text = if exact.is_some() {
+                pattern.format_scaled(&value, negative, exact.as_ref())
+            } else {
+                pattern.format(&value, negative, None)
+            };
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        "parse" => {
+            let text = arg_string(heap, &args[0])?;
+            let Some(value) = pattern.parse_number(&text) else {
+                return Err(throw(format!(
+                    "java.text.ParseException: Unparseable number: \"{text}\""
+                )));
+            };
+            // A whole number comes back as a `Long`, anything else as a
+            // `Double` — which is what a program's `intValue()` then reads.
+            let boxed = match value.to_i64_exact() {
+                Ok(whole) => heap.box_wrapper("java/lang/Long", JValue::Long(whole)),
+                Err(_) => heap.box_wrapper("java/lang/Double", JValue::Double(value.to_f64())),
+            };
+            Ok(Some(JValue::Ref(Some(boxed))))
+        }
+        "toPattern" | "toLocalizedPattern" => {
+            let text = pattern.to_pattern();
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        "applyPattern" | "applyLocalizedPattern" => {
+            let text = arg_string(heap, &args[0])?;
+            let parsed = crate::numfmt::NumberPattern::parse(&text)
+                .map_err(|reason| throw(format!("java.lang.IllegalArgumentException: {reason}")))?;
+            store(heap, parsed)
+        }
+        "getMaximumFractionDigits" => Ok(Some(JValue::Int(
+            i32::try_from(pattern.maximum_fraction_digits).unwrap_or(i32::MAX),
+        ))),
+        "getMinimumFractionDigits" => Ok(Some(JValue::Int(
+            i32::try_from(pattern.minimum_fraction_digits).unwrap_or(0),
+        ))),
+        "getMaximumIntegerDigits" => Ok(Some(JValue::Int(
+            i32::try_from(pattern.maximum_integer_digits).unwrap_or(i32::MAX),
+        ))),
+        "getMinimumIntegerDigits" => Ok(Some(JValue::Int(
+            i32::try_from(pattern.minimum_integer_digits).unwrap_or(0),
+        ))),
+        "getGroupingSize" => Ok(Some(JValue::Int(
+            i32::try_from(pattern.grouping_size).unwrap_or(0),
+        ))),
+        "isGroupingUsed" => Ok(Some(JValue::Int(i32::from(pattern.grouping_used)))),
+        "getRoundingMode" => Ok(Some(JValue::Ref(Some(
+            heap.intern_rounding_mode(u8::try_from(pattern.rounding.ordinal()).unwrap_or(6)),
+        )))),
+        "setMaximumFractionDigits"
+        | "setMinimumFractionDigits"
+        | "setMaximumIntegerDigits"
+        | "setMinimumIntegerDigits"
+        | "setGroupingSize" => {
+            let mut changed = *pattern;
+            let value = u32::try_from(int_arg().max(0)).unwrap_or(0);
+            match method {
+                // A JDK keeps the pair CONSISTENT: raising a minimum past its
+                // maximum drags the maximum with it, and the other way round.
+                "setMaximumFractionDigits" => {
+                    changed.maximum_fraction_digits = value;
+                    changed.minimum_fraction_digits = changed.minimum_fraction_digits.min(value);
+                }
+                "setMinimumFractionDigits" => {
+                    changed.minimum_fraction_digits = value;
+                    changed.maximum_fraction_digits = changed.maximum_fraction_digits.max(value);
+                }
+                "setMaximumIntegerDigits" => {
+                    changed.maximum_integer_digits = value;
+                    changed.minimum_integer_digits = changed.minimum_integer_digits.min(value);
+                }
+                "setMinimumIntegerDigits" => {
+                    changed.minimum_integer_digits = value;
+                    changed.maximum_integer_digits = changed.maximum_integer_digits.max(value);
+                }
+                _ => {
+                    changed.grouping_size = value;
+                    changed.grouping_used = value > 0;
+                }
+            }
+            store(heap, changed)
+        }
+        "setGroupingUsed" => {
+            let mut changed = *pattern;
+            changed.grouping_used = matches!(args.first(), Some(JValue::Int(1)));
+            store(heap, changed)
+        }
+        "setRoundingMode" => {
+            let mut changed = *pattern;
+            changed.rounding = rounding_argument(heap, args.first())?;
+            store(heap, changed)
+        }
+        "equals" => {
+            let same = matches!(args.first(), Some(JValue::Ref(Some(other)))
+                if matches!(heap.get(*other), Some(HeapObject::NumberFormat(theirs))
+                    if **theirs == *pattern));
+            Ok(Some(JValue::Int(i32::from(same))))
+        }
+        "hashCode" => Ok(Some(JValue::Int(identity_hash(receiver)))),
+        _ => Err(VmError::UnknownIntrinsic(format!("DecimalFormat.{method}"))),
     }
 }
 

@@ -13796,3 +13796,68 @@ four method references, a `Comparator.comparing(...).thenComparing(...)`, a
 `Number` and a `Comparable` variable, and runs the `RoundingMode` enum through
 a switch, an `EnumSet`, an `EnumMap`, a stream and a sort. Seven unit tests sit
 in the core beside them.
+
+## A number a person reads
+
+`java.text.DecimalFormat` and `java.text.NumberFormat` — the third and last
+piece of the numbers lane, and the one a program reaches for the moment a
+`double` has to appear on a screen: `new DecimalFormat("#,##0.00").format(total)`.
+
+The pattern is a small language, and what it means is a handful of counts:
+how few integer digits to insist on, how many fraction digits to allow, where
+the groups fall, what multiplies the value, and what sits either side of it.
+The core is `crates/caturra-vm/src/numfmt.rs`, formatting through the exact
+decimal arithmetic of `decimal.rs` rather than a second pass through a
+`double`.
+
+**What was measured.** The seventeen-pattern by thirteen-value grid a program
+would actually write (289 lines of a JDK), then three randomized sweeps against
+a real JDK: 700 patterns generated from the grammar, 900 wilder ones (nested
+quoting, negative subpatterns, per-mille, currency), and 10,272 chosen to sit
+ON a tie, which is the only place two engines can disagree. 12,161 cases, and
+they agree exactly.
+
+**Four rules that are a JDK's and not the javadoc's.** Each cost a fuzz round
+to find:
+
+- **In scientific notation the significant-digit count is `maximumInteger +
+  maximumFraction`,** and the fraction limit does not cap what is printed:
+  `##.00#E0` of -707326118 is `-7.0733E8`, five digits where the pattern names
+  three fraction places. The total printed is at least
+  `minimumInteger + minimumFraction`, at least the value's own digit count,
+  and at least the integer places the exponent left in front.
+- **A zero has no exponent at all,** and grows a fraction where a non-zero
+  would move digits left: `###.#E00` of 0 is `0E00`, and `###.00#E0` is `0.0E0`.
+- **`toPattern` writes one position above the minimum,** so `0` comes back as
+  `#0` — and an affix is quoted as a WHOLE when it holds a literal special
+  (`(#` becomes `'(#'`), never per character.
+- **A tie is not simply HALF_EVEN.** Which way it goes depends on three things
+  a JDK reads off `Double.toString`: whether the true value sat above or below
+  the shortest decimal (`0.05` at one place is `0.1`, `1.005` at two is
+  `1.00`), whether the value is WHOLE (the `.0` that `Double.toString` writes
+  puts the rounding position one short of the last digit, so `12335.0` to four
+  significant digits is `1.234E4` where an exact `12335` gives the same and
+  `12345.0` gives `1.235E4` where the exact one gives `1.234E4`), and — for a
+  tie that underflows to zero — whether the text was scientific: `0.005` at two
+  places is `0.01`, `0.0005` at three is `0.000`.
+
+A percent pattern multiplies **the double**, in double arithmetic, before any
+of that: `0%` of 2.675 is `268%`, because `2.675 * 100` is exactly `267.5` and
+the tie then rounds to the odd digit's even neighbour. Multiplying the decimal
+instead gave `267%`.
+
+The locale here has no COUNTRY — a sandbox has no way to know one — so its
+currency sign is the generic `¤` and its ISO code `XXX`, which is exactly what
+a JDK with `LANG=en` answers. `getCurrencyInstance(Locale.US)` is not modelled
+rather than guessed at.
+
+Pinned as `every_decimal_format_pattern`, `a_number_format_in_every_position`
+and `a_decimal_format_breaks_a_tie_as_a_jdk_does` — the last of which is the
+twelve-pattern by thirty-five-value tie grid, run once over doubles and once
+over the same values as exact decimals, which round the plain half-even way.
+Seven unit tests sit in the core.
+
+**One deliberate divergence.** `new DecimalFormat("").toPattern()` asks a JDK
+for an array of 2^31 digits and dies with an `OutOfMemoryError`; caturra
+answers `#,##0.###`, the pattern the empty one leaves in place. Reproducing a
+JDK's out-of-memory bug is not worth the fidelity.

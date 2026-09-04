@@ -20326,6 +20326,7 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         "java/math/BigInteger" | "java/math/BigDecimal" => {
             &["java/lang/Number", "java/lang/Comparable"]
         }
+        "java/text/DecimalFormat" => &["java/text/NumberFormat", "java/text/Format"],
         "java/util/EnumMap" => &["java/util/Map"],
         "java/util/RegularEnumSet" => &["java/util/Set", "java/util/Collection"],
         "sun/nio/fs/UnixPath" => &[
@@ -20467,6 +20468,9 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         Some(HeapObject::BigDecimal(_)) => String::from("java/math/BigDecimal"),
         Some(HeapObject::RoundingMode(_)) => String::from("java/math/RoundingMode"),
         Some(HeapObject::MathContext { .. }) => String::from("java/math/MathContext"),
+        // A `NumberFormat` factory answers a `DecimalFormat` in a JDK too, so
+        // there is only ever the one class here.
+        Some(HeapObject::NumberFormat(_)) => String::from("java/text/DecimalFormat"),
         Some(HeapObject::Charset(name)) => format!("sun/nio/cs/{}", name.replace('-', "_")),
         Some(HeapObject::SummaryStats { .. }) => String::from("java/util/IntSummaryStatistics"),
         // The regex trio. A frozen match is an INNER class of Matcher in a

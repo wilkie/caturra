@@ -50040,3 +50040,186 @@ public class DecFormat {
 }
 "#
 );
+
+differential_test!(
+    a_number_format_in_every_position,
+    "DQ",
+    r##"
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
+import java.text.ParseException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.*;
+import java.util.stream.*;
+
+public class DQ {
+  static final DecimalFormat MONEY = new DecimalFormat("#,##0.00");
+  static NumberFormat percent = NumberFormat.getPercentInstance();
+  static String bill(double amount) { return MONEY.format(amount); }
+
+  public static void main(String[] args) throws ParseException {
+    System.out.println(bill(1234.5) + " " + percent.format(0.756));
+    NumberFormat plain = NumberFormat.getInstance();
+    NumberFormat whole = NumberFormat.getIntegerInstance();
+    NumberFormat money = NumberFormat.getCurrencyInstance();
+    System.out.println(plain.format(1234.5678) + " " + whole.format(1234.5678) + " " + money.format(-5));
+    // A DecimalFormat IS a NumberFormat.
+    NumberFormat asBase = MONEY;
+    System.out.println(asBase.format(9.5) + " " + (asBase instanceof DecimalFormat));
+    DecimalFormat back = (DecimalFormat) asBase;
+    System.out.println(back.toPattern());
+    // The limits a program changes after the fact.
+    NumberFormat two = NumberFormat.getInstance();
+    two.setMaximumFractionDigits(2);
+    two.setMinimumFractionDigits(2);
+    two.setGroupingUsed(false);
+    System.out.println(two.format(1234.5) + " " + two.getMaximumFractionDigits() + two.isGroupingUsed());
+    DecimalFormat rounded = new DecimalFormat("0.0");
+    rounded.setRoundingMode(RoundingMode.FLOOR);
+    System.out.println(rounded.format(2.55) + " " + rounded.getRoundingMode());
+    rounded.applyPattern("0.000");
+    System.out.println(rounded.format(2.5) + " " + rounded.getGroupingSize());
+    // Reading numbers back.
+    Number parsed = MONEY.parse("1,234.56");
+    System.out.println(parsed + " " + parsed.intValue() + " " + parsed.doubleValue());
+    System.out.println(new DecimalFormat("0").parse("42").getClass().getName());
+    try {
+      new DecimalFormat("0").parse("abc");
+    } catch (ParseException e) {
+      System.out.println("refused: " + e.getMessage());
+    }
+    try {
+      new DecimalFormat("0.0.0");
+    } catch (IllegalArgumentException e) {
+      System.out.println("bad pattern: " + e.getMessage());
+    }
+    // In every position a value can take.
+    DecimalFormat[] formats = { new DecimalFormat("0"), new DecimalFormat("0.00"), MONEY };
+    System.out.println(Arrays.stream(formats).map(f -> f.format(3.14159)).collect(Collectors.joining("|")));
+    List<NumberFormat> list = new ArrayList<>(Arrays.asList(formats));
+    System.out.println(list.size() + " " + list.get(0).format(7));
+    Map<String, NumberFormat> named = new HashMap<>();
+    named.put("money", MONEY);
+    System.out.println(named.get("money").format(19.995));
+    Object o = MONEY;
+    System.out.println(o.getClass().getName() + " " + (o instanceof NumberFormat));
+    StringBuilder sb = new StringBuilder();
+    sb.append(MONEY.format(1)).append('/').append(MONEY.format(2));
+    System.out.println(sb);
+    System.out.println(MONEY.equals(new DecimalFormat("#,##0.00")) + " " + MONEY.equals(new DecimalFormat("0")));
+    // The formats a program actually writes.
+    System.out.println(new DecimalFormat("#,##0.00").format(new BigDecimal("12345.678")));
+    System.out.println(new DecimalFormat("0.###E0").format(12345.0));
+    System.out.println(new DecimalFormat("#.##%").format(0.12345));
+    System.out.println(new DecimalFormat("#,##0.00;(#,##0.00)").format(-42.5));
+    for (double value : new double[] {0, 0.5, 2.5, 1.005, 99.995, 0.05, -0.5, 1e7}) {
+      System.out.print(new DecimalFormat("0.00").format(value) + " ");
+    }
+    System.out.println();
+  }
+}
+"##
+);
+
+differential_test!(
+    every_decimal_format_pattern,
+    "DF",
+    r##"
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.math.RoundingMode;
+public class DF {
+  interface Body { Object get() throws Exception; }
+  static void show(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    String[] patterns = {"0", "0.00", "#.##", "#,##0.00", "#,###", "0.0#", "000", "#", "0%", "0.0%",
+                         "$#,##0.00", "#,##0.00 units", "0.###E0", "'#'0", "#.##;(#.##)", "+0;-0", "\u00a4#,##0.00"};
+    double[] values = {0, 1, -1, 0.5, 2.5, 3.14159, 1234.5678, -1234.5678, 1000000, 0.0001, -0.5, 1.005, 99.995};
+    for (String p : patterns) {
+      for (double v : values) {
+        final String pp = p; final double vv = v;
+        show("[" + pp + "] " + vv, () -> new DecimalFormat(pp).format(vv));
+      }
+      final String pp = p;
+      show("[" + pp + "] toPattern", () -> new DecimalFormat(pp).toPattern());
+      show("[" + pp + "] long", () -> new DecimalFormat(pp).format(1234567890123L));
+      show("[" + pp + "] BigDecimal", () -> new DecimalFormat(pp).format(new BigDecimal("1234.5678")));
+      show("[" + pp + "] BigInteger", () -> new DecimalFormat(pp).format(new BigInteger("12345678901234567890")));
+    }
+    show("bad pattern", () -> new DecimalFormat("0.0.0"));
+    show("empty pattern", () -> new DecimalFormat("").format(1234.5));
+    show("default ctor", () -> new DecimalFormat().format(1234.5678) + " | " + new DecimalFormat().toPattern());
+    show("getInstance", () -> NumberFormat.getInstance().format(1234.5678));
+    show("getNumberInstance", () -> NumberFormat.getNumberInstance().format(1234.5678));
+    show("getIntegerInstance", () -> NumberFormat.getIntegerInstance().format(1234.5678) + " " + NumberFormat.getIntegerInstance().format(1234.4));
+    show("getCurrencyInstance", () -> NumberFormat.getCurrencyInstance().format(1234.5678) + " " + NumberFormat.getCurrencyInstance().format(-5));
+    show("getPercentInstance", () -> NumberFormat.getPercentInstance().format(0.756) + " " + NumberFormat.getPercentInstance().format(1));
+    show("setMaximumFractionDigits", () -> { NumberFormat f = NumberFormat.getInstance(); f.setMaximumFractionDigits(2); return f.format(1234.5678); });
+    show("setMinimumFractionDigits", () -> { NumberFormat f = NumberFormat.getInstance(); f.setMinimumFractionDigits(3); return f.format(1234.5); });
+    show("setGroupingUsed", () -> { NumberFormat f = NumberFormat.getInstance(); f.setGroupingUsed(false); return f.format(1234567.89); });
+    show("setMaximumIntegerDigits", () -> { NumberFormat f = NumberFormat.getInstance(); f.setMaximumIntegerDigits(3); return f.format(1234567.89); });
+    show("setRoundingMode", () -> { DecimalFormat f = new DecimalFormat("0.0"); f.setRoundingMode(RoundingMode.FLOOR); return f.format(2.55) + " " + f.getRoundingMode(); });
+    show("applyPattern", () -> { DecimalFormat f = new DecimalFormat("0"); f.applyPattern("0.000"); return f.format(2.5); });
+    show("parse", () -> new DecimalFormat("#,##0.00").parse("1,234.56"));
+    show("parse int", () -> new DecimalFormat("0").parse("42"));
+    show("parse bad", () -> new DecimalFormat("0").parse("abc"));
+    show("parse partial", () -> new DecimalFormat("0").parse("12abc"));
+    show("half even default", () -> new DecimalFormat("0.0").format(0.25) + " " + new DecimalFormat("0.0").format(0.35) + " " + new DecimalFormat("0").format(0.5) + " " + new DecimalFormat("0").format(1.5));
+    show("getMaximumFractionDigits", () -> { DecimalFormat f = new DecimalFormat("0.00"); return f.getMaximumFractionDigits() + " " + f.getMinimumFractionDigits() + " " + f.getMaximumIntegerDigits() + " " + f.getMinimumIntegerDigits() + " " + f.isGroupingUsed() + " " + f.getGroupingSize(); });
+    show("format is NumberFormat", () -> { NumberFormat f = new DecimalFormat("0.00"); return f.format(3.14159); });
+    show("toString", () -> new DecimalFormat("0.00").getClass().getName());
+    show("equals", () -> new DecimalFormat("0.00").equals(new DecimalFormat("0.00")));
+    show("negative zero", () -> new DecimalFormat("0.0").format(-0.001) + " " + new DecimalFormat("0.0").format(-0.0));
+  }
+}
+"##
+);
+
+differential_test!(
+    a_decimal_format_breaks_a_tie_as_a_jdk_does,
+    "DecTies",
+    r###"
+import java.text.DecimalFormat;
+
+public class DecTies {
+    public static void main(String[] args) {
+        // A `double` on a tie is the one place a formatter's rounding is not
+        // simply HALF_EVEN: which way it goes depends on which side of the
+        // shortest decimal the true value fell, on whether the value is a
+        // whole number, and on whether `Double.toString` wrote it in
+        // scientific notation.
+        String[] patterns = {
+            "0", "0.0", "0.00", "0.000", "#.##", "#,##0.00", "0.###E0", "#.##E0",
+            "##0.##E0", "0%", "0.0%", "#,##0.####",
+        };
+        double[] values = {
+            0, 0.5, 1.5, 2.5, 3.5, 0.05, 0.005, 0.0005, 0.00005, 1.005, 1.0005,
+            2.675, 1.115, 8.835, 0.125, 0.375, 99.995, 12345, 12335, 12325, 12355,
+            1234.5, 1233.5, 12345000, 0.00012345, 0.15, 0.015, 0.0015, -0.5, -2.675,
+            -963.755, 15.005, 30.115, 43.005, -269.3345,
+        };
+        for (String shape : patterns) {
+            DecimalFormat format = new DecimalFormat(shape);
+            StringBuilder line = new StringBuilder(shape).append(" |");
+            for (double value : values) {
+                line.append(' ').append(format.format(value));
+            }
+            System.out.println(line);
+            // ...and the same values as exact decimals, which round the plain
+            // half-even way instead.
+            StringBuilder exact = new StringBuilder(shape).append(" exact |");
+            for (double value : values) {
+                exact.append(' ').append(format.format(new java.math.BigDecimal(String.valueOf(value))));
+            }
+            System.out.println(exact);
+        }
+    }
+}
+"###
+);

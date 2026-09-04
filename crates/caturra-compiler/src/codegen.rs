@@ -6254,6 +6254,8 @@ fn library_value_type(simple: &str) -> Option<JType> {
         "BigDecimal" => JType::BigDecimal,
         "RoundingMode" => JType::RoundingMode,
         "MathContext" => JType::MathContext,
+        "DecimalFormat" => JType::DecimalFormat,
+        "NumberFormat" => JType::NumberFormat,
         "LocalDate" => JType::LocalDate,
         "LocalTime" => JType::LocalTime,
         "LocalDateTime" => JType::LocalDateTime,
@@ -7796,6 +7798,9 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         )
         // A `BigInteger` is a `Number` and a `Comparable` — the only library
         // value that wears the wrappers' two faces.
+        // A `DecimalFormat` IS a `NumberFormat` — one object under two names,
+        // and the only widening between two library types here.
+        || matches!((from, to), (JType::DecimalFormat, JType::NumberFormat))
         || matches!(
             (from, to),
             (JType::BigInteger | JType::BigDecimal, JType::Object(id))
@@ -8304,6 +8309,11 @@ enum JType {
     /// `java.math.MathContext` — how many significant digits to keep, and how
     /// to round what falls off.
     MathContext,
+    /// `java.text.DecimalFormat`, and `java.text.NumberFormat` — the narrower
+    /// face its factories answer with. One object, two names, exactly as a
+    /// JDK has it (`NumberFormat.getInstance()` IS a `DecimalFormat`).
+    DecimalFormat,
+    NumberFormat,
     /// `java.nio.charset.Charset` (intrinsic) — `StandardCharsets.UTF_8` and
     /// the names beside it, which a program passes to `getBytes`, to
     /// `new String(bytes, …)` and to the `Files` readers. The object carries
@@ -8830,6 +8840,8 @@ impl JType {
             JType::BigDecimal => String::from("BigDecimal"),
             JType::RoundingMode => String::from("RoundingMode"),
             JType::MathContext => String::from("MathContext"),
+            JType::DecimalFormat => String::from("DecimalFormat"),
+            JType::NumberFormat => String::from("NumberFormat"),
             JType::Charset => String::from("Charset"),
             JType::Pattern => String::from("Pattern"),
             JType::Matcher => String::from("Matcher"),
@@ -8893,6 +8905,8 @@ impl JType {
                 | JType::BigDecimal
                 | JType::RoundingMode
                 | JType::MathContext
+                | JType::DecimalFormat
+                | JType::NumberFormat
                 | JType::Pattern
                 | JType::Matcher
                 | JType::MatchResult
@@ -9050,6 +9064,8 @@ impl JType {
             JType::BigDecimal => String::from("Ljava/math/BigDecimal;"),
             JType::RoundingMode => String::from("Ljava/math/RoundingMode;"),
             JType::MathContext => String::from("Ljava/math/MathContext;"),
+            JType::DecimalFormat => String::from("Ljava/text/DecimalFormat;"),
+            JType::NumberFormat => String::from("Ljava/text/NumberFormat;"),
             JType::Charset => String::from("Ljava/nio/charset/Charset;"),
             JType::Pattern => String::from("Ljava/util/regex/Pattern;"),
             JType::Matcher => String::from("Ljava/util/regex/Matcher;"),
@@ -10691,6 +10707,10 @@ enum BRet {
     BigDecimalArray,
     RoundingMode,
     RoundingModeArray,
+    /// The `java.text` face its factories answer with, and the `Number` a
+    /// parse gives back.
+    NumberFormat,
+    Number,
     /// `java.io.PrintStream` — what `append`/`printf` answer, for chaining.
     PrintStream,
     /// The `java.time` values.
@@ -15273,6 +15293,216 @@ const MATH_CONTEXT_METHODS: &[BuiltinMethod] = &[
     bm("hashCode", &[], BRet::Int, "()I"),
 ];
 
+/// `java.text.NumberFormat` — the face its factories answer with, and the
+/// methods every formatter has.
+const NUMBER_FORMAT_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "format",
+        &[BParam::Double],
+        BRet::Str,
+        "(D)Ljava/lang/String;",
+    ),
+    bm(
+        "format",
+        &[BParam::Long],
+        BRet::Str,
+        "(J)Ljava/lang/String;",
+    ),
+    bm("format", &[BParam::Int], BRet::Str, "(I)Ljava/lang/String;"),
+    bm(
+        "format",
+        &[BParam::Object],
+        BRet::Str,
+        "(Ljava/lang/Object;)Ljava/lang/String;",
+    ),
+    bm(
+        "parse",
+        &[BParam::Str],
+        BRet::Number,
+        "(Ljava/lang/String;)Ljava/lang/Number;",
+    ),
+    bm("getMaximumFractionDigits", &[], BRet::Int, "()I"),
+    bm(
+        "setMaximumFractionDigits",
+        &[BParam::Int],
+        BRet::Void,
+        "(I)V",
+    ),
+    bm("getMinimumFractionDigits", &[], BRet::Int, "()I"),
+    bm(
+        "setMinimumFractionDigits",
+        &[BParam::Int],
+        BRet::Void,
+        "(I)V",
+    ),
+    bm("getMaximumIntegerDigits", &[], BRet::Int, "()I"),
+    bm(
+        "setMaximumIntegerDigits",
+        &[BParam::Int],
+        BRet::Void,
+        "(I)V",
+    ),
+    bm("getMinimumIntegerDigits", &[], BRet::Int, "()I"),
+    bm(
+        "setMinimumIntegerDigits",
+        &[BParam::Int],
+        BRet::Void,
+        "(I)V",
+    ),
+    bm("isGroupingUsed", &[], BRet::Boolean, "()Z"),
+    bm("setGroupingUsed", &[BParam::Boolean], BRet::Void, "(Z)V"),
+    bm(
+        "getRoundingMode",
+        &[],
+        BRet::RoundingMode,
+        "()Ljava/math/RoundingMode;",
+    ),
+    bm(
+        "setRoundingMode",
+        &[BParam::RoundingMode],
+        BRet::Void,
+        "(Ljava/math/RoundingMode;)V",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+/// `java.text.DecimalFormat` — everything a `NumberFormat` has, plus the
+/// PATTERN, which is the whole reason a program names the subclass.
+const DECIMAL_FORMAT_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "format",
+        &[BParam::Double],
+        BRet::Str,
+        "(D)Ljava/lang/String;",
+    ),
+    bm(
+        "format",
+        &[BParam::Long],
+        BRet::Str,
+        "(J)Ljava/lang/String;",
+    ),
+    bm("format", &[BParam::Int], BRet::Str, "(I)Ljava/lang/String;"),
+    bm(
+        "format",
+        &[BParam::Object],
+        BRet::Str,
+        "(Ljava/lang/Object;)Ljava/lang/String;",
+    ),
+    bm(
+        "parse",
+        &[BParam::Str],
+        BRet::Number,
+        "(Ljava/lang/String;)Ljava/lang/Number;",
+    ),
+    bm("getMaximumFractionDigits", &[], BRet::Int, "()I"),
+    bm(
+        "setMaximumFractionDigits",
+        &[BParam::Int],
+        BRet::Void,
+        "(I)V",
+    ),
+    bm("getMinimumFractionDigits", &[], BRet::Int, "()I"),
+    bm(
+        "setMinimumFractionDigits",
+        &[BParam::Int],
+        BRet::Void,
+        "(I)V",
+    ),
+    bm("getMaximumIntegerDigits", &[], BRet::Int, "()I"),
+    bm(
+        "setMaximumIntegerDigits",
+        &[BParam::Int],
+        BRet::Void,
+        "(I)V",
+    ),
+    bm("getMinimumIntegerDigits", &[], BRet::Int, "()I"),
+    bm(
+        "setMinimumIntegerDigits",
+        &[BParam::Int],
+        BRet::Void,
+        "(I)V",
+    ),
+    bm("isGroupingUsed", &[], BRet::Boolean, "()Z"),
+    bm("setGroupingUsed", &[BParam::Boolean], BRet::Void, "(Z)V"),
+    bm(
+        "getRoundingMode",
+        &[],
+        BRet::RoundingMode,
+        "()Ljava/math/RoundingMode;",
+    ),
+    bm(
+        "setRoundingMode",
+        &[BParam::RoundingMode],
+        BRet::Void,
+        "(Ljava/math/RoundingMode;)V",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toPattern", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("toLocalizedPattern", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "applyPattern",
+        &[BParam::Str],
+        BRet::Void,
+        "(Ljava/lang/String;)V",
+    ),
+    bm(
+        "applyLocalizedPattern",
+        &[BParam::Str],
+        BRet::Void,
+        "(Ljava/lang/String;)V",
+    ),
+    bm("getGroupingSize", &[], BRet::Int, "()I"),
+    bm("setGroupingSize", &[BParam::Int], BRet::Void, "(I)V"),
+];
+
+/// `NumberFormat`'s five factories. Each answers a formatter over the pattern
+/// the locale would give; the locale here has no COUNTRY, so its currency sign
+/// is the generic one, exactly as a JDK with `LANG=en` answers.
+const NUMBER_FORMAT_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "getInstance",
+        &[],
+        BRet::NumberFormat,
+        "()Ljava/text/NumberFormat;",
+    ),
+    bm(
+        "getNumberInstance",
+        &[],
+        BRet::NumberFormat,
+        "()Ljava/text/NumberFormat;",
+    ),
+    bm(
+        "getIntegerInstance",
+        &[],
+        BRet::NumberFormat,
+        "()Ljava/text/NumberFormat;",
+    ),
+    bm(
+        "getCurrencyInstance",
+        &[],
+        BRet::NumberFormat,
+        "()Ljava/text/NumberFormat;",
+    ),
+    bm(
+        "getPercentInstance",
+        &[],
+        BRet::NumberFormat,
+        "()Ljava/text/NumberFormat;",
+    ),
+];
+
 /// `java.time.temporal.ValueRange` — four numbers, and the questions asked
 /// of them.
 const VALUE_RANGE_METHODS: &[BuiltinMethod] = &[
@@ -18574,6 +18804,8 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::BigDecimal
             | JType::RoundingMode
             | JType::MathContext
+            | JType::DecimalFormat
+            | JType::NumberFormat
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -18628,6 +18860,8 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::BigDecimal => Some(("java/math/BigDecimal", BIG_DECIMAL_METHODS)),
         JType::RoundingMode => Some(("java/math/RoundingMode", ROUNDING_MODE_METHODS)),
         JType::MathContext => Some(("java/math/MathContext", MATH_CONTEXT_METHODS)),
+        JType::DecimalFormat => Some(("java/text/DecimalFormat", DECIMAL_FORMAT_METHODS)),
+        JType::NumberFormat => Some(("java/text/NumberFormat", NUMBER_FORMAT_METHODS)),
         JType::Charset => Some(("java/nio/charset/Charset", CHARSET_METHODS)),
         JType::Pattern => Some(("java/util/regex/Pattern", PATTERN_METHODS)),
         JType::Matcher => Some(("java/util/regex/Matcher", MATCHER_METHODS)),
@@ -19399,6 +19633,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "BigInteger" => Some(("java/math/BigInteger", BIG_INTEGER_STATIC_METHODS)),
         "BigDecimal" => Some(("java/math/BigDecimal", BIG_DECIMAL_STATIC_METHODS)),
         "RoundingMode" => Some(("java/math/RoundingMode", ROUNDING_MODE_STATIC_METHODS)),
+        "NumberFormat" => Some(("java/text/NumberFormat", NUMBER_FORMAT_STATIC_METHODS)),
         // A `MathContext` has no statics of its own; the entry exists so its
         // four CONSTANTS resolve as a qualified name.
         "MathContext" => Some(("java/math/MathContext", &[])),
@@ -20173,6 +20408,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Path => Some(JType::Path),
         BRet::BigInteger => Some(JType::BigInteger),
         BRet::BigDecimal => Some(JType::BigDecimal),
+        BRet::NumberFormat => Some(JType::NumberFormat),
+        // `NumberFormat.parse` answers a `Number` — a Long or a Double, and
+        // the program asks it which with `intValue()`/`doubleValue()`.
+        BRet::Number => table.class_id("Number").map(JType::Object),
         BRet::RoundingMode => Some(JType::RoundingMode),
         BRet::RoundingModeArray => Some(JType::Array {
             elem: ElemType::RoundingMode,
@@ -25114,6 +25353,7 @@ impl BodyGen<'_> {
             "BigInteger" => JType::BigInteger,
             "BigDecimal" => JType::BigDecimal,
             "MathContext" => JType::MathContext,
+            "DecimalFormat" => JType::DecimalFormat,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
             "PrintStream" => JType::PrintStream,
@@ -25505,6 +25745,7 @@ impl BodyGen<'_> {
                 "BigInteger" => return self.new_big_integer(args, span),
                 "BigDecimal" => return self.new_big_decimal(args, span),
                 "MathContext" => return self.new_math_context(args, span),
+                "DecimalFormat" => return self.new_decimal_format(args, span),
                 "File" => return self.new_file(args, span),
                 // A `FileWriter` is the same thing this engine calls a
                 // writer, plus the APPEND flag: `new FileWriter(path, true)`
@@ -26337,6 +26578,37 @@ impl BodyGen<'_> {
     }
 
     /// `new MathContext(digits)` / `new MathContext(digits, roundingMode)`.
+    /// `new DecimalFormat(pattern)` / `new DecimalFormat()`.
+    fn new_decimal_format(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class = intern_class(self.pool, "java/text/DecimalFormat");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let descriptor = match args {
+            [] => Some("()V"),
+            [pattern] => {
+                let ty = self.expr(pattern);
+                if ty == JType::Error {
+                    self.error_bail(span, "DecimalFormat pattern");
+                    return JType::Error;
+                }
+                matches!(ty, JType::Str | JType::Null).then_some("(Ljava/lang/String;)V")
+            }
+            _ => None,
+        };
+        let Some(descriptor) = descriptor else {
+            self.error(
+                span,
+                String::from("new DecimalFormat takes a pattern String, or no argument at all"),
+            );
+            return JType::Error;
+        };
+        let init_ref =
+            intern_method_ref(self.pool, "java/text/DecimalFormat", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        self.code.drop_stack(1 + u16::from(descriptor.len() > 3));
+        JType::DecimalFormat
+    }
+
     fn new_math_context(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let class = intern_class(self.pool, "java/math/MathContext");
         self.code.push_op_u16(op::NEW, class, 1);
@@ -27870,6 +28142,8 @@ impl BodyGen<'_> {
             | JType::BigDecimal
             | JType::RoundingMode
             | JType::MathContext
+            | JType::DecimalFormat
+            | JType::NumberFormat
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -28908,6 +29182,8 @@ impl BodyGen<'_> {
                 | JType::BigDecimal
                 | JType::RoundingMode
                 | JType::MathContext
+                | JType::DecimalFormat
+                | JType::NumberFormat
                 | JType::IsoEra => {
                     tags.push_str("Ljava/lang/Object;");
                     width += 1;
@@ -29975,6 +30251,8 @@ impl BodyGen<'_> {
             JType::BigDecimal => String::from("java/math/BigDecimal"),
             JType::RoundingMode => String::from("java/math/RoundingMode"),
             JType::MathContext => String::from("java/math/MathContext"),
+            JType::DecimalFormat => String::from("java/text/DecimalFormat"),
+            JType::NumberFormat => String::from("java/text/NumberFormat"),
             JType::Charset => String::from("java/nio/charset/Charset"),
             JType::Pattern => String::from("java/util/regex/Pattern"),
             JType::Matcher => String::from("java/util/regex/Matcher"),
@@ -33759,6 +34037,8 @@ impl BodyGen<'_> {
             | JType::BigDecimal
             | JType::RoundingMode
             | JType::MathContext
+            | JType::DecimalFormat
+            | JType::NumberFormat
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -38859,6 +39139,8 @@ impl BodyGen<'_> {
             | JType::BigDecimal
             | JType::RoundingMode
             | JType::MathContext
+            | JType::DecimalFormat
+            | JType::NumberFormat
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -39287,6 +39569,8 @@ impl BodyGen<'_> {
             | JType::BigDecimal
             | JType::RoundingMode
             | JType::MathContext
+            | JType::DecimalFormat
+            | JType::NumberFormat
             | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
@@ -39331,6 +39615,8 @@ impl BodyGen<'_> {
             | JType::BigDecimal
             | JType::RoundingMode
             | JType::MathContext
+            | JType::DecimalFormat
+            | JType::NumberFormat
             | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };
@@ -39591,6 +39877,9 @@ impl BodyGen<'_> {
             // or parameterized.
             (JType::Str | JType::Boxed(_), JType::Object(_) | JType::Generic { .. })
                 if widens(from, to, self.table) => {}
+            // A `DecimalFormat` held as the `NumberFormat` it is. This matrix
+            // gates separately from `widens`, so both need the arm.
+            (JType::DecimalFormat, JType::NumberFormat) => {}
             // Any reference type widens to the Object top type.
             (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
             // ...and an ARRAY to `Cloneable`, which every one of them is.

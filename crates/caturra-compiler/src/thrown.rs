@@ -829,6 +829,9 @@ fn library_kind_of_class(name: &str) -> Option<&'static str> {
         // of as I/O that declares a CHECKED exception, because the name may be
         // one no charset answers to.
         "String" => Some("String"),
+        // A formatter's `parse` declares `ParseException`, and nothing else in
+        // `java.text` declares anything checked.
+        "DecimalFormat" | "NumberFormat" => Some("NumberFormat"),
         "Class" => Some("Class"),
         "Method" => Some("Method"),
         "Field" => Some("Field"),
@@ -863,6 +866,9 @@ fn library_kind_throws(
         | (Some("File"), "createNewFile" | "getCanonicalPath" | "getCanonicalFile") => {
             &["java/io/IOException"]
         }
+        // Reading a number back is the one `java.text` method that declares a
+        // checked exception, and a program has to catch it.
+        (Some("NumberFormat"), "parse") => &["java/text/ParseException"],
         (
             Some("Class"),
             "getMethod" | "getDeclaredMethod" | "getConstructor" | "getDeclaredConstructor",

@@ -230,6 +230,9 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/time/temporal/UnsupportedTemporalTypeException",
         "java/time/DateTimeException",
     ),
+    // `NumberFormat.parse(text)` on text that is not a number. Checked, like
+    // the I/O ones, so a program has to name it.
+    ("java/text/ParseException", "java/lang/Exception"),
     (
         "java/nio/charset/UnsupportedCharsetException",
         "java/lang/IllegalArgumentException",

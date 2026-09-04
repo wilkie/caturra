@@ -876,6 +876,10 @@ pub enum HeapObject {
     /// A `java.math.MathContext`: how many significant digits to keep, and how
     /// to round what falls off.
     MathContext { precision: i32, mode: u8 },
+    /// A `java.text.DecimalFormat` — the parsed pattern, and the limits a
+    /// program may then change on it. `NumberFormat` is the same object under
+    /// a narrower name, which is what a JDK's factories answer with too.
+    NumberFormat(Box<crate::numfmt::NumberPattern>),
     /// A `java.nio.charset.Charset` — `StandardCharsets.UTF_8` and the names
     /// beside it. It carries its canonical NAME and nothing else, which is all
     /// `getBytes`, `new String(bytes, …)` and its own `toString` need.
@@ -1200,6 +1204,7 @@ impl HeapObject {
             | HeapObject::BigDecimal(_)
             | HeapObject::RoundingMode(_)
             | HeapObject::MathContext { .. }
+            | HeapObject::NumberFormat(_)
             | HeapObject::Pattern { .. }
             | HeapObject::MatchResult { .. }
             | HeapObject::Writer { .. }

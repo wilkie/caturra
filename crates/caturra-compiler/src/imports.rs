@@ -147,6 +147,9 @@ const JAVA_TIME_FORMAT: &[&str] = &[
 /// overflows on.
 const JAVA_MATH: &[&str] = &["BigInteger", "BigDecimal", "RoundingMode", "MathContext"];
 
+/// `java.text` — a number rendered for a person to read, by pattern.
+const JAVA_TEXT: &[&str] = &["DecimalFormat", "NumberFormat", "ParseException"];
+
 /// `java.nio.charset` — the charsets a program names when it turns text into
 /// bytes and back. `Charset` is the type; `StandardCharsets` holds the
 /// constants; the exceptions are what an unknown name throws.
@@ -347,14 +350,8 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
 
 /// Real JDK packages we don't model at all (for wildcard/unknown-class
 /// imports of them, an honest message beats "does not exist").
-const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
-    "java.net",
-    "java.nio",
-    "java.text",
-    "java.math",
-    "java.sql",
-    "java.util.concurrent",
-];
+const KNOWN_UNSUPPORTED_PACKAGES: &[&str] =
+    &["java.net", "java.nio", "java.sql", "java.util.concurrent"];
 
 /// Library type names whose use requires an import.
 const REQUIRES_IMPORT: &[&str] = &[
@@ -703,6 +700,7 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("java.time.chrono", JAVA_TIME_CHRONO),
     ("java.nio.charset", JAVA_NIO_CHARSET),
     ("java.math", JAVA_MATH),
+    ("java.text", JAVA_TEXT),
     ("java.lang", JAVA_LANG),
     ("java.lang.reflect", JAVA_LANG_REFLECT),
     ("org.code.neighborhood", ORG_CODE_NEIGHBORHOOD),

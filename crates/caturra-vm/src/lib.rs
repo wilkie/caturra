@@ -16,6 +16,7 @@ mod interpreter;
 pub mod intrinsics;
 pub mod io;
 pub mod map;
+pub mod numfmt;
 pub(crate) mod regex;
 pub mod time;
 pub mod unicode;

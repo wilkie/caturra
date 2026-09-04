@@ -250,6 +250,16 @@
     "expected": "-8764578968847253504\n265252859812191058636308480000000\n123456789012345678901234567987 123456789012345678901234567793 11975308534197530853419753085330\n1272750402189130710322005854 52 52\n-2 3\n1 true\n97 and 61\ntrue 97\n3\n"
   },
   {
+    "id": "decimalformats",
+    "category": "Library",
+    "title": "Numbers for a person to read",
+    "summary": "DecimalFormat: a pattern applied to a number, and read back.",
+    "main": "Pretty",
+    "source": "import java.text.DecimalFormat;\nimport java.text.NumberFormat;\nimport java.text.ParseException;\nimport java.math.RoundingMode;\n\npublic class Pretty {\n    public static void main(String[] args) throws ParseException {\n        // A pattern is a handful of counts: how few integer digits to insist\n        // on, how many fraction digits to allow, and where the groups fall.\n        DecimalFormat money = new DecimalFormat(\"#,##0.00\");\n        System.out.println(money.format(1234.5) + \" \" + money.format(-7));\n        System.out.println(new DecimalFormat(\"0.##\").format(3.14159));\n        System.out.println(new DecimalFormat(\"000\").format(7));\n        System.out.println(new DecimalFormat(\"0.0%\").format(0.756));\n        System.out.println(new DecimalFormat(\"#.##;(#.##)\").format(-42.5));\n        System.out.println(new DecimalFormat(\"0.###E0\").format(123456.0));\n\n        // The factories, for when no pattern is wanted.\n        System.out.println(NumberFormat.getInstance().format(1234.5678));\n        System.out.println(NumberFormat.getIntegerInstance().format(1234.5678));\n        System.out.println(NumberFormat.getPercentInstance().format(0.5));\n\n        // The limits can be changed after the fact, and so can the rounding.\n        NumberFormat two = NumberFormat.getInstance();\n        two.setMaximumFractionDigits(2);\n        two.setMinimumFractionDigits(2);\n        two.setGroupingUsed(false);\n        System.out.println(two.format(1234.5));\n        DecimalFormat down = new DecimalFormat(\"0.0\");\n        down.setRoundingMode(RoundingMode.FLOOR);\n        System.out.println(down.format(2.55) + \" \" + new DecimalFormat(\"0.0\").format(2.55));\n\n        // ...and a formatter reads a number back as well as writing one.\n        Number read = money.parse(\"1,234.56\");\n        System.out.println(read + \" \" + read.intValue());\n        try {\n            money.parse(\"not a number\");\n        } catch (ParseException e) {\n            System.out.println(\"refused: \" + e.getMessage());\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "1,234.50 -7.00\n3.14\n007\n75.6%\n(42.5)\n1.235E5\n1,234.568\n1,235\n50%\n1234.50\n2.5 2.5\n1234.56 1234\nrefused: Unparseable number: \"not a number\"\n"
+  },
+  {
     "id": "bigdecimals",
     "category": "Library",
     "title": "Decimals that add up",
