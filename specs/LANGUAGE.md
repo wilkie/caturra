@@ -13639,3 +13639,39 @@ the four localized formats over a date, a time and both, the two missing-field
 failures, the four `toString`s and a parse back through one — with the two new
 strictnesses beside it in the divergence list. The `java.time` fuzzer's
 positions program asks for all twenty-four of them each run.
+
+## What a longer fuzz run found
+
+The fuzzers are usually run for a handful of seeds a session, which is enough
+to catch a regression and not enough to search. Run properly — nine hundred
+random programs, sixty collection sequences, forty regex seeds, thirty each of
+format and time, and seven hundred one-token source mutations — they found
+three things, in three different parts of the engine.
+
+**A precision truncates `%h`'s null.** `String.format("%.1h", null)` is "n": a
+null hashes to the WORD "null", and every conversion's text is cut to its
+precision. `%h`'s null arm padded and never truncated, so it printed the whole
+word — the one cell of the format cross-product that had never been asked with
+both a null and a precision.
+
+**A type ARGUMENT nothing declares was accepted.** `Box<R>` for an `R` no scope
+declares read as the RAW `Box` and compiled; so did `Comparator<xyzzy>`, whose
+arguments the functional erasure drops on purpose, and so did `Box<int>`, where
+a library generic had said "unexpected type" all along. Three arms silently
+answered the erasure where the argument was a mistake rather than something the
+erasure declines to carry — and a fourth position, a method SIGNATURE, never
+looked at its arguments at all, because the descriptor erases them away. The
+mutation that found it renamed a method's own `<R>`, which is exactly how a
+student meets it: a typo'd type variable, silently compiled.
+
+**An inner class's enclosing instance was read as its own type argument.**
+`outer.new Box<>("hi")` for a non-static `Box<T>` inferred `Box<Outer>`: the
+enclosing instance is prepended as the leading constructor argument, and the
+constructor's inference plan counts only the parameters the program WROTE. The
+first thing done with the value — "Box<Outer> cannot be converted to
+Box<String>" — named a type the program never wrote. Writing the argument out
+(`new Box<String>(…)`) worked, which is why nothing had noticed.
+
+Pinned as `what_a_longer_fuzz_run_found`, with five refusals beside it. The
+lesson is the running, not the finding: three real defects sat behind seeds
+nobody had drawn.

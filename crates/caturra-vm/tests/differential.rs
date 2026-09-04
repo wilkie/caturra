@@ -49511,3 +49511,107 @@ public class Named {
 }
 "#
 );
+
+differential_test!(
+    what_a_longer_fuzz_run_found,
+    "Longer",
+    r#"
+import java.util.function.Function;
+
+/** Three things a longer fuzz run found. */
+public class Longer {
+    class Box<T> {
+        final T value;
+
+        Box(T value) {
+            this.value = value;
+        }
+
+        <R> Box<R> map(Function<T, R> f) {
+            return new Box<>(f.apply(value));
+        }
+
+        Box<T> copy() {
+            return new Box<>(value);
+        }
+
+        public String toString() {
+            return "Box[" + value + "]";
+        }
+    }
+
+    static class Free<T> {
+        final T value;
+
+        Free(T value) {
+            this.value = value;
+        }
+
+        Free<T> copy() {
+            return new Free<>(value);
+        }
+    }
+
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // A PRECISION truncates every conversion's text, `%h`'s null included.
+        Object nothing = null;
+        System.out.println("[" + String.format("%h", nothing) + "]"
+            + "[" + String.format("%.1h", nothing) + "]"
+            + "[" + String.format("%.2h", nothing) + "]"
+            + "[" + String.format("%.0h", nothing) + "]"
+            + "[" + String.format("%10.2h", nothing) + "]"
+            + "[" + String.format("%-10.2h", nothing) + "]"
+            + "[" + String.format("%.2H", nothing) + "]");
+        System.out.println("[" + String.format("%.2h", "hello") + "]"
+            + "[" + String.format("%.3h", 255) + "]"
+            + "[" + String.format("%.1s", nothing) + "]"
+            + "[" + String.format("%.1b", nothing) + "]");
+
+        // An INNER generic class carries its enclosing instance as the leading
+        // constructor argument, which the diamond's inference must not read.
+        Longer outer = new Longer();
+        Longer.Box<String> box = outer.new Box<>("hi");
+        probe("inner value", () -> box.value.length());
+        probe("inner copy", () -> box.copy().value.toUpperCase());
+        probe("inner map", () -> box.map(s -> s.length()).value + 1);
+        probe("inner nested", () -> outer.new Box<>(outer.new Box<>("deep")).value.value);
+        Free<String> free = new Free<>("yo");
+        probe("static copy", () -> free.copy().value.length());
+    }
+}
+"#
+);
+
+differential_wording!(
+    reject_undeclared_type_argument_in_a_return,
+    "RejArg2",
+    "import java.util.*;\npublic class RejArg2 {\n  static class Box<T> { T v; }\n  static <A> Box<R> map(Box<A> b) { return null; }\n  public static void main(String[] args) { System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_undeclared_type_argument_in_a_parameter,
+    "RejArg2",
+    "import java.util.*;\npublic class RejArg2 {\n  static class Box<T> { T v; }\n  static void go(java.util.function.Function<xyzzy, String> f) { }\n  public static void main(String[] args) { System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_undeclared_type_argument_in_a_local,
+    "RejArg2",
+    "import java.util.*;\npublic class RejArg2 {\n  static class Box<T> { T v; }\n  static void here() { Box<Nope> b = null; System.out.println(b); }\n  public static void main(String[] args) { System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_undeclared_type_argument_on_a_functional,
+    "RejArg2",
+    "import java.util.*;\npublic class RejArg2 {\n  static class Box<T> { T v; }\n  static void go(java.util.Comparator<xyzzy> by) { }\n  public static void main(String[] args) { System.out.println(\"no\"); }\n}"
+);
+differential_wording!(
+    reject_a_primitive_type_argument_on_a_user_generic,
+    "RejArg2",
+    "import java.util.*;\npublic class RejArg2 {\n  static class Box<T> { T v; }\n  static void go(Box<int> b) { }\n  public static void main(String[] args) { System.out.println(\"no\"); }\n}"
+);

@@ -994,8 +994,13 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<Vec<u16>, VmError>
         'h' => {
             let hash = match arg {
                 FormatArg::Str(None) => {
-                    let text = if conversion == 'H' { "NULL" } else { "null" };
-                    return Ok(pad(spec, text));
+                    // A null hashes to the WORD "null", and a precision
+                    // truncates it exactly as it truncates every other null:
+                    // `%.1h` is "n". Padding alone printed the whole word.
+                    return Ok(pad_units(
+                        spec,
+                        &general_text("null", spec, conversion == 'H'),
+                    ));
                 }
                 FormatArg::Str(Some(reference)) => match heap.get(reference) {
                     Some(HeapObject::JavaString(units)) => {

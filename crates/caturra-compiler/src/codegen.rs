@@ -3925,6 +3925,13 @@ impl MethodTable {
                     && !self.has_class(simple)
                     && let Some(id) = self.class_id(erased)
                 {
+                    // The same mistake on a FUNCTIONAL interface, whose
+                    // arguments the erasure drops on purpose:
+                    // `Comparator<xyzzy>` for an undeclared `xyzzy` read as a
+                    // plain `Comparator` and compiled.
+                    if args.iter().any(|arg| bad_type_argument(arg, self)) {
+                        return None;
+                    }
                     // `Comparator<T>` / `Function<T, R>` / … erase to their
                     // bundled `__`-interface. The RESULT argument is kept
                     // though: `Supplier<String>.get()` is a String, and
@@ -3967,6 +3974,18 @@ impl MethodTable {
                     let tracked: Option<Vec<ElemType>> = (declared == args.len() && declared > 0)
                         .then(|| args.iter().map(|a| elem_from_type_arg(a, self)).collect())
                         .flatten();
+                    // An argument whose NAME does not resolve at all is a
+                    // mistake, not an erasure. `Box<R>` for an `R` no scope
+                    // declares is javac's "cannot find symbol", and answering
+                    // the RAW class silently accepted a mistyped type variable
+                    // — the shape a syntax fuzzer found by renaming one.
+                    // ...and a PRIMITIVE is not a type argument at all, which
+                    // is the same answer from the other side: a library
+                    // generic already said "unexpected type" for `List<int>`,
+                    // and `Box<int>` fell through to the raw class.
+                    if tracked.is_none() && args.iter().any(|arg| bad_type_argument(arg, self)) {
+                        return None;
+                    }
                     // Each argument must be one caturra can carry: a WRAPPER
                     // is tracked too (`Node<Integer>`), since fields and
                     // collections hold boxed references, so `T get()` really
@@ -4899,6 +4918,57 @@ fn unsupported_name_in(ty: &TypeRef) -> Option<String> {
     args.iter().find_map(unsupported_name_in)
 }
 
+/// Whether a written type ARGUMENT is a mistake rather than something the
+/// erasure declines to carry: a name no scope declares, or a primitive, which
+/// is not a type argument at all. Both are javac errors, and answering the RAW
+/// type silently accepted them — a mistyped type variable compiled.
+fn bad_type_argument(arg: &TypeRef, table: &MethodTable) -> bool {
+    elem_from_type_arg(arg, table).is_none()
+        && (unknown_name_in(arg, table).is_some()
+            || !matches!(
+                arg,
+                TypeRef::Named(_) | TypeRef::Generic { .. } | TypeRef::Array(_)
+            ))
+}
+
+/// javac's complaint about one: a name nothing declares is "cannot find
+/// symbol", and a PRIMITIVE is "unexpected type", which is what a JDK says
+/// about `List<int>`.
+fn bad_type_argument_message(
+    arg: &TypeRef,
+    table: &MethodTable,
+    location: Option<&str>,
+) -> Option<String> {
+    // A real Java class caturra does not model says so BY NAME — `List<Vector>`
+    // is "java.util.Vector is not supported", not "cannot find symbol" about a
+    // class java.util really has. Same precedence the general chooser uses.
+    if let Some(reason) = unsupported_name_in(arg) {
+        return Some(reason);
+    }
+    if let Some(unknown) = unknown_name_in(arg, table) {
+        if let Some(reason) = crate::imports::unusable_library_type_reason(
+            unknown.rsplit('.').next().unwrap_or(&unknown),
+        ) {
+            return Some(reason);
+        }
+        return Some(cannot_find_symbol("class", &unknown, location));
+    }
+    let primitive = match arg {
+        TypeRef::Int => "int",
+        TypeRef::Long => "long",
+        TypeRef::Double => "double",
+        TypeRef::Float => "float",
+        TypeRef::Short => "short",
+        TypeRef::Byte => "byte",
+        TypeRef::Char => "char",
+        TypeRef::Boolean => "boolean",
+        _ => return None,
+    };
+    Some(format!(
+        "unexpected type\n  required: reference\n  found:    {primitive}"
+    ))
+}
+
 /// The first name in `ty` the table cannot resolve at all — a typo, most
 /// likely. Type arguments are searched before the base, so
 /// `ArrayList<Frobnicator>` blames the `Frobnicator`.
@@ -5075,6 +5145,18 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable, in_class: &str) ->
         })
     {
         return format!("unexpected type\n  required: reference\n  found:    {primitive}");
+    }
+    // ...but an ARGUMENT nothing declares is that argument's fault, whatever
+    // the base is: `Function<xyzzy, String>` is javac's "cannot find symbol",
+    // and blaming the base said "type Function does not take parameters" about
+    // a type that takes two.
+    if let TypeRef::Generic { args, .. } = ty
+        && let Some(bad) = args
+            .iter()
+            .filter(|arg| bad_type_argument(arg, table))
+            .find_map(|arg| bad_type_argument_message(arg, table, location))
+    {
+        return bad;
     }
     // A type that resolves perfectly WITHOUT arguments, written WITH them:
     // `String<Integer>`. javac names the mistake exactly — "type String does
@@ -10054,7 +10136,19 @@ fn method_descriptor(
                 // descriptor names the wrapper class, distinct from `[I`.
                 push_type(path, diagnostics, table, out, inner, span);
             }
-            TypeRef::Generic { base, .. } => {
+            TypeRef::Generic { base, args } => {
+                // A type ARGUMENT nothing declares is a mistake wherever it is
+                // written, and a SIGNATURE never looked: the descriptor erases
+                // the arguments away, so `void go(Function<xyzzy, String> f)`
+                // compiled. Reported here; the erased descriptor is still
+                // written, so the rest of the method still compiles.
+                if let Some(message) = args
+                    .iter()
+                    .filter(|arg| bad_type_argument(arg, table))
+                    .find_map(|arg| bad_type_argument_message(arg, table, None))
+                {
+                    diagnostics.push(Diagnostic::error(path, message, span));
+                }
                 // The name to LOOK UP: a library type written qualified
                 // (`java.util.Iterator<T>`) is the same type as the simple
                 // name, and the bundled interfaces live in the class table
@@ -24943,7 +25037,25 @@ impl BodyGen<'_> {
             return None;
         };
         let sig = sig.clone();
-        self.diamond_argument(&sig, arg_types)
+        // An INNER class's `new` carries its enclosing instance as the leading
+        // argument, which the constructor's inference plan does not count: the
+        // plan was built from the parameters the program WROTE. Reading the
+        // arguments as they arrive made the ENCLOSING INSTANCE the type
+        // argument, so `outer.new Box<>("hi")` was a `Box<Outer>` — and the
+        // first thing done with it, "Box<Outer> cannot be converted to
+        // Box<String>", named a type the program never wrote.
+        let written = if self
+            .table
+            .class_id(class_name)
+            .and_then(|id| self.table.info_by_id(id))
+            .is_some_and(|info| info.is_inner)
+            && !arg_types.is_empty()
+        {
+            &arg_types[1..]
+        } else {
+            arg_types
+        };
+        self.diamond_argument(&sig, written)
     }
 
     /// The type argument a DIAMOND (`new Node<>(5)`) infers from the
