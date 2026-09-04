@@ -834,6 +834,69 @@ public class Big {
 ''',
     ),
     dict(
+        id="small-utilities",
+        category="Library",
+        title="The small utilities",
+        summary="StringTokenizer, UUID, Base64, BitSet, and text that looks like a file.",
+        main="Utils",
+        source='''
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.Base64;
+import java.util.BitSet;
+import java.util.StringTokenizer;
+import java.util.UUID;
+
+public class Utils {
+    public static void main(String[] args) {
+        // The pre-split way to walk words, still the first one taught.
+        StringTokenizer words = new StringTokenizer("the quick brown fox");
+        System.out.println(words.countTokens() + " " + words.nextToken() + " " + words.nextToken());
+        StringTokenizer fields = new StringTokenizer("a,b,,c", ",");
+        while (fields.hasMoreTokens()) {
+            System.out.print(fields.nextToken() + "|");
+        }
+        System.out.println();
+
+        // An identifier, by its canonical spelling.
+        UUID id = UUID.fromString("123e4567-e89b-12d3-a456-426614174000");
+        System.out.println(id + " " + id.version() + " " + id.variant());
+        System.out.println(id.equals(UUID.fromString("123e4567-e89b-12d3-a456-426614174000")));
+
+        // Bytes through text, and back.
+        String coded = Base64.getEncoder().encodeToString("attack at dawn".getBytes());
+        System.out.println(coded + " -> " + new String(Base64.getDecoder().decode(coded)));
+        System.out.println(Base64.getEncoder().withoutPadding().encodeToString("a".getBytes()));
+
+        // A set of small numbers: the sieve, in the type it was made for.
+        BitSet composite = new BitSet();
+        for (int i = 2; i * i <= 30; i++) {
+            if (!composite.get(i)) {
+                for (int j = i * i; j <= 30; j += i) {
+                    composite.set(j);
+                }
+            }
+        }
+        for (int i = 2; i <= 30; i++) {
+            if (!composite.get(i)) {
+                System.out.print(i + " ");
+            }
+        }
+        System.out.println();
+        System.out.println(composite.cardinality() + " " + composite.nextSetBit(10));
+
+        // ...and output a program can read back.
+        StringWriter buffer = new StringWriter();
+        PrintWriter out = new PrintWriter(buffer);
+        out.println("a line");
+        out.printf("%s=%d%n", "count", 42);
+        out.flush();
+        System.out.print(buffer);
+    }
+}
+''',
+    ),
+    dict(
         id="decimalformats",
         category="Library",
         title="Numbers for a person to read",

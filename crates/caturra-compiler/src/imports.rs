@@ -21,6 +21,8 @@ const JAVA_UTIL: &[&str] = &[
     // unique name" exercise reaches for.
     "StringTokenizer",
     "UUID",
+    "Base64",
+    "BitSet",
     "AbstractMap",
     "ArrayList",
     "List",
@@ -559,6 +561,10 @@ const NESTED_LIBRARY_CLASSES: &[(&str, &str, &str)] = &[
     // compiled while `AbstractMap.SimpleEntry<K, V> e = …` was "package
     // AbstractMap does not exist", about a package that is a class.
     ("AbstractMap", "SimpleEntry", "Map.Entry"),
+    // `Base64` is only a namespace for its two coders, and a program that keeps
+    // one in a field has to be able to NAME it.
+    ("Base64", "Encoder", "Base64.Encoder"),
+    ("Base64", "Decoder", "Base64.Decoder"),
 ];
 
 /// Resolve a fully qualified library name (`java.util.Scanner`) to the

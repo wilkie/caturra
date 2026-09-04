@@ -13897,3 +13897,36 @@ getting a silently empty result instead of a failure.
 
 Pinned as `a_tokenizer_and_a_uuid`, `text_that_looks_like_a_file` and
 `the_small_utilities_in_every_position`.
+
+## Bytes as text, and a set of small numbers
+
+`java.util.Base64`, `java.util.BitSet`, and the marker interface an algorithm
+asks about before it walks a list: `java.util.RandomAccess`.
+
+**Base64** is a namespace for two coders. Three alphabets (basic, URL-safe,
+MIME), padding that can be turned off, and a MIME encoder that breaks the line
+every 76 characters. A decoder takes the text either way round — a `String` or
+the bytes of one — and an unrecognised character is a JDK's
+`Illegal base64 character 21`, naming the character's CODE in hex. A MIME
+decoder skips what it does not recognise instead.
+
+`Base64.Encoder` and `Base64.Decoder` are NESTED types, so a program that keeps
+one in a field has to be able to name them — which meant registering them
+beside `Map.Entry` in the nested-library table, or `Base64.Encoder e;` was
+"package Base64 does not exist", about a package that is a class.
+
+**BitSet** is index arithmetic over 64-bit words. Two details are its own:
+`length()` is one past the highest set bit while `size()` is the STORAGE (a
+multiple of 64, never less than one word, so two equal sets can report the same
+size while holding different words); and `set(bit, value)` and `set(from, to)`
+have the same ARITY, so the compiler renames the first before the VM sees it.
+
+**RandomAccess** is a marker with no methods, synthesized beside `Cloneable`.
+An `ArrayList` and a `Stack` wear it and a `LinkedList` does not — which is the
+whole point of it, and what `list instanceof RandomAccess` asks. Like
+`Comparable`, a synthesized marker reaches the VM under its BARE name, so the
+runtime face list carries both spellings.
+
+Pinned as `base64_and_bitset` and `base64_and_bitset_in_every_position` — the
+second of which writes the sieve of Eratosthenes over a `BitSet`, which is what
+a course actually uses one for.

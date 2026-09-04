@@ -250,6 +250,16 @@
     "expected": "-8764578968847253504\n265252859812191058636308480000000\n123456789012345678901234567987 123456789012345678901234567793 11975308534197530853419753085330\n1272750402189130710322005854 52 52\n-2 3\n1 true\n97 and 61\ntrue 97\n3\n"
   },
   {
+    "id": "small-utilities",
+    "category": "Library",
+    "title": "The small utilities",
+    "summary": "StringTokenizer, UUID, Base64, BitSet, and text that looks like a file.",
+    "main": "Utils",
+    "source": "import java.io.PrintWriter;\nimport java.io.StringWriter;\nimport java.util.Base64;\nimport java.util.BitSet;\nimport java.util.StringTokenizer;\nimport java.util.UUID;\n\npublic class Utils {\n    public static void main(String[] args) {\n        // The pre-split way to walk words, still the first one taught.\n        StringTokenizer words = new StringTokenizer(\"the quick brown fox\");\n        System.out.println(words.countTokens() + \" \" + words.nextToken() + \" \" + words.nextToken());\n        StringTokenizer fields = new StringTokenizer(\"a,b,,c\", \",\");\n        while (fields.hasMoreTokens()) {\n            System.out.print(fields.nextToken() + \"|\");\n        }\n        System.out.println();\n\n        // An identifier, by its canonical spelling.\n        UUID id = UUID.fromString(\"123e4567-e89b-12d3-a456-426614174000\");\n        System.out.println(id + \" \" + id.version() + \" \" + id.variant());\n        System.out.println(id.equals(UUID.fromString(\"123e4567-e89b-12d3-a456-426614174000\")));\n\n        // Bytes through text, and back.\n        String coded = Base64.getEncoder().encodeToString(\"attack at dawn\".getBytes());\n        System.out.println(coded + \" -> \" + new String(Base64.getDecoder().decode(coded)));\n        System.out.println(Base64.getEncoder().withoutPadding().encodeToString(\"a\".getBytes()));\n\n        // A set of small numbers: the sieve, in the type it was made for.\n        BitSet composite = new BitSet();\n        for (int i = 2; i * i <= 30; i++) {\n            if (!composite.get(i)) {\n                for (int j = i * i; j <= 30; j += i) {\n                    composite.set(j);\n                }\n            }\n        }\n        for (int i = 2; i <= 30; i++) {\n            if (!composite.get(i)) {\n                System.out.print(i + \" \");\n            }\n        }\n        System.out.println();\n        System.out.println(composite.cardinality() + \" \" + composite.nextSetBit(10));\n\n        // ...and output a program can read back.\n        StringWriter buffer = new StringWriter();\n        PrintWriter out = new PrintWriter(buffer);\n        out.println(\"a line\");\n        out.printf(\"%s=%d%n\", \"count\", 42);\n        out.flush();\n        System.out.print(buffer);\n    }\n}\n",
+    "status": "supported",
+    "expected": "4 the quick\na|b|c|\n123e4567-e89b-12d3-a456-426614174000 1 2\ntrue\nYXR0YWNrIGF0IGRhd24= -> attack at dawn\nYQ\n2 3 5 7 11 13 17 19 23 29 \n19 10\na line\ncount=42\n"
+  },
+  {
     "id": "decimalformats",
     "category": "Library",
     "title": "Numbers for a person to read",

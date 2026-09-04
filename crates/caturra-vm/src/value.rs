@@ -889,6 +889,16 @@ pub enum HeapObject {
     },
     /// A `java.util.UUID` — two longs, and nothing else.
     Uuid(i64, i64),
+    /// A `java.util.Base64.Encoder` or `.Decoder` — which alphabet, whether it
+    /// pads, and whether it wraps at 76 characters.
+    Base64 {
+        url: bool,
+        mime: bool,
+        padding: bool,
+        decoding: bool,
+    },
+    /// A `java.util.BitSet` — the bits, as 64 to a word.
+    BitSet(Vec<u64>),
     /// A `java.io.StringWriter` — the characters written into it so far.
     StringWriter(Vec<u16>),
     /// A `java.text.DecimalFormat` — the parsed pattern, and the limits a
@@ -1236,6 +1246,8 @@ impl HeapObject {
             | HeapObject::NumberFormat(_)
             | HeapObject::StringTokenizer { .. }
             | HeapObject::Uuid(_, _)
+            | HeapObject::Base64 { .. }
+            | HeapObject::BitSet(_)
             | HeapObject::StringWriter(_)
             | HeapObject::Pattern { .. }
             | HeapObject::MatchResult { .. }

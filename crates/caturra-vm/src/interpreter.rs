@@ -20188,10 +20188,17 @@ fn library_is_interface(internal: &str) -> bool {
 #[allow(clippy::too_many_lines)] // one row per library class
 fn library_faces(class: &str) -> &'static [&'static str] {
     const LIST: &[&str] = &["java/util/List", "java/util/Collection"];
+    // An `ArrayList` indexes in constant time, so it wears `RandomAccess` —
+    // which is the whole reason the marker exists, and what a `LinkedList`
+    // does NOT wear.
     const CLONEABLE_LIST: &[&str] = &[
         "java/util/List",
         "java/util/Collection",
         "java/lang/Cloneable",
+        // Both spellings: a synthesized marker reaches the VM under its bare
+        // name, the way `Comparable` does.
+        "java/util/RandomAccess",
+        "RandomAccess",
     ];
     const SET: &[&str] = &["java/util/Set", "java/util/Collection"];
     const CLONEABLE_SET: &[&str] = &[
@@ -20484,6 +20491,12 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         Some(HeapObject::NumberFormat(_)) => String::from("java/text/DecimalFormat"),
         Some(HeapObject::StringTokenizer { .. }) => String::from("java/util/StringTokenizer"),
         Some(HeapObject::Uuid(_, _)) => String::from("java/util/UUID"),
+        Some(HeapObject::BitSet(_)) => String::from("java/util/BitSet"),
+        Some(HeapObject::Base64 { decoding, .. }) => String::from(if *decoding {
+            "java/util/Base64$Decoder"
+        } else {
+            "java/util/Base64$Encoder"
+        }),
         Some(HeapObject::StringWriter(_)) => String::from("java/io/StringWriter"),
         Some(HeapObject::Charset(name)) => format!("sun/nio/cs/{}", name.replace('-', "_")),
         Some(HeapObject::SummaryStats { .. }) => String::from("java/util/IntSummaryStatistics"),

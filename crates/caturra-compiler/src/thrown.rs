@@ -908,6 +908,31 @@ fn library_kind_throws(
     out
 }
 
+/// Whether a `new PrintWriter(...)` wraps another writer rather than naming a
+/// file — the one form of it that declares no checked exception.
+fn wraps_a_writer(args: &[Expr], ctx: &Ctx) -> bool {
+    let [only] = args else {
+        return false;
+    };
+    match only {
+        // `new PrintWriter(new StringWriter())`, written inline.
+        Expr::NewObject { class, .. } => matches!(
+            class.rsplit('.').next().unwrap_or(class),
+            "StringWriter" | "CharArrayWriter"
+        ),
+        // ...or through a variable the program declared as one.
+        Expr::Name { path, .. } => matches!(path.as_slice(), [only] if matches!(
+            ctx.locals.get(only),
+            Some(Binding::Declared(TypeRef::Named(name)))
+                if matches!(
+                    name.rsplit('.').next().unwrap_or(name),
+                    "StringWriter" | "Writer"
+                )
+        )),
+        _ => false,
+    }
+}
+
 /// Checked exceptions of modeled library STATICS.
 fn library_static_throws(
     class: &str,
@@ -955,8 +980,13 @@ fn ctor_throws(
     let simple = class.rsplit('.').next().unwrap_or(class);
     let mut out = ThrownSet::default();
     match simple {
-        // `new FileReader(...)` / `new PrintWriter(file-or-name)`.
-        "FileReader" | "PrintWriter" => out.push(Exc::Lib("java/io/FileNotFoundException")),
+        // `new FileReader(...)` / `new PrintWriter(file-or-name)`. A
+        // `PrintWriter` over a WRITER declares nothing — there is no file to be
+        // missing — which is exactly the form that wraps a `StringWriter`.
+        "FileReader" => out.push(Exc::Lib("java/io/FileNotFoundException")),
+        "PrintWriter" if !wraps_a_writer(args, ctx) => {
+            out.push(Exc::Lib("java/io/FileNotFoundException"));
+        }
         // `new String(bytes, "UTF-8")` — the charset NAMED as text may name no
         // charset, so this constructor declares the checked exception where
         // the `Charset` form (and every other String constructor) does not.

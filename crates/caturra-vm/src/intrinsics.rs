@@ -2558,6 +2558,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             return_delimiters: false,
         }),
         "java/util/UUID" => Some(HeapObject::Uuid(0, 0)),
+        "java/util/BitSet" => Some(HeapObject::BitSet(Vec::new())),
         "java/io/StringWriter" => Some(HeapObject::StringWriter(Vec::new())),
         // A `StringReader` is the reader kind already here, over text the
         // program handed in rather than a file.
@@ -3695,6 +3696,17 @@ pub fn invoke_virtual(
         (HeapObject::NumberFormat(_), _) => number_format_method(heap, receiver, method, args),
         (HeapObject::StringTokenizer { .. }, _) => tokenizer_method(heap, receiver, method),
         (HeapObject::Uuid(_, _), _) => uuid_method(heap, receiver, method, args),
+        (HeapObject::Base64 { .. }, _) => base64_method(heap, receiver, method, args),
+        (HeapObject::BitSet(_), _) => {
+            // `set(bit, value)` and `set(from, to)` have the same arity; the
+            // compiler renames the first so the VM can tell them apart.
+            let method = if method == "set" && descriptor == "(IZ)V" {
+                "setValue"
+            } else {
+                method
+            };
+            bitset_method(heap, receiver, method, args)
+        }
         (HeapObject::StringWriter(_), _) => {
             string_writer_method(heap, receiver, method, descriptor, args)
         }
@@ -4058,10 +4070,11 @@ pub(crate) fn uses_identity_equality(object: &HeapObject) -> bool {
             | HeapObject::StringBuilder(_)
             | HeapObject::Exception { .. }
             | HeapObject::Iterator { .. }
-            // A tokenizer and a writer are identity objects: a JDK gives them
-            // no `equals` of their own.
+            // A tokenizer, a writer and a base-64 coder are identity objects:
+            // a JDK gives them no `equals` of their own.
             | HeapObject::StringTokenizer { .. }
             | HeapObject::StringWriter(_)
+            | HeapObject::Base64 { .. }
             // A `RoundingMode` is an ENUM, so `equals` is identity — and since
             // the constants are interned, identity IS value equality.
             | HeapObject::RoundingMode(_)
@@ -6906,6 +6919,7 @@ pub(crate) fn native_equals(heap: &Heap, a: JValue, b: JValue) -> bool {
                     (Some(HeapObject::Uuid(hx, lx)), Some(HeapObject::Uuid(hy, ly))) => {
                         hx == hy && lx == ly
                     }
+                    (Some(HeapObject::BitSet(bx)), Some(HeapObject::BitSet(by))) => bx == by,
                     (
                         Some(HeapObject::MathContext {
                             precision: px,
@@ -6960,6 +6974,15 @@ pub(crate) fn native_hash(heap: &Heap, value: JValue) -> i32 {
             Some(HeapObject::Uuid(high, low)) => {
                 let folded = high ^ low;
                 ((folded >> 32) as i32) ^ (folded as i32)
+            }
+            Some(HeapObject::BitSet(words)) => {
+                let mut hash: u64 = 1234;
+                for (at, word) in words.iter().enumerate() {
+                    hash ^= word.wrapping_mul(at as u64 + 1);
+                }
+                u32::try_from(((hash >> 32) ^ hash) & 0xffff_ffff)
+                    .unwrap_or(0)
+                    .cast_signed()
             }
             Some(HeapObject::MathContext { precision, mode }) => precision
                 .wrapping_add(identity_hash(reference).wrapping_mul(59))
@@ -10682,6 +10705,37 @@ pub fn invoke_static(
             }
             _ => Err(VmError::UnknownIntrinsic(format!("BigInteger.{method}"))),
         },
+        // `Base64.getEncoder()` and the five beside it. Each answers a coder
+        // that knows only its alphabet and whether it pads or wraps.
+        "java/util/Base64" => {
+            let url = method.contains("Url");
+            let mime = method.contains("Mime");
+            let decoding = method.contains("Decoder");
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Base64 {
+                url,
+                mime,
+                padding: true,
+                decoding,
+            })))))
+        }
+        // `BitSet.valueOf(longs)` — the bits those words already hold.
+        "java/util/BitSet" => match method {
+            "valueOf" => {
+                let words = match args.first() {
+                    Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                        Some(HeapObject::LongArray(values)) => {
+                            values.iter().map(|value| value.cast_unsigned()).collect()
+                        }
+                        _ => return Err(throw("java.lang.ClassCastException: not a long[]")),
+                    },
+                    _ => return Err(throw("java.lang.NullPointerException")),
+                };
+                Ok(Some(JValue::Ref(Some(
+                    heap.alloc(HeapObject::BitSet(words)),
+                ))))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("BitSet.{method}"))),
+        },
         // `UUID.fromString(text)` and `UUID.randomUUID()`. The random one
         // cannot match a JDK's VALUE — a JDK draws from a secure source — but
         // its SHAPE is fixed: version 4, variant 2.
@@ -13226,6 +13280,7 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::BigInteger(value)) => value.to_text(10),
             Some(HeapObject::BigDecimal(value)) => value.to_text(),
             Some(HeapObject::Uuid(high, low)) => uuid_text(*high, *low),
+            Some(HeapObject::BitSet(words)) => bitset_text(words),
             Some(HeapObject::StringWriter(units)) => String::from_utf16_lossy(units),
             // A JDK's `Format.toString` is the default one; the identity hash
             // in it is normalized away by every comparison that reads this.
@@ -14672,6 +14727,362 @@ fn exact_error(method: &str) -> VmError {
     throw(format!(
         "java.lang.ArithmeticException: BigInteger out of {width} range"
     ))
+}
+
+/// The three base-64 alphabets a JDK offers. The URL one swaps the last two
+/// characters so the text is safe in a path or a query.
+const BASE64_BASIC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const BASE64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// `java.util.Base64` — the encoders and decoders, and what they answer.
+fn base64_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let (url, mime, padding, decoding) = match heap.get(receiver) {
+        Some(HeapObject::Base64 {
+            url,
+            mime,
+            padding,
+            decoding,
+        }) => (*url, *mime, *padding, *decoding),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    match method {
+        "withoutPadding" => {
+            let made = heap.alloc(HeapObject::Base64 {
+                url,
+                mime,
+                padding: false,
+                decoding,
+            });
+            Ok(Some(JValue::Ref(Some(made))))
+        }
+        "encode" | "encodeToString" => {
+            let bytes = byte_array_values(heap, &args[0])?;
+            let text = base64_encode(&bytes, url, mime, padding);
+            let answer = if method == "encodeToString" {
+                heap.alloc_string(&text)
+            } else {
+                let bytes: Vec<i8> = text.bytes().map(u8::cast_signed).collect();
+                heap.alloc(HeapObject::ByteArray(bytes))
+            };
+            Ok(Some(JValue::Ref(Some(answer))))
+        }
+        "decode" => {
+            // A decoder takes the text either way round: a String or the bytes
+            // of one.
+            let text = match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::ByteArray(bytes)) => bytes
+                        .iter()
+                        .map(|byte| char::from(byte.cast_unsigned()))
+                        .collect(),
+                    _ => heap
+                        .string_text(*reference)
+                        .ok_or_else(|| throw("java.lang.ClassCastException: not text"))?,
+                },
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            let bytes = base64_decode(&text, url, mime)?;
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::ByteArray(bytes)),
+            ))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("Base64.{method}"))),
+    }
+}
+
+/// Three bytes become four characters; a short tail pads (or does not).
+fn base64_encode(bytes: &[i8], url: bool, mime: bool, padding: bool) -> String {
+    let alphabet = if url { BASE64_URL } else { BASE64_BASIC };
+    let mut out = String::new();
+    let mut since_break = 0;
+    for chunk in bytes.chunks(3) {
+        let mut word = 0u32;
+        for (at, byte) in chunk.iter().enumerate() {
+            word |= u32::from(byte.cast_unsigned()) << (16 - at * 8);
+        }
+        // A two-byte tail writes three characters and a one-byte tail two;
+        // the rest is padding, when there is padding.
+        let written = chunk.len() + 1;
+        for at in 0..written {
+            out.push(char::from(
+                alphabet[((word >> (18 - at * 6)) & 0x3f) as usize],
+            ));
+        }
+        if padding {
+            for _ in written..4 {
+                out.push('=');
+            }
+        }
+        // A MIME encoder breaks the line every 76 characters.
+        since_break += 4;
+        if mime && since_break >= 76 && bytes.len() > (out.len() / 4) * 3 {
+            out.push_str("\r\n");
+            since_break = 0;
+        }
+    }
+    out
+}
+
+/// ...and back. A MIME decoder skips what it does not recognise; the other two
+/// refuse it, naming the character's CODE as a JDK does.
+fn base64_decode(text: &str, url: bool, mime: bool) -> Result<Vec<i8>, VmError> {
+    let mut word = 0u32;
+    let mut have = 0;
+    let mut out = Vec::new();
+    for ch in text.chars() {
+        if ch == '=' {
+            break;
+        }
+        let value = match ch {
+            'A'..='Z' => ch as u32 - 'A' as u32,
+            'a'..='z' => ch as u32 - 'a' as u32 + 26,
+            '0'..='9' => ch as u32 - '0' as u32 + 52,
+            '+' if !url => 62,
+            '/' if !url => 63,
+            '-' if url => 62,
+            '_' if url => 63,
+            _ => {
+                if mime {
+                    continue;
+                }
+                return Err(throw(format!(
+                    "java.lang.IllegalArgumentException: Illegal base64 character {:x}",
+                    ch as u32
+                )));
+            }
+        };
+        word = (word << 6) | value;
+        have += 6;
+        if have >= 8 {
+            have -= 8;
+            out.push(
+                u8::try_from((word >> have) & 0xff)
+                    .unwrap_or(0)
+                    .cast_signed(),
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// `java.util.BitSet` — a set of small non-negative integers, stored 64 to a
+/// word. Everything here is index arithmetic over that.
+#[allow(clippy::too_many_lines)] // one arm per question a BitSet answers
+fn bitset_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let words = match heap.get(receiver) {
+        Some(HeapObject::BitSet(words)) => words.clone(),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    let index = |at: usize| -> Result<i32, VmError> {
+        match args.get(at) {
+            Some(JValue::Int(value)) if *value >= 0 => Ok(*value),
+            Some(JValue::Int(value)) => Err(throw(format!(
+                "java.lang.IndexOutOfBoundsException: bitIndex < 0: {value}"
+            ))),
+            _ => Err(throw("java.lang.NullPointerException")),
+        }
+    };
+    let other = |heap: &Heap| -> Result<Vec<u64>, VmError> {
+        match args.first() {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::BitSet(words)) => Ok(words.clone()),
+                _ => Err(throw("java.lang.ClassCastException: not a BitSet")),
+            },
+            _ => Err(throw("java.lang.NullPointerException")),
+        }
+    };
+    let store = |heap: &mut Heap, mut words: Vec<u64>| {
+        while words.last() == Some(&0) {
+            words.pop();
+        }
+        if let Some(HeapObject::BitSet(slot)) = heap.get_mut(receiver) {
+            *slot = words;
+        }
+        Ok(None)
+    };
+    // Every index here has already been checked non-negative.
+    let get = |words: &[u64], bit: i32| -> bool {
+        let bit = usize::try_from(bit).unwrap_or(0);
+        words
+            .get(bit / 64)
+            .is_some_and(|w| (w >> (bit % 64)) & 1 == 1)
+    };
+    match method {
+        "set" | "setValue" | "clear" | "flip" => {
+            let from = index(0)?;
+            // The three shapes: one bit, a RANGE (`set(from, to)`), and one bit
+            // with an explicit value (`set(bit, false)`). The caller renames the
+            // last two so the arity alone tells them apart.
+            let (from, to, value) = match (method, args.get(1)) {
+                ("setValue", Some(JValue::Int(flag))) => (from, from + 1, *flag != 0),
+                (_, Some(JValue::Int(end))) => (from, *end, true),
+                _ => (from, from + 1, true),
+            };
+            let value = if method == "clear" { false } else { value };
+            let mut words = words;
+            let needed = usize::try_from(to.max(from)).unwrap_or(0) / 64 + 1;
+            while words.len() < needed {
+                words.push(0);
+            }
+            for bit in from..to {
+                let bit = usize::try_from(bit).unwrap_or(0);
+                let word = bit / 64;
+                let mask = 1u64 << (bit % 64);
+                if method == "flip" {
+                    words[word] ^= mask;
+                } else if value {
+                    words[word] |= mask;
+                } else {
+                    words[word] &= !mask;
+                }
+            }
+            store(heap, words)
+        }
+        "get" => Ok(Some(JValue::Int(i32::from(get(&words, index(0)?))))),
+        "cardinality" => Ok(Some(JValue::Int(
+            words
+                .iter()
+                .map(|word| word.count_ones())
+                .sum::<u32>()
+                .cast_signed(),
+        ))),
+        "isEmpty" => Ok(Some(JValue::Int(i32::from(
+            words.iter().all(|word| *word == 0),
+        )))),
+        // `length` is one past the highest set bit; `size` is the STORAGE,
+        // which is a multiple of 64 and never less than one word.
+        "length" => {
+            let highest = words
+                .iter()
+                .enumerate()
+                .rfind(|(_, word)| **word != 0)
+                .map_or(0, |(at, word)| {
+                    at * 64 + 64 - usize::try_from(word.leading_zeros()).unwrap_or(0)
+                });
+            Ok(Some(JValue::Int(i32::try_from(highest).unwrap_or(0))))
+        }
+        "size" => Ok(Some(JValue::Int(
+            i32::try_from(words.len().max(1) * 64).unwrap_or(64),
+        ))),
+        "nextSetBit" | "nextClearBit" | "previousSetBit" | "previousClearBit" => {
+            let from = index(0)?;
+            let want = method.ends_with("SetBit");
+            let limit = i32::try_from(words.len() * 64).unwrap_or(0);
+            if method.starts_with("next") {
+                // Past the stored words every bit is CLEAR, so a search for one
+                // succeeds there and a search for a set bit does not.
+                let mut bit = from;
+                while bit < limit {
+                    if get(&words, bit) == want {
+                        return Ok(Some(JValue::Int(bit)));
+                    }
+                    bit += 1;
+                }
+                return Ok(Some(JValue::Int(if want { -1 } else { bit })));
+            }
+            let mut bit = from.min(limit);
+            while bit >= 0 {
+                if get(&words, bit) == want {
+                    return Ok(Some(JValue::Int(bit)));
+                }
+                bit -= 1;
+            }
+            Ok(Some(JValue::Int(-1)))
+        }
+        "and" | "or" | "xor" | "andNot" => {
+            let theirs = other(heap)?;
+            let width = match method {
+                "and" | "andNot" => words.len(),
+                _ => words.len().max(theirs.len()),
+            };
+            let mut folded = vec![0u64; width];
+            for (at, slot) in folded.iter_mut().enumerate() {
+                let mine = words.get(at).copied().unwrap_or(0);
+                let theirs = theirs.get(at).copied().unwrap_or(0);
+                *slot = match method {
+                    "and" => mine & theirs,
+                    "or" => mine | theirs,
+                    "xor" => mine ^ theirs,
+                    _ => mine & !theirs,
+                };
+            }
+            store(heap, folded)
+        }
+        "clone" => Ok(Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::BitSet(words)),
+        )))),
+        "toString" => {
+            let text = bitset_text(&words);
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        "equals" => {
+            let same = matches!(args.first(), Some(JValue::Ref(Some(reference)))
+                if matches!(heap.get(*reference), Some(HeapObject::BitSet(theirs)) if *theirs == words));
+            Ok(Some(JValue::Int(i32::from(same))))
+        }
+        // A JDK's hash folds the words with a magic seed, then the two halves.
+        "hashCode" => {
+            let mut hash: u64 = 1234;
+            for (at, word) in words.iter().enumerate() {
+                hash ^= word.wrapping_mul(at as u64 + 1);
+            }
+            let folded = (hash >> 32) ^ hash;
+            Ok(Some(JValue::Int(
+                u32::try_from(folded & 0xffff_ffff)
+                    .unwrap_or(0)
+                    .cast_signed(),
+            )))
+        }
+        "stream" => {
+            let mut values = Vec::new();
+            for bit in 0..i32::try_from(words.len() * 64).unwrap_or(0) {
+                if get(&words, bit) {
+                    values.push(JValue::Int(bit));
+                }
+            }
+            let stream = heap.alloc(HeapObject::Stream {
+                source: crate::value::StreamSource::Fixed(values),
+                ops: Vec::new(),
+            });
+            Ok(Some(JValue::Ref(Some(stream))))
+        }
+        "toLongArray" => {
+            let longs: Vec<i64> = words.iter().map(|word| word.cast_signed()).collect();
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::LongArray(longs)),
+            ))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("BitSet.{method}"))),
+    }
+}
+
+/// `{1, 3, 5}` — the set bits in order, which is what `toString` shows.
+fn bitset_text(words: &[u64]) -> String {
+    let mut out = String::from("{");
+    let mut first = true;
+    for (at, word) in words.iter().enumerate() {
+        for bit in 0..64 {
+            if (word >> bit) & 1 == 1 {
+                if !first {
+                    out.push_str(", ");
+                }
+                first = false;
+                let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{}", at * 64 + bit));
+            }
+        }
+    }
+    out.push('}');
+    out
 }
 
 #[cfg(test)]

@@ -50357,3 +50357,117 @@ public class U5 {
 }
 "#
 );
+
+differential_test!(
+    base64_and_bitset,
+    "U3",
+    r#"
+import java.util.*;
+public class U3 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("b64 encode", () -> Base64.getEncoder().encodeToString("hello world".getBytes()));
+    s("b64 decode", () -> new String(Base64.getDecoder().decode("aGVsbG8gd29ybGQ=")));
+    s("b64 padding", () -> Base64.getEncoder().encodeToString("a".getBytes()) + " " + Base64.getEncoder().encodeToString("ab".getBytes()) + " " + Base64.getEncoder().encodeToString("abc".getBytes()));
+    s("b64 no padding", () -> Base64.getEncoder().withoutPadding().encodeToString("a".getBytes()));
+    s("b64 url", () -> Base64.getUrlEncoder().encodeToString(new byte[] {(byte) 251, (byte) 255, (byte) 190}));
+    s("b64 mime", () -> Base64.getMimeEncoder().encodeToString("the quick brown fox jumps over the lazy dog, and then some more text to wrap".getBytes()).replace("\r\n", "|"));
+    s("b64 decode bad", () -> Base64.getDecoder().decode("!!!"));
+    s("b64 round trip", () -> Arrays.toString(Base64.getDecoder().decode(Base64.getEncoder().encodeToString(new byte[] {0, 1, -1, 127, -128}))));
+    s("b64 empty", () -> "[" + Base64.getEncoder().encodeToString(new byte[0]) + "] " + Base64.getDecoder().decode("").length);
+    s("b64 encode into", () -> Base64.getEncoder().encode("hi".getBytes()).length);
+    s("bitset basic", () -> { BitSet b = new BitSet(); b.set(1); b.set(3); b.set(5); return b + " " + b.cardinality() + " " + b.length() + " " + b.size() + " " + b.isEmpty(); });
+    s("bitset ops", () -> { BitSet x = new BitSet(); x.set(0, 4); BitSet y = new BitSet(); y.set(2, 6); BitSet and = (BitSet) x.clone(); and.and(y); BitSet or = (BitSet) x.clone(); or.or(y); BitSet xor = (BitSet) x.clone(); xor.xor(y); BitSet an = (BitSet) x.clone(); an.andNot(y); return and + " " + or + " " + xor + " " + an; });
+    s("bitset scan", () -> { BitSet b = new BitSet(); b.set(2); b.set(7); return b.nextSetBit(0) + " " + b.nextSetBit(3) + " " + b.nextSetBit(8) + " " + b.nextClearBit(2) + " " + b.previousSetBit(6); });
+    s("bitset flip clear", () -> { BitSet b = new BitSet(); b.set(0, 5); b.flip(2); b.clear(4); return b + " " + b.get(2) + " " + b.get(100); });
+    s("bitset negative", () -> new BitSet().get(-1));
+    s("bitset stream", () -> { BitSet b = new BitSet(); b.set(1); b.set(4); return b.stream().sum() + " " + Arrays.toString(b.stream().toArray()); });
+    s("bitset equals", () -> { BitSet x = new BitSet(); x.set(3); BitSet y = new BitSet(64); y.set(3); return x.equals(y) + " " + (x.hashCode() == y.hashCode()) + " " + x.size() + " " + y.size(); });
+    s("bitset valueOf", () -> BitSet.valueOf(new long[] {5L}) + " " + Arrays.toString(BitSet.valueOf(new long[] {5L}).toLongArray()));
+    s("randomaccess", () -> (new ArrayList<String>() instanceof RandomAccess) + " " + (new LinkedList<String>() instanceof RandomAccess));
+    // --- StringTokenizer
+    // --- UUID
+    // --- Base64
+    // --- BitSet
+    // --- RandomAccess
+  }
+}
+"#
+);
+
+differential_test!(
+    base64_and_bitset_in_every_position,
+    "U6",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class U6 {
+  static final Base64.Encoder ENCODER = Base64.getEncoder();
+  static String encoded(String text) { return ENCODER.encodeToString(text.getBytes()); }
+  static int walk(List<String> items) { return (items instanceof RandomAccess) ? items.size() : -items.size(); }
+
+  public static void main(String[] args) {
+    // Base64 in the shape a program uses it: round-trip a string.
+    String secret = "attack at dawn";
+    String coded = encoded(secret);
+    System.out.println(coded + " -> " + new String(Base64.getDecoder().decode(coded)));
+    System.out.println(encoded("a") + " " + encoded("ab") + " " + encoded("abc"));
+    System.out.println(Base64.getEncoder().withoutPadding().encodeToString("a".getBytes()));
+    byte[] raw = { (byte) 251, (byte) 255, (byte) 190 };
+    System.out.println(Base64.getEncoder().encodeToString(raw) + " " + Base64.getUrlEncoder().encodeToString(raw));
+    System.out.println(Arrays.toString(Base64.getDecoder().decode(Base64.getEncoder().encodeToString(new byte[] {0, 1, -1, 127, -128}))));
+    System.out.println(Base64.getEncoder().encode("hi".getBytes()).length + " " + new String(Base64.getEncoder().encode("hi".getBytes())));
+    try {
+      Base64.getDecoder().decode("!!!");
+    } catch (IllegalArgumentException e) {
+      System.out.println("refused: " + e.getMessage());
+    }
+    Base64.Decoder decoder = Base64.getDecoder();
+    Map<String, Base64.Encoder> coders = new HashMap<>();
+    coders.put("basic", ENCODER);
+    System.out.println(coders.get("basic").encodeToString("x".getBytes()) + " " + new String(decoder.decode("eA==")));
+    // A BitSet as a set of small numbers — the sieve every course writes.
+    BitSet composite = new BitSet();
+    for (int i = 2; i * i <= 50; i++) {
+      if (!composite.get(i)) {
+        for (int j = i * i; j <= 50; j += i) { composite.set(j); }
+      }
+    }
+    List<Integer> primes = new ArrayList<>();
+    for (int i = 2; i <= 50; i++) { if (!composite.get(i)) { primes.add(i); } }
+    System.out.println(primes);
+    BitSet flags = new BitSet();
+    flags.set(1);
+    flags.set(3, 6);
+    flags.set(9, false);
+    System.out.println(flags + " " + flags.cardinality() + " " + flags.length() + " " + flags.size() + " " + flags.isEmpty());
+    BitSet other = new BitSet();
+    other.set(4, 8);
+    BitSet both = (BitSet) flags.clone();
+    both.and(other);
+    BitSet either = (BitSet) flags.clone();
+    either.or(other);
+    BitSet odd = (BitSet) flags.clone();
+    odd.xor(other);
+    BitSet only = (BitSet) flags.clone();
+    only.andNot(other);
+    System.out.println(both + " " + either + " " + odd + " " + only);
+    System.out.println(flags.nextSetBit(0) + " " + flags.nextSetBit(2) + " " + flags.nextClearBit(3) + " " + flags.previousSetBit(4));
+    System.out.println(flags.stream().sum() + " " + Arrays.toString(flags.stream().toArray()));
+    System.out.println(BitSet.valueOf(new long[] {5L}) + " " + Arrays.toString(BitSet.valueOf(new long[] {5L}).toLongArray()));
+    System.out.println(flags.equals(flags.clone()) + " " + (flags.hashCode() == ((BitSet) flags.clone()).hashCode()));
+    List<BitSet> sets = new ArrayList<>(List.of(flags, other));
+    System.out.println(sets.size() + " " + sets.contains(other) + " " + sets.get(0).getClass().getName());
+    // ...and the marker an algorithm asks about before it walks a list.
+    System.out.println(walk(new ArrayList<>(List.of("a", "b"))) + " " + walk(new LinkedList<>(List.of("a", "b"))));
+    RandomAccess indexed = new ArrayList<String>();
+    System.out.println(indexed instanceof List);
+  }
+}
+"#
+);

@@ -1101,7 +1101,10 @@ impl MethodTable {
         // is to make `implements Cloneable` compile and to be visible at run
         // time, where `Object.clone()` consults it: without the marker, the
         // JDK's `clone` throws `CloneNotSupportedException`.
-        for (offset, name) in ["AutoCloseable", "Closeable", "Cloneable"]
+        // `RandomAccess` is the other marker: a list that indexes in constant
+        // time wears it, and an algorithm asks `list instanceof RandomAccess`
+        // before it decides how to walk one.
+        for (offset, name) in ["AutoCloseable", "Closeable", "Cloneable", "RandomAccess"]
             .into_iter()
             .enumerate()
         {
@@ -1132,7 +1135,7 @@ impl MethodTable {
                     type_param_bounds: Vec::new(),
                     is_bundled: true,
                     supertype_args: Vec::new(),
-                    methods: if name == "Cloneable" {
+                    methods: if matches!(name, "Cloneable" | "RandomAccess") {
                         Vec::new()
                     } else {
                         vec![MethodSig {
@@ -6263,6 +6266,9 @@ fn library_value_type(simple: &str) -> Option<JType> {
         "NumberFormat" => JType::NumberFormat,
         "StringTokenizer" => JType::StringTokenizer,
         "UUID" => JType::Uuid,
+        "BitSet" => JType::BitSet,
+        "Base64.Encoder" => JType::Base64Encoder,
+        "Base64.Decoder" => JType::Base64Decoder,
         "StringWriter" => JType::StringWriter,
         "LocalDate" => JType::LocalDate,
         "LocalTime" => JType::LocalTime,
@@ -7331,6 +7337,13 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (from, to),
             (JType::Array { .. }, JType::Object(id)) if table.class_id("Cloneable") == Some(id)
         )
+        // ...and an indexed list to `RandomAccess`, which an algorithm asks
+        // about before it decides how to walk one.
+        || matches!(
+            (from, to),
+            (JType::List { .. } | JType::Stack(_), JType::Object(id))
+                if table.class_id("RandomAccess") == Some(id)
+        )
         // A `String` and the wrappers implement `Comparable`, so they assign to
         // a `Comparable<T>` variable — the erased interface caturra registers
         // for a user class to implement. The VM dispatches `compareTo` on the
@@ -8333,6 +8346,12 @@ enum JType {
     StringTokenizer,
     /// `java.util.UUID` — two longs and a canonical spelling.
     Uuid,
+    /// `java.util.Base64.Encoder` and `.Decoder` — the two halves of the
+    /// namespace `Base64` itself is.
+    Base64Encoder,
+    Base64Decoder,
+    /// `java.util.BitSet` — a set of small non-negative integers.
+    BitSet,
     /// `java.io.StringWriter` — a writer that keeps what was written, which is
     /// how a program tests its own output.
     StringWriter,
@@ -8869,6 +8888,9 @@ impl JType {
             JType::MathContext => String::from("MathContext"),
             JType::StringTokenizer => String::from("StringTokenizer"),
             JType::Uuid => String::from("UUID"),
+            JType::Base64Encoder => String::from("Base64.Encoder"),
+            JType::Base64Decoder => String::from("Base64.Decoder"),
+            JType::BitSet => String::from("BitSet"),
             JType::StringWriter => String::from("StringWriter"),
             JType::DecimalFormat => String::from("DecimalFormat"),
             JType::NumberFormat => String::from("NumberFormat"),
@@ -8939,6 +8961,9 @@ impl JType {
                 | JType::NumberFormat
                 | JType::StringTokenizer
                 | JType::Uuid
+                | JType::Base64Encoder
+                | JType::Base64Decoder
+                | JType::BitSet
                 | JType::StringWriter
                 | JType::Pattern
                 | JType::Matcher
@@ -9099,6 +9124,9 @@ impl JType {
             JType::MathContext => String::from("Ljava/math/MathContext;"),
             JType::StringTokenizer => String::from("Ljava/util/StringTokenizer;"),
             JType::Uuid => String::from("Ljava/util/UUID;"),
+            JType::Base64Encoder => String::from("Ljava/util/Base64$Encoder;"),
+            JType::Base64Decoder => String::from("Ljava/util/Base64$Decoder;"),
+            JType::BitSet => String::from("Ljava/util/BitSet;"),
             JType::StringWriter => String::from("Ljava/io/StringWriter;"),
             JType::DecimalFormat => String::from("Ljava/text/DecimalFormat;"),
             JType::NumberFormat => String::from("Ljava/text/NumberFormat;"),
@@ -10646,6 +10674,8 @@ enum BParam {
     BigInteger,
     /// A `java.util.UUID`, which is what `compareTo` and `equals` take.
     Uuid,
+    /// A `java.util.BitSet`, which is what its four set operations take.
+    BitSet,
     /// `java.math.BigDecimal`, likewise — and the two that steer its rounding.
     BigDecimal,
     RoundingMode,
@@ -10655,6 +10685,10 @@ enum BParam {
     CharSeq,
     /// `char[]`.
     CharArray,
+    /// `byte[]` — what a base-64 coder takes, and what it answers.
+    ByteArray,
+    /// `long[]` — `BitSet.valueOf`.
+    LongArray,
     /// The receiver's own list type (`addAll(otherList)`).
     SelfList,
     /// Any collection whose element type is assignable to the receiver's
@@ -10748,6 +10782,12 @@ enum BRet {
     /// A `java.util.UUID` and a `java.io.StringWriter`.
     Uuid,
     StringWriter,
+    /// The base-64 coders, and a `java.util.BitSet`.
+    Base64Encoder,
+    Base64Decoder,
+    BitSet,
+    /// `long[]` — `BitSet.toLongArray`.
+    LongArray,
     /// The `java.text` face its factories answer with, and the `Number` a
     /// parse gives back.
     NumberFormat,
@@ -15351,6 +15391,138 @@ const MATH_CONTEXT_METHODS: &[BuiltinMethod] = &[
     bm("hashCode", &[], BRet::Int, "()I"),
 ];
 
+/// `java.util.Base64.Encoder` — bytes to text, in one of three alphabets.
+const BASE64_ENCODER_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "encodeToString",
+        &[BParam::ByteArray],
+        BRet::Str,
+        "([B)Ljava/lang/String;",
+    ),
+    bm("encode", &[BParam::ByteArray], BRet::ByteArray, "([B)[B"),
+    bm(
+        "withoutPadding",
+        &[],
+        BRet::Base64Encoder,
+        "()Ljava/util/Base64$Encoder;",
+    ),
+];
+
+/// `java.util.Base64.Decoder` — and back, from text or from its bytes.
+const BASE64_DECODER_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "decode",
+        &[BParam::Str],
+        BRet::ByteArray,
+        "(Ljava/lang/String;)[B",
+    ),
+    bm("decode", &[BParam::ByteArray], BRet::ByteArray, "([B)[B"),
+];
+
+/// `Base64`'s six factories — the class itself is only their namespace.
+const BASE64_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "getEncoder",
+        &[],
+        BRet::Base64Encoder,
+        "()Ljava/util/Base64$Encoder;",
+    ),
+    bm(
+        "getUrlEncoder",
+        &[],
+        BRet::Base64Encoder,
+        "()Ljava/util/Base64$Encoder;",
+    ),
+    bm(
+        "getMimeEncoder",
+        &[],
+        BRet::Base64Encoder,
+        "()Ljava/util/Base64$Encoder;",
+    ),
+    bm(
+        "getDecoder",
+        &[],
+        BRet::Base64Decoder,
+        "()Ljava/util/Base64$Decoder;",
+    ),
+    bm(
+        "getUrlDecoder",
+        &[],
+        BRet::Base64Decoder,
+        "()Ljava/util/Base64$Decoder;",
+    ),
+    bm(
+        "getMimeDecoder",
+        &[],
+        BRet::Base64Decoder,
+        "()Ljava/util/Base64$Decoder;",
+    ),
+];
+
+/// `java.util.BitSet` — a set of small non-negative integers, and the four set
+/// operations over them.
+const BITSET_METHODS: &[BuiltinMethod] = &[
+    bm("set", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("set", &[BParam::Int, BParam::Boolean], BRet::Void, "(IZ)V"),
+    bm("set", &[BParam::Int, BParam::Int], BRet::Void, "(II)V"),
+    bm("clear", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("clear", &[BParam::Int, BParam::Int], BRet::Void, "(II)V"),
+    bm("flip", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("flip", &[BParam::Int, BParam::Int], BRet::Void, "(II)V"),
+    bm("get", &[BParam::Int], BRet::Boolean, "(I)Z"),
+    bm("cardinality", &[], BRet::Int, "()I"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("length", &[], BRet::Int, "()I"),
+    bm("size", &[], BRet::Int, "()I"),
+    bm("nextSetBit", &[BParam::Int], BRet::Int, "(I)I"),
+    bm("nextClearBit", &[BParam::Int], BRet::Int, "(I)I"),
+    bm("previousSetBit", &[BParam::Int], BRet::Int, "(I)I"),
+    bm("previousClearBit", &[BParam::Int], BRet::Int, "(I)I"),
+    bm(
+        "and",
+        &[BParam::BitSet],
+        BRet::Void,
+        "(Ljava/util/BitSet;)V",
+    ),
+    bm("or", &[BParam::BitSet], BRet::Void, "(Ljava/util/BitSet;)V"),
+    bm(
+        "xor",
+        &[BParam::BitSet],
+        BRet::Void,
+        "(Ljava/util/BitSet;)V",
+    ),
+    bm(
+        "andNot",
+        &[BParam::BitSet],
+        BRet::Void,
+        "(Ljava/util/BitSet;)V",
+    ),
+    bm("clone", &[], BRet::BitSet, "()Ljava/lang/Object;"),
+    bm(
+        "stream",
+        &[],
+        BRet::IntStream,
+        "()Ljava/util/stream/IntStream;",
+    ),
+    bm("toLongArray", &[], BRet::LongArray, "()[J"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+/// `BitSet.valueOf(longs)`.
+const BITSET_STATIC_METHODS: &[BuiltinMethod] = &[bm(
+    "valueOf",
+    &[BParam::LongArray],
+    BRet::BitSet,
+    "([J)Ljava/util/BitSet;",
+)];
+
 /// `java.util.StringTokenizer` — four questions, and it answers the two an
 /// `Enumeration` asks as well as its own.
 const TOKENIZER_METHODS: &[BuiltinMethod] = &[
@@ -18949,6 +19121,9 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::NumberFormat
             | JType::StringTokenizer
             | JType::Uuid
+            | JType::Base64Encoder
+            | JType::Base64Decoder
+            | JType::BitSet
             | JType::StringWriter
             | JType::Pattern
             | JType::Matcher
@@ -19006,6 +19181,9 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::MathContext => Some(("java/math/MathContext", MATH_CONTEXT_METHODS)),
         JType::StringTokenizer => Some(("java/util/StringTokenizer", TOKENIZER_METHODS)),
         JType::Uuid => Some(("java/util/UUID", UUID_METHODS)),
+        JType::Base64Encoder => Some(("java/util/Base64$Encoder", BASE64_ENCODER_METHODS)),
+        JType::Base64Decoder => Some(("java/util/Base64$Decoder", BASE64_DECODER_METHODS)),
+        JType::BitSet => Some(("java/util/BitSet", BITSET_METHODS)),
         JType::StringWriter => Some(("java/io/StringWriter", STRING_WRITER_METHODS)),
         JType::DecimalFormat => Some(("java/text/DecimalFormat", DECIMAL_FORMAT_METHODS)),
         JType::NumberFormat => Some(("java/text/NumberFormat", NUMBER_FORMAT_METHODS)),
@@ -19782,6 +19960,8 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "RoundingMode" => Some(("java/math/RoundingMode", ROUNDING_MODE_STATIC_METHODS)),
         "NumberFormat" => Some(("java/text/NumberFormat", NUMBER_FORMAT_STATIC_METHODS)),
         "UUID" => Some(("java/util/UUID", UUID_STATIC_METHODS)),
+        "Base64" => Some(("java/util/Base64", BASE64_STATIC_METHODS)),
+        "BitSet" => Some(("java/util/BitSet", BITSET_STATIC_METHODS)),
         // A `MathContext` has no statics of its own; the entry exists so its
         // four CONSTANTS resolve as a qualified name.
         "MathContext" => Some(("java/math/MathContext", &[])),
@@ -20108,6 +20288,15 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::BigInteger => JType::BigInteger,
         BParam::BigDecimal => JType::BigDecimal,
         BParam::Uuid => JType::Uuid,
+        BParam::BitSet => JType::BitSet,
+        BParam::ByteArray => JType::Array {
+            elem: ElemType::Byte,
+            dims: 1,
+        },
+        BParam::LongArray => JType::Array {
+            elem: ElemType::Long,
+            dims: 1,
+        },
         BParam::RoundingMode => JType::RoundingMode,
         BParam::MathContext => JType::MathContext,
         BParam::Charset => JType::Charset,
@@ -20559,6 +20748,13 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::BigDecimal => Some(JType::BigDecimal),
         BRet::NumberFormat => Some(JType::NumberFormat),
         BRet::Uuid => Some(JType::Uuid),
+        BRet::Base64Encoder => Some(JType::Base64Encoder),
+        BRet::Base64Decoder => Some(JType::Base64Decoder),
+        BRet::BitSet => Some(JType::BitSet),
+        BRet::LongArray => Some(JType::Array {
+            elem: ElemType::Long,
+            dims: 1,
+        }),
         BRet::StringWriter => Some(JType::StringWriter),
         // `NumberFormat.parse` answers a `Number` — a Long or a Double, and
         // the program asks it which with `intValue()`/`doubleValue()`.
@@ -25507,6 +25703,7 @@ impl BodyGen<'_> {
             "DecimalFormat" => JType::DecimalFormat,
             "StringTokenizer" => JType::StringTokenizer,
             "UUID" => JType::Uuid,
+            "BitSet" => JType::BitSet,
             "StringWriter" => JType::StringWriter,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
@@ -25902,6 +26099,7 @@ impl BodyGen<'_> {
                 "DecimalFormat" => return self.new_decimal_format(args, span),
                 "StringTokenizer" => return self.new_tokenizer(args, span),
                 "UUID" => return self.new_uuid(args, span),
+                "BitSet" => return self.new_bit_set(args, span),
                 "StringWriter" => return self.new_string_writer(args, span),
                 "File" => return self.new_file(args, span),
                 // A `FileWriter` is the same thing this engine calls a
@@ -26777,6 +26975,38 @@ impl BodyGen<'_> {
         self.code
             .drop_stack(1 + u16::try_from(written.len()).unwrap_or(0));
         JType::StringTokenizer
+    }
+
+    /// `new BitSet()` / `new BitSet(bits)` — the size is a HINT, and a JDK
+    /// grows past it silently, so it changes nothing but the reported `size()`.
+    fn new_bit_set(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class = intern_class(self.pool, "java/util/BitSet");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let descriptor = match args {
+            [] => Some("()V"),
+            [bits] => {
+                let ty = self.expr(bits);
+                if ty == JType::Error {
+                    self.error_bail(span, "BitSet size");
+                    return JType::Error;
+                }
+                matches!(ty, JType::Int | JType::Short | JType::Byte | JType::Char)
+                    .then_some("(I)V")
+            }
+            _ => None,
+        };
+        let Some(descriptor) = descriptor else {
+            self.error(
+                span,
+                String::from("new BitSet takes a size, or no argument at all"),
+            );
+            return JType::Error;
+        };
+        let init = intern_method_ref(self.pool, "java/util/BitSet", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code.drop_stack(1 + u16::from(descriptor.len() > 3));
+        JType::BitSet
     }
 
     /// `new UUID(high, low)`.
@@ -28389,6 +28619,9 @@ impl BodyGen<'_> {
             | JType::NumberFormat
             | JType::StringTokenizer
             | JType::Uuid
+            | JType::Base64Encoder
+            | JType::Base64Decoder
+            | JType::BitSet
             | JType::StringWriter
             | JType::Pattern
             | JType::Matcher
@@ -29432,6 +29665,9 @@ impl BodyGen<'_> {
                 | JType::NumberFormat
                 | JType::StringTokenizer
                 | JType::Uuid
+                | JType::Base64Encoder
+                | JType::Base64Decoder
+                | JType::BitSet
                 | JType::StringWriter
                 | JType::IsoEra => {
                     tags.push_str("Ljava/lang/Object;");
@@ -30502,6 +30738,9 @@ impl BodyGen<'_> {
             JType::MathContext => String::from("java/math/MathContext"),
             JType::StringTokenizer => String::from("java/util/StringTokenizer"),
             JType::Uuid => String::from("java/util/UUID"),
+            JType::Base64Encoder => String::from("java/util/Base64$Encoder"),
+            JType::Base64Decoder => String::from("java/util/Base64$Decoder"),
+            JType::BitSet => String::from("java/util/BitSet"),
             JType::StringWriter => String::from("java/io/StringWriter"),
             JType::DecimalFormat => String::from("java/text/DecimalFormat"),
             JType::NumberFormat => String::from("java/text/NumberFormat"),
@@ -34294,6 +34533,9 @@ impl BodyGen<'_> {
             | JType::NumberFormat
             | JType::StringTokenizer
             | JType::Uuid
+            | JType::Base64Encoder
+            | JType::Base64Decoder
+            | JType::BitSet
             | JType::StringWriter
             | JType::Pattern
             | JType::Matcher
@@ -39335,6 +39577,7 @@ impl BodyGen<'_> {
     }
 
     /// Append the value on top of the stack (above the builder).
+    #[allow(clippy::too_many_lines)] // one arm per appendable type
     fn append_part(&mut self, ty: JType, span: SourceSpan) {
         let ty = self.coerce_to_string_for_output(ty);
         let descriptor = match ty {
@@ -39400,6 +39643,9 @@ impl BodyGen<'_> {
             | JType::NumberFormat
             | JType::StringTokenizer
             | JType::Uuid
+            | JType::Base64Encoder
+            | JType::Base64Decoder
+            | JType::BitSet
             | JType::StringWriter
             | JType::Pattern
             | JType::Matcher
@@ -39834,6 +40080,9 @@ impl BodyGen<'_> {
             | JType::NumberFormat
             | JType::StringTokenizer
             | JType::Uuid
+            | JType::Base64Encoder
+            | JType::Base64Decoder
+            | JType::BitSet
             | JType::StringWriter
             | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
@@ -39883,6 +40132,9 @@ impl BodyGen<'_> {
             | JType::NumberFormat
             | JType::StringTokenizer
             | JType::Uuid
+            | JType::Base64Encoder
+            | JType::Base64Decoder
+            | JType::BitSet
             | JType::StringWriter
             | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
@@ -40152,6 +40404,9 @@ impl BodyGen<'_> {
             // ...and an ARRAY to `Cloneable`, which every one of them is.
             (JType::Array { .. }, JType::Object(id))
                 if self.table.class_id("Cloneable") == Some(id) => {}
+            // An indexed list held as the `RandomAccess` it is.
+            (JType::List { .. } | JType::Stack(_), JType::Object(id))
+                if self.table.class_id("RandomAccess") == Some(id) => {}
             // A String already satisfies a `Comparable`-bounded param — it is a
             // reference and implements Comparable (a boxed wrapper is boxed
             // above; a primitive is boxed by the autoboxing rule).
