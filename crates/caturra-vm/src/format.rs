@@ -1208,6 +1208,16 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<Vec<u16>, VmError>
             Ok(pad_numeric(spec, prefix, &text))
         }
         'f' | 'e' | 'g' => {
+            // A `BigDecimal` carries its own digits, so it reaches these
+            // conversions EXACTLY rather than through a double it would not fit.
+            if let Some(decimal) = big_decimal_of(heap, arg) {
+                let text = format_big_decimal(spec, &decimal);
+                return Ok(if conversion.is_ascii_uppercase() {
+                    pad_sign_aware(spec, decimal.signum() < 0, &text.to_uppercase())
+                } else {
+                    pad_sign_aware(spec, decimal.signum() < 0, &text)
+                });
+            }
             let value = match arg {
                 FormatArg::Double(v) => v,
                 // Java's Formatter widens Float via doubleValue().
@@ -1656,7 +1666,13 @@ fn round_half_up(digits: &mut Vec<u8>, keep: usize) -> bool {
 
 /// `%f`: fixed-point with exactly `precision` fraction digits.
 fn fixed_digits(value: f64, precision: usize) -> String {
-    let (mut digits, mut point) = shortest_decimal(value);
+    let (digits, point) = shortest_decimal(value);
+    fixed_from_digits(digits, point, precision)
+}
+
+/// The same, from digits already decided — which is how an exact
+/// `BigDecimal` reaches these conversions without going through a `double`.
+fn fixed_from_digits(mut digits: Vec<u8>, mut point: i32, precision: usize) -> String {
     // Total digits to keep: point + precision (fraction digits after
     // the decimal point).
     let keep = point + i32::try_from(precision).unwrap_or(0);
@@ -1724,7 +1740,11 @@ fn render_fixed(digits: &[u8], point: i32, precision: usize) -> String {
 /// `%e`: scientific with `precision` fraction digits and a two-digit
 /// (minimum) exponent.
 fn scientific_digits(value: f64, precision: usize) -> String {
-    let (mut digits, point) = shortest_decimal(value);
+    let (digits, point) = shortest_decimal(value);
+    scientific_from_digits(digits, point, precision)
+}
+
+fn scientific_from_digits(mut digits: Vec<u8>, point: i32, precision: usize) -> String {
     if digits.is_empty() {
         let mut out = String::from("0");
         if precision > 0 {
@@ -1759,7 +1779,11 @@ fn scientific_digits(value: f64, precision: usize) -> String {
 /// `%g`: `precision` significant digits, fixed or scientific by
 /// Java's exponent rule.
 fn general_digits(value: f64, precision: usize) -> String {
-    let (mut digits, point) = shortest_decimal(value);
+    let (digits, point) = shortest_decimal(value);
+    general_from_digits(digits, point, precision)
+}
+
+fn general_from_digits(mut digits: Vec<u8>, point: i32, precision: usize) -> String {
     if digits.is_empty() {
         // Zero in %g is fixed notation with `precision - 1` fraction digits:
         // `%.1g` of 0.0 is `0`, `%.6g` is `0.00000`. It was emitting `0.0`
@@ -1910,5 +1934,82 @@ fn big_integer_of(heap: &Heap, arg: FormatArg) -> Option<crate::bigint::BigInt> 
     match heap.get(reference) {
         Some(HeapObject::BigInteger(value)) => Some(value.clone()),
         _ => None,
+    }
+}
+
+/// The `BigDecimal` a reference argument points at, if it is one.
+fn big_decimal_of(heap: &Heap, arg: FormatArg) -> Option<crate::decimal::BigDec> {
+    let FormatArg::Str(Some(reference)) = arg else {
+        return None;
+    };
+    match heap.get(reference) {
+        Some(HeapObject::BigDecimal(value)) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+/// `%f`/`%e`/`%g` of a `BigDecimal`. The same three renderers a `double`
+/// takes, handed the decimal's OWN digits — so a value a double could not
+/// hold prints every one of them.
+fn format_big_decimal(spec: &Spec, value: &crate::decimal::BigDec) -> String {
+    let negative = value.signum() < 0;
+    let sign = if negative {
+        "-"
+    } else if spec.plus {
+        "+"
+    } else if spec.space {
+        " "
+    } else {
+        ""
+    };
+    let use_parens = spec.parentheses && negative;
+    let sign = if use_parens { "" } else { sign };
+    // `0.digits x 10^point`, which is the shape the renderers read.
+    let digits: Vec<u8> = value
+        .unscaled()
+        .abs()
+        .to_text(10)
+        .bytes()
+        .map(|byte| byte - b'0')
+        .collect();
+    let digits = if value.signum() == 0 {
+        Vec::new()
+    } else {
+        digits
+    };
+    let point = i32::try_from(digits.len()).unwrap_or(0) - value.scale();
+    let mut body = match spec.conversion.to_ascii_lowercase() {
+        'f' => {
+            let precision = spec.precision.unwrap_or(6);
+            let mut text = fixed_from_digits(digits, point, precision);
+            if spec.alternate && precision == 0 {
+                text.push('.');
+            }
+            text
+        }
+        'e' => scientific_from_digits(digits, point, spec.precision.unwrap_or(6)),
+        _ => {
+            let precision = match spec.precision {
+                Some(0) => 1,
+                Some(p) => p,
+                None => 6,
+            };
+            general_from_digits(digits, point, precision)
+        }
+    };
+    if spec.grouping && !body.contains(['e', 'E']) {
+        let (integral, fraction) = body
+            .split_once('.')
+            .map_or((body.as_str(), None), |(i, f)| (i, Some(f)));
+        let grouped = group_digits(integral);
+        body = match fraction {
+            Some(fraction) => format!("{grouped}.{fraction}"),
+            None => grouped,
+        };
+    }
+    if use_parens {
+        format!("({body})")
+    } else {
+        format!("{sign}{body}")
     }
 }

@@ -49834,3 +49834,209 @@ public class BigWhere {
 }
 "#
 );
+
+differential_test!(
+    a_big_decimal_in_every_position,
+    "BQ",
+    r#"
+import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
+import java.util.*;
+import java.util.stream.*;
+
+public class BQ {
+  static BigDecimal rate = new BigDecimal("0.0825");
+  static RoundingMode mode = RoundingMode.HALF_UP;
+  static BigDecimal withTax(BigDecimal price) { return price.multiply(BigDecimal.ONE.add(rate)).setScale(2, mode); }
+  static <T extends Comparable<T>> T biggest(List<T> items) { return Collections.max(items); }
+  static class Box<T> { T held; Box(T held) { this.held = held; } T get() { return held; } }
+  static String describe(RoundingMode m) { switch (m) { case FLOOR: return "down"; case CEILING: return "up"; default: return m.name(); } }
+
+  public static void main(String[] args) {
+    BigDecimal price = new BigDecimal("19.99");
+    System.out.println(withTax(price) + " " + rate.scale() + " " + rate.precision());
+    BigDecimal[] cart = { price, new BigDecimal("4.50"), new BigDecimal("100") };
+    System.out.println(Arrays.toString(cart));
+    Arrays.sort(cart);
+    System.out.println(Arrays.toString(cart));
+    List<BigDecimal> list = new ArrayList<>(Arrays.asList(cart));
+    System.out.println(list.contains(price) + " " + list.indexOf(price));
+    BigDecimal total = BigDecimal.ZERO;
+    for (BigDecimal item : list) { total = total.add(item); }
+    System.out.println(total + " " + total.setScale(2, RoundingMode.HALF_EVEN));
+    Map<String, BigDecimal> prices = new HashMap<>();
+    prices.put("book", price);
+    System.out.println(prices.get("book").multiply(new BigDecimal("3")));
+    TreeMap<BigDecimal, String> byPrice = new TreeMap<>();
+    byPrice.put(price, "book"); byPrice.put(new BigDecimal("4.50"), "pen");
+    System.out.println(byPrice.firstKey() + " " + byPrice.lastEntry().getValue());
+    System.out.println(new TreeSet<>(list));
+    Object o = price;
+    System.out.println((o instanceof BigDecimal) + " " + ((BigDecimal) o).equals(price));
+    System.out.println(biggest(list) + " " + new Box<>(price).get().scale());
+    System.out.println(list.stream().map(BigDecimal::toPlainString).collect(Collectors.joining("+")));
+    System.out.println(list.stream().reduce(BigDecimal.ZERO, BigDecimal::add));
+    System.out.println(list.stream().mapToInt(BigDecimal::signum).sum());
+    list.sort(Comparator.comparing(BigDecimal::scale).thenComparing(Comparator.naturalOrder()));
+    System.out.println(list);
+    System.out.println(Stream.of(cart).max(Comparator.naturalOrder()).get());
+    StringBuilder sb = new StringBuilder();
+    sb.append(price).append('|').append(mode);
+    System.out.println(sb);
+    System.out.println(Objects.equals(price, new BigDecimal("19.99")) + " " + price.hashCode());
+    System.out.println(price.getClass().getSimpleName() + " " + price.getClass().getName());
+    Number n = price;
+    Comparable<BigDecimal> c = price;
+    System.out.println(n.doubleValue() + " " + c.compareTo(BigDecimal.TEN));
+    // A RoundingMode is a real enum: it switches, it fills an EnumSet, and it streams.
+    System.out.println(describe(RoundingMode.FLOOR) + " " + describe(RoundingMode.UP));
+    System.out.println(EnumSet.of(RoundingMode.UP, RoundingMode.FLOOR));
+    System.out.println(Arrays.stream(RoundingMode.values()).map(RoundingMode::name).collect(Collectors.toList()));
+    System.out.println(Arrays.stream(RoundingMode.values()).filter(m -> m.name().startsWith("HALF")).count());
+    EnumMap<RoundingMode, BigDecimal> rounded = new EnumMap<>(RoundingMode.class);
+    for (RoundingMode m : RoundingMode.values()) {
+      if (m != RoundingMode.UNNECESSARY) { rounded.put(m, new BigDecimal("2.5").setScale(0, m)); }
+    }
+    System.out.println(rounded);
+    MathContext five = new MathContext(5);
+    System.out.println(BigDecimal.ONE.divide(new BigDecimal("7"), five) + " " + five + " " + five.getPrecision());
+    System.out.println(new BigDecimal("1234.5678").round(MathContext.DECIMAL32));
+    List<RoundingMode> modes = new ArrayList<>(List.of(RoundingMode.HALF_UP, RoundingMode.UP));
+    Collections.sort(modes);
+    System.out.println(modes + " " + modes.get(0).ordinal());
+    System.out.println(String.format("%.2f %,.2f %e %s %g", price, new BigDecimal("1234567.891"), price, price, price));
+  }
+}
+"#
+);
+
+differential_test!(
+    big_decimal_keeps_its_scale,
+    "DecScale",
+    r#"
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
+public class DecScale {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        // The scale is OBSERVABLE, which is the whole difference from double.
+        probe("equals is not compareTo", () -> new BigDecimal("2.0").equals(new BigDecimal("2.00"))
+            + " " + new BigDecimal("2.0").compareTo(new BigDecimal("2.00"))
+            + " " + new BigDecimal("2.0").hashCode() + " " + new BigDecimal("2.00").hashCode());
+        probe("in a set", () -> new java.util.HashSet<>(java.util.List.of(
+            new BigDecimal("2.0"), new BigDecimal("2.00"))).size());
+        probe("the classic", () -> new BigDecimal("0.1").add(new BigDecimal("0.2"))
+            + " vs " + (0.1 + 0.2));
+        probe("scales add", () -> new BigDecimal("2.50").multiply(new BigDecimal("4.000"))
+            + " " + new BigDecimal("2.5").add(new BigDecimal("0.001"))
+            + " " + new BigDecimal("1E+3").add(BigDecimal.ONE));
+        probe("exact division", () -> new BigDecimal("2.50").divide(BigDecimal.ONE)
+            + " " + new BigDecimal("10").divide(new BigDecimal("4"))
+            + " " + new BigDecimal("100").divide(new BigDecimal("5"))
+            + " " + new BigDecimal("1.00").divide(new BigDecimal("4.0")));
+        probe("non-terminating", () -> BigDecimal.ONE.divide(new BigDecimal("3")));
+        probe("divide by zero", () -> BigDecimal.ONE.divide(BigDecimal.ZERO));
+        probe("zero over zero", () -> BigDecimal.ZERO.divide(BigDecimal.ZERO));
+        probe("divide at a scale", () -> BigDecimal.ONE.divide(new BigDecimal("3"), 4, RoundingMode.HALF_UP)
+            + " " + new BigDecimal("10").divide(new BigDecimal("3"), RoundingMode.HALF_UP)
+            + " " + new BigDecimal("10.00").divide(new BigDecimal("3"), RoundingMode.HALF_UP));
+        probe("divide at a scale by zero", () -> BigDecimal.ONE.divide(BigDecimal.ZERO, 2, RoundingMode.HALF_UP));
+        probe("integral and remainder", () -> new BigDecimal("7.5").divideToIntegralValue(new BigDecimal("2"))
+            + " " + new BigDecimal("7.5").remainder(new BigDecimal("2"))
+            + " " + java.util.Arrays.toString(new BigDecimal("7.5").divideAndRemainder(new BigDecimal("2")))
+            + " " + new BigDecimal("-7").remainder(new BigDecimal("5")));
+        // Every rounding mode, at the tie a half sits on.
+        for (RoundingMode mode : RoundingMode.values()) {
+            final RoundingMode m = mode;
+            probe("2.5 " + m, () -> new BigDecimal("2.5").setScale(0, m)
+                + " " + new BigDecimal("3.5").setScale(0, m)
+                + " " + new BigDecimal("-2.5").setScale(0, m));
+        }
+        probe("setScale bare", () -> new BigDecimal("2.5").setScale(3) + " " + new BigDecimal("1E+3").setScale(1));
+        probe("setScale loses", () -> new BigDecimal("2.55").setScale(1));
+        probe("deprecated int mode", () -> new BigDecimal("2.55").setScale(1, BigDecimal.ROUND_HALF_UP)
+            + " " + new BigDecimal("10").divide(new BigDecimal("3"), 4, BigDecimal.ROUND_HALF_UP));
+        probe("pow", () -> new BigDecimal("2.5").pow(3) + " " + new BigDecimal("2.5").pow(0));
+        probe("negative exponent", () -> new BigDecimal("2.5").pow(-1));
+        probe("the three texts", () -> new BigDecimal("1E+3") + " / " + new BigDecimal("1E+3").toPlainString()
+            + " / " + new BigDecimal("1E+3").toEngineeringString()
+            + " | " + new BigDecimal("1E-7") + " / " + new BigDecimal("1E-7").toPlainString()
+            + " / " + new BigDecimal("1E-7").toEngineeringString()
+            + " | " + new BigDecimal("3E+1").toEngineeringString()
+            + " | " + new BigDecimal("0E+1").toEngineeringString());
+        probe("no negative zero", () -> new BigDecimal("-0.0") + " " + new BigDecimal("-0.000003").setScale(5, RoundingMode.DOWN));
+        probe("stripTrailingZeros", () -> new BigDecimal("600.0").stripTrailingZeros()
+            + " " + new BigDecimal("600").stripTrailingZeros() + " " + new BigDecimal("0.000").stripTrailingZeros());
+        probe("moving the point", () -> new BigDecimal("2.50").movePointLeft(5)
+            + " " + new BigDecimal("2.50").movePointRight(5)
+            + " " + new BigDecimal("2.50").scaleByPowerOfTen(5)
+            + " " + new BigDecimal("0.0").scaleByPowerOfTen(5));
+        probe("parts", () -> new BigDecimal("0.00").scale() + " " + new BigDecimal("0.00").precision()
+            + " " + new BigDecimal("0.00").unscaledValue() + " " + new BigDecimal("1E+3").scale()
+            + " " + new BigDecimal("2.50").ulp());
+        probe("reading numbers", () -> new BigDecimal("-2.9").intValue() + " " + new BigDecimal("1E+3").intValue()
+            + " " + new BigDecimal("0.1").doubleValue() + " " + new BigDecimal("0.1").floatValue()
+            + " " + new BigDecimal("1E+400").doubleValue() + " " + new BigDecimal("2.50").toBigInteger());
+        probe("exact reads", () -> new BigDecimal("2.00").intValueExact());
+        probe("a fraction is not exact", () -> new BigDecimal("2.01").intValueExact());
+        probe("too wide to be exact", () -> new BigDecimal("1E+30").longValueExact());
+        probe("toBigIntegerExact", () -> new BigDecimal("2.50").toBigIntegerExact());
+        // The two ways a double becomes a decimal, which do not agree.
+        probe("from a double", () -> new BigDecimal(0.1) + " | " + BigDecimal.valueOf(0.1)
+            + " " + BigDecimal.valueOf(2.50) + " " + BigDecimal.valueOf(12345, 2));
+        probe("parse refusals", () -> new BigDecimal("1.2.3"));
+        probe("empty", () -> new BigDecimal(""));
+        probe("a space", () -> new BigDecimal(" 1"));
+        probe("money", () -> new BigDecimal("19.99").multiply(new BigDecimal("3")).setScale(2, RoundingMode.HALF_UP));
+    }
+}
+"#
+);
+
+differential_test!(
+    big_decimal_formats_exactly,
+    "DecFormat",
+    r#"
+import java.math.BigDecimal;
+
+public class DecFormat {
+    static void probe(String label, java.util.function.Supplier<Object> body) {
+        try {
+            System.out.println(label + " = " + body.get());
+        } catch (Throwable e) {
+            System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        BigDecimal value = new BigDecimal("1234.5");
+        BigDecimal small = new BigDecimal("-0.005");
+        // A decimal reaches the float conversions with its OWN digits, so one
+        // a double could not hold prints every one of them.
+        BigDecimal huge = new BigDecimal("123456789012345678901234567890.125");
+        for (String shape : new String[] {
+            "%s", "%S", "%12s", "%f", "%.2f", "%,.3f", "%10.1f", "%+f", "%(f",
+            "%08.2f", "%-10.2f", "%e", "%.3e", "%E", "%g", "%.4g", "%b", "%h",
+            "%a", "%d", "%x", "%o", "%c",
+        }) {
+            final String spec = shape;
+            probe("value " + spec, () -> "[" + String.format(spec, value) + "]");
+            probe("small " + spec, () -> "[" + String.format(spec, small) + "]");
+            probe("huge " + spec, () -> "[" + String.format(spec, huge) + "]");
+        }
+        probe("zero", () -> String.format("[%f][%e][%g][%.0f]", BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO));
+        probe("concatenation", () -> "n=" + value + " " + small);
+    }
+}
+"#
+);

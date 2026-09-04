@@ -2535,6 +2535,13 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         // Every constructor sets the value; a `BigInteger` starts at zero only
         // because the object must exist before `<init>` runs.
         "java/math/BigInteger" => Some(HeapObject::BigInteger(crate::bigint::BigInt::zero())),
+        "java/math/BigDecimal" => Some(HeapObject::BigDecimal(crate::decimal::BigDec::zero())),
+        // A default context is a JDK's `UNLIMITED`; every constructor replaces
+        // it.
+        "java/math/MathContext" => Some(HeapObject::MathContext {
+            precision: 0,
+            mode: 4,
+        }),
         "java/io/File" => Some(HeapObject::File(String::new())),
         "java/io/ByteArrayOutputStream" => Some(HeapObject::ByteStream(Vec::new())),
         // Where it writes is decided by the constructor; standard out until
@@ -2601,6 +2608,61 @@ pub fn invoke_special(
         let value = parse_big_integer(&text, radix)?;
         if let Some(slot) = heap.get_mut(receiver) {
             *slot = HeapObject::BigInteger(value);
+        }
+        return Ok(());
+    }
+    // `new BigDecimal(...)` — from text, from a `BigInteger` (with an optional
+    // scale), or from a primitive. The `double` form is the EXACT binary value,
+    // which is the lesson `BigDecimal.valueOf(double)` exists to teach.
+    if class == "java/math/BigDecimal" && method == "<init>" {
+        let value = match args.first() {
+            Some(JValue::Double(number)) => crate::decimal::BigDec::from_f64_exactly(*number),
+            Some(JValue::Int(number)) => crate::decimal::BigDec::from_i64(i64::from(*number)),
+            Some(JValue::Long(number)) => crate::decimal::BigDec::from_i64(*number),
+            Some(JValue::Ref(Some(reference))) => {
+                if let Some(HeapObject::BigInteger(unscaled)) = heap.get(*reference) {
+                    let scale = match args.get(1) {
+                        Some(JValue::Int(scale)) => *scale,
+                        _ => 0,
+                    };
+                    crate::decimal::BigDec::new(unscaled.clone(), scale)
+                } else {
+                    let text = string_arg(heap, &args[0])?;
+                    crate::decimal::BigDec::parse(&text).map_err(|reason| {
+                        if reason.is_empty() {
+                            throw("java.lang.NumberFormatException")
+                        } else {
+                            throw(format!("java.lang.NumberFormatException: {reason}"))
+                        }
+                    })?
+                }
+            }
+            _ => return Err(throw("java.lang.NullPointerException")),
+        };
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::BigDecimal(value);
+        }
+        return Ok(());
+    }
+    // `new MathContext(digits)` / `new MathContext(digits, roundingMode)`.
+    if class == "java/math/MathContext" && method == "<init>" {
+        let precision = match args.first() {
+            Some(JValue::Int(precision)) => *precision,
+            _ => 0,
+        };
+        if precision < 0 {
+            return Err(throw("java.lang.IllegalArgumentException: Digits < 0"));
+        }
+        let mode = match args.get(1) {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::RoundingMode(ordinal)) => *ordinal,
+                _ => return Err(throw("java.lang.ClassCastException: not a RoundingMode")),
+            },
+            None => 4,
+            _ => return Err(throw("java.lang.NullPointerException")),
+        };
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::MathContext { precision, mode };
         }
         return Ok(());
     }
@@ -3516,6 +3578,9 @@ pub fn invoke_virtual(
             Ok(Some(JValue::Int(i32::from(equal))))
         }
         (HeapObject::BigInteger(_), _) => big_integer_method(heap, receiver, method, args),
+        (HeapObject::BigDecimal(_), _) => big_decimal_method(heap, receiver, method, args),
+        (HeapObject::RoundingMode(_), _) => rounding_mode_method(heap, receiver, method, args),
+        (HeapObject::MathContext { .. }, _) => math_context_method(heap, receiver, method, args),
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method, args),
         (HeapObject::Path(_), _) => path_method(heap, receiver, method, args),
         // A `Charset` is its NAME: `toString`, `name` and `displayName` all
@@ -3874,6 +3939,9 @@ pub(crate) fn uses_identity_equality(object: &HeapObject) -> bool {
             | HeapObject::StringBuilder(_)
             | HeapObject::Exception { .. }
             | HeapObject::Iterator { .. }
+            // A `RoundingMode` is an ENUM, so `equals` is identity — and since
+            // the constants are interned, identity IS value equality.
+            | HeapObject::RoundingMode(_)
             // The regex trio: a JDK's Pattern, Matcher and MatchResult all
             // inherit `Object.equals`, so two equal patterns are not equal.
             | HeapObject::Pattern { .. }
@@ -6624,6 +6692,21 @@ pub(crate) fn native_equals(heap: &Heap, a: JValue, b: JValue) -> bool {
                     (Some(HeapObject::BigInteger(bx)), Some(HeapObject::BigInteger(by))) => {
                         bx == by
                     }
+                    // Two decimals are `equals` only with the SAME scale: `2.0`
+                    // and `2.00` are different objects to a `HashSet`.
+                    (Some(HeapObject::BigDecimal(bx)), Some(HeapObject::BigDecimal(by))) => {
+                        bx == by
+                    }
+                    (
+                        Some(HeapObject::MathContext {
+                            precision: px,
+                            mode: mx,
+                        }),
+                        Some(HeapObject::MathContext {
+                            precision: py,
+                            mode: my,
+                        }),
+                    ) => px == py && mx == my,
                     // A `java.time` value compares by its FIELDS, which is
                     // what makes `dates.contains(LocalDate.of(...))` answer
                     // the way a JDK's does.
@@ -6664,6 +6747,10 @@ pub(crate) fn native_hash(heap: &Heap, value: JValue) -> i32 {
             Some(HeapObject::File(path)) => java_string_hash(path) ^ 0x0012_d591,
             Some(HeapObject::Charset(name)) => java_string_hash(name),
             Some(HeapObject::BigInteger(value)) => value.java_hash(),
+            Some(HeapObject::BigDecimal(value)) => value.java_hash(),
+            Some(HeapObject::MathContext { precision, mode }) => precision
+                .wrapping_add(identity_hash(reference).wrapping_mul(59))
+                .wrapping_add(i32::from(*mode)),
             // Identity hash (arbitrary in Java too).
             _ => reference.cast_signed(),
         },
@@ -10365,6 +10452,85 @@ pub fn invoke_static(
             }
             _ => Err(VmError::UnknownIntrinsic(format!("BigInteger.{method}"))),
         },
+        // `BigDecimal.valueOf(...)`, and the three constants the compiler
+        // lowers to it. `valueOf(double)` goes through `Double.toString`, which
+        // is why it answers `0.1` where the constructor answers the exact
+        // binary value.
+        "java/math/BigDecimal" => match method {
+            "valueOf" => {
+                let value = match args.first() {
+                    Some(JValue::Double(number)) => crate::decimal::BigDec::parse(
+                        &crate::floatdec::java_double_to_string(*number),
+                    )
+                    .unwrap_or_else(|_| crate::decimal::BigDec::zero()),
+                    Some(JValue::Long(unscaled)) => {
+                        let scale = match args.get(1) {
+                            Some(JValue::Int(scale)) => *scale,
+                            _ => 0,
+                        };
+                        crate::decimal::BigDec::new(
+                            crate::bigint::BigInt::from_i64(*unscaled),
+                            scale,
+                        )
+                    }
+                    _ => return Err(throw("java.lang.VerifyError: expected a number")),
+                };
+                Ok(Some(JValue::Ref(Some(
+                    heap.alloc(HeapObject::BigDecimal(value)),
+                ))))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("BigDecimal.{method}"))),
+        },
+        // `RoundingMode.HALF_UP` and the seven beside it, plus the two every
+        // enum answers. `valueOf` takes a NAME or the deprecated int.
+        "java/math/RoundingMode" => match method {
+            "values" => {
+                let constants: Vec<JValue> = (0..8)
+                    .map(|ordinal| JValue::Ref(Some(heap.intern_rounding_mode(ordinal))))
+                    .collect();
+                let array = heap.alloc(HeapObject::RefArray(String::from(class), constants));
+                Ok(Some(JValue::Ref(Some(array))))
+            }
+            "valueOf" | "__of" => {
+                let ordinal = if let Some(JValue::Int(ordinal)) = args.first() {
+                    if !(0..8).contains(ordinal) {
+                        return Err(throw(
+                            "java.lang.IllegalArgumentException: argument out of range",
+                        ));
+                    }
+                    u8::try_from(*ordinal).unwrap_or(4)
+                } else {
+                    let name = arg_string(heap, &args[0])?;
+                    let found = ROUNDING_NAMES.iter().position(|known| *known == name);
+                    let Some(found) = found else {
+                        return Err(throw(format!(
+                            "java.lang.IllegalArgumentException: No enum constant \
+                             java.math.RoundingMode.{name}"
+                        )));
+                    };
+                    u8::try_from(found).unwrap_or(4)
+                };
+                Ok(Some(JValue::Ref(Some(heap.intern_rounding_mode(ordinal)))))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("RoundingMode.{method}"))),
+        },
+        // `MathContext.DECIMAL32` and the three beside it, which the compiler
+        // lowers to this call.
+        "java/math/MathContext" => {
+            let which = match args.first() {
+                Some(JValue::Int(which)) => *which,
+                _ => 3,
+            };
+            let (precision, mode) = match which {
+                0 => (7, 6),
+                1 => (16, 6),
+                2 => (34, 6),
+                _ => (0, 4),
+            };
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::MathContext { precision, mode }),
+            ))))
+        }
         // `Charset.forName(name)` — and the `StandardCharsets` constants, which
         // the compiler lowers to the same call. An unknown name is the JDK's
         // `UnsupportedCharsetException`, whose message is the name itself.
@@ -12778,6 +12944,14 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             }
             Some(HeapObject::Temporal(value)) => value.text(),
             Some(HeapObject::BigInteger(value)) => value.to_text(10),
+            Some(HeapObject::BigDecimal(value)) => value.to_text(),
+            Some(HeapObject::RoundingMode(ordinal)) => rounding_name(*ordinal),
+            Some(HeapObject::MathContext { precision, mode }) => {
+                format!(
+                    "precision={precision} roundingMode={}",
+                    rounding_name(*mode)
+                )
+            }
             Some(HeapObject::Collector(_)) => collector_text(reference),
             Some(HeapObject::SummaryStats {
                 count,
@@ -13125,6 +13299,371 @@ pub(crate) fn sorted_view_pairs(heap: &Heap, view: HeapRef) -> Vec<(JValue, JVal
         slice.reverse();
     }
     slice
+}
+
+/// The eight `RoundingMode` constants, by ordinal.
+pub(crate) const ROUNDING_NAMES: [&str; 8] = [
+    "UP",
+    "DOWN",
+    "CEILING",
+    "FLOOR",
+    "HALF_UP",
+    "HALF_DOWN",
+    "HALF_EVEN",
+    "UNNECESSARY",
+];
+
+fn rounding_name(ordinal: u8) -> String {
+    String::from(
+        ROUNDING_NAMES
+            .get(ordinal as usize)
+            .copied()
+            .unwrap_or("HALF_UP"),
+    )
+}
+
+/// The rounding an argument names — a `RoundingMode` constant, or the
+/// deprecated `int` that says the same thing.
+fn rounding_argument(
+    heap: &Heap,
+    value: Option<&JValue>,
+) -> Result<crate::decimal::Rounding, VmError> {
+    let ordinal = match value {
+        Some(JValue::Int(ordinal)) => *ordinal,
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::RoundingMode(ordinal)) => i32::from(*ordinal),
+            _ => return Err(throw("java.lang.ClassCastException: not a RoundingMode")),
+        },
+        _ => return Err(throw("java.lang.NullPointerException")),
+    };
+    crate::decimal::Rounding::from_ordinal(ordinal)
+        .ok_or_else(|| throw("java.lang.IllegalArgumentException: Invalid rounding mode"))
+}
+
+/// The JDK message each decimal refusal carries. They differ, and a student
+/// reads them: "Non-terminating decimal expansion" is a lesson, not a crash.
+fn decimal_error(error: crate::decimal::DecError) -> VmError {
+    use crate::decimal::DecError;
+    throw(match error {
+        DecError::DivisionByZero => "java.lang.ArithmeticException: Division by zero",
+        DecError::ByZero => "java.lang.ArithmeticException: / by zero",
+        DecError::BigByZero => "java.lang.ArithmeticException: BigInteger divide by zero",
+        DecError::DivisionUndefined => "java.lang.ArithmeticException: Division undefined",
+        DecError::NonTerminating => {
+            "java.lang.ArithmeticException: Non-terminating decimal expansion; \
+             no exact representable decimal result."
+        }
+        DecError::RoundingNecessary => "java.lang.ArithmeticException: Rounding necessary",
+        DecError::Overflow => "java.lang.ArithmeticException: Overflow",
+        DecError::InvalidOperation => "java.lang.ArithmeticException: Invalid operation",
+    })
+}
+
+/// `java.math.RoundingMode` — an enum, so what it answers is its own name and
+/// its place in the list.
+fn rounding_mode_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let ordinal = match heap.get(receiver) {
+        Some(HeapObject::RoundingMode(ordinal)) => *ordinal,
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    match method {
+        "name" | "toString" => {
+            let text = rounding_name(ordinal);
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        "ordinal" => Ok(Some(JValue::Int(i32::from(ordinal)))),
+        "compareTo" => {
+            let theirs = match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::RoundingMode(theirs)) => i32::from(*theirs),
+                    _ => return Err(throw("java.lang.ClassCastException: not a RoundingMode")),
+                },
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            Ok(Some(JValue::Int(i32::from(ordinal) - theirs)))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("RoundingMode.{method}"))),
+    }
+}
+
+/// `java.math.MathContext` — two numbers, and the questions asked of them.
+fn math_context_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let (precision, mode) = match heap.get(receiver) {
+        Some(HeapObject::MathContext { precision, mode }) => (*precision, *mode),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    match method {
+        // A context compares by VALUE; the hash mirrors a JDK's shape (which
+        // folds an enum's identity hash, so it is not reproducible there
+        // either).
+        "equals" => {
+            let same = matches!(args.first(), Some(JValue::Ref(Some(other)))
+                if matches!(heap.get(*other), Some(HeapObject::MathContext { precision: p, mode: m })
+                    if *p == precision && *m == mode));
+            Ok(Some(JValue::Int(i32::from(same))))
+        }
+        "hashCode" => Ok(Some(JValue::Int(
+            precision
+                .wrapping_add(identity_hash(receiver).wrapping_mul(59))
+                .wrapping_add(i32::from(mode)),
+        ))),
+        "getPrecision" => Ok(Some(JValue::Int(precision))),
+        "getRoundingMode" => Ok(Some(JValue::Ref(Some(heap.intern_rounding_mode(mode))))),
+        "toString" => {
+            let text = format!("precision={precision} roundingMode={}", rounding_name(mode));
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("MathContext.{method}"))),
+    }
+}
+
+/// `java.math.BigDecimal` — every question asked of one value, or of two. The
+/// SCALE is half of every answer here, which is what separates this from
+/// `double` arithmetic.
+#[allow(clippy::too_many_lines)]
+fn big_decimal_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    use crate::decimal::{BigDec, Rounding};
+    let value = match heap.get(receiver) {
+        Some(HeapObject::BigDecimal(value)) => value.clone(),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    let decimal_at = |heap: &Heap, at: usize| -> Result<BigDec, VmError> {
+        match args.get(at) {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::BigDecimal(value)) => Ok(value.clone()),
+                _ => Err(throw("java.lang.ClassCastException: not a BigDecimal")),
+            },
+            _ => Err(throw("java.lang.NullPointerException")),
+        }
+    };
+    let context_at = |heap: &Heap, at: usize| -> Result<(u32, Rounding), VmError> {
+        match args.get(at) {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::MathContext { precision, mode }) => Ok((
+                    u32::try_from(*precision).unwrap_or(0),
+                    Rounding::from_ordinal(i32::from(*mode)).unwrap_or(Rounding::HalfUp),
+                )),
+                _ => Err(throw("java.lang.ClassCastException: not a MathContext")),
+            },
+            _ => Err(throw("java.lang.NullPointerException")),
+        }
+    };
+    let int_at = |at: usize| -> i32 {
+        match args.get(at) {
+            Some(JValue::Int(value)) => *value,
+            _ => 0,
+        }
+    };
+    let is_context = |heap: &Heap, at: usize| -> bool {
+        matches!(args.get(at), Some(JValue::Ref(Some(reference)))
+            if matches!(heap.get(*reference), Some(HeapObject::MathContext { .. })))
+    };
+    let answer = |heap: &mut Heap, value: BigDec| {
+        Ok(Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::BigDecimal(value)),
+        ))))
+    };
+    match method {
+        "add" | "subtract" | "multiply" => {
+            let them = decimal_at(heap, 0)?;
+            let folded = match method {
+                "add" => value.add(&them),
+                "subtract" => value.subtract(&them),
+                _ => value.multiply(&them),
+            };
+            let folded = if args.len() > 1 {
+                let (digits, mode) = context_at(heap, 1)?;
+                folded.with_precision(digits, mode).map_err(decimal_error)?
+            } else {
+                folded
+            };
+            answer(heap, folded)
+        }
+        "divide" => {
+            let them = decimal_at(heap, 0)?;
+            let quotient = match args.len() {
+                1 => value.divide(&them),
+                // `divide(divisor, mc)` and `divide(divisor, roundingMode)`
+                // both take one extra argument, and only the object says which.
+                2 if is_context(heap, 1) => {
+                    let (digits, mode) = context_at(heap, 1)?;
+                    value.divide_with_precision(&them, digits, mode)
+                }
+                2 => {
+                    let mode = rounding_argument(heap, args.get(1))?;
+                    value.divide_to_scale(&them, value.scale(), mode)
+                }
+                _ => {
+                    let mode = rounding_argument(heap, args.get(2))?;
+                    value.divide_to_scale(&them, int_at(1), mode)
+                }
+            };
+            answer(heap, quotient.map_err(decimal_error)?)
+        }
+        "divideToIntegralValue" => {
+            let them = decimal_at(heap, 0)?;
+            let quotient = value.divide_to_integral(&them).map_err(decimal_error)?;
+            answer(heap, quotient)
+        }
+        "remainder" => {
+            let them = decimal_at(heap, 0)?;
+            let rest = value.remainder(&them).map_err(decimal_error)?;
+            answer(heap, rest)
+        }
+        "divideAndRemainder" => {
+            let them = decimal_at(heap, 0)?;
+            let quotient = value.divide_to_integral(&them).map_err(decimal_error)?;
+            let rest = value.remainder(&them).map_err(decimal_error)?;
+            let quotient = heap.alloc(HeapObject::BigDecimal(quotient));
+            let rest = heap.alloc(HeapObject::BigDecimal(rest));
+            let pair = heap.alloc(HeapObject::RefArray(
+                String::from("[Ljava/math/BigDecimal;"),
+                vec![JValue::Ref(Some(quotient)), JValue::Ref(Some(rest))],
+            ));
+            Ok(Some(JValue::Ref(Some(pair))))
+        }
+        "pow" => {
+            let raised = value.pow(int_at(0)).map_err(decimal_error)?;
+            answer(heap, raised)
+        }
+        "negate" => {
+            let negated = value.negated();
+            answer(heap, negated)
+        }
+        // `plus()` is the unary `+`: the value itself.
+        "abs" | "plus" => {
+            let magnitude = if method == "abs" { value.abs() } else { value };
+            answer(heap, magnitude)
+        }
+        "min" | "max" => {
+            let them = decimal_at(heap, 0)?;
+            // A tie answers THIS, which matters: 0 and 0.000 are equal and
+            // print differently.
+            let smaller = value.compare(&them) != std::cmp::Ordering::Greater;
+            let bigger = value.compare(&them) != std::cmp::Ordering::Less;
+            let kept = if (method == "min" && smaller) || (method == "max" && bigger) {
+                value
+            } else {
+                them
+            };
+            answer(heap, kept)
+        }
+        "setScale" => {
+            let mode = if args.len() > 1 {
+                rounding_argument(heap, args.get(1))?
+            } else {
+                Rounding::Unnecessary
+            };
+            let scaled = value.with_scale(int_at(0), mode).map_err(decimal_error)?;
+            answer(heap, scaled)
+        }
+        "round" => {
+            let (digits, mode) = context_at(heap, 0)?;
+            let rounded = value.with_precision(digits, mode).map_err(decimal_error)?;
+            answer(heap, rounded)
+        }
+        "movePointLeft" | "movePointRight" => {
+            let by = int_at(0);
+            let moved = value.move_point(if method == "movePointLeft" { by } else { -by });
+            answer(heap, moved)
+        }
+        "scaleByPowerOfTen" => {
+            let moved = value.scale_by_power_of_ten(int_at(0));
+            answer(heap, moved)
+        }
+        "stripTrailingZeros" => {
+            let stripped = value.stripped();
+            answer(heap, stripped)
+        }
+        "ulp" => {
+            let unit = value.ulp();
+            answer(heap, unit)
+        }
+        "scale" => Ok(Some(JValue::Int(value.scale()))),
+        "precision" => Ok(Some(JValue::Int(
+            i32::try_from(value.precision()).unwrap_or(i32::MAX),
+        ))),
+        "signum" => Ok(Some(JValue::Int(value.signum()))),
+        "unscaledValue" => Ok(Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::BigInteger(value.unscaled().clone())),
+        )))),
+        "toBigInteger" => Ok(Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::BigInteger(value.to_big_integer())),
+        )))),
+        "toBigIntegerExact" => {
+            let exact = value.to_big_integer_exact().map_err(decimal_error)?;
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::BigInteger(exact)),
+            ))))
+        }
+        "intValue" => Ok(Some(JValue::Int(value.to_big_integer().to_i32()))),
+        "longValue" => Ok(Some(JValue::Long(value.to_big_integer().to_i64()))),
+        "shortValue" => Ok(Some(JValue::Int(i32::from(
+            value.to_big_integer().to_i32() as i16,
+        )))),
+        "byteValue" => Ok(Some(JValue::Int(i32::from(
+            value.to_big_integer().to_i32() as i8,
+        )))),
+        "doubleValue" => Ok(Some(JValue::Double(value.to_f64()))),
+        "floatValue" => Ok(Some(JValue::Float(value.to_f32()))),
+        "intValueExact" | "longValueExact" | "shortValueExact" | "byteValueExact" => {
+            let wide = value.to_i64_exact().map_err(decimal_error)?;
+            let narrowed = match method {
+                "longValueExact" => return Ok(Some(JValue::Long(wide))),
+                "intValueExact" => i64::from(
+                    i32::try_from(wide)
+                        .map_err(|_| decimal_error(crate::decimal::DecError::Overflow))?,
+                ),
+                "shortValueExact" => i64::from(
+                    i16::try_from(wide)
+                        .map_err(|_| decimal_error(crate::decimal::DecError::Overflow))?,
+                ),
+                _ => i64::from(
+                    i8::try_from(wide)
+                        .map_err(|_| decimal_error(crate::decimal::DecError::Overflow))?,
+                ),
+            };
+            Ok(Some(JValue::Int(narrowed as i32)))
+        }
+        "compareTo" => {
+            let them = decimal_at(heap, 0)?;
+            Ok(Some(JValue::Int(match value.compare(&them) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })))
+        }
+        "equals" => {
+            let same = matches!(args.first(), Some(JValue::Ref(Some(reference)))
+                if matches!(heap.get(*reference), Some(HeapObject::BigDecimal(theirs)) if *theirs == value));
+            Ok(Some(JValue::Int(i32::from(same))))
+        }
+        "hashCode" => Ok(Some(JValue::Int(value.java_hash()))),
+        "toString" | "toPlainString" | "toEngineeringString" => {
+            let text = match method {
+                "toPlainString" => value.to_plain_text(),
+                "toEngineeringString" => value.to_engineering_text(),
+                _ => value.to_text(),
+            };
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("BigDecimal.{method}"))),
+    }
 }
 
 /// Parse the text of `new BigInteger(text)` / `new BigInteger(text, radix)`,

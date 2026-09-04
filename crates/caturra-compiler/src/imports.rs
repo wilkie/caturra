@@ -145,7 +145,7 @@ const JAVA_TIME_FORMAT: &[&str] = &[
 ];
 /// `java.math` — arbitrary-precision arithmetic: the integers a `long`
 /// overflows on.
-const JAVA_MATH: &[&str] = &["BigInteger"];
+const JAVA_MATH: &[&str] = &["BigInteger", "BigDecimal", "RoundingMode", "MathContext"];
 
 /// `java.nio.charset` — the charsets a program names when it turns text into
 /// bytes and back. `Charset` is the type; `StandardCharsets` holds the

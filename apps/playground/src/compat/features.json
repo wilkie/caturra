@@ -250,6 +250,16 @@
     "expected": "-8764578968847253504\n265252859812191058636308480000000\n123456789012345678901234567987 123456789012345678901234567793 11975308534197530853419753085330\n1272750402189130710322005854 52 52\n-2 3\n1 true\n97 and 61\ntrue 97\n3\n"
   },
   {
+    "id": "bigdecimals",
+    "category": "Library",
+    "title": "Decimals that add up",
+    "summary": "BigDecimal: exact decimal arithmetic, and the scale that comes with it.",
+    "main": "Money",
+    "source": "import java.math.BigDecimal;\nimport java.math.RoundingMode;\n\npublic class Money {\n    public static void main(String[] args) {\n        // The first surprise every course delivers, and its answer.\n        System.out.println(0.1 + 0.2);\n        System.out.println(new BigDecimal(\"0.1\").add(new BigDecimal(\"0.2\")));\n\n        // A price times a quantity, rounded to cents the way a till does.\n        BigDecimal price = new BigDecimal(\"19.99\");\n        BigDecimal total = price.multiply(new BigDecimal(\"3\"));\n        System.out.println(total + \" -> \" + total.setScale(2, RoundingMode.HALF_UP));\n\n        // The SCALE is part of the value: these are equal, and not equals.\n        BigDecimal a = new BigDecimal(\"2.0\");\n        BigDecimal b = new BigDecimal(\"2.00\");\n        System.out.println(a.compareTo(b) + \" \" + a.equals(b) + \" \" + a.scale() + b.scale());\n\n        // The scales add on a multiply and take the larger on a sum.\n        System.out.println(new BigDecimal(\"2.50\").multiply(new BigDecimal(\"4.000\")));\n        System.out.println(new BigDecimal(\"2.5\").add(new BigDecimal(\"0.001\")));\n\n        // A division that does not terminate has to be told how to round.\n        System.out.println(BigDecimal.ONE.divide(new BigDecimal(\"8\")));\n        System.out.println(BigDecimal.ONE.divide(new BigDecimal(\"3\"), 5, RoundingMode.HALF_UP));\n\n        // Every rounding mode, at the half they disagree about.\n        for (RoundingMode mode : RoundingMode.values()) {\n            if (mode != RoundingMode.UNNECESSARY) {\n                System.out.print(new BigDecimal(\"2.5\").setScale(0, mode) + \" \");\n            }\n        }\n        System.out.println();\n        System.out.println(String.format(\"%.2f and %,.2f\", price, new BigDecimal(\"1234567.891\")));\n    }\n}\n",
+    "status": "supported",
+    "expected": "0.30000000000000004\n0.3\n59.97 -> 59.97\n0 false 12\n10.00000\n2.501\n0.125\n0.33333\n3 2 3 2 3 2 2 \n19.99 and 1,234,567.89\n"
+  },
+  {
     "id": "charsets",
     "category": "Library",
     "title": "Text to bytes and back",

@@ -81,9 +81,10 @@ Each of these went past the exam surface for the reason beside it. The list is
 kept current as things land, so "is X in scope?" has an answer that is not a
 grep of the source.
 
-| Addition               | Why                                                                                                                                                                                                                                                                        |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `java.math.BigInteger` | Exact arithmetic past `long` — factorials, RSA-shaped exercises, and the "why did my number go negative?" lesson that overflow teaches. Its own bignum core (`crates/caturra-vm/src/bigint.rs`), for the same reason the regex engine and the float formatter are our own. |
+| Addition                                                 | Why                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `java.math.BigDecimal` (+ `RoundingMode`, `MathContext`) | The answer to `0.1 + 0.2`, and the type every money exercise should be written in. The scale is observable, so it teaches something a `double` cannot.                                                                                                                     |
+| `java.math.BigInteger`                                   | Exact arithmetic past `long` — factorials, RSA-shaped exercises, and the "why did my number go negative?" lesson that overflow teaches. Its own bignum core (`crates/caturra-vm/src/bigint.rs`), for the same reason the regex engine and the float formatter are our own. |
 
 ## Non-goals (for now)
 

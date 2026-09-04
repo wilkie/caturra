@@ -866,6 +866,16 @@ pub enum HeapObject {
     /// JDK, but `==` on them is not a promise any program may lean on, so
     /// caturra allocates each one.
     BigInteger(crate::bigint::BigInt),
+    /// A `java.math.BigDecimal`: an unscaled integer and a SCALE, which is
+    /// observable — `2.0` and `2.00` compare equal, are not `equals`, and hash
+    /// differently.
+    BigDecimal(crate::decimal::BigDec),
+    /// A `java.math.RoundingMode` constant, by its own ordinal. A real enum, so
+    /// interned: `==` on one is what a program writes.
+    RoundingMode(u8),
+    /// A `java.math.MathContext`: how many significant digits to keep, and how
+    /// to round what falls off.
+    MathContext { precision: i32, mode: u8 },
     /// A `java.nio.charset.Charset` — `StandardCharsets.UTF_8` and the names
     /// beside it. It carries its canonical NAME and nothing else, which is all
     /// `getBytes`, `new String(bytes, …)` and its own `toString` need.
@@ -1187,6 +1197,9 @@ impl HeapObject {
             | HeapObject::Path(_)
             | HeapObject::Charset(_)
             | HeapObject::BigInteger(_)
+            | HeapObject::BigDecimal(_)
+            | HeapObject::RoundingMode(_)
+            | HeapObject::MathContext { .. }
             | HeapObject::Pattern { .. }
             | HeapObject::MatchResult { .. }
             | HeapObject::Writer { .. }
@@ -1355,7 +1368,7 @@ pub struct Heap {
     /// (wrapper tag, value) — see [`Heap::box_wrapper`].
     wrapper_cache: std::collections::HashMap<(u8, i64), HeapRef>,
     /// The `java.time` enum constants, keyed by (kind, value).
-    temporal_pool: std::collections::HashMap<(u8, u8), HeapRef>,
+    enum_pool: std::collections::HashMap<(u8, u8), HeapRef>,
     /// What class a VIEW object reports: `Collections.emptyList()` and
     /// `List.of(a, b)` are both an unmodifiable list here, and a JDK names
     /// them `Collections$EmptyList` and `ImmutableCollections$List12`. It
@@ -1410,7 +1423,7 @@ impl Default for Heap {
             live_bytes: 0,
             threshold: HEAP_FLOOR,
             wrapper_cache: std::collections::HashMap::new(),
-            temporal_pool: std::collections::HashMap::new(),
+            enum_pool: std::collections::HashMap::new(),
             view_class: std::collections::HashMap::new(),
             format_text: std::collections::HashMap::new(),
             builder_capacity: std::collections::HashMap::new(),
@@ -1486,11 +1499,24 @@ impl Heap {
             Temporal::Field(field) => (3u8, field),
             Temporal::Era(era) => (4u8, era),
         };
-        if let Some(existing) = self.temporal_pool.get(&key) {
+        if let Some(existing) = self.enum_pool.get(&key) {
             return *existing;
         }
         let reference = self.alloc(HeapObject::Temporal(value));
-        self.temporal_pool.insert(key, reference);
+        self.enum_pool.insert(key, reference);
+        reference
+    }
+
+    /// `RoundingMode.HALF_UP` and the seven beside it — interned in the same
+    /// pool the `java.time` enums use, because they are enums for the same
+    /// reason: a program compares them with `==`.
+    pub fn intern_rounding_mode(&mut self, ordinal: u8) -> HeapRef {
+        let key = (5u8, ordinal);
+        if let Some(existing) = self.enum_pool.get(&key) {
+            return *existing;
+        }
+        let reference = self.alloc(HeapObject::RoundingMode(ordinal));
+        self.enum_pool.insert(key, reference);
         reference
     }
 
@@ -1510,10 +1536,10 @@ impl Heap {
         self.view_class.retain(|reference, _| alive(*reference));
     }
 
-    /// The interned `java.time` constants: roots, for the same reason the
-    /// boxes are.
-    pub fn interned_temporals(&self) -> impl Iterator<Item = HeapRef> + '_ {
-        self.temporal_pool.values().copied()
+    /// The interned library ENUM constants — `java.time`'s and
+    /// `RoundingMode`'s: roots, for the same reason the boxes are.
+    pub fn interned_enums(&self) -> impl Iterator<Item = HeapRef> + '_ {
+        self.enum_pool.values().copied()
     }
 
     /// The object at a slot, for the collector's walk — which must see even a

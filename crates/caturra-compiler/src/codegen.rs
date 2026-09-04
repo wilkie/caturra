@@ -4074,6 +4074,8 @@ impl MethodTable {
                     JType::MatchResult => ElemType::MatchResult,
                     JType::File => ElemType::File,
                     JType::BigInteger => ElemType::BigInteger,
+                    JType::BigDecimal => ElemType::BigDecimal,
+                    JType::RoundingMode => ElemType::RoundingMode,
                     JType::DayOfWeek => ElemType::DayOfWeek,
                     JType::Month => ElemType::Month,
                     JType::ChronoUnit => ElemType::ChronoUnit,
@@ -4870,6 +4872,8 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::MatchResult => "java/util/regex/MatchResult",
         ElemType::File => "java/io/File",
         ElemType::BigInteger => "java/math/BigInteger",
+        ElemType::BigDecimal => "java/math/BigDecimal",
+        ElemType::RoundingMode => "java/math/RoundingMode",
         ElemType::DayOfWeek => "java/time/DayOfWeek",
         ElemType::Month => "java/time/Month",
         ElemType::ChronoUnit => "java/time/temporal/ChronoUnit",
@@ -5212,6 +5216,8 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::MatchResult => String::from("MatchResult"),
         ElemType::File => String::from("File"),
         ElemType::BigInteger => String::from("BigInteger"),
+        ElemType::BigDecimal => String::from("BigDecimal"),
+        ElemType::RoundingMode => String::from("RoundingMode"),
         ElemType::DayOfWeek => String::from("DayOfWeek"),
         ElemType::Month => String::from("Month"),
         ElemType::ChronoUnit => String::from("ChronoUnit"),
@@ -5822,10 +5828,12 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
         | ElemType::ChronoUnit
         | ElemType::ChronoField
         | ElemType::IsoEra
+        // A `RoundingMode` is an enum like those, so it is ordered too.
+        | ElemType::RoundingMode
         | ElemType::LocalDate => table.class_id("Comparable") == Some(class),
         // A `BigInteger` element wears the wrappers' two faces: it orders
         // itself, and it is a `Number`.
-        ElemType::BigInteger => {
+        ElemType::BigInteger | ElemType::BigDecimal => {
             table.class_id("Comparable") == Some(class) || table.class_id("Number") == Some(class)
         }
         _ => false,
@@ -5914,6 +5922,8 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::MatchResult => Some(ElemType::MatchResult),
         JType::File => Some(ElemType::File),
         JType::BigInteger => Some(ElemType::BigInteger),
+        JType::BigDecimal => Some(ElemType::BigDecimal),
+        JType::RoundingMode => Some(ElemType::RoundingMode),
         JType::DayOfWeek => Some(ElemType::DayOfWeek),
         JType::Month => Some(ElemType::Month),
         JType::ChronoUnit => Some(ElemType::ChronoUnit),
@@ -6230,6 +6240,7 @@ fn library_enum_constants(ty: JType) -> Option<&'static [&'static str]> {
         JType::ChronoUnit => "ChronoUnit",
         JType::ChronoField => "ChronoField",
         JType::IsoEra => "IsoEra",
+        JType::RoundingMode => "RoundingMode",
         _ => return None,
     })
 }
@@ -6240,6 +6251,9 @@ fn library_enum_constants(ty: JType) -> Option<&'static [&'static str]> {
 fn library_value_type(simple: &str) -> Option<JType> {
     Some(match simple {
         "BigInteger" => JType::BigInteger,
+        "BigDecimal" => JType::BigDecimal,
+        "RoundingMode" => JType::RoundingMode,
+        "MathContext" => JType::MathContext,
         "LocalDate" => JType::LocalDate,
         "LocalTime" => JType::LocalTime,
         "LocalDateTime" => JType::LocalDateTime,
@@ -6382,6 +6396,8 @@ fn library_comparable(ty: JType) -> Option<bool> {
         JType::LocalDate | JType::LocalDateTime => false,
         JType::LocalTime
         | JType::BigInteger
+        | JType::BigDecimal
+        | JType::RoundingMode
         | JType::Duration
         | JType::DayOfWeek
         | JType::Month
@@ -6401,6 +6417,7 @@ const LIBRARY_ENUMS: &[(&str, JType)] = &[
     ("ChronoUnit", JType::ChronoUnit),
     ("ChronoField", JType::ChronoField),
     ("IsoEra", JType::IsoEra),
+    ("RoundingMode", JType::RoundingMode),
 ];
 
 /// Whether a locale ARGUMENT names one caturra can answer. `Locale` is not a
@@ -6483,6 +6500,7 @@ fn library_enum_class(ty: JType) -> &'static str {
         JType::ChronoUnit => "java/time/temporal/ChronoUnit",
         JType::ChronoField => "java/time/temporal/ChronoField",
         JType::IsoEra => "java/time/chrono/IsoEra",
+        JType::RoundingMode => "java/math/RoundingMode",
         _ => "java/time/Month",
     }
 }
@@ -6504,6 +6522,7 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         "ChronoUnit" => JType::ChronoUnit,
         "ChronoField" => JType::ChronoField,
         "IsoEra" => JType::IsoEra,
+        "RoundingMode" => JType::RoundingMode,
         "DateTimeFormatter" => JType::DateFormat,
         _ => JType::Month,
     };
@@ -6528,6 +6547,18 @@ fn time_constant_names(class: &str) -> Option<&'static [&'static str]> {
         // and are asked for the same way.
         "LocalTime" => &["MIDNIGHT", "NOON", "MAX", "MIN"],
         "Duration" | "Period" => &["ZERO"],
+        // `java.math.RoundingMode`, in the enum's own order — which is also
+        // `ordinal()`, and the deprecated `BigDecimal.ROUND_*` ints.
+        "RoundingMode" => &[
+            "UP",
+            "DOWN",
+            "CEILING",
+            "FLOOR",
+            "HALF_UP",
+            "HALF_DOWN",
+            "HALF_EVEN",
+            "UNNECESSARY",
+        ],
         // Every ISO constant prints what the value's own `toString` prints,
         // so they are all the same object here.
         "DateTimeFormatter" => &[
@@ -6643,23 +6674,48 @@ fn standard_charset(path: &[String], table: &MethodTable) -> Option<&'static str
     })
 }
 
-/// `BigInteger.ZERO` and the three constants beside it. A JDK caches those
-/// four objects, but `==` on a `BigInteger` is not a promise a program may
-/// lean on, so each one here simply lowers to the `valueOf` that mints it.
-fn big_integer_constant(path: &[String], table: &MethodTable) -> Option<i64> {
+/// `BigInteger.ZERO` and the constants beside it — and `BigDecimal`'s three.
+/// A JDK caches those objects, but `==` on either is not a promise a program
+/// may lean on, so each one here simply lowers to the `valueOf` that mints it.
+/// `MathContext.DECIMAL32` and the three beside it, by the index the VM
+/// builds them from.
+fn math_context_constant(path: &[String], table: &MethodTable) -> Option<i32> {
     let [.., owner, constant] = path else {
         return None;
     };
-    if owner != "BigInteger" || table.has_class(owner) {
+    if owner != "MathContext" || table.has_class(owner) {
         return None;
     }
     Some(match constant.as_str() {
-        "ZERO" => 0,
-        "ONE" => 1,
-        "TWO" => 2,
-        "TEN" => 10,
+        "DECIMAL32" => 0,
+        "DECIMAL64" => 1,
+        "DECIMAL128" => 2,
+        "UNLIMITED" => 3,
         _ => return None,
     })
+}
+
+fn big_number_constant(path: &[String], table: &MethodTable) -> Option<(JType, i64)> {
+    let [.., owner, constant] = path else {
+        return None;
+    };
+    if table.has_class(owner) {
+        return None;
+    }
+    let ty = match owner.as_str() {
+        "BigInteger" => JType::BigInteger,
+        "BigDecimal" => JType::BigDecimal,
+        _ => return None,
+    };
+    let value = match constant.as_str() {
+        "ZERO" => 0,
+        "ONE" => 1,
+        // A `BigDecimal` has no `TWO` — that constant arrived in Java 19.
+        "TWO" if ty == JType::BigInteger => 2,
+        "TEN" => 10,
+        _ => return None,
+    };
+    Some((ty, value))
 }
 
 fn comparator_alias(name: &str, declared: bool) -> &str {
@@ -7742,7 +7798,7 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // value that wears the wrappers' two faces.
         || matches!(
             (from, to),
-            (JType::BigInteger, JType::Object(id))
+            (JType::BigInteger | JType::BigDecimal, JType::Object(id))
                 if id == table.object_id
                     || table.class_id("Number") == Some(id)
                     || table.class_id("Comparable") == Some(id)
@@ -7813,6 +7869,9 @@ enum ElemType {
     /// `java.math.BigInteger` — the element of the pair `divideAndRemainder`
     /// answers, and of any collection a program keeps them in.
     BigInteger,
+    /// `java.math.BigDecimal`, and `RoundingMode.values()`.
+    BigDecimal,
+    RoundingMode,
     /// A `java.time` ENUM as an element — what `DayOfWeek.values()` and
     /// `Month.values()` answer, which is how a program loops over one.
     DayOfWeek,
@@ -7970,6 +8029,8 @@ impl ElemType {
             ElemType::MatchResult => String::from("Ljava/util/regex/MatchResult;"),
             ElemType::File => String::from("Ljava/io/File;"),
             ElemType::BigInteger => String::from("Ljava/math/BigInteger;"),
+            ElemType::BigDecimal => String::from("Ljava/math/BigDecimal;"),
+            ElemType::RoundingMode => String::from("Ljava/math/RoundingMode;"),
             ElemType::DayOfWeek => String::from("Ljava/time/DayOfWeek;"),
             ElemType::Month => String::from("Ljava/time/Month;"),
             ElemType::ChronoUnit => String::from("Ljava/time/temporal/ChronoUnit;"),
@@ -8045,6 +8106,8 @@ impl ElemType {
             ElemType::MatchResult => JType::MatchResult,
             ElemType::File => JType::File,
             ElemType::BigInteger => JType::BigInteger,
+            ElemType::BigDecimal => JType::BigDecimal,
+            ElemType::RoundingMode => JType::RoundingMode,
             ElemType::DayOfWeek => JType::DayOfWeek,
             ElemType::Month => JType::Month,
             ElemType::ChronoUnit => JType::ChronoUnit,
@@ -8232,6 +8295,15 @@ enum JType {
     /// `java.math.BigInteger` (intrinsic) — an integer of any size. Immutable,
     /// compared by VALUE, and a `Number` and a `Comparable` like the wrappers.
     BigInteger,
+    /// `java.math.BigDecimal` (intrinsic) — an unscaled integer and a SCALE.
+    /// The scale is observable, which is the whole difference from `double`.
+    BigDecimal,
+    /// `java.math.RoundingMode` — a real enum, so it switches and fills an
+    /// `EnumSet` like the `java.time` ones.
+    RoundingMode,
+    /// `java.math.MathContext` — how many significant digits to keep, and how
+    /// to round what falls off.
+    MathContext,
     /// `java.nio.charset.Charset` (intrinsic) — `StandardCharsets.UTF_8` and
     /// the names beside it, which a program passes to `getBytes`, to
     /// `new String(bytes, …)` and to the `Files` readers. The object carries
@@ -8755,6 +8827,9 @@ impl JType {
             JType::Reader => String::from("BufferedReader"),
             JType::Path => String::from("Path"),
             JType::BigInteger => String::from("BigInteger"),
+            JType::BigDecimal => String::from("BigDecimal"),
+            JType::RoundingMode => String::from("RoundingMode"),
+            JType::MathContext => String::from("MathContext"),
             JType::Charset => String::from("Charset"),
             JType::Pattern => String::from("Pattern"),
             JType::Matcher => String::from("Matcher"),
@@ -8815,6 +8890,9 @@ impl JType {
                 | JType::Path
                 | JType::Charset
                 | JType::BigInteger
+                | JType::BigDecimal
+                | JType::RoundingMode
+                | JType::MathContext
                 | JType::Pattern
                 | JType::Matcher
                 | JType::MatchResult
@@ -8969,6 +9047,9 @@ impl JType {
             JType::Reader => String::from("Ljava/io/BufferedReader;"),
             JType::Path => String::from("Ljava/nio/file/Path;"),
             JType::BigInteger => String::from("Ljava/math/BigInteger;"),
+            JType::BigDecimal => String::from("Ljava/math/BigDecimal;"),
+            JType::RoundingMode => String::from("Ljava/math/RoundingMode;"),
+            JType::MathContext => String::from("Ljava/math/MathContext;"),
             JType::Charset => String::from("Ljava/nio/charset/Charset;"),
             JType::Pattern => String::from("Ljava/util/regex/Pattern;"),
             JType::Matcher => String::from("Ljava/util/regex/Matcher;"),
@@ -10511,6 +10592,10 @@ enum BParam {
     Str,
     /// `java.math.BigInteger`, which is what every two-operand method takes.
     BigInteger,
+    /// `java.math.BigDecimal`, likewise — and the two that steer its rounding.
+    BigDecimal,
+    RoundingMode,
+    MathContext,
     /// `java.lang.CharSequence` — a `String`, `StringBuilder`, or
     /// `CharSequence`-typed value (`append(CharSequence, int, int)`).
     CharSeq,
@@ -10601,6 +10686,11 @@ enum BRet {
     /// `java.math.BigInteger`, and the pair `divideAndRemainder` answers.
     BigInteger,
     BigIntegerArray,
+    /// The `java.math` decimal trio, and the two arrays they answer.
+    BigDecimal,
+    BigDecimalArray,
+    RoundingMode,
+    RoundingModeArray,
     /// `java.io.PrintStream` — what `append`/`printf` answer, for chaining.
     PrintStream,
     /// The `java.time` values.
@@ -14886,6 +14976,303 @@ const BIG_INTEGER_STATIC_METHODS: &[BuiltinMethod] = &[bm(
     "(J)Ljava/math/BigInteger;",
 )];
 
+/// `java.math.BigDecimal` — an unscaled integer and a SCALE. Every method has
+/// a rule for the scale it answers with, which is the whole difference between
+/// this and `double` arithmetic.
+const BIG_DECIMAL_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "add",
+        &[BParam::BigDecimal],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "add",
+        &[BParam::BigDecimal, BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "subtract",
+        &[BParam::BigDecimal],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "subtract",
+        &[BParam::BigDecimal, BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "multiply",
+        &[BParam::BigDecimal],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "multiply",
+        &[BParam::BigDecimal, BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "divide",
+        &[BParam::BigDecimal],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "divide",
+        &[BParam::BigDecimal, BParam::RoundingMode],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;Ljava/math/RoundingMode;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "divide",
+        &[BParam::BigDecimal, BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "divide",
+        &[BParam::BigDecimal, BParam::Int, BParam::RoundingMode],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;ILjava/math/RoundingMode;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "divide",
+        &[BParam::BigDecimal, BParam::Int, BParam::Int],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;II)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "divideToIntegralValue",
+        &[BParam::BigDecimal],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "remainder",
+        &[BParam::BigDecimal],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "divideAndRemainder",
+        &[BParam::BigDecimal],
+        BRet::BigDecimalArray,
+        "(Ljava/math/BigDecimal;)[Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "pow",
+        &[BParam::Int],
+        BRet::BigDecimal,
+        "(I)Ljava/math/BigDecimal;",
+    ),
+    bm("negate", &[], BRet::BigDecimal, "()Ljava/math/BigDecimal;"),
+    bm("abs", &[], BRet::BigDecimal, "()Ljava/math/BigDecimal;"),
+    bm("plus", &[], BRet::BigDecimal, "()Ljava/math/BigDecimal;"),
+    bm(
+        "stripTrailingZeros",
+        &[],
+        BRet::BigDecimal,
+        "()Ljava/math/BigDecimal;",
+    ),
+    bm("ulp", &[], BRet::BigDecimal, "()Ljava/math/BigDecimal;"),
+    bm(
+        "min",
+        &[BParam::BigDecimal],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "max",
+        &[BParam::BigDecimal],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "setScale",
+        &[BParam::Int],
+        BRet::BigDecimal,
+        "(I)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "setScale",
+        &[BParam::Int, BParam::RoundingMode],
+        BRet::BigDecimal,
+        "(ILjava/math/RoundingMode;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "setScale",
+        &[BParam::Int, BParam::Int],
+        BRet::BigDecimal,
+        "(II)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "round",
+        &[BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "movePointLeft",
+        &[BParam::Int],
+        BRet::BigDecimal,
+        "(I)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "movePointRight",
+        &[BParam::Int],
+        BRet::BigDecimal,
+        "(I)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "scaleByPowerOfTen",
+        &[BParam::Int],
+        BRet::BigDecimal,
+        "(I)Ljava/math/BigDecimal;",
+    ),
+    bm("scale", &[], BRet::Int, "()I"),
+    bm("precision", &[], BRet::Int, "()I"),
+    bm("signum", &[], BRet::Int, "()I"),
+    bm(
+        "unscaledValue",
+        &[],
+        BRet::BigInteger,
+        "()Ljava/math/BigInteger;",
+    ),
+    bm(
+        "toBigInteger",
+        &[],
+        BRet::BigInteger,
+        "()Ljava/math/BigInteger;",
+    ),
+    bm(
+        "toBigIntegerExact",
+        &[],
+        BRet::BigInteger,
+        "()Ljava/math/BigInteger;",
+    ),
+    bm("intValue", &[], BRet::Int, "()I"),
+    bm("longValue", &[], BRet::Long, "()J"),
+    bm("shortValue", &[], BRet::Short, "()S"),
+    bm("byteValue", &[], BRet::Byte, "()B"),
+    bm("doubleValue", &[], BRet::Double, "()D"),
+    bm("floatValue", &[], BRet::Float, "()F"),
+    bm("intValueExact", &[], BRet::Int, "()I"),
+    bm("longValueExact", &[], BRet::Long, "()J"),
+    bm("shortValueExact", &[], BRet::Short, "()S"),
+    bm("byteValueExact", &[], BRet::Byte, "()B"),
+    bm(
+        "compareTo",
+        &[BParam::BigDecimal],
+        BRet::Int,
+        "(Ljava/math/BigDecimal;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("toPlainString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "toEngineeringString",
+        &[],
+        BRet::Str,
+        "()Ljava/lang/String;",
+    ),
+];
+
+/// `BigDecimal.valueOf(...)` — and the constants the compiler lowers to it.
+const BIG_DECIMAL_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "valueOf",
+        &[BParam::Long],
+        BRet::BigDecimal,
+        "(J)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "valueOf",
+        &[BParam::Long, BParam::Int],
+        BRet::BigDecimal,
+        "(JI)Ljava/math/BigDecimal;",
+    ),
+    // `valueOf(double)` goes through `Double.toString`, which is why it
+    // answers `0.1` where `new BigDecimal(0.1)` answers the exact binary value.
+    bm(
+        "valueOf",
+        &[BParam::Double],
+        BRet::BigDecimal,
+        "(D)Ljava/math/BigDecimal;",
+    ),
+];
+
+/// `java.math.RoundingMode` — an enum, and it answers what every enum answers.
+const ROUNDING_MODE_METHODS: &[BuiltinMethod] = &[
+    bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("ordinal", &[], BRet::Int, "()I"),
+    bm(
+        "compareTo",
+        &[BParam::RoundingMode],
+        BRet::Int,
+        "(Ljava/math/RoundingMode;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+/// `RoundingMode.values()` and `valueOf`, which take the two shapes a JDK's do.
+const ROUNDING_MODE_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "values",
+        &[],
+        BRet::RoundingModeArray,
+        "()[Ljava/math/RoundingMode;",
+    ),
+    bm(
+        "valueOf",
+        &[BParam::Str],
+        BRet::RoundingMode,
+        "(Ljava/lang/String;)Ljava/math/RoundingMode;",
+    ),
+    bm(
+        "valueOf",
+        &[BParam::Int],
+        BRet::RoundingMode,
+        "(I)Ljava/math/RoundingMode;",
+    ),
+];
+
+/// `java.math.MathContext` — two numbers, and the questions asked of them.
+const MATH_CONTEXT_METHODS: &[BuiltinMethod] = &[
+    bm("getPrecision", &[], BRet::Int, "()I"),
+    bm(
+        "getRoundingMode",
+        &[],
+        BRet::RoundingMode,
+        "()Ljava/math/RoundingMode;",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
 /// `java.time.temporal.ValueRange` — four numbers, and the questions asked
 /// of them.
 const VALUE_RANGE_METHODS: &[BuiltinMethod] = &[
@@ -18184,6 +18571,9 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::Path
             | JType::Charset
             | JType::BigInteger
+            | JType::BigDecimal
+            | JType::RoundingMode
+            | JType::MathContext
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -18235,6 +18625,9 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
         JType::BigInteger => Some(("java/math/BigInteger", BIG_INTEGER_METHODS)),
+        JType::BigDecimal => Some(("java/math/BigDecimal", BIG_DECIMAL_METHODS)),
+        JType::RoundingMode => Some(("java/math/RoundingMode", ROUNDING_MODE_METHODS)),
+        JType::MathContext => Some(("java/math/MathContext", MATH_CONTEXT_METHODS)),
         JType::Charset => Some(("java/nio/charset/Charset", CHARSET_METHODS)),
         JType::Pattern => Some(("java/util/regex/Pattern", PATTERN_METHODS)),
         JType::Matcher => Some(("java/util/regex/Matcher", MATCHER_METHODS)),
@@ -19004,6 +19397,11 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         // `Charset.forName(name)` / `defaultCharset()`, and the
         // `StandardCharsets` constants, which lower to the same call.
         "BigInteger" => Some(("java/math/BigInteger", BIG_INTEGER_STATIC_METHODS)),
+        "BigDecimal" => Some(("java/math/BigDecimal", BIG_DECIMAL_STATIC_METHODS)),
+        "RoundingMode" => Some(("java/math/RoundingMode", ROUNDING_MODE_STATIC_METHODS)),
+        // A `MathContext` has no statics of its own; the entry exists so its
+        // four CONSTANTS resolve as a qualified name.
+        "MathContext" => Some(("java/math/MathContext", &[])),
         "Charset" => Some(("java/nio/charset/Charset", CHARSET_STATIC_METHODS)),
         "Pattern" => Some(("java/util/regex/Pattern", PATTERN_STATIC_METHODS)),
         "Matcher" => Some(("java/util/regex/Matcher", MATCHER_STATIC_METHODS)),
@@ -19067,6 +19465,16 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
         ("Integer" | "Float", "BYTES") => Some(Int(4)),
         ("Character", "SIZE") => Some(Int(16)),
         ("Character", "BYTES") => Some(Int(2)),
+        // `BigDecimal.ROUND_HALF_UP` and the seven beside it — the deprecated
+        // int form of a `RoundingMode`, and its ordinal exactly.
+        ("BigDecimal", "ROUND_UP") => Some(Int(0)),
+        ("BigDecimal", "ROUND_DOWN") => Some(Int(1)),
+        ("BigDecimal", "ROUND_CEILING") => Some(Int(2)),
+        ("BigDecimal", "ROUND_FLOOR") => Some(Int(3)),
+        ("BigDecimal", "ROUND_HALF_UP") => Some(Int(4)),
+        ("BigDecimal", "ROUND_HALF_DOWN") => Some(Int(5)),
+        ("BigDecimal", "ROUND_HALF_EVEN") => Some(Int(6)),
+        ("BigDecimal", "ROUND_UNNECESSARY") => Some(Int(7)),
         // `Pattern.CASE_INSENSITIVE` and the flags beside it — ints, and the
         // JDK's own values, since a program may OR them together.
         ("Pattern", "UNIX_LINES") => Some(Int(0x01)),
@@ -19315,6 +19723,9 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
             .map_or(JType::Error, |elem| elem_value_type(elem, table)),
         BParam::Class => JType::Class,
         BParam::BigInteger => JType::BigInteger,
+        BParam::BigDecimal => JType::BigDecimal,
+        BParam::RoundingMode => JType::RoundingMode,
+        BParam::MathContext => JType::MathContext,
         BParam::Charset => JType::Charset,
         BParam::Pattern => JType::Pattern,
         BParam::Path => JType::Path,
@@ -19761,6 +20172,16 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Month => Some(JType::Month),
         BRet::Path => Some(JType::Path),
         BRet::BigInteger => Some(JType::BigInteger),
+        BRet::BigDecimal => Some(JType::BigDecimal),
+        BRet::RoundingMode => Some(JType::RoundingMode),
+        BRet::RoundingModeArray => Some(JType::Array {
+            elem: ElemType::RoundingMode,
+            dims: 1,
+        }),
+        BRet::BigDecimalArray => Some(JType::Array {
+            elem: ElemType::BigDecimal,
+            dims: 1,
+        }),
         BRet::BigIntegerArray => Some(JType::Array {
             elem: ElemType::BigInteger,
             dims: 1,
@@ -24691,6 +25112,8 @@ impl BodyGen<'_> {
             "StringBuilder" => JType::StringBuilder,
             "Scanner" => JType::Scanner,
             "BigInteger" => JType::BigInteger,
+            "BigDecimal" => JType::BigDecimal,
+            "MathContext" => JType::MathContext,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
             "PrintStream" => JType::PrintStream,
@@ -25080,6 +25503,8 @@ impl BodyGen<'_> {
                 "ArrayDeque" => return self.new_array_deque(type_args, args, span),
                 "PriorityQueue" => return self.new_priority_queue(type_args, args, span),
                 "BigInteger" => return self.new_big_integer(args, span),
+                "BigDecimal" => return self.new_big_decimal(args, span),
+                "MathContext" => return self.new_math_context(args, span),
                 "File" => return self.new_file(args, span),
                 // A `FileWriter` is the same thing this engine calls a
                 // writer, plus the APPEND flag: `new FileWriter(path, true)`
@@ -25846,6 +26271,113 @@ impl BodyGen<'_> {
         self.code
             .drop_stack(2 + u16::from(descriptor.contains(";I)")));
         JType::BigInteger
+    }
+
+    /// `new BigDecimal(...)` — from text, from a `BigInteger` (with an optional
+    /// scale), or from a primitive. The `double` form is the one that surprises:
+    /// it takes the EXACT binary value, so `new BigDecimal(0.1)` is not a tenth.
+    fn new_big_decimal(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class = intern_class(self.pool, "java/math/BigDecimal");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let mut width = 0u16;
+        let descriptor = match args {
+            [one] => {
+                let ty = self.expr(one);
+                if ty == JType::Error {
+                    self.error_bail(span, "BigDecimal value");
+                    return JType::Error;
+                }
+                match ty {
+                    JType::Str | JType::Null => Some("(Ljava/lang/String;)V"),
+                    JType::Double | JType::Float => {
+                        self.convert_for_assignment(ty, JType::Double, span);
+                        width = 1;
+                        Some("(D)V")
+                    }
+                    JType::Long => {
+                        width = 1;
+                        Some("(J)V")
+                    }
+                    JType::Int | JType::Short | JType::Byte | JType::Char => Some("(I)V"),
+                    JType::BigInteger => Some("(Ljava/math/BigInteger;)V"),
+                    _ => None,
+                }
+            }
+            [value, scale] => {
+                let value_ty = self.expr(value);
+                let scale_ty = self.expr(scale);
+                if value_ty == JType::Error || scale_ty == JType::Error {
+                    self.error_bail(span, "BigDecimal value");
+                    return JType::Error;
+                }
+                (value_ty == JType::BigInteger
+                    && matches!(
+                        scale_ty,
+                        JType::Int | JType::Short | JType::Byte | JType::Char
+                    ))
+                .then_some("(Ljava/math/BigInteger;I)V")
+            }
+            _ => None,
+        };
+        let Some(descriptor) = descriptor else {
+            self.error(
+                span,
+                String::from(
+                    "new BigDecimal takes a String, a number, or a BigInteger and a scale",
+                ),
+            );
+            return JType::Error;
+        };
+        let init_ref = intern_method_ref(self.pool, "java/math/BigDecimal", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        self.code
+            .drop_stack(2 + width + u16::from(descriptor.contains(";I)")));
+        JType::BigDecimal
+    }
+
+    /// `new MathContext(digits)` / `new MathContext(digits, roundingMode)`.
+    fn new_math_context(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class = intern_class(self.pool, "java/math/MathContext");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let descriptor = match args {
+            [digits] => {
+                let ty = self.expr(digits);
+                if ty == JType::Error {
+                    self.error_bail(span, "MathContext precision");
+                    return JType::Error;
+                }
+                matches!(ty, JType::Int | JType::Short | JType::Byte | JType::Char)
+                    .then_some("(I)V")
+            }
+            [digits, mode] => {
+                let digits_ty = self.expr(digits);
+                let mode_ty = self.expr(mode);
+                if digits_ty == JType::Error || mode_ty == JType::Error {
+                    self.error_bail(span, "MathContext precision");
+                    return JType::Error;
+                }
+                (matches!(
+                    digits_ty,
+                    JType::Int | JType::Short | JType::Byte | JType::Char
+                ) && mode_ty == JType::RoundingMode)
+                    .then_some("(ILjava/math/RoundingMode;)V")
+            }
+            _ => None,
+        };
+        let Some(descriptor) = descriptor else {
+            self.error(
+                span,
+                String::from("new MathContext takes a digit count, and optionally a RoundingMode"),
+            );
+            return JType::Error;
+        };
+        let init_ref = intern_method_ref(self.pool, "java/math/MathContext", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        self.code
+            .drop_stack(2 + u16::from(descriptor.contains('L')));
+        JType::MathContext
     }
 
     fn new_file(&mut self, args: &[Expr], span: SourceSpan) -> JType {
@@ -27335,6 +27867,9 @@ impl BodyGen<'_> {
             | JType::Path
             | JType::Charset
             | JType::BigInteger
+            | JType::BigDecimal
+            | JType::RoundingMode
+            | JType::MathContext
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -28370,6 +28905,9 @@ impl BodyGen<'_> {
                 | JType::ChronoField
                 | JType::ValueRange
                 | JType::BigInteger
+                | JType::BigDecimal
+                | JType::RoundingMode
+                | JType::MathContext
                 | JType::IsoEra => {
                     tags.push_str("Ljava/lang/Object;");
                     width += 1;
@@ -29434,6 +29972,9 @@ impl BodyGen<'_> {
             JType::File => String::from("java/io/File"),
             JType::Path => String::from("java/nio/file/Path"),
             JType::BigInteger => String::from("java/math/BigInteger"),
+            JType::BigDecimal => String::from("java/math/BigDecimal"),
+            JType::RoundingMode => String::from("java/math/RoundingMode"),
+            JType::MathContext => String::from("java/math/MathContext"),
             JType::Charset => String::from("java/nio/charset/Charset"),
             JType::Pattern => String::from("java/util/regex/Pattern"),
             JType::Matcher => String::from("java/util/regex/Matcher"),
@@ -33215,6 +33756,9 @@ impl BodyGen<'_> {
             | JType::Constructor
             | JType::Charset
             | JType::BigInteger
+            | JType::BigDecimal
+            | JType::RoundingMode
+            | JType::MathContext
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -33433,8 +33977,11 @@ impl BodyGen<'_> {
             }
             // `BigInteger.ZERO` and its three siblings — typed here as well as
             // emitted, or an argument of this type has no type at all.
-            Expr::Name { path, .. } if big_integer_constant(path, self.table).is_some() => {
-                JType::BigInteger
+            Expr::Name { path, .. } if math_context_constant(path, self.table).is_some() => {
+                JType::MathContext
+            }
+            Expr::Name { path, .. } if big_number_constant(path, self.table).is_some() => {
+                big_number_constant(path, self.table).map_or(JType::Error, |(ty, _)| ty)
             }
             Expr::Name { path, .. }
                 if path.len() == 2
@@ -35466,6 +36013,8 @@ impl BodyGen<'_> {
             ElemType::MatchResult => Some(String::from("java/util/regex/MatchResult")),
             ElemType::File => Some(String::from("java/io/File")),
             ElemType::BigInteger => Some(String::from("java/math/BigInteger")),
+            ElemType::BigDecimal => Some(String::from("java/math/BigDecimal")),
+            ElemType::RoundingMode => Some(String::from("java/math/RoundingMode")),
             ElemType::DayOfWeek => Some(String::from("java/time/DayOfWeek")),
             ElemType::Month => Some(String::from("java/time/Month")),
             ElemType::ChronoUnit => Some(String::from("java/time/temporal/ChronoUnit")),
@@ -35896,6 +36445,7 @@ impl BodyGen<'_> {
                 JType::ChronoField => "java/time/temporal/ChronoField",
                 JType::TemporalAdjuster => "java/time/temporal/TemporalAdjuster",
                 JType::IsoEra => "java/time/chrono/IsoEra",
+                JType::RoundingMode => "java/math/RoundingMode",
                 JType::ValueRange => "java/time/temporal/ValueRange",
                 JType::DateFormat => "java/time/format/DateTimeFormatter",
                 _ => "java/time/Month",
@@ -35908,18 +36458,32 @@ impl BodyGen<'_> {
         }
         // `StandardCharsets.UTF_8` — a constant whose value is a Charset, built
         // by the same call `Charset.forName` makes.
-        if let Some(value) = big_integer_constant(path, self.table) {
-            let index = self.pool.intern(Constant::Long(value));
-            self.code.push_op_u16(op::LDC2_W, index, 2);
+        // `MathContext.DECIMAL64` and the three beside it — a context is an
+        // object, so the constant lowers to the call that builds it.
+        if let Some(which) = math_context_constant(path, self.table) {
+            self.push_int(which);
             let method_ref = intern_method_ref(
                 self.pool,
-                "java/math/BigInteger",
-                "valueOf",
-                "(J)Ljava/math/BigInteger;",
+                "java/math/MathContext",
+                "__of",
+                "(I)Ljava/math/MathContext;",
             );
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+            return JType::MathContext;
+        }
+        if let Some((ty, value)) = big_number_constant(path, self.table) {
+            let class = if ty == JType::BigInteger {
+                "java/math/BigInteger"
+            } else {
+                "java/math/BigDecimal"
+            };
+            let index = self.pool.intern(Constant::Long(value));
+            self.code.push_op_u16(op::LDC2_W, index, 2);
+            let method_ref =
+                intern_method_ref(self.pool, class, "valueOf", &format!("(J)L{class};"));
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
             self.code.drop_stack(1);
-            return JType::BigInteger;
+            return ty;
         }
         if let Some(name) = standard_charset(path, self.table) {
             let utf8 = self.pool.intern_utf8(name);
@@ -38292,6 +38856,9 @@ impl BodyGen<'_> {
             | JType::Path
             | JType::Charset
             | JType::BigInteger
+            | JType::BigDecimal
+            | JType::RoundingMode
+            | JType::MathContext
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -38545,6 +39112,8 @@ impl BodyGen<'_> {
             | ElemType::MatchResult
             | ElemType::File
             | ElemType::BigInteger
+            | ElemType::BigDecimal
+            | ElemType::RoundingMode
             | ElemType::DayOfWeek
             | ElemType::Month
             | ElemType::ChronoUnit
@@ -38715,6 +39284,9 @@ impl BodyGen<'_> {
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
             | JType::BigInteger
+            | JType::BigDecimal
+            | JType::RoundingMode
+            | JType::MathContext
             | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
@@ -38756,6 +39328,9 @@ impl BodyGen<'_> {
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
             | JType::BigInteger
+            | JType::BigDecimal
+            | JType::RoundingMode
+            | JType::MathContext
             | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };

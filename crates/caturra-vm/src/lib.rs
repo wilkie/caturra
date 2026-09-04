@@ -9,6 +9,7 @@
 
 pub mod bigint;
 pub mod debug;
+pub mod decimal;
 pub(crate) mod floatdec;
 pub(crate) mod format;
 mod interpreter;

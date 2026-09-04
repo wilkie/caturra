@@ -834,6 +834,52 @@ public class Big {
 ''',
     ),
     dict(
+        id="bigdecimals",
+        category="Library",
+        title="Decimals that add up",
+        summary="BigDecimal: exact decimal arithmetic, and the scale that comes with it.",
+        main="Money",
+        source='''
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
+public class Money {
+    public static void main(String[] args) {
+        // The first surprise every course delivers, and its answer.
+        System.out.println(0.1 + 0.2);
+        System.out.println(new BigDecimal("0.1").add(new BigDecimal("0.2")));
+
+        // A price times a quantity, rounded to cents the way a till does.
+        BigDecimal price = new BigDecimal("19.99");
+        BigDecimal total = price.multiply(new BigDecimal("3"));
+        System.out.println(total + " -> " + total.setScale(2, RoundingMode.HALF_UP));
+
+        // The SCALE is part of the value: these are equal, and not equals.
+        BigDecimal a = new BigDecimal("2.0");
+        BigDecimal b = new BigDecimal("2.00");
+        System.out.println(a.compareTo(b) + " " + a.equals(b) + " " + a.scale() + b.scale());
+
+        // The scales add on a multiply and take the larger on a sum.
+        System.out.println(new BigDecimal("2.50").multiply(new BigDecimal("4.000")));
+        System.out.println(new BigDecimal("2.5").add(new BigDecimal("0.001")));
+
+        // A division that does not terminate has to be told how to round.
+        System.out.println(BigDecimal.ONE.divide(new BigDecimal("8")));
+        System.out.println(BigDecimal.ONE.divide(new BigDecimal("3"), 5, RoundingMode.HALF_UP));
+
+        // Every rounding mode, at the half they disagree about.
+        for (RoundingMode mode : RoundingMode.values()) {
+            if (mode != RoundingMode.UNNECESSARY) {
+                System.out.print(new BigDecimal("2.5").setScale(0, mode) + " ");
+            }
+        }
+        System.out.println();
+        System.out.println(String.format("%.2f and %,.2f", price, new BigDecimal("1234567.891")));
+    }
+}
+''',
+    ),
+    dict(
         id="charsets",
         category="Library",
         title="Text to bytes and back",

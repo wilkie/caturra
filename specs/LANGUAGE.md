@@ -13733,3 +13733,66 @@ parameter, an array, a `List`, a `TreeMap` key, a `TreeSet`, a cast, an
 `Comparator.comparing`, a `StringBuilder`, and a `Number` and `Comparable`
 variable. The bignum core carries seven unit tests of its own for the parts a
 program cannot reach directly.
+
+## A number with a scale
+
+`java.math.BigDecimal`, and the two types it cannot be used without:
+`RoundingMode` and `MathContext`. This is the answer to the first surprise
+every programming course delivers — `0.1 + 0.2` is `0.30000000000000004` — and
+the type every money exercise should be written in.
+
+The core is `crates/caturra-vm/src/decimal.rs`, over the `BigInteger` written
+beside it: an unscaled integer and a `scale`, so the value is
+`unscaled x 10^-scale`. That is a JDK's model exactly, and it has to be,
+because **the scale is observable**. `2.0` and `2.00` compare equal and are not
+`equals`; they hash differently, so a `HashSet` holds both; and every operation
+has a rule for the scale it answers with — the scales ADD on a multiply, take
+the larger on a sum, and an exact division answers at the "preferred" scale
+(`dividend.scale - divisor.scale`) when the exact quotient fits there.
+
+**What was measured.** Three JDK captures, run before a line was written:
+a twelve-value grid crossed with eleven binary operations, twenty-two unary
+ones, seven rounding modes at three scales and four powers (2234 lines); a
+seventy-two-shape format matrix over a positive, a negative and a value no
+`double` can hold; and a ten-by-ten-by-five `MathContext` cross-product (614
+lines). Then 90,000 randomized checks against Python's own `decimal`, which
+follows the same IBM specification a JDK's `toString` does.
+
+**What that found.** Four things, none of them guessable:
+
+- **A JDK has no negative zero, and Python does.** `new BigDecimal("-0.000003")
+  .setScale(5, DOWN)` is `0.00000`, not `-0.00000` — the oracle was wrong, not
+  the core, and the JDK capture is what said so.
+- **`toEngineeringString` does not write an exponent of zero.** `3E+1` prints
+  as `30`. And a ZERO is a rule of its own: `0E+1` is `0.00E+3`, because the
+  coefficient grows a fraction where a non-zero would move digits left.
+- **A zero divisor says two different things.** `divide(x)` says `Division by
+  zero`; `divide(x, scale, mode)` says `/ by zero` — and `BigInteger divide by
+  zero` once the dividend is too big for the `long` path a JDK takes first.
+  Three messages for one mistake, and a student reads them.
+- **`divide(divisor, mc)` is not "round the quotient".** An EXACT quotient that
+  fits the precision is answered at the preferred scale; the context only bites
+  when it does not fit. `10 / 1` to one significant digit is `1E+1`, to two it
+  is `10`.
+
+`RoundingMode` is a real enum here, not an int read at compile time: it
+switches, fills an `EnumSet`, keys an `EnumMap`, streams, sorts, and `==`
+works on it — which meant giving the interning pool the `java.time` enums use a
+second occupant, and renaming it from `temporal_pool` to what it now holds.
+`MathContext` is an ordinary two-field value. The deprecated `BigDecimal.ROUND_*`
+ints are the same ordinals, and are accepted wherever a `RoundingMode` is.
+
+Reading a decimal as a `double` goes through its own text — Rust's parser
+rounds once, as a JDK does — and `new BigDecimal(0.1)` takes the EXACT binary
+value (`0.1000000000000000055511151231257827021181583404541015625`), which is
+the lesson `BigDecimal.valueOf(0.1)` exists to teach. `%f`, `%e` and `%g` take
+one too, with its OWN digits rather than a `double`'s: a value past a double's
+range prints every digit it has.
+
+Pinned as `big_decimal_keeps_its_scale`, `big_decimal_formats_exactly` and
+`a_big_decimal_in_every_position` — the last of which puts one in a field, an
+array, a `List`, a `TreeMap` key, a `TreeSet`, a cast, a bounded type variable,
+four method references, a `Comparator.comparing(...).thenComparing(...)`, a
+`Number` and a `Comparable` variable, and runs the `RoundingMode` enum through
+a switch, an `EnumSet`, an `EnumMap`, a stream and a sort. Seven unit tests sit
+in the core beside them.

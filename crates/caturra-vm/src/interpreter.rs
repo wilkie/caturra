@@ -1170,7 +1170,7 @@ impl<'run> Interpreter<'run> {
             .chain(self.string_pool.values().copied())
             .chain(self.class_pool.values().copied())
             .chain(self.heap.cached_boxes())
-            .chain(self.heap.interned_temporals())
+            .chain(self.heap.interned_enums())
             .chain(self.stdin_scanner)
             .chain(self.last_thrown)
             .collect();
@@ -16188,6 +16188,9 @@ impl<'run> Interpreter<'run> {
                 // `BigInteger implements Comparable<BigInteger>` — so a list
                 // of them sorts and a `TreeSet` of them is a set.
                 Some(HeapObject::BigInteger(_)) => Some("java.math.BigInteger"),
+                Some(HeapObject::BigDecimal(_)) => Some("java.math.BigDecimal"),
+                // An enum orders by its ordinal, as every enum does.
+                Some(HeapObject::RoundingMode(_)) => Some("java.math.RoundingMode"),
                 // `LocalDate implements Comparable<ChronoLocalDate>`, and the
                 // two enums are `Comparable` as every enum is — so a list of
                 // dates sorts and a `TreeSet` of them is a set.
@@ -16877,6 +16880,13 @@ impl<'run> Interpreter<'run> {
                     (Some(HeapObject::BigInteger(one)), Some(HeapObject::BigInteger(other))) => {
                         one.compare(other)
                     }
+                    (Some(HeapObject::BigDecimal(one)), Some(HeapObject::BigDecimal(other))) => {
+                        one.compare(other)
+                    }
+                    (
+                        Some(HeapObject::RoundingMode(one)),
+                        Some(HeapObject::RoundingMode(other)),
+                    ) => one.cmp(other),
                     (
                         Some(HeapObject::Boxed { value: va, .. }),
                         Some(HeapObject::Boxed { value: vb, .. }),
@@ -20298,7 +20308,9 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         | "java/time/Month"
         | "java/time/temporal/ChronoUnit"
         | "java/time/temporal/ChronoField"
-        | "java/time/chrono/IsoEra" => &["java/lang/Comparable", "java/lang/Enum"],
+        | "java/time/chrono/IsoEra"
+        // ...and `java.math.RoundingMode`, which is an enum for the same reason.
+        | "java/math/RoundingMode" => &["java/lang/Comparable", "java/lang/Enum"],
         // A `Matcher` IS a `MatchResult` (it implements the interface), and so
         // is the frozen result it hands out — which a JDK calls
         // `Matcher$ImmutableMatchResult`.
@@ -20309,8 +20321,11 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         // names is the interface (or the abstract class) above them.
         // An EnumMap is a Map and an EnumSet a Set, like the sorted
         // collections they are made of here.
-        // A `BigInteger` is a `Number` and orders itself.
-        "java/math/BigInteger" => &["java/lang/Number", "java/lang/Comparable"],
+        // A `BigInteger` is a `Number` and orders itself, and so is a
+        // `BigDecimal`.
+        "java/math/BigInteger" | "java/math/BigDecimal" => {
+            &["java/lang/Number", "java/lang/Comparable"]
+        }
         "java/util/EnumMap" => &["java/util/Map"],
         "java/util/RegularEnumSet" => &["java/util/Set", "java/util/Collection"],
         "sun/nio/fs/UnixPath" => &[
@@ -20359,6 +20374,7 @@ pub(crate) fn is_library_enum(internal: &str) -> bool {
             | "java/time/temporal/ChronoUnit"
             | "java/time/temporal/ChronoField"
             | "java/time/chrono/IsoEra"
+            | "java/math/RoundingMode"
     )
 }
 
@@ -20448,6 +20464,9 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         // A charset is a class PER CHARSET in a JDK, named after the canonical
         // name with its dashes as underscores.
         Some(HeapObject::BigInteger(_)) => String::from("java/math/BigInteger"),
+        Some(HeapObject::BigDecimal(_)) => String::from("java/math/BigDecimal"),
+        Some(HeapObject::RoundingMode(_)) => String::from("java/math/RoundingMode"),
+        Some(HeapObject::MathContext { .. }) => String::from("java/math/MathContext"),
         Some(HeapObject::Charset(name)) => format!("sun/nio/cs/{}", name.replace('-', "_")),
         Some(HeapObject::SummaryStats { .. }) => String::from("java/util/IntSummaryStatistics"),
         // The regex trio. A frozen match is an INNER class of Matcher in a
