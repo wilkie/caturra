@@ -50471,3 +50471,121 @@ public class U6 {
 }
 "#
 );
+
+differential_test!(
+    a_year_a_month_and_a_day,
+    "U4",
+    r#"
+import java.io.*;
+import java.time.*;
+import java.time.format.*;
+import java.time.temporal.*;
+import java.util.*;
+public class U4 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("year", () -> { Year y = Year.of(2024); return y + " " + y.getValue() + " " + y.isLeap() + " " + y.length() + " " + Year.isLeap(1900); });
+    s("year ops", () -> { Year y = Year.of(2024); return y.plusYears(2) + " " + y.minusYears(30) + " " + y.atDay(60) + " " + y.atMonth(2) + " " + y.atMonthDay(MonthDay.of(2, 29)); });
+    s("year compare", () -> Year.of(2020).compareTo(Year.of(2024)) + " " + Year.of(2020).isBefore(Year.of(2024)) + " " + Year.of(2020).equals(Year.of(2020)) + " " + Year.of(2020).hashCode());
+    s("year parse", () -> Year.parse("2024") + " " + Year.of(2024).format(DateTimeFormatter.ofPattern("yyyy")));
+    s("year bad", () -> Year.of(1000000000));
+    s("year from date", () -> Year.from(LocalDate.of(2024, 5, 15)) + " " + Year.of(2024).get(ChronoField.YEAR));
+    s("yearmonth", () -> { YearMonth ym = YearMonth.of(2024, 2); return ym + " " + ym.getYear() + " " + ym.getMonthValue() + " " + ym.getMonth() + " " + ym.lengthOfMonth() + " " + ym.lengthOfYear() + " " + ym.isLeapYear(); });
+    s("yearmonth ops", () -> { YearMonth ym = YearMonth.of(2024, 2); return ym.plusMonths(11) + " " + ym.minusYears(1) + " " + ym.atDay(15) + " " + ym.atEndOfMonth() + " " + ym.isValidDay(30); });
+    s("yearmonth parse", () -> YearMonth.parse("2024-02") + " " + YearMonth.of(2024, 2).format(DateTimeFormatter.ofPattern("MM/yyyy")));
+    s("yearmonth compare", () -> YearMonth.of(2024, 1).compareTo(YearMonth.of(2024, 3)) + " " + YearMonth.of(2024, 1).isBefore(YearMonth.of(2024, 3)));
+    s("yearmonth bad", () -> YearMonth.of(2024, 13));
+    s("monthday", () -> { MonthDay md = MonthDay.of(2, 29); return md + " " + md.getMonthValue() + " " + md.getDayOfMonth() + " " + md.getMonth() + " " + md.isValidYear(2023) + " " + md.isValidYear(2024); });
+    s("monthday ops", () -> MonthDay.of(2, 29).atYear(2024) + " " + MonthDay.of(2, 29).atYear(2023) + " " + MonthDay.of(1, 5).withMonth(3) + " " + MonthDay.of(1, 5).withDayOfMonth(9));
+    s("monthday parse", () -> MonthDay.parse("--02-29") + " " + MonthDay.of(12, 25).compareTo(MonthDay.of(1, 1)));
+    s("monthday bad", () -> MonthDay.of(2, 30));
+    s("monthday from", () -> MonthDay.from(LocalDate.of(2024, 5, 15)));
+    s("sorted", () -> { List<Year> ys = new ArrayList<>(List.of(Year.of(2030), Year.of(2020))); Collections.sort(ys); return ys.toString(); });
+    s("in a map", () -> { Map<YearMonth, String> m = new TreeMap<>(); m.put(YearMonth.of(2024, 3), "mar"); m.put(YearMonth.of(2024, 1), "jan"); return m.toString(); });
+    // --- StringWriter / StringReader
+    // --- Year / YearMonth / MonthDay
+  }
+}
+"#
+);
+
+differential_test!(
+    the_partial_dates_in_every_position,
+    "U7",
+    r#"
+import java.time.*;
+import java.time.format.*;
+import java.time.temporal.*;
+import java.util.*;
+import java.util.stream.*;
+
+public class U7 {
+  static final Year FOUNDED = Year.of(1969);
+  static YearMonth billing = YearMonth.of(2024, 2);
+  static MonthDay birthday(int month, int day) { return MonthDay.of(month, day); }
+  static <T extends Comparable<T>> T latest(List<T> items) { return Collections.max(items); }
+
+  public static void main(String[] args) {
+    System.out.println(FOUNDED + " " + FOUNDED.getValue() + " " + FOUNDED.isLeap() + " " + FOUNDED.length());
+    System.out.println(billing + " " + billing.getMonth() + " " + billing.lengthOfMonth() + " " + billing.atEndOfMonth());
+    MonthDay leapDay = birthday(2, 29);
+    System.out.println(leapDay + " " + leapDay.isValidYear(2023) + " " + leapDay.atYear(2023) + " " + leapDay.atYear(2024));
+    // Every position a value can take.
+    Year[] years = { Year.of(2030), FOUNDED, Year.of(2000) };
+    Arrays.sort(years);
+    System.out.println(Arrays.toString(years));
+    List<YearMonth> months = new ArrayList<>(List.of(YearMonth.of(2024, 3), YearMonth.of(2023, 12)));
+    Collections.sort(months);
+    System.out.println(months + " " + latest(months));
+    TreeMap<MonthDay, String> holidays = new TreeMap<>();
+    holidays.put(MonthDay.of(12, 25), "christmas");
+    holidays.put(MonthDay.of(1, 1), "new year");
+    System.out.println(holidays + " " + holidays.firstKey());
+    Set<Year> seen = new HashSet<>(List.of(Year.of(2024), Year.of(2024)));
+    System.out.println(seen.size() + " " + Year.of(2024).hashCode() + " " + Year.of(2024).equals(Year.of(2024)));
+    Object o = billing;
+    System.out.println((o instanceof YearMonth) + " " + o.getClass().getName());
+    System.out.println(months.stream().map(YearMonth::toString).collect(Collectors.joining("|")));
+    System.out.println(Stream.of(years).map(Year::getValue).mapToInt(Integer::intValue).sum());
+    StringBuilder sb = new StringBuilder();
+    sb.append(FOUNDED).append('/').append(billing).append('/').append(leapDay);
+    System.out.println(sb);
+    Comparable<Year> c = FOUNDED;
+    System.out.println(c.compareTo(Year.of(2000)) + " " + FOUNDED.isBefore(Year.of(2000)));
+    // Reading and writing them as text.
+    System.out.println(Year.parse("2024") + " " + YearMonth.parse("2024-02") + " " + MonthDay.parse("--02-29"));
+    System.out.println(Year.of(2024).format(DateTimeFormatter.ofPattern("yyyy")));
+    System.out.println(YearMonth.of(2024, 2).format(DateTimeFormatter.ofPattern("MM/yyyy")));
+    System.out.println(MonthDay.of(2, 29).format(DateTimeFormatter.ofPattern("MMM d")));
+    // ...and the fields they do and do not have.
+    System.out.println(Year.of(2024).get(ChronoField.YEAR) + " " + Year.of(2024).isSupported(ChronoField.MONTH_OF_YEAR));
+    System.out.println(billing.get(ChronoField.MONTH_OF_YEAR) + " " + leapDay.get(ChronoField.DAY_OF_MONTH));
+    try {
+      System.out.println(Year.of(2024).format(DateTimeFormatter.ofPattern("MM")));
+    } catch (DateTimeException e) {
+      System.out.println("no month: " + e.getMessage());
+    }
+    try {
+      Year.of(1000000000);
+    } catch (DateTimeException e) {
+      System.out.println("out of range: " + e.getMessage());
+    }
+    try {
+      MonthDay.of(2, 30);
+    } catch (DateTimeException e) {
+      System.out.println("no such day: " + e.getMessage());
+    }
+    // ...and the way they are built from a date.
+    LocalDate day = LocalDate.of(2024, 5, 15);
+    System.out.println(Year.from(day) + " " + YearMonth.from(day) + " " + MonthDay.from(day));
+    System.out.println(Year.isLeap(1900) + " " + Year.isLeap(2000));
+    System.out.println(billing.plusMonths(11) + " " + billing.minusYears(1) + " " + billing.atDay(15) + " " + billing.isValidDay(30));
+    System.out.println(FOUNDED.plusYears(2) + " " + FOUNDED.atDay(60) + " " + FOUNDED.atMonth(2) + " " + FOUNDED.atMonthDay(leapDay));
+  }
+}
+"#
+);

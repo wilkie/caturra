@@ -382,6 +382,13 @@ pub enum Temporal {
     Adjuster(crate::time::Adjuster),
     /// `java.time.chrono.IsoEra` — 0 is BCE and 1 is CE.
     Era(u8),
+    /// `java.time.Year` — a year on its own, which is a value a program keeps
+    /// when the month and day would be a lie.
+    Year(i32),
+    /// `java.time.YearMonth` — a month of a year, the unit a statement covers.
+    YearMonth(i32, u8),
+    /// `java.time.MonthDay` — a day of a year that has no year: a birthday.
+    MonthDay(u8, u8),
 }
 
 impl Temporal {
@@ -403,6 +410,9 @@ impl Temporal {
             // synthetic one; a program never prints it usefully.
             Temporal::Adjuster(_) => "java/time/temporal/TemporalAdjusters",
             Temporal::Era(_) => "java/time/chrono/IsoEra",
+            Temporal::Year(_) => "java/time/Year",
+            Temporal::YearMonth(_, _) => "java/time/YearMonth",
+            Temporal::MonthDay(_, _) => "java/time/MonthDay",
         }
     }
 
@@ -434,6 +444,11 @@ impl Temporal {
             Temporal::Range(range) => range.text(),
             Temporal::Adjuster(adjuster) => format!("{adjuster:?}"),
             Temporal::Era(era) => String::from(if era == 0 { "BCE" } else { "CE" }),
+            // A year is written as at least four digits, and a month-day with
+            // the two leading dashes that say it has no year.
+            Temporal::Year(year) => format!("{year:04}"),
+            Temporal::YearMonth(year, month) => format!("{year:04}-{month:02}"),
+            Temporal::MonthDay(month, day) => format!("--{month:02}-{day:02}"),
         }
     }
 }
@@ -1538,6 +1553,11 @@ impl Heap {
             | Temporal::Duration(_)
             | Temporal::Period(_)
             | Temporal::Range(_)
+            // A year, a year-month and a month-day are VALUES, not enums: a
+            // JDK does not intern them and `==` on two is false.
+            | Temporal::Year(_)
+            | Temporal::YearMonth(_, _)
+            | Temporal::MonthDay(_, _)
             | Temporal::Adjuster(_) => {
                 return self.alloc(HeapObject::Temporal(value));
             }

@@ -13930,3 +13930,35 @@ runtime face list carries both spellings.
 Pinned as `base64_and_bitset` and `base64_and_bitset_in_every_position` — the
 second of which writes the sieve of Eratosthenes over a `BitSet`, which is what
 a course actually uses one for.
+
+## A year, a month, and a day that has no year
+
+`java.time.Year`, `java.time.YearMonth` and `java.time.MonthDay` — the three
+PARTIAL dates, and the last item of the small-utilities lane. A year on its own
+is what a program keeps when the month and day would be a lie; a year-month is
+the unit a statement covers; a month-day is a birthday.
+
+They are three more `Temporal` variants, and — unlike the `java.time` enums
+beside them — they are VALUES: a JDK does not intern them, so `==` on two is
+false and they allocate.
+
+Three things had to be decided rather than assumed:
+
+- **What each one supports.** A `Year` has `YEAR`, `YEAR_OF_ERA` and `ERA` and
+  nothing else; a `YearMonth` adds the month; a `MonthDay` has only the month
+  and the day. `Year.of(2024).get(ChronoField.MONTH_OF_YEAR)` is a refusal, not
+  January.
+- **How they format.** Each renders through a date filled out with defaults,
+  and a pattern that reaches past the fields it really carries is the JDK's
+  `UnsupportedTemporalTypeException: Unsupported field: MonthOfYear` — not a
+  silently invented 1st of January. The guard walks the pattern's pieces
+  (including the optional and padded ones) before anything is printed.
+- **What a 29th of February does in a common year.** `MonthDay.of(2, 29)
+  .atYear(2023)` is the 28th, which is what a JDK does rather than refusing;
+  but `MonthDay.of(2, 30)` is refused outright, because no year has one.
+
+Pinned as `a_year_a_month_and_a_day` and
+`the_partial_dates_in_every_position` — the second putting all three in a
+field, an array that sorts, a `List` that sorts, a `TreeMap` key, a `HashSet`,
+a bounded type variable, a stream, a `StringBuilder` and a `Comparable`
+variable, and running each one's text, fields and refusals.

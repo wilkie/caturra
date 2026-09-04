@@ -118,6 +118,11 @@ const JAVA_NIO_FILE: &[&str] = &["Files", "Path", "Paths"];
 /// second copy would only add a version to disagree with.
 const JAVA_TIME: &[&str] = &[
     "LocalDate",
+    // The three PARTIAL dates: a year, a month of a year, and a day of a year
+    // that has no year.
+    "Year",
+    "YearMonth",
+    "MonthDay",
     "LocalTime",
     "LocalDateTime",
     "Duration",

@@ -109,6 +109,11 @@ fn temporal_hash(value: Temporal) -> i32 {
         Temporal::Field(field) => i32::from(field),
         Temporal::Adjuster(adjuster) => i32::from(adjuster.day),
         Temporal::Era(era) => i32::from(era),
+        // A `Year` hashes as itself; the two pairs fold the way a JDK folds
+        // them, so two equal values hash alike wherever the program looks.
+        Temporal::Year(year) => year,
+        Temporal::YearMonth(year, month) => year ^ (i32::from(month) << 27),
+        Temporal::MonthDay(month, day) => (i32::from(month) << 6) + i32::from(day),
         // `ValueRange` folds its four numbers the way the JDK does.
         Temporal::Range(range) => {
             let fold = range.min + (range.largest_min << 16) + (range.largest_min >> 48)
@@ -804,12 +809,46 @@ fn format_temporal(
     heap: &mut Heap,
     formatter: HeapRef,
 ) -> Result<Option<JValue>, VmError> {
+    // A PARTIAL date formats through a date filled out with defaults — and a
+    // pattern that asks for a field it has not got is the JDK's own refusal,
+    // not January the 1st.
     let (date, time) = match value {
         Temporal::Date(date) => (Some(date), None),
         Temporal::Time(time) => (None, Some(time)),
         Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
+        Temporal::Year(year) => (
+            Some(crate::time::Date {
+                year,
+                month: 1,
+                day: 1,
+            }),
+            None,
+        ),
+        Temporal::YearMonth(year, month) => (
+            Some(crate::time::Date {
+                year,
+                month,
+                day: 1,
+            }),
+            None,
+        ),
+        Temporal::MonthDay(month, day) => (
+            Some(crate::time::Date {
+                year: 2024,
+                month,
+                day,
+            }),
+            None,
+        ),
         _ => return Err(throw("java.lang.ClassCastException: not a date or a time")),
     };
+    if let Ok(pieces) = formatter_pieces(heap, formatter)?
+        && let Some(missing) = missing_partial_field(value, &pieces)
+    {
+        return Err(VmError::UncaughtException(format!(
+            "java.time.temporal.UnsupportedTemporalTypeException: Unsupported field: {missing}"
+        )));
+    }
     let text = match formatter_pieces(heap, formatter)? {
         // An ISO constant is NOT the value's `toString`: its time half
         // always writes the seconds, and its fraction carries only as many
@@ -1643,6 +1682,32 @@ fn field_value(value: Temporal, field: u8) -> Result<i64, VmError> {
         Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
         Temporal::DayOfWeek(day) if field == 15 => return Ok(i64::from(day)),
         Temporal::Month(month) if field == 23 => return Ok(i64::from(month)),
+        // A partial date reads through a date filled out with defaults; only
+        // the fields it really carries reach here, so nothing is invented.
+        Temporal::Year(year) => (
+            Some(crate::time::Date {
+                year,
+                month: 1,
+                day: 1,
+            }),
+            None,
+        ),
+        Temporal::YearMonth(year, month) => (
+            Some(crate::time::Date {
+                year,
+                month,
+                day: 1,
+            }),
+            None,
+        ),
+        Temporal::MonthDay(month, day) => (
+            Some(crate::time::Date {
+                year: 2024,
+                month,
+                day,
+            }),
+            None,
+        ),
         _ => return Err(unsupported_field(field)),
     };
     if crate::time::field_is_time_based(field) {
@@ -2029,6 +2094,12 @@ fn supports_field(value: Temporal, field: u8) -> bool {
         }
         Temporal::DayOfWeek(_) => field == 15,
         Temporal::Month(_) => field == 23,
+        // The PARTIAL dates support only the fields they carry: YEAR and
+        // YEAR_OF_ERA and ERA for a year, the month beside them for a
+        // year-month, and the month and day for a month-day.
+        Temporal::Year(_) => matches!(field, 25..=27),
+        Temporal::YearMonth(_, _) => matches!(field, 23..=27),
+        Temporal::MonthDay(_, _) => matches!(field, 18 | 23),
         _ => false,
     }
 }
@@ -2339,6 +2410,9 @@ fn temporal_method(
             return temporal_enum_method(value, heap, method, args);
         }
         Temporal::Time(time) => return time_method(time, heap, method, args),
+        Temporal::Year(_) | Temporal::YearMonth(_, _) | Temporal::MonthDay(_, _) => {
+            return partial_date_method(value, heap, method, args);
+        }
         Temporal::DateTime(when) => return date_time_method(when, heap, method, args),
         Temporal::Duration(amount) => return duration_method(amount, heap, method, args),
         Temporal::Period(period) => return period_method(period, heap, method, args),
@@ -10705,6 +10779,12 @@ pub fn invoke_static(
             }
             _ => Err(VmError::UnknownIntrinsic(format!("BigInteger.{method}"))),
         },
+        // `Year.of` and the two beside it, and the same three for a
+        // `YearMonth` and a `MonthDay`. `from(temporal)` reads whichever
+        // fields the value has.
+        "java/time/Year" | "java/time/YearMonth" | "java/time/MonthDay" => {
+            partial_date_static(class, heap, method, args)
+        }
         // `Base64.getEncoder()` and the five beside it. Each answers a coder
         // that knows only its alphabet and whether it pads or wraps.
         "java/util/Base64" => {
@@ -15083,6 +15163,419 @@ fn bitset_text(words: &[u64]) -> String {
     }
     out.push('}');
     out
+}
+
+/// `java.time.Year`, `YearMonth` and `MonthDay` — the three PARTIAL dates. A
+/// year on its own, a month of a year, and a day of a year that has no year.
+#[allow(clippy::too_many_lines)] // one arm per question the three answer
+#[allow(clippy::match_same_arms)] // one arm per question, by kind
+fn partial_date_method(
+    value: Temporal,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let int_at = |at: usize| -> i64 {
+        match args.get(at) {
+            Some(JValue::Int(number)) => i64::from(*number),
+            Some(JValue::Long(number)) => *number,
+            _ => 0,
+        }
+    };
+    let made =
+        |heap: &mut Heap, value: Temporal| Ok(Some(JValue::Ref(Some(heap.intern_temporal(value)))));
+    let other = |heap: &Heap| -> Option<Temporal> {
+        match args.first() {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::Temporal(other)) => Some(*other),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    // The three compare on the numbers they carry, in the order they carry
+    // them — which is what makes them sort into a calendar.
+    let order = |theirs: Temporal| -> Option<i32> {
+        Some(match (value, theirs) {
+            (Temporal::Year(mine), Temporal::Year(theirs)) => mine - theirs,
+            (Temporal::YearMonth(y1, m1), Temporal::YearMonth(y2, m2)) => {
+                if y1 == y2 {
+                    i32::from(m1) - i32::from(m2)
+                } else {
+                    y1 - y2
+                }
+            }
+            (Temporal::MonthDay(m1, d1), Temporal::MonthDay(m2, d2)) => {
+                if m1 == m2 {
+                    i32::from(d1) - i32::from(d2)
+                } else {
+                    i32::from(m1) - i32::from(m2)
+                }
+            }
+            _ => return None,
+        })
+    };
+    match (value, method) {
+        (Temporal::Year(year), "getValue") => Ok(Some(JValue::Int(year))),
+        (Temporal::Year(year), "isLeap") => Ok(Some(JValue::Int(i32::from(
+            crate::time::is_leap_year(year),
+        )))),
+        (Temporal::Year(year), "length") => {
+            Ok(Some(JValue::Int(if crate::time::is_leap_year(year) {
+                366
+            } else {
+                365
+            })))
+        }
+        (Temporal::Year(year), "plusYears" | "minusYears") => {
+            let by = if method == "minusYears" {
+                -int_at(0)
+            } else {
+                int_at(0)
+            };
+            made(heap, Temporal::Year(shifted_year(i64::from(year) + by)?))
+        }
+        (Temporal::Year(year), "atDay") => {
+            let day = int_at(0);
+            let length = if crate::time::is_leap_year(year) {
+                366
+            } else {
+                365
+            };
+            if !(1..=length).contains(&day) {
+                return Err(date_time_exception(&format!(
+                    "Invalid value for DayOfYear (valid values 1 - 365/366): {day}"
+                )));
+            }
+            let mut date = crate::time::Date {
+                year,
+                month: 1,
+                day: 1,
+            };
+            date = date.plus_days(day - 1);
+            made(heap, Temporal::Date(date))
+        }
+        (Temporal::Year(year), "atMonth") => {
+            let month = month_argument(heap, args.first(), int_at(0))?;
+            made(heap, Temporal::YearMonth(year, month))
+        }
+        (Temporal::Year(year), "atMonthDay") => match other(heap) {
+            Some(Temporal::MonthDay(month, day)) => {
+                let length = crate::time::length_of_month(year, month);
+                made(
+                    heap,
+                    Temporal::Date(crate::time::Date {
+                        year,
+                        month,
+                        day: day.min(length),
+                    }),
+                )
+            }
+            _ => Err(throw("java.lang.ClassCastException: not a MonthDay")),
+        },
+        (Temporal::YearMonth(year, _), "getYear") => Ok(Some(JValue::Int(year))),
+        (Temporal::YearMonth(_, month), "getMonthValue") => Ok(Some(JValue::Int(i32::from(month)))),
+        (Temporal::YearMonth(_, month), "getMonth") => made(heap, Temporal::Month(month)),
+        (Temporal::YearMonth(year, month), "lengthOfMonth") => Ok(Some(JValue::Int(i32::from(
+            crate::time::length_of_month(year, month),
+        )))),
+        (Temporal::YearMonth(year, _), "lengthOfYear") => {
+            Ok(Some(JValue::Int(if crate::time::is_leap_year(year) {
+                366
+            } else {
+                365
+            })))
+        }
+        (Temporal::YearMonth(year, _), "isLeapYear") => Ok(Some(JValue::Int(i32::from(
+            crate::time::is_leap_year(year),
+        )))),
+        (Temporal::YearMonth(year, month), "plusMonths" | "minusMonths") => {
+            let by = if method == "minusMonths" {
+                -int_at(0)
+            } else {
+                int_at(0)
+            };
+            let total = i64::from(year) * 12 + i64::from(month) - 1 + by;
+            let year = shifted_year(total.div_euclid(12))?;
+            let month = u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1);
+            made(heap, Temporal::YearMonth(year, month))
+        }
+        (Temporal::YearMonth(year, month), "plusYears" | "minusYears") => {
+            let by = if method == "minusYears" {
+                -int_at(0)
+            } else {
+                int_at(0)
+            };
+            made(
+                heap,
+                Temporal::YearMonth(shifted_year(i64::from(year) + by)?, month),
+            )
+        }
+        (Temporal::YearMonth(year, month), "atDay") => {
+            let day = int_at(0);
+            let length = i64::from(crate::time::length_of_month(year, month));
+            if !(1..=length).contains(&day) {
+                return Err(date_time_exception(&format!(
+                    "Invalid value for DayOfMonth (valid values 1 - 28/31): {day}"
+                )));
+            }
+            made(
+                heap,
+                Temporal::Date(crate::time::Date {
+                    year,
+                    month,
+                    day: u8::try_from(day).unwrap_or(1),
+                }),
+            )
+        }
+        (Temporal::YearMonth(year, month), "atEndOfMonth") => made(
+            heap,
+            Temporal::Date(crate::time::Date {
+                year,
+                month,
+                day: crate::time::length_of_month(year, month),
+            }),
+        ),
+        (Temporal::YearMonth(year, month), "isValidDay") => {
+            let day = int_at(0);
+            Ok(Some(JValue::Int(i32::from(
+                (1..=i64::from(crate::time::length_of_month(year, month))).contains(&day),
+            ))))
+        }
+        (Temporal::MonthDay(month, _), "getMonthValue") => Ok(Some(JValue::Int(i32::from(month)))),
+        (Temporal::MonthDay(_, day), "getDayOfMonth") => Ok(Some(JValue::Int(i32::from(day)))),
+        (Temporal::MonthDay(month, _), "getMonth") => made(heap, Temporal::Month(month)),
+        (Temporal::MonthDay(month, day), "isValidYear") => {
+            let year = i32::try_from(int_at(0)).unwrap_or(0);
+            Ok(Some(JValue::Int(i32::from(
+                day <= crate::time::length_of_month(year, month),
+            ))))
+        }
+        (Temporal::MonthDay(month, day), "atYear") => {
+            let year = i32::try_from(int_at(0)).unwrap_or(0);
+            // A 29th of February in a common year becomes the 28th, which is
+            // what a JDK does rather than refusing.
+            let length = crate::time::length_of_month(year, month);
+            made(
+                heap,
+                Temporal::Date(crate::time::Date {
+                    year,
+                    month,
+                    day: day.min(length),
+                }),
+            )
+        }
+        (Temporal::MonthDay(_, day), "withMonth") => {
+            let month = month_argument(heap, args.first(), int_at(0))?;
+            made(heap, Temporal::MonthDay(month, day))
+        }
+        (Temporal::MonthDay(month, _), "withDayOfMonth") => {
+            let day = int_at(0);
+            check_month_day(month, day)?;
+            made(
+                heap,
+                Temporal::MonthDay(month, u8::try_from(day).unwrap_or(1)),
+            )
+        }
+        (_, "compareTo") => match other(heap).and_then(order) {
+            Some(order) => Ok(Some(JValue::Int(order))),
+            None => Err(throw("java.lang.ClassCastException: not the same kind")),
+        },
+        (_, "isBefore" | "isAfter") => match other(heap).and_then(order) {
+            Some(order) => Ok(Some(JValue::Int(i32::from(if method == "isBefore" {
+                order < 0
+            } else {
+                order > 0
+            })))),
+            None => Err(throw("java.lang.ClassCastException: not the same kind")),
+        },
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "{}.{method}",
+            value.class_name()
+        ))),
+    }
+}
+
+/// A year has to fit the range a JDK allows.
+fn shifted_year(year: i64) -> Result<i32, VmError> {
+    if !(-999_999_999..=999_999_999).contains(&year) {
+        return Err(date_time_exception(&format!(
+            "Invalid value for Year (valid values -999999999 - 999999999): {year}"
+        )));
+    }
+    Ok(i32::try_from(year).unwrap_or(0))
+}
+
+/// The month an argument names — a `Month` constant or the number.
+fn month_argument(heap: &Heap, value: Option<&JValue>, number: i64) -> Result<u8, VmError> {
+    if let Some(JValue::Ref(Some(reference))) = value
+        && let Some(HeapObject::Temporal(Temporal::Month(month))) = heap.get(*reference)
+    {
+        return Ok(*month);
+    }
+    if !(1..=12).contains(&number) {
+        return Err(date_time_exception(&format!(
+            "Invalid value for MonthOfYear (valid values 1 - 12): {number}"
+        )));
+    }
+    Ok(u8::try_from(number).unwrap_or(1))
+}
+
+/// A month-day accepts the 29th of February even though most years do not, so
+/// the check is against the month's LONGEST length.
+fn check_month_day(month: u8, day: i64) -> Result<(), VmError> {
+    if !(1..=31).contains(&day) {
+        return Err(date_time_exception(&format!(
+            "Invalid value for DayOfMonth (valid values 1 - 28/31): {day}"
+        )));
+    }
+    let longest = i64::from(crate::time::length_of_month(2024, month));
+    if day > longest {
+        return Err(date_time_exception(&format!(
+            "Illegal value for DayOfMonth field, value {day} is not valid for month {}",
+            crate::time::month_name(month)
+        )));
+    }
+    Ok(())
+}
+
+/// The factories of `Year`, `YearMonth` and `MonthDay`.
+fn partial_date_static(
+    class: &str,
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let int_at = |at: usize| -> i64 {
+        match args.get(at) {
+            Some(JValue::Int(number)) => i64::from(*number),
+            Some(JValue::Long(number)) => *number,
+            _ => 0,
+        }
+    };
+    let made =
+        |heap: &mut Heap, value: Temporal| Ok(Some(JValue::Ref(Some(heap.intern_temporal(value)))));
+    // `from(temporal)` takes the fields it needs off whatever it is handed.
+    let fields = |heap: &Heap| -> Option<(i32, u8, u8)> {
+        match args.first() {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::Temporal(Temporal::Date(date))) => {
+                    Some((date.year, date.month, date.day))
+                }
+                Some(HeapObject::Temporal(Temporal::DateTime(when))) => {
+                    Some((when.date.year, when.date.month, when.date.day))
+                }
+                Some(HeapObject::Temporal(Temporal::YearMonth(year, month))) => {
+                    Some((*year, *month, 1))
+                }
+                Some(HeapObject::Temporal(Temporal::MonthDay(month, day))) => {
+                    Some((0, *month, *day))
+                }
+                Some(HeapObject::Temporal(Temporal::Year(year))) => Some((*year, 1, 1)),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    match (class, method) {
+        ("java/time/Year", "isLeap") => Ok(Some(JValue::Int(i32::from(
+            crate::time::is_leap_year(i32::try_from(int_at(0)).unwrap_or(0)),
+        )))),
+        ("java/time/Year", "of") => made(heap, Temporal::Year(shifted_year(int_at(0))?)),
+        ("java/time/YearMonth", "of") => {
+            let year = shifted_year(int_at(0))?;
+            let month = month_argument(heap, args.get(1), int_at(1))?;
+            made(heap, Temporal::YearMonth(year, month))
+        }
+        ("java/time/MonthDay", "of") => {
+            let month = month_argument(heap, args.first(), int_at(0))?;
+            let day = int_at(1);
+            check_month_day(month, day)?;
+            made(
+                heap,
+                Temporal::MonthDay(month, u8::try_from(day).unwrap_or(1)),
+            )
+        }
+        (_, "from") => {
+            let Some((year, month, day)) = fields(heap) else {
+                return Err(date_time_exception(
+                    "Unable to obtain a partial date from this value",
+                ));
+            };
+            made(
+                heap,
+                match class {
+                    "java/time/Year" => Temporal::Year(year),
+                    "java/time/YearMonth" => Temporal::YearMonth(year, month),
+                    _ => Temporal::MonthDay(month, day),
+                },
+            )
+        }
+        (_, "parse") => {
+            let text = arg_string(heap, &args[0])?;
+            let parsed = parse_partial_date(class, &text).ok_or_else(|| {
+                VmError::UncaughtException(format!(
+                    "java.time.format.DateTimeParseException: Text '{text}' could not be parsed"
+                ))
+            })?;
+            made(heap, parsed)
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
+    }
+}
+
+/// `2024`, `2024-02` and `--02-29` — the three ISO forms.
+fn parse_partial_date(class: &str, text: &str) -> Option<Temporal> {
+    match class {
+        "java/time/Year" => Some(Temporal::Year(text.parse::<i32>().ok()?)),
+        "java/time/YearMonth" => {
+            let (year, month) = text.rsplit_once('-')?;
+            let month = month.parse::<u8>().ok().filter(|m| (1..=12).contains(m))?;
+            Some(Temporal::YearMonth(year.parse::<i32>().ok()?, month))
+        }
+        _ => {
+            let rest = text.strip_prefix("--")?;
+            let (month, day) = rest.split_once('-')?;
+            let month = month.parse::<u8>().ok().filter(|m| (1..=12).contains(m))?;
+            let day = day.parse::<u8>().ok()?;
+            (day >= 1 && day <= crate::time::length_of_month(2024, month))
+                .then_some(Temporal::MonthDay(month, day))
+        }
+    }
+}
+
+/// Which of a pattern's fields a PARTIAL date has not got. A `Year` has only
+/// its year, a `YearMonth` its year and month, a `MonthDay` its month and day
+/// — and a pattern that reaches past those is a JDK's refusal.
+fn missing_partial_field(value: Temporal, pieces: &[crate::time::Piece]) -> Option<String> {
+    fn walk(pieces: &[crate::time::Piece], allowed: &[char]) -> Option<char> {
+        for piece in pieces {
+            match piece {
+                crate::time::Piece::Field(letter, _) if !allowed.contains(letter) => {
+                    return Some(*letter);
+                }
+                crate::time::Piece::Optional(inner) => {
+                    if let Some(found) = walk(inner, allowed) {
+                        return Some(found);
+                    }
+                }
+                crate::time::Piece::Pad(_, inner) => {
+                    if let Some(found) = walk(std::slice::from_ref(inner), allowed) {
+                        return Some(found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    let allowed: &[char] = match value {
+        Temporal::Year(_) => &['u', 'y', 'G'],
+        Temporal::YearMonth(_, _) => &['u', 'y', 'G', 'M', 'L', 'Q', 'q'],
+        Temporal::MonthDay(_, _) => &['M', 'L', 'd'],
+        _ => return None,
+    };
+    walk(pieces, allowed).map(|letter| crate::time::field_name(letter).to_owned())
 }
 
 #[cfg(test)]

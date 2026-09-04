@@ -1620,7 +1620,7 @@ fn parse_section(
 
 /// The `ChronoField` a pattern letter reads, as the JDK NAMES it — which is
 /// what its "Unsupported field" message says when the value has no such part.
-fn field_name(letter: char) -> &'static str {
+pub(crate) fn field_name(letter: char) -> &'static str {
     match letter {
         // `u` is the proleptic year and `y` is the year OF THE ERA. They are
         // the same number for every date a student writes, and different

@@ -16208,6 +16208,9 @@ impl<'run> Interpreter<'run> {
                     crate::value::Temporal::Range(_) => "java.time.temporal.ValueRange",
                     crate::value::Temporal::Adjuster(_) => "java.time.temporal.TemporalAdjusters",
                     crate::value::Temporal::Era(_) => "java.time.chrono.IsoEra",
+                    crate::value::Temporal::Year(_) => "java.time.Year",
+                    crate::value::Temporal::YearMonth(_, _) => "java.time.YearMonth",
+                    crate::value::Temporal::MonthDay(_, _) => "java.time.MonthDay",
                 }),
                 Some(HeapObject::Boxed { class_name, .. }) => Some(match class_name.as_ref() {
                     "java/lang/Integer" => "java.lang.Integer",
@@ -20315,6 +20318,10 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         | "java/time/LocalTime"
         | "java/time/LocalDateTime"
         | "java/time/Duration"
+        // ...the three PARTIAL dates, which order themselves...
+        | "java/time/Year"
+        | "java/time/YearMonth"
+        | "java/time/MonthDay"
         // ...and a UUID, which orders itself too.
         | "java/util/UUID" => &["java/lang/Comparable"],
         // ...and the `java.time` ENUMS, which are ordered because they extend

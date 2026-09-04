@@ -6278,6 +6278,9 @@ fn library_value_type(simple: &str) -> Option<JType> {
         "ChronoUnit" => JType::ChronoUnit,
         "ChronoField" => JType::ChronoField,
         "ValueRange" => JType::ValueRange,
+        "Year" => JType::Year,
+        "YearMonth" => JType::YearMonth,
+        "MonthDay" => JType::MonthDay,
         "TemporalAdjuster" => JType::TemporalAdjuster,
         "IsoEra" => JType::IsoEra,
         "DateTimeFormatter" => JType::DateFormat,
@@ -6415,6 +6418,10 @@ fn library_comparable(ty: JType) -> Option<bool> {
         | JType::BigDecimal
         | JType::RoundingMode
         | JType::Uuid
+        // The three partial dates compare to their OWN kind.
+        | JType::Year
+        | JType::YearMonth
+        | JType::MonthDay
         | JType::Duration
         | JType::DayOfWeek
         | JType::Month
@@ -8305,6 +8312,11 @@ enum JType {
     TemporalAdjuster,
     /// `java.time.chrono.IsoEra`, which `LocalDate.getEra` answers.
     IsoEra,
+    /// The three PARTIAL dates: a year on its own, a month of a year, and a
+    /// day of a year that has no year.
+    Year,
+    YearMonth,
+    MonthDay,
     /// `java.time.format.DateTimeFormatter` — a pattern, or one of the ISO
     /// constants.
     DateFormat,
@@ -8874,6 +8886,9 @@ impl JType {
             JType::ChronoField => String::from("ChronoField"),
             JType::TemporalAdjuster => String::from("TemporalAdjuster"),
             JType::IsoEra => String::from("IsoEra"),
+            JType::Year => String::from("Year"),
+            JType::YearMonth => String::from("YearMonth"),
+            JType::MonthDay => String::from("MonthDay"),
             JType::ValueRange => String::from("ValueRange"),
             JType::DateFormat => String::from("DateTimeFormatter"),
             JType::LocalDateTime => String::from("LocalDateTime"),
@@ -8946,6 +8961,9 @@ impl JType {
                 | JType::ChronoField
                 | JType::TemporalAdjuster
                 | JType::IsoEra
+                | JType::Year
+                | JType::YearMonth
+                | JType::MonthDay
                 | JType::ValueRange
                 | JType::DateFormat
                 | JType::DayOfWeek
@@ -9110,6 +9128,9 @@ impl JType {
             JType::ChronoField => String::from("Ljava/time/temporal/ChronoField;"),
             JType::TemporalAdjuster => String::from("Ljava/time/temporal/TemporalAdjuster;"),
             JType::IsoEra => String::from("Ljava/time/chrono/IsoEra;"),
+            JType::Year => String::from("Ljava/time/Year;"),
+            JType::YearMonth => String::from("Ljava/time/YearMonth;"),
+            JType::MonthDay => String::from("Ljava/time/MonthDay;"),
             JType::ValueRange => String::from("Ljava/time/temporal/ValueRange;"),
             JType::DateFormat => String::from("Ljava/time/format/DateTimeFormatter;"),
             JType::LocalDateTime => String::from("Ljava/time/LocalDateTime;"),
@@ -10676,6 +10697,10 @@ enum BParam {
     Uuid,
     /// A `java.util.BitSet`, which is what its four set operations take.
     BitSet,
+    /// The three partial dates, which compare to their own kind.
+    Year,
+    YearMonth,
+    MonthDay,
     /// `java.math.BigDecimal`, likewise — and the two that steer its rounding.
     BigDecimal,
     RoundingMode,
@@ -10782,6 +10807,10 @@ enum BRet {
     /// A `java.util.UUID` and a `java.io.StringWriter`.
     Uuid,
     StringWriter,
+    /// The three partial dates.
+    Year,
+    YearMonth,
+    MonthDay,
     /// The base-64 coders, and a `java.util.BitSet`.
     Base64Encoder,
     Base64Decoder,
@@ -15391,6 +15420,347 @@ const MATH_CONTEXT_METHODS: &[BuiltinMethod] = &[
     bm("hashCode", &[], BRet::Int, "()I"),
 ];
 
+/// `java.time.Year` — a year on its own, which is what a program keeps when
+/// the month and day would be a lie.
+const YEAR_METHODS: &[BuiltinMethod] = &[
+    bm("getValue", &[], BRet::Int, "()I"),
+    bm("isLeap", &[], BRet::Boolean, "()Z"),
+    bm("length", &[], BRet::Int, "()I"),
+    bm(
+        "plusYears",
+        &[BParam::Long],
+        BRet::Year,
+        "(J)Ljava/time/Year;",
+    ),
+    bm(
+        "minusYears",
+        &[BParam::Long],
+        BRet::Year,
+        "(J)Ljava/time/Year;",
+    ),
+    bm(
+        "atDay",
+        &[BParam::Int],
+        BRet::LocalDate,
+        "(I)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "atMonth",
+        &[BParam::Int],
+        BRet::YearMonth,
+        "(I)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "atMonth",
+        &[BParam::Month],
+        BRet::YearMonth,
+        "(Ljava/time/Month;)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "atMonthDay",
+        &[BParam::MonthDay],
+        BRet::LocalDate,
+        "(Ljava/time/MonthDay;)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "format",
+        &[BParam::DateFormat],
+        BRet::Str,
+        "(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;",
+    ),
+    bm(
+        "get",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/TemporalField;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::ChronoField],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalField;)J",
+    ),
+    bm(
+        "isSupported",
+        &[BParam::ChronoField],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::Year],
+        BRet::Int,
+        "(Ljava/time/Year;)I",
+    ),
+    bm(
+        "isBefore",
+        &[BParam::Year],
+        BRet::Boolean,
+        "(Ljava/time/Year;)Z",
+    ),
+    bm(
+        "isAfter",
+        &[BParam::Year],
+        BRet::Boolean,
+        "(Ljava/time/Year;)Z",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `Year.of`, `Year.isLeap`, and the two readers every `java.time` value has.
+const YEAR_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm("of", &[BParam::Int], BRet::Year, "(I)Ljava/time/Year;"),
+    bm("isLeap", &[BParam::Long], BRet::Boolean, "(J)Z"),
+    bm(
+        "parse",
+        &[BParam::CharSeq],
+        BRet::Year,
+        "(Ljava/lang/CharSequence;)Ljava/time/Year;",
+    ),
+    bm(
+        "from",
+        &[BParam::LocalDate],
+        BRet::Year,
+        "(Ljava/time/LocalDate;)Ljava/time/Year;",
+    ),
+];
+
+/// `java.time.YearMonth` — the unit a statement covers.
+const YEAR_MONTH_METHODS: &[BuiltinMethod] = &[
+    bm("getYear", &[], BRet::Int, "()I"),
+    bm("getMonthValue", &[], BRet::Int, "()I"),
+    bm("getMonth", &[], BRet::Month, "()Ljava/time/Month;"),
+    bm("lengthOfMonth", &[], BRet::Int, "()I"),
+    bm("lengthOfYear", &[], BRet::Int, "()I"),
+    bm("isLeapYear", &[], BRet::Boolean, "()Z"),
+    bm(
+        "plusMonths",
+        &[BParam::Long],
+        BRet::YearMonth,
+        "(J)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "minusMonths",
+        &[BParam::Long],
+        BRet::YearMonth,
+        "(J)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "plusYears",
+        &[BParam::Long],
+        BRet::YearMonth,
+        "(J)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "minusYears",
+        &[BParam::Long],
+        BRet::YearMonth,
+        "(J)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "atDay",
+        &[BParam::Int],
+        BRet::LocalDate,
+        "(I)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "atEndOfMonth",
+        &[],
+        BRet::LocalDate,
+        "()Ljava/time/LocalDate;",
+    ),
+    bm("isValidDay", &[BParam::Int], BRet::Boolean, "(I)Z"),
+    bm(
+        "format",
+        &[BParam::DateFormat],
+        BRet::Str,
+        "(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;",
+    ),
+    bm(
+        "get",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/TemporalField;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::ChronoField],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalField;)J",
+    ),
+    bm(
+        "isSupported",
+        &[BParam::ChronoField],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::YearMonth],
+        BRet::Int,
+        "(Ljava/time/YearMonth;)I",
+    ),
+    bm(
+        "isBefore",
+        &[BParam::YearMonth],
+        BRet::Boolean,
+        "(Ljava/time/YearMonth;)Z",
+    ),
+    bm(
+        "isAfter",
+        &[BParam::YearMonth],
+        BRet::Boolean,
+        "(Ljava/time/YearMonth;)Z",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `YearMonth.of` and the two readers.
+const YEAR_MONTH_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "of",
+        &[BParam::Int, BParam::Int],
+        BRet::YearMonth,
+        "(II)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "of",
+        &[BParam::Int, BParam::Month],
+        BRet::YearMonth,
+        "(ILjava/time/Month;)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "parse",
+        &[BParam::CharSeq],
+        BRet::YearMonth,
+        "(Ljava/lang/CharSequence;)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "from",
+        &[BParam::LocalDate],
+        BRet::YearMonth,
+        "(Ljava/time/LocalDate;)Ljava/time/YearMonth;",
+    ),
+];
+
+/// `java.time.MonthDay` — a day of a year that has no year: a birthday.
+const MONTH_DAY_METHODS: &[BuiltinMethod] = &[
+    bm("getMonthValue", &[], BRet::Int, "()I"),
+    bm("getDayOfMonth", &[], BRet::Int, "()I"),
+    bm("getMonth", &[], BRet::Month, "()Ljava/time/Month;"),
+    bm("isValidYear", &[BParam::Int], BRet::Boolean, "(I)Z"),
+    bm(
+        "atYear",
+        &[BParam::Int],
+        BRet::LocalDate,
+        "(I)Ljava/time/LocalDate;",
+    ),
+    bm(
+        "withMonth",
+        &[BParam::Int],
+        BRet::MonthDay,
+        "(I)Ljava/time/MonthDay;",
+    ),
+    bm(
+        "withDayOfMonth",
+        &[BParam::Int],
+        BRet::MonthDay,
+        "(I)Ljava/time/MonthDay;",
+    ),
+    bm(
+        "format",
+        &[BParam::DateFormat],
+        BRet::Str,
+        "(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;",
+    ),
+    bm(
+        "get",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/TemporalField;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::ChronoField],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalField;)J",
+    ),
+    bm(
+        "isSupported",
+        &[BParam::ChronoField],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::MonthDay],
+        BRet::Int,
+        "(Ljava/time/MonthDay;)I",
+    ),
+    bm(
+        "isBefore",
+        &[BParam::MonthDay],
+        BRet::Boolean,
+        "(Ljava/time/MonthDay;)Z",
+    ),
+    bm(
+        "isAfter",
+        &[BParam::MonthDay],
+        BRet::Boolean,
+        "(Ljava/time/MonthDay;)Z",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `MonthDay.of` and the two readers.
+const MONTH_DAY_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "of",
+        &[BParam::Int, BParam::Int],
+        BRet::MonthDay,
+        "(II)Ljava/time/MonthDay;",
+    ),
+    bm(
+        "of",
+        &[BParam::Month, BParam::Int],
+        BRet::MonthDay,
+        "(Ljava/time/Month;I)Ljava/time/MonthDay;",
+    ),
+    bm(
+        "parse",
+        &[BParam::CharSeq],
+        BRet::MonthDay,
+        "(Ljava/lang/CharSequence;)Ljava/time/MonthDay;",
+    ),
+    bm(
+        "from",
+        &[BParam::LocalDate],
+        BRet::MonthDay,
+        "(Ljava/time/LocalDate;)Ljava/time/MonthDay;",
+    ),
+];
+
 /// `java.util.Base64.Encoder` — bytes to text, in one of three alphabets.
 const BASE64_ENCODER_METHODS: &[BuiltinMethod] = &[
     bm(
@@ -19106,6 +19476,9 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::Year
+            | JType::YearMonth
+            | JType::MonthDay
             | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
@@ -19167,6 +19540,9 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::ChronoUnit => Some(("java/time/temporal/ChronoUnit", CHRONO_UNIT_METHODS)),
         JType::ChronoField => Some(("java/time/temporal/ChronoField", CHRONO_FIELD_METHODS)),
         JType::IsoEra => Some(("java/time/chrono/IsoEra", ISO_ERA_METHODS)),
+        JType::Year => Some(("java/time/Year", YEAR_METHODS)),
+        JType::YearMonth => Some(("java/time/YearMonth", YEAR_MONTH_METHODS)),
+        JType::MonthDay => Some(("java/time/MonthDay", MONTH_DAY_METHODS)),
         JType::ValueRange => Some(("java/time/temporal/ValueRange", VALUE_RANGE_METHODS)),
         JType::DateFormat => Some(("java/time/format/DateTimeFormatter", DATE_FORMAT_METHODS)),
         JType::LocalDateTime => Some(("java/time/LocalDateTime", LOCAL_DATE_TIME_METHODS)),
@@ -19962,6 +20338,9 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "UUID" => Some(("java/util/UUID", UUID_STATIC_METHODS)),
         "Base64" => Some(("java/util/Base64", BASE64_STATIC_METHODS)),
         "BitSet" => Some(("java/util/BitSet", BITSET_STATIC_METHODS)),
+        "Year" => Some(("java/time/Year", YEAR_STATIC_METHODS)),
+        "YearMonth" => Some(("java/time/YearMonth", YEAR_MONTH_STATIC_METHODS)),
+        "MonthDay" => Some(("java/time/MonthDay", MONTH_DAY_STATIC_METHODS)),
         // A `MathContext` has no statics of its own; the entry exists so its
         // four CONSTANTS resolve as a qualified name.
         "MathContext" => Some(("java/math/MathContext", &[])),
@@ -20289,6 +20668,9 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::BigDecimal => JType::BigDecimal,
         BParam::Uuid => JType::Uuid,
         BParam::BitSet => JType::BitSet,
+        BParam::Year => JType::Year,
+        BParam::YearMonth => JType::YearMonth,
+        BParam::MonthDay => JType::MonthDay,
         BParam::ByteArray => JType::Array {
             elem: ElemType::Byte,
             dims: 1,
@@ -20748,6 +21130,9 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::BigDecimal => Some(JType::BigDecimal),
         BRet::NumberFormat => Some(JType::NumberFormat),
         BRet::Uuid => Some(JType::Uuid),
+        BRet::Year => Some(JType::Year),
+        BRet::YearMonth => Some(JType::YearMonth),
+        BRet::MonthDay => Some(JType::MonthDay),
         BRet::Base64Encoder => Some(JType::Base64Encoder),
         BRet::Base64Decoder => Some(JType::Base64Decoder),
         BRet::BitSet => Some(JType::BitSet),
@@ -28604,6 +28989,9 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::Year
+            | JType::YearMonth
+            | JType::MonthDay
             | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
@@ -29656,6 +30044,9 @@ impl BodyGen<'_> {
                 | JType::Month
                 | JType::ChronoUnit
                 | JType::ChronoField
+                | JType::Year
+                | JType::YearMonth
+                | JType::MonthDay
                 | JType::ValueRange
                 | JType::BigInteger
                 | JType::BigDecimal
@@ -30760,6 +31151,9 @@ impl BodyGen<'_> {
             JType::ChronoField => String::from("java/time/temporal/ChronoField"),
             JType::TemporalAdjuster => String::from("java/time/temporal/TemporalAdjuster"),
             JType::IsoEra => String::from("java/time/chrono/IsoEra"),
+            JType::Year => String::from("java/time/Year"),
+            JType::YearMonth => String::from("java/time/YearMonth"),
+            JType::MonthDay => String::from("java/time/MonthDay"),
             JType::ValueRange => String::from("java/time/temporal/ValueRange"),
             JType::DateFormat => String::from("java/time/format/DateTimeFormatter"),
             JType::LocalDateTime => String::from("java/time/LocalDateTime"),
@@ -34567,6 +34961,9 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::Year
+            | JType::YearMonth
+            | JType::MonthDay
             | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
@@ -39660,6 +40057,9 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::Year
+            | JType::YearMonth
+            | JType::MonthDay
             | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
@@ -40061,6 +40461,9 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::Year
+            | JType::YearMonth
+            | JType::MonthDay
             | JType::ValueRange
             | JType::DateFormat
             | JType::DayOfWeek
