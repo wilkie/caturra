@@ -994,7 +994,7 @@ impl<'run> Interpreter<'run> {
                 Some(crate::value::HeapObject::Class { name }) => format!("class {name}"),
                 Some(crate::value::HeapObject::Scanner { .. }) => String::from("Scanner"),
                 Some(crate::value::HeapObject::File(path)) => format!("File({path})"),
-                Some(crate::value::HeapObject::Writer { path }) => {
+                Some(crate::value::HeapObject::Writer { path, .. }) => {
                     format!("PrintWriter({path})")
                 }
                 _ => String::from("<object>"),
@@ -16189,6 +16189,7 @@ impl<'run> Interpreter<'run> {
                 // of them sorts and a `TreeSet` of them is a set.
                 Some(HeapObject::BigInteger(_)) => Some("java.math.BigInteger"),
                 Some(HeapObject::BigDecimal(_)) => Some("java.math.BigDecimal"),
+                Some(HeapObject::Uuid(_, _)) => Some("java.util.UUID"),
                 // An enum orders by its ordinal, as every enum does.
                 Some(HeapObject::RoundingMode(_)) => Some("java.math.RoundingMode"),
                 // `LocalDate implements Comparable<ChronoLocalDate>`, and the
@@ -16883,6 +16884,11 @@ impl<'run> Interpreter<'run> {
                     (Some(HeapObject::BigDecimal(one)), Some(HeapObject::BigDecimal(other))) => {
                         one.compare(other)
                     }
+                    // A UUID compares its two halves as SIGNED longs.
+                    (
+                        Some(HeapObject::Uuid(high, low)),
+                        Some(HeapObject::Uuid(theirs_high, theirs_low)),
+                    ) => (high, low).cmp(&(theirs_high, theirs_low)),
                     (
                         Some(HeapObject::RoundingMode(one)),
                         Some(HeapObject::RoundingMode(other)),
@@ -20301,7 +20307,9 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         | "java/time/LocalDate"
         | "java/time/LocalTime"
         | "java/time/LocalDateTime"
-        | "java/time/Duration" => &["java/lang/Comparable"],
+        | "java/time/Duration"
+        // ...and a UUID, which orders itself too.
+        | "java/util/UUID" => &["java/lang/Comparable"],
         // ...and the `java.time` ENUMS, which are ordered because they extend
         // `java.lang.Enum` — a supertype a program can name and test for.
         "java/time/DayOfWeek"
@@ -20327,6 +20335,9 @@ fn library_faces(class: &str) -> &'static [&'static str] {
             &["java/lang/Number", "java/lang/Comparable"]
         }
         "java/text/DecimalFormat" => &["java/text/NumberFormat", "java/text/Format"],
+        // A tokenizer IS the pre-collections cursor, and a UUID orders itself.
+        "java/util/StringTokenizer" => &["java/util/Enumeration"],
+        "java/io/StringWriter" => &["java/io/Writer"],
         "java/util/EnumMap" => &["java/util/Map"],
         "java/util/RegularEnumSet" => &["java/util/Set", "java/util/Collection"],
         "sun/nio/fs/UnixPath" => &[
@@ -20471,6 +20482,9 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         // A `NumberFormat` factory answers a `DecimalFormat` in a JDK too, so
         // there is only ever the one class here.
         Some(HeapObject::NumberFormat(_)) => String::from("java/text/DecimalFormat"),
+        Some(HeapObject::StringTokenizer { .. }) => String::from("java/util/StringTokenizer"),
+        Some(HeapObject::Uuid(_, _)) => String::from("java/util/UUID"),
+        Some(HeapObject::StringWriter(_)) => String::from("java/io/StringWriter"),
         Some(HeapObject::Charset(name)) => format!("sun/nio/cs/{}", name.replace('-', "_")),
         Some(HeapObject::SummaryStats { .. }) => String::from("java/util/IntSummaryStatistics"),
         // The regex trio. A frozen match is an INNER class of Matcher in a

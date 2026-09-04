@@ -2466,6 +2466,12 @@ fn write_units_to_sink(
                 stream.extend_from_slice(&bytes);
             }
         }
+        // A `StringWriter` collects the CODE UNITS, not their encoding.
+        PrintSink::Text(reference) => {
+            if let Some(HeapObject::StringWriter(text)) = heap.get_mut(reference) {
+                text.extend_from_slice(units);
+            }
+        }
     }
 }
 
@@ -2476,6 +2482,12 @@ fn write_to_sink(sink: PrintSink, text: &str, heap: &mut Heap, console: &mut dyn
         PrintSink::Bytes(reference) => {
             if let Some(HeapObject::ByteStream(bytes)) = heap.get_mut(reference) {
                 bytes.extend_from_slice(text.as_bytes());
+            }
+        }
+        PrintSink::Text(reference) => {
+            let units: Vec<u16> = text.encode_utf16().collect();
+            if let Some(HeapObject::StringWriter(buffer)) = heap.get_mut(reference) {
+                buffer.extend_from_slice(&units);
             }
         }
     }
@@ -2539,6 +2551,22 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         // Every constructor applies a pattern; the default is the one a bare
         // `new DecimalFormat()` keeps.
         "java/text/DecimalFormat" => Some(HeapObject::NumberFormat(Box::default())),
+        "java/util/StringTokenizer" => Some(HeapObject::StringTokenizer {
+            text: Vec::new(),
+            delimiters: Vec::new(),
+            pos: 0,
+            return_delimiters: false,
+        }),
+        "java/util/UUID" => Some(HeapObject::Uuid(0, 0)),
+        "java/io/StringWriter" => Some(HeapObject::StringWriter(Vec::new())),
+        // A `StringReader` is the reader kind already here, over text the
+        // program handed in rather than a file.
+        "java/io/StringReader" => Some(HeapObject::Reader {
+            buffer: String::new(),
+            pos: 0,
+            stdin: false,
+            closed: false,
+        }),
         // A default context is a JDK's `UNLIMITED`; every constructor replaces
         // it.
         "java/math/MathContext" => Some(HeapObject::MathContext {
@@ -2552,6 +2580,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         "java/io/PrintStream" => Some(HeapObject::PrintStream(PrintSink::Std(StdStream::Out))),
         "java/io/PrintWriter" => Some(HeapObject::Writer {
             path: String::new(),
+            text: None,
         }),
         "java/io/BufferedReader" | "java/io/FileReader" | "java/io/InputStreamReader" => {
             Some(HeapObject::Reader {
@@ -2611,6 +2640,62 @@ pub fn invoke_special(
         let value = parse_big_integer(&text, radix)?;
         if let Some(slot) = heap.get_mut(receiver) {
             *slot = HeapObject::BigInteger(value);
+        }
+        return Ok(());
+    }
+    // `new StringTokenizer(text)` / `(text, delims)` / `(text, delims, keep)`.
+    if class == "java/util/StringTokenizer" && method == "<init>" {
+        let text: Vec<u16> = string_units(heap, &args[0])?;
+        let delimiters: Vec<u16> = match args.get(1) {
+            Some(value) => string_units(heap, value)?,
+            // A JDK's default is space, tab, newline, carriage return and form
+            // feed — NOT every whitespace character.
+            None => " \t\n\r\u{c}".encode_utf16().collect(),
+        };
+        let return_delimiters = matches!(args.get(2), Some(JValue::Int(1)));
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::StringTokenizer {
+                text,
+                delimiters,
+                pos: 0,
+                return_delimiters,
+            };
+        }
+        return Ok(());
+    }
+    // `new UUID(high, low)`.
+    if class == "java/util/UUID" && method == "<init>" {
+        let (JValue::Long(high), Some(JValue::Long(low))) = (args[0], args.get(1)) else {
+            return Err(throw("java.lang.VerifyError: expected two longs"));
+        };
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::Uuid(high, *low);
+        }
+        return Ok(());
+    }
+    // `new PrintWriter(stringWriter)` — a writer whose target is memory.
+    if class == "java/io/PrintWriter" && method == "<init>" && descriptor == "(Ljava/io/Writer;)V" {
+        let JValue::Ref(Some(target)) = args[0] else {
+            return Err(throw("java.lang.NullPointerException"));
+        };
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::Writer {
+                path: String::new(),
+                text: Some(target),
+            };
+        }
+        return Ok(());
+    }
+    // `new StringReader(text)` — the reader kind, over text rather than a file.
+    if class == "java/io/StringReader" && method == "<init>" {
+        let text = string_arg(heap, &args[0])?;
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::Reader {
+                buffer: text,
+                pos: 0,
+                stdin: false,
+                closed: false,
+            };
         }
         return Ok(());
     }
@@ -2980,7 +3065,7 @@ pub fn invoke_special(
                     }
                     Ok(())
                 }
-                Some(HeapObject::Writer { path }) => {
+                Some(HeapObject::Writer { path, .. }) => {
                     // PrintWriter(String) truncates on open (like Java)
                     // and writes through as the program prints.
                     path.clone_from(&text);
@@ -3055,7 +3140,7 @@ pub fn invoke_special(
                 vfs.write_file(&target, Vec::new())
                     .map_err(|e| throw(format!("java.io.FileNotFoundException: {e}")))?;
             }
-            if let Some(HeapObject::Writer { path }) = heap.get_mut(receiver) {
+            if let Some(HeapObject::Writer { path, .. }) = heap.get_mut(receiver) {
                 *path = target;
             }
             Ok(())
@@ -3066,7 +3151,7 @@ pub fn invoke_special(
                 Some(HeapObject::Writer { .. }) => {
                     vfs.write_file(&target, Vec::new())
                         .map_err(|e| throw(format!("java.io.FileNotFoundException: {e}")))?;
-                    if let Some(HeapObject::Writer { path }) = heap.get_mut(receiver) {
+                    if let Some(HeapObject::Writer { path, .. }) = heap.get_mut(receiver) {
                         *path = target;
                     }
                     Ok(())
@@ -3542,7 +3627,16 @@ pub fn invoke_virtual(
         }
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method, args),
-        (HeapObject::Reader { .. }, _) => reader_method(heap, console, receiver, method),
+        (HeapObject::Reader { .. }, _) => {
+            // `read(char[])` and `read()` share a NAME; the descriptor is what
+            // tells them apart, so the array form gets its own here.
+            let method = if method == "read" && !args.is_empty() {
+                "readInto"
+            } else {
+                method
+            };
+            reader_method(heap, console, receiver, method, args)
+        }
         (
             HeapObject::ArrayList(_) | HeapObject::LinkedList(_) | HeapObject::ArrayBackedList(_),
             _,
@@ -3599,6 +3693,11 @@ pub fn invoke_virtual(
         (HeapObject::BigInteger(_), _) => big_integer_method(heap, receiver, method, args),
         (HeapObject::BigDecimal(_), _) => big_decimal_method(heap, receiver, method, args),
         (HeapObject::NumberFormat(_), _) => number_format_method(heap, receiver, method, args),
+        (HeapObject::StringTokenizer { .. }, _) => tokenizer_method(heap, receiver, method),
+        (HeapObject::Uuid(_, _), _) => uuid_method(heap, receiver, method, args),
+        (HeapObject::StringWriter(_), _) => {
+            string_writer_method(heap, receiver, method, descriptor, args)
+        }
         (HeapObject::RoundingMode(_), _) => rounding_mode_method(heap, receiver, method, args),
         (HeapObject::MathContext { .. }, _) => math_context_method(heap, receiver, method, args),
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method, args),
@@ -3959,6 +4058,10 @@ pub(crate) fn uses_identity_equality(object: &HeapObject) -> bool {
             | HeapObject::StringBuilder(_)
             | HeapObject::Exception { .. }
             | HeapObject::Iterator { .. }
+            // A tokenizer and a writer are identity objects: a JDK gives them
+            // no `equals` of their own.
+            | HeapObject::StringTokenizer { .. }
+            | HeapObject::StringWriter(_)
             // A `RoundingMode` is an ENUM, so `equals` is identity — and since
             // the constants are interned, identity IS value equality.
             | HeapObject::RoundingMode(_)
@@ -5945,16 +6048,29 @@ fn scanner_method(
 /// `java.io.BufferedReader`/`FileReader` methods. A file reader hands out lines
 /// from its slurped buffer; a `System.in` reader pulls each line from the
 /// console. `readLine` returns null at end of stream (not an exception).
+#[allow(clippy::too_many_lines)] // one arm per read shape
 fn reader_method(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
     receiver: HeapRef,
     method: &str,
+    args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
     let (stdin, closed) = match heap.get(receiver) {
         Some(HeapObject::Reader { stdin, closed, .. }) => (*stdin, *closed),
         _ => unreachable!("receiver kind checked by caller"),
     };
+    // Reading a CLOSED reader is a JDK's `IOException`, not an end of stream —
+    // which matters, because a program that closes early then reads gets a
+    // failure rather than a silently empty result.
+    if closed
+        && matches!(
+            method,
+            "readLine" | "read" | "readInto" | "skip" | "ready" | "lines"
+        )
+    {
+        return Err(throw("java.io.IOException: Stream closed"));
+    }
     match method {
         "readLine" => {
             let line = if closed {
@@ -5976,6 +6092,76 @@ fn reader_method(
                 reader_next_char(heap, receiver)
             };
             Ok(Some(JValue::Int(ch)))
+        }
+        // `read(buffer)` / `read(buffer, offset, length)` — fill an array and
+        // answer how many characters landed in it, or -1 at the end.
+        "readInto" => {
+            let Some(JValue::Ref(Some(target))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let room = match heap.get(*target) {
+                Some(HeapObject::IntArray(_, values)) => values.len(),
+                _ => return Err(throw("java.lang.ClassCastException: not a char[]")),
+            };
+            let (offset, wanted) = match (args.get(1), args.get(2)) {
+                (Some(JValue::Int(offset)), Some(JValue::Int(length))) => {
+                    let offset = check_offset(*offset, room)?;
+                    (
+                        offset,
+                        usize::try_from(*length).unwrap_or(0).min(room - offset),
+                    )
+                }
+                _ => (0, room),
+            };
+            let mut taken = 0;
+            while taken < wanted {
+                let ch = if closed || stdin {
+                    -1
+                } else {
+                    reader_next_char(heap, receiver)
+                };
+                if ch < 0 {
+                    break;
+                }
+                if let Some(HeapObject::IntArray(_, values)) = heap.get_mut(*target) {
+                    values[offset + taken] = ch;
+                }
+                taken += 1;
+            }
+            Ok(Some(JValue::Int(if taken == 0 && wanted > 0 {
+                -1
+            } else {
+                i32::try_from(taken).unwrap_or(0)
+            })))
+        }
+        "skip" => {
+            let wanted = match args.first() {
+                Some(JValue::Long(count)) => *count,
+                Some(JValue::Int(count)) => i64::from(*count),
+                _ => 0,
+            };
+            let mut skipped = 0;
+            while skipped < wanted && !closed && !stdin && reader_next_char(heap, receiver) >= 0 {
+                skipped += 1;
+            }
+            Ok(Some(JValue::Long(skipped)))
+        }
+        // `lines()` — every line still to come, as a stream.
+        "lines" => {
+            let mut lines = Vec::new();
+            while let Some(text) = if closed || stdin {
+                None
+            } else {
+                reader_next_line(heap, receiver)
+            } {
+                let line = heap.alloc_string(&text);
+                lines.push(JValue::Ref(Some(line)));
+            }
+            let stream = heap.alloc(HeapObject::Stream {
+                source: crate::value::StreamSource::Fixed(lines),
+                ops: Vec::new(),
+            });
+            Ok(Some(JValue::Ref(Some(stream))))
         }
         "ready" => {
             let ready = !closed
@@ -6717,6 +6903,9 @@ pub(crate) fn native_equals(heap: &Heap, a: JValue, b: JValue) -> bool {
                     (Some(HeapObject::BigDecimal(bx)), Some(HeapObject::BigDecimal(by))) => {
                         bx == by
                     }
+                    (Some(HeapObject::Uuid(hx, lx)), Some(HeapObject::Uuid(hy, ly))) => {
+                        hx == hy && lx == ly
+                    }
                     (
                         Some(HeapObject::MathContext {
                             precision: px,
@@ -6768,6 +6957,10 @@ pub(crate) fn native_hash(heap: &Heap, value: JValue) -> i32 {
             Some(HeapObject::Charset(name)) => java_string_hash(name),
             Some(HeapObject::BigInteger(value)) => value.java_hash(),
             Some(HeapObject::BigDecimal(value)) => value.java_hash(),
+            Some(HeapObject::Uuid(high, low)) => {
+                let folded = high ^ low;
+                ((folded >> 32) as i32) ^ (folded as i32)
+            }
             Some(HeapObject::MathContext { precision, mode }) => precision
                 .wrapping_add(identity_hash(reference).wrapping_mul(59))
                 .wrapping_add(i32::from(*mode)),
@@ -9032,9 +9225,22 @@ fn writer_method(
     descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
-    let path = match heap.get(receiver) {
-        Some(HeapObject::Writer { path }) => path.clone(),
+    let (path, target) = match heap.get(receiver) {
+        Some(HeapObject::Writer { path, text }) => (path.clone(), *text),
         _ => unreachable!("receiver kind checked by caller"),
+    };
+    // A writer over a `StringWriter` collects code units; one over a file
+    // appends bytes. Every write here goes through this.
+    let put = |heap: &mut Heap, vfs: &mut VirtualFileSystem, text: &str| {
+        if let Some(reference) = target {
+            let units: Vec<u16> = text.encode_utf16().collect();
+            if let Some(HeapObject::StringWriter(buffer)) = heap.get_mut(reference) {
+                buffer.extend_from_slice(&units);
+            }
+            return Ok(());
+        }
+        vfs.append_file(&path, text.as_bytes())
+            .map_err(|e| throw(format!("java.io.IOException: {e}")))
     };
     match method {
         "printf" | "format" => {
@@ -9049,8 +9255,7 @@ fn writer_method(
             };
             let format_args = crate::format::args_from_descriptor(heap, descriptor, &args[1..])?;
             let text = crate::format::java_format(heap, &template, &format_args)?;
-            vfs.append_file(&path, &units_to_utf8(&text))
-                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            put(heap, vfs, &String::from_utf16_lossy(&text))?;
             // `format` returns the writer for chaining; `printf` is void.
             Ok((method == "format").then_some(JValue::Ref(Some(receiver))))
         }
@@ -9070,8 +9275,7 @@ fn writer_method(
                     _ => String::new(),
                 }
             };
-            vfs.append_file(&path, text.as_bytes())
-                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            put(heap, vfs, &text)?;
             Ok(None)
         }
         // `append(char)` writes the character; `append(CharSequence)` the text
@@ -9091,8 +9295,7 @@ fn writer_method(
                     _ => String::new(),
                 }
             };
-            vfs.append_file(&path, text.as_bytes())
-                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            put(heap, vfs, &text)?;
             Ok(Some(JValue::Ref(Some(receiver))))
         }
         "print" | "println" => {
@@ -9100,8 +9303,7 @@ fn writer_method(
             if method == "println" {
                 text.push('\n');
             }
-            vfs.append_file(&path, text.as_bytes())
-                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            put(heap, vfs, &text)?;
             Ok(None)
         }
         // Write-through means close/flush have nothing left to do.
@@ -9131,6 +9333,14 @@ impl JavaRng {
     fn next(&mut self, bits: u32) -> u64 {
         self.seed = self.seed.wrapping_mul(Self::MULTIPLIER).wrapping_add(0xB) & Self::MASK;
         self.seed >> (48 - bits)
+    }
+
+    /// `Random.nextLong()`: two 32-bit draws, high half first.
+    pub fn next_long(&mut self) -> i64 {
+        let high = self.next(32).cast_signed();
+        // The low half is a SIGNED 32-bit draw, as Java's `nextLong` adds it.
+        let low = i64::from(self.next(32).cast_signed() as i32);
+        (high << 32).wrapping_add(low)
     }
 
     /// `Random.nextDouble()`: uniform in `[0, 1)`.
@@ -10471,6 +10681,34 @@ pub fn invoke_static(
                 ))))))
             }
             _ => Err(VmError::UnknownIntrinsic(format!("BigInteger.{method}"))),
+        },
+        // `UUID.fromString(text)` and `UUID.randomUUID()`. The random one
+        // cannot match a JDK's VALUE — a JDK draws from a secure source — but
+        // its SHAPE is fixed: version 4, variant 2.
+        "java/util/UUID" => match method {
+            "fromString" => {
+                let text = arg_string(heap, &args[0])?;
+                let Some((high, low)) = uuid_from_text(&text) else {
+                    return Err(throw(format!(
+                        "java.lang.IllegalArgumentException: Invalid UUID string: {text}"
+                    )));
+                };
+                Ok(Some(JValue::Ref(Some(
+                    heap.alloc(HeapObject::Uuid(high, low)),
+                ))))
+            }
+            "randomUUID" => {
+                // Version 4 in the high half, variant 2 in the low — the four
+                // bits and two bits a JDK stamps over its random draw.
+                let high = (rng.next_long() & !0xf000i64) | 0x4000;
+                let low = (rng.next_long().cast_unsigned() & !(0xc000u64 << 48)
+                    | (0x8000u64 << 48))
+                    .cast_signed();
+                Ok(Some(JValue::Ref(Some(
+                    heap.alloc(HeapObject::Uuid(high, low)),
+                ))))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("UUID.{method}"))),
         },
         // `NumberFormat.getInstance()` and the four factories beside it. Each
         // is a `DecimalFormat` over the pattern the locale would give — and
@@ -12987,6 +13225,8 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::Temporal(value)) => value.text(),
             Some(HeapObject::BigInteger(value)) => value.to_text(10),
             Some(HeapObject::BigDecimal(value)) => value.to_text(),
+            Some(HeapObject::Uuid(high, low)) => uuid_text(*high, *low),
+            Some(HeapObject::StringWriter(units)) => String::from_utf16_lossy(units),
             // A JDK's `Format.toString` is the default one; the identity hash
             // in it is normalized away by every comparison that reads this.
             Some(HeapObject::NumberFormat(_)) => {
@@ -13891,6 +14131,249 @@ fn number_format_method(
         }
         "hashCode" => Ok(Some(JValue::Int(identity_hash(receiver)))),
         _ => Err(VmError::UnknownIntrinsic(format!("DecimalFormat.{method}"))),
+    }
+}
+
+/// A `java.util.StringTokenizer` — the pre-`split` way to walk words, and the
+/// one a textbook still teaches first.
+fn tokenizer_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+) -> Result<Option<JValue>, VmError> {
+    let (text, delimiters, pos, keep) = match heap.get(receiver) {
+        Some(HeapObject::StringTokenizer {
+            text,
+            delimiters,
+            pos,
+            return_delimiters,
+        }) => (text.clone(), delimiters.clone(), *pos, *return_delimiters),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    let is_delimiter = |unit: u16| delimiters.contains(&unit);
+    // Where the next token starts, and where it ends. With the delimiters kept
+    // a single one IS the token, which is what `keep` changes.
+    let next = |from: usize| -> Option<(usize, usize)> {
+        let mut at = from;
+        if !keep {
+            while at < text.len() && is_delimiter(text[at]) {
+                at += 1;
+            }
+        }
+        if at >= text.len() {
+            return None;
+        }
+        if keep && is_delimiter(text[at]) {
+            return Some((at, at + 1));
+        }
+        let start = at;
+        while at < text.len() && !is_delimiter(text[at]) {
+            at += 1;
+        }
+        Some((start, at))
+    };
+    match method {
+        "hasMoreTokens" | "hasMoreElements" => {
+            Ok(Some(JValue::Int(i32::from(next(pos).is_some()))))
+        }
+        "countTokens" => {
+            let mut at = pos;
+            let mut count = 0;
+            while let Some((_, end)) = next(at) {
+                count += 1;
+                at = end;
+            }
+            Ok(Some(JValue::Int(count)))
+        }
+        "nextToken" | "nextElement" => {
+            let Some((start, end)) = next(pos) else {
+                return Err(throw("java.util.NoSuchElementException"));
+            };
+            if let Some(HeapObject::StringTokenizer { pos, .. }) = heap.get_mut(receiver) {
+                *pos = end;
+            }
+            let token = heap.alloc_string_units(&text[start..end]);
+            Ok(Some(JValue::Ref(Some(token))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "StringTokenizer.{method}"
+        ))),
+    }
+}
+
+/// The canonical text of a UUID: eight-four-four-four-twelve lowercase hex
+/// digits, which is also what `toString` answers.
+fn uuid_text(high: i64, low: i64) -> String {
+    let high = high.cast_unsigned();
+    let low = low.cast_unsigned();
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        high >> 32,
+        (high >> 16) & 0xffff,
+        high & 0xffff,
+        (low >> 48) & 0xffff,
+        low & 0x0000_ffff_ffff_ffff
+    )
+}
+
+/// Read the canonical text back. `None` for anything that is not one.
+fn uuid_from_text(text: &str) -> Option<(i64, i64)> {
+    let parts: Vec<&str> = text.split('-').collect();
+    let [first, second, third, fourth, fifth] = parts.as_slice() else {
+        return None;
+    };
+    // A JDK is lenient about WIDTH — it parses each group as a hex number —
+    // but not about the group count.
+    let value = |part: &str| u64::from_str_radix(part, 16).ok();
+    let high = (value(first)? << 32) | (value(second)? << 16) | value(third)?;
+    let low = (value(fourth)? << 48) | value(fifth)?;
+    Some((high.cast_signed(), low.cast_signed()))
+}
+
+/// `java.util.UUID` — two longs, and the questions asked of them.
+fn uuid_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let (high, low) = match heap.get(receiver) {
+        Some(HeapObject::Uuid(high, low)) => (*high, *low),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    let other = || match args.first() {
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Uuid(high, low)) => Some((*high, *low)),
+            _ => None,
+        },
+        _ => None,
+    };
+    match method {
+        "toString" => {
+            let text = uuid_text(high, low);
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        "getMostSignificantBits" => Ok(Some(JValue::Long(high))),
+        "getLeastSignificantBits" => Ok(Some(JValue::Long(low))),
+        "version" => Ok(Some(JValue::Int(((high >> 12) & 0x0f) as i32))),
+        "variant" => {
+            // The JDK's own expression: the top bits of the low half, masked by
+            // the SIGN-extended top bit — so a variant-2 UUID answers 2 and a
+            // variant-0 one answers 0.
+            let magnitude = low.cast_unsigned();
+            let top = u32::try_from(magnitude >> 62).unwrap_or(0);
+            // Java's `>>>` masks the count to six bits, and so does this.
+            let shifted = magnitude.wrapping_shr(64 - top).cast_signed();
+            Ok(Some(JValue::Int((shifted & (low >> 63)) as i32)))
+        }
+        "timestamp" => {
+            if (high >> 12) & 0x0f != 1 {
+                return Err(throw(
+                    "java.lang.UnsupportedOperationException: Not a time-based UUID",
+                ));
+            }
+            let time = ((high >> 32) & 0xffff_ffff)
+                | ((high >> 16) & 0xffff) << 32
+                | (high & 0x0fff) << 48;
+            Ok(Some(JValue::Long(time)))
+        }
+        "compareTo" => {
+            let Some((theirs_high, theirs_low)) = other() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            // A JDK compares the two halves as SIGNED longs.
+            let order = if high != theirs_high {
+                i32::from(high > theirs_high) * 2 - 1
+            } else if low != theirs_low {
+                i32::from(low > theirs_low) * 2 - 1
+            } else {
+                0
+            };
+            Ok(Some(JValue::Int(order)))
+        }
+        "equals" => Ok(Some(JValue::Int(i32::from(other() == Some((high, low)))))),
+        "hashCode" => {
+            let folded = high ^ low;
+            Ok(Some(JValue::Int(((folded >> 32) as i32) ^ (folded as i32))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("UUID.{method}"))),
+    }
+}
+
+/// A `java.io.StringWriter` — a `Writer` that keeps what was written so a
+/// program can read it back, which is how output gets tested.
+fn string_writer_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    match method {
+        "toString" | "getBuffer" => {
+            let units = match heap.get(receiver) {
+                Some(HeapObject::StringWriter(units)) => units.clone(),
+                _ => unreachable!("receiver kind checked by caller"),
+            };
+            // `getBuffer` answers a `StringBuffer` in a JDK; caturra has one
+            // builder kind, and what a program does with it is read the text.
+            let object = if method == "getBuffer" {
+                heap.alloc(HeapObject::StringBuilder(units))
+            } else {
+                heap.alloc_string_units(&units)
+            };
+            Ok(Some(JValue::Ref(Some(object))))
+        }
+        "write" | "append" | "print" => {
+            // `write(int)` writes a single CHARACTER — its low sixteen bits —
+            // where `print(int)` would write the number.
+            let param = if method == "write" && descriptor.starts_with("(I)") {
+                "C"
+            } else {
+                descriptor_param(descriptor)
+            };
+            let units = builder_value_text(heap, param, &args[0])?;
+            // `write(text, off, len)` writes a RANGE, and `append(cs, start,
+            // end)` two INDEXES — the same two numbers meaning different things.
+            let units = match (method, args.get(1), args.get(2)) {
+                (_, Some(JValue::Int(first)), Some(JValue::Int(second))) => {
+                    let (start, end) = if method == "append" {
+                        (*first, *second)
+                    } else {
+                        (*first, first.saturating_add(*second))
+                    };
+                    let (start, end) = check_range(start, end, units.len())?;
+                    units[start..end].to_vec()
+                }
+                _ => units,
+            };
+            if let Some(HeapObject::StringWriter(buffer)) = heap.get_mut(receiver) {
+                buffer.extend_from_slice(&units);
+            }
+            Ok(if method == "append" {
+                Some(JValue::Ref(Some(receiver)))
+            } else {
+                None
+            })
+        }
+        // A `StringWriter` writes to memory, so there is nothing to flush and
+        // closing one does nothing at all — a JDK says so in as many words.
+        "flush" | "close" => Ok(None),
+        _ => Err(VmError::UnknownIntrinsic(format!("StringWriter.{method}"))),
+    }
+}
+
+/// The first parameter's descriptor, for the builder's text reader.
+fn descriptor_param(descriptor: &str) -> &str {
+    let inner = descriptor
+        .strip_prefix('(')
+        .and_then(|rest| rest.split(')').next())
+        .unwrap_or("");
+    match inner.chars().next() {
+        Some('C') => "C",
+        Some('[') => "[C",
+        // A `CharSequence` reaches the builder's reader as the String it is.
+        _ => "Ljava/lang/String;",
     }
 }
 

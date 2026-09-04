@@ -17,6 +17,10 @@ use crate::diagnostics::{Diagnostic, SourceSpan};
 /// Importable library classes, per package.
 const JAVA_UTIL: &[&str] = &[
     "Scanner",
+    // The pre-`split` word walker, and the identifier every "give this a
+    // unique name" exercise reaches for.
+    "StringTokenizer",
+    "UUID",
     "AbstractMap",
     "ArrayList",
     "List",
@@ -81,6 +85,10 @@ const JAVA_UTIL: &[&str] = &[
 const JAVA_IO: &[&str] = &[
     "File",
     "PrintWriter",
+    // The two that make text look like a file: a reader over a String, and a
+    // writer a program reads back.
+    "StringReader",
+    "StringWriter",
     // `System.out` IS a `PrintStream`, and a test captures printing by
     // handing `System.setOut` one over a `ByteArrayOutputStream` — the only
     // `OutputStream` there is here, which is why the abstract name is a face

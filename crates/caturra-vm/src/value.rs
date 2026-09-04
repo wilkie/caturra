@@ -447,6 +447,9 @@ impl Temporal {
 pub enum PrintSink {
     Std(StdStream),
     Bytes(HeapRef),
+    /// A `java.io.StringWriter` — a `PrintWriter` over one collects CHARACTERS
+    /// rather than bytes, which is what makes `sw.toString()` legible.
+    Text(HeapRef),
 }
 
 /// Where each of a class's instance fields lives in an object.
@@ -876,6 +879,18 @@ pub enum HeapObject {
     /// A `java.math.MathContext`: how many significant digits to keep, and how
     /// to round what falls off.
     MathContext { precision: i32, mode: u8 },
+    /// A `java.util.StringTokenizer` — the text, the delimiters, where the
+    /// cursor sits, and whether the delimiters are handed out as tokens too.
+    StringTokenizer {
+        text: Vec<u16>,
+        delimiters: Vec<u16>,
+        pos: usize,
+        return_delimiters: bool,
+    },
+    /// A `java.util.UUID` — two longs, and nothing else.
+    Uuid(i64, i64),
+    /// A `java.io.StringWriter` — the characters written into it so far.
+    StringWriter(Vec<u16>),
     /// A `java.text.DecimalFormat` — the parsed pattern, and the limits a
     /// program may then change on it. `NumberFormat` is the same object under
     /// a narrower name, which is what a JDK's factories answer with too.
@@ -918,7 +933,13 @@ pub enum HeapObject {
     RegexPredicate { pattern: HeapRef, whole: bool },
     /// A `java.io.PrintWriter` into the virtual filesystem
     /// (write-through: output is durable without `close()`).
-    Writer { path: String },
+    Writer {
+        path: String,
+        /// A `PrintWriter` built over a `StringWriter` writes THERE instead of
+        /// into the filesystem, and `sw.toString()` is how the program reads
+        /// it back.
+        text: Option<HeapRef>,
+    },
     /// A throwable: a library exception class (dotted name) with its
     /// optional message. Bound by `catch` handlers, created by
     /// `new SomeException(...)`.
@@ -1177,7 +1198,15 @@ impl HeapObject {
             // A `PrintStream` over a program's own buffer KEEPS that buffer
             // alive: `System.setOut(new PrintStream(captor))` and then reading
             // `captor` after collection.
-            HeapObject::PrintStream(PrintSink::Bytes(reference)) => visit(*reference),
+            HeapObject::PrintStream(PrintSink::Bytes(reference) | PrintSink::Text(reference)) => {
+                visit(*reference);
+            }
+            // A writer over a `StringWriter` holds it.
+            HeapObject::Writer { text, .. } => {
+                if let Some(reference) = text {
+                    visit(*reference);
+                }
+            }
             // No references at all: the text, the primitive arrays, the
             // handles that hold only names, the stream/file endpoints.
             HeapObject::JavaString(_)
@@ -1205,9 +1234,11 @@ impl HeapObject {
             | HeapObject::RoundingMode(_)
             | HeapObject::MathContext { .. }
             | HeapObject::NumberFormat(_)
+            | HeapObject::StringTokenizer { .. }
+            | HeapObject::Uuid(_, _)
+            | HeapObject::StringWriter(_)
             | HeapObject::Pattern { .. }
             | HeapObject::MatchResult { .. }
-            | HeapObject::Writer { .. }
             | HeapObject::Class { .. }
             | HeapObject::Field { .. }
             | HeapObject::ReflectType { .. }

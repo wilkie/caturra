@@ -13861,3 +13861,39 @@ Seven unit tests sit in the core.
 for an array of 2^31 digits and dies with an `OutOfMemoryError`; caturra
 answers `#,##0.###`, the pattern the empty one leaves in place. Reproducing a
 JDK's out-of-memory bug is not worth the fidelity.
+
+## Text that looks like a file, and a word at a time
+
+Four small utilities a program reaches for without thinking, and which had no
+answer at all: `java.util.StringTokenizer`, `java.util.UUID`,
+`java.io.StringReader` and `java.io.StringWriter`.
+
+**`StringTokenizer`** is the pre-`split` way to walk words, and the one a
+textbook still teaches first. It is four questions over a cursor. Two details
+are its own: a JDK's default delimiters are exactly space, tab, newline,
+carriage return and form feed — not every whitespace character — and with the
+delimiters KEPT (`new StringTokenizer(text, ",", true)`) a single delimiter IS
+a token.
+
+**`UUID`** is two longs and a canonical spelling. `fromString` is lenient about
+each group's WIDTH and strict about the count; `variant()` is the JDK's own
+bit expression, in which the top bits of the low half are masked by the
+sign-extended top bit — reading it as unsigned answers 0 where a JDK answers 2.
+`randomUUID()` cannot match a JDK's VALUE (a JDK draws from a secure source),
+but its shape is fixed and pinned: version 4, variant 2, and the canonical
+36 characters.
+
+**`StringReader` costs almost nothing**, because caturra's `Reader` already IS
+one: a buffer and a cursor. **`StringWriter`** needed a new sink, so
+`PrintSink` gained a `Text` arm and a `PrintWriter` its target — which is what
+makes `new PrintWriter(new StringWriter())` collect `printf` output a program
+can read back, the shape every "test what this prints" exercise takes.
+
+Three gaps turned up beside them and are closed too: `Reader.read(char[])` and
+its range form, `Reader.skip`, and `Reader.lines()`. And **reading a CLOSED
+reader is now a JDK's `IOException: Stream closed`** rather than an end of
+stream — which matters, because a program that closes early and then reads was
+getting a silently empty result instead of a failure.
+
+Pinned as `a_tokenizer_and_a_uuid`, `text_that_looks_like_a_file` and
+`the_small_utilities_in_every_position`.

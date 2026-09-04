@@ -3739,9 +3739,8 @@ impl MethodTable {
                     // there is here, so the abstract name is a FACE of it —
                     // the way `List` is a face of `ArrayList`.
                     "ByteArrayOutputStream" | "OutputStream" => Some(JType::ByteStream),
-                    "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader" => {
-                        Some(JType::Reader)
-                    }
+                    "BufferedReader" | "FileReader" | "InputStreamReader" | "StringReader"
+                    | "Reader" => Some(JType::Reader),
                     "Path" => Some(JType::Path),
                     "Charset" if !self.has_class(simple) => Some(JType::Charset),
                     "Pattern" if !self.has_class(simple) => Some(JType::Pattern),
@@ -4076,6 +4075,7 @@ impl MethodTable {
                     JType::BigInteger => ElemType::BigInteger,
                     JType::BigDecimal => ElemType::BigDecimal,
                     JType::RoundingMode => ElemType::RoundingMode,
+                    JType::Uuid => ElemType::Uuid,
                     JType::DayOfWeek => ElemType::DayOfWeek,
                     JType::Month => ElemType::Month,
                     JType::ChronoUnit => ElemType::ChronoUnit,
@@ -4874,6 +4874,7 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::BigInteger => "java/math/BigInteger",
         ElemType::BigDecimal => "java/math/BigDecimal",
         ElemType::RoundingMode => "java/math/RoundingMode",
+        ElemType::Uuid => "java/util/UUID",
         ElemType::DayOfWeek => "java/time/DayOfWeek",
         ElemType::Month => "java/time/Month",
         ElemType::ChronoUnit => "java/time/temporal/ChronoUnit",
@@ -5218,6 +5219,7 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::BigInteger => String::from("BigInteger"),
         ElemType::BigDecimal => String::from("BigDecimal"),
         ElemType::RoundingMode => String::from("RoundingMode"),
+        ElemType::Uuid => String::from("UUID"),
         ElemType::DayOfWeek => String::from("DayOfWeek"),
         ElemType::Month => String::from("Month"),
         ElemType::ChronoUnit => String::from("ChronoUnit"),
@@ -5830,6 +5832,8 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
         | ElemType::IsoEra
         // A `RoundingMode` is an enum like those, so it is ordered too.
         | ElemType::RoundingMode
+        // ...and a UUID, which orders itself too.
+        | ElemType::Uuid
         | ElemType::LocalDate => table.class_id("Comparable") == Some(class),
         // A `BigInteger` element wears the wrappers' two faces: it orders
         // itself, and it is a `Number`.
@@ -5924,6 +5928,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::BigInteger => Some(ElemType::BigInteger),
         JType::BigDecimal => Some(ElemType::BigDecimal),
         JType::RoundingMode => Some(ElemType::RoundingMode),
+        JType::Uuid => Some(ElemType::Uuid),
         JType::DayOfWeek => Some(ElemType::DayOfWeek),
         JType::Month => Some(ElemType::Month),
         JType::ChronoUnit => Some(ElemType::ChronoUnit),
@@ -6256,6 +6261,9 @@ fn library_value_type(simple: &str) -> Option<JType> {
         "MathContext" => JType::MathContext,
         "DecimalFormat" => JType::DecimalFormat,
         "NumberFormat" => JType::NumberFormat,
+        "StringTokenizer" => JType::StringTokenizer,
+        "UUID" => JType::Uuid,
+        "StringWriter" => JType::StringWriter,
         "LocalDate" => JType::LocalDate,
         "LocalTime" => JType::LocalTime,
         "LocalDateTime" => JType::LocalDateTime,
@@ -6400,6 +6408,7 @@ fn library_comparable(ty: JType) -> Option<bool> {
         | JType::BigInteger
         | JType::BigDecimal
         | JType::RoundingMode
+        | JType::Uuid
         | JType::Duration
         | JType::DayOfWeek
         | JType::Month
@@ -7808,6 +7817,12 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                     || table.class_id("Number") == Some(id)
                     || table.class_id("Comparable") == Some(id)
         )
+        // A `UUID` orders itself, so it satisfies a `Comparable` bound.
+        || matches!(
+            (from, to),
+            (JType::Uuid, JType::Object(id))
+                if id == table.object_id || table.class_id("Comparable") == Some(id)
+        )
 }
 
 /// The declared access level of a method: 3 public, 2 protected, 1
@@ -7877,6 +7892,8 @@ enum ElemType {
     /// `java.math.BigDecimal`, and `RoundingMode.values()`.
     BigDecimal,
     RoundingMode,
+    /// A `java.util.UUID` — the element of a list of identifiers.
+    Uuid,
     /// A `java.time` ENUM as an element — what `DayOfWeek.values()` and
     /// `Month.values()` answer, which is how a program loops over one.
     DayOfWeek,
@@ -8036,6 +8053,7 @@ impl ElemType {
             ElemType::BigInteger => String::from("Ljava/math/BigInteger;"),
             ElemType::BigDecimal => String::from("Ljava/math/BigDecimal;"),
             ElemType::RoundingMode => String::from("Ljava/math/RoundingMode;"),
+            ElemType::Uuid => String::from("Ljava/util/UUID;"),
             ElemType::DayOfWeek => String::from("Ljava/time/DayOfWeek;"),
             ElemType::Month => String::from("Ljava/time/Month;"),
             ElemType::ChronoUnit => String::from("Ljava/time/temporal/ChronoUnit;"),
@@ -8113,6 +8131,7 @@ impl ElemType {
             ElemType::BigInteger => JType::BigInteger,
             ElemType::BigDecimal => JType::BigDecimal,
             ElemType::RoundingMode => JType::RoundingMode,
+            ElemType::Uuid => JType::Uuid,
             ElemType::DayOfWeek => JType::DayOfWeek,
             ElemType::Month => JType::Month,
             ElemType::ChronoUnit => JType::ChronoUnit,
@@ -8309,6 +8328,14 @@ enum JType {
     /// `java.math.MathContext` — how many significant digits to keep, and how
     /// to round what falls off.
     MathContext,
+    /// `java.util.StringTokenizer` — the pre-`split` way to walk words, and an
+    /// `Enumeration` while it does.
+    StringTokenizer,
+    /// `java.util.UUID` — two longs and a canonical spelling.
+    Uuid,
+    /// `java.io.StringWriter` — a writer that keeps what was written, which is
+    /// how a program tests its own output.
+    StringWriter,
     /// `java.text.DecimalFormat`, and `java.text.NumberFormat` — the narrower
     /// face its factories answer with. One object, two names, exactly as a
     /// JDK has it (`NumberFormat.getInstance()` IS a `DecimalFormat`).
@@ -8840,6 +8867,9 @@ impl JType {
             JType::BigDecimal => String::from("BigDecimal"),
             JType::RoundingMode => String::from("RoundingMode"),
             JType::MathContext => String::from("MathContext"),
+            JType::StringTokenizer => String::from("StringTokenizer"),
+            JType::Uuid => String::from("UUID"),
+            JType::StringWriter => String::from("StringWriter"),
             JType::DecimalFormat => String::from("DecimalFormat"),
             JType::NumberFormat => String::from("NumberFormat"),
             JType::Charset => String::from("Charset"),
@@ -8907,6 +8937,9 @@ impl JType {
                 | JType::MathContext
                 | JType::DecimalFormat
                 | JType::NumberFormat
+                | JType::StringTokenizer
+                | JType::Uuid
+                | JType::StringWriter
                 | JType::Pattern
                 | JType::Matcher
                 | JType::MatchResult
@@ -9064,6 +9097,9 @@ impl JType {
             JType::BigDecimal => String::from("Ljava/math/BigDecimal;"),
             JType::RoundingMode => String::from("Ljava/math/RoundingMode;"),
             JType::MathContext => String::from("Ljava/math/MathContext;"),
+            JType::StringTokenizer => String::from("Ljava/util/StringTokenizer;"),
+            JType::Uuid => String::from("Ljava/util/UUID;"),
+            JType::StringWriter => String::from("Ljava/io/StringWriter;"),
             JType::DecimalFormat => String::from("Ljava/text/DecimalFormat;"),
             JType::NumberFormat => String::from("Ljava/text/NumberFormat;"),
             JType::Charset => String::from("Ljava/nio/charset/Charset;"),
@@ -10608,6 +10644,8 @@ enum BParam {
     Str,
     /// `java.math.BigInteger`, which is what every two-operand method takes.
     BigInteger,
+    /// A `java.util.UUID`, which is what `compareTo` and `equals` take.
+    Uuid,
     /// `java.math.BigDecimal`, likewise — and the two that steer its rounding.
     BigDecimal,
     RoundingMode,
@@ -10707,6 +10745,9 @@ enum BRet {
     BigDecimalArray,
     RoundingMode,
     RoundingModeArray,
+    /// A `java.util.UUID` and a `java.io.StringWriter`.
+    Uuid,
+    StringWriter,
     /// The `java.text` face its factories answer with, and the `Number` a
     /// parse gives back.
     NumberFormat,
@@ -11675,6 +11716,23 @@ const READER_METHODS: &[BuiltinMethod] = &[
     // `readLine` returns null at end of stream; its static type is String.
     bm("readLine", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("read", &[], BRet::Int, "()I"),
+    // `read(buffer)` and its range form fill a char array and answer how many
+    // they read, which is how a program reads in blocks rather than by line.
+    bm("read", &[BParam::CharArray], BRet::Int, "([C)I"),
+    bm(
+        "read",
+        &[BParam::CharArray, BParam::Int, BParam::Int],
+        BRet::Int,
+        "([CII)I",
+    ),
+    bm("skip", &[BParam::Long], BRet::Long, "(J)J"),
+    // ...and `lines()` is how it reaches a stream.
+    bm(
+        "lines",
+        &[],
+        BRet::StreamString,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm("ready", &[], BRet::Boolean, "()Z"),
     bm("close", &[], BRet::Void, "()V"),
 ];
@@ -15293,6 +15351,89 @@ const MATH_CONTEXT_METHODS: &[BuiltinMethod] = &[
     bm("hashCode", &[], BRet::Int, "()I"),
 ];
 
+/// `java.util.StringTokenizer` — four questions, and it answers the two an
+/// `Enumeration` asks as well as its own.
+const TOKENIZER_METHODS: &[BuiltinMethod] = &[
+    bm("hasMoreTokens", &[], BRet::Boolean, "()Z"),
+    bm("hasMoreElements", &[], BRet::Boolean, "()Z"),
+    bm("nextToken", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("nextElement", &[], BRet::Object, "()Ljava/lang/Object;"),
+    bm("countTokens", &[], BRet::Int, "()I"),
+];
+
+/// `java.util.UUID` — two longs, and what is asked of them.
+const UUID_METHODS: &[BuiltinMethod] = &[
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getMostSignificantBits", &[], BRet::Long, "()J"),
+    bm("getLeastSignificantBits", &[], BRet::Long, "()J"),
+    bm("version", &[], BRet::Int, "()I"),
+    bm("variant", &[], BRet::Int, "()I"),
+    bm("timestamp", &[], BRet::Long, "()J"),
+    bm(
+        "compareTo",
+        &[BParam::Uuid],
+        BRet::Int,
+        "(Ljava/util/UUID;)I",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
+/// `UUID.fromString` and `UUID.randomUUID`.
+const UUID_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "fromString",
+        &[BParam::Str],
+        BRet::Uuid,
+        "(Ljava/lang/String;)Ljava/util/UUID;",
+    ),
+    bm("randomUUID", &[], BRet::Uuid, "()Ljava/util/UUID;"),
+];
+
+/// `java.io.StringWriter` — a writer whose output a program reads back.
+const STRING_WRITER_METHODS: &[BuiltinMethod] = &[
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "getBuffer",
+        &[],
+        BRet::Builder,
+        "()Ljava/lang/StringBuffer;",
+    ),
+    bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
+    bm("write", &[BParam::Char], BRet::Void, "(I)V"),
+    bm(
+        "write",
+        &[BParam::Str, BParam::Int, BParam::Int],
+        BRet::Void,
+        "(Ljava/lang/String;II)V",
+    ),
+    bm(
+        "append",
+        &[BParam::CharSeq],
+        BRet::StringWriter,
+        "(Ljava/lang/CharSequence;)Ljava/io/StringWriter;",
+    ),
+    bm(
+        "append",
+        &[BParam::Char],
+        BRet::StringWriter,
+        "(C)Ljava/io/StringWriter;",
+    ),
+    bm(
+        "append",
+        &[BParam::CharSeq, BParam::Int, BParam::Int],
+        BRet::StringWriter,
+        "(Ljava/lang/CharSequence;II)Ljava/io/StringWriter;",
+    ),
+    bm("flush", &[], BRet::Void, "()V"),
+    bm("close", &[], BRet::Void, "()V"),
+];
+
 /// `java.text.NumberFormat` — the face its factories answer with, and the
 /// methods every formatter has.
 const NUMBER_FORMAT_METHODS: &[BuiltinMethod] = &[
@@ -18806,6 +18947,9 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::StringTokenizer
+            | JType::Uuid
+            | JType::StringWriter
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -18860,6 +19004,9 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::BigDecimal => Some(("java/math/BigDecimal", BIG_DECIMAL_METHODS)),
         JType::RoundingMode => Some(("java/math/RoundingMode", ROUNDING_MODE_METHODS)),
         JType::MathContext => Some(("java/math/MathContext", MATH_CONTEXT_METHODS)),
+        JType::StringTokenizer => Some(("java/util/StringTokenizer", TOKENIZER_METHODS)),
+        JType::Uuid => Some(("java/util/UUID", UUID_METHODS)),
+        JType::StringWriter => Some(("java/io/StringWriter", STRING_WRITER_METHODS)),
         JType::DecimalFormat => Some(("java/text/DecimalFormat", DECIMAL_FORMAT_METHODS)),
         JType::NumberFormat => Some(("java/text/NumberFormat", NUMBER_FORMAT_METHODS)),
         JType::Charset => Some(("java/nio/charset/Charset", CHARSET_METHODS)),
@@ -19634,6 +19781,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "BigDecimal" => Some(("java/math/BigDecimal", BIG_DECIMAL_STATIC_METHODS)),
         "RoundingMode" => Some(("java/math/RoundingMode", ROUNDING_MODE_STATIC_METHODS)),
         "NumberFormat" => Some(("java/text/NumberFormat", NUMBER_FORMAT_STATIC_METHODS)),
+        "UUID" => Some(("java/util/UUID", UUID_STATIC_METHODS)),
         // A `MathContext` has no statics of its own; the entry exists so its
         // four CONSTANTS resolve as a qualified name.
         "MathContext" => Some(("java/math/MathContext", &[])),
@@ -19959,6 +20107,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Class => JType::Class,
         BParam::BigInteger => JType::BigInteger,
         BParam::BigDecimal => JType::BigDecimal,
+        BParam::Uuid => JType::Uuid,
         BParam::RoundingMode => JType::RoundingMode,
         BParam::MathContext => JType::MathContext,
         BParam::Charset => JType::Charset,
@@ -20409,6 +20558,8 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::BigInteger => Some(JType::BigInteger),
         BRet::BigDecimal => Some(JType::BigDecimal),
         BRet::NumberFormat => Some(JType::NumberFormat),
+        BRet::Uuid => Some(JType::Uuid),
+        BRet::StringWriter => Some(JType::StringWriter),
         // `NumberFormat.parse` answers a `Number` — a Long or a Double, and
         // the program asks it which with `intValue()`/`doubleValue()`.
         BRet::Number => table.class_id("Number").map(JType::Object),
@@ -25354,11 +25505,14 @@ impl BodyGen<'_> {
             "BigDecimal" => JType::BigDecimal,
             "MathContext" => JType::MathContext,
             "DecimalFormat" => JType::DecimalFormat,
+            "StringTokenizer" => JType::StringTokenizer,
+            "UUID" => JType::Uuid,
+            "StringWriter" => JType::StringWriter,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
             "PrintStream" => JType::PrintStream,
             "ByteArrayOutputStream" => JType::ByteStream,
-            "BufferedReader" | "FileReader" | "InputStreamReader" => JType::Reader,
+            "BufferedReader" | "FileReader" | "InputStreamReader" | "StringReader" => JType::Reader,
             "ArrayList" => match type_args {
                 // A diamond `new ArrayList<>(...)` leaves its element
                 // UNWRITTEN, which is the raw marker — matching what
@@ -25714,7 +25868,7 @@ impl BodyGen<'_> {
                 "StringBuilder" => return self.new_string_builder(args, span),
                 "String" => return self.new_string(args, span),
                 "Scanner" => return self.new_scanner(args, span),
-                "BufferedReader" | "FileReader" | "InputStreamReader" => {
+                "BufferedReader" | "FileReader" | "InputStreamReader" | "StringReader" => {
                     return self.new_reader(class_name, args, span);
                 }
                 "ArrayList" => return self.new_array_list(type_args, args, span),
@@ -25746,6 +25900,9 @@ impl BodyGen<'_> {
                 "BigDecimal" => return self.new_big_decimal(args, span),
                 "MathContext" => return self.new_math_context(args, span),
                 "DecimalFormat" => return self.new_decimal_format(args, span),
+                "StringTokenizer" => return self.new_tokenizer(args, span),
+                "UUID" => return self.new_uuid(args, span),
+                "StringWriter" => return self.new_string_writer(args, span),
                 "File" => return self.new_file(args, span),
                 // A `FileWriter` is the same thing this engine calls a
                 // writer, plus the APPEND flag: `new FileWriter(path, true)`
@@ -26449,7 +26606,8 @@ impl BodyGen<'_> {
             return JType::Error;
         }
         let arg_desc = match (class_name, arg_ty) {
-            ("FileReader", JType::Str) => "Ljava/lang/String;",
+            // A `StringReader` reads the text itself rather than a file's name.
+            ("StringReader" | "FileReader", JType::Str) => "Ljava/lang/String;",
             ("FileReader", JType::File) => "Ljava/io/File;",
             ("BufferedReader", JType::Reader) => "Ljava/io/Reader;",
             _ => {
@@ -26468,7 +26626,6 @@ impl BodyGen<'_> {
         JType::Reader
     }
 
-    /// `new File(pathString)`.
     /// `new BigInteger(text)` / `new BigInteger(text, radix)` — the only way
     /// to build one from digits a program read.
     fn new_big_integer(&mut self, args: &[Expr], span: SourceSpan) -> JType {
@@ -26578,6 +26735,88 @@ impl BodyGen<'_> {
     }
 
     /// `new MathContext(digits)` / `new MathContext(digits, roundingMode)`.
+    /// `new StringTokenizer(text)`, with optional delimiters and a flag that
+    /// hands the delimiters out as tokens too.
+    fn new_tokenizer(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class = intern_class(self.pool, "java/util/StringTokenizer");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let mut written = Vec::new();
+        for arg in args {
+            let ty = self.expr(arg);
+            if ty == JType::Error {
+                self.error_bail(span, "StringTokenizer argument");
+                return JType::Error;
+            }
+            written.push(ty);
+        }
+        let descriptor = match written.as_slice() {
+            [JType::Str | JType::Null] => Some("(Ljava/lang/String;)V"),
+            [JType::Str | JType::Null, JType::Str | JType::Null] => {
+                Some("(Ljava/lang/String;Ljava/lang/String;)V")
+            }
+            [
+                JType::Str | JType::Null,
+                JType::Str | JType::Null,
+                JType::Boolean,
+            ] => Some("(Ljava/lang/String;Ljava/lang/String;Z)V"),
+            _ => None,
+        };
+        let Some(descriptor) = descriptor else {
+            self.error(
+                span,
+                String::from(
+                    "new StringTokenizer takes the text, optionally the delimiters, \
+                     and optionally whether to return them",
+                ),
+            );
+            return JType::Error;
+        };
+        let init = intern_method_ref(self.pool, "java/util/StringTokenizer", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code
+            .drop_stack(1 + u16::try_from(written.len()).unwrap_or(0));
+        JType::StringTokenizer
+    }
+
+    /// `new UUID(high, low)`.
+    fn new_uuid(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class = intern_class(self.pool, "java/util/UUID");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let [high, low] = args else {
+            self.error(span, String::from("new UUID takes two longs"));
+            return JType::Error;
+        };
+        for half in [high, low] {
+            let ty = self.expr(half);
+            if ty == JType::Error {
+                self.error_bail(span, "UUID half");
+                return JType::Error;
+            }
+            self.convert_for_assignment(ty, JType::Long, span);
+        }
+        let init = intern_method_ref(self.pool, "java/util/UUID", "<init>", "(JJ)V");
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code.drop_stack(5);
+        JType::Uuid
+    }
+
+    /// `new StringWriter()`.
+    fn new_string_writer(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        if !args.is_empty() {
+            self.error(span, String::from("new StringWriter takes no arguments"));
+            return JType::Error;
+        }
+        let class = intern_class(self.pool, "java/io/StringWriter");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let init = intern_method_ref(self.pool, "java/io/StringWriter", "<init>", "()V");
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code.drop_stack(1);
+        JType::StringWriter
+    }
+
     /// `new DecimalFormat(pattern)` / `new DecimalFormat()`.
     fn new_decimal_format(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let class = intern_class(self.pool, "java/text/DecimalFormat");
@@ -26652,6 +26891,7 @@ impl BodyGen<'_> {
         JType::MathContext
     }
 
+    /// `new File(pathString)`.
     fn new_file(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let file_class = intern_class(self.pool, "java/io/File");
         self.code.push_op_u16(op::NEW, file_class, 1);
@@ -26733,6 +26973,9 @@ impl BodyGen<'_> {
                 _ => false,
             };
             let descriptor = match (target_ty, appends) {
+                // A `PrintWriter` over a `StringWriter` writes into memory,
+                // which is how a program builds text with `printf`.
+                (JType::StringWriter, false) => Some("(Ljava/io/Writer;)V"),
                 (JType::Str, false) => Some("(Ljava/lang/String;)V"),
                 (JType::Str, true) => Some("(Ljava/lang/String;Z)V"),
                 (JType::File, false) => Some("(Ljava/io/File;)V"),
@@ -28144,6 +28387,9 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::StringTokenizer
+            | JType::Uuid
+            | JType::StringWriter
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -29184,6 +29430,9 @@ impl BodyGen<'_> {
                 | JType::MathContext
                 | JType::DecimalFormat
                 | JType::NumberFormat
+                | JType::StringTokenizer
+                | JType::Uuid
+                | JType::StringWriter
                 | JType::IsoEra => {
                     tags.push_str("Ljava/lang/Object;");
                     width += 1;
@@ -30251,6 +30500,9 @@ impl BodyGen<'_> {
             JType::BigDecimal => String::from("java/math/BigDecimal"),
             JType::RoundingMode => String::from("java/math/RoundingMode"),
             JType::MathContext => String::from("java/math/MathContext"),
+            JType::StringTokenizer => String::from("java/util/StringTokenizer"),
+            JType::Uuid => String::from("java/util/UUID"),
+            JType::StringWriter => String::from("java/io/StringWriter"),
             JType::DecimalFormat => String::from("java/text/DecimalFormat"),
             JType::NumberFormat => String::from("java/text/NumberFormat"),
             JType::Charset => String::from("java/nio/charset/Charset"),
@@ -33990,6 +34242,7 @@ impl BodyGen<'_> {
             .drop_stack(1 + descriptor_arg_width(&arg_descriptor));
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per printable type
     fn print_descriptor(&mut self, ty: JType, span: SourceSpan) -> Option<String> {
         match ty {
             // Reached only if not already coerced; treat as Object.
@@ -34039,6 +34292,9 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::StringTokenizer
+            | JType::Uuid
+            | JType::StringWriter
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -36295,6 +36551,7 @@ impl BodyGen<'_> {
             ElemType::BigInteger => Some(String::from("java/math/BigInteger")),
             ElemType::BigDecimal => Some(String::from("java/math/BigDecimal")),
             ElemType::RoundingMode => Some(String::from("java/math/RoundingMode")),
+            ElemType::Uuid => Some(String::from("java/util/UUID")),
             ElemType::DayOfWeek => Some(String::from("java/time/DayOfWeek")),
             ElemType::Month => Some(String::from("java/time/Month")),
             ElemType::ChronoUnit => Some(String::from("java/time/temporal/ChronoUnit")),
@@ -39141,6 +39398,9 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::StringTokenizer
+            | JType::Uuid
+            | JType::StringWriter
             | JType::Pattern
             | JType::Matcher
             | JType::MatchResult
@@ -39396,6 +39656,7 @@ impl BodyGen<'_> {
             | ElemType::BigInteger
             | ElemType::BigDecimal
             | ElemType::RoundingMode
+            | ElemType::Uuid
             | ElemType::DayOfWeek
             | ElemType::Month
             | ElemType::ChronoUnit
@@ -39571,6 +39832,9 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::StringTokenizer
+            | JType::Uuid
+            | JType::StringWriter
             | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
@@ -39617,6 +39881,9 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::StringTokenizer
+            | JType::Uuid
+            | JType::StringWriter
             | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };

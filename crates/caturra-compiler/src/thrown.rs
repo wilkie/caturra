@@ -817,7 +817,12 @@ fn names_a_charset(expr: &Expr, ctx: &Ctx) -> bool {
 fn library_kind_of_class(name: &str) -> Option<&'static str> {
     let simple = name.rsplit('.').next().unwrap_or(name);
     match simple {
-        "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader" => Some("Reader"),
+        "BufferedReader" | "FileReader" | "InputStreamReader" | "StringReader" | "Reader" => {
+            Some("Reader")
+        }
+        // A `StringWriter`'s writes do NOT declare one — it narrows them away —
+        // but `close()` still does, which is what a try-with-resources catches.
+        "StringWriter" => Some("StringWriter"),
         // A `Writer`'s `write`/`close`/`flush` all declare `IOException` —
         // which is what makes `try (FileWriter w = …) … catch (IOException e)`
         // legal, the shape every program that writes a file is written in.
@@ -861,7 +866,8 @@ fn library_kind_throws(
         }
         // Every I/O method that declares the same one exception, in one arm:
         // a reader's reads, a writer's writes, and `File.createNewFile`.
-        (Some("Reader"), "read" | "readLine" | "ready" | "close" | "lines")
+        (Some("StringWriter"), "close") => &["java/io/IOException"],
+        (Some("Reader"), "read" | "readLine" | "ready" | "close" | "lines" | "skip")
         | (Some("Writer"), "write" | "append" | "close" | "flush" | "newLine")
         | (Some("File"), "createNewFile" | "getCanonicalPath" | "getCanonicalFile") => {
             &["java/io/IOException"]

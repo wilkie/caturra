@@ -50223,3 +50223,137 @@ public class DecTies {
 }
 "###
 );
+
+differential_test!(
+    a_tokenizer_and_a_uuid,
+    "U1",
+    r#"
+import java.util.*;
+public class U1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("st basic", () -> { StringTokenizer t = new StringTokenizer("a b  c"); StringBuilder o = new StringBuilder(); while (t.hasMoreTokens()) o.append(t.nextToken()).append('|'); return o + " count=" + new StringTokenizer("a b  c").countTokens(); });
+    s("st delims", () -> { StringTokenizer t = new StringTokenizer("a,b;;c", ",;"); StringBuilder o = new StringBuilder(); while (t.hasMoreElements()) o.append(t.nextElement()).append('|'); return o.toString(); });
+    s("st return delims", () -> { StringTokenizer t = new StringTokenizer("a,b", ",", true); StringBuilder o = new StringBuilder(); while (t.hasMoreTokens()) o.append('[').append(t.nextToken()).append(']'); return o.toString(); });
+    s("st empty", () -> new StringTokenizer("").countTokens() + " " + new StringTokenizer("   ").hasMoreTokens());
+    s("st past end", () -> { StringTokenizer t = new StringTokenizer("a"); t.nextToken(); return t.nextToken(); });
+    s("st null", () -> new StringTokenizer(null));
+    s("st tabs", () -> { StringTokenizer t = new StringTokenizer("a\tb\nc\rd\fe"); return t.countTokens(); });
+    s("uuid fromString", () -> UUID.fromString("123e4567-e89b-12d3-a456-426614174000"));
+    s("uuid parts", () -> { UUID u = UUID.fromString("123e4567-e89b-12d3-a456-426614174000"); return u.getMostSignificantBits() + " " + u.getLeastSignificantBits() + " " + u.version() + " " + u.variant() + " " + u.timestamp(); });
+    s("uuid new", () -> new UUID(1L, 2L) + " " + new UUID(1L, 2L).equals(new UUID(1L, 2L)) + " " + new UUID(1L, 2L).hashCode());
+    s("uuid compare", () -> UUID.fromString("00000000-0000-0000-0000-000000000001").compareTo(UUID.fromString("00000000-0000-0000-0000-000000000002")));
+    s("uuid bad", () -> UUID.fromString("nope"));
+    s("uuid random shape", () -> { UUID u = UUID.randomUUID(); return u.toString().length() + " " + u.version() + " " + u.variant() + " " + u.toString().matches("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"); });
+    s("uuid in a set", () -> new HashSet<>(List.of(new UUID(1,2), new UUID(1,2))).size());
+    // --- StringTokenizer
+    // --- UUID
+    // --- Base64
+    // --- BitSet
+    // --- RandomAccess
+  }
+}
+"#
+);
+
+differential_test!(
+    text_that_looks_like_a_file,
+    "U2",
+    r#"
+import java.io.*;
+import java.time.*;
+import java.time.format.*;
+import java.time.temporal.*;
+import java.util.*;
+public class U2 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("sw basic", () -> { StringWriter w = new StringWriter(); w.write("hello"); w.write(' '); w.write("world!", 0, 5); return w.toString() + " " + w.getBuffer().length(); });
+    s("sw println", () -> { StringWriter w = new StringWriter(); PrintWriter p = new PrintWriter(w); p.println("line"); p.printf("%d-%s%n", 7, "x"); p.flush(); return w.toString().replace("\n", "|"); });
+    s("sw append", () -> { StringWriter w = new StringWriter(); w.append('a').append("bc").append("xyz", 1, 3); return w.toString(); });
+    s("sr basic", () -> { StringReader r = new StringReader("hi"); return r.read() + " " + r.read() + " " + r.read(); });
+    s("sr buffered", () -> { BufferedReader r = new BufferedReader(new StringReader("one\ntwo\nthree")); StringBuilder o = new StringBuilder(); String line; while ((line = r.readLine()) != null) o.append('[').append(line).append(']'); return o.toString(); });
+    s("sr lines", () -> new BufferedReader(new StringReader("a\nb")).lines().count());
+    s("sr array", () -> { StringReader r = new StringReader("hello"); char[] buf = new char[3]; int n = r.read(buf); return n + " " + new String(buf, 0, n); });
+    s("sr skip ready", () -> { StringReader r = new StringReader("abcdef"); r.skip(2); return (char) r.read() + " " + r.ready(); });
+    s("sr closed", () -> { StringReader r = new StringReader("x"); r.close(); return r.read(); });
+    s("scanner over string", () -> { Scanner sc = new Scanner("1 2 three"); return sc.nextInt() + sc.nextInt() + sc.next(); });
+    // --- StringWriter / StringReader
+    // --- Year / YearMonth / MonthDay
+  }
+}
+"#
+);
+
+differential_test!(
+    the_small_utilities_in_every_position,
+    "U5",
+    r#"
+import java.io.*;
+import java.util.*;
+import java.util.stream.*;
+
+public class U5 {
+  static final UUID FIXED = UUID.fromString("123e4567-e89b-12d3-a456-426614174000");
+  static UUID doubled(UUID id) { return new UUID(id.getMostSignificantBits() * 2, id.getLeastSignificantBits()); }
+  static <T extends Comparable<T>> T biggest(List<T> items) { return Collections.max(items); }
+
+  public static void main(String[] args) throws IOException {
+    // A tokenizer walking a line, which is what it is for.
+    StringTokenizer words = new StringTokenizer("the quick brown fox");
+    List<String> found = new ArrayList<>();
+    while (words.hasMoreTokens()) { found.add(words.nextToken()); }
+    System.out.println(found + " " + found.size());
+    StringTokenizer csv = new StringTokenizer("a,b,,c", ",");
+    System.out.println(csv.countTokens() + " " + csv.nextToken());
+    // A UUID in every position.
+    UUID[] ids = { FIXED, new UUID(0, 1), doubled(FIXED) };
+    Arrays.sort(ids);
+    System.out.println(Arrays.toString(ids));
+    List<UUID> list = new ArrayList<>(Arrays.asList(ids));
+    System.out.println(list.contains(FIXED) + " " + list.indexOf(FIXED) + " " + biggest(list));
+    Map<UUID, String> named = new HashMap<>();
+    named.put(FIXED, "first");
+    System.out.println(named.get(UUID.fromString("123e4567-e89b-12d3-a456-426614174000")));
+    System.out.println(new TreeSet<>(list).first());
+    Object o = FIXED;
+    System.out.println((o instanceof UUID) + " " + o.getClass().getName() + " " + FIXED.equals(o));
+    System.out.println(list.stream().map(UUID::toString).map(s -> s.substring(0, 8)).collect(Collectors.joining(",")));
+    System.out.println(FIXED.version() + " " + FIXED.variant() + " " + FIXED.hashCode());
+    // Text that looks like a file.
+    StringWriter out = new StringWriter();
+    PrintWriter writer = new PrintWriter(out);
+    writer.println("first");
+    writer.printf("%s=%d%n", "count", 42);
+    writer.print(3.5);
+    writer.flush();
+    System.out.println("[" + out.toString().replace(System.lineSeparator(), "|") + "]");
+    StringWriter plain = new StringWriter();
+    plain.write("abc");
+    plain.write('d');
+    plain.append('e').append("fg");
+    System.out.println(plain + " " + plain.getBuffer().length());
+    BufferedReader reader = new BufferedReader(new StringReader("one\ntwo\nthree"));
+    System.out.println(reader.readLine() + " " + reader.lines().collect(Collectors.toList()));
+    StringReader chars = new StringReader("hello");
+    char[] buffer = new char[3];
+    System.out.println(chars.read(buffer) + " " + new String(buffer) + " " + chars.skip(1) + " " + (char) chars.read());
+    StringReader done = new StringReader("x");
+    done.close();
+    try {
+      done.read();
+    } catch (IOException e) {
+      System.out.println("closed: " + e.getMessage());
+    }
+  }
+}
+"#
+);
