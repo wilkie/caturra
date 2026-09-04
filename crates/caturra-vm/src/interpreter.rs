@@ -3261,6 +3261,26 @@ impl<'run> Interpreter<'run> {
             }
             return Ok(None);
         }
+        // Which READER a reader is. The four share one storage and one set of
+        // reads, so the class a program sees has to be recorded rather than
+        // inferred — `new StringReader(t).getClass()` answered
+        // `java.io.BufferedReader`, which is a confidently wrong answer about
+        // a class the program named itself.
+        if let "java/io/StringReader"
+        | "java/io/FileReader"
+        | "java/io/InputStreamReader"
+        | "java/io/BufferedReader" = target_class
+        {
+            self.heap.set_view_class(
+                receiver,
+                match target_class {
+                    "java/io/StringReader" => "java/io/StringReader",
+                    "java/io/FileReader" => "java/io/FileReader",
+                    "java/io/InputStreamReader" => "java/io/InputStreamReader",
+                    _ => "java/io/BufferedReader",
+                },
+            );
+        }
         if matches!(target_class, "java/util/Vector" | "java/util/Hashtable") {
             let name = if target_class == "java/util/Vector" {
                 "java/util/Vector"
@@ -19945,6 +19965,13 @@ fn library_superclass(internal: &str) -> Option<&'static str> {
         // A `Hashtable` extends the abstract `Dictionary` a `Map` replaced —
         // the one place that class is still visible.
         ("java/util/Hashtable", "java/util/Dictionary"),
+        // A `FileReader` extends `InputStreamReader`, not `Reader` — the one
+        // place that class shows in an ordinary program.
+        ("java/io/FileReader", "java/io/InputStreamReader"),
+        ("java/io/InputStreamReader", "java/io/Reader"),
+        ("java/io/StringReader", "java/io/Reader"),
+        ("java/io/BufferedReader", "java/io/Reader"),
+        ("java/io/Reader", "java/lang/Object"),
         ("java/util/Dictionary", "java/lang/Object"),
         ("java/util/AbstractSequentialList", "java/util/AbstractList"),
         ("java/util/AbstractList", "java/util/AbstractCollection"),
@@ -20451,6 +20478,14 @@ fn library_direct_interfaces(internal: &str) -> &'static [&'static str] {
         "java/util/EnumMap" => &["java/io/Serializable", "java/lang/Cloneable"],
         "java/util/EnumSet" => &["java/lang/Cloneable", "java/io/Serializable"],
         "java/util/Scanner" => &["java/util/Iterator", "java/io/Closeable"],
+        // A reader and a writer DECLARE nothing: the interfaces belong to the
+        // abstract `Reader` and `Writer` above them, which is what a JDK says.
+        "java/io/Reader" => &["java/lang/Readable", "java/io/Closeable"],
+        "java/io/Writer" => &[
+            "java/lang/Appendable",
+            "java/io/Closeable",
+            "java/io/Flushable",
+        ],
         "java/util/stream/Stream" => &["java/util/stream/BaseStream"],
         "java/util/AbstractList" => &["java/util/List"],
         "java/util/AbstractCollection" => COLLECTION,
@@ -20498,6 +20533,23 @@ fn library_is_interface(internal: &str) -> bool {
 
 #[allow(clippy::too_many_lines)] // one row per library class
 fn library_faces(class: &str) -> &'static [&'static str] {
+    // Every reader IS a `java.io.Reader` and closeable — which is what
+    // `instanceof Reader` and a try-with-resources ask — and a `FileReader`
+    // reaches it through the `InputStreamReader` it extends. Likewise every
+    // writer wears the abstract `Writer`.
+    const READER: &[&str] = &[
+        "java/io/Reader",
+        "java/lang/Readable",
+        "java/io/Closeable",
+        "java/lang/AutoCloseable",
+    ];
+    const WRITER: &[&str] = &[
+        "java/io/Writer",
+        "java/lang/Appendable",
+        "java/io/Closeable",
+        "java/io/Flushable",
+        "java/lang/AutoCloseable",
+    ];
     const LIST: &[&str] = &["java/util/List", "java/util/Collection"];
     // An `ArrayList` indexes in constant time, so it wears `RandomAccess` —
     // which is the whole reason the marker exists, and what a `LinkedList`
@@ -20626,6 +20678,16 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         | "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet$UnmodifiableEntry" => ENTRY,
         // A `StringBuilder` became `Comparable` in Java 11 — the release
         // caturra targets, so it is `Comparable` here.
+        "java/io/StringReader" | "java/io/BufferedReader" | "java/io/InputStreamReader" => READER,
+        "java/io/FileReader" => &[
+            "java/io/InputStreamReader",
+            "java/io/Reader",
+            "java/lang/Readable",
+            "java/io/Closeable",
+            "java/lang/AutoCloseable",
+        ],
+        "java/io/StringWriter" | "java/io/BufferedWriter" | "java/io/PrintWriter"
+        | "java/io/FileWriter" => WRITER,
         "java/lang/StringBuilder" => &["java/lang/CharSequence", "java/lang/Comparable"],
         // Every array is `Cloneable` (and `Serializable`), whatever it holds.
         _ if class.starts_with('[') => &["java/lang/Cloneable"],
@@ -20674,7 +20736,6 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         "java/text/DecimalFormat" => &["java/text/NumberFormat", "java/text/Format"],
         // A tokenizer IS the pre-collections cursor, and a UUID orders itself.
         "java/util/StringTokenizer" => &["java/util/Enumeration"],
-        "java/io/StringWriter" => &["java/io/Writer"],
         "java/util/EnumMap" => &["java/util/Map"],
         "java/util/RegularEnumSet" => &["java/util/Set", "java/util/Collection"],
         "sun/nio/fs/UnixPath" => &[
@@ -20806,7 +20867,12 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         // All five names recorded from a real JDK.
         Some(HeapObject::File(_)) => String::from("java/io/File"),
         Some(HeapObject::Scanner { .. }) => String::from("java/util/Scanner"),
+        // A reader's class is the one its constructor recorded (the view
+        // class), since the four share one storage; a `BufferedReader` is the
+        // fallback because it is what a bare reader object was before any of
+        // them said which they are.
         Some(HeapObject::Reader { .. }) => String::from("java/io/BufferedReader"),
+        Some(HeapObject::BufferedWriter { .. }) => String::from("java/io/BufferedWriter"),
         Some(HeapObject::Writer { .. }) => String::from("java/io/PrintWriter"),
         Some(HeapObject::PrintStream(_)) => String::from("java/io/PrintStream"),
         Some(HeapObject::Temporal(value)) => value.class_name().to_owned(),

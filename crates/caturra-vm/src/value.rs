@@ -691,6 +691,12 @@ pub enum HeapObject {
         stdin: bool,
         /// `close()` was called; further reads return end-of-stream.
         closed: bool,
+        /// Where `reset()` returns to, set by `mark(readAheadLimit)`. A
+        /// `StringReader` and a `BufferedReader` both support marks (a JDK's
+        /// `markSupported` says so), and `reset()` before any `mark` returns
+        /// to the START for a `StringReader` — which is what its own mark
+        /// field is initialized to.
+        mark: usize,
     },
     /// A `java.util.ArrayList` (element types erased; values are
     /// stored directly — boxing is a no-op in this VM).
@@ -957,6 +963,16 @@ pub enum HeapObject {
     BitSet(Vec<u64>),
     /// A `java.io.StringWriter` — the characters written into it so far.
     StringWriter(Vec<u16>),
+    /// A `java.io.BufferedWriter` over another writer. It really BUFFERS —
+    /// what a program writes is not in the target until a `flush` or a
+    /// `close`, and a JDK lets it see that: `sw.toString()` is empty in
+    /// between. Modelling it as a pass-through would answer the wrong thing
+    /// for the one program that checks.
+    BufferedWriter {
+        target: HeapRef,
+        buffer: Vec<u16>,
+        closed: bool,
+    },
     /// A `java.text.DecimalFormat` — the parsed pattern, and the limits a
     /// program may then change on it. `NumberFormat` is the same object under
     /// a narrower name, which is what a JDK's factories answer with too.
@@ -1279,6 +1295,8 @@ impl HeapObject {
             HeapObject::PrintStream(PrintSink::Bytes(reference) | PrintSink::Text(reference)) => {
                 visit(*reference);
             }
+            // ...and a buffered writer holds whatever it wraps.
+            HeapObject::BufferedWriter { target, .. } => visit(*target),
             // A writer over a `StringWriter` holds it.
             HeapObject::Writer { text, .. } => {
                 if let Some(reference) = text {

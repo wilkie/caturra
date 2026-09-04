@@ -10682,6 +10682,17 @@ assignment. The looseness cannot lose type safety (both sides erase to one
 class, and every read through the target still answers the target's element).
 Pinned by `loose_a_nested_argument_widens_between_variables`.
 
+**And one the reader/collector session made (2026-09-04).** A `Collector`
+carries what it GATHERS and not what it CONSUMES, so
+`Collector<String, ?, String> c = Collectors.joining();` is accepted where
+javac infers `Collector<CharSequence, ?, String>` and calls the assignment
+incompatible. The element is the one type argument caturra's collectors erase;
+what each gathers is still exactly its factory's, and every read through the
+result answers the result's own type. Writing the element javac infers compiles
+in both. Pinned by `a_collectors_element_is_unchecked` — recorded here the same
+day it was noticed, because a looseness that is only observed and not counted
+is what the pin-versus-bullet audit exists to catch.
+
 ### What the refusals SAY (2026-08-30)
 
 `differential_reject!` asserts that both engines refuse a program. It has never
@@ -14211,3 +14222,56 @@ Left refused, and honestly: `BufferedWriter`, `InputStream` and `Serializable`
 as declared types, and `OutputStream o = System.out` (caturra models
 `ByteArrayOutputStream` and the abstract name as one type, so the face cannot
 tell them apart). Each says so by name.
+
+## Which reader a reader is
+
+The four readers — `BufferedReader`, `FileReader`, `InputStreamReader`,
+`StringReader` — were ONE type over one heap object. They share their storage
+honestly (a buffer and a cursor, and the same reads), but they differ in two
+ways a program can see, and caturra was wrong about both:
+
+- **`getClass()` named the wrong class for three of them.**
+  `new StringReader(t).getClass().getName()` answered `java.io.BufferedReader`.
+  That is a confidently wrong answer about a class the program named itself,
+  which is worse than a missing one.
+- **`readLine` was offered on all four.** `new StringReader(t).readLine()`
+  compiled and ran; javac says "cannot find symbol", because `readLine` and
+  `lines` are a `BufferedReader`'s alone. A student who writes that here and
+  hands it in gets a compile error from their teacher's JDK.
+
+`JType::Reader` carries a `ReaderFace` now — the same shape `CollFace`,
+`TableFace` and `SeqRole` already give the collections — and there are two
+method tables: what `java.io.Reader` declares, and that plus the two a
+`BufferedReader` adds. The runtime class rides in the view-class map the
+`Vector`/`Hashtable` work put there, set by each constructor.
+
+Measured against a JDK first, and three answers were not guessable:
+
+- **A `FileReader`'s superclass is `java.io.InputStreamReader`**, not `Reader`
+  — the one place that class shows up in an ordinary program.
+- **`markSupported()` is true** for a `StringReader` as well as a
+  `BufferedReader`, so `mark`/`reset` work on both. caturra had none of the
+  three; they are a cursor save and restore over the buffer it already keeps.
+- **`getInterfaces()` is empty for every one of them.** The interfaces belong
+  to the abstract `Reader` (`Readable`, `Closeable`) and `Writer`
+  (`Appendable`, `Closeable`, `Flushable`) above them.
+
+`Reader.transferTo(Writer)` came with them — Java 10's, and the shortest way to
+copy a whole reader into a writer.
+
+**`java.io.BufferedWriter`, and why it is a heap kind.** It was a named refusal
+until now, and it is what every file-writing exercise wraps a `FileWriter` in.
+It really BUFFERS: what a program writes reaches the writer underneath only on
+a `flush` or a `close`, and a JDK lets it see that — `sw.toString()` is empty in
+between. Modelling it as a pass-through would answer the wrong thing for the
+one program that checks, and "my file is empty" is exactly the lesson a
+forgotten `close()` is supposed to teach. `close()` flushes; a second `close()`
+is not an error; writing after one is `IOException: Stream closed`.
+
+The reader faces are the NINTH type to need an arm in both `widens` and the
+assignment matrix.
+
+Pinned as `which_reader_a_reader_is` and
+`readers_and_writers_in_every_position`, with four reject pins for the
+direction that matters: `readLine` and `lines` on a plain reader, `newLine` on
+a plain writer, and one reader assigned to another.

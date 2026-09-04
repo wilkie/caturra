@@ -2684,6 +2684,13 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         "java/util/UUID" => Some(HeapObject::Uuid(0, 0)),
         "java/util/BitSet" => Some(HeapObject::BitSet(Vec::new())),
         "java/io/StringWriter" => Some(HeapObject::StringWriter(Vec::new())),
+        // The target is set by the constructor; until then it wraps nothing,
+        // which no program can observe.
+        "java/io/BufferedWriter" => Some(HeapObject::BufferedWriter {
+            target: 0,
+            buffer: Vec::new(),
+            closed: false,
+        }),
         // A `StringReader` is the reader kind already here, over text the
         // program handed in rather than a file.
         "java/io/StringReader" => Some(HeapObject::Reader {
@@ -2691,6 +2698,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             pos: 0,
             stdin: false,
             closed: false,
+            mark: 0,
         }),
         // A default context is a JDK's `UNLIMITED`; every constructor replaces
         // it.
@@ -2713,6 +2721,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
                 pos: 0,
                 stdin: false,
                 closed: false,
+                mark: 0,
             })
         }
         _ => {
@@ -2811,6 +2820,22 @@ pub fn invoke_special(
         }
         return Ok(());
     }
+    // `new BufferedWriter(writer)` — the writer it wraps, and an empty buffer.
+    // The second argument is a buffer SIZE, which changes nothing observable.
+    if class == "java/io/BufferedWriter" && method == "<init>" {
+        let Some(JValue::Ref(Some(target))) = args.first() else {
+            return Err(throw("java.lang.NullPointerException"));
+        };
+        let target = *target;
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::BufferedWriter {
+                target,
+                buffer: Vec::new(),
+                closed: false,
+            };
+        }
+        return Ok(());
+    }
     // `new StringReader(text)` — the reader kind, over text rather than a file.
     if class == "java/io/StringReader" && method == "<init>" {
         let text = string_arg(heap, &args[0])?;
@@ -2820,6 +2845,7 @@ pub fn invoke_special(
                 pos: 0,
                 stdin: false,
                 closed: false,
+                mark: 0,
             };
         }
         return Ok(());
@@ -2946,6 +2972,7 @@ pub fn invoke_special(
                     pos,
                     stdin,
                     closed,
+                    ..
                 }) => (buffer.clone(), *pos, *stdin, *closed),
                 _ => return Err(throw("java.lang.ClassCastException: not a Reader")),
             };
@@ -2954,6 +2981,7 @@ pub fn invoke_special(
                 pos,
                 stdin,
                 closed,
+                ..
             }) = heap.get_mut(receiver)
             {
                 *buffer = wrapped.0;
@@ -3223,6 +3251,7 @@ pub fn invoke_special(
                     pos,
                     stdin,
                     closed,
+                    ..
                 }) => {
                     // FileReader(String): slurp the whole file up front.
                     let content = vfs.read_file(&text).map_err(|_| {
@@ -3346,6 +3375,7 @@ pub fn invoke_special(
                         pos,
                         stdin,
                         closed,
+                        ..
                     }) = heap.get_mut(receiver)
                     {
                         *buffer = text;
@@ -3772,6 +3802,9 @@ pub fn invoke_virtual(
         }
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method, args),
+        (HeapObject::BufferedWriter { .. }, _) => {
+            buffered_writer_method(heap, vfs, receiver, method, descriptor, args)
+        }
         (HeapObject::Reader { .. }, _) => {
             // `read(char[])` and `read()` share a NAME; the descriptor is what
             // tells them apart, so the array form gets its own here.
@@ -3780,7 +3813,7 @@ pub fn invoke_virtual(
             } else {
                 method
             };
-            reader_method(heap, console, receiver, method, args)
+            reader_method(heap, vfs, console, receiver, method, args)
         }
         (
             HeapObject::ArrayList(_) | HeapObject::LinkedList(_) | HeapObject::ArrayBackedList(_),
@@ -6216,8 +6249,130 @@ fn scanner_method(
 /// from its slurped buffer; a `System.in` reader pulls each line from the
 /// console. `readLine` returns null at end of stream (not an exception).
 #[allow(clippy::too_many_lines)] // one arm per read shape
+/// A `java.io.BufferedWriter`. Everything written lands in its own buffer, and
+/// reaches the writer underneath only on a `flush` or a `close` — which is
+/// observable, and the reason this is a heap kind rather than a pass-through:
+/// a JDK's `sw.toString()` is empty until one of the two happens.
+fn buffered_writer_method(
+    heap: &mut Heap,
+    vfs: &mut VirtualFileSystem,
+    receiver: HeapRef,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let closed = matches!(
+        heap.get(receiver),
+        Some(HeapObject::BufferedWriter { closed: true, .. })
+    );
+    if closed && matches!(method, "write" | "append" | "newLine" | "flush") {
+        return Err(throw("java.io.IOException: Stream closed"));
+    }
+    // Everything the buffer has, into the writer underneath.
+    let drain = |heap: &mut Heap, vfs: &mut VirtualFileSystem| -> Result<(), VmError> {
+        let (target, units) = match heap.get_mut(receiver) {
+            Some(HeapObject::BufferedWriter { target, buffer, .. }) => {
+                (*target, std::mem::take(buffer))
+            }
+            _ => return Ok(()),
+        };
+        if units.is_empty() {
+            return Ok(());
+        }
+        match heap.get_mut(target) {
+            Some(HeapObject::StringWriter(into)) => into.extend_from_slice(&units),
+            Some(HeapObject::BufferedWriter { buffer, .. }) => buffer.extend_from_slice(&units),
+            Some(HeapObject::Writer { .. }) => {
+                let text = heap.alloc_string(&String::from_utf16_lossy(&units));
+                writer_method(
+                    heap,
+                    vfs,
+                    target,
+                    "write",
+                    "(Ljava/lang/String;)V",
+                    &[JValue::Ref(Some(text))],
+                )?;
+            }
+            _ => return Err(throw("java.lang.ClassCastException: not a Writer")),
+        }
+        Ok(())
+    };
+    match method {
+        "write" | "append" => {
+            // `write(int)` is one character; everything else is text, and
+            // `append`'s range form takes an end where `write`'s takes a
+            // length — the same pair a `StringWriter` tells apart.
+            let mut units: Vec<u16> = if descriptor.starts_with("(I)") {
+                match args.first() {
+                    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                    Some(JValue::Int(ch)) => vec![*ch as u16],
+                    _ => Vec::new(),
+                }
+            } else {
+                match args.first() {
+                    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                    Some(JValue::Int(ch)) => vec![*ch as u16],
+                    Some(JValue::Ref(Some(text))) => {
+                        heap.string_units(*text).unwrap_or_default().to_vec()
+                    }
+                    Some(JValue::Ref(None)) => "null".encode_utf16().collect::<Vec<u16>>(),
+                    _ => Vec::new(),
+                }
+            };
+            if let (Some(JValue::Int(first)), Some(JValue::Int(second))) =
+                (args.get(1), args.get(2))
+            {
+                let (start, end) = if method == "append" {
+                    (*first, *second)
+                } else {
+                    (*first, first.saturating_add(*second))
+                };
+                let (start, end) = check_range(start, end, units.len())?;
+                units = units[start..end].to_vec();
+            }
+            if let Some(HeapObject::BufferedWriter { buffer, .. }) = heap.get_mut(receiver) {
+                buffer.extend_from_slice(&units);
+            }
+            Ok((method == "append").then_some(JValue::Ref(Some(receiver))))
+        }
+        // `newLine()` writes the platform separator, which is "\n" here — the
+        // same answer `System.lineSeparator()` gives.
+        "newLine" => {
+            if let Some(HeapObject::BufferedWriter { buffer, .. }) = heap.get_mut(receiver) {
+                buffer.push(u16::from(b'\n'));
+            }
+            Ok(None)
+        }
+        "flush" => {
+            drain(heap, vfs)?;
+            Ok(None)
+        }
+        // Closing FLUSHES first — the reason a program that forgets to close
+        // finds an empty file, and the reason one that closes finds a full
+        // one. Closing twice is not an error.
+        "close" => {
+            if !closed {
+                drain(heap, vfs)?;
+                if let Some(HeapObject::BufferedWriter { target, closed, .. }) =
+                    heap.get_mut(receiver)
+                {
+                    *closed = true;
+                    let target = *target;
+                    let _ = target;
+                }
+            }
+            Ok(None)
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "java/io/BufferedWriter.{method}"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per reader method
 fn reader_method(
     heap: &mut Heap,
+    vfs: &mut VirtualFileSystem,
     console: &mut dyn ConsoleIo,
     receiver: HeapRef,
     method: &str,
@@ -6335,6 +6490,67 @@ fn reader_method(
                 && !stdin
                 && matches!(heap.get(receiver), Some(HeapObject::Reader { buffer, pos, .. }) if *pos < buffer.len());
             Ok(Some(JValue::Int(i32::from(ready))))
+        }
+        // Every reader caturra models supports a mark: a `StringReader` and a
+        // `BufferedReader` both say so, and the two it has left read from a
+        // buffer that is all in memory anyway. The read-ahead LIMIT is a hint
+        // about how much a real one would have to keep, and nothing here has
+        // to forget.
+        "markSupported" => Ok(Some(JValue::Int(1))),
+        "mark" => {
+            if let Some(HeapObject::Reader { pos, mark, .. }) = heap.get_mut(receiver) {
+                *mark = *pos;
+            }
+            Ok(Some(JValue::NULL))
+        }
+        "reset" => {
+            if let Some(HeapObject::Reader { pos, mark, .. }) = heap.get_mut(receiver) {
+                *pos = *mark;
+            }
+            Ok(Some(JValue::NULL))
+        }
+        // `transferTo(writer)` — everything left, and how many characters that
+        // was. The writer is asked to `write` exactly as a program would.
+        "transferTo" => {
+            let Some(JValue::Ref(Some(target))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let target = *target;
+            let mut moved = 0i64;
+            let mut text = String::new();
+            if !closed && !stdin {
+                loop {
+                    let ch = reader_next_char(heap, receiver);
+                    if ch < 0 {
+                        break;
+                    }
+                    if let Some(unit) = u32::try_from(ch).ok().and_then(char::from_u32) {
+                        text.push(unit);
+                    }
+                    moved += 1;
+                }
+            }
+            // The target is whatever writer the program handed over: a
+            // `StringWriter` collects into its buffer, a `PrintWriter` or a
+            // `FileWriter` writes through to wherever it points.
+            match heap.get_mut(target) {
+                Some(HeapObject::StringWriter(buffer)) => {
+                    buffer.extend(text.encode_utf16());
+                }
+                Some(HeapObject::Writer { .. }) => {
+                    let written = heap.alloc_string(&text);
+                    writer_method(
+                        heap,
+                        vfs,
+                        target,
+                        "write",
+                        "(Ljava/lang/String;)V",
+                        &[JValue::Ref(Some(written))],
+                    )?;
+                }
+                _ => return Err(throw("java.lang.ClassCastException: not a Writer")),
+            }
+            Ok(Some(JValue::Long(moved)))
         }
         "close" => {
             if let Some(HeapObject::Reader { closed, .. }) = heap.get_mut(receiver) {

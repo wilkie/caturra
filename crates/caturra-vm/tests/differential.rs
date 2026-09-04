@@ -51270,3 +51270,172 @@ public class GatheredMap {
 }
 "#
 );
+
+// The four readers shared one type and one heap object, so `getClass()` named
+// the wrong class for three of them and `readLine` was offered on all four —
+// `new StringReader(t).readLine()` compiled and ran, where javac says "cannot
+// find symbol". Measured against a JDK: `FileReader`'s superclass is
+// `InputStreamReader`, `markSupported` is true, and a `BufferedWriter` really
+// BUFFERS (nothing reaches the writer under it until a flush or a close).
+differential_test!(
+    which_reader_a_reader_is,
+    "Rd1",
+    r#"
+import java.io.*;
+import java.util.*;
+import java.util.stream.*;
+public class Rd1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static String drain(Reader r) throws IOException { StringBuilder o = new StringBuilder(); int c; while ((c = r.read()) >= 0) o.append((char) c); return o.toString(); }
+  public static void main(String[] a) throws Exception {
+    try (PrintWriter w = new PrintWriter("d1.txt")) { w.println("one"); w.println("two"); }
+    // --- which class each one is
+    s("classes", () -> new StringReader("x").getClass().getName()
+        + " " + new BufferedReader(new StringReader("x")).getClass().getName()
+        + " " + new FileReader("d1.txt").getClass().getName()
+        + " " + new InputStreamReader(System.in).getClass().getName());
+    s("superclasses", () -> new StringReader("x").getClass().getSuperclass()
+        + " | " + new BufferedReader(new StringReader("x")).getClass().getSuperclass()
+        + " | " + new FileReader("d1.txt").getClass().getSuperclass());
+    s("instanceof", () -> { Object o = new StringReader("x"); return (o instanceof Reader) + " " + (o instanceof StringReader) + " " + (o instanceof BufferedReader); });
+    // --- what each one reads
+    s("string reader", () -> drain(new StringReader("hello")));
+    s("string reader read", () -> { StringReader r = new StringReader("ab"); return r.read() + " " + r.read() + " " + r.read(); });
+    s("buffered readLine", () -> { BufferedReader r = new BufferedReader(new FileReader("d1.txt")); return r.readLine() + "/" + r.readLine() + "/" + r.readLine(); });
+    s("buffered lines", () -> { BufferedReader r = new BufferedReader(new FileReader("d1.txt")); return r.lines().collect(Collectors.joining(",")); });
+    s("file reader drain", () -> drain(new FileReader("d1.txt")).replace("\n", "|"));
+    s("buffered over string", () -> { BufferedReader r = new BufferedReader(new StringReader("p\nq")); return r.readLine() + "/" + r.readLine(); });
+    // --- what Reader itself declares
+    s("read char array", () -> { Reader r = new StringReader("abcdef"); char[] buf = new char[4]; int n = r.read(buf); return n + " " + new String(buf, 0, n); });
+    s("read range", () -> { Reader r = new StringReader("abcdef"); char[] buf = new char[6]; int n = r.read(buf, 1, 3); return n + " " + new String(buf).trim(); });
+    s("skip", () -> { Reader r = new StringReader("abcdef"); r.skip(2); return (char) r.read(); });
+    s("ready", () -> { Reader r = new StringReader("ab"); return r.ready(); });
+    s("markSupported", () -> new StringReader("a").markSupported() + " " + new BufferedReader(new StringReader("a")).markSupported());
+    s("mark reset", () -> { Reader r = new StringReader("abc"); r.read(); r.mark(10); int x = r.read(); r.reset(); return (char) x + "" + (char) r.read(); });
+    s("closed read", () -> { Reader r = new StringReader("ab"); r.close(); return r.read(); });
+    s("transferTo", () -> { StringWriter w = new StringWriter(); new StringReader("xy").transferTo(w); return w.toString(); });
+    // --- the ones only a BufferedReader has
+    s("readLine on plain", () -> new StringReader("x").ready());
+    s("close twice", () -> { Reader r = new StringReader("a"); r.close(); r.close(); return "ok"; });
+    // --- BufferedWriter
+    s("buffered writer", () -> { StringWriter sw = new StringWriter(); BufferedWriter w = new BufferedWriter(sw); w.write("x"); w.flush(); return sw.toString(); });
+    s("buffered writer newline", () -> { StringWriter sw = new StringWriter(); BufferedWriter w = new BufferedWriter(sw); w.write("a"); w.newLine(); w.write("b"); w.flush(); return sw.toString().replace("\n", "|"); });
+    s("buffered writer class", () -> new BufferedWriter(new StringWriter()).getClass().getName());
+    s("buffered writer unflushed", () -> { StringWriter sw = new StringWriter(); BufferedWriter w = new BufferedWriter(sw); w.write("x"); return "[" + sw + "]"; });
+    s("buffered writer close flushes", () -> { StringWriter sw = new StringWriter(); BufferedWriter w = new BufferedWriter(sw); w.write("x"); w.close(); return sw.toString(); });
+    s("buffered writer over file", () -> { BufferedWriter w = new BufferedWriter(new FileWriter("d2.txt")); w.write("hi"); w.newLine(); w.close(); return new BufferedReader(new FileReader("d2.txt")).readLine(); });
+    s("buffered writer as writer", () -> { StringWriter sw = new StringWriter(); Writer w = new BufferedWriter(sw); w.write("z"); w.flush(); return sw.toString(); });
+    s("buffered writer append", () -> { StringWriter sw = new StringWriter(); BufferedWriter w = new BufferedWriter(sw); w.append("a").append('b'); w.flush(); return sw.toString(); });
+  }
+}
+"#
+);
+
+// The same in every position a type can take — a field, an array, a list, a
+// parameter, a ternary, a cast, a try-with-resources — and through real files.
+differential_test!(
+    readers_and_writers_in_every_position,
+    "Rd2",
+    r#"
+import java.io.*;
+import java.util.*;
+import java.util.stream.*;
+public class Rd2 {
+  interface Body { Object get() throws Exception; }
+  static Reader field;
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static int count(Reader r) throws IOException { int n = 0; while (r.read() >= 0) n++; return n; }
+  static String lines(BufferedReader r) throws IOException { StringBuilder o = new StringBuilder(); String line; while ((line = r.readLine()) != null) o.append(line).append('|'); return o.toString(); }
+  static void writeAll(Writer w, String... xs) throws IOException { for (String x : xs) w.write(x); }
+  public static void main(String[] a) throws Exception {
+    try (PrintWriter w = new PrintWriter("d3.txt")) { w.println("alpha"); w.println("beta"); }
+    // --- readers in every position
+    s("field", () -> { field = new StringReader("fld"); return count(field); });
+    s("array", () -> { Reader[] rs = { new StringReader("ab"), new StringReader("cde") }; return count(rs[0]) + count(rs[1]); });
+    s("list", () -> { List<Reader> rs = new ArrayList<>(); rs.add(new StringReader("xy")); return count(rs.get(0)); });
+    s("parameter buffered", () -> lines(new BufferedReader(new FileReader("d3.txt"))));
+    s("ternary", () -> count(true ? new StringReader("ab") : new StringReader("cdef")));
+    s("cast down", () -> { Object o = new BufferedReader(new StringReader("p\nq")); return ((BufferedReader) o).readLine(); });
+    s("cast to reader", () -> { Object o = new StringReader("zz"); return count((Reader) o); });
+    s("try with resources", () -> { try (Reader r = new StringReader("trw")) { return count(r); } });
+    s("try with buffered", () -> { try (BufferedReader r = new BufferedReader(new FileReader("d3.txt"))) { return r.readLine(); } });
+    s("scanner-ish loop", () -> { BufferedReader r = new BufferedReader(new FileReader("d3.txt")); return r.lines().map(String::toUpperCase).collect(Collectors.joining("/")); });
+    s("reader equals", () -> { Reader r = new StringReader("a"); return r.equals(r); });
+    s("nested buffered", () -> { BufferedReader r = new BufferedReader(new BufferedReader(new StringReader("n1\nn2"))); return r.readLine(); });
+    s("mark on buffered", () -> { BufferedReader r = new BufferedReader(new StringReader("abc")); r.mark(5); r.read(); r.reset(); return (char) r.read(); });
+    // --- writers in every position
+    s("writer param", () -> { StringWriter sw = new StringWriter(); writeAll(sw, "a", "b"); return sw.toString(); });
+    s("buffered writer param", () -> { StringWriter sw = new StringWriter(); BufferedWriter bw = new BufferedWriter(sw); writeAll(bw, "c", "d"); bw.flush(); return sw.toString(); });
+    s("buffered writer field-ish", () -> { StringWriter sw = new StringWriter(); Writer w = new BufferedWriter(sw); w.write("e"); w.close(); return sw.toString(); });
+    s("buffered writer list", () -> { List<Writer> ws = new ArrayList<>(); StringWriter sw = new StringWriter(); ws.add(new BufferedWriter(sw)); ws.get(0).write("g"); ws.get(0).flush(); return sw.toString(); });
+    s("buffered writer to file", () -> { try (BufferedWriter w = new BufferedWriter(new FileWriter("d4.txt"))) { w.write("line1"); w.newLine(); w.write("line2"); } return lines(new BufferedReader(new FileReader("d4.txt"))); });
+    s("buffered writer append file", () -> { try (BufferedWriter w = new BufferedWriter(new FileWriter("d4.txt", true))) { w.newLine(); w.write("line3"); } return lines(new BufferedReader(new FileReader("d4.txt"))); });
+    s("buffered writer instanceof", () -> { Object o = new BufferedWriter(new StringWriter()); return (o instanceof Writer) + " " + (o instanceof BufferedWriter) + " " + (o instanceof StringWriter); });
+    s("buffered writer write range", () -> { StringWriter sw = new StringWriter(); BufferedWriter w = new BufferedWriter(sw); w.write("abcdef", 1, 3); w.flush(); return sw.toString(); });
+    s("buffered writer closed", () -> { StringWriter sw = new StringWriter(); BufferedWriter w = new BufferedWriter(sw); w.close(); w.write("x"); return "?"; });
+    s("buffered writer sized", () -> { StringWriter sw = new StringWriter(); BufferedWriter w = new BufferedWriter(sw, 16); w.write("s"); w.flush(); return sw.toString(); });
+    s("writer transferTo", () -> { StringWriter sw = new StringWriter(); long n = new StringReader("move").transferTo(sw); return n + " " + sw; });
+  }
+}
+"#
+);
+
+// `readLine` and `lines` are a `BufferedReader`'s alone. Offering them on every
+// reader compiled a program javac refuses, which is the direction that matters:
+// a student who writes it here and hands it in gets a compile error.
+differential_reject!(
+    reject_read_line_on_a_string_reader,
+    "PlainReaderLine",
+    "import java.io.*;\npublic class PlainReaderLine { static void r() throws Exception { new StringReader(\"x\").readLine(); } }"
+);
+
+differential_reject!(
+    reject_lines_on_a_file_reader,
+    "PlainReaderLines",
+    "import java.io.*;\npublic class PlainReaderLines { static void r() throws Exception { new FileReader(\"f\").lines(); } }"
+);
+
+// ...and `newLine` is a `BufferedWriter`'s.
+differential_reject!(
+    reject_new_line_on_a_string_writer,
+    "PlainWriterNewLine",
+    "import java.io.*;\npublic class PlainWriterNewLine { static void r() throws Exception { new StringWriter().newLine(); } }"
+);
+
+// The four readers are DISTINCT types: one does not assign to another.
+differential_reject!(
+    reject_a_string_reader_as_a_buffered_one,
+    "ReaderNarrowing",
+    "import java.io.*;\npublic class ReaderNarrowing { static void r() { BufferedReader b = new StringReader(\"x\"); } }"
+);
+
+// The THIRD permissiveness, and this session's own. A `Collector` carries what
+// it GATHERS and not what it CONSUMES: caturra's collectors are erased in the
+// element, so `Collector<String, ?, String> c = Collectors.joining();` is
+// accepted where javac infers `Collector<CharSequence, ?, String>` and calls
+// the assignment incompatible. Writing the element javac infers works in both,
+// and every collector still gathers what its own factory decides — only the
+// element is unchecked.
+looser_than_javac!(
+    a_collectors_element_is_unchecked,
+    "LooserCollectorElement",
+    r#"
+import java.util.stream.Collector;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public class LooserCollectorElement {
+    public static void main(String[] args) {
+        Collector<String, ?, String> joined = Collectors.joining("-");
+        System.out.println(Stream.of("a", "b").collect(joined));
+    }
+}
+"#
+);

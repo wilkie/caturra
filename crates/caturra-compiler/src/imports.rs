@@ -134,6 +134,7 @@ const JAVA_IO: &[&str] = &[
     // `StringWriter` are each one, and a variable holding either is declared
     // as this.
     "Writer",
+    "BufferedWriter",
     "FileWriter",
     "UncheckedIOException",
     "UnsupportedEncodingException",
@@ -410,7 +411,7 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
         // listed in both tables resolves fine written under a wildcard import
         // and is refused by its own single import, which is the same fact
         // answered two ways.
-        &["Serializable", "BufferedWriter", "InputStream"],
+        &["Serializable", "InputStream"],
     ),
     // The rest of `java.lang`: the JVM's own errors (a program can CATCH one,
     // and naming it should say what it is), the class-loading and module
