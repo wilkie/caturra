@@ -11078,6 +11078,10 @@ enum BParam {
     ByteArray,
     /// `long[]` — `BitSet.valueOf`.
     LongArray,
+    /// `StackTraceElement[]` — what `setStackTrace` replaces a trace with.
+    StackFrameArray,
+    /// A summary of the receiver's own flavour — what `combine` folds in.
+    SummaryStats,
     /// The receiver's own list type (`addAll(otherList)`).
     SelfList,
     /// Any collection whose element type is assignable to the receiver's
@@ -12248,6 +12252,21 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Duration", "from", NO_TEMPORAL_AMOUNT),
     ("Period", "from", NO_TEMPORAL_AMOUNT),
     ("ChronoUnit", "addTo", BARE_TEMPORAL),
+    // ---- java.lang.StackTraceElement: the three pieces Java 9 added for the
+    // module system, which caturra does not have.
+    ("StackTraceElement", "getModuleName", NO_MODULES),
+    ("StackTraceElement", "getModuleVersion", NO_MODULES),
+    (
+        "StackTraceElement",
+        "getClassLoaderName",
+        "caturra compiles a whole program at once and has no class loader",
+    ),
+    // ---- The summary statistics are `IntConsumer`s, so they inherit its
+    // composing default. Composing one with another consumer needs a consumer
+    // VALUE built out of two, which caturra does not model.
+    ("IntSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
+    ("LongSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
+    ("DoubleSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
     // ---- java.time.format.DateTimeFormatter. caturra's formatter is a
     // PATTERN that renders a value; everything below is either the parsing
     // half (which a program reaches through LocalDate.parse) or one of the
@@ -12293,6 +12312,9 @@ const ERASED_SIGNATURE: &str =
 const CODE_SIGNING: &str = "caturra does not model code signing";
 const NO_CLASS_PATH: &str = "caturra has no class path to load a resource from";
 const NEST_MATES: &str = "caturra does not model nest mates";
+const NO_MODULES: &str = "caturra does not model the module system";
+const CONSUMER_ANDTHEN: &str =
+    "caturra does not model a consumer composed of two others - call them in turn";
 const NO_ENCLOSING_METHOD: &str =
     "caturra hoists a local or anonymous class to the top level and records no enclosing method";
 const CHECKED_VIEWS: &str = "caturra does not model a dynamically type-checked view - the compiler's own check is the one that runs here";
@@ -12345,6 +12367,8 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::Month => "Month",
         JType::DateFormat => "DateTimeFormatter",
         JType::ChronoUnit => "ChronoUnit",
+        JType::StackFrame => "StackTraceElement",
+        JType::SummaryStats(flavour) => flavour.simple_name(),
         _ => "",
     }
 }
@@ -18208,6 +18232,16 @@ macro_rules! throwable_methods {
             descriptor: "()Ljava/lang/Throwable;",
             needs: TableFace::Sorted,
         },
+        // `setStackTrace(frames)` REPLACES the recorded trace. A JDK copies
+        // the array, so a caller that goes on mutating its own does not reach
+        // inside the throwable.
+        BuiltinMethod {
+            name: "setStackTrace",
+            params: &[BParam::StackFrameArray],
+            ret: BRet::Void,
+            descriptor: "([Ljava/lang/StackTraceElement;)V",
+            needs: TableFace::Sorted,
+        },
         // `initCause(t)` sets the cause and returns `this` (for chaining).
         BuiltinMethod {
             name: "initCause",
@@ -19302,8 +19336,18 @@ const STACK_FRAME_METHODS: &[BuiltinMethod] = &[
     bm("getMethodName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getFileName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getLineNumber", &[], BRet::Int, "()I"),
+    // A JDK marks a native frame by writing -2 as its line number, so this is
+    // that test and not a fifth piece of state.
+    bm("isNativeMethod", &[], BRet::Boolean, "()Z"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
 ];
 
 const METHOD_METHODS: &[BuiltinMethod] = &[
@@ -20826,6 +20870,29 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
                 PATTERN_SYNTAX_METHODS,
             ))
         }
+        JType::Exception(id)
+            if let Some(methods) = detail_exception_methods(exception_internal(id)) =>
+        {
+            Some((exception_internal(id), methods))
+        }
+        // Three throwables name their CAUSE something else — each predates
+        // `getCause` and kept the accessor it shipped with.
+        JType::Exception(id)
+            if matches!(
+                exception_internal(id),
+                "java/lang/ClassNotFoundException" | "java/lang/ExceptionInInitializerError"
+            ) =>
+        {
+            Some((exception_internal(id), WRAPPED_CAUSE_METHODS))
+        }
+        JType::Exception(id)
+            if exception_internal(id) == "java/lang/reflect/InvocationTargetException" =>
+        {
+            Some((
+                "java/lang/reflect/InvocationTargetException",
+                TARGET_EXCEPTION_METHODS,
+            ))
+        }
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::PrintStream => Some(("java/io/PrintStream", PRINT_STREAM_METHODS)),
@@ -20974,6 +21041,82 @@ const PATTERN_METHODS: &[BuiltinMethod] = &[
 
 /// `java.util.regex.PatternSyntaxException` — every throwable's methods, plus
 /// the three that say what was wrong with the pattern and where.
+/// The throwables that answer ONE question beyond `Throwable`'s: the piece
+/// their message was worded around (or, for the two parse exceptions, the
+/// piece it was not). Keyed by internal name in `builtin_instance_table`.
+fn detail_exception_methods(internal: &str) -> Option<&'static [BuiltinMethod]> {
+    Some(match internal {
+        "java/util/DuplicateFormatFlagsException" | "java/util/IllegalFormatFlagsException" => {
+            FLAGS_EXCEPTION_METHODS
+        }
+        "java/util/UnknownFormatConversionException" => UNKNOWN_CONVERSION_METHODS,
+        "java/util/MissingFormatArgumentException" | "java/util/MissingFormatWidthException" => {
+            FORMAT_SPECIFIER_METHODS
+        }
+        "java/util/IllegalFormatWidthException" => BAD_WIDTH_METHODS,
+        "java/util/IllegalFormatPrecisionException" => BAD_PRECISION_METHODS,
+        "java/util/IllegalFormatCodePointException" => BAD_CODE_POINT_METHODS,
+        "java/util/FormatFlagsConversionMismatchException" => FLAGS_MISMATCH_METHODS,
+        "java/util/IllegalFormatConversionException" => BAD_CONVERSION_METHODS,
+        "java/nio/charset/IllegalCharsetNameException"
+        | "java/nio/charset/UnsupportedCharsetException" => CHARSET_NAME_METHODS,
+        "java/text/ParseException" => PARSE_EXCEPTION_METHODS,
+        "java/time/format/DateTimeParseException" => DATE_PARSE_EXCEPTION_METHODS,
+        _ => return None,
+    })
+}
+
+const FLAGS_EXCEPTION_METHODS: &[BuiltinMethod] =
+    throwable_methods![bm("getFlags", &[], BRet::Str, "()Ljava/lang/String;"),];
+const UNKNOWN_CONVERSION_METHODS: &[BuiltinMethod] =
+    throwable_methods![bm("getConversion", &[], BRet::Str, "()Ljava/lang/String;"),];
+const FORMAT_SPECIFIER_METHODS: &[BuiltinMethod] = throwable_methods![bm(
+    "getFormatSpecifier",
+    &[],
+    BRet::Str,
+    "()Ljava/lang/String;"
+),];
+const BAD_WIDTH_METHODS: &[BuiltinMethod] =
+    throwable_methods![bm("getWidth", &[], BRet::Int, "()I"),];
+const BAD_PRECISION_METHODS: &[BuiltinMethod] =
+    throwable_methods![bm("getPrecision", &[], BRet::Int, "()I"),];
+const BAD_CODE_POINT_METHODS: &[BuiltinMethod] =
+    throwable_methods![bm("getCodePoint", &[], BRet::Int, "()I"),];
+const FLAGS_MISMATCH_METHODS: &[BuiltinMethod] = throwable_methods![
+    bm("getFlags", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getConversion", &[], BRet::Char, "()C"),
+];
+const BAD_CONVERSION_METHODS: &[BuiltinMethod] = throwable_methods![
+    bm("getConversion", &[], BRet::Char, "()C"),
+    bm("getArgumentClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+];
+const CHARSET_NAME_METHODS: &[BuiltinMethod] =
+    throwable_methods![bm("getCharsetName", &[], BRet::Str, "()Ljava/lang/String;"),];
+const PARSE_EXCEPTION_METHODS: &[BuiltinMethod] =
+    throwable_methods![bm("getErrorOffset", &[], BRet::Int, "()I"),];
+const DATE_PARSE_EXCEPTION_METHODS: &[BuiltinMethod] = throwable_methods![
+    bm("getErrorIndex", &[], BRet::Int, "()I"),
+    bm("getParsedString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `ClassNotFoundException.getException()` and
+/// `ExceptionInInitializerError.getException()` — both predate `getCause`, and
+/// both answer exactly what `getCause` answers.
+const WRAPPED_CAUSE_METHODS: &[BuiltinMethod] = throwable_methods![bm(
+    "getException",
+    &[],
+    BRet::Throwable,
+    "()Ljava/lang/Throwable;"
+),];
+
+/// ...and `InvocationTargetException`, which calls the same thing the TARGET.
+const TARGET_EXCEPTION_METHODS: &[BuiltinMethod] = throwable_methods![bm(
+    "getTargetException",
+    &[],
+    BRet::Throwable,
+    "()Ljava/lang/Throwable;"
+),];
+
 const PATTERN_SYNTAX_METHODS: &[BuiltinMethod] = throwable_methods![
     bm("getDescription", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getPattern", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -21202,6 +21345,15 @@ const SUMMARY_STATS_METHODS: &[BuiltinMethod] = &[
     bm("getMax", &[], BRet::Int, "()I"),
     bm("getAverage", &[], BRet::Double, "()D"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    // The two that make a hand-made summary worth having: feed it a value,
+    // or fold another summary into it.
+    bm("accept", &[BParam::Int], BRet::Void, "(I)V"),
+    bm(
+        "combine",
+        &[BParam::SummaryStats],
+        BRet::Void,
+        "(Ljava/util/IntSummaryStatistics;)V",
+    ),
 ];
 
 /// `LongSummaryStatistics` — the same five, with `long` bounds.
@@ -21212,6 +21364,13 @@ const LONG_SUMMARY_METHODS: &[BuiltinMethod] = &[
     bm("getMax", &[], BRet::Long, "()J"),
     bm("getAverage", &[], BRet::Double, "()D"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("accept", &[BParam::Long], BRet::Void, "(J)V"),
+    bm(
+        "combine",
+        &[BParam::SummaryStats],
+        BRet::Void,
+        "(Ljava/util/LongSummaryStatistics;)V",
+    ),
 ];
 
 /// `DoubleSummaryStatistics` — the sum and bounds are `double`s here, which is
@@ -21226,6 +21385,13 @@ const DOUBLE_SUMMARY_METHODS: &[BuiltinMethod] = &[
     bm("getMax", &[], BRet::Double, "()D"),
     bm("getAverage", &[], BRet::Double, "()D"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("accept", &[BParam::Double], BRet::Void, "(D)V"),
+    bm(
+        "combine",
+        &[BParam::SummaryStats],
+        BRet::Void,
+        "(Ljava/util/DoubleSummaryStatistics;)V",
+    ),
 ];
 
 const COLLECTORS_METHODS: &[BuiltinMethod] = &[
@@ -21910,6 +22076,17 @@ impl TypeArgs {
                 second: None,
                 ..Self::default()
             },
+            // A summary's flavour IS its element: it is what `accept` takes
+            // and what `combine` folds in.
+            JType::SummaryStats(flavour) => Self {
+                first: Some(match flavour {
+                    SummaryFlavour::Int => ElemType::Int,
+                    SummaryFlavour::Long => ElemType::Long,
+                    SummaryFlavour::Double => ElemType::Double,
+                }),
+                second: None,
+                ..Self::default()
+            },
             JType::Map { key, value, .. }
             | JType::Hashtable { key, value }
             | JType::TreeMap { key, value, .. }
@@ -21966,6 +22143,50 @@ fn boxed_or_nested(elem: Option<ElemType>, table: &MethodTable) -> JType {
     match elem {
         Some(ElemType::Nested { inner, .. }) => table.nested_type(inner),
         other => boxed_if_primitive(other),
+    }
+}
+
+/// The throwables whose constructor takes something a MESSAGE alone does not
+/// carry, as (parameter kinds, descriptor). Chosen by the argument types, so
+/// the ordinary `(String)` and `(String, Throwable)` forms still reach their
+/// own arms.
+fn detail_exception_ctor(
+    internal: &str,
+    arg_types: &[JType],
+) -> Option<(&'static [BParam], &'static str)> {
+    match (internal, arg_types) {
+        ("java/util/FormatFlagsConversionMismatchException", [JType::Str, JType::Char]) => {
+            Some((&[BParam::Str, BParam::Char], "(Ljava/lang/String;C)V"))
+        }
+        ("java/util/IllegalFormatConversionException", [JType::Char, JType::Class]) => {
+            Some((&[BParam::Char, BParam::Class], "(CLjava/lang/Class;)V"))
+        }
+        (
+            "java/util/regex/PatternSyntaxException",
+            [
+                JType::Str,
+                JType::Str,
+                JType::Int | JType::Short | JType::Byte,
+            ],
+        ) => Some((
+            &[BParam::Str, BParam::Str, BParam::Int],
+            "(Ljava/lang/String;Ljava/lang/String;I)V",
+        )),
+        ("java/text/ParseException", [JType::Str, JType::Int | JType::Short | JType::Byte]) => {
+            Some((&[BParam::Str, BParam::Int], "(Ljava/lang/String;I)V"))
+        }
+        (
+            "java/time/format/DateTimeParseException",
+            [
+                JType::Str,
+                JType::Str | JType::CharSequence,
+                JType::Int | JType::Short | JType::Byte,
+            ],
+        ) => Some((
+            &[BParam::Str, BParam::CharSeq, BParam::Int],
+            "(Ljava/lang/String;Ljava/lang/CharSequence;I)V",
+        )),
+        _ => None,
     }
 }
 
@@ -22027,6 +22248,17 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::LongArray => JType::Array {
             elem: ElemType::Long,
             dims: 1,
+        },
+        BParam::StackFrameArray => JType::Array {
+            elem: ElemType::StackFrame,
+            dims: 1,
+        },
+        // `combine` takes the receiver's OWN flavour, which is the receiver's
+        // type argument here.
+        BParam::SummaryStats => match args.first {
+            Some(ElemType::Double) => JType::SummaryStats(SummaryFlavour::Double),
+            Some(ElemType::Long) => JType::SummaryStats(SummaryFlavour::Long),
+            _ => JType::SummaryStats(SummaryFlavour::Int),
         },
         BParam::RoundingMode => JType::RoundingMode,
         BParam::MathContext => JType::MathContext,
@@ -27476,6 +27708,10 @@ impl BodyGen<'_> {
             "UUID" => JType::Uuid,
             "BitSet" => JType::BitSet,
             "StringWriter" => JType::StringWriter,
+            "StackTraceElement" => JType::StackFrame,
+            "IntSummaryStatistics" => JType::SummaryStats(SummaryFlavour::Int),
+            "LongSummaryStatistics" => JType::SummaryStats(SummaryFlavour::Long),
+            "DoubleSummaryStatistics" => JType::SummaryStats(SummaryFlavour::Double),
             "Writer" => JType::WriterFace,
             "BufferedWriter" => JType::BufferedWriter,
             "File" => JType::File,
@@ -27915,6 +28151,16 @@ impl BodyGen<'_> {
                 "UUID" => return self.new_uuid(args, span),
                 "BitSet" => return self.new_bit_set(args, span),
                 "StringWriter" => return self.new_string_writer(args, span),
+                "StackTraceElement" => return self.new_stack_frame(args, span),
+                "IntSummaryStatistics" => {
+                    return self.new_summary_stats(SummaryFlavour::Int, args, span);
+                }
+                "LongSummaryStatistics" => {
+                    return self.new_summary_stats(SummaryFlavour::Long, args, span);
+                }
+                "DoubleSummaryStatistics" => {
+                    return self.new_summary_stats(SummaryFlavour::Double, args, span);
+                }
                 "File" => return self.new_file(args, span),
                 // A `FileWriter` is the same thing this engine calls a
                 // writer, plus the APPEND flag: `new FileWriter(path, true)`
@@ -28260,6 +28506,11 @@ impl BodyGen<'_> {
                     "java/lang/ArrayIndexOutOfBoundsException"
                         | "java/lang/IndexOutOfBoundsException"
                         | "java/lang/StringIndexOutOfBoundsException"
+                        // ...and the format exceptions whose one argument is a
+                        // width, a precision or a code point.
+                        | "java/util/IllegalFormatWidthException"
+                        | "java/util/IllegalFormatPrecisionException"
+                        | "java/util/IllegalFormatCodePointException"
                 ) =>
             {
                 let actual = self.expr(index);
@@ -28267,6 +28518,25 @@ impl BodyGen<'_> {
                 let init_ref = intern_method_ref(self.pool, internal, "<init>", "(I)V");
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(2);
+            }
+            // `new FormatFlagsConversionMismatchException(flags, conversion)`,
+            // `new IllegalFormatConversionException(conversion, argumentClass)`,
+            // `new ParseException(message, errorOffset)` and
+            // `new DateTimeParseException(message, parsedText, errorIndex)` —
+            // the four throwables whose constructor carries something a
+            // message alone does not.
+            _ if detail_exception_ctor(internal, &arg_types).is_some() => {
+                let (params, descriptor) =
+                    detail_exception_ctor(internal, &arg_types).expect("checked by the guard");
+                for (arg, want) in args.iter().zip(params) {
+                    let actual = self.expr(arg);
+                    let wanted = bparam_type(*want, TypeArgs::default(), self.table);
+                    self.convert_for_assignment(actual, wanted, arg.span());
+                }
+                let init_ref = intern_method_ref(self.pool, internal, "<init>", descriptor);
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code
+                    .drop_stack(1 + u16::try_from(params.len()).unwrap_or(0));
             }
             [message] => {
                 let message_ty = self.expr(message);
@@ -28875,6 +29145,81 @@ impl BodyGen<'_> {
         self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
         self.code.drop_stack(1);
         JType::StringWriter
+    }
+
+    /// `new StackTraceElement(declaringClass, methodName, fileName, lineNumber)`
+    /// — the four-argument constructor, which is the one a program writes to
+    /// hand a throwable a trace of its own. (Java 9's nine-argument form adds
+    /// the class loader, module and version, none of which caturra records.)
+    fn new_stack_frame(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let [declaring, method, file, line] = args else {
+            self.error(
+                span,
+                String::from(
+                    "new StackTraceElement takes a class name, a method name, a file name and a \
+                     line number",
+                ),
+            );
+            for arg in args {
+                self.expr(arg);
+            }
+            return JType::Error;
+        };
+        let class = intern_class(self.pool, "java/lang/StackTraceElement");
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        for text in [declaring, method, file] {
+            let ty = self.expr(text);
+            // The file name is the one piece a JDK lets a program leave out.
+            if ty != JType::Str && ty != JType::Null && ty != JType::Error {
+                self.error(
+                    text.span(),
+                    format!(
+                        "incompatible types: {} cannot be converted to String",
+                        ty.describe(self.table)
+                    ),
+                );
+            }
+        }
+        let line_ty = self.expr(line);
+        self.convert_for_assignment(line_ty, JType::Int, line.span());
+        let init = intern_method_ref(
+            self.pool,
+            "java/lang/StackTraceElement",
+            "<init>",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V",
+        );
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code.drop_stack(5);
+        JType::StackFrame
+    }
+
+    /// `new IntSummaryStatistics()` and its two siblings — an EMPTY summary, a
+    /// program's own accumulator to `accept` into. (A JDK also has a
+    /// four-argument form that states the whole result at once; nothing
+    /// reaches for it, and it validates the four against each other.)
+    fn new_summary_stats(
+        &mut self,
+        flavour: SummaryFlavour,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> JType {
+        let named = flavour.simple_name();
+        if !args.is_empty() {
+            self.error(span, format!("new {named} takes no arguments"));
+            for arg in args {
+                self.expr(arg);
+            }
+            return JType::Error;
+        }
+        let internal = flavour.internal_name();
+        let class = intern_class(self.pool, internal);
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let init = intern_method_ref(self.pool, internal, "<init>", "()V");
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code.drop_stack(1);
+        JType::SummaryStats(flavour)
     }
 
     /// `new DecimalFormat(pattern)` / `new DecimalFormat()`.

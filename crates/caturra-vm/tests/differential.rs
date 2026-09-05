@@ -51983,3 +51983,188 @@ stricter_than_javac!(
     "StrictCharacterName",
     "public class StrictCharacterName { static void r() { Character.getName(65); } }"
 );
+
+// ---- The throwables, measured. `measure.py` could not score eleven of these
+// classes at all: their constructors take something other than a message, so
+// the probe's receiver did not compile and every method on it read as
+// missing. These are those constructors, and the one method every throwable
+// in Java has that caturra had none of.
+//
+// `setStackTrace` COPIES the array a JDK is handed; it rejects a null array,
+// and a null ELEMENT by its index ("stackTrace[0]"). A native frame is not a
+// fifth piece of state — it is a line number of -2. And three throwables that
+// predate `getCause` call the cause something else.
+differential_test!(
+    what_a_throwable_carries,
+    "ThrowE1",
+    r#"
+import java.io.*;
+import java.text.*;
+import java.time.format.*;
+import java.util.*;
+import java.util.regex.*;
+public class ThrowE1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    // --- setStackTrace
+    s("set stack trace", () -> {
+      Exception e = new Exception("m");
+      StackTraceElement[] frames = { new StackTraceElement("A", "b", "A.java", 7) };
+      e.setStackTrace(frames);
+      return e.getStackTrace().length + " " + e.getStackTrace()[0];
+    });
+    s("set empty", () -> { Error e = new Error("m"); e.setStackTrace(new StackTraceElement[0]); return e.getStackTrace().length; });
+    s("set copies", () -> {
+      RuntimeException e = new RuntimeException("m");
+      StackTraceElement[] frames = { new StackTraceElement("A", "b", "A.java", 7) };
+      e.setStackTrace(frames);
+      frames[0] = new StackTraceElement("C", "d", "C.java", 9);
+      return e.getStackTrace()[0].getClassName();
+    });
+    s("set null", () -> { Exception e = new Exception("m"); e.setStackTrace(null); return "?"; });
+    s("set null element", () -> { Exception e = new Exception("m"); e.setStackTrace(new StackTraceElement[]{ null }); return "?"; });
+    // --- StackTraceElement itself
+    s("frame native", () -> new StackTraceElement("A", "b", "A.java", -2).isNativeMethod());
+    s("frame not native", () -> new StackTraceElement("A", "b", "A.java", 7).isNativeMethod());
+    s("frame text", () -> new StackTraceElement("A", "b", "A.java", 7).toString());
+    // --- the wrapped-cause accessors, which are the CAUSE under another name
+    s("class not found", () -> { ClassNotFoundException e = new ClassNotFoundException("C", new Error("why")); return e.getException(); });
+    s("init error", () -> { ExceptionInInitializerError e = new ExceptionInInitializerError(new Error("why")); return e.getException(); });
+    s("invocation target", () -> { java.lang.reflect.InvocationTargetException e = new java.lang.reflect.InvocationTargetException(new Error("why")); return e.getTargetException(); });
+    s("cause agrees", () -> { ClassNotFoundException e = new ClassNotFoundException("C", new Error("why")); return e.getException() == e.getCause(); });
+    s("no cause", () -> new ClassNotFoundException("C").getException());
+  }
+}
+"#
+);
+
+// The eleven constructors that carry more than a message. Where the JDK's
+// message is BUILT from the extra value — `Conversion = 'q'`, `Flags = '--'`,
+// `d != java.lang.String` — the getter reads it back out of the message, so
+// one implementation answers both the exception a program CONSTRUCTS and the
+// one caturra's own formatter THREW. Only `ParseException`'s offset and
+// `DateTimeParseException`'s parsed text, which no message carries, are
+// stored beside it.
+differential_test!(
+    the_throwables_that_carry_more_than_a_message,
+    "ThrowE2",
+    r#"
+import java.io.*;
+import java.text.*;
+import java.time.format.*;
+import java.util.*;
+import java.util.regex.*;
+public class ThrowE2 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    s("parse exception", () -> { ParseException e = new ParseException("bad", 4); return e.getMessage() + " " + e.getErrorOffset(); });
+    s("pattern syntax", () -> { PatternSyntaxException e = new PatternSyntaxException("d", "a(b", 2); return e.getDescription() + " " + e.getPattern() + " " + e.getIndex(); });
+    s("date time parse", () -> { DateTimeParseException e = new DateTimeParseException("bad", "2024-13", 5); return e.getParsedString() + " " + e.getErrorIndex(); });
+    s("dup flags", () -> new DuplicateFormatFlagsException("--").getFlags());
+    s("flags mismatch", () -> { FormatFlagsConversionMismatchException e = new FormatFlagsConversionMismatchException("-", 'd'); return e.getFlags() + " " + e.getConversion(); });
+    s("bad code point", () -> new IllegalFormatCodePointException(0x110000).getCodePoint());
+    s("bad conversion", () -> { IllegalFormatConversionException e = new IllegalFormatConversionException('d', String.class); return e.getConversion() + " " + e.getArgumentClass().getName(); });
+    s("bad flags", () -> new IllegalFormatFlagsException("-+").getFlags());
+    s("bad precision", () -> new IllegalFormatPrecisionException(-3).getPrecision());
+    s("bad width", () -> new IllegalFormatWidthException(-3).getWidth());
+    s("missing arg", () -> new MissingFormatArgumentException("%s").getFormatSpecifier());
+    s("missing width", () -> new MissingFormatWidthException("%-s").getFormatSpecifier());
+    s("unknown conversion", () -> new UnknownFormatConversionException("q").getConversion());
+    s("bad charset name", () -> new java.nio.charset.IllegalCharsetNameException("!").getCharsetName());
+    s("unsupported charset", () -> new java.nio.charset.UnsupportedCharsetException("zz").getCharsetName());
+    s("messages", () -> new DuplicateFormatFlagsException("--").getMessage() + " | " + new UnknownFormatConversionException("q").getMessage() + " | " + new IllegalFormatWidthException(-3).getMessage());
+    s("charset messages", () -> new java.nio.charset.UnsupportedCharsetException("zz").getMessage() + " | " + new java.nio.charset.IllegalCharsetNameException("!").getMessage());
+    s("parse message", () -> new ParseException("bad", 4).toString());
+    s("pattern message", () -> new PatternSyntaxException("d", "a(b", 2).getMessage().replace(System.lineSeparator(), "/"));
+    s("date parse message", () -> new DateTimeParseException("bad", "2024-13", 5).getMessage());
+  }
+}
+"#
+);
+
+// ...and the other direction, which is the point of deriving from the message:
+// a format exception CAUGHT from caturra's own formatter answers exactly what a
+// constructed one does. Probing it found a real divergence beside that — a
+// charset name that is syntactically illegal and one that is merely unknown are
+// different exceptions in a JDK, and caturra threw the same one for both.
+differential_test!(
+    a_caught_format_exception_answers_the_same,
+    "ThrowE3",
+    r#"
+import java.util.*;
+public class ThrowE3 {
+  public static void main(String[] a) {
+    try { String.format("%q", 1); }
+    catch (UnknownFormatConversionException e) { System.out.println("caught conversion = " + e.getConversion()); }
+    try { String.format("%-s", 1); }
+    catch (MissingFormatWidthException e) { System.out.println("caught width spec = " + e.getFormatSpecifier()); }
+    try { String.format("%s"); }
+    catch (MissingFormatArgumentException e) { System.out.println("caught missing arg = " + e.getFormatSpecifier()); }
+    try { String.format("%d", "x"); }
+    catch (IllegalFormatConversionException e) { System.out.println("caught bad conversion = " + e.getConversion() + " " + e.getArgumentClass().getName()); }
+    try { String.format("%--d", 1); }
+    catch (DuplicateFormatFlagsException e) { System.out.println("caught dup flags = " + e.getFlags()); }
+    try { String.format("%#d", 1); }
+    catch (FormatFlagsConversionMismatchException e) { System.out.println("caught mismatch = " + e.getFlags() + " " + e.getConversion()); }
+    try { java.nio.charset.Charset.forName("!!"); }
+    catch (java.nio.charset.IllegalCharsetNameException e) { System.out.println("caught charset name = " + e.getCharsetName()); }
+    try { "abc".charAt(9); }
+    catch (StringIndexOutOfBoundsException e) { System.out.println("still fine = " + e.getMessage()); }
+  }
+}
+"#
+);
+
+// An empty summary is a program's own accumulator: `new IntSummaryStatistics()`
+// keeps the identity values a JDK's starts from (MAX_VALUE as the minimum),
+// and `accept`/`combine` fold into it.
+differential_test!(
+    a_summary_a_program_fills_itself,
+    "ThrowS2",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class ThrowS2 {
+  public static void main(String[] a) {
+    IntSummaryStatistics s = new IntSummaryStatistics();
+    s.accept(3); s.accept(9); s.accept(-1);
+    System.out.println(s);
+    IntSummaryStatistics t = IntStream.of(4, 4).summaryStatistics();
+    s.combine(t);
+    System.out.println(s + " " + s.getAverage());
+    LongSummaryStatistics l = new LongSummaryStatistics();
+    l.accept(7L); l.combine(new LongSummaryStatistics());
+    System.out.println(l);
+    DoubleSummaryStatistics d = new DoubleSummaryStatistics();
+    d.accept(1.5); d.accept(2.5);
+    System.out.println(d);
+    DoubleSummaryStatistics e = new DoubleSummaryStatistics();
+    e.combine(d);
+    System.out.println(e.getSum() + " " + e.getMax());
+  }
+}
+"#
+);
+
+// The pieces of a stack frame Java 9 added for the module system, which this
+// engine does not have — and the composing default the summary statistics
+// inherit from `IntConsumer`.
+stricter_than_javac!(
+    strict_a_frame_names_no_module,
+    "StrictFrameModule",
+    "public class StrictFrameModule { static void r() { new Throwable().getStackTrace()[0].getModuleName(); } }"
+);
+
+stricter_than_javac!(
+    strict_no_composed_consumer,
+    "StrictComposedConsumer",
+    "import java.util.*;\npublic class StrictComposedConsumer { static void r() { new IntSummaryStatistics().andThen(null); } }"
+);

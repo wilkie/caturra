@@ -1051,6 +1051,16 @@ pub enum HeapObject {
         /// try-with-resources attaches when `close()` throws while the body
         /// is already unwinding (JLS §14.20.3.1).
         suppressed: Vec<HeapRef>,
+        /// The one piece a few throwables carry that their MESSAGE does not.
+        ///
+        /// Most of them need nothing here: a JDK builds
+        /// `UnknownFormatConversionException`'s message out of the conversion
+        /// (`Conversion = 'q'`), so `getConversion()` reads it back out of the
+        /// message and a CONSTRUCTED one and a THROWN one answer alike with
+        /// one implementation. Only where the message does not carry the value
+        /// — `ParseException`'s error offset, `DateTimeParseException`'s
+        /// parsed text and index — is it stored, `\u{1f}`-separated.
+        detail: Option<String>,
     },
     /// A `java.lang.Class` handle from `obj.getClass()` — the (flat,
     /// simple) class name is enough for the structural reflection the

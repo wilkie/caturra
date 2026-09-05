@@ -9036,6 +9036,13 @@ counting catches: a divergence that stopped being one.
   caturra carries Unicode's character CATEGORIES, which is what `isLetter` and
   its siblings need, not the character database of NAMES.
   (`strict_no_unicode_character_names`)
+- `aFrame.getModuleName()`, `getModuleVersion()` and `getClassLoaderName()` —
+  the three pieces Java 9 added to a `StackTraceElement` for the module system.
+  (`strict_a_frame_names_no_module`)
+- `stats.andThen(consumer)` — the summary statistics are `IntConsumer`s, so
+  they inherit its composing default; a consumer built out of two others is not
+  a value caturra models. Call them in turn.
+  (`strict_no_composed_consumer`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -14598,3 +14605,68 @@ score a class whose receiver expression does not compile: that reads exactly
 like a class scoring zero, and it is not the same fact. Eleven did — the
 exception constructors that take something other than a message, and the three
 summary-statistics classes with no visible constructor.
+
+## What a throwable carries
+
+Widening the measurement to every class caturra names (see the section above)
+put 46 throwables under it for the first time, and they came back with two
+things in common and eleven with a problem of their own.
+
+**Every throwable in Java has `setStackTrace`, and none of caturra's did.** The
+trace is not stored in the heap object here — it lives beside it, as the
+rendered lines `getStackTrace()` reads back and `printStackTrace()` prints — so
+this writes those lines, through the one renderer both of those use. Three JDK
+facts a guess would have missed, all captured: it COPIES the array (a caller
+that goes on mutating its own does not reach inside the throwable), it rejects
+a null array with a bare `NullPointerException`, and it rejects a null ELEMENT
+by its index — `stackTrace[0]`.
+
+Beside it, `new StackTraceElement(class, method, file, line)`, without which
+there is nothing to hand `setStackTrace`, and `isNativeMethod()`, which is not
+a fifth piece of state: a JDK writes **-2** as the line number of a native
+frame, and that is the whole test.
+
+**Three throwables call their cause something else.** `ClassNotFoundException`
+and `ExceptionInInitializerError` have `getException()`; `InvocationTargetException`
+has `getTargetException()`. All three predate `getCause` and all three answer
+exactly what it answers, so they share its arm rather than reading the field a
+second time.
+
+**Eleven could not be measured at all.** Their constructors take something
+other than a message — `new ParseException("bad", 4)`,
+`new IllegalFormatConversionException('d', String.class)` — so the probe's
+receiver did not compile and every method on the class read as missing. That is
+not the same fact as a class scoring zero, which is why the script now says so
+rather than counting it.
+
+The rule for where the extra value lives is worth writing down, because it is
+not "wherever is convenient":
+
+> **It lives in the MESSAGE when the JDK's message carries it.** A JDK words
+> `new UnknownFormatConversionException("q")` as `Conversion = 'q'` and reads
+> `getConversion()` back out of that. Doing the same here is not a shortcut: it
+> means one implementation answers both the exception a program CONSTRUCTS and
+> the one caturra's own formatter THREW, and the two cannot drift apart. Only
+> where the message does not carry the value — `ParseException`'s error offset,
+> `DateTimeParseException`'s parsed text and index — is anything stored beside
+> it.
+
+That is checked in both directions: one pin constructs each of the twelve and
+reads its accessor, another catches six of them from caturra's own
+`String.format` and reads the same accessors. The second found a real
+divergence next door — `Charset.forName` threw `UnsupportedCharsetException`
+for a name that is not a legal charset name at all, where a JDK asks the two
+questions separately and answers the first with `IllegalCharsetNameException`.
+
+**And the summary statistics.** `new IntSummaryStatistics()` and its two
+siblings were the last receivers the measurement could not compile. An empty
+one keeps the identity values a JDK's accumulator starts from —
+`Integer.MAX_VALUE` as the minimum — and `accept`/`combine` fold into it, which
+is what makes a hand-made accumulator worth having.
+
+Pinned as `what_a_throwable_carries`,
+`the_throwables_that_carry_more_than_a_message`,
+`a_caught_format_exception_answers_the_same` and
+`a_summary_a_program_fills_itself`. Every class caturra names is now measured
+— 225 of them, no receiver left that will not compile — at 3007/3385 method
+names answered.

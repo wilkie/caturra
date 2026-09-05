@@ -2781,6 +2781,7 @@ impl<'run> Interpreter<'run> {
                         message: message.clone(),
                         cause: None,
                         suppressed: Vec::new(),
+                        detail: None,
                     })
                 });
                 // A materialized object keeps the trace already embedded in
@@ -2804,6 +2805,7 @@ impl<'run> Interpreter<'run> {
                         message: message.clone(),
                         cause: None,
                         suppressed: Vec::new(),
+                        detail: None,
                     })
                 });
                 let wrapper = self.heap.alloc(crate::value::HeapObject::Exception {
@@ -2811,6 +2813,7 @@ impl<'run> Interpreter<'run> {
                     message: None,
                     cause: Some(cause),
                     suppressed: Vec::new(),
+                    detail: None,
                 });
                 dotted = String::from("java.lang.reflect.InvocationTargetException");
                 message = None;
@@ -2841,6 +2844,7 @@ impl<'run> Interpreter<'run> {
                         message: message.clone(),
                         cause: None,
                         suppressed: Vec::new(),
+                        detail: None,
                     })
                 });
                 // The cause keeps the original in-clinit frames even when it
@@ -2851,6 +2855,7 @@ impl<'run> Interpreter<'run> {
                     message: None,
                     cause: Some(cause),
                     suppressed: Vec::new(),
+                    detail: None,
                 });
                 // The EIIE's own trace is the frames BELOW the <clinit> —
                 // the use site that triggered initialization.
@@ -15333,6 +15338,51 @@ impl<'run> Interpreter<'run> {
             self.vec_pool.push(args);
             return Ok(None);
         }
+        // `setStackTrace(frames)` REPLACES the recorded trace. The store is
+        // the rendered LINES (`Class.method(File:line)`), which is what
+        // `getStackTrace` reads back and what `printStackTrace` prints, so the
+        // frames are rendered with the one renderer both of those use.
+        //
+        // A JDK COPIES the array: a caller that goes on mutating its own does
+        // not reach inside the throwable. It also rejects a null array, and a
+        // null element by its INDEX ("stackTrace[0]").
+        if method_name == "setStackTrace"
+            && let Some(exception) = receiver
+            && matches!(
+                self.heap.get(exception),
+                Some(crate::value::HeapObject::Exception { .. })
+            )
+        {
+            let Some(JValue::Ref(Some(array))) = args.first() else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
+            let elements = self.array_elements(*array).unwrap_or_default();
+            let mut lines = Vec::with_capacity(elements.len());
+            for (at, element) in elements.iter().enumerate() {
+                let JValue::Ref(Some(frame_ref)) = element else {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.NullPointerException: stackTrace[{at}]"
+                    )));
+                };
+                let Some(crate::value::HeapObject::StackFrame {
+                    declaring,
+                    method,
+                    file,
+                    line,
+                }) = self.heap.get(*frame_ref)
+                else {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.NullPointerException: stackTrace[{at}]"
+                    )));
+                };
+                lines.push(stack_frame_text(declaring, method, file.as_deref(), *line));
+            }
+            self.exception_traces.insert(exception, lines);
+            self.vec_pool.push(args);
+            return Ok(None);
+        }
         // `fillInStackTrace()` re-records the trace AT THIS CALL and returns
         // the receiver itself (`Throwable`'s own return is `this`), so a
         // throwable rethrown from elsewhere can be made to point at the
@@ -15369,6 +15419,9 @@ impl<'run> Interpreter<'run> {
                     None => JValue::NULL,
                 }),
                 "getLineNumber" => Some(JValue::Int(line)),
+                // A JDK writes -2 as the line number of a native frame, so
+                // this is that test rather than a fifth piece of state.
+                "isNativeMethod" => Some(JValue::Int(i32::from(line == -2))),
                 "toString" => {
                     let text = stack_frame_text(&declaring, &method, file.as_deref(), line);
                     Some(JValue::Ref(Some(self.heap.alloc_string(&text))))

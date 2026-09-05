@@ -2616,6 +2616,7 @@ fn write_to_sink(sink: PrintSink, text: &str, heap: &mut Heap, console: &mut dyn
 /// Instantiate an intrinsic class (the `new` opcode). Returns `None`
 /// for classes the VM doesn't know how to construct.
 #[must_use]
+#[allow(clippy::too_many_lines)] // one arm per library class with a `new`
 pub fn instantiate(class: &str) -> Option<HeapObject> {
     match class {
         // A bare `new Object()` — an identity-only object (used e.g. to test
@@ -2686,6 +2687,36 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         "java/util/UUID" => Some(HeapObject::Uuid(0, 0)),
         "java/util/BitSet" => Some(HeapObject::BitSet(Vec::new())),
         "java/io/StringWriter" => Some(HeapObject::StringWriter(Vec::new())),
+        // An EMPTY summary: the identity values a JDK's accumulator starts
+        // from, which an unfed one leaves showing.
+        "java/util/IntSummaryStatistics" => Some(HeapObject::SummaryStats {
+            count: 0,
+            sum: 0,
+            min: i64::from(i32::MAX),
+            max: i64::from(i32::MIN),
+            kind: crate::value::SummaryKind::Int,
+        }),
+        "java/util/LongSummaryStatistics" => Some(HeapObject::SummaryStats {
+            count: 0,
+            sum: 0,
+            min: i64::MAX,
+            max: i64::MIN,
+            kind: crate::value::SummaryKind::Long,
+        }),
+        "java/util/DoubleSummaryStatistics" => Some(HeapObject::DoubleSummaryStats {
+            count: 0,
+            sum: 0.0,
+            min: f64::INFINITY,
+            max: f64::NEG_INFINITY,
+        }),
+        // Every piece is set by the constructor; the blank frame exists only
+        // because the object has to before `<init>` runs.
+        "java/lang/StackTraceElement" => Some(HeapObject::StackFrame {
+            declaring: String::new(),
+            method: String::new(),
+            file: None,
+            line: -1,
+        }),
         // The target is set by the constructor; until then it wraps nothing,
         // which no program can observe.
         "java/io/BufferedWriter" => Some(HeapObject::BufferedWriter {
@@ -2733,10 +2764,141 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
                     message: None,
                     cause: None,
                     suppressed: Vec::new(),
+                    detail: None,
                 });
             }
             None
         }
+    }
+}
+
+/// The throwables that carry ONE piece of detail beyond a message, and the
+/// JDK's own layout for putting it INTO the message.
+///
+/// A JDK words `new UnknownFormatConversionException("q")` as
+/// `Conversion = 'q'` and reads `getConversion()` back out of that. Doing the
+/// same here is not a shortcut: caturra's own formatter throws these with the
+/// same messages, so one implementation answers both the exception a program
+/// CONSTRUCTS and the one the engine THREW, and the two can never disagree.
+/// Only where the message does NOT carry the value — `ParseException`'s
+/// offset — is anything stored beside it.
+fn detail_exception_message(class: &str, detail: &str) -> Option<String> {
+    Some(match class {
+        // `Flags = '--'`
+        "java/util/DuplicateFormatFlagsException" | "java/util/IllegalFormatFlagsException" => {
+            format!("Flags = '{detail}'")
+        }
+        // `Conversion = 'q'`
+        "java/util/UnknownFormatConversionException" => format!("Conversion = '{detail}'"),
+        // `Format specifier '%s'`
+        "java/util/MissingFormatArgumentException" => format!("Format specifier '{detail}'"),
+        // ...and three whose message is the value, bare: the specifier, the
+        // width or precision, the charset name.
+        "java/util/MissingFormatWidthException"
+        | "java/util/IllegalFormatWidthException"
+        | "java/util/IllegalFormatPrecisionException"
+        | "java/nio/charset/IllegalCharsetNameException"
+        | "java/nio/charset/UnsupportedCharsetException" => detail.to_owned(),
+        // `Code point = 0x110000`
+        "java/util/IllegalFormatCodePointException" => {
+            let code = detail.parse::<i32>().unwrap_or(0);
+            format!("Code point = 0x{code:x}")
+        }
+        _ => return None,
+    })
+}
+
+/// ...and the way back out: the piece a message was built around. Every arm is
+/// the exact inverse of one above.
+fn detail_from_exception_message(class: &str, message: &str) -> Option<String> {
+    let between_quotes = || {
+        message
+            .split_once('\'')
+            .and_then(|(_, rest)| rest.rsplit_once('\''))
+            .map(|(inner, _)| inner.to_owned())
+    };
+    match class {
+        "java.util.DuplicateFormatFlagsException"
+        | "java.util.IllegalFormatFlagsException"
+        | "java.util.UnknownFormatConversionException"
+        | "java.util.MissingFormatArgumentException" => between_quotes(),
+        "java.util.IllegalFormatCodePointException" => message
+            .rsplit_once("0x")
+            .and_then(|(_, hex)| i32::from_str_radix(hex, 16).ok())
+            .map(|code| code.to_string()),
+        // The rest word the message AS the piece — either because it is the
+        // whole message (a width, a specifier, a charset name) or because it
+        // is a PAIR that `detail_answer` splits (`Conversion = d, Flags = -`,
+        // `d != java.lang.String`).
+        "java.util.MissingFormatWidthException"
+        | "java.util.IllegalFormatWidthException"
+        | "java.util.IllegalFormatPrecisionException"
+        | "java.nio.charset.IllegalCharsetNameException"
+        | "java.nio.charset.UnsupportedCharsetException"
+        | "java.util.FormatFlagsConversionMismatchException"
+        | "java.util.IllegalFormatConversionException" => Some(message.to_owned()),
+        _ => None,
+    }
+}
+
+/// One `accept`/`combine` contribution, in the width the receiving summary
+/// keeps its numbers in.
+enum Folded {
+    Long(i64, i64, i64, i64),
+    Double(i64, f64, f64, f64),
+}
+
+/// Whether a string is a legal charset NAME at all (`java.nio.charset.Charset`
+/// documents the grammar): one or more of the letters, digits, and
+/// `-`, `+`, `.`, `:`, `_`, beginning with a letter or a digit. Whether such a
+/// charset EXISTS is the separate question `canonical_charset` answers.
+fn is_legal_charset_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '+' | '.' | ':' | '_'))
+}
+
+/// One getter's answer, given the piece `detail_from_exception_message` read
+/// back out of the message. The two PAIRED exceptions (`Conversion = d,
+/// Flags = -` and `d != java.lang.String`) split their piece here.
+fn detail_answer(heap: &mut Heap, class_name: &str, method: &str, piece: &str) -> JValue {
+    let text = |heap: &mut Heap, value: &str| JValue::Ref(Some(heap.alloc_string(value)));
+    match (class_name, method) {
+        // `Conversion = d, Flags = -`
+        ("java.util.FormatFlagsConversionMismatchException", _) => {
+            let (conversion, flags) = piece
+                .split_once(", Flags = ")
+                .map_or(("?", ""), |(head, flags)| {
+                    (head.trim_start_matches("Conversion = "), flags)
+                });
+            match method {
+                "getFlags" => text(heap, flags),
+                _ => JValue::Int(conversion.chars().next().unwrap_or('?') as i32),
+            }
+        }
+        // `d != java.lang.String`
+        ("java.util.IllegalFormatConversionException", _) => {
+            let (conversion, named) = piece
+                .split_once(" != ")
+                .unwrap_or(("?", "java.lang.Object"));
+            if method == "getConversion" {
+                JValue::Int(conversion.chars().next().unwrap_or('?') as i32)
+            } else {
+                let handle = heap.alloc(HeapObject::Class {
+                    name: named.replace('.', "/"),
+                });
+                JValue::Ref(Some(handle))
+            }
+        }
+        (_, "getWidth" | "getPrecision" | "getCodePoint") => {
+            JValue::Int(piece.parse().unwrap_or(-1))
+        }
+        // `UnknownFormatConversionException.getConversion()` answers a STRING,
+        // unlike the two above, which answer a char.
+        _ => text(heap, piece),
     }
 }
 
@@ -2806,6 +2968,32 @@ pub fn invoke_special(
         };
         if let Some(slot) = heap.get_mut(receiver) {
             *slot = HeapObject::Uuid(high, *low);
+        }
+        return Ok(());
+    }
+    // `new StackTraceElement(declaring, method, file, line)`. The file name is
+    // the one piece a JDK lets a program pass as null, and a null there is what
+    // makes `getFileName()` null and the frame print "Unknown Source".
+    if class == "java/lang/StackTraceElement" && method == "<init>" {
+        let text = |at: usize| match args.get(at) {
+            Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+            _ => None,
+        };
+        let (declaring, method_name, file) = (text(0), text(1), text(2));
+        let (Some(declaring), Some(method_name)) = (declaring, method_name) else {
+            return Err(throw("java.lang.NullPointerException"));
+        };
+        let line = match args.get(3) {
+            Some(JValue::Int(line)) => *line,
+            _ => -1,
+        };
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::StackFrame {
+                declaring,
+                method: method_name,
+                file,
+                line,
+            };
         }
         return Ok(());
     }
@@ -3025,6 +3213,12 @@ pub fn invoke_special(
                 "java/lang/ArrayIndexOutOfBoundsException" => {
                     format!("Array index out of range: {index}")
                 }
+                // The format exceptions whose one argument is a NUMBER — a
+                // width, a precision, a code point — word it their own way.
+                other if detail_exception_message(other, &index.to_string()).is_some() => {
+                    detail_exception_message(other, &index.to_string())
+                        .expect("checked by the guard")
+                }
                 _ => format!("Index out of range: {index}"),
             };
             if let Some(HeapObject::Exception { message, .. }) = heap.get_mut(receiver) {
@@ -3221,8 +3415,14 @@ pub fn invoke_special(
                     }
                     Ok(())
                 }
-                Some(HeapObject::Exception { message, .. }) => {
-                    *message = Some(text);
+                Some(HeapObject::Exception { .. }) => {
+                    // A few of them word the message AROUND the argument, in
+                    // the JDK's own layout, and their getter reads it back out
+                    // of there (see `detail_exception_message`).
+                    let worded = detail_exception_message(class, &text).unwrap_or(text);
+                    if let Some(HeapObject::Exception { message, .. }) = heap.get_mut(receiver) {
+                        *message = Some(worded);
+                    }
                     Ok(())
                 }
                 // A user exception class chaining `super("message")`
@@ -3269,6 +3469,98 @@ pub fn invoke_special(
                     "{class}.{method}{descriptor}"
                 ))),
             }
+        }
+        // `new FormatFlagsConversionMismatchException(flags, conversion)` and
+        // `new IllegalFormatConversionException(conversion, argumentClass)` —
+        // the two format exceptions built from a PAIR. Each writes the JDK's
+        // message, and both getters read their half back out of it.
+        ("<init>", "(Ljava/lang/String;C)V" | "(CLjava/lang/Class;)V")
+            if caturra_classfile::exceptions::is_exception_class(class) =>
+        {
+            let text = if descriptor == "(Ljava/lang/String;C)V" {
+                let flags = string_arg(heap, &args[0])?;
+                let JValue::Int(conversion) = args[1] else {
+                    return Err(throw("java.lang.VerifyError: expected a char"));
+                };
+                let conversion =
+                    char::from_u32(u32::try_from(conversion).unwrap_or(0)).unwrap_or('?');
+                format!("Conversion = {conversion}, Flags = {flags}")
+            } else {
+                let JValue::Int(conversion) = args[0] else {
+                    return Err(throw("java.lang.VerifyError: expected a char"));
+                };
+                let conversion =
+                    char::from_u32(u32::try_from(conversion).unwrap_or(0)).unwrap_or('?');
+                let named = match args.get(1) {
+                    Some(JValue::Ref(Some(handle))) => match heap.get(*handle) {
+                        Some(HeapObject::Class { name }) => name.replace('/', "."),
+                        _ => String::from("java.lang.Object"),
+                    },
+                    _ => return Err(throw("java.lang.NullPointerException")),
+                };
+                format!("{conversion} != {named}")
+            };
+            if let Some(HeapObject::Exception { message, .. }) = heap.get_mut(receiver) {
+                *message = Some(text);
+            }
+            Ok(())
+        }
+        // `new PatternSyntaxException(description, pattern, index)` — worded
+        // by the SAME builder the regex engine throws through, so a
+        // constructed one and a compiled-a-bad-pattern one are identical and
+        // `getDescription`/`getPattern`/`getIndex` read either back.
+        ("<init>", "(Ljava/lang/String;Ljava/lang/String;I)V")
+            if class == "java/util/regex/PatternSyntaxException" =>
+        {
+            let description = string_arg(heap, &args[0])?;
+            let pattern = string_arg(heap, &args[1])?;
+            let index = match args.get(2) {
+                Some(JValue::Int(index)) => isize::try_from(*index).unwrap_or(-1),
+                _ => -1,
+            };
+            let text = crate::regex::SyntaxError {
+                description,
+                index,
+                pattern,
+            }
+            .message();
+            if let Some(HeapObject::Exception { message, .. }) = heap.get_mut(receiver) {
+                *message = Some(text);
+            }
+            Ok(())
+        }
+        // `new ParseException(message, errorOffset)` and
+        // `new DateTimeParseException(message, parsedText, errorIndex)` — the
+        // two whose message does NOT carry the extra, so it is stored beside
+        // it rather than parsed back out.
+        ("<init>", "(Ljava/lang/String;I)V" | "(Ljava/lang/String;Ljava/lang/CharSequence;I)V")
+            if caturra_classfile::exceptions::is_exception_class(class) =>
+        {
+            let text = string_arg(heap, &args[0])?;
+            let extra = if descriptor == "(Ljava/lang/String;I)V" {
+                match args.get(1) {
+                    Some(JValue::Int(offset)) => offset.to_string(),
+                    _ => String::from("-1"),
+                }
+            } else {
+                let parsed = match &args[1] {
+                    JValue::Ref(None) => String::new(),
+                    other => string_arg(heap, other)?,
+                };
+                let index = match args.get(2) {
+                    Some(JValue::Int(index)) => *index,
+                    _ => -1,
+                };
+                format!("{parsed}\u{1f}{index}")
+            };
+            if let Some(HeapObject::Exception {
+                message, detail, ..
+            }) = heap.get_mut(receiver)
+            {
+                *message = Some(text);
+                *detail = Some(extra);
+            }
+            Ok(())
         }
         // Exception chaining. `new X(message, cause)` stores both; `new
         // X(cause)` derives the message from the cause's toString, as Java's
@@ -3748,6 +4040,78 @@ pub fn invoke_virtual(
             }
             Ok(None)
         }
+        // `accept(value)` folds one number in, and `combine(other)` folds a
+        // whole summary in — the two ways a program feeds an accumulator it
+        // made itself. Both come before the read-only arm below, which owns
+        // every other method on these objects.
+        (
+            HeapObject::SummaryStats { .. } | HeapObject::DoubleSummaryStats { .. },
+            "accept" | "combine",
+        ) => {
+            let folded = if method == "accept" {
+                match args.first() {
+                    Some(JValue::Double(value)) => Folded::Double(1, *value, *value, *value),
+                    Some(JValue::Long(value)) => Folded::Long(1, *value, *value, *value),
+                    Some(JValue::Int(value)) => {
+                        Folded::Long(1, i64::from(*value), i64::from(*value), i64::from(*value))
+                    }
+                    _ => return Err(throw("java.lang.VerifyError: expected a number")),
+                }
+            } else {
+                let Some(JValue::Ref(Some(other))) = args.first() else {
+                    return Err(throw("java.lang.NullPointerException"));
+                };
+                match heap.get(*other) {
+                    Some(HeapObject::SummaryStats {
+                        count,
+                        sum,
+                        min,
+                        max,
+                        ..
+                    }) => Folded::Long(*count, *sum, *min, *max),
+                    Some(HeapObject::DoubleSummaryStats {
+                        count,
+                        sum,
+                        min,
+                        max,
+                    }) => Folded::Double(*count, *sum, *min, *max),
+                    _ => return Err(throw("java.lang.ClassCastException: not a summary")),
+                }
+            };
+            match (heap.get_mut(receiver), folded) {
+                (
+                    Some(HeapObject::SummaryStats {
+                        count,
+                        sum,
+                        min,
+                        max,
+                        ..
+                    }),
+                    Folded::Long(n, total, low, high),
+                ) => {
+                    *count += n;
+                    *sum = sum.wrapping_add(total);
+                    *min = (*min).min(low);
+                    *max = (*max).max(high);
+                }
+                (
+                    Some(HeapObject::DoubleSummaryStats {
+                        count,
+                        sum,
+                        min,
+                        max,
+                    }),
+                    Folded::Double(n, total, low, high),
+                ) => {
+                    *count += n;
+                    *sum += total;
+                    *min = min.min(low);
+                    *max = max.max(high);
+                }
+                _ => return Err(throw("java.lang.ClassCastException: not a summary")),
+            }
+            Ok(None)
+        }
         // The summary objects — five stored numbers, read back. The integral
         // kinds share a variant; only the class name they print and the width
         // of their accessors differ.
@@ -4098,8 +4462,56 @@ pub fn invoke_virtual(
                 }
             }
         }
-        // `getCause()` — the chained cause, or null.
-        (HeapObject::Exception { cause, .. }, "getCause") => Ok(Some(JValue::Ref(*cause))),
+        // The one piece a few throwables carry beyond their message. Every one
+        // of these reads it back out of the MESSAGE, in the layout the JDK
+        // words it in — so a program that CAUGHT one thrown by caturra's own
+        // formatter gets the same answer as one that constructed it.
+        (
+            HeapObject::Exception {
+                class_name,
+                message,
+                detail,
+                ..
+            },
+            "getFlags" | "getConversion" | "getFormatSpecifier" | "getCharsetName" | "getWidth"
+            | "getPrecision" | "getCodePoint" | "getArgumentClass" | "getErrorOffset"
+            | "getErrorIndex" | "getParsedString",
+        ) => {
+            let class_name = class_name.clone();
+            let message = message.clone().unwrap_or_default();
+            let detail = detail.clone();
+            // `ParseException` and `DateTimeParseException`: the message does
+            // not carry these, so they were stored beside it.
+            let stored = detail.unwrap_or_default();
+            let answer = match method {
+                "getErrorOffset" => JValue::Int(stored.parse().unwrap_or(-1)),
+                "getErrorIndex" => JValue::Int(
+                    stored
+                        .rsplit_once('\u{1f}')
+                        .and_then(|(_, index)| index.parse().ok())
+                        .unwrap_or(-1),
+                ),
+                "getParsedString" => {
+                    let parsed = stored.split_once('\u{1f}').map_or("", |(text, _)| text);
+                    JValue::Ref(Some(heap.alloc_string(parsed)))
+                }
+                _ => {
+                    let Some(piece) = detail_from_exception_message(&class_name, &message) else {
+                        return Err(VmError::UnknownIntrinsic(format!("{class_name}.{method}")));
+                    };
+                    detail_answer(heap, &class_name, method, &piece)
+                }
+            };
+            Ok(Some(answer))
+        }
+        // `getCause()` — the chained cause, or null. Two older throwables call
+        // the same thing `getException` and a third calls it the TARGET; all
+        // three predate `getCause` and answer exactly what it answers, so they
+        // share its arm rather than reading the field a second time.
+        (
+            HeapObject::Exception { cause, .. },
+            "getCause" | "getException" | "getTargetException",
+        ) => Ok(Some(JValue::Ref(*cause))),
         // Every object has an identity hash; a throwable does not override it.
         (HeapObject::Exception { .. }, "hashCode") => Ok(Some(JValue::Int(
             i32::try_from(receiver).unwrap_or(i32::MAX),
@@ -11674,14 +12086,24 @@ pub fn invoke_static(
             ))))
         }
         // `Charset.forName(name)` — and the `StandardCharsets` constants, which
-        // the compiler lowers to the same call. An unknown name is the JDK's
-        // `UnsupportedCharsetException`, whose message is the name itself.
+        // the compiler lowers to the same call.
+        //
+        // A JDK asks TWO questions, in order, and answers them with different
+        // exceptions: is the name even a legal charset name (letters, digits
+        // and `-+.:_`, starting on a letter or digit), and is that charset one
+        // it has? `"!!"` is the first failure and `"zz"` the second, and a
+        // program that catches one does not catch the other.
         "java/nio/charset/Charset" => match method {
             "defaultCharset" => Ok(Some(JValue::Ref(Some(
                 heap.alloc(HeapObject::Charset(String::from("UTF-8"))),
             )))),
             "forName" | "__standard" => {
                 let written = arg_string(heap, &args[0])?;
+                if !is_legal_charset_name(&written) {
+                    return Err(throw(format!(
+                        "java.nio.charset.IllegalCharsetNameException: {written}"
+                    )));
+                }
                 let Some(name) = canonical_charset(&written) else {
                     return Err(throw(format!(
                         "java.nio.charset.UnsupportedCharsetException: {written}"
