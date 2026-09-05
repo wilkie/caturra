@@ -125,6 +125,16 @@ pub struct FieldDecl {
     pub ty: TypeRef,
     pub is_static: bool,
     pub is_private: bool,
+    /// Declared `public` / `protected`. A field carried only `is_private`, so
+    /// every other field was emitted PUBLIC — and `getModifiers()` reported
+    /// `public` for a package-private one, which is what a JDK does not say.
+    pub is_public: bool,
+    pub is_protected: bool,
+    /// A CONSTANT of an enum, which the class file marks with its own bit and
+    /// `Field.isEnumConstant()` reads back. Set only where the enum
+    /// desugaring synthesizes one, so it cannot misfire on an ordinary
+    /// `static final` field of the same type.
+    pub is_enum_constant: bool,
     pub is_final: bool,
     pub init: Option<Expr>,
     /// Textual position among the class's fields and init blocks.

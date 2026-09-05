@@ -29,6 +29,30 @@ class Modifier {
   public static boolean isAbstract(int m) { return (m & 0x0400) != 0; }
   public static boolean isStrict(int m) { return (m & 0x0800) != 0; }
 
+  // Which modifiers each declaration may carry, as the OR of the constants
+  // above — the JDK's own definition, so the numbers are derived here rather
+  // than written out (3103, 223, 3391, 7, 3087, 16).
+  public static int classModifiers() {
+    return PUBLIC | PROTECTED | PRIVATE | ABSTRACT | STATIC | FINAL | STRICT;
+  }
+
+  public static int interfaceModifiers() {
+    return PUBLIC | PROTECTED | PRIVATE | ABSTRACT | STATIC | STRICT;
+  }
+
+  public static int constructorModifiers() { return PUBLIC | PROTECTED | PRIVATE; }
+
+  public static int methodModifiers() {
+    return PUBLIC | PROTECTED | PRIVATE | ABSTRACT | STATIC | FINAL | SYNCHRONIZED | NATIVE | STRICT;
+  }
+
+  public static int fieldModifiers() {
+    return PUBLIC | PROTECTED | PRIVATE | STATIC | FINAL | TRANSIENT | VOLATILE;
+  }
+
+  // A parameter may only be final.
+  public static int parameterModifiers() { return FINAL; }
+
   // Canonical modifier order (java.lang.reflect.Modifier.toString).
   public static String toString(int m) {
     String s = "";

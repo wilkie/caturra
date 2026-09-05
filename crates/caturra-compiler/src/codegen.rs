@@ -200,16 +200,28 @@ fn emit_class(
         } else if let Some(message) = type_arity_error(&field.ty, table) {
             diagnostics.push(Diagnostic::error(path, message, field.span));
         }
-        let mut flags = if field.is_private {
-            caturra_classfile::FieldAccessFlags::PRIVATE
-        } else {
-            caturra_classfile::FieldAccessFlags::PUBLIC
-        };
+        // A field's ACCESS bits, as a JDK reports them from `getModifiers()`.
+        // Package-private is the ABSENCE of all three, not `public` — every
+        // field that was not private used to be emitted `public`, so
+        // `Modifier.toString(f.getModifiers())` said "public static final" for
+        // a `static final` one.
+        let mut flags = 0;
+        if field.is_private {
+            flags |= caturra_classfile::FieldAccessFlags::PRIVATE;
+        } else if field.is_protected {
+            flags |= caturra_classfile::FieldAccessFlags::PROTECTED;
+        } else if field.is_public || decl.is_interface {
+            // Every field of an interface is implicitly public static final.
+            flags |= caturra_classfile::FieldAccessFlags::PUBLIC;
+        }
         if field.is_static {
             flags |= caturra_classfile::FieldAccessFlags::STATIC;
         }
         if field.is_final {
             flags |= caturra_classfile::FieldAccessFlags::FINAL;
+        }
+        if field.is_enum_constant {
+            flags |= caturra_classfile::FieldAccessFlags::ENUM;
         }
         let name_index = class.constant_pool.intern_utf8(&field.name);
         let descriptor_index = class.constant_pool.intern_utf8(&ty.descriptor(table));
@@ -10582,8 +10594,20 @@ fn emit_method(
     if decl.is_private {
         flags |= MethodAccessFlags::PRIVATE;
     }
+    if decl.is_protected {
+        flags |= MethodAccessFlags::PROTECTED;
+    }
     if decl.is_static {
         flags |= MethodAccessFlags::STATIC;
+    }
+    if decl.is_final {
+        flags |= MethodAccessFlags::FINAL;
+    }
+    // A trailing `Type... name` is what makes a method VARARGS, and the bit is
+    // the only thing `Method.isVarArgs()` can read: the descriptor says an
+    // array either way.
+    if decl.params.last().is_some_and(|last| last.is_varargs) {
+        flags |= MethodAccessFlags::VARARGS;
     }
     let jvm_name = if decl.is_constructor {
         "<init>"
@@ -12276,6 +12300,100 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("IntSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
     ("LongSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
     ("DoubleSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
+    ("Year", "query", TEMPORAL_QUERY),
+    ("Year", "adjustInto", BARE_TEMPORAL),
+    ("YearMonth", "query", TEMPORAL_QUERY),
+    ("YearMonth", "adjustInto", BARE_TEMPORAL),
+    ("MonthDay", "query", TEMPORAL_QUERY),
+    ("MonthDay", "adjustInto", BARE_TEMPORAL),
+    ("IsoEra", "query", TEMPORAL_QUERY),
+    ("IsoEra", "adjustInto", BARE_TEMPORAL),
+    ("ChronoField", "query", TEMPORAL_QUERY),
+    ("ChronoField", "adjustInto", BARE_TEMPORAL),
+    ("ChronoField", "resolve", "caturra does not model field RESOLUTION, which is a parsing step"),
+    ("TemporalAdjuster", "adjustInto", BARE_TEMPORAL),
+    (
+        "TemporalAdjusters",
+        "ofDateAdjuster",
+        "caturra models the ADJUSTERS java.time ships, not one built from a function",
+    ),
+    (
+        "ValueRange",
+        "checkValidValue",
+        "caturra models a ValueRange as the two bounds it prints; checking a value against a FIELD is the field's own job",
+    ),
+    (
+        "ValueRange",
+        "checkValidIntValue",
+        "caturra models a ValueRange as the two bounds it prints; checking a value against a FIELD is the field's own job",
+    ),
+    // ---- The reflective members. What is left on each of the three is one
+    // of four things caturra's class files do not carry: annotations,
+    // generic signatures, the `Exceptions` attribute, and parameter NAMES.
+    ("Field", "getAnnotation", ANNOTATIONS_DISCARDED),
+    ("Field", "getAnnotations", ANNOTATIONS_DISCARDED),
+    ("Field", "getAnnotationsByType", ANNOTATIONS_DISCARDED),
+    ("Field", "getDeclaredAnnotation", ANNOTATIONS_DISCARDED),
+    ("Field", "getDeclaredAnnotations", ANNOTATIONS_DISCARDED),
+    ("Field", "getDeclaredAnnotationsByType", ANNOTATIONS_DISCARDED),
+    ("Field", "isAnnotationPresent", ANNOTATIONS_DISCARDED),
+    ("Field", "getAnnotatedType", ANNOTATIONS_DISCARDED),
+    ("Field", "getAnnotatedExceptionTypes", ANNOTATIONS_DISCARDED),
+    ("Field", "getAnnotatedParameterTypes", ANNOTATIONS_DISCARDED),
+    ("Field", "getAnnotatedReceiverType", ANNOTATIONS_DISCARDED),
+    ("Field", "getAnnotatedReturnType", ANNOTATIONS_DISCARDED),
+    ("Field", "getParameterAnnotations", ANNOTATIONS_DISCARDED),
+    ("Field", "getGenericExceptionTypes", ERASED_SIGNATURE),
+    ("Field", "getGenericParameterTypes", ERASED_SIGNATURE),
+    ("Field", "getGenericReturnType", ERASED_SIGNATURE),
+    ("Field", "getTypeParameters", ERASED_SIGNATURE),
+    ("Field", "toGenericString", ERASED_SIGNATURE),
+    ("Method", "getAnnotation", ANNOTATIONS_DISCARDED),
+    ("Method", "getAnnotations", ANNOTATIONS_DISCARDED),
+    ("Method", "getAnnotationsByType", ANNOTATIONS_DISCARDED),
+    ("Method", "getDeclaredAnnotation", ANNOTATIONS_DISCARDED),
+    ("Method", "getDeclaredAnnotations", ANNOTATIONS_DISCARDED),
+    ("Method", "getDeclaredAnnotationsByType", ANNOTATIONS_DISCARDED),
+    ("Method", "isAnnotationPresent", ANNOTATIONS_DISCARDED),
+    ("Method", "getAnnotatedType", ANNOTATIONS_DISCARDED),
+    ("Method", "getAnnotatedExceptionTypes", ANNOTATIONS_DISCARDED),
+    ("Method", "getAnnotatedParameterTypes", ANNOTATIONS_DISCARDED),
+    ("Method", "getAnnotatedReceiverType", ANNOTATIONS_DISCARDED),
+    ("Method", "getAnnotatedReturnType", ANNOTATIONS_DISCARDED),
+    ("Method", "getParameterAnnotations", ANNOTATIONS_DISCARDED),
+    ("Method", "getGenericExceptionTypes", ERASED_SIGNATURE),
+    ("Method", "getGenericParameterTypes", ERASED_SIGNATURE),
+    ("Method", "getGenericReturnType", ERASED_SIGNATURE),
+    ("Method", "getTypeParameters", ERASED_SIGNATURE),
+    ("Method", "toGenericString", ERASED_SIGNATURE),
+    ("Constructor", "getAnnotation", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getAnnotations", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getAnnotationsByType", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getDeclaredAnnotation", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getDeclaredAnnotations", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getDeclaredAnnotationsByType", ANNOTATIONS_DISCARDED),
+    ("Constructor", "isAnnotationPresent", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getAnnotatedType", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getAnnotatedExceptionTypes", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getAnnotatedParameterTypes", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getAnnotatedReceiverType", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getAnnotatedReturnType", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getParameterAnnotations", ANNOTATIONS_DISCARDED),
+    ("Constructor", "getGenericExceptionTypes", ERASED_SIGNATURE),
+    ("Constructor", "getGenericParameterTypes", ERASED_SIGNATURE),
+    ("Constructor", "getGenericReturnType", ERASED_SIGNATURE),
+    ("Constructor", "getTypeParameters", ERASED_SIGNATURE),
+    ("Constructor", "toGenericString", ERASED_SIGNATURE),
+    ("Method", "getExceptionTypes", NO_THROWS_RECORDED),
+    ("Constructor", "getExceptionTypes", NO_THROWS_RECORDED),
+    ("Method", "getParameters", NO_PARAMETER_NAMES),
+    ("Constructor", "getParameters", NO_PARAMETER_NAMES),
+    (
+        "Method",
+        "getDefaultValue",
+        "an annotation member's default is an annotation, and caturra parses annotations and \
+         discards them",
+    ),
     // ---- java.time.format.DateTimeFormatter. caturra's formatter is a
     // PATTERN that renders a value; everything below is either the parsing
     // half (which a program reaches through LocalDate.parse) or one of the
@@ -12321,6 +12439,9 @@ const ERASED_SIGNATURE: &str =
 const CODE_SIGNING: &str = "caturra does not model code signing";
 const NO_CLASS_PATH: &str = "caturra has no class path to load a resource from";
 const NEST_MATES: &str = "caturra does not model nest mates";
+const NO_THROWS_RECORDED: &str = "caturra's class files carry no Exceptions attribute, so a member does not record what it throws";
+const NO_PARAMETER_NAMES: &str =
+    "caturra does not model java.lang.reflect.Parameter - getParameterTypes() gives the types";
 const NO_MODULES: &str = "caturra does not model the module system";
 const CONSUMER_ANDTHEN: &str =
     "caturra does not model a consumer composed of two others - call them in turn";
@@ -12377,6 +12498,15 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::DateFormat => "DateTimeFormatter",
         JType::ChronoUnit => "ChronoUnit",
         JType::StackFrame => "StackTraceElement",
+        JType::Year => "Year",
+        JType::YearMonth => "YearMonth",
+        JType::MonthDay => "MonthDay",
+        JType::IsoEra => "IsoEra",
+        JType::ChronoField => "ChronoField",
+        JType::ValueRange => "ValueRange",
+        JType::Field => "Field",
+        JType::Method => "Method",
+        JType::Constructor => "Constructor",
         JType::SummaryStats(flavour) => flavour.simple_name(),
         _ => "",
     }
@@ -19582,6 +19712,29 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
 
 /// `java.lang.reflect.Constructor` methods.
 const CONSTRUCTOR_METHODS: &[BuiltinMethod] = &[
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // caturra enforces no access control, so `setAccessible` changes nothing
+    // — but these three REPORT the flag, and a program that asks before
+    // setting it should not be told the wrong thing.
+    bm("isAccessible", &[], BRet::Boolean, "()Z"),
+    bm(
+        "canAccess",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("trySetAccessible", &[], BRet::Boolean, "()Z"),
+    bm("isSynthetic", &[], BRet::Boolean, "()Z"),
+    bm("isVarArgs", &[], BRet::Boolean, "()Z"),
+    bm("setAccessible", &[BParam::Boolean], BRet::Void, "(Z)V"),
+    // A constructor's shape reads off the same descriptor a method's does.
+    bm(
+        "getParameterTypes",
+        &[],
+        BRet::ClassArray,
+        "()[Ljava/lang/Class;",
+    ),
+    bm("getParameterCount", &[], BRet::Int, "()I"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getModifiers", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -19595,6 +19748,22 @@ const CONSTRUCTOR_METHODS: &[BuiltinMethod] = &[
 
 /// `java.lang.reflect.Field` methods.
 const FIELD_METHODS: &[BuiltinMethod] = &[
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // caturra enforces no access control, so `setAccessible` changes nothing
+    // — but these three REPORT the flag, and a program that asks before
+    // setting it should not be told the wrong thing.
+    bm("isAccessible", &[], BRet::Boolean, "()Z"),
+    bm(
+        "canAccess",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("trySetAccessible", &[], BRet::Boolean, "()Z"),
+    bm("isSynthetic", &[], BRet::Boolean, "()Z"),
+    // A constant of an enum is a field of the enum's own type, and the class
+    // file marks it.
+    bm("isEnumConstant", &[], BRet::Boolean, "()Z"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getType", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("getModifiers", &[], BRet::Int, "()I"),
@@ -19611,6 +19780,56 @@ const FIELD_METHODS: &[BuiltinMethod] = &[
         &[BParam::Object],
         BRet::Int,
         "(Ljava/lang/Object;)I",
+    ),
+    // The four narrower reads beside them. Which conversions each allows is
+    // one widening rule in the VM, not eight hand-written matches.
+    bm(
+        "getByte",
+        &[BParam::Object],
+        BRet::Byte,
+        "(Ljava/lang/Object;)B",
+    ),
+    bm(
+        "getShort",
+        &[BParam::Object],
+        BRet::Short,
+        "(Ljava/lang/Object;)S",
+    ),
+    bm(
+        "getChar",
+        &[BParam::Object],
+        BRet::Char,
+        "(Ljava/lang/Object;)C",
+    ),
+    bm(
+        "getFloat",
+        &[BParam::Object],
+        BRet::Float,
+        "(Ljava/lang/Object;)F",
+    ),
+    bm(
+        "setByte",
+        &[BParam::Object, BParam::Byte],
+        BRet::Void,
+        "(Ljava/lang/Object;B)V",
+    ),
+    bm(
+        "setShort",
+        &[BParam::Object, BParam::Short],
+        BRet::Void,
+        "(Ljava/lang/Object;S)V",
+    ),
+    bm(
+        "setChar",
+        &[BParam::Object, BParam::Char],
+        BRet::Void,
+        "(Ljava/lang/Object;C)V",
+    ),
+    bm(
+        "setFloat",
+        &[BParam::Object, BParam::Float],
+        BRet::Void,
+        "(Ljava/lang/Object;F)V",
     ),
     bm(
         "getLong",
@@ -19703,6 +19922,24 @@ const STACK_FRAME_METHODS: &[BuiltinMethod] = &[
 ];
 
 const METHOD_METHODS: &[BuiltinMethod] = &[
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // caturra enforces no access control, so `setAccessible` changes nothing
+    // — but these three REPORT the flag, and a program that asks before
+    // setting it should not be told the wrong thing.
+    bm("isAccessible", &[], BRet::Boolean, "()Z"),
+    bm(
+        "canAccess",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("trySetAccessible", &[], BRet::Boolean, "()Z"),
+    bm("isSynthetic", &[], BRet::Boolean, "()Z"),
+    bm("isVarArgs", &[], BRet::Boolean, "()Z"),
+    // A BRIDGE is the override a generic method's erasure synthesizes; a
+    // DEFAULT is an interface method with a body.
+    bm("isBridge", &[], BRet::Boolean, "()Z"),
+    bm("isDefault", &[], BRet::Boolean, "()Z"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getModifiers", &[], BRet::Int, "()I"),
     bm("getReturnType", &[], BRet::Class, "()Ljava/lang/Class;"),

@@ -46,6 +46,12 @@ pub(crate) struct Interpreter<'run> {
     /// the `false` branch, so `equals`, `List.contains` and `HashSet` dedup all
     /// silently disagreed with a real JDK.
     class_pool: HashMap<String, HeapRef>,
+    /// The reflective objects `setAccessible(true)` has been called on.
+    /// caturra enforces no access control, so opening one changes nothing —
+    /// but `isAccessible()`/`canAccess(o)` REPORT the flag, and answering
+    /// them without recording it would tell a program the wrong thing about a
+    /// call it had just made.
+    reflect_opened: std::collections::HashSet<HeapRef>,
     /// The first `Scanner(System.in)` to read anything. A JDK's Scanner
     /// BUFFERS the stream, so whatever it took is gone: a second one over
     /// standard input finds nothing — a real trap in a program that makes two,
@@ -282,6 +288,7 @@ impl<'run> Interpreter<'run> {
             intrinsic_statics: IntrinsicStatics::default(),
             string_pool: HashMap::new(),
             class_pool: HashMap::new(),
+            reflect_opened: std::collections::HashSet::new(),
             stdin_scanner: None,
             rng: intrinsics::JavaRng::new(random_seed),
             statics: HashMap::new(),
@@ -15907,13 +15914,19 @@ impl<'run> Interpreter<'run> {
         // (A user enum's constant CAN have one, and there the two differ:
         // `getClass` names the body's subclass and `getDeclaringClass` the
         // enum. That path is the user one, above.)
-        // ...but NOT on a `Class` itself, whose `getDeclaringClass()` asks
-        // which class DECLARES the one it stands for — answered below with the
-        // rest of `java.lang.Class`. Read as the enum question it would have
-        // said every class declares `java.lang.Class`.
+        // ...but NOT on the REFLECTIVE objects, every one of which has a
+        // `getDeclaringClass()` of its own asking which class declares the
+        // member it stands for. Read as the enum question, a `Class` said
+        // every class declares `java.lang.Class`, and a `Field`/`Method`/
+        // `Constructor` said `java.lang.Object` declares it.
         let class_object = matches!(
             self.heap.get(receiver),
-            Some(crate::value::HeapObject::Class { .. })
+            Some(
+                crate::value::HeapObject::Class { .. }
+                    | crate::value::HeapObject::Field { .. }
+                    | crate::value::HeapObject::Method { .. }
+                    | crate::value::HeapObject::Constructor { .. }
+            )
         );
         if (method_name == "getClass" || (method_name == "getDeclaringClass" && !class_object))
             && descriptor == "()Ljava/lang/Class;"
@@ -18384,13 +18397,32 @@ impl<'run> Interpreter<'run> {
                             intrinsics::field_to_string(&declaring, &name, &descriptor, access);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
+                    "getDeclaringClass" => {
+                        let reference = self.intern_class(declaring.clone());
+                        Ok(Some(JValue::Ref(Some(reference))))
+                    }
+                    // A constant of an enum is a field of the enum's own type,
+                    // marked with the ENUM bit.
+                    "isEnumConstant" => Ok(Some(JValue::Int(i32::from(
+                        access & caturra_classfile::FieldAccessFlags::ENUM != 0,
+                    )))),
+                    "isSynthetic" => Ok(Some(JValue::Int(i32::from(
+                        access & caturra_classfile::FieldAccessFlags::SYNTHETIC != 0,
+                    )))),
+                    "isAccessible" | "canAccess" | "trySetAccessible" => {
+                        Ok(Some(self.reflect_access_answer(receiver, method, access)))
+                    }
                     // `setAccessible` is a no-op (caturra enforces no access control).
-                    "setAccessible" => Ok(None),
-                    "getInt" | "getLong" | "getDouble" | "getBoolean" => {
+                    "setAccessible" => {
+                        self.reflect_opened.insert(receiver);
+                        Ok(None)
+                    }
+                    "getInt" | "getLong" | "getDouble" | "getBoolean" | "getByte" | "getChar"
+                    | "getShort" | "getFloat" => {
                         // Primitive accessors widen the field's value, or refuse.
                         let raw =
                             self.read_reflected_field(&declaring, &name, access, args.first())?;
-                        Self::reflect_get_as(method, &descriptor, raw).map(Some)
+                        Self::reflect_get_as(method, &declaring, &name, &descriptor, raw).map(Some)
                     }
                     "get" => {
                         // `Field.get` returns Object — a primitive field boxes
@@ -18399,13 +18431,18 @@ impl<'run> Interpreter<'run> {
                             self.read_reflected_field(&declaring, &name, access, args.first())?;
                         Ok(Some(self.box_if_primitive(raw, &descriptor)))
                     }
-                    "set" | "setInt" | "setLong" | "setDouble" | "setBoolean" => {
+                    "set" | "setInt" | "setLong" | "setDouble" | "setBoolean" | "setByte"
+                    | "setChar" | "setShort" | "setFloat" => {
                         // `set` stores whatever it is given; the typed setters
                         // widen the value into the field, or refuse.
                         let value = match args.get(1).copied() {
-                            Some(value) if method != "set" => {
-                                Some(Self::reflect_set_as(method, &descriptor, value)?)
-                            }
+                            Some(value) if method != "set" => Some(Self::reflect_set_as(
+                                method,
+                                &declaring,
+                                &name,
+                                &descriptor,
+                                value,
+                            )?),
                             // Plain `set` takes an `Object`, so a primitive
                             // field is handed a WRAPPER — and Java unwraps it
                             // into the field. Storing the reference left an
@@ -18435,6 +18472,29 @@ impl<'run> Interpreter<'run> {
                             intrinsics::constructor_to_string(&declaring, &descriptor, access);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
+                    // A constructor's shape reads off the same descriptor a
+                    // method's does — it simply has no return type to skip.
+                    "getDeclaringClass" => {
+                        let reference = self.intern_class(declaring.clone());
+                        Ok(Some(JValue::Ref(Some(reference))))
+                    }
+                    "getParameterTypes" => Ok(Some(self.parameter_class_array(&descriptor))),
+                    "getParameterCount" => Ok(Some(JValue::Int(
+                        i32::try_from(parse_descriptor_params(&descriptor).len()).unwrap_or(0),
+                    ))),
+                    "isVarArgs" => Ok(Some(JValue::Int(i32::from(
+                        access & caturra_classfile::MethodAccessFlags::VARARGS != 0,
+                    )))),
+                    "isSynthetic" => Ok(Some(JValue::Int(i32::from(
+                        access & caturra_classfile::MethodAccessFlags::SYNTHETIC != 0,
+                    )))),
+                    "setAccessible" => {
+                        self.reflect_opened.insert(receiver);
+                        Ok(None)
+                    }
+                    "isAccessible" | "canAccess" | "trySetAccessible" => {
+                        Ok(Some(self.reflect_access_answer(receiver, method, access)))
+                    }
                     other => Err(VmError::UnknownIntrinsic(format!("Constructor.{other}"))),
                 }
             }
@@ -18455,22 +18515,7 @@ impl<'run> Interpreter<'run> {
                         let reference = self.intern_class(type_name);
                         Ok(Some(JValue::Ref(Some(reference))))
                     }
-                    "getParameterTypes" => {
-                        let params = parse_descriptor_params(&descriptor);
-                        let names: Vec<String> = params
-                            .iter()
-                            .map(|p| intrinsics::type_name_of_descriptor(p))
-                            .collect();
-                        let refs: Vec<JValue> = names
-                            .into_iter()
-                            .map(|name| JValue::Ref(Some(self.intern_class(name))))
-                            .collect();
-                        let array = self.heap.alloc(HeapObject::RefArray(
-                            String::from("[Ljava/lang/Class;"),
-                            refs,
-                        ));
-                        Ok(Some(JValue::Ref(Some(array))))
-                    }
+                    "getParameterTypes" => Ok(Some(self.parameter_class_array(&descriptor))),
                     "getParameterCount" => {
                         let count = parse_descriptor_params(&descriptor).len();
                         Ok(Some(JValue::Int(i32::try_from(count).unwrap_or(0))))
@@ -18499,8 +18544,41 @@ impl<'run> Interpreter<'run> {
                         );
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
-                    "setAccessible" => Ok(None),
                     // `invoke` runs a frame and is handled before this value path.
+                    "getDeclaringClass" => {
+                        let reference = self.intern_class(declaring.clone());
+                        Ok(Some(JValue::Ref(Some(reference))))
+                    }
+                    "isVarArgs" => Ok(Some(JValue::Int(i32::from(
+                        access & caturra_classfile::MethodAccessFlags::VARARGS != 0,
+                    )))),
+                    "isSynthetic" => Ok(Some(JValue::Int(i32::from(
+                        access & caturra_classfile::MethodAccessFlags::SYNTHETIC != 0,
+                    )))),
+                    // A BRIDGE is the synthesized override a generic method
+                    // gets; its bit (0x0040) is `volatile`'s on a field, which
+                    // is why it is not in the shared flag list.
+                    "isBridge" => Ok(Some(JValue::Int(i32::from(access & 0x0040 != 0)))),
+                    // A DEFAULT method is a method of an INTERFACE that has a
+                    // body — neither abstract nor static.
+                    "isDefault" => {
+                        let on_interface = self
+                            .classes
+                            .get(&declaring)
+                            .is_some_and(|class| class.access_flags.0 & 0x0200 != 0);
+                        let concrete = access
+                            & (caturra_classfile::MethodAccessFlags::ABSTRACT
+                                | caturra_classfile::MethodAccessFlags::STATIC)
+                            == 0;
+                        Ok(Some(JValue::Int(i32::from(on_interface && concrete))))
+                    }
+                    "setAccessible" => {
+                        self.reflect_opened.insert(receiver);
+                        Ok(None)
+                    }
+                    "isAccessible" | "canAccess" | "trySetAccessible" => {
+                        Ok(Some(self.reflect_access_answer(receiver, method, access)))
+                    }
                     other => Err(VmError::UnknownIntrinsic(format!("Method.{other}"))),
                 }
             }
@@ -18551,59 +18629,162 @@ impl<'run> Interpreter<'run> {
     /// narrow it — `getLong` on an `int` field is `7L`, while `getInt` on a
     /// `long` field is an `IllegalArgumentException`. Returning the raw value,
     /// as this used to, put a `Long` where the bytecode expected an `Int`.
-    fn reflect_get_as(method: &str, descriptor: &str, raw: JValue) -> Result<JValue, VmError> {
-        let bad = || {
-            Err(VmError::UncaughtException(format!(
-                "java.lang.IllegalArgumentException: cannot read a field of type \
-                 '{descriptor}' with {method}"
-            )))
+    /// A descriptor's parameter types as a `Class[]` — the same reading for a
+    /// method and for a constructor, which differ only in having a return type
+    /// after the parentheses.
+    fn parameter_class_array(&mut self, descriptor: &str) -> JValue {
+        let names: Vec<String> = parse_descriptor_params(descriptor)
+            .iter()
+            .map(|p| intrinsics::type_name_of_descriptor(p))
+            .collect();
+        let refs: Vec<JValue> = names
+            .into_iter()
+            .map(|name| JValue::Ref(Some(self.intern_class(name))))
+            .collect();
+        let array = self.heap.alloc(crate::value::HeapObject::RefArray(
+            String::from("[Ljava/lang/Class;"),
+            refs,
+        ));
+        JValue::Ref(Some(array))
+    }
+
+    /// `isAccessible()`, `canAccess(obj)` and `trySetAccessible()`.
+    ///
+    /// caturra enforces no access control, so `setAccessible(true)` has always
+    /// been a no-op — but these three REPORT that flag, and a program that
+    /// checks `isAccessible()` before setting it would have been told the
+    /// wrong thing. So the flag is now recorded (per reflective object), and
+    /// `canAccess` answers what a JDK answers for a member that is already
+    /// public or has been opened. `trySetAccessible` opens it and says so; it
+    /// can never fail here, since there is no module to refuse.
+    fn reflect_access_answer(&mut self, receiver: HeapRef, method: &str, access: u16) -> JValue {
+        let public = access & caturra_classfile::MethodAccessFlags::PUBLIC != 0;
+        let answer = match method {
+            "isAccessible" => self.reflect_opened.contains(&receiver),
+            "canAccess" => public || self.reflect_opened.contains(&receiver),
+            _ => {
+                self.reflect_opened.insert(receiver);
+                true
+            }
         };
-        // `byte`, `short` and `char` are already Ints at runtime.
-        let integral = matches!(descriptor, "B" | "S" | "C" | "I");
-        match method {
-            "getBoolean" if descriptor == "Z" => Ok(raw),
-            "getInt" if integral => Ok(raw),
-            "getLong" => match (descriptor, raw) {
-                (_, JValue::Int(v)) if integral => Ok(JValue::Long(i64::from(v))),
-                ("J", value @ JValue::Long(_)) => Ok(value),
-                _ => bad(),
-            },
-            "getDouble" => match (descriptor, raw) {
-                (_, JValue::Int(v)) if integral => Ok(JValue::Double(f64::from(v))),
-                #[allow(clippy::cast_precision_loss)] // Java widens long->double the same way
-                ("J", JValue::Long(v)) => Ok(JValue::Double(v as f64)),
-                ("F", JValue::Float(v)) => Ok(JValue::Double(f64::from(v))),
-                ("D", value @ JValue::Double(_)) => Ok(value),
-                _ => bad(),
-            },
-            _ => bad(),
+        JValue::Int(i32::from(answer))
+    }
+
+    /// Which primitive descriptors a value of this one WIDENS into, in the
+    /// JLS's order (§5.1.2) and with itself first.
+    ///
+    /// The typed field accessors are both directions of this one rule:
+    /// `getX` reads a field whose type widens into X, and `setX` writes a
+    /// value that widens into the field. Written as two hand-rolled matches
+    /// they had covered four accessors of the eight, and disagreed about
+    /// `char`.
+    fn widens_into(descriptor: &str) -> &'static [&'static str] {
+        match descriptor {
+            "B" => &["B", "S", "I", "J", "F", "D"],
+            "S" => &["S", "I", "J", "F", "D"],
+            "C" => &["C", "I", "J", "F", "D"],
+            "I" => &["I", "J", "F", "D"],
+            "J" => &["J", "F", "D"],
+            "F" => &["F", "D"],
+            "D" => &["D"],
+            "Z" => &["Z"],
+            _ => &[],
         }
     }
 
-    /// The mirror image for `Field.setInt/setLong/setDouble/setBoolean`: the
-    /// value may widen into the field, never narrow. `setInt` into a `long`
-    /// field stores `5L`; `setLong` into an `int` field is an error.
-    fn reflect_set_as(method: &str, descriptor: &str, value: JValue) -> Result<JValue, VmError> {
-        let bad = || {
-            Err(VmError::UncaughtException(format!(
-                "java.lang.IllegalArgumentException: cannot write a field of type \
-                 '{descriptor}' with {method}"
-            )))
-        };
-        #[allow(clippy::cast_precision_loss)] // Java widens long->double/float likewise
-        match (method, descriptor, value) {
-            // Exact match: store as given.
-            ("setBoolean", "Z", v)
-            | ("setInt", "I", v)
-            | ("setLong", "J", v)
-            | ("setDouble", "D", v) => Ok(v),
-            // Widening conversions.
-            ("setInt", "J", JValue::Int(v)) => Ok(JValue::Long(i64::from(v))),
-            ("setInt", "F", JValue::Int(v)) => Ok(JValue::Float(v as f32)),
-            ("setInt", "D", JValue::Int(v)) => Ok(JValue::Double(f64::from(v))),
-            ("setLong", "F", JValue::Long(v)) => Ok(JValue::Float(v as f32)),
-            ("setLong", "D", JValue::Long(v)) => Ok(JValue::Double(v as f64)),
-            _ => bad(),
+    /// The descriptor a typed accessor names: `getByte`/`setByte` is `B`.
+    fn accessor_descriptor(method: &str) -> &'static str {
+        match method
+            .strip_prefix("get")
+            .or_else(|| method.strip_prefix("set"))
+            .unwrap_or("")
+        {
+            "Byte" => "B",
+            "Short" => "S",
+            "Char" => "C",
+            "Int" => "I",
+            "Long" => "J",
+            "Float" => "F",
+            "Double" => "D",
+            "Boolean" => "Z",
+            _ => "",
+        }
+    }
+
+    /// `Field.getInt(o)` and the seven beside it: the field's value widened
+    /// into the accessor's type, or a JDK's own complaint about a conversion
+    /// that is not a widening.
+    fn reflect_get_as(
+        method: &str,
+        declaring: &str,
+        name: &str,
+        descriptor: &str,
+        raw: JValue,
+    ) -> Result<JValue, VmError> {
+        let wanted = Self::accessor_descriptor(method);
+        if !Self::widens_into(descriptor).contains(&wanted) {
+            return Err(VmError::UncaughtException(format!(
+                "java.lang.IllegalArgumentException: Attempt to get {} field \"{}.{name}\" with \
+                 illegal data type conversion to {}",
+                intrinsics::type_name_of_descriptor(descriptor),
+                declaring.replace('/', "."),
+                intrinsics::type_name_of_descriptor(wanted)
+            )));
+        }
+        // Everything narrower than an `int` is already an `Int` at runtime, so
+        // only the widenings that change a value's SHAPE are listed.
+        Ok(Self::widened(wanted, raw))
+    }
+
+    /// The mirror image, for `Field.setInt(o, v)` and its seven siblings: the
+    /// value widens INTO the field, never narrows.
+    fn reflect_set_as(
+        method: &str,
+        declaring: &str,
+        name: &str,
+        descriptor: &str,
+        value: JValue,
+    ) -> Result<JValue, VmError> {
+        let given = Self::accessor_descriptor(method);
+        if !Self::widens_into(given).contains(&descriptor) {
+            return Err(VmError::UncaughtException(format!(
+                "java.lang.IllegalArgumentException: Can not set {} field {}.{name} to ({}){}",
+                intrinsics::type_name_of_descriptor(descriptor),
+                declaring.replace('/', "."),
+                intrinsics::type_name_of_descriptor(given),
+                Self::reflect_value_text(given, value)
+            )));
+        }
+        Ok(Self::widened(descriptor, value))
+    }
+
+    /// A value in the runtime shape a descriptor calls for.
+    fn widened(descriptor: &str, value: JValue) -> JValue {
+        #[allow(clippy::cast_precision_loss)] // Java widens int/long to float the same way
+        match (descriptor, value) {
+            ("J", JValue::Int(v)) => JValue::Long(i64::from(v)),
+            ("F", JValue::Int(v)) => JValue::Float(v as f32),
+            ("F", JValue::Long(v)) => JValue::Float(v as f32),
+            ("D", JValue::Int(v)) => JValue::Double(f64::from(v)),
+            ("D", JValue::Long(v)) => JValue::Double(v as f64),
+            ("D", JValue::Float(v)) => JValue::Double(f64::from(v)),
+            (_, value) => value,
+        }
+    }
+
+    /// How a JDK writes the REJECTED value into its complaint — as the
+    /// ACCESSOR's own type, so `setInt(x, 1)` on a boolean field says
+    /// `(int)1` and not `(int)true`.
+    fn reflect_value_text(given: &str, value: JValue) -> String {
+        match (given, value) {
+            ("Z", JValue::Int(v)) => (v != 0).to_string(),
+            ("C", JValue::Int(v)) => char::from_u32(u32::try_from(v).unwrap_or(0))
+                .map_or_else(|| v.to_string(), |c| c.to_string()),
+            (_, JValue::Int(v)) => v.to_string(),
+            (_, JValue::Long(v)) => v.to_string(),
+            (_, JValue::Float(v)) => intrinsics::java_float_to_string(v),
+            (_, JValue::Double(v)) => intrinsics::java_double_to_string(v),
+            (_, other) => format!("{other:?}"),
         }
     }
 

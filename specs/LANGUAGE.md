@@ -9043,6 +9043,17 @@ counting catches: a divergence that stopped being one.
   they inherit its composing default; a consumer built out of two others is not
   a value caturra models. Call them in turn.
   (`strict_no_composed_consumer`)
+- `aMethod.getAnnotations()` and the twelve other annotation questions on a
+  `Field`, a `Method` and a `Constructor` — caturra parses annotations and
+  discards them, the same reason a `Class` cannot be asked.
+  (`strict_a_member_has_no_annotations`)
+- `aMethod.getExceptionTypes()` — caturra's class files carry no `Exceptions`
+  attribute, so a member does not record what it throws. Answering an empty
+  array would be a lie about every method that declares a `throws` clause.
+  (`strict_a_member_records_no_throws`)
+- `aMethod.getParameters()` — a `java.lang.reflect.Parameter` is a NAME as well
+  as a type, and a class file only carries names under `-parameters`.
+  `getParameterTypes()` gives the types. (`strict_no_parameter_objects`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -14745,3 +14756,70 @@ writing — a program's output silently landing somewhere it should not.
 Pinned as `the_partial_dates_finished`, `the_edges_of_a_partial_date` and
 `the_small_gaps_a_measurement_found`. The measurement reads 3057/3385 across
 225 classes, with fourteen more of them at 100%.
+
+## What a reflective member knows
+
+`java.lang.reflect` was the worst block the widened measurement found —
+`Method` answered 7 of its 36 names, `Constructor` 3 of 30, `Field` 15 of 38 —
+and it is the block the GRADING path itself walks: a validator finds a
+student's method by reflection before it can call it.
+
+**Three access-flag bits were never emitted**, and each was a wrong answer
+rather than a missing one:
+
+* A field that was not `private` came out `PUBLIC`. The AST carried only
+  `is_private` for a field, though the parser had already read `public` and
+  `protected` — so `Modifier.toString(f.getModifiers())` said "public static
+  final" where a JDK says "static final". Package-private is the ABSENCE of all
+  three bits, not `public`.
+* An enum's constants carried no `ENUM` bit, so `isEnumConstant()` was false
+  for every one of them. It is set where the enum desugaring synthesizes the
+  constant, so it cannot misfire on an ordinary `static final` field of the
+  same type.
+* No method carried `VARARGS`. The descriptor says an array either way; the bit
+  is the only thing `isVarArgs()` can read.
+
+`FINAL` and `PROTECTED` went on beside them, for the same reason: a flag that
+is not written is a question that cannot be answered.
+
+**`getDeclaringClass()` was answering `java.lang.Object`** on all three. The
+arm that answers `getClass`/`getDeclaringClass` together — right for an enum
+CONSTANT, where the two really are the same question — was catching the
+reflective objects too. It already excluded a `Class`; it now excludes the
+other three, which is the whole set of receivers that have a
+`getDeclaringClass` of their own.
+
+**The eight typed field accessors are one rule, both ways round.**
+`getByte`/`getChar`/`getShort`/`getFloat` were missing and their four siblings
+were hand-rolled matches that had come to disagree about `char`. There is one
+statement of what widens into what (JLS §5.1.2), and:
+
+> `getX` reads a field whose type widens INTO X; `setX` writes a value that
+> widens into the FIELD.
+
+The two complaints are a JDK's own, and they are not the same shape as each
+other — a failed read quotes the field
+(`Attempt to get int field "Box.n" with illegal data type conversion to byte`),
+a failed write renders the value it would not take
+(`Can not set int field Box.n to (long)5`).
+
+**`setAccessible` is still a no-op, and now it is recorded.** caturra enforces
+no access control, so opening a member changes nothing — but `isAccessible()`
+and `canAccess(o)` REPORT that flag, and a program that asked after setting it
+would have been told the wrong thing. `trySetAccessible()` opens and answers
+true; it can never fail here, since there is no module to refuse.
+
+Beside those: `Constructor`'s `getParameterTypes`/`getParameterCount` (the same
+descriptor reading a `Method` already had, now shared so the two cannot come to
+differ), `Method.isBridge`/`isDefault`/`isSynthetic`, `Field.isSynthetic`, and
+`Modifier`'s six masks, written in the bundled `Modifier` as the OR of the
+constants above it rather than as the six numbers.
+
+What is left on the three is what a caturra class file does not carry, and it
+says so: annotations (parsed and discarded), generic signatures (erased), the
+`Exceptions` attribute (never written — an empty array would be a lie about
+every method with a `throws` clause), and parameter NAMES.
+
+Pinned as `what_a_reflective_member_knows` and `the_typed_field_accessors`.
+The measurement reads 3094/3385 across 225 classes; `Modifier` and
+`InvocationTargetException` are at 100%, `Field` at 76%.

@@ -52340,3 +52340,150 @@ public class OrdO3 {
 }
 "#
 );
+
+// ---- Reflection: `Method` answered 7 of its 36 names, `Constructor` 3 of
+// 30, `Field` 15 of 38 — the worst block the widened measurement found, and
+// the one the GRADING path itself walks.
+//
+// Most of what was missing reads straight off the class file once the class
+// file says it. Three access-flag bits were simply never emitted: a field that
+// was not private came out PUBLIC (so `Modifier.toString` said "public static
+// final" for a package-private `static final`), an enum constant carried no
+// ENUM bit, and no method carried VARARGS. A `getDeclaringClass()` on any of
+// the three was intercepted by the arm that answers the same name on an enum
+// CONSTANT, so every member reported `java.lang.Object`.
+differential_test!(
+    what_a_reflective_member_knows,
+    "ReflF1",
+    r#"
+import java.lang.reflect.*;
+public class ReflF1 {
+  interface Greeter { String hi(); default String loud() { return hi().toUpperCase(); } }
+  enum Colour { RED, GREEN }
+  static class Box {
+    public int n;
+    private String label;
+    static final double SCALE = 2.0;
+    byte b; char c; short s; float f; long l; boolean flag;
+    Box() {}
+    Box(int n, String label) { this.n = n; this.label = label; }
+    int sum(int a, int b) { return a + b; }
+    static void varargs(String head, int... rest) {}
+    void boom() throws java.io.IOException {}
+  }
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static Method named(String name) throws Exception {
+    for (Method m : Box.class.getDeclaredMethods()) if (m.getName().equals(name)) return m;
+    throw new NoSuchMethodException(name);
+  }
+  public static void main(String[] a) throws Exception {
+    Field n = Box.class.getDeclaredField("n");
+    Field label = Box.class.getDeclaredField("label");
+    Field scale = Box.class.getDeclaredField("SCALE");
+    // --- declaring class
+    s("field declaring", () -> n.getDeclaringClass().getSimpleName());
+    s("method declaring", () -> named("sum").getDeclaringClass().getSimpleName());
+    s("ctor declaring", () -> Box.class.getDeclaredConstructors()[0].getDeclaringClass().getSimpleName());
+    // --- the typed field accessors
+    s("field widths", () -> { Box x = new Box(); x.b = 7; x.c = 'q'; x.s = 9; x.f = 1.5f; x.l = 11L; x.flag = true;
+      Field fb = Box.class.getDeclaredField("b"), fc = Box.class.getDeclaredField("c"), fs = Box.class.getDeclaredField("s"), ff = Box.class.getDeclaredField("f");
+      fb.setAccessible(true); fc.setAccessible(true); fs.setAccessible(true); ff.setAccessible(true);
+      return fb.getByte(x) + " " + fc.getChar(x) + " " + fs.getShort(x) + " " + ff.getFloat(x); });
+    s("field set widths", () -> { Box x = new Box();
+      Field fb = Box.class.getDeclaredField("b"), fc = Box.class.getDeclaredField("c"), fs = Box.class.getDeclaredField("s"), ff = Box.class.getDeclaredField("f");
+      fb.setAccessible(true); fc.setAccessible(true); fs.setAccessible(true); ff.setAccessible(true);
+      fb.setByte(x, (byte) 3); fc.setChar(x, 'z'); fs.setShort(x, (short) 4); ff.setFloat(x, 2.5f);
+      return x.b + " " + x.c + " " + x.s + " " + x.f; });
+    s("wrong width", () -> { Box x = new Box(); n.setAccessible(true); return n.getByte(x); });
+    // --- the flag questions
+    s("field is enum constant", () -> n.isEnumConstant() + " " + Colour.class.getDeclaredField("RED").isEnumConstant());
+    s("field synthetic", () -> n.isSynthetic());
+    s("method varargs", () -> named("varargs").isVarArgs() + " " + named("sum").isVarArgs());
+    s("method synthetic", () -> named("sum").isSynthetic());
+    s("method default", () -> { Method loud = Greeter.class.getDeclaredMethod("loud"); Method hi = Greeter.class.getDeclaredMethod("hi"); return loud.isDefault() + " " + hi.isDefault(); });
+    s("ctor varargs", () -> Box.class.getDeclaredConstructors()[0].isVarArgs());
+    // --- the constructor's shape
+    s("ctor param count", () -> { int[] counts = new int[3]; for (Constructor<?> c : Box.class.getDeclaredConstructors()) counts[c.getParameterCount()] += 1; return counts[0] + " " + counts[2]; });
+    s("ctor param types", () -> { for (Constructor<?> c : Box.class.getDeclaredConstructors()) if (c.getParameterCount() == 2) { Class<?>[] p = c.getParameterTypes(); return p[0].getName() + " " + p[1].getName(); } return "?"; });
+    s("ctor accessible", () -> { Constructor<?> c = Box.class.getDeclaredConstructor(); c.setAccessible(true); return "ok"; });
+    // --- accessibility
+    s("field accessible", () -> { Field x = Box.class.getDeclaredField("label"); boolean before = x.isAccessible(); x.setAccessible(true); return before + " " + x.isAccessible(); });
+    s("field can access", () -> { Field x = Box.class.getDeclaredField("n"); return x.canAccess(new Box()); });
+    s("field try set", () -> Box.class.getDeclaredField("label").trySetAccessible());
+    // --- Modifier's masks
+    s("modifier masks", () -> Modifier.classModifiers() + " " + Modifier.fieldModifiers() + " " + Modifier.methodModifiers() + " " + Modifier.constructorModifiers() + " " + Modifier.interfaceModifiers() + " " + Modifier.parameterModifiers());
+    s("static final field", () -> Modifier.toString(scale.getModifiers()));
+    s("label modifiers", () -> Modifier.toString(label.getModifiers()));
+  }
+}
+"#
+);
+// The eight typed field accessors, both directions of ONE widening rule:
+// `getX` reads a field whose type widens into X, `setX` writes a value that
+// widens into the field. Written as two hand-rolled matches they had covered
+// four of the eight and disagreed about `char`. The two complaints are a
+// JDK's own, and they are not the same shape as each other — a failed read
+// quotes the field, a failed write renders the value it would not take.
+differential_test!(
+    the_typed_field_accessors,
+    "ReflF2",
+    r#"
+import java.lang.reflect.*;
+public class ReflF2 {
+  static class Box { int n = 1; long big = 2; byte b = 3; boolean flag = true; String label = "x"; double d = 4; }
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static Field f(String name) throws Exception { Field x = Box.class.getDeclaredField(name); x.setAccessible(true); return x; }
+  public static void main(String[] a) throws Exception {
+    Box x = new Box();
+    s("get byte from int", () -> f("n").getByte(x));
+    s("get char from int", () -> f("n").getChar(x));
+    s("get short from byte", () -> f("b").getShort(x));
+    s("get int from byte", () -> f("b").getInt(x));
+    s("get float from long", () -> f("big").getFloat(x));
+    s("get double from boolean", () -> f("flag").getDouble(x));
+    s("get int from boolean", () -> f("flag").getInt(x));
+    s("get int from String", () -> f("label").getInt(x));
+    s("get boolean from int", () -> f("n").getBoolean(x));
+    s("set long into int", () -> { f("n").setLong(x, 5L); return x.n; });
+    s("set byte into int", () -> { f("n").setByte(x, (byte) 5); return x.n; });
+    s("set int into byte", () -> { f("b").setInt(x, 5); return x.b; });
+    s("set double into int", () -> { f("n").setDouble(x, 5.0); return x.n; });
+    s("set int into boolean", () -> { f("flag").setInt(x, 1); return x.flag; });
+    s("set int into String", () -> { f("label").setInt(x, 1); return x.label; });
+    s("set char into int", () -> { f("n").setChar(x, 'A'); return x.n; });
+    s("get on null", () -> f("n").getInt(null));
+    s("get object field as int", () -> f("label").get(x));
+    s("declaring binary", () -> f("n").getDeclaringClass().getName());
+  }
+}
+"#
+);
+
+// What a caturra class file does not carry, and so cannot be asked for: the
+// annotations it parses and discards, the generic signature erasure removed,
+// the `Exceptions` attribute it never writes, and parameter NAMES.
+stricter_than_javac!(
+    strict_a_member_has_no_annotations,
+    "StrictMemberAnnotations",
+    "import java.lang.reflect.*;\npublic class StrictMemberAnnotations { static void r() throws Exception { StrictMemberAnnotations.class.getDeclaredMethods()[0].getAnnotations(); } }"
+);
+
+stricter_than_javac!(
+    strict_a_member_records_no_throws,
+    "StrictMemberThrows",
+    "import java.lang.reflect.*;\npublic class StrictMemberThrows { static void r() throws Exception { StrictMemberThrows.class.getDeclaredMethods()[0].getExceptionTypes(); } }"
+);
+
+stricter_than_javac!(
+    strict_no_parameter_objects,
+    "StrictParameters",
+    "import java.lang.reflect.*;\npublic class StrictParameters { static void r() throws Exception { StrictParameters.class.getDeclaredMethods()[0].getParameters(); } }"
+);
