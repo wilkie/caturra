@@ -114,8 +114,15 @@ exists in Java, but …" — and never reads as "cannot find symbol", which is w
 a typo looks like. That is checked rather than claimed:
 `scripts/coverage/measure.py --why` prints the complaint for every missing name
 and exits non-zero if one of them is a bare "cannot find symbol". The same run
-reports how much is answered: 1406 of 1552 method names across 56 classes, with
-a refusal counting as MISSING rather than as known.
+reports how much is answered, with a refusal counting as MISSING rather than as
+known.
+
+That measurement used to be taken over 56 hand-picked classes — less than a
+quarter of the 232 core `java.*` classes caturra names, and the 176 it skipped
+were skipped for no better reason than that nobody had written down a receiver
+expression for them. All 232 are measured now: **2833 of 3268 method names
+across 214 classes**. A receiver that does not itself compile is reported as a
+measurement failure rather than counted as a class scoring zero.
 
 ## Non-goals (for now)
 

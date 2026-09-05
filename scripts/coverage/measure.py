@@ -120,6 +120,30 @@ def complaint(class_name, receiver, name, methods):
     return "(no error)"
 
 
+def receiver_compiles(receiver):
+    """Whether the RECEIVER expression itself compiles.
+
+    A receiver that does not is a measurement failure and not a result: every
+    method on it comes back "cannot find symbol" about the receiver, and the
+    class reads as 0/N when the truth is that the probe was wrong. Asked with
+    `hashCode()`, which every receiver in Java has and caturra answers
+    generically.
+    """
+    source = (
+        "public class Probe {\n    public static void main(String[] args) throws Exception {\n"
+        f"        System.out.println(({receiver}).hashCode());\n    }}\n}}\n"
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "Probe.java")
+        with open(path, "w") as handle:
+            handle.write(source)
+        result = subprocess.run(
+            [ENGINE, path], capture_output=True, text=True, cwd=REPO, timeout=300
+        )
+    problems = [l for l in result.stdout.splitlines() if l.startswith("Error@")]
+    return (result.returncode == 0 and not problems), (problems[0] if problems else "")
+
+
 def inventory(class_names):
     """What a REAL JDK offers on each class, by reflection — the denominator.
 
@@ -168,11 +192,16 @@ def main():
     )
     api = inventory(sorted(receivers))
     total_known = total_all = 0
-    rows, unexplained = [], []
+    rows, unexplained, broken = [], [], []
     for class_name, methods in sorted(api.items()):
         receiver = receivers.get(class_name)
         if receiver in (None, "SKIP"):
             continue
+        if receiver != "STATIC":
+            compiles, complained = receiver_compiles(receiver)
+            if not compiles:
+                broken.append(f"{class_name}: {receiver} — {complained}")
+                continue
         known, missing = measure(class_name, receiver, methods)
         if why:
             for name in missing:
@@ -194,6 +223,11 @@ def main():
     # The other half of the estimate: how many classes there are to have
     # methods on. A share is meaningless here — nobody models all of the JDK —
     # so this is an inventory, not a percentage.
+    if broken:
+        print(f"\n{len(broken)} receivers do not compile — these classes were NOT measured:")
+        for line in broken:
+            print(f"  {line}")
+
     if why and unexplained:
         print(f"\n{len(unexplained)} missing names say only \"cannot find symbol\":")
         for name in unexplained:

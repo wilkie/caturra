@@ -14584,7 +14584,17 @@ been written out three times for a `Locale`, seven times for a `Temporal` and
 five for a `TemporalQuery`.
 
 Pinned as `the_long_tail_of_a_modelled_class` and the nine `strict_no_*` pins
-above. The measurement reads 1406/1552 method names answered across 56 classes
+above. The measurement read 1406/1552 method names answered across 56 classes
 — down from the 1449 it reported before, because an honest refusal now counts
 as a name that is MISSING rather than one that is known. It is the same engine;
 the number is just no longer flattered by its own good manners.
+
+**And then the same question about the measurement itself.** Those 56 classes
+were the ones somebody had written a receiver expression for — less than a
+quarter of the 232 core `java.*` classes caturra names. The other 176 were not
+measured, which is a different thing from being complete. All of them are
+measured now (**2833/3268 across 214 classes**), and the script refuses to
+score a class whose receiver expression does not compile: that reads exactly
+like a class scoring zero, and it is not the same fact. Eleven did — the
+exception constructors that take something other than a message, and the three
+summary-statistics classes with no visible constructor.
