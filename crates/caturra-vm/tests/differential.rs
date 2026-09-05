@@ -52487,3 +52487,112 @@ stricter_than_javac!(
     "StrictParameters",
     "import java.lang.reflect.*;\npublic class StrictParameters { static void r() throws Exception { StrictParameters.class.getDeclaredMethods()[0].getParameters(); } }"
 );
+
+// ---- `DecimalFormat` answered 20 of its 49 names and `NumberFormat` 19 of
+// 27 — the two that turn a number into something a person reads.
+//
+// Most of what was missing is already IN the pattern the engine parses: the
+// four affixes, the multiplier, the digit counts. Three flags were not, and
+// each is observable: the separator a format shows with nothing after it, and
+// the two questions about PARSING — stop at the separator, and answer a
+// `BigDecimal` rather than a `Long`/`Double`.
+//
+// `getIntegerInstance()` is the one factory that parses integers only, which
+// is a second thing about it a javadoc mentions in passing.
+differential_test!(
+    what_a_number_format_is_asked,
+    "NumFmtN1",
+    r##"
+import java.text.*;
+public class NumFmtN1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    // --- the affixes
+    s("prefixes", () -> { DecimalFormat f = new DecimalFormat("#,##0.00;(#,##0.00)"); return "[" + f.getPositivePrefix() + "][" + f.getPositiveSuffix() + "][" + f.getNegativePrefix() + "][" + f.getNegativeSuffix() + "]"; });
+    s("plain prefixes", () -> { DecimalFormat f = new DecimalFormat("0.0"); return "[" + f.getPositivePrefix() + "][" + f.getNegativePrefix() + "]"; });
+    s("percent affix", () -> { DecimalFormat f = new DecimalFormat("#0.0%"); return "[" + f.getPositiveSuffix() + "][" + f.getNegativeSuffix() + "]"; });
+    s("set prefix", () -> { DecimalFormat f = new DecimalFormat("0.0"); f.setPositivePrefix("<"); f.setNegativePrefix(">"); f.setPositiveSuffix("!"); f.setNegativeSuffix("?"); return f.format(1.5) + " " + f.format(-1.5); });
+    s("set prefix pattern", () -> { DecimalFormat f = new DecimalFormat("0.0"); f.setPositivePrefix("<"); return f.toPattern(); });
+    // --- the multiplier
+    s("multiplier default", () -> new DecimalFormat("0.0").getMultiplier() + " " + new DecimalFormat("0.0%").getMultiplier() + " " + new DecimalFormat("0.0‰").getMultiplier());
+    s("set multiplier", () -> { DecimalFormat f = new DecimalFormat("0.0"); f.setMultiplier(3); return f.format(2) + " " + f.getMultiplier(); });
+    s("multiplier zero", () -> { DecimalFormat f = new DecimalFormat("0.0"); f.setMultiplier(0); return f.format(7); });
+    // --- the separator
+    s("always shown", () -> { DecimalFormat f = new DecimalFormat("#"); return f.isDecimalSeparatorAlwaysShown() + " " + f.format(5); });
+    s("set always shown", () -> { DecimalFormat f = new DecimalFormat("#"); f.setDecimalSeparatorAlwaysShown(true); return f.format(5) + " " + f.isDecimalSeparatorAlwaysShown() + " " + f.toPattern(); });
+    s("always shown with fraction", () -> { DecimalFormat f = new DecimalFormat("0.0"); f.setDecimalSeparatorAlwaysShown(true); return f.format(5); });
+    // --- parsing flags
+    s("parse integer only", () -> { DecimalFormat f = new DecimalFormat("0.0"); boolean before = f.isParseIntegerOnly(); f.setParseIntegerOnly(true); return before + " " + f.isParseIntegerOnly() + " " + f.parse("12.75"); });
+    s("parse big decimal", () -> { DecimalFormat f = new DecimalFormat("0.0"); boolean before = f.isParseBigDecimal(); f.setParseBigDecimal(true); Object v = f.parse("12.75"); return before + " " + v.getClass().getSimpleName() + " " + v; });
+    s("parse object", () -> new DecimalFormat("0.0").parseObject("42.5"));
+    s("parse plain", () -> { Object v = new DecimalFormat("0.0").parse("42.5"); return v.getClass().getSimpleName() + " " + v; });
+    s("parse whole", () -> { Object v = new DecimalFormat("0").parse("42"); return v.getClass().getSimpleName() + " " + v; });
+    // --- the factories
+    s("get instance", () -> NumberFormat.getInstance().format(1234.5));
+    s("number instance", () -> NumberFormat.getNumberInstance().format(1234.5));
+    s("integer instance", () -> NumberFormat.getIntegerInstance().format(1234.5));
+    s("percent instance", () -> NumberFormat.getPercentInstance().format(0.25));
+    s("currency instance", () -> NumberFormat.getCurrencyInstance().format(1234.5));
+    s("integer instance parses ints", () -> NumberFormat.getIntegerInstance().isParseIntegerOnly());
+    s("instance is a DecimalFormat", () -> NumberFormat.getInstance().getClass().getName());
+    s("instance pattern", () -> ((DecimalFormat) NumberFormat.getInstance()).toPattern());
+    s("integer pattern", () -> ((DecimalFormat) NumberFormat.getIntegerInstance()).toPattern());
+    s("percent pattern", () -> ((DecimalFormat) NumberFormat.getPercentInstance()).toPattern());
+    s("currency pattern", () -> ((DecimalFormat) NumberFormat.getCurrencyInstance()).toPattern());
+    // --- clone
+    s("clone", () -> { DecimalFormat f = new DecimalFormat("0.0"); DecimalFormat g = (DecimalFormat) f.clone(); g.setMultiplier(5); return f.getMultiplier() + " " + g.getMultiplier() + " " + (f == g); });
+  }
+}
+"##
+);
+// `toPattern()` after a SETTER. A JDK stores a programmatically-set affix as
+// a LITERAL, and then spells both halves of the pattern out — which is why
+// `setNegativePrefix("-")` comes back as `'-'` and not `-`, though the text is
+// the one the pattern would have derived anyway. Setting anything else (a
+// multiplier, a digit count) leaves the pattern's shape alone.
+differential_test!(
+    the_pattern_a_format_writes_back,
+    "NumFmtN2",
+    r##"
+import java.text.*;
+public class NumFmtN2 {
+  static void p(String label, DecimalFormat f) { System.out.println(label + " = [" + f.toPattern() + "]"); }
+  public static void main(String[] a) {
+    p("plain", new DecimalFormat("0.0"));
+    p("hash", new DecimalFormat("#"));
+    p("grouped", new DecimalFormat("#,##0.00"));
+    p("two subpatterns", new DecimalFormat("#,##0.00;(#,##0.00)"));
+    p("percent", new DecimalFormat("#0.0%"));
+    DecimalFormat a1 = new DecimalFormat("0.0"); a1.setPositivePrefix("<"); p("pos prefix", a1);
+    DecimalFormat a2 = new DecimalFormat("0.0"); a2.setNegativePrefix(">"); p("neg prefix", a2);
+    DecimalFormat a3 = new DecimalFormat("0.0"); a3.setPositiveSuffix("!"); p("pos suffix", a3);
+    DecimalFormat a4 = new DecimalFormat("#,##0.00"); a4.setPositivePrefix("<"); p("grouped prefix", a4);
+    DecimalFormat a5 = new DecimalFormat("#"); a5.setDecimalSeparatorAlwaysShown(true); p("always shown", a5);
+    DecimalFormat a6 = new DecimalFormat("0.0"); a6.setMultiplier(3); p("multiplier", a6);
+    DecimalFormat a7 = new DecimalFormat("0.0"); a7.setNegativePrefix("-"); p("neg prefix same", a7);
+    DecimalFormat a8 = new DecimalFormat("0.0"); a8.setMaximumFractionDigits(4); p("more fraction", a8);
+    System.out.println("neg suffix of grouped = [" + new DecimalFormat("#,##0.00").getNegativeSuffix() + "]");
+    System.out.println("format after prefix = " + a4.format(12) + " " + a4.format(-12));
+  }
+}
+"##
+);
+
+// What a number format is asked that is not about the NUMBER: the currency it
+// names, the symbols it draws with, the locales it could have used, and the
+// attributed text a Swing field would style.
+stricter_than_javac!(
+    strict_a_format_names_no_currency,
+    "StrictFormatCurrency",
+    "import java.text.*;\npublic class StrictFormatCurrency { static void r() { new DecimalFormat(\"0.0\").getCurrency(); } }"
+);
+
+stricter_than_javac!(
+    strict_no_format_symbols,
+    "StrictFormatSymbols",
+    "import java.text.*;\npublic class StrictFormatSymbols { static void r() { new DecimalFormat(\"0.0\").getDecimalFormatSymbols(); } }"
+);

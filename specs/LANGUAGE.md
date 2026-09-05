@@ -9054,6 +9054,13 @@ counting catches: a divergence that stopped being one.
 - `aMethod.getParameters()` — a `java.lang.reflect.Parameter` is a NAME as well
   as a type, and a class file only carries names under `-parameters`.
   `getParameterTypes()` gives the types. (`strict_no_parameter_objects`)
+- `aFormat.getCurrency()` / `setCurrency(c)` — caturra does not model
+  `java.util.Currency`; the pattern's currency sign is what it draws.
+  (`strict_a_format_names_no_currency`)
+- `aFormat.getDecimalFormatSymbols()` / `setDecimalFormatSymbols(s)` — the
+  separators and the grouping character are the ones its locale draws with,
+  and are not a value a program can take apart.
+  (`strict_no_format_symbols`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -14823,3 +14830,55 @@ every method with a `throws` clause), and parameter NAMES.
 Pinned as `what_a_reflective_member_knows` and `the_typed_field_accessors`.
 The measurement reads 3094/3385 across 225 classes; `Modifier` and
 `InvocationTargetException` are at 100%, `Field` at 76%.
+
+## What a number format is asked
+
+`DecimalFormat` answered 20 of its 49 names and `NumberFormat` 19 of 27 — the
+two classes that turn a number into something a person reads, and the ones a
+money exercise is written in.
+
+**Most of what was missing was already in the pattern.** caturra parses a
+pattern into a `NumberPattern` that carries the four affixes, the multiplier,
+the digit counts, the grouping and the rounding mode — so the getters were a
+field read each, and the setters a field write. What a JDK does with them is
+not obvious, though, and the capture settled three things:
+
+* The four affixes are not what a pattern LOOKS like. `#,##0.00;(#,##0.00)` has
+  an empty positive prefix and suffix, `(` and `)` for the negative pair; a
+  plain `0.0` has `-` as its negative prefix, not `""`; and a `%` pattern puts
+  the sign in BOTH suffixes.
+* Setting one affix does not derive the others. `setPositivePrefix("<")` leaves
+  the negative prefix at `-`, which is then no longer the derived `-<`.
+* `setMultiplier(0)` is not refused; it formats everything as zero.
+
+**Three flags were not in the pattern**, and each is observable:
+`setDecimalSeparatorAlwaysShown(true)` makes `#` render 5 as `5.` (and its
+pattern as `#.`), `setParseIntegerOnly(true)` stops a read AT the separator so
+`"12.75"` parses to 12, and `setParseBigDecimal(true)` answers a `BigDecimal`
+where a `Long` or a `Double` would be — which is how a program reads money back
+without going through a `double` at all.
+
+**`toPattern()` after a setter** is the one genuinely surprising rule:
+
+> A JDK stores a programmatically-set affix as a LITERAL, and its `toPattern()`
+> then spells BOTH halves out. So `setNegativePrefix("-")` comes back as
+> `'-'`, though the text is exactly what the pattern would have derived.
+
+Modelled as a flag saying an affix came from a setter, rather than by comparing
+the two halves as WRITTEN — that second reading was tried, and it broke a
+pattern whose own prefix is a quoted `#`.
+
+Beside those: `parseObject` (which IS `parse` — the two differ only in the type
+a JDK declares, so they share an arm), `clone` (a real copy, which is the whole
+reason a program clones a format), and `DecimalFormat.getInstance()` and its
+four siblings — inherited statics that used to report the CLASS as unknown, the
+same shape `PrintStream.nullOutputStream()` had. `getIntegerInstance()` parses
+integers only, which is a second thing about it the javadoc mentions in
+passing.
+
+What is left says why: `java.util.Currency`, `DecimalFormatSymbols`, the
+available `Locale`s, and the attributed text a Swing field would style.
+
+Pinned as `what_a_number_format_is_asked` and
+`the_pattern_a_format_writes_back`. The measurement reads 3121/3385 across 225
+classes; `DecimalFormat` went 41% → 88%, `NumberFormat` 70% → 85%.

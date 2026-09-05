@@ -12327,6 +12327,19 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
         "checkValidIntValue",
         "caturra models a ValueRange as the two bounds it prints; checking a value against a FIELD is the field's own job",
     ),
+    // ---- java.text: what a number format is asked that is not about the
+    // NUMBER — the currency it names, the symbols it draws with, the locales
+    // it could have used.
+    ("DecimalFormat", "getCurrency", NO_CURRENCY),
+    ("DecimalFormat", "setCurrency", NO_CURRENCY),
+    ("DecimalFormat", "getAvailableLocales", NO_LOCALE_VALUE),
+    ("DecimalFormat", "formatToCharacterIterator", NO_CHARACTER_ITERATOR),
+    ("NumberFormat", "getCurrency", NO_CURRENCY),
+    ("NumberFormat", "setCurrency", NO_CURRENCY),
+    ("NumberFormat", "getAvailableLocales", NO_LOCALE_VALUE),
+    ("NumberFormat", "formatToCharacterIterator", NO_CHARACTER_ITERATOR),
+    ("DecimalFormat", "getDecimalFormatSymbols", NO_FORMAT_SYMBOLS),
+    ("DecimalFormat", "setDecimalFormatSymbols", NO_FORMAT_SYMBOLS),
     // ---- The reflective members. What is left on each of the three is one
     // of four things caturra's class files do not carry: annotations,
     // generic signatures, the `Exceptions` attribute, and parameter NAMES.
@@ -12439,6 +12452,11 @@ const ERASED_SIGNATURE: &str =
 const CODE_SIGNING: &str = "caturra does not model code signing";
 const NO_CLASS_PATH: &str = "caturra has no class path to load a resource from";
 const NEST_MATES: &str = "caturra does not model nest mates";
+const NO_CURRENCY: &str =
+    "caturra does not model java.util.Currency - the pattern's currency sign is what it draws";
+const NO_FORMAT_SYMBOLS: &str = "caturra does not model java.text.DecimalFormatSymbols - the separators are the ones its locale draws with";
+const NO_CHARACTER_ITERATOR: &str =
+    "caturra does not model java.text.AttributedCharacterIterator - format(value) gives the text";
 const NO_THROWS_RECORDED: &str = "caturra's class files carry no Exceptions attribute, so a member does not record what it throws";
 const NO_PARAMETER_NAMES: &str =
     "caturra does not model java.lang.reflect.Parameter - getParameterTypes() gives the types";
@@ -17552,6 +17570,24 @@ const STRING_WRITER_METHODS: &[BuiltinMethod] = &[
 /// `java.text.NumberFormat` — the face its factories answer with, and the
 /// methods every formatter has.
 const NUMBER_FORMAT_METHODS: &[BuiltinMethod] = &[
+    // The two questions about PARSING rather than formatting, which a
+    // `NumberFormat` has as much as a `DecimalFormat` does.
+    bm("isParseIntegerOnly", &[], BRet::Boolean, "()Z"),
+    bm(
+        "setParseIntegerOnly",
+        &[BParam::Boolean],
+        BRet::Void,
+        "(Z)V",
+    ),
+    bm(
+        "parseObject",
+        &[BParam::Str],
+        BRet::Object,
+        "(Ljava/lang/String;)Ljava/lang/Object;",
+    ),
+    // `clone()` is a real copy — the whole reason a program clones a format
+    // is to change one without changing the other.
+    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm(
         "format",
         &[BParam::Double],
@@ -17631,6 +17667,66 @@ const NUMBER_FORMAT_METHODS: &[BuiltinMethod] = &[
 /// `java.text.DecimalFormat` — everything a `NumberFormat` has, plus the
 /// PATTERN, which is the whole reason a program names the subclass.
 const DECIMAL_FORMAT_METHODS: &[BuiltinMethod] = &[
+    // The two questions about PARSING rather than formatting, which a
+    // `NumberFormat` has as much as a `DecimalFormat` does.
+    bm("isParseIntegerOnly", &[], BRet::Boolean, "()Z"),
+    bm(
+        "setParseIntegerOnly",
+        &[BParam::Boolean],
+        BRet::Void,
+        "(Z)V",
+    ),
+    bm(
+        "parseObject",
+        &[BParam::Str],
+        BRet::Object,
+        "(Ljava/lang/String;)Ljava/lang/Object;",
+    ),
+    // `clone()` is a real copy — the whole reason a program clones a format
+    // is to change one without changing the other.
+    bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
+    // The four affixes the two halves of a pattern wear, read and written.
+    bm("getPositivePrefix", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getPositiveSuffix", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getNegativePrefix", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getNegativeSuffix", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "setPositivePrefix",
+        &[BParam::Str],
+        BRet::Void,
+        "(Ljava/lang/String;)V",
+    ),
+    bm(
+        "setPositiveSuffix",
+        &[BParam::Str],
+        BRet::Void,
+        "(Ljava/lang/String;)V",
+    ),
+    bm(
+        "setNegativePrefix",
+        &[BParam::Str],
+        BRet::Void,
+        "(Ljava/lang/String;)V",
+    ),
+    bm(
+        "setNegativeSuffix",
+        &[BParam::Str],
+        BRet::Void,
+        "(Ljava/lang/String;)V",
+    ),
+    // The factor a value is scaled by before it is written: 100 for a percent
+    // pattern, 1000 for a per-mille one.
+    bm("getMultiplier", &[], BRet::Int, "()I"),
+    bm("setMultiplier", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("isDecimalSeparatorAlwaysShown", &[], BRet::Boolean, "()Z"),
+    bm(
+        "setDecimalSeparatorAlwaysShown",
+        &[BParam::Boolean],
+        BRet::Void,
+        "(Z)V",
+    ),
+    bm("isParseBigDecimal", &[], BRet::Boolean, "()Z"),
+    bm("setParseBigDecimal", &[BParam::Boolean], BRet::Void, "(Z)V"),
     bm(
         "format",
         &[BParam::Double],
@@ -22443,7 +22539,12 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "BigInteger" => Some(("java/math/BigInteger", BIG_INTEGER_STATIC_METHODS)),
         "BigDecimal" => Some(("java/math/BigDecimal", BIG_DECIMAL_STATIC_METHODS)),
         "RoundingMode" => Some(("java/math/RoundingMode", ROUNDING_MODE_STATIC_METHODS)),
-        "NumberFormat" => Some(("java/text/NumberFormat", NUMBER_FORMAT_STATIC_METHODS)),
+        // A `DecimalFormat` inherits every one of `NumberFormat`'s factories,
+        // so `DecimalFormat.getInstance()` is ordinary Java — and used to
+        // report the CLASS as unknown.
+        "NumberFormat" | "DecimalFormat" => {
+            Some(("java/text/NumberFormat", NUMBER_FORMAT_STATIC_METHODS))
+        }
         "UUID" => Some(("java/util/UUID", UUID_STATIC_METHODS)),
         "Base64" => Some(("java/util/Base64", BASE64_STATIC_METHODS)),
         "BitSet" => Some(("java/util/BitSet", BITSET_STATIC_METHODS)),

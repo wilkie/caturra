@@ -12185,7 +12185,7 @@ pub fn invoke_static(
         // is a `DecimalFormat` over the pattern the locale would give — and
         // the locale here has no COUNTRY, so its currency sign is the generic
         // one, exactly as a JDK with `LANG=en` answers.
-        "java/text/NumberFormat" => {
+        "java/text/NumberFormat" | "java/text/DecimalFormat" => {
             let pattern = match method {
                 "getIntegerInstance" => "#,##0",
                 "getCurrencyInstance" => "\u{00a4}#,##0.00",
@@ -12196,8 +12196,10 @@ pub fn invoke_static(
                 .unwrap_or_else(|_| crate::numfmt::NumberPattern::default());
             if method == "getIntegerInstance" {
                 // The integer instance rounds half-EVEN to a whole number,
-                // which is the one factory whose mode is not the default.
+                // which is the one factory whose mode is not the default —
+                // and it PARSES integers only, which is the other.
                 parsed.rounding = crate::decimal::Rounding::HalfEven;
+                parsed.parse_integer_only = true;
             }
             Ok(Some(JValue::Ref(Some(
                 heap.alloc(HeapObject::NumberFormat(Box::new(parsed))),
@@ -15557,15 +15559,32 @@ fn number_format_method(
             };
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
         }
-        "parse" => {
+        // `parseObject` IS `parse` — the two differ only in the type a JDK
+        // declares, which is why they share an arm rather than one calling
+        // the other.
+        "parse" | "parseObject" => {
             let text = arg_string(heap, &args[0])?;
-            let Some(value) = pattern.parse_number(&text) else {
+            // `setParseIntegerOnly(true)` stops the read AT the separator, so
+            // "12.75" is 12 — not 13, and not a failure.
+            let read = if pattern.parse_integer_only {
+                text.split_once('.')
+                    .map_or(text.clone(), |(whole, _)| whole.to_owned())
+            } else {
+                text.clone()
+            };
+            let Some(value) = pattern.parse_number(&read) else {
                 return Err(throw(format!(
                     "java.text.ParseException: Unparseable number: \"{text}\""
                 )));
             };
             // A whole number comes back as a `Long`, anything else as a
             // `Double` — which is what a program's `intValue()` then reads.
+            // `setParseBigDecimal(true)` overrides both, and is how a program
+            // reads money back without going through a `double`.
+            if pattern.parse_big_decimal {
+                let reference = heap.alloc(HeapObject::BigDecimal(value));
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
             let boxed = match value.to_i64_exact() {
                 Ok(whole) => heap.box_wrapper("java/lang/Long", JValue::Long(whole)),
                 Err(_) => heap.box_wrapper("java/lang/Double", JValue::Double(value.to_f64())),
@@ -15651,6 +15670,73 @@ fn number_format_method(
             Ok(Some(JValue::Int(i32::from(same))))
         }
         "hashCode" => Ok(Some(JValue::Int(identity_hash(receiver)))),
+        // The four affixes a pattern's two halves wear. Reading one is just
+        // the field; WRITING one stores a literal, which is what makes
+        // `setNegativePrefix("-")` show as `'-'` in the pattern afterwards.
+        "getPositivePrefix" | "getPositiveSuffix" | "getNegativePrefix" | "getNegativeSuffix" => {
+            let text = match method {
+                "getPositivePrefix" => &pattern.positive_prefix,
+                "getPositiveSuffix" => &pattern.positive_suffix,
+                "getNegativePrefix" => &pattern.negative_prefix,
+                _ => &pattern.negative_suffix,
+            };
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(text)))))
+        }
+        "setPositivePrefix" | "setPositiveSuffix" | "setNegativePrefix" | "setNegativeSuffix" => {
+            let text = match args.first() {
+                Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                Some(JValue::Ref(None)) => {
+                    return Err(throw("java.lang.NullPointerException"));
+                }
+                _ => None,
+            }
+            .unwrap_or_default();
+            let which = match method {
+                "setPositivePrefix" => crate::numfmt::Affix::PositivePrefix,
+                "setPositiveSuffix" => crate::numfmt::Affix::PositiveSuffix,
+                "setNegativePrefix" => crate::numfmt::Affix::NegativePrefix,
+                _ => crate::numfmt::Affix::NegativeSuffix,
+            };
+            let mut changed = pattern.clone();
+            changed.set_affix(which, text);
+            store(heap, *changed)
+        }
+        // The factor a value is scaled by before it is written — 100 for a
+        // percent pattern, 1000 for a per-mille one, and whatever a program
+        // sets.
+        "getMultiplier" => Ok(Some(JValue::Int(
+            i32::try_from(pattern.multiplier).unwrap_or(i32::MAX),
+        ))),
+        "setMultiplier" => {
+            let mut changed = pattern.clone();
+            changed.multiplier = i64::from(int_arg());
+            store(heap, *changed)
+        }
+        "isDecimalSeparatorAlwaysShown" => Ok(Some(JValue::Int(i32::from(
+            pattern.decimal_separator_always_shown,
+        )))),
+        "setDecimalSeparatorAlwaysShown" => {
+            let mut changed = pattern.clone();
+            changed.decimal_separator_always_shown = matches!(args.first(), Some(JValue::Int(1)));
+            store(heap, *changed)
+        }
+        "isParseIntegerOnly" => Ok(Some(JValue::Int(i32::from(pattern.parse_integer_only)))),
+        "setParseIntegerOnly" => {
+            let mut changed = pattern.clone();
+            changed.parse_integer_only = matches!(args.first(), Some(JValue::Int(1)));
+            store(heap, *changed)
+        }
+        "isParseBigDecimal" => Ok(Some(JValue::Int(i32::from(pattern.parse_big_decimal)))),
+        "setParseBigDecimal" => {
+            let mut changed = pattern.clone();
+            changed.parse_big_decimal = matches!(args.first(), Some(JValue::Int(1)));
+            store(heap, *changed)
+        }
+        // `clone()` is a real copy: changing one afterwards must not reach the
+        // other, which is the whole reason a program clones a format.
+        "clone" => Ok(Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::NumberFormat(pattern.clone())),
+        )))),
         _ => Err(VmError::UnknownIntrinsic(format!("DecimalFormat.{method}"))),
     }
 }

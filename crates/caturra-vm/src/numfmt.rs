@@ -52,6 +52,18 @@ pub struct NumberPattern {
     pub multiplier: i64,
     /// `0.###E0` — the minimum width of the exponent that follows.
     pub exponent_digits: Option<u32>,
+    /// `setDecimalSeparatorAlwaysShown(true)` — a format with no fraction
+    /// digits still writes the separator, so `#` renders 5 as `5.`. It shows
+    /// in the pattern too (`#.`), which is why it lives here.
+    pub decimal_separator_always_shown: bool,
+    /// The two questions about PARSING rather than formatting: stop at the
+    /// separator, and answer a `BigDecimal` rather than a `Long`/`Double`.
+    pub parse_integer_only: bool,
+    pub parse_big_decimal: bool,
+    /// Any of the four affixes came from a SETTER rather than the pattern.
+    /// A JDK stores such an affix as a literal, and its `toPattern()` then
+    /// spells both halves out.
+    pub affixes_set: bool,
     pub rounding: Rounding,
 }
 
@@ -79,6 +91,10 @@ impl Default for NumberPattern {
             grouping_size: 3,
             multiplier: 1,
             exponent_digits: None,
+            decimal_separator_always_shown: false,
+            parse_integer_only: false,
+            parse_big_decimal: false,
+            affixes_set: false,
             rounding: Rounding::HalfEven,
         }
     }
@@ -87,6 +103,15 @@ impl Default for NumberPattern {
 /// The currency sign for a locale with no country — which is caturra's, since
 /// a sandbox has no way to know one. A JDK with `LANG=en` answers the same.
 pub const CURRENCY_SIGN: char = '\u{00a4}';
+
+/// Which of a pattern's four affixes a setter is writing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Affix {
+    PositivePrefix,
+    PositiveSuffix,
+    NegativePrefix,
+    NegativeSuffix,
+}
 
 impl NumberPattern {
     /// Parse a `DecimalFormat` pattern.
@@ -231,6 +256,42 @@ impl NumberPattern {
         Ok(out)
     }
 
+    /// Record an affix a SETTER supplied. A JDK stores such an affix as a
+    /// literal, which is why `setNegativePrefix("-")` then `toPattern()` is
+    /// `'-'` and not `-`: quoted, it no longer matches the negative half the
+    /// positive one derives, so the pattern spells both out.
+    pub fn set_affix(&mut self, which: Affix, text: String) {
+        self.affixes_set = true;
+        let needs_quoting = text.chars().any(|c| {
+            matches!(
+                c,
+                '-' | '#' | '0' | ',' | '.' | ';' | '%' | 'E' | CURRENCY_SIGN
+            )
+        });
+        match which {
+            Affix::PositivePrefix => {
+                self.positive_prefix = text;
+                self.positive_prefix_quoted = needs_quoting;
+                self.positive_prefix_code = false;
+            }
+            Affix::PositiveSuffix => {
+                self.positive_suffix = text;
+                self.positive_suffix_quoted = needs_quoting;
+                self.positive_suffix_code = false;
+            }
+            Affix::NegativePrefix => {
+                self.negative_prefix = text;
+                self.negative_prefix_quoted = needs_quoting;
+                self.negative_prefix_code = false;
+            }
+            Affix::NegativeSuffix => {
+                self.negative_suffix = text;
+                self.negative_suffix_quoted = needs_quoting;
+                self.negative_suffix_code = false;
+            }
+        }
+    }
+
     /// The pattern a JDK's `toPattern` writes back — which is NOT always the
     /// one handed in: `0` comes back as `#0`, because the width one above the
     /// minimum is written out too. The affixes are echoed as they were WRITTEN.
@@ -247,8 +308,13 @@ impl NumberPattern {
             self.positive_suffix_quoted,
             self.positive_suffix_code,
         ));
-        // The negative half is written only when it is not the derived one.
-        if self.negative_prefix != format!("-{}", self.positive_prefix)
+        // The negative half is written only when it is not the derived one —
+        // or when a SETTER supplied any affix, which a JDK spells out even if
+        // the text it was handed is the derived one. That is why
+        // `setNegativePrefix("-")` comes back as `'-'` in the pattern: stored
+        // as a literal, it is no longer the minus sign the pattern derives.
+        if self.affixes_set
+            || self.negative_prefix != format!("-{}", self.positive_prefix)
             || self.negative_suffix != self.positive_suffix
         {
             out.push(';');
@@ -302,6 +368,8 @@ impl NumberPattern {
                     '#'
                 });
             }
+        } else if self.decimal_separator_always_shown {
+            out.push('.');
         }
         if let Some(width) = self.exponent_digits {
             out.push('E');
@@ -379,7 +447,13 @@ impl NumberPattern {
         } else {
             integral
         };
-        if !fraction.is_empty() {
+        if fraction.is_empty() {
+            // `setDecimalSeparatorAlwaysShown(true)` writes the separator even
+            // with nothing after it, so `#` renders 5 as `5.`
+            if self.decimal_separator_always_shown {
+                out.push('.');
+            }
+        } else {
             out.push('.');
             out.push_str(&fraction);
         }
