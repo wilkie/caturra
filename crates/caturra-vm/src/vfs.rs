@@ -22,12 +22,65 @@ pub enum VfsError {
     DirectoryNotEmpty(String),
     #[error("file already exists: {0}")]
     AlreadyExists(String),
+    /// The entry is there and its permissions say no. Worded as a JDK words
+    /// it, because it reaches a program through the same
+    /// `FileNotFoundException` an absent file does.
+    #[error("{0} (Permission denied)")]
+    PermissionDenied(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Node {
     File(Vec<u8>),
     Directory,
+}
+
+/// Which permission bit `setReadable`/`setWritable`/`setExecutable` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    Read,
+    Write,
+    Execute,
+}
+
+/// One entry, and what `java.io.File` can ask about it besides its bytes.
+///
+/// The permissions are real state rather than a fixed answer: a program that
+/// calls `setReadOnly()` and then `canWrite()` is testing exactly this, and a
+/// filesystem that always said "writable" would answer it wrongly.
+///
+/// They are also ENFORCED. That was worth measuring rather than assuming: the
+/// first version of this comment said they were advisory, and a JDK capture
+/// said otherwise — opening a read-only file for writing is
+/// `FileNotFoundException: name (Permission denied)`, and so is reading one
+/// that is not readable. What is NOT gated is metadata: `exists`, `length`
+/// and `delete` all work on a file a program has locked itself out of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Entry {
+    node: Node,
+    readable: bool,
+    writable: bool,
+    executable: bool,
+    /// Milliseconds since the epoch, as `File.lastModified` reports them. Zero
+    /// until the host supplies a clock, which is also what a JDK answers for a
+    /// file that is not there.
+    modified: i64,
+}
+
+impl Entry {
+    /// A newly written file or directory: readable and writable, and not
+    /// executable — which is what a JDK reports for a file a program just
+    /// made, and `true` for the execute bit only on a directory.
+    fn new(node: Node) -> Self {
+        let executable = matches!(node, Node::Directory);
+        Self {
+            node,
+            readable: true,
+            writable: true,
+            executable,
+            modified: 0,
+        }
+    }
 }
 
 /// A flat-map filesystem: normalized absolute path → node.
@@ -37,7 +90,12 @@ enum Node {
 /// student workflow — "just write a file" — friction-free.
 #[derive(Debug, Clone)]
 pub struct VirtualFileSystem {
-    nodes: BTreeMap<String, Node>,
+    nodes: BTreeMap<String, Entry>,
+    /// What the host's clock last said, in milliseconds since the epoch. Every
+    /// write stamps the entry it touches from HERE rather than from a clock of
+    /// its own, so no write path can forget to — the defect a per-call-site
+    /// stamp would keep inviting.
+    clock: i64,
 }
 
 impl Default for VirtualFileSystem {
@@ -50,8 +108,94 @@ impl VirtualFileSystem {
     #[must_use]
     pub fn new() -> Self {
         let mut nodes = BTreeMap::new();
-        nodes.insert("/".to_owned(), Node::Directory);
-        Self { nodes }
+        nodes.insert("/".to_owned(), Entry::new(Node::Directory));
+        Self { nodes, clock: 0 }
+    }
+
+    /// Tell the filesystem what time it is. The interpreter does this on the
+    /// way into every intrinsic call, so a write always has a current clock
+    /// without every write path having to ask for one.
+    pub fn set_clock(&mut self, millis: i64) {
+        self.clock = millis;
+    }
+
+    /// Write a node, KEEPING the permissions and time an entry at that path
+    /// already had. Rewriting a file does not make it writable again — a
+    /// program that calls `setReadOnly()` and then writes anyway must still
+    /// find `canWrite()` false, because that is what a JDK's file says.
+    fn write_entry(&mut self, path: String, node: Node) {
+        let clock = self.clock;
+        if let Some(existing) = self.nodes.get_mut(&path) {
+            existing.node = node;
+            existing.modified = clock;
+            return;
+        }
+        let mut entry = Entry::new(node);
+        entry.modified = clock;
+        self.nodes.insert(path, entry);
+    }
+
+    /// Whether a write to this path is allowed: the FILE's own bit when it is
+    /// already there, and otherwise the DIRECTORY it would be created in — a
+    /// JDK refuses `new PrintWriter(new File(readOnlyDir, "x"))` for the
+    /// directory's sake, not the file's.
+    fn check_writable(&self, path: &str) -> Result<(), VfsError> {
+        if let Some(entry) = self.nodes.get(path) {
+            return if entry.writable {
+                Ok(())
+            } else {
+                Err(VfsError::PermissionDenied(path.to_owned()))
+            };
+        }
+        match Self::parent_of(path).and_then(|parent| self.nodes.get(parent)) {
+            Some(parent) if !parent.writable => Err(VfsError::PermissionDenied(path.to_owned())),
+            _ => Ok(()),
+        }
+    }
+
+    /// The three permission bits, as `canRead`/`canWrite`/`canExecute` answer
+    /// them. A path that is not there has none of them, which is a JDK's
+    /// answer too — the question is about a file, and there is no file.
+    #[must_use]
+    pub fn permissions(&self, path: &str) -> (bool, bool, bool) {
+        self.nodes
+            .get(&Self::normalize(path))
+            .map_or((false, false, false), |entry| {
+                (entry.readable, entry.writable, entry.executable)
+            })
+    }
+
+    /// Set one of them, and say whether there was a file to set it on —
+    /// which is what `setReadable` and its three siblings return.
+    pub fn set_permission(&mut self, path: &str, which: Permission, value: bool) -> bool {
+        let Some(entry) = self.nodes.get_mut(&Self::normalize(path)) else {
+            return false;
+        };
+        match which {
+            Permission::Read => entry.readable = value,
+            Permission::Write => entry.writable = value,
+            Permission::Execute => entry.executable = value,
+        }
+        true
+    }
+
+    /// Milliseconds since the epoch, or 0 for a path that is not there.
+    #[must_use]
+    pub fn modified(&self, path: &str) -> i64 {
+        self.nodes
+            .get(&Self::normalize(path))
+            .map_or(0, |entry| entry.modified)
+    }
+
+    /// ...and set it, answering whether there was a file to set it on.
+    pub fn set_modified(&mut self, path: &str, millis: i64) -> bool {
+        match self.nodes.get_mut(&Self::normalize(path)) {
+            Some(entry) => {
+                entry.modified = millis;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Normalize a path to absolute form: resolves `.` and `..`,
@@ -90,11 +234,12 @@ impl VirtualFileSystem {
     /// overwriting any existing file at that path.
     pub fn write_file(&mut self, path: &str, contents: impl Into<Vec<u8>>) -> Result<(), VfsError> {
         let path = Self::normalize(path);
-        if matches!(self.nodes.get(&path), Some(Node::Directory)) {
+        if matches!(self.nodes.get(&path), Some(e) if e.node == Node::Directory) {
             return Err(VfsError::IsDirectory(path));
         }
+        self.check_writable(&path)?;
         self.mkdir_parents(&path)?;
-        self.nodes.insert(path, Node::File(contents.into()));
+        self.write_entry(path, Node::File(contents.into()));
         Ok(())
     }
 
@@ -102,8 +247,17 @@ impl VirtualFileSystem {
     pub fn read_file(&self, path: &str) -> Result<&[u8], VfsError> {
         let path = Self::normalize(path);
         match self.nodes.get(&path) {
-            Some(Node::File(bytes)) => Ok(bytes),
-            Some(Node::Directory) => Err(VfsError::IsDirectory(path)),
+            Some(Entry {
+                readable: false, ..
+            }) => Err(VfsError::PermissionDenied(path)),
+            Some(Entry {
+                node: Node::File(bytes),
+                ..
+            }) => Ok(bytes),
+            Some(Entry {
+                node: Node::Directory,
+                ..
+            }) => Err(VfsError::IsDirectory(path)),
             None => Err(VfsError::NotFound(path)),
         }
     }
@@ -111,12 +265,25 @@ impl VirtualFileSystem {
     /// Append to a file, creating it (and parents) if absent.
     pub fn append_file(&mut self, path: &str, contents: &[u8]) -> Result<(), VfsError> {
         let path = Self::normalize(path);
+        self.check_writable(&path)?;
+        let clock = self.clock;
         match self.nodes.get_mut(&path) {
-            Some(Node::File(bytes)) => {
+            // An append is a write: it stamps the time like any other, which
+            // is what makes a file a program has just printed into report a
+            // `lastModified` rather than the zero of a file that is not there.
+            Some(Entry {
+                node: Node::File(bytes),
+                modified,
+                ..
+            }) => {
                 bytes.extend_from_slice(contents);
+                *modified = clock;
                 Ok(())
             }
-            Some(Node::Directory) => Err(VfsError::IsDirectory(path)),
+            Some(Entry {
+                node: Node::Directory,
+                ..
+            }) => Err(VfsError::IsDirectory(path)),
             None => self.write_file(&path, contents),
         }
     }
@@ -124,11 +291,11 @@ impl VirtualFileSystem {
     /// Create a directory (and any missing parents).
     pub fn mkdir(&mut self, path: &str) -> Result<(), VfsError> {
         let path = Self::normalize(path);
-        if matches!(self.nodes.get(&path), Some(Node::File(_))) {
+        if matches!(self.nodes.get(&path), Some(e) if matches!(e.node, Node::File(_))) {
             return Err(VfsError::AlreadyExists(path));
         }
         self.mkdir_parents(&path)?;
-        self.nodes.insert(path, Node::Directory);
+        self.write_entry(path, Node::Directory);
         Ok(())
     }
 
@@ -137,14 +304,20 @@ impl VirtualFileSystem {
         let mut current = Self::parent_of(path);
         while let Some(dir) = current {
             match self.nodes.get(dir) {
-                Some(Node::Directory) => break,
-                Some(Node::File(_)) => return Err(VfsError::NotADirectory(dir.to_owned())),
+                Some(Entry {
+                    node: Node::Directory,
+                    ..
+                }) => break,
+                Some(Entry {
+                    node: Node::File(_),
+                    ..
+                }) => return Err(VfsError::NotADirectory(dir.to_owned())),
                 None => missing.push(dir.to_owned()),
             }
             current = Self::parent_of(dir);
         }
         for dir in missing {
-            self.nodes.insert(dir, Node::Directory);
+            self.write_entry(dir, Node::Directory);
         }
         Ok(())
     }
@@ -160,14 +333,17 @@ impl VirtualFileSystem {
     pub fn is_directory(&self, path: &str) -> bool {
         matches!(
             self.nodes.get(&Self::normalize(path)),
-            Some(Node::Directory)
+            Some(Entry {
+                node: Node::Directory,
+                ..
+            })
         )
     }
 
     /// Whether the path names a regular file.
     #[must_use]
     pub fn is_file(&self, path: &str) -> bool {
-        matches!(self.nodes.get(&Self::normalize(path)), Some(Node::File(_)))
+        matches!(self.nodes.get(&Self::normalize(path)), Some(e) if matches!(e.node, Node::File(_)))
     }
 
     /// File length in bytes (`File.length()` semantics: 0 for
@@ -175,7 +351,10 @@ impl VirtualFileSystem {
     #[must_use]
     pub fn len(&self, path: &str) -> u64 {
         match self.nodes.get(&Self::normalize(path)) {
-            Some(Node::File(bytes)) => bytes.len() as u64,
+            Some(Entry {
+                node: Node::File(bytes),
+                ..
+            }) => bytes.len() as u64,
             _ => 0,
         }
     }
@@ -191,8 +370,14 @@ impl VirtualFileSystem {
     pub fn list_dir(&self, path: &str) -> Result<Vec<String>, VfsError> {
         let path = Self::normalize(path);
         match self.nodes.get(&path) {
-            Some(Node::Directory) => {}
-            Some(Node::File(_)) => return Err(VfsError::NotADirectory(path)),
+            Some(Entry {
+                node: Node::Directory,
+                ..
+            }) => {}
+            Some(Entry {
+                node: Node::File(_),
+                ..
+            }) => return Err(VfsError::NotADirectory(path)),
             None => return Err(VfsError::NotFound(path)),
         }
         let prefix = if path == "/" {
@@ -226,7 +411,7 @@ impl VirtualFileSystem {
         if to.starts_with(&format!("{from}/")) {
             return Err(VfsError::NotADirectory(to));
         }
-        if matches!(self.nodes.get(&to), Some(Node::Directory)) {
+        if matches!(self.nodes.get(&to), Some(e) if e.node == Node::Directory) {
             return Err(VfsError::IsDirectory(to));
         }
         // A directory moves with everything under it, so the paths to rewrite
@@ -259,7 +444,10 @@ impl VirtualFileSystem {
         let path = Self::normalize(path);
         match self.nodes.get(&path) {
             None => return Err(VfsError::NotFound(path)),
-            Some(Node::Directory) => {
+            Some(Entry {
+                node: Node::Directory,
+                ..
+            }) => {
                 if !self.list_dir(&path)?.is_empty() {
                     return Err(VfsError::DirectoryNotEmpty(path));
                 }
@@ -267,7 +455,10 @@ impl VirtualFileSystem {
                     return Err(VfsError::DirectoryNotEmpty(path));
                 }
             }
-            Some(Node::File(_)) => {}
+            Some(Entry {
+                node: Node::File(_),
+                ..
+            }) => {}
         }
         self.nodes.remove(&path);
         Ok(())

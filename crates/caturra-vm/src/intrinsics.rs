@@ -3243,7 +3243,7 @@ pub fn invoke_special(
                     // and writes through as the program prints.
                     path.clone_from(&text);
                     vfs.write_file(&text, Vec::new())
-                        .map_err(|e| throw(format!("java.io.FileNotFoundException: {e}")))?;
+                        .map_err(|error| open_failure(&error, &text))?;
                     Ok(())
                 }
                 Some(HeapObject::Reader {
@@ -3254,11 +3254,9 @@ pub fn invoke_special(
                     ..
                 }) => {
                     // FileReader(String): slurp the whole file up front.
-                    let content = vfs.read_file(&text).map_err(|_| {
-                        throw(format!(
-                            "java.io.FileNotFoundException: {text} (No such file or directory)"
-                        ))
-                    })?;
+                    let content = vfs
+                        .read_file(&text)
+                        .map_err(|error| open_failure(&error, &text))?;
                     *buffer = String::from_utf8_lossy(content).into_owned();
                     *pos = 0;
                     *stdin = false;
@@ -3312,7 +3310,7 @@ pub fn invoke_special(
             let appends = matches!(args.get(1), Some(JValue::Int(flag)) if *flag != 0);
             if !appends || vfs.read_file(&target).is_err() {
                 vfs.write_file(&target, Vec::new())
-                    .map_err(|e| throw(format!("java.io.FileNotFoundException: {e}")))?;
+                    .map_err(|error| open_failure(&error, &target))?;
             }
             if let Some(HeapObject::Writer { path, .. }) = heap.get_mut(receiver) {
                 *path = target;
@@ -3324,7 +3322,7 @@ pub fn invoke_special(
             match heap.get(receiver) {
                 Some(HeapObject::Writer { .. }) => {
                     vfs.write_file(&target, Vec::new())
-                        .map_err(|e| throw(format!("java.io.FileNotFoundException: {e}")))?;
+                        .map_err(|error| open_failure(&error, &target))?;
                     if let Some(HeapObject::Writer { path, .. }) = heap.get_mut(receiver) {
                         *path = target;
                     }
@@ -3334,12 +3332,7 @@ pub fn invoke_special(
                     // Scanner(File): slurp the whole file up front.
                     let content = vfs
                         .read_file(&target)
-                        .map_err(|_| {
-                            throw(format!(
-                                "java.io.FileNotFoundException: {target} \
-                                 (No such file or directory)"
-                            ))
-                        })?
+                        .map_err(|error| open_failure(&error, &target))?
                         .to_vec();
                     let text = String::from_utf8_lossy(&content).into_owned();
                     if let Some(HeapObject::Scanner {
@@ -3362,12 +3355,7 @@ pub fn invoke_special(
                     // FileReader(File): slurp the whole file up front.
                     let content = vfs
                         .read_file(&target)
-                        .map_err(|_| {
-                            throw(format!(
-                                "java.io.FileNotFoundException: {target} \
-                                 (No such file or directory)"
-                            ))
-                        })?
+                        .map_err(|error| open_failure(&error, &target))?
                         .to_vec();
                     let text = String::from_utf8_lossy(&content).into_owned();
                     if let Some(HeapObject::Reader {
@@ -3539,6 +3527,10 @@ pub fn invoke_virtual(
     descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
+    // Every write stamps the file's modified time from the filesystem's own
+    // clock, so it is set HERE — once, on the way in — rather than at each of
+    // the write paths, any one of which could forget.
+    vfs.set_clock(console.now_millis());
     let receiver_object = heap.get(receiver).ok_or_else(|| VmError::MalformedClass {
         name: class.to_owned(),
         reason: format!("dangling heap reference {receiver}"),
@@ -8451,6 +8443,21 @@ fn absolute_path(path: &str) -> String {
     }
 }
 
+/// What a failed open says. A missing file and an unreadable one both reach a
+/// program as `FileNotFoundException`, and only the parenthesis differs — so
+/// the three open sites ask this rather than each spelling one of the two.
+fn open_failure(error: &crate::vfs::VfsError, path: &str) -> VmError {
+    match error {
+        crate::vfs::VfsError::PermissionDenied(_) => throw(format!(
+            "java.io.FileNotFoundException: {path} (Permission denied)"
+        )),
+        _ => throw(format!(
+            "java.io.FileNotFoundException: {path} (No such file or directory)"
+        )),
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per File method
 fn file_method(
     heap: &mut Heap,
     vfs: &mut VirtualFileSystem,
@@ -8465,6 +8472,49 @@ fn file_method(
     let boolean = |b: bool| Ok(Some(JValue::Int(i32::from(b))));
     match method {
         "exists" => boolean(vfs.exists(&path)),
+        // The three permission questions. A path that is not there has none of
+        // them — the question is about a file, and there is no file.
+        "canRead" => boolean(vfs.permissions(&path).0),
+        "canWrite" => boolean(vfs.permissions(&path).1),
+        "canExecute" => boolean(vfs.permissions(&path).2),
+        // ...and the four that SET them, each answering whether there was a
+        // file to set it on. `setReadOnly` is `setWritable(false)` under
+        // another name.
+        "setReadable" | "setWritable" | "setExecutable" | "setReadOnly" => {
+            use crate::vfs::Permission;
+            let (which, value) = match method {
+                "setReadable" => (Permission::Read, true),
+                "setWritable" => (Permission::Write, true),
+                "setExecutable" => (Permission::Execute, true),
+                _ => (Permission::Write, false),
+            };
+            // `setReadable(flag)` / `setReadable(flag, ownerOnly)` — the
+            // second argument is about WHO, which one program on one
+            // filesystem cannot tell apart.
+            let value = match args.first() {
+                Some(JValue::Int(flag)) => *flag != 0,
+                _ => value,
+            };
+            boolean(vfs.set_permission(&path, which, value))
+        }
+        // The time, in milliseconds since the epoch. Zero for a path that is
+        // not there, which is a JDK's answer too.
+        "lastModified" => Ok(Some(JValue::Long(vfs.modified(&path)))),
+        "setLastModified" => {
+            let millis = match args.first() {
+                Some(JValue::Long(millis)) => *millis,
+                Some(JValue::Int(millis)) => i64::from(*millis),
+                _ => 0,
+            };
+            if millis < 0 {
+                return Err(throw("java.lang.IllegalArgumentException: Negative time"));
+            }
+            boolean(vfs.set_modified(&path, millis))
+        }
+        // A JDK deletes the file when the JVM exits. Nothing here outlives the
+        // run — the whole filesystem goes with it — so the observable
+        // behaviour of doing nothing is the same.
+        "deleteOnExit" => Ok(Some(JValue::NULL)),
         "isFile" => boolean(vfs.is_file(&path)),
         "isDirectory" => boolean(vfs.is_directory(&path)),
         "delete" => boolean(vfs.remove(&path).is_ok()),
@@ -10242,6 +10292,73 @@ pub fn invoke_static(
     descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
+    vfs.set_clock(console.now_millis());
+    // `File.listRoots()` and `File.createTempFile(...)` — the two statics
+    // `java.io.File` has.
+    if class == "java/io/File" {
+        match method {
+            // caturra's filesystem is rooted at `/` and has exactly one root,
+            // which is what a Unix JDK answers too.
+            "listRoots" => {
+                let root = heap.alloc(HeapObject::File(String::from("/")));
+                let array = heap.alloc(HeapObject::RefArray(
+                    String::from("java/io/File"),
+                    vec![JValue::Ref(Some(root))],
+                ));
+                return Ok(Some(JValue::Ref(Some(array))));
+            }
+            // `createTempFile(prefix, suffix[, directory])` makes an EMPTY
+            // file whose name nothing else has. A JDK puts a random number
+            // between the two; caturra takes its from the same seeded
+            // generator every other random here comes from, so a run is
+            // reproducible — and a program can only check the prefix and the
+            // suffix, which is what the contract promises.
+            "createTempFile" => {
+                let prefix = match args.first() {
+                    Some(JValue::Ref(Some(text))) => heap.string_text(*text).unwrap_or_default(),
+                    _ => return Err(throw("java.lang.NullPointerException")),
+                };
+                if prefix.chars().count() < 3 {
+                    return Err(throw(&*format!(
+                        "java.lang.IllegalArgumentException: Prefix string \"{prefix}\" too \
+                         short: length must be at least 3"
+                    )));
+                }
+                let suffix = match args.get(1) {
+                    Some(JValue::Ref(Some(text))) => heap.string_text(*text).unwrap_or_default(),
+                    _ => String::from(".tmp"),
+                };
+                let directory = match args.get(2) {
+                    Some(JValue::Ref(Some(dir))) => match heap.get(*dir) {
+                        Some(HeapObject::File(path)) => path.clone(),
+                        _ => String::from("/"),
+                    },
+                    _ => String::from("/"),
+                };
+                let mut path = String::new();
+                for _ in 0..64 {
+                    let stamp = rng.next_long().unsigned_abs();
+                    let candidate = format!("{directory}/{prefix}{stamp}{suffix}");
+                    if !vfs.exists(&candidate) {
+                        path = candidate;
+                        break;
+                    }
+                }
+                if path.is_empty() {
+                    return Err(throw("java.io.IOException: could not create a unique file"));
+                }
+                vfs.write_file(&path, Vec::new())
+                    .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+                // The file keeps the ABSTRACT path — `./pre123.x` for a
+                // directory written as `.` — because that is what `getParent`
+                // and `getName` read. Normalizing here would answer a parent
+                // of `/` for a program that said `.`.
+                let file = heap.alloc(HeapObject::File(path));
+                return Ok(Some(JValue::Ref(Some(file))));
+            }
+            _ => {}
+        }
+    }
     // Autoboxing: the compiler emits `Wrapper.valueOf(prim)LWrapper;`
     // (a wrapper return) to box. User `Integer.valueOf(7)` is compiled
     // with an `int` return and falls through unboxed.

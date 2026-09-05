@@ -11998,6 +11998,29 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Class", "getModifiers", "caturra does not model a class's access flags"),
     ("Class", "getPackage", "caturra does not model java.lang.Package"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
+    // The three SPACE queries. caturra's filesystem lives in memory and has no
+    // device under it, so every number it could answer would be fiction about
+    // a disk the program cannot fill — and a made-up "total" is worse than a
+    // refusal, because a program that checks before writing would trust it.
+    (
+        "File",
+        "getFreeSpace",
+        "caturra's filesystem is in memory and has no device to measure",
+    ),
+    (
+        "File",
+        "getTotalSpace",
+        "caturra's filesystem is in memory and has no device to measure",
+    ),
+    (
+        "File",
+        "getUsableSpace",
+        "caturra's filesystem is in memory and has no device to measure",
+    ),
+    // `toURI`/`toURL` answer a `java.net.URI`/`URL`, and `java.net` is not
+    // modelled — so the answer would be a type the program cannot then use.
+    ("File", "toURI", "caturra does not model java.net.URI"),
+    ("File", "toURL", "caturra does not model java.net.URL"),
     ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
     ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
     ("Scanner", "skip", "caturra's Scanner reads whole tokens and cannot skip by pattern"),
@@ -14168,7 +14191,57 @@ const OPTIONALDOUBLE_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
+/// `java.io.File`'s two statics: the filesystem's roots, and a file with a
+/// name nothing else has.
+const FILE_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm("listRoots", &[], BRet::FileArray, "()[Ljava/io/File;"),
+    bm(
+        "createTempFile",
+        &[BParam::Str, BParam::Str],
+        BRet::File,
+        "(Ljava/lang/String;Ljava/lang/String;)Ljava/io/File;",
+    ),
+    bm(
+        "createTempFile",
+        &[BParam::Str, BParam::Str, BParam::File],
+        BRet::File,
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/io/File;)Ljava/io/File;",
+    ),
+];
+
 const FILE_METHODS: &[BuiltinMethod] = &[
+    // What a program can ASK about a file besides its bytes: whether it may be
+    // read, written or run, and when it last changed.
+    bm("canRead", &[], BRet::Boolean, "()Z"),
+    bm("canWrite", &[], BRet::Boolean, "()Z"),
+    bm("canExecute", &[], BRet::Boolean, "()Z"),
+    bm("setReadable", &[BParam::Boolean], BRet::Boolean, "(Z)Z"),
+    bm(
+        "setReadable",
+        &[BParam::Boolean, BParam::Boolean],
+        BRet::Boolean,
+        "(ZZ)Z",
+    ),
+    bm("setWritable", &[BParam::Boolean], BRet::Boolean, "(Z)Z"),
+    bm(
+        "setWritable",
+        &[BParam::Boolean, BParam::Boolean],
+        BRet::Boolean,
+        "(ZZ)Z",
+    ),
+    bm("setExecutable", &[BParam::Boolean], BRet::Boolean, "(Z)Z"),
+    bm(
+        "setExecutable",
+        &[BParam::Boolean, BParam::Boolean],
+        BRet::Boolean,
+        "(ZZ)Z",
+    ),
+    bm("setReadOnly", &[], BRet::Boolean, "()Z"),
+    bm("lastModified", &[], BRet::Long, "()J"),
+    bm("setLastModified", &[BParam::Long], BRet::Boolean, "(J)Z"),
+    // A JDK deletes the file when the JVM exits; nothing here outlives the
+    // run, so doing nothing is the same observable behaviour.
+    bm("deleteOnExit", &[], BRet::Void, "()V"),
     // `File.toString()` IS `getPath()` (the JDK says so), and concatenating a
     // File already produced that text — but the method itself was missing, so
     // the two spellings of one thing disagreed.
@@ -21083,6 +21156,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
     }
     match class {
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
+        "File" => Some(("java/io/File", FILE_STATIC_METHODS)),
         "LocalDate" => Some(("java/time/LocalDate", LOCAL_DATE_STATIC_METHODS)),
         "LocalTime" => Some(("java/time/LocalTime", LOCAL_TIME_STATIC_METHODS)),
         "Duration" => Some(("java/time/Duration", DURATION_STATIC_METHODS)),

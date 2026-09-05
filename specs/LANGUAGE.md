@@ -8980,6 +8980,13 @@ counting catches: a divergence that stopped being one.
 - `Collectors c;` — a class caturra models only as a namespace for its members
   cannot name a variable, and now says exactly that instead of claiming the
   class is unsupported. (`stricter_namespace_class_says_what_is_missing`)
+- `aFile.getFreeSpace()` and its two siblings — caturra's filesystem is in
+  memory and has no device under it, so every number it could answer would be
+  fiction about a disk the program cannot fill. A made-up "total" is worse than
+  a refusal, because a program that checks before writing would trust it.
+  (`strict_a_file_has_no_free_space`)
+- `aFile.toURI()` / `toURL()` — the answer would be a `java.net.URI`, a type
+  the program could then do nothing with. (`strict_a_file_has_no_uri`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -14335,3 +14342,55 @@ emit/typing split again, in a unit that added fourteen wrapper names at once.
 Pinned as `the_methods_a_measurement_found` and
 `the_measured_methods_in_every_position`, with two reject pins for the sorted
 wrappers that must still refuse an unsorted argument.
+
+## What a file says about itself
+
+`java.io.File` was the next cluster the coverage measurement pointed at — 23 of
+40 method names, the lowest of any class a student actually uses. What was
+missing was everything a file knows about itself besides its bytes.
+
+**The measurement corrected a guess mid-unit.** The first version of this code
+modelled the three permission bits as state a program could set and read back,
+and said in as many words that they were advisory — that nothing would enforce
+them, because a JDK's enforcement is the host operating system's. The capture
+said otherwise: opening a read-only file for writing is
+`FileNotFoundException: name (Permission denied)`, and so is reading one that
+is not readable. The comment was rewritten and the enforcement built. What is
+NOT gated is metadata — `exists`, `length` and `delete` all work on a file a
+program has locked itself out of, and `delete` answers to the DIRECTORY's
+permission rather than the file's.
+
+The check lives in the filesystem rather than at the five places a file is
+opened, for the reason this repo keeps rediscovering: five copies of one rule
+is five chances to forget it. So is the modified time — every write stamps the
+entry from a clock the interpreter sets once on the way into any intrinsic
+call, rather than each write path asking for one.
+
+Three more measured answers:
+
+- A newly written file is readable and writable and NOT executable; a
+  directory is all three.
+- The four setters answer `false` for a path that is not there, and
+  `lastModified()` on one is 0 — the question is about a file, and there is no
+  file.
+- `setLastModified(-1)` is `IllegalArgumentException: Negative time`.
+- `File.createTempFile` demands a prefix of at least three characters, and says
+  so with the prefix quoted.
+
+**`lastModified` is a HOST question**, like `System.currentTimeMillis()` and
+`LocalDate.now()` before it. A host with no clock — the CLI, the tests —
+answers 0, and the browser answers a real time. So "the file I just wrote has a
+modified time later than zero" is true in the playground and false under
+`compatrun`, and cannot be pinned any more than `LocalDate.now()` can. What IS
+pinned is everything relative: a time a program sets is the time it reads back,
+and a file that is not there has none.
+
+**Refused, and by name:** `getFreeSpace`/`getTotalSpace`/`getUsableSpace` (an
+in-memory filesystem has no device to measure, and a made-up total is worse
+than a refusal because a program that checks before writing would trust it),
+and `toURI`/`toURL` (the answer would be a `java.net.URI`, a type the program
+could then do nothing with).
+
+Pinned as `what_a_file_says_about_itself` and
+`file_permissions_at_their_edges`, with the two strictness entries listed
+above.

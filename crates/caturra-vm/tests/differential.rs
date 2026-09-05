@@ -51579,3 +51579,128 @@ differential_reject!(
     "SyncListNarrow",
     "import java.util.*;\npublic class SyncListNarrow { static void r() { Collections.synchronizedList(new HashSet<String>()); } }"
 );
+
+// `java.io.File`'s metadata: the three permission questions, the four that
+// SET them, the times, and the two statics. Measured against a JDK first —
+// which is how the permissions turned out to be ENFORCED rather than advisory,
+// the opposite of what the first version of this code assumed.
+differential_test!(
+    what_a_file_says_about_itself,
+    "Fm1",
+    r#"
+import java.io.*;
+import java.util.*;
+public class Fm1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    try (PrintWriter w = new PrintWriter("f1.txt")) { w.print("hello"); }
+    File f = new File("f1.txt");
+    File missing = new File("nope-f1.txt");
+    File dir = new File(".");
+    // --- the permission questions
+    s("can read", () -> f.canRead());
+    s("can write", () -> f.canWrite());
+    s("can execute", () -> f.canExecute());
+    s("missing can read", () -> missing.canRead());
+    s("missing can write", () -> missing.canWrite());
+    s("missing can execute", () -> missing.canExecute());
+    s("dir can read", () -> dir.canRead() + " " + dir.canExecute());
+    // --- setting them
+    s("set read only", () -> { File t = new File("f2.txt"); new PrintWriter(t).close(); boolean ok = t.setReadOnly(); return ok + " " + t.canRead() + " " + t.canWrite(); });
+    s("set writable back", () -> { File t = new File("f2.txt"); boolean ok = t.setWritable(true); return ok + " " + t.canWrite(); });
+    s("set readable false", () -> { File t = new File("f3.txt"); new PrintWriter(t).close(); boolean ok = t.setReadable(false); return ok + " " + t.canRead(); });
+    s("set executable", () -> { File t = new File("f4.txt"); new PrintWriter(t).close(); boolean ok = t.setExecutable(true); return ok + " " + t.canExecute(); });
+    s("set on missing", () -> missing.setReadOnly() + " " + missing.setWritable(true) + " " + missing.setReadable(true) + " " + missing.setExecutable(true));
+    // --- times
+    s("missing last modified", () -> missing.lastModified());
+    s("set last modified", () -> { boolean ok = f.setLastModified(1_000_000_000L); return ok + " " + f.lastModified(); });
+    s("set last modified missing", () -> missing.setLastModified(1000L));
+    s("set last modified negative", () -> f.setLastModified(-1L));
+    // --- the space queries
+    // --- roots and temp files
+    s("list roots", () -> Arrays.toString(File.listRoots()));
+    s("temp file", () -> { File t = File.createTempFile("cat", ".txt"); return t.exists() + " " + t.getName().startsWith("cat") + " " + t.getName().endsWith(".txt"); });
+    s("temp file in dir", () -> { File t = File.createTempFile("pre", ".x", new File(".")); return t.exists() + " " + t.getParentFile().getName(); });
+    s("delete on exit", () -> { File t = new File("f5.txt"); new PrintWriter(t).close(); t.deleteOnExit(); return t.exists(); });
+    // --- the URI pair
+  }
+}
+"#
+);
+
+// The same across a rewrite, a delete, a directory, and every position a
+// `File` can take — and what each refusal says.
+differential_test!(
+    file_permissions_at_their_edges,
+    "Fm2",
+    r#"
+import java.io.*;
+import java.util.*;
+public class Fm2 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static String flags(File f) { return f.canRead() + "/" + f.canWrite() + "/" + f.canExecute(); }
+  public static void main(String[] a) throws Exception {
+    // --- permissions survive a rewrite, and travel with the path
+    s("rewrite keeps flags", () -> { File f = new File("g1.txt"); new PrintWriter(f).close(); f.setReadOnly();
+      try (PrintWriter w = new PrintWriter(f)) { w.print("x"); } return flags(f); });
+    s("same path same flags", () -> { File f = new File("g1.txt"); File g = new File("./g1.txt"); return flags(g); });
+    s("flags are not enforced", () -> { File f = new File("g2.txt"); new PrintWriter(f).close(); f.setReadOnly();
+      try (PrintWriter w = new PrintWriter(f)) { w.print("still"); }
+      BufferedReader r = new BufferedReader(new FileReader(f)); return r.readLine(); });
+    s("directory flags", () -> { File d = new File("gdir"); d.mkdir(); return flags(d); });
+    s("delete resets", () -> { File f = new File("g3.txt"); new PrintWriter(f).close(); f.setReadOnly(); f.delete();
+      new PrintWriter(f).close(); return flags(f); });
+    // --- the setters' answers
+    s("set twice", () -> { File f = new File("g4.txt"); new PrintWriter(f).close(); return f.setWritable(false) + " " + f.setWritable(false) + " " + f.canWrite(); });
+    s("set readable two-arg", () -> { File f = new File("g5.txt"); new PrintWriter(f).close(); return f.setReadable(false, true) + " " + f.canRead(); });
+    s("set executable two-arg", () -> { File f = new File("g6.txt"); new PrintWriter(f).close(); return f.setExecutable(true, false) + " " + f.canExecute(); });
+    // --- times
+    s("set and read", () -> { File f = new File("g7.txt"); new PrintWriter(f).close(); f.setLastModified(123456789L); return f.lastModified(); });
+    s("set zero", () -> { File f = new File("g8.txt"); new PrintWriter(f).close(); return f.setLastModified(0L) + " " + f.lastModified(); });
+    s("directory time", () -> { File d = new File("gdir2"); d.mkdir(); return d.setLastModified(555L) + " " + d.lastModified(); });
+    s("time on missing", () -> new File("gnope.txt").lastModified());
+    // --- File in every position
+    s("in a list", () -> { List<File> fs = new ArrayList<>(); fs.add(new File("g1.txt")); return fs.get(0).canRead(); });
+    s("as a parameter", () -> { File f = new File("g9.txt"); new PrintWriter(f).close(); return flags(f); });
+    s("array of", () -> { File[] fs = { new File("g1.txt"), new File("gnope.txt") }; return fs[0].canRead() + " " + fs[1].canRead(); });
+    s("sorted set", () -> { Set<File> fs = new TreeSet<>(List.of(new File("b.txt"), new File("a.txt"))); return fs.toString(); });
+    // --- the statics
+    s("roots length", () -> File.listRoots().length);
+    s("roots first", () -> File.listRoots()[0].getPath() + " " + File.listRoots()[0].isDirectory());
+    s("temp is empty", () -> { File t = File.createTempFile("tmp", ".dat"); return t.length() + " " + t.exists() + " " + t.isFile(); });
+    s("temp distinct", () -> { File x = File.createTempFile("aaa", ".t"); File y = File.createTempFile("aaa", ".t"); return !x.getName().equals(y.getName()); });
+    s("temp writable", () -> { File t = File.createTempFile("wrt", ".t"); try (PrintWriter w = new PrintWriter(t)) { w.print("in"); }
+      return new BufferedReader(new FileReader(t)).readLine(); });
+    s("temp short prefix", () -> File.createTempFile("ab", ".t"));
+    s("delete on exit returns void", () -> { File f = new File("g1.txt"); f.deleteOnExit(); return f.exists(); });
+  }
+}
+"#
+);
+
+// The three SPACE queries are refused BY NAME: caturra's filesystem is in
+// memory and has no device under it, so every number it could answer would be
+// fiction about a disk the program cannot fill — and a made-up "total" is
+// worse than a refusal, because a program that checks before writing would
+// trust it.
+stricter_than_javac!(
+    strict_a_file_has_no_free_space,
+    "StrictFreeSpace",
+    "import java.io.*;\npublic class StrictFreeSpace { static void r() { new File(\"x\").getFreeSpace(); } }"
+);
+
+// ...and `toURI` would answer a `java.net.URI`, a type the program could then
+// do nothing with.
+stricter_than_javac!(
+    strict_a_file_has_no_uri,
+    "StrictFileUri",
+    "import java.io.*;\npublic class StrictFileUri { static void r() { new File(\"x\").toURI(); } }"
+);
