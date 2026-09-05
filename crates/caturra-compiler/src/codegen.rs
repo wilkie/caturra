@@ -11179,6 +11179,12 @@ enum BRet {
     Uuid,
     StringWriter,
     WriterFace,
+    /// A plain `java.io.Reader` — the abstract face, which is what
+    /// `Reader.nullReader()` answers.
+    ReaderFace,
+    /// A plain `java.io.OutputStream` — `nullOutputStream()`'s answer, which
+    /// caturra models as the byte stream it already has.
+    NullByteStream,
     /// A `java.util.Enumeration` over the receiver's element, its keys, or
     /// its values.
     Enumeration,
@@ -11249,6 +11255,9 @@ enum BRet {
     Stream,
     /// `Iterator<E>` of the receiver's element type (`collection.iterator()`).
     Iterator,
+    /// An `Iterator<Object>` — a cursor over a source with no element type
+    /// of its own to pass on (a `StringTokenizer`'s, which is raw in Java too).
+    ObjectIterator,
     /// `ListIterator<E>` of the receiver's element type (`list.listIterator()`).
     ListIterator,
     /// `Iterator<Map.Entry<K, V>>` (`entrySet().iterator()`).
@@ -12568,7 +12577,26 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
 /// all a `StringReader`, a `FileReader` or an `InputStreamReader` has.
 /// `readLine`/`lines` are not here: they are a `BufferedReader`'s own, and
 /// offering them to the rest accepted a program javac refuses.
+/// The three Java 11 statics that answer a stream which goes nowhere: a reader
+/// always at end of input, and two writers that discard. They live on the
+/// ABSTRACT bases, so every reader and writer class inherits all of the ones
+/// its own hierarchy has — which is why one table is shared and the emitter
+/// picks by name.
+const NULL_STREAM_METHODS: &[BuiltinMethod] = &[
+    bm("nullReader", &[], BRet::ReaderFace, "()Ljava/io/Reader;"),
+    bm("nullWriter", &[], BRet::WriterFace, "()Ljava/io/Writer;"),
+    bm(
+        "nullOutputStream",
+        &[],
+        BRet::NullByteStream,
+        "()Ljava/io/OutputStream;",
+    ),
+];
+
 const READER_METHODS: &[BuiltinMethod] = &[
+    // The charset a byte-reading reader decodes with. A JDK answers the
+    // HISTORICAL name ("UTF8"), not the canonical one ("UTF-8").
+    bm("getEncoding", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("read", &[], BRet::Int, "()I"),
     // `read(buffer)` and its range form fill a char array and answer how many
     // they read, which is how a program reads in blocks rather than by line.
@@ -14534,6 +14562,27 @@ const OPTIONAL_METHODS: &[BuiltinMethod] = &[
 
 /// `java.util.OptionalInt` — `getAsInt`/`orElse` yield an `int`.
 const OPTIONALINT_METHODS: &[BuiltinMethod] = &[
+    // The three a primitive Optional shares with the object one. `stream()`
+    // answers a PRIMITIVE pipeline of nought or one element, which is the
+    // whole reason it is not `Optional.stream()`.
+    bm(
+        "orElseGet",
+        &[BParam::Supplier],
+        BRet::Int,
+        "(Ljava/util/function/IntSupplier;)Ljava/lang/Object;",
+    ),
+    bm(
+        "ifPresentOrElse",
+        &[BParam::Consumer, BParam::Runnable],
+        BRet::Void,
+        "(Ljava/util/function/IntConsumer;Ljava/lang/Runnable;)V",
+    ),
+    bm(
+        "stream",
+        &[],
+        BRet::IntStream,
+        "()Ljava/util/stream/IntStream;",
+    ),
     bm("isPresent", &[], BRet::Boolean, "()Z"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("getAsInt", &[], BRet::Int, "()I"),
@@ -14550,6 +14599,27 @@ const OPTIONALINT_METHODS: &[BuiltinMethod] = &[
 
 /// `java.util.OptionalLong` — `getAsLong`/`orElse` yield a `long`.
 const OPTIONALLONG_METHODS: &[BuiltinMethod] = &[
+    // The three a primitive Optional shares with the object one. `stream()`
+    // answers a PRIMITIVE pipeline of nought or one element, which is the
+    // whole reason it is not `Optional.stream()`.
+    bm(
+        "orElseGet",
+        &[BParam::Supplier],
+        BRet::Long,
+        "(Ljava/util/function/LongSupplier;)Ljava/lang/Object;",
+    ),
+    bm(
+        "ifPresentOrElse",
+        &[BParam::Consumer, BParam::Runnable],
+        BRet::Void,
+        "(Ljava/util/function/LongConsumer;Ljava/lang/Runnable;)V",
+    ),
+    bm(
+        "stream",
+        &[],
+        BRet::LongStream,
+        "()Ljava/util/stream/LongStream;",
+    ),
     bm("isPresent", &[], BRet::Boolean, "()Z"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("getAsLong", &[], BRet::Long, "()J"),
@@ -14566,6 +14636,27 @@ const OPTIONALLONG_METHODS: &[BuiltinMethod] = &[
 
 /// `java.util.OptionalDouble` — `getAsDouble`/`orElse` yield a `double`.
 const OPTIONALDOUBLE_METHODS: &[BuiltinMethod] = &[
+    // The three a primitive Optional shares with the object one. `stream()`
+    // answers a PRIMITIVE pipeline of nought or one element, which is the
+    // whole reason it is not `Optional.stream()`.
+    bm(
+        "orElseGet",
+        &[BParam::Supplier],
+        BRet::Double,
+        "(Ljava/util/function/DoubleSupplier;)Ljava/lang/Object;",
+    ),
+    bm(
+        "ifPresentOrElse",
+        &[BParam::Consumer, BParam::Runnable],
+        BRet::Void,
+        "(Ljava/util/function/DoubleConsumer;Ljava/lang/Runnable;)V",
+    ),
+    bm(
+        "stream",
+        &[],
+        BRet::DoubleStream,
+        "()Ljava/util/stream/DoubleStream;",
+    ),
     bm("isPresent", &[], BRet::Boolean, "()Z"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("getAsDouble", &[], BRet::Double, "()D"),
@@ -14786,6 +14877,14 @@ const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
     ),
+    // ...and the same question about a UNIT, which is the other half of
+    // `isSupported` and reads the same on every value that has it.
+    bm(
+        "isSupported",
+        &[BParam::ChronoUnit],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalUnit;)Z",
+    ),
     bm(
         "get",
         &[BParam::ChronoField],
@@ -14978,6 +15077,14 @@ const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
     ),
+    // ...and the same question about a UNIT, which is the other half of
+    // `isSupported` and reads the same on every value that has it.
+    bm(
+        "isSupported",
+        &[BParam::ChronoUnit],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalUnit;)Z",
+    ),
     bm(
         "get",
         &[BParam::ChronoField],
@@ -15044,6 +15151,14 @@ const MONTH_METHODS: &[BuiltinMethod] = &[
         &[BParam::ChronoField],
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    // ...and the same question about a UNIT, which is the other half of
+    // `isSupported` and reads the same on every value that has it.
+    bm(
+        "isSupported",
+        &[BParam::ChronoUnit],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalUnit;)Z",
     ),
     bm(
         "get",
@@ -15145,6 +15260,14 @@ const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
         &[BParam::ChronoField],
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    // ...and the same question about a UNIT, which is the other half of
+    // `isSupported` and reads the same on every value that has it.
+    bm(
+        "isSupported",
+        &[BParam::ChronoUnit],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalUnit;)Z",
     ),
     bm(
         "get",
@@ -15353,6 +15476,14 @@ const LOCAL_DATE_TIME_METHODS: &[BuiltinMethod] = &[
         &[BParam::ChronoField],
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    // ...and the same question about a UNIT, which is the other half of
+    // `isSupported` and reads the same on every value that has it.
+    bm(
+        "isSupported",
+        &[BParam::ChronoUnit],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalUnit;)Z",
     ),
     bm(
         "get",
@@ -15962,6 +16093,10 @@ const CHRONO_FIELD_METHODS: &[BuiltinMethod] = &[
 /// takes another `BigInteger` (never an `int`), which is the first thing a
 /// program written against `long` gets wrong.
 const BIG_INTEGER_METHODS: &[BuiltinMethod] = &[
+    // The number as TWO'S-COMPLEMENT bytes, big-endian and as short as it can
+    // be while keeping the sign bit — the form `new BigInteger(byte[])` reads
+    // back, and the only way a program moves a bignum through bytes.
+    bm("toByteArray", &[], BRet::ByteArray, "()[B"),
     bm(
         "add",
         &[BParam::BigInteger],
@@ -16494,6 +16629,58 @@ const YEAR_METHODS: &[BuiltinMethod] = &[
         BRet::LocalDate,
         "(Ljava/time/MonthDay;)Ljava/time/LocalDate;",
     ),
+    // Whether a month-day falls in THIS year — the leap-day question, which
+    // is the reason a `Year` and a `MonthDay` meet at all.
+    bm(
+        "isValidMonthDay",
+        &[BParam::MonthDay],
+        BRet::Boolean,
+        "(Ljava/time/MonthDay;)Z",
+    ),
+    // The `Temporal` surface: move by a unit or a whole amount, write a
+    // field, and measure to another of the same kind.
+    bm(
+        "plus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::Year,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/Year;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::Year,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/Year;",
+    ),
+    bm(
+        "plus",
+        &[BParam::Temporal],
+        BRet::Year,
+        "(Ljava/time/temporal/TemporalAmount;)Ljava/time/Year;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Temporal],
+        BRet::Year,
+        "(Ljava/time/temporal/TemporalAmount;)Ljava/time/Year;",
+    ),
+    bm(
+        "with",
+        &[BParam::ChronoField, BParam::Long],
+        BRet::Year,
+        "(Ljava/time/temporal/TemporalField;J)Ljava/time/Year;",
+    ),
+    bm(
+        "until",
+        &[BParam::Temporal, BParam::ChronoUnit],
+        BRet::Long,
+        "(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J",
+    ),
+    bm(
+        "range",
+        &[BParam::ChronoField],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalField;)Ljava/time/temporal/ValueRange;",
+    ),
     bm(
         "format",
         &[BParam::DateFormat],
@@ -16517,6 +16704,14 @@ const YEAR_METHODS: &[BuiltinMethod] = &[
         &[BParam::ChronoField],
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    // ...and the same question about a UNIT, which is the other half of
+    // `isSupported` and reads the same on every value that has it.
+    bm(
+        "isSupported",
+        &[BParam::ChronoUnit],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalUnit;)Z",
     ),
     bm(
         "compareTo",
@@ -16548,6 +16743,9 @@ const YEAR_METHODS: &[BuiltinMethod] = &[
 
 /// `Year.of`, `Year.isLeap`, and the two readers every `java.time` value has.
 const YEAR_STATIC_METHODS: &[BuiltinMethod] = &[
+    // The host owns the clock and the zone, as it does for `LocalDate.now()`
+    // — and these read the same one, so the four agree.
+    bm("now", &[], BRet::Year, "()Ljava/time/Year;"),
     bm("of", &[BParam::Int], BRet::Year, "(I)Ljava/time/Year;"),
     bm("isLeap", &[BParam::Long], BRet::Boolean, "(J)Z"),
     bm(
@@ -16633,6 +16831,71 @@ const YEAR_MONTH_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
     ),
+    // ...and the same question about a UNIT, which is the other half of
+    // `isSupported` and reads the same on every value that has it.
+    bm(
+        "isSupported",
+        &[BParam::ChronoUnit],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalUnit;)Z",
+    ),
+    // The two a `YearMonth` writes directly, beside the field form.
+    bm(
+        "withYear",
+        &[BParam::Int],
+        BRet::YearMonth,
+        "(I)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "withMonth",
+        &[BParam::Int],
+        BRet::YearMonth,
+        "(I)Ljava/time/YearMonth;",
+    ),
+    // The `Temporal` surface: move by a unit or a whole amount, write a
+    // field, and measure to another of the same kind.
+    bm(
+        "plus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::YearMonth,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::YearMonth,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "plus",
+        &[BParam::Temporal],
+        BRet::YearMonth,
+        "(Ljava/time/temporal/TemporalAmount;)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Temporal],
+        BRet::YearMonth,
+        "(Ljava/time/temporal/TemporalAmount;)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "with",
+        &[BParam::ChronoField, BParam::Long],
+        BRet::YearMonth,
+        "(Ljava/time/temporal/TemporalField;J)Ljava/time/YearMonth;",
+    ),
+    bm(
+        "until",
+        &[BParam::Temporal, BParam::ChronoUnit],
+        BRet::Long,
+        "(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J",
+    ),
+    bm(
+        "range",
+        &[BParam::ChronoField],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalField;)Ljava/time/temporal/ValueRange;",
+    ),
     bm(
         "compareTo",
         &[BParam::YearMonth],
@@ -16663,6 +16926,9 @@ const YEAR_MONTH_METHODS: &[BuiltinMethod] = &[
 
 /// `YearMonth.of` and the two readers.
 const YEAR_MONTH_STATIC_METHODS: &[BuiltinMethod] = &[
+    // The host owns the clock and the zone, as it does for `LocalDate.now()`
+    // — and these read the same one, so the four agree.
+    bm("now", &[], BRet::YearMonth, "()Ljava/time/YearMonth;"),
     bm(
         "of",
         &[BParam::Int, BParam::Int],
@@ -16691,6 +16957,22 @@ const YEAR_MONTH_STATIC_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.MonthDay` — a day of a year that has no year: a birthday.
 const MONTH_DAY_METHODS: &[BuiltinMethod] = &[
+    // A `MonthDay` is a `TemporalAccessor` and NOT a `Temporal`: a JDK gives
+    // it no `plus`, no `minus`, no `until` and no two-argument `with`, because
+    // a month-day cannot be moved without a year to move it in. These two are
+    // all it has beyond its readers.
+    bm(
+        "with",
+        &[BParam::Month],
+        BRet::MonthDay,
+        "(Ljava/time/Month;)Ljava/time/MonthDay;",
+    ),
+    bm(
+        "range",
+        &[BParam::ChronoField],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalField;)Ljava/time/temporal/ValueRange;",
+    ),
     bm("getMonthValue", &[], BRet::Int, "()I"),
     bm("getDayOfMonth", &[], BRet::Int, "()I"),
     bm("getMonth", &[], BRet::Month, "()Ljava/time/Month;"),
@@ -16737,6 +17019,14 @@ const MONTH_DAY_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
     ),
+    // ...and the same question about a UNIT, which is the other half of
+    // `isSupported` and reads the same on every value that has it.
+    bm(
+        "isSupported",
+        &[BParam::ChronoUnit],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalUnit;)Z",
+    ),
     bm(
         "compareTo",
         &[BParam::MonthDay],
@@ -16767,6 +17057,9 @@ const MONTH_DAY_METHODS: &[BuiltinMethod] = &[
 
 /// `MonthDay.of` and the two readers.
 const MONTH_DAY_STATIC_METHODS: &[BuiltinMethod] = &[
+    // The host owns the clock and the zone, as it does for `LocalDate.now()`
+    // — and these read the same one, so the four agree.
+    bm("now", &[], BRet::MonthDay, "()Ljava/time/MonthDay;"),
     bm(
         "of",
         &[BParam::Int, BParam::Int],
@@ -16864,6 +17157,16 @@ const BASE64_STATIC_METHODS: &[BuiltinMethod] = &[
 /// `java.util.BitSet` — a set of small non-negative integers, and the four set
 /// operations over them.
 const BITSET_METHODS: &[BuiltinMethod] = &[
+    // Whether the two sets share a set bit — the question `and` answers by
+    // building a whole third set.
+    bm(
+        "intersects",
+        &[BParam::BitSet],
+        BRet::Boolean,
+        "(Ljava/util/BitSet;)Z",
+    ),
+    // The bits as bytes, LITTLE-endian: bit 0 is the low bit of byte 0.
+    bm("toByteArray", &[], BRet::ByteArray, "()[B"),
     bm("set", &[BParam::Int], BRet::Void, "(I)V"),
     bm("set", &[BParam::Int, BParam::Boolean], BRet::Void, "(IZ)V"),
     bm("set", &[BParam::Int, BParam::Int], BRet::Void, "(II)V"),
@@ -16930,6 +17233,9 @@ const BITSET_STATIC_METHODS: &[BuiltinMethod] = &[bm(
 const ENUMERATION_METHODS: &[BuiltinMethod] = &[
     bm("hasMoreElements", &[], BRet::Boolean, "()Z"),
     bm("nextElement", &[], BRet::Elem, "()Ljava/lang/Object;"),
+    // Java 9's bridge to the newer cursor, so an old API's `Enumeration` can
+    // be walked by a for-each or handed to anything that takes an `Iterator`.
+    bm("asIterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
 ];
 
 /// `java.util.StringTokenizer` — four questions, and it answers the two an
@@ -16940,6 +17246,15 @@ const TOKENIZER_METHODS: &[BuiltinMethod] = &[
     bm("nextToken", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("nextElement", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("countTokens", &[], BRet::Int, "()I"),
+    // A `StringTokenizer` IS an `Enumeration`, so it has the same bridge — and
+    // over `Object`, which is what the raw interface it implements says. (Its
+    // `nextToken` is the typed way to the same tokens.)
+    bm(
+        "asIterator",
+        &[],
+        BRet::ObjectIterator,
+        "()Ljava/util/Iterator;",
+    ),
 ];
 
 /// `java.util.UUID` — two longs, and what is asked of them.
@@ -18140,6 +18455,11 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
         descriptor: "()V",
         needs: TableFace::Sorted,
     },
+    // A `PrintWriter` swallows its `IOException`s and records that one
+    // happened, exactly as a `PrintStream` does. Nothing here can produce one
+    // — but writing to a CLOSED writer does set the flag, which is the one
+    // way a program sees it become true.
+    bm("checkError", &[], BRet::Boolean, "()Z"),
 ];
 
 /// Every throwable's methods, plus whatever a particular one adds. Written
@@ -18763,6 +19083,23 @@ const SHORT_METHODS: &[BuiltinMethod] = &[
     ),
     bm("hashCode", &[BParam::Short], BRet::Int, "(S)I"),
     bm("reverseBytes", &[BParam::Short], BRet::Short, "(S)S"),
+    // The two `Integer` and `Long` had and these did not — the same methods,
+    // and the reason they were missing is that a table is written once per
+    // wrapper. `decode` reads the 0x/#/leading-0 forms a literal can be
+    // written in; `compareUnsigned` on the two NARROW wrappers answers the
+    // DIFFERENCE, where the wide ones answer a sign.
+    bm(
+        "decode",
+        &[S],
+        BRet::Wrapper(ElemType::Short),
+        "(Ljava/lang/String;)Ljava/lang/Short;",
+    ),
+    bm(
+        "compareUnsigned",
+        &[BParam::Short, BParam::Short],
+        BRet::Int,
+        "(SS)I",
+    ),
 ];
 
 const BYTE_METHODS: &[BuiltinMethod] = &[
@@ -18790,10 +19127,25 @@ const BYTE_METHODS: &[BuiltinMethod] = &[
     ),
     bm("compare", &[BParam::Byte, BParam::Byte], BRet::Int, "(BB)I"),
     bm("hashCode", &[BParam::Byte], BRet::Int, "(B)I"),
+    bm(
+        "decode",
+        &[S],
+        BRet::Wrapper(ElemType::Byte),
+        "(Ljava/lang/String;)Ljava/lang/Byte;",
+    ),
+    bm(
+        "compareUnsigned",
+        &[BParam::Byte, BParam::Byte],
+        BRet::Int,
+        "(BB)I",
+    ),
 ];
 
 const FLOAT_METHODS: &[BuiltinMethod] = &[
     bm("parseFloat", &[S], BRet::Float, "(Ljava/lang/String;)F"),
+    // `Double` had it and `Float` did not — the same hexadecimal form, at the
+    // narrower precision.
+    bm("toHexString", &[F], BRet::Str, "(F)Ljava/lang/String;"),
     bm("toString", &[F], BRet::Str, "(F)Ljava/lang/String;"),
     bm(
         "valueOf",
@@ -21836,8 +22188,19 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         // to reach the refusal path rather than report the CLASS as unknown:
         // `PrintStream.nullOutputStream()` said "cannot find symbol:
         // 'PrintStream'" about a class a program can name and hold.
-        "PrintStream" => Some(("java/io/PrintStream", &[])),
-        "ByteArrayOutputStream" => Some(("java/io/ByteArrayOutputStream", &[])),
+        "PrintStream" => Some(("java/io/PrintStream", NULL_STREAM_METHODS)),
+        "ByteArrayOutputStream" => Some(("java/io/ByteArrayOutputStream", NULL_STREAM_METHODS)),
+        // `Reader.nullReader()`, `Writer.nullWriter()` and
+        // `OutputStream.nullOutputStream()` (Java 11) — each is a static on the
+        // ABSTRACT base, so every subclass inherits it and can be written as
+        // the receiver. One table serves all three: the name picks the answer.
+        "Reader" | "BufferedReader" | "StringReader" | "FileReader" | "InputStreamReader" => {
+            Some(("java/io/Reader", NULL_STREAM_METHODS))
+        }
+        "Writer" | "BufferedWriter" | "StringWriter" | "FileWriter" | "PrintWriter" => {
+            Some(("java/io/Writer", NULL_STREAM_METHODS))
+        }
+        "OutputStream" => Some(("java/io/OutputStream", NULL_STREAM_METHODS)),
         // `Charset.forName(name)` / `defaultCharset()`, and the
         // `StandardCharsets` constants, which lower to the same call.
         "BigInteger" => Some(("java/math/BigInteger", BIG_INTEGER_STATIC_METHODS)),
@@ -22749,6 +23112,8 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         }),
         BRet::StringWriter => Some(JType::StringWriter),
         BRet::WriterFace => Some(JType::WriterFace),
+        BRet::ReaderFace => Some(JType::Reader(ReaderFace::Abstract)),
+        BRet::NullByteStream => Some(JType::ByteStream),
         // `NumberFormat.parse` answers a `Number` — a Long or a Double, and
         // the program asks it which with `intValue()`/`doubleValue()`.
         BRet::Number => table.class_id("Number").map(JType::Object),
@@ -22805,6 +23170,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         ),
         BRet::Stream => Some(args.first.map_or(JType::Error, JType::Stream)),
         BRet::Iterator => Some(args.first.map_or(JType::Error, JType::Iterator)),
+        BRet::ObjectIterator => Some(JType::Iterator(ElemType::Object(table.object_id))),
         BRet::ListIterator => Some(args.first.map_or(JType::Error, JType::ListIterator)),
         BRet::EntryIterator => Some(match (args.first, args.second) {
             (Some(key), Some(value)) => JType::EntryIterator { key, value },
@@ -28937,7 +29303,20 @@ impl BodyGen<'_> {
                     self.error_bail(span, "BigInteger text");
                     return JType::Error;
                 }
-                (text_ty == JType::Str || text_ty == JType::Null).then_some("(Ljava/lang/String;)V")
+                // ...or the two's-complement BYTES, which is what
+                // `toByteArray()` answers and the only other way in.
+                if matches!(
+                    text_ty,
+                    JType::Array {
+                        elem: ElemType::Byte,
+                        dims: 1
+                    }
+                ) {
+                    Some("([B)V")
+                } else {
+                    (text_ty == JType::Str || text_ty == JType::Null)
+                        .then_some("(Ljava/lang/String;)V")
+                }
             }
             [text, radix] => {
                 let text_ty = self.expr(text);
@@ -28958,7 +29337,10 @@ impl BodyGen<'_> {
         let Some(descriptor) = descriptor else {
             self.error(
                 span,
-                String::from("new BigInteger takes the digits as a String, and optionally a radix"),
+                String::from(
+                    "new BigInteger takes the digits as a String (and optionally a radix), or the \
+                     two's-complement bytes",
+                ),
             );
             return JType::Error;
         };

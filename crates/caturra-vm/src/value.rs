@@ -485,9 +485,13 @@ impl Temporal {
             // these overrides it.
             Temporal::TextStyle(style) => String::from(TEXT_STYLE_NAMES[usize::from(style)]),
             Temporal::FormatStyle(style) => String::from(FORMAT_STYLE_NAMES[usize::from(style)]),
-            // A year is written as at least four digits, and a month-day with
-            // the two leading dashes that say it has no year.
-            Temporal::Year(year) => format!("{year:04}"),
+            // A `Year` prints as the plain NUMBER — `Year.of(5)` is "5", not
+            // "0005". The four-digit padding belongs to the values that write
+            // a year as part of a longer date (`0005-03`, `0005-03-14`),
+            // where it is what keeps the fields apart.
+            Temporal::Year(year) => year.to_string(),
+            // A month-day carries the two leading dashes that say it has no
+            // year at all.
             Temporal::YearMonth(year, month) => format!("{year:04}-{month:02}"),
             Temporal::MonthDay(month, day) => format!("--{month:02}-{day:02}"),
         }
@@ -1037,6 +1041,11 @@ pub enum HeapObject {
         /// into the filesystem, and `sw.toString()` is how the program reads
         /// it back.
         text: Option<HeapRef>,
+        /// `close()` was called. A JDK's `PrintWriter` does not throw after
+        /// that — it QUIETLY drops the write and raises its error flag, which
+        /// `checkError()` reports. Without this, a closed writer went on
+        /// writing here and every `checkError` was false.
+        closed: bool,
     },
     /// A throwable: a library exception class (dotted name) with its
     /// optional message. Bound by `catch` handlers, created by

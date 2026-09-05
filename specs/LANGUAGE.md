@@ -14670,3 +14670,78 @@ Pinned as `what_a_throwable_carries`,
 `a_summary_a_program_fills_itself`. Every class caturra names is now measured
 — 225 of them, no receiver left that will not compile — at 3007/3385 method
 names answered.
+
+## Ordinary Java the measurement found missing
+
+With every class measured, the gaps sort themselves by how ordinary they are.
+This is the ordinary end of the list — what a student writes, not what a
+framework calls.
+
+**The three partial dates, finished.** `Year`, `YearMonth` and `MonthDay` had
+their readers and a couple of `plusX` methods; they had no `plus(n, unit)`, no
+`with(field, value)`, no `until`, no `range`, no `now()`, and a `YearMonth` had
+no `withYear`/`withMonth`. The rule that closed all of it at once:
+
+> Every question about MOVING a partial date is that question about the date it
+> FILLS OUT TO, asked and then narrowed again. The defaults are the JDK's:
+> January, the 1st, and a LEAP year for a month-day — which is why `--02-29` is
+> a legal one.
+
+Written that way the calendar arithmetic exists once, in `Date`, rather than
+once per partial kind, and what each one supports falls out rather than being
+listed: a `Year` moves by years and up, a `YearMonth` by months and up, and a
+`MonthDay` by nothing at all. That last is not an omission — a `MonthDay` is a
+`TemporalAccessor` and NOT a `Temporal`, so a JDK gives it no `plus`, no
+`until` and no two-argument `with` either. It has no year to move in.
+
+Four measured facts a guess would have got wrong:
+
+* `YearMonth.range(DAY_OF_MONTH)` REFUSES — a year-month does not carry a day.
+  (The tempting answer, `1 - 29`, is wrong twice over.)
+* `MonthDay.range(DAY_OF_MONTH)` for February is `1 - 28/29`: the one range a
+  JDK reports as VARIABLE, because a month-day has no year to settle it.
+* `MonthDay.of(1, 31).with(FEBRUARY)` is `--02-29`, not the 28th — for the same
+  reason.
+* `Period.addTo` has two shapes and which one runs is OBSERVABLE. With no
+  months in the period a JDK adds the years AS YEARS, so
+  `Year.plus(Period.ofYears(2))` works and `Year.plus(Period.ofMonths(2))` is
+  "Unsupported unit: Months". No `LocalDate` can show the difference; a `Year`
+  can, and caturra was combining them.
+
+And one plain bug the probe found beside them: `Year.toString()` is the year as
+a NUMBER — `Year.of(5)` is "5" — where caturra padded it to four digits. The
+padding belongs to the values that write a year as part of a longer date
+(`0005-03`, `0005-03-14`), where it is what keeps the fields apart.
+
+**The primitive Optionals.** `OptionalInt`, `OptionalLong` and `OptionalDouble`
+lacked `ifPresentOrElse`, `orElseGet` and `stream` — the three the object
+`Optional` has had. The runtime already answered them (all four kinds are one
+heap object); what was missing was the tables, and a way for the lambda pass to
+find the target type of `orElseGet(() -> 9)`. That element is not a type
+argument here: it is in the class NAME.
+
+**The wrappers' missing siblings.** `Byte.decode`, `Short.decode`,
+`Byte.compareUnsigned`, `Short.compareUnsigned` and `Float.toHexString` — every
+one of them present on `Integer`, `Long` or `Double` and absent from the
+narrower wrapper beside it, because a method table is written once per class.
+The narrow `compareUnsigned` answers the DIFFERENCE where the wide ones answer
+a sign, and `decode`'s complaint about a value that does not fit
+("Value 300 out of range from input 300") is not the one `parseByte` gives.
+
+**And the rest of the ordinary list.** Java 9's `asIterator()` on an
+`Enumeration` and a `StringTokenizer` (both are already cursors here, so the
+bridge hands the receiver back); Java 11's `Reader.nullReader()`,
+`Writer.nullWriter()` and `OutputStream.nullOutputStream()`;
+`InputStreamReader.getEncoding()`, which answers the HISTORICAL charset name
+("UTF8", not "UTF-8"); `BitSet.intersects`/`toByteArray`;
+`BigInteger.toByteArray` and the `new BigInteger(byte[])` that reads it back.
+
+`PrintWriter.checkError()` came with a real defect behind it. A JDK's
+`PrintWriter` never throws: a write after `close()` is DROPPED and the error
+flag goes up, which is the only way `checkError()` becomes true for a writer
+over memory. caturra's `close()` was a no-op, so a closed writer went on
+writing — a program's output silently landing somewhere it should not.
+
+Pinned as `the_partial_dates_finished`, `the_edges_of_a_partial_date` and
+`the_small_gaps_a_measurement_found`. The measurement reads 3057/3385 across
+225 classes, with fourteen more of them at 100%.

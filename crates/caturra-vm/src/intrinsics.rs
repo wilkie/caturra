@@ -1513,6 +1513,62 @@ fn field_surface(
 }
 
 /// `with(field, value)` — the same value with ONE field changed.
+/// A PARTIAL date as a full one.
+///
+/// `Year`, `YearMonth` and `MonthDay` each carry a PIECE of a date, and every
+/// question about one — which value a field holds, moving by a unit, the
+/// distance to another — is that question about the date it fills out to. The
+/// defaults are the JDK's: January, the 1st, and a LEAP year for a month-day,
+/// which is why `--02-29` is a legal one.
+fn partial_as_date(value: Temporal) -> Option<crate::time::Date> {
+    Some(match value {
+        Temporal::Year(year) => crate::time::Date {
+            year,
+            month: 1,
+            day: 1,
+        },
+        Temporal::YearMonth(year, month) => crate::time::Date {
+            year,
+            month,
+            day: 1,
+        },
+        Temporal::MonthDay(month, day) => crate::time::Date {
+            year: 2024,
+            month,
+            day,
+        },
+        _ => return None,
+    })
+}
+
+/// ...and the way back: the same PIECE of a date that has moved. A `MonthDay`
+/// has no way back, and needs none — a JDK gives it no `plus`, no `with` and
+/// no `until`, because a month-day cannot be moved without a year to move it
+/// in. It is a `TemporalAccessor` and not a `Temporal`.
+fn narrow_like(value: Temporal, moved: crate::time::Date) -> Option<Temporal> {
+    Some(match value {
+        Temporal::Year(_) => Temporal::Year(moved.year),
+        Temporal::YearMonth(_, _) => Temporal::YearMonth(moved.year, moved.month),
+        _ => return None,
+    })
+}
+
+/// The answer a delegated `with`/`plus` gave, narrowed back to the partial
+/// kind it was asked of.
+fn narrow_answer(value: Temporal, answer: Option<JValue>, heap: &mut Heap) -> Option<JValue> {
+    let Some(JValue::Ref(Some(reference))) = answer else {
+        return answer;
+    };
+    let Some(HeapObject::Temporal(Temporal::Date(moved))) = heap.get(reference) else {
+        return answer;
+    };
+    let moved = *moved;
+    let Some(narrowed) = narrow_like(value, moved) else {
+        return answer;
+    };
+    Some(JValue::Ref(Some(heap.intern_temporal(narrowed))))
+}
+
 fn with_field(
     value: Temporal,
     field: u8,
@@ -1533,6 +1589,14 @@ fn with_field(
     }
     if !supports_field(value, field) {
         return Err(unsupported_field(field));
+    }
+    // A partial date writes the field into the date it fills out to, and
+    // narrows back to the same piece.
+    if let Some(date) = partial_as_date(value)
+        && narrow_like(value, date).is_some()
+    {
+        let answer = with_field(Temporal::Date(date), field, wanted, heap)?;
+        return Ok(narrow_answer(value, answer, heap));
     }
     let current = field_value(value, field)?;
     let (date, time) = match value {
@@ -1695,32 +1759,9 @@ fn field_value(value: Temporal, field: u8) -> Result<i64, VmError> {
         Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
         Temporal::DayOfWeek(day) if field == 15 => return Ok(i64::from(day)),
         Temporal::Month(month) if field == 23 => return Ok(i64::from(month)),
-        // A partial date reads through a date filled out with defaults; only
-        // the fields it really carries reach here, so nothing is invented.
-        Temporal::Year(year) => (
-            Some(crate::time::Date {
-                year,
-                month: 1,
-                day: 1,
-            }),
-            None,
-        ),
-        Temporal::YearMonth(year, month) => (
-            Some(crate::time::Date {
-                year,
-                month,
-                day: 1,
-            }),
-            None,
-        ),
-        Temporal::MonthDay(month, day) => (
-            Some(crate::time::Date {
-                year: 2024,
-                month,
-                day,
-            }),
-            None,
-        ),
+        // A partial date reads through the date it fills out to; only the
+        // fields it really carries reach here, so nothing is invented.
+        partial if partial_as_date(partial).is_some() => (partial_as_date(partial), None),
         _ => return Err(unsupported_field(field)),
     };
     if crate::time::field_is_time_based(field) {
@@ -1798,7 +1839,31 @@ fn field_range_of(value: Temporal, field: u8) -> Result<crate::time::ValueRange,
         _ => None,
     };
     let Some(date) = date else {
-        return Ok(crate::time::field_range(field));
+        return Ok(match (value, field) {
+            // A `Year`'s YEAR_OF_ERA stops at the era boundary, the way a
+            // date's does.
+            (Temporal::Year(year), 25) => crate::time::ValueRange::fixed(
+                1,
+                if year <= 0 {
+                    1_000_000_000
+                } else {
+                    999_999_999
+                },
+            ),
+            // A `MonthDay` has no year, so February's DAY_OF_MONTH is the one
+            // range a JDK reports as VARIABLE — `1 - 28/29`.
+            (Temporal::MonthDay(2, _), 18) => crate::time::ValueRange {
+                min: 1,
+                largest_min: 1,
+                smallest_max: 28,
+                max: 29,
+            },
+            (Temporal::MonthDay(month, _), 18) => crate::time::ValueRange::fixed(
+                1,
+                i64::from(crate::time::length_of_month(2024, month)),
+            ),
+            _ => crate::time::field_range(field),
+        });
     };
     Ok(match field {
         18 => crate::time::ValueRange::fixed(
@@ -1930,15 +1995,23 @@ fn shift_by_amount(
         // A period is years, then months, then days — in that order, because
         // each may land on a shorter month than the last.
         Temporal::Period(period) => {
-            // Years and months go on TOGETHER, as one number of months: a
-            // JDK adds `years * 12 + months` and then the days, and adding
-            // the years first would clamp February 29 to the 28th on the way
-            // through.
+            // `Period.addTo` has two shapes, and which one runs is
+            // OBSERVABLE — not on a date, where both come out the same, but on
+            // a `Year`, which supports YEARS and not MONTHS. With no months in
+            // the period a JDK adds the years AS YEARS, so
+            // `Year.plus(Period.ofYears(2))` works and
+            // `Year.plus(Period.ofMonths(2))` is "Unsupported unit: Months".
+            // With months, both go on together as one number of months —
+            // adding the years first would clamp February 29 to the 28th on
+            // the way through.
             let mut moved = value;
-            for (unit, count) in [
-                (9, i64::from(period.years) * 12 + i64::from(period.months)),
-                (7, i64::from(period.days)),
-            ] {
+            let (years, months) = (i64::from(period.years), i64::from(period.months));
+            let calendar = if months == 0 {
+                (10, years)
+            } else {
+                (9, years * 12 + months)
+            };
+            for (unit, count) in [calendar, (7, i64::from(period.days))] {
                 if count == 0 {
                     continue;
                 }
@@ -2018,6 +2091,15 @@ fn shift_by_unit(
             crate::time::unit_name(unit)
         )));
     }
+    // ...and a partial date moves the date it fills out to. `Year.plus(1,
+    // ERAS)` reaches the same era arm below and fails the same way a JDK's
+    // does — "Invalid value for Era (valid values 0 - 1): 2".
+    if let Some(date) = partial_as_date(value)
+        && narrow_like(value, date).is_some()
+    {
+        let answer = shift_by_unit(Temporal::Date(date), amount, unit, heap)?;
+        return Ok(narrow_answer(value, answer, heap));
+    }
     let (date, time) = match value {
         Temporal::Date(date) => (Some(date), None),
         Temporal::Time(time) => (None, Some(time)),
@@ -2092,6 +2174,10 @@ fn supports_unit(value: Temporal, unit: u8) -> bool {
         Temporal::Date(_) => (7..=14).contains(&unit),
         Temporal::Time(_) => unit <= 6,
         Temporal::DateTime(_) => unit <= 14,
+        // A YEAR moves by years and up; a YEAR-MONTH by months and up. A
+        // MONTH-DAY moves by nothing: it has no year to move in.
+        Temporal::Year(_) => (10..=14).contains(&unit),
+        Temporal::YearMonth(_, _) => (9..=14).contains(&unit),
         _ => false,
     }
 }
@@ -2150,12 +2236,15 @@ fn unit_method(
         Temporal::Date(date) => Some((date.to_epoch_day(), 0, true)),
         Temporal::Time(time) => Some((0, time.nano_of_day, false)),
         Temporal::DateTime(when) => Some((when.date.to_epoch_day(), when.time.nano_of_day, false)),
-        _ => None,
+        partial => partial_as_date(partial).map(|date| (date.to_epoch_day(), 0, true)),
     };
     let calendar = |value: Temporal| match value {
         Temporal::Date(date) => Some(date),
         Temporal::DateTime(when) => Some(when.date),
-        _ => None,
+        // `Year.until(other, YEARS)` measures between the dates the two fill
+        // out to — which is how a JDK's `Year.from(temporal)` conversion comes
+        // out too, and is why `until` takes any temporal, not just a `Year`.
+        partial => partial_as_date(partial),
     };
     // From MONTHS up these are CALENDAR units: they count whole months the
     // way `Period.between` does, not a number of nanoseconds.
@@ -2364,9 +2453,13 @@ fn temporal_method(
         return Ok(Some(JValue::Ref(Some(stream))));
     }
     // `with(adjuster)` and `with(temporal)` — one value adjusting another,
-    // which reads the same on a date and a stamp.
+    // which reads the same on a date and a stamp. NOT on a `MonthDay`: it is
+    // a `TemporalAccessor` and not a `Temporal`, so nothing adjusts it, and
+    // its own one-argument `with(Month)` is answered with the rest of its
+    // methods.
     if method == "with"
         && args.len() == 1
+        && !matches!(value, Temporal::MonthDay(_, _))
         && let Some(JValue::Ref(Some(reference))) = args.first()
         && let Some(HeapObject::Temporal(adjuster)) = heap.get(*reference)
     {
@@ -2378,7 +2471,15 @@ fn temporal_method(
         && args.len() == 1
         && matches!(
             value,
-            Temporal::Date(_) | Temporal::Time(_) | Temporal::DateTime(_)
+            Temporal::Date(_)
+                | Temporal::Time(_)
+                | Temporal::DateTime(_)
+                // A `Year` and a `YearMonth` take an amount too — and refuse
+                // the units they have not got, which is what makes
+                // `Year.plus(Period.ofMonths(2))` an error and
+                // `Year.plus(Period.ofYears(2))` a year.
+                | Temporal::Year(_)
+                | Temporal::YearMonth(_, _)
         )
         && let Some(JValue::Ref(Some(reference))) = args.first()
         && let Some(HeapObject::Temporal(amount @ (Temporal::Period(_) | Temporal::Duration(_)))) =
@@ -2408,6 +2509,13 @@ fn temporal_method(
     {
         let start = JValue::Ref(Some(heap.intern_temporal(value)));
         return unit_method(unit, heap, "between", &[start, end]);
+    }
+    // `isSupported(unit)` — the other half of `isSupported`, and the only
+    // method that takes a UNIT and is not `plus`/`minus`/`until`.
+    if method == "isSupported"
+        && let Some(unit) = unit_argument(heap, args.first())
+    {
+        return Ok(Some(JValue::Int(i32::from(supports_unit(value, unit)))));
     }
     // The FIELD surface — `isSupported`, `get`, `getLong`, `range` and the
     // two-argument `with` — reads the same on every value that has fields,
@@ -2747,6 +2855,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         "java/io/PrintWriter" => Some(HeapObject::Writer {
             path: String::new(),
             text: None,
+            closed: false,
         }),
         "java/io/BufferedReader" | "java/io/FileReader" | "java/io/InputStreamReader" => {
             Some(HeapObject::Reader {
@@ -2930,6 +3039,47 @@ pub fn invoke_special(
     };
     // `new BigInteger(text)` / `new BigInteger(text, radix)`.
     if class == "java/math/BigInteger" && method == "<init>" {
+        // `new BigInteger(bytes)` — the two's-complement form `toByteArray`
+        // answers, read back big-endian with the top bit as the sign.
+        if descriptor == "([B)V" {
+            let Some(JValue::Ref(Some(reference))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let Some(HeapObject::ByteArray(bytes)) = heap.get(*reference) else {
+                return Err(throw("java.lang.ClassCastException: not a byte array"));
+            };
+            if bytes.is_empty() {
+                return Err(throw(
+                    "java.lang.NumberFormatException: Zero length BigInteger",
+                ));
+            }
+            let negative = bytes[0] < 0;
+            // Build the MAGNITUDE by hand: shift a byte in at a time, and for
+            // a negative number take the two's complement of the whole run
+            // afterwards, which is what makes the sign one decision rather
+            // than one per byte.
+            let mut magnitude = crate::bigint::BigInt::zero();
+            let two_fifty_six = crate::bigint::BigInt::from_i64(256);
+            for byte in bytes.clone() {
+                let digit = if negative {
+                    i64::from(!byte.cast_unsigned())
+                } else {
+                    i64::from(byte.cast_unsigned())
+                };
+                magnitude = magnitude
+                    .multiply(&two_fifty_six)
+                    .add(&crate::bigint::BigInt::from_i64(digit));
+            }
+            let value = if negative {
+                magnitude.add(&crate::bigint::BigInt::from_i64(1)).negated()
+            } else {
+                magnitude
+            };
+            if let Some(slot) = heap.get_mut(receiver) {
+                *slot = HeapObject::BigInteger(value);
+            }
+            return Ok(());
+        }
         let text = string_arg(heap, &args[0])?;
         let radix = match args.get(1) {
             Some(JValue::Int(radix)) => *radix,
@@ -3006,6 +3156,7 @@ pub fn invoke_special(
             *slot = HeapObject::Writer {
                 path: String::new(),
                 text: Some(target),
+                closed: false,
             };
         }
         return Ok(());
@@ -6997,6 +7148,10 @@ fn reader_method(
         return Err(throw("java.io.IOException: Stream closed"));
     }
     match method {
+        // The charset a byte-reading reader decodes with. caturra decodes
+        // UTF-8 everywhere, and a JDK answers the HISTORICAL name for it
+        // ("UTF8"), not the canonical one.
+        "getEncoding" => Ok(Some(JValue::Ref(Some(heap.alloc_string("UTF8"))))),
         "readLine" => {
             let line = if closed {
                 None
@@ -8400,7 +8555,12 @@ fn iterator_method(
     let (source, index, last, expected_len, writes, descending) =
         (*source, *index, *last, *expected_len, *writes, *descending);
     // An `Enumeration` is the same cursor under the two names it had before
-    // `Iterator` existed, so the answers come from exactly the same code.
+    // `Iterator` existed, so the answers come from exactly the same code — and
+    // `asIterator()`, Java 9's bridge between the two names, is that cursor
+    // itself. (Its `remove` still refuses: an enumerator writes nothing.)
+    if method == "asIterator" {
+        return Ok(Some(JValue::Ref(Some(receiver))));
+    }
     let method = match method {
         "hasMoreElements" => "hasNext",
         "nextElement" => "next",
@@ -10345,10 +10505,19 @@ fn writer_method(
     descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
-    let (path, target) = match heap.get(receiver) {
-        Some(HeapObject::Writer { path, text }) => (path.clone(), *text),
+    let (path, target, closed) = match heap.get(receiver) {
+        Some(HeapObject::Writer { path, text, closed }) => (path.clone(), *text, *closed),
         _ => unreachable!("receiver kind checked by caller"),
     };
+    // A JDK's `PrintWriter` never throws: a write after `close()` is dropped
+    // and the error flag goes up, which is the only way `checkError()` becomes
+    // true for a writer over memory.
+    if closed && !matches!(method, "close" | "flush" | "checkError") {
+        return Ok(match method {
+            "append" => Some(JValue::Ref(Some(receiver))),
+            _ => None,
+        });
+    }
     // A writer over a `StringWriter` collects code units; one over a file
     // appends bytes. Every write here goes through this.
     let put = |heap: &mut Heap, vfs: &mut VirtualFileSystem, text: &str| {
@@ -10427,7 +10596,14 @@ fn writer_method(
             Ok(None)
         }
         // Write-through means close/flush have nothing left to do.
-        "close" | "flush" => Ok(None),
+        "close" => {
+            if let Some(HeapObject::Writer { closed, .. }) = heap.get_mut(receiver) {
+                *closed = true;
+            }
+            Ok(None)
+        }
+        "flush" => Ok(None),
+        "checkError" => Ok(Some(JValue::Int(i32::from(closed)))),
         _ => Err(VmError::UnknownIntrinsic(format!("PrintWriter.{method}"))),
     }
 }
@@ -11919,11 +12095,32 @@ pub fn invoke_static(
             }
             _ => Err(VmError::UnknownIntrinsic(format!("BigInteger.{method}"))),
         },
+        // `Reader.nullReader()`, `Writer.nullWriter()` and
+        // `OutputStream.nullOutputStream()` (Java 11). Each is the stream that
+        // goes nowhere: a reader already at end of input, and two writers that
+        // discard — which is exactly an empty `StringReader` and a
+        // `StringWriter`/`ByteArrayOutputStream` nobody reads back.
+        "java/io/Reader" | "java/io/Writer" | "java/io/OutputStream" => match method {
+            "nullReader" => Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Reader {
+                buffer: String::new(),
+                pos: 0,
+                stdin: false,
+                closed: false,
+                mark: 0,
+            }))))),
+            "nullWriter" => Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::StringWriter(Vec::new())),
+            )))),
+            "nullOutputStream" => Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::ByteStream(Vec::new())),
+            )))),
+            _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
+        },
         // `Year.of` and the two beside it, and the same three for a
         // `YearMonth` and a `MonthDay`. `from(temporal)` reads whichever
         // fields the value has.
         "java/time/Year" | "java/time/YearMonth" | "java/time/MonthDay" => {
-            partial_date_static(class, heap, method, args)
+            partial_date_static(class, heap, console, method, args)
         }
         // `Base64.getEncoder()` and the five beside it. Each answers a coder
         // that knows only its alphabet and whether it pads or wraps.
@@ -13135,6 +13332,14 @@ pub(crate) fn java_double_to_hex(v: f64) -> String {
     format!("{sign}0x1.{hex}p{unbiased}")
 }
 
+/// `Float.toHexString`. A `float` widens to a `double` EXACTLY — every bit of
+/// its mantissa survives, followed by zeros the renderer trims — so a JDK's
+/// answer is the double rendering of the widened value, and this is that
+/// rather than a second bit-picking routine to keep in step.
+pub(crate) fn java_float_to_hex(v: f32) -> String {
+    java_double_to_hex(f64::from(v))
+}
+
 /// Strip an optional trailing Java float/double type suffix (`f`/`F`/`d`/`D`),
 /// legal on any numeric floating string — `"1.0f"`, `"3.14d"`, `"0x1p4d"`.
 fn strip_float_suffix(s: &str) -> &str {
@@ -14012,6 +14217,33 @@ fn small_int_static(
             }
             Ok(Some(JValue::Int(value)))
         }
+        // `decode` reads the 0x / # / leading-0 forms, then range-checks — and
+        // its complaint about a value that does not fit is NOT the one
+        // `parseByte` gives, which is why it cannot share that arm.
+        ("decode", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            let value = decode_integer(&text)?;
+            if value < i64::from(lo) || value > i64::from(hi) {
+                return Err(VmError::UncaughtException(format!(
+                    "java.lang.NumberFormatException: Value {} out of range from input {}",
+                    text.raw, text.raw
+                )));
+            }
+            let wrapper = if class == "Short" {
+                "java/lang/Short"
+            } else {
+                "java/lang/Byte"
+            };
+            let reference =
+                heap.box_wrapper(wrapper, JValue::Int(i32::try_from(value).unwrap_or(0)));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        // ...and the unsigned comparison, which on these NARROW wrappers is
+        // the difference of the two zero-extended values, not a sign.
+        ("compareUnsigned", [JValue::Int(a), JValue::Int(b)]) => {
+            let mask = if class == "Short" { 0xFFFF } else { 0xFF };
+            Ok(Some(JValue::Int((a & mask) - (b & mask))))
+        }
         ("hashCode", [JValue::Int(v)]) => Ok(Some(JValue::Int(*v))),
         ("valueOf", [JValue::Int(v)]) => {
             let reference = heap.box_wrapper(
@@ -14064,6 +14296,10 @@ fn float_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option
     let f = |v: f32| Ok(Some(JValue::Float(v)));
     let b = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
     match (method, args) {
+        ("toHexString", [JValue::Float(v)]) => {
+            let reference = heap.alloc_string(&java_float_to_hex(*v));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("parseFloat" | "valueOf", [text @ JValue::Ref(_)]) => {
             // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
             // primitive. Returning the primitive for both made two `valueOf`
@@ -15458,7 +15694,10 @@ fn tokenizer_method(
         Some((start, at))
     };
     match method {
-        "hasMoreTokens" | "hasMoreElements" => {
+        // A tokenizer IS its own cursor here, so the bridge hands it back and
+        // `hasNext`/`next` read the two names below.
+        "asIterator" => Ok(Some(JValue::Ref(Some(receiver)))),
+        "hasMoreTokens" | "hasMoreElements" | "hasNext" => {
             Ok(Some(JValue::Int(i32::from(next(pos).is_some()))))
         }
         "countTokens" => {
@@ -15470,7 +15709,7 @@ fn tokenizer_method(
             }
             Ok(Some(JValue::Int(count)))
         }
-        "nextToken" | "nextElement" => {
+        "nextToken" | "nextElement" | "next" => {
             let Some((start, end)) = next(pos) else {
                 return Err(throw("java.util.NoSuchElementException"));
             };
@@ -15880,6 +16119,25 @@ fn big_integer_method(
         }
         "signum" => Ok(Some(JValue::Int(value.signum()))),
         "bitLength" => Ok(Some(JValue::Int(value.bit_length().cast_signed()))),
+        // The JDK's minimal two's-complement, big-endian: as many bytes as
+        // `bitLength()/8 + 1`, which is exactly enough to keep the sign bit —
+        // so zero is one byte and -1 is one byte, not none.
+        "toByteArray" => {
+            let len = (value.bit_length() / 8 + 1) as usize;
+            let mut bytes = vec![0i8; len];
+            for at in 0..len {
+                let mut byte: u8 = 0;
+                for bit in 0..8u32 {
+                    if value.test_bit(u32::try_from(at).unwrap_or(0) * 8 + bit) {
+                        byte |= 1 << bit;
+                    }
+                }
+                bytes[len - 1 - at] = byte.cast_signed();
+            }
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::ByteArray(bytes)),
+            ))))
+        }
         "bitCount" => Ok(Some(JValue::Int(value.bit_count().cast_signed()))),
         "getLowestSetBit" => Ok(Some(JValue::Int(
             value.lowest_set_bit().map_or(-1, u32::cast_signed),
@@ -16179,6 +16437,38 @@ fn bitset_method(
             store(heap, words)
         }
         "get" => Ok(Some(JValue::Int(i32::from(get(&words, index(0)?))))),
+        // Whether the two share a set bit. Asked word by word rather than by
+        // building the whole intersection, which is what makes it worth having
+        // beside `and`.
+        "intersects" => {
+            let them = other(heap)?;
+            let shared = words
+                .iter()
+                .zip(them.iter())
+                .any(|(mine, theirs)| mine & theirs != 0);
+            Ok(Some(JValue::Int(i32::from(shared))))
+        }
+        // The bits as bytes, LITTLE-endian — bit 0 is the low bit of byte 0 —
+        // and trimmed to the last byte that holds anything, so an empty set is
+        // an empty array rather than a run of zeros.
+        "toByteArray" => {
+            let mut bytes: Vec<i8> = Vec::new();
+            for word in &words {
+                for at in 0..8 {
+                    bytes.push(
+                        u8::try_from((word >> (at * 8)) & 0xFF)
+                            .unwrap_or(0)
+                            .cast_signed(),
+                    );
+                }
+            }
+            while bytes.last() == Some(&0) {
+                bytes.pop();
+            }
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::ByteArray(bytes)),
+            ))))
+        }
         "cardinality" => Ok(Some(JValue::Int(
             words
                 .iter()
@@ -16461,6 +16751,13 @@ fn partial_date_method(
                 Temporal::YearMonth(shifted_year(i64::from(year) + by)?, month),
             )
         }
+        (Temporal::YearMonth(_, month), "withYear") => {
+            made(heap, Temporal::YearMonth(shifted_year(int_at(0))?, month))
+        }
+        (Temporal::YearMonth(year, _), "withMonth") => {
+            let month = month_argument(heap, args.first(), int_at(0))?;
+            made(heap, Temporal::YearMonth(year, month))
+        }
         (Temporal::YearMonth(year, month), "atDay") => {
             let day = int_at(0);
             let length = i64::from(crate::time::length_of_month(year, month));
@@ -16514,6 +16811,23 @@ fn partial_date_method(
                     day: day.min(length),
                 }),
             )
+        }
+        // `with(Month)` on a month-day CLAMPS the day, and clamps it against a
+        // LEAP February: `--01-31.with(FEBRUARY)` is `--02-29`, not the 28th,
+        // because a month-day has no year to make February short.
+        (Temporal::MonthDay(_, day), "with") => {
+            let month = month_argument(heap, args.first(), int_at(0))?;
+            let length = crate::time::length_of_month(2024, month);
+            made(heap, Temporal::MonthDay(month, day.min(length)))
+        }
+        (Temporal::Year(year), "isValidMonthDay") => {
+            let valid = match other(heap) {
+                Some(Temporal::MonthDay(month, day)) => {
+                    day <= crate::time::length_of_month(year, month)
+                }
+                _ => false,
+            };
+            Ok(Some(JValue::Int(i32::from(valid))))
         }
         (Temporal::MonthDay(_, day), "withMonth") => {
             let month = month_argument(heap, args.first(), int_at(0))?;
@@ -16593,6 +16907,7 @@ fn check_month_day(month: u8, day: i64) -> Result<(), VmError> {
 fn partial_date_static(
     class: &str,
     heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
     method: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
@@ -16644,6 +16959,22 @@ fn partial_date_static(
             made(
                 heap,
                 Temporal::MonthDay(month, u8::try_from(day).unwrap_or(1)),
+            )
+        }
+        // What "this year" is depends on a ZONE, which the host owns — the
+        // same clock `LocalDate.now()` reads, so the three agree with it and
+        // with each other.
+        (_, "now") => {
+            let offset = i64::from(console.zone_offset_seconds()) * 1000;
+            let local = console.now_millis().saturating_add(offset);
+            let today = crate::time::Date::from_epoch_day(local.div_euclid(86_400_000));
+            made(
+                heap,
+                match class {
+                    "java/time/Year" => Temporal::Year(today.year),
+                    "java/time/YearMonth" => Temporal::YearMonth(today.year, today.month),
+                    _ => Temporal::MonthDay(today.month, today.day),
+                },
             )
         }
         (_, "from") => {

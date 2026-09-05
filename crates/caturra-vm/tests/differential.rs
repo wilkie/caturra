@@ -52168,3 +52168,175 @@ stricter_than_javac!(
     "StrictComposedConsumer",
     "import java.util.*;\npublic class StrictComposedConsumer { static void r() { new IntSummaryStatistics().andThen(null); } }"
 );
+
+// ---- The gaps the widened measurement found that are ORDINARY Java: the
+// three partial dates finished, the primitive Optionals, and the wrapper
+// methods that were on `Integer` and `Long` and not on their narrow siblings.
+//
+// Every question about MOVING a partial date is that question about the date
+// it fills out to — January, the 1st, and a LEAP year for a month-day — asked
+// and then narrowed again. Written that way, the calendar arithmetic exists
+// once. What each one supports falls out of it: a `Year` moves by years and
+// up, a `YearMonth` by months and up, and a `MonthDay` by nothing at all,
+// because it has no year to move in. A `MonthDay` is a `TemporalAccessor` and
+// not a `Temporal`, which is why a JDK gives it no `plus` and no two-argument
+// `with` either.
+differential_test!(
+    the_partial_dates_finished,
+    "OrdO1",
+    r##"
+import java.time.*;
+import java.time.temporal.*;
+public class OrdO1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    // --- Year
+    s("year plus", () -> Year.of(2024).plus(3, ChronoUnit.YEARS));
+    s("year plus amount", () -> Year.of(2024).plus(Period.ofYears(2)));
+    s("year minus", () -> Year.of(2024).minus(1, ChronoUnit.YEARS));
+    s("year minus amount", () -> Year.of(2024).minus(Period.ofYears(5)));
+    s("year with", () -> Year.of(2024).with(ChronoField.YEAR, 1999));
+    s("year until", () -> Year.of(2020).until(Year.of(2024), ChronoUnit.YEARS));
+    s("year range", () -> Year.of(2024).range(ChronoField.YEAR));
+    s("year range era", () -> Year.of(2024).range(ChronoField.YEAR_OF_ERA));
+    s("year valid month day", () -> Year.of(2024).isValidMonthDay(MonthDay.of(2, 29)) + " " + Year.of(2023).isValidMonthDay(MonthDay.of(2, 29)));
+    s("year plus decades", () -> Year.of(2024).plus(2, ChronoUnit.DECADES));
+    s("year plus days refuses", () -> Year.of(2024).plus(1, ChronoUnit.DAYS));
+    // --- YearMonth
+    s("ym plus", () -> YearMonth.of(2024, 3).plus(2, ChronoUnit.MONTHS));
+    s("ym plus amount", () -> YearMonth.of(2024, 3).plus(Period.ofMonths(11)));
+    s("ym minus", () -> YearMonth.of(2024, 1).minus(2, ChronoUnit.MONTHS));
+    s("ym with year", () -> YearMonth.of(2024, 3).withYear(1999));
+    s("ym with month", () -> YearMonth.of(2024, 3).withMonth(12));
+    s("ym with month bad", () -> YearMonth.of(2024, 3).withMonth(13));
+    s("ym with field", () -> YearMonth.of(2024, 3).with(ChronoField.MONTH_OF_YEAR, 7));
+    s("ym until", () -> YearMonth.of(2024, 1).until(YearMonth.of(2025, 4), ChronoUnit.MONTHS));
+    s("ym range", () -> YearMonth.of(2024, 2).range(ChronoField.DAY_OF_MONTH));
+    s("ym range non leap", () -> YearMonth.of(2023, 2).range(ChronoField.DAY_OF_MONTH));
+    // --- MonthDay
+    s("md with", () -> MonthDay.of(3, 14).with(Month.SEPTEMBER));
+    s("md with clamps", () -> MonthDay.of(1, 31).with(Month.FEBRUARY));
+    s("md range", () -> MonthDay.of(3, 14).range(ChronoField.DAY_OF_MONTH));
+    s("md range month", () -> MonthDay.of(2, 14).range(ChronoField.DAY_OF_MONTH));
+    // --- the Optional primitives
+    s("opt int stream", () -> java.util.OptionalInt.of(4).stream().sum());
+    s("opt int empty stream", () -> java.util.OptionalInt.empty().stream().sum());
+    s("opt int or else get", () -> java.util.OptionalInt.empty().orElseGet(() -> 9));
+    s("opt long or else get", () -> java.util.OptionalLong.of(3L).orElseGet(() -> 9L));
+    s("opt double or else get", () -> java.util.OptionalDouble.empty().orElseGet(() -> 1.5));
+    s("opt double stream", () -> java.util.OptionalDouble.of(2.5).stream().sum());
+    s("opt long stream", () -> java.util.OptionalLong.of(7L).stream().sum());
+    s("opt if present or else", () -> { StringBuilder o = new StringBuilder(); java.util.OptionalInt.of(1).ifPresentOrElse(v -> o.append("got ").append(v), () -> o.append("none")); java.util.OptionalInt.empty().ifPresentOrElse(v -> o.append(v), () -> o.append("|none")); return o.toString(); });
+    // --- the wrappers' missing siblings
+    s("byte decode", () -> Byte.decode("0x1f") + " " + Byte.decode("-12") + " " + Byte.decode("010"));
+    s("short decode", () -> Short.decode("#ff") + " " + Short.decode("0X10"));
+    s("byte compare unsigned", () -> Byte.compareUnsigned((byte) -1, (byte) 1));
+    s("short compare unsigned", () -> Short.compareUnsigned((short) -1, (short) 1));
+    s("byte toUnsignedInt", () -> Byte.toUnsignedInt((byte) -1));
+    s("float hex", () -> Float.toHexString(1.5f) + " " + Float.toHexString(0.0f) + " " + Float.toHexString(-0.1f));
+    s("decode bad", () -> Byte.decode("zz"));
+    s("decode overflow", () -> Byte.decode("300"));
+  }
+}
+"##
+);
+// ...and the edges, which is where the rule earns itself. `Year.plus(1, ERAS)`
+// goes through the era FIELD and fails a JDK's way;
+// `Year.plus(Period.ofYears(2))` works while `plus(Period.ofMonths(2))` is
+// "Unsupported unit: Months", because `Period.addTo` adds the years AS YEARS
+// when there are no months — a difference no `LocalDate` can show.
+// `MonthDay.with(FEBRUARY)` clamps to the 29th, not the 28th. And
+// `Year.toString()` is the plain number: `Year.of(5)` is "5", where a
+// `YearMonth` pads its year to four digits.
+differential_test!(
+    the_edges_of_a_partial_date,
+    "OrdO2",
+    r#"
+import java.time.*;
+import java.time.temporal.*;
+public class OrdO2 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("year eras", () -> Year.of(2024).plus(1, ChronoUnit.ERAS));
+    s("year until eras", () -> Year.of(2020).until(Year.of(2024), ChronoUnit.ERAS));
+    s("year until decades", () -> Year.of(2004).until(Year.of(2024), ChronoUnit.DECADES));
+    s("year until partial", () -> Year.of(2004).until(Year.of(2013), ChronoUnit.DECADES));
+    s("year until backwards", () -> Year.of(2024).until(Year.of(2020), ChronoUnit.YEARS));
+    s("year plus months amount", () -> Year.of(2024).plus(Period.ofMonths(2)));
+    s("year plus years+months", () -> Year.of(2024).plus(Period.of(1, 2, 0)));
+    s("year minus millennia", () -> Year.of(2024).minus(1, ChronoUnit.MILLENNIA));
+    s("year until other type", () -> Year.of(2020).until(YearMonth.of(2024, 1), ChronoUnit.YEARS));
+    s("year with era", () -> Year.of(2024).with(ChronoField.ERA, 0));
+    s("year with bad field", () -> Year.of(2024).with(ChronoField.MONTH_OF_YEAR, 3));
+    s("year with year of era", () -> Year.of(2024).with(ChronoField.YEAR_OF_ERA, 5));
+    s("year supports", () -> Year.of(2024).isSupported(ChronoUnit.YEARS) + " " + Year.of(2024).isSupported(ChronoUnit.MONTHS) + " " + Year.of(2024).isSupported(ChronoUnit.ERAS));
+    s("ym until years", () -> YearMonth.of(2020, 6).until(YearMonth.of(2024, 3), ChronoUnit.YEARS));
+    s("ym until backwards", () -> YearMonth.of(2024, 3).until(YearMonth.of(2024, 1), ChronoUnit.MONTHS));
+    s("ym plus period", () -> YearMonth.of(2024, 3).plus(Period.of(1, 2, 20)));
+    s("ym supports", () -> YearMonth.of(2024, 1).isSupported(ChronoUnit.MONTHS) + " " + YearMonth.of(2024, 1).isSupported(ChronoUnit.DAYS));
+    s("ym with proleptic", () -> YearMonth.of(2024, 3).with(ChronoField.PROLEPTIC_MONTH, 24000));
+    s("md supports", () -> MonthDay.of(3, 14).isSupported(ChronoField.DAY_OF_MONTH) + " " + MonthDay.of(3, 14).isSupported(ChronoField.YEAR));
+    s("md range month field", () -> MonthDay.of(3, 14).range(ChronoField.MONTH_OF_YEAR));
+    s("md leap day", () -> MonthDay.of(2, 29).toString());
+    s("year now class", () -> Year.now().getClass().getName());
+    s("ym now class", () -> YearMonth.now().getClass().getName());
+    s("md now class", () -> MonthDay.now().getClass().getName());
+    s("now agree", () -> { LocalDate d = LocalDate.now(); return Year.now().getValue() == d.getYear(); });
+    s("ym now agree", () -> { LocalDate d = LocalDate.now(); return YearMonth.now().equals(YearMonth.of(d.getYear(), d.getMonthValue())); });
+    s("md now agree", () -> { LocalDate d = LocalDate.now(); return MonthDay.now().equals(MonthDay.of(d.getMonthValue(), d.getDayOfMonth())); });
+  }
+}
+"#
+);
+// The rest of the same list: Java 9's `asIterator` on the two old cursors,
+// Java 11's three streams that go nowhere, a `PrintWriter` that has been
+// CLOSED (a JDK drops the write and raises its error flag, where caturra went
+// on writing), a reader's historical charset name, and the two ways a number
+// becomes bytes.
+differential_test!(
+    the_small_gaps_a_measurement_found,
+    "OrdO3",
+    r#"
+import java.io.*;
+import java.math.*;
+import java.util.*;
+public class OrdO3 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    // --- the Java 9 asIterator pair
+    s("enumeration as iterator", () -> { Vector<String> v = new Vector<>(List.of("a","b")); Iterator<String> it = v.elements().asIterator(); StringBuilder o = new StringBuilder(); while (it.hasNext()) o.append(it.next()); return o.toString(); });
+    s("tokenizer as iterator", () -> { Iterator<Object> it = new StringTokenizer("x y").asIterator(); StringBuilder o = new StringBuilder(); while (it.hasNext()) o.append(it.next()); return o.toString(); });
+    s("empty enumeration as iterator", () -> new Vector<String>().elements().asIterator().hasNext());
+    // --- the null streams
+    s("null reader", () -> new BufferedReader(Reader.nullReader()).readLine());
+    s("null reader read", () -> Reader.nullReader().read());
+    s("null writer", () -> { Writer w = Writer.nullWriter(); w.write("ignored"); w.close(); return "ok"; });
+    s("null output", () -> { OutputStream o = OutputStream.nullOutputStream(); o.write(65); o.close(); return "ok"; });
+    s("null reader closed", () -> { Reader r = Reader.nullReader(); r.close(); return r.read(); });
+    // --- a writer that swallows its errors
+    s("check error", () -> { PrintWriter w = new PrintWriter(new StringWriter()); w.print("x"); return w.checkError(); });
+    s("check error after close", () -> { PrintWriter w = new PrintWriter(new StringWriter()); w.close(); w.print("x"); return w.checkError(); });
+    // --- a reader's charset name
+    s("reader encoding", () -> new InputStreamReader(System.in).getEncoding());
+    // --- the bit sets and the bignum
+    s("bitset intersects", () -> { BitSet x = new BitSet(); x.set(1); x.set(5); BitSet y = new BitSet(); y.set(5); BitSet z = new BitSet(); z.set(2); return x.intersects(y) + " " + x.intersects(z); });
+    s("bitset bytes", () -> { BitSet x = new BitSet(); x.set(0); x.set(9); return Arrays.toString(x.toByteArray()); });
+    s("bitset empty bytes", () -> Arrays.toString(new BitSet().toByteArray()));
+    s("bigint bytes", () -> Arrays.toString(BigInteger.valueOf(300).toByteArray()) + " " + Arrays.toString(BigInteger.valueOf(-1).toByteArray()) + " " + Arrays.toString(BigInteger.ZERO.toByteArray()));
+    s("bigint round trip", () -> new BigInteger(BigInteger.valueOf(-12345).toByteArray()));
+  }
+}
+"#
+);

@@ -6820,6 +6820,19 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 /// erases it to `Object`, and a stream's `findFirst`/`max`/`min` terminal
 /// carries the stream's element — so
 /// `list.stream().filter(p).findFirst().ifPresent(x -> ...)` types its lambda.
+/// The element of a PRIMITIVE Optional, which is not a type argument — it is
+/// in the class name. `OptionalInt.orElseGet(() -> 9)` needs a target type for
+/// its lambda exactly as `Optional<T>.orElseGet` does, and there is no `<T>`
+/// to read it from.
+fn primitive_optional_elem(named: &str) -> Option<TypeRef> {
+    Some(match named {
+        "OptionalInt" => TypeRef::Int,
+        "OptionalLong" => TypeRef::Long,
+        "OptionalDouble" => TypeRef::Double,
+        _ => return None,
+    })
+}
+
 fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // A call to one of the PROGRAM's own generic methods that answers an
     // `Optional<T>` — with `T` pinned from the arguments or an explicit
@@ -6849,6 +6862,13 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             && names_library_class(prev, "Optional")
         {
             return Some(literal_element_type(args, ctx));
+        }
+        // `OptionalInt.of(4)` and `OptionalInt.empty()` used straight as a
+        // receiver — their element is the one their NAME says.
+        for named in ["OptionalInt", "OptionalLong", "OptionalDouble"] {
+            if matches!(method.as_str(), "of" | "empty") && names_library_class(prev, named) {
+                return primitive_optional_elem(named);
+            }
         }
         // `Optional.<String>empty()` — a WITNESS says the element where there
         // is no argument to read it from, and an empty Optional is exactly the
@@ -6908,6 +6928,13 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         }
         _ => return None,
     };
+    // A variable declared `OptionalInt` (and its two siblings) carries no type
+    // argument at all, so it never reaches the generic reading below.
+    if let TypeRef::Named(name) = &ty
+        && let Some(elem) = primitive_optional_elem(name.rsplit('.').next().unwrap_or(name))
+    {
+        return Some(elem);
+    }
     let TypeRef::Generic { base, args } = ty else {
         return None;
     };
