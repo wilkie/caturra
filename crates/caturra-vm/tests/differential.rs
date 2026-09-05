@@ -52596,3 +52596,120 @@ stricter_than_javac!(
     "StrictFormatSymbols",
     "import java.text.*;\npublic class StrictFormatSymbols { static void r() { new DecimalFormat(\"0.0\").getDecimalFormatSymbols(); } }"
 );
+
+// ---- The last of the measured list. A charset's own five questions:
+// `contains` asks about the character REPERTOIRE and not the encoding, which
+// is why `UTF-8.contains(UTF-16)` is true and `US-ASCII.contains(anything
+// else)` is false. The aliases come from ONE table that `forName` also reads,
+// so a name `aliases()` reports is a name `forName` accepts — which two
+// hand-written lists do not stay agreed on.
+differential_test!(
+    what_a_charset_says_about_itself,
+    "CsS1",
+    r#"
+import java.nio.charset.*;
+import java.util.*;
+public class CsS1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("is supported", () -> Charset.isSupported("UTF-8") + " " + Charset.isSupported("utf8") + " " + Charset.isSupported("zz"));
+    s("is supported illegal", () -> Charset.isSupported("!!"));
+    s("is registered", () -> StandardCharsets.UTF_8.isRegistered() + " " + StandardCharsets.US_ASCII.isRegistered());
+    s("can encode", () -> StandardCharsets.UTF_8.canEncode() + " " + StandardCharsets.US_ASCII.canEncode());
+    s("contains self", () -> StandardCharsets.UTF_8.contains(StandardCharsets.UTF_8));
+    s("utf8 contains ascii", () -> StandardCharsets.UTF_8.contains(StandardCharsets.US_ASCII));
+    s("ascii contains utf8", () -> StandardCharsets.US_ASCII.contains(StandardCharsets.UTF_8));
+    s("latin1 contains ascii", () -> StandardCharsets.ISO_8859_1.contains(StandardCharsets.US_ASCII));
+    s("ascii contains latin1", () -> StandardCharsets.US_ASCII.contains(StandardCharsets.ISO_8859_1));
+    s("utf16 contains all", () -> StandardCharsets.UTF_16.contains(StandardCharsets.UTF_8) + " " + StandardCharsets.UTF_16.contains(StandardCharsets.ISO_8859_1));
+    s("utf8 contains utf16", () -> StandardCharsets.UTF_8.contains(StandardCharsets.UTF_16));
+    s("compare", () -> StandardCharsets.UTF_8.compareTo(StandardCharsets.US_ASCII) + " " + StandardCharsets.US_ASCII.compareTo(StandardCharsets.UTF_8) + " " + StandardCharsets.UTF_8.compareTo(StandardCharsets.UTF_8));
+    s("aliases ascii", () -> new TreeSet<>(StandardCharsets.US_ASCII.aliases()));
+    s("aliases utf8", () -> new TreeSet<>(StandardCharsets.UTF_8.aliases()));
+    s("aliases latin1", () -> new TreeSet<>(StandardCharsets.ISO_8859_1.aliases()));
+    s("aliases utf16", () -> new TreeSet<>(StandardCharsets.UTF_16.aliases()));
+    s("aliases utf16be", () -> new TreeSet<>(StandardCharsets.UTF_16BE.aliases()));
+    s("aliases utf16le", () -> new TreeSet<>(StandardCharsets.UTF_16LE.aliases()));
+  }
+}
+"#
+);
+// ...and the scatter beside it. An ERA carries the one field it IS, so it
+// answers the reader surface every other `java.time` value does — and its
+// three STANDALONE display styles fall back to the era's NUMBER, which is what
+// a JDK prints when its data carries no standalone name. A version-3 UUID is
+// the MD5 of a name with the version and variant bits stamped over it, which
+// makes it the one deterministic UUID a program can rely on.
+differential_test!(
+    the_last_of_the_measured_list,
+    "CsS2",
+    r#"
+import java.math.*;
+import java.nio.file.*;
+import java.time.chrono.*;
+import java.time.temporal.*;
+import java.util.*;
+public class CsS2 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    // --- IsoEra's field surface
+    s("era value", () -> IsoEra.CE.getValue() + " " + IsoEra.BCE.getValue());
+    s("era supports", () -> IsoEra.CE.isSupported(ChronoField.ERA) + " " + IsoEra.CE.isSupported(ChronoField.YEAR));
+    s("era get", () -> IsoEra.CE.get(ChronoField.ERA) + " " + IsoEra.BCE.getLong(ChronoField.ERA));
+    s("era range", () -> IsoEra.CE.range(ChronoField.ERA));
+    s("era bad field", () -> IsoEra.CE.get(ChronoField.YEAR));
+    // --- ValueRange.of
+    s("range of two", () -> ValueRange.of(1, 12));
+    s("range of three", () -> ValueRange.of(1, 28, 31));
+    s("range of four", () -> ValueRange.of(1, 1, 28, 31));
+    s("range bad", () -> ValueRange.of(5, 1));
+    s("range fixed", () -> ValueRange.of(1, 12).isFixed() + " " + ValueRange.of(1, 28, 31).isFixed());
+    // --- UUID
+    s("uuid node", () -> { UUID u = UUID.fromString("a8098c1a-f86e-11da-bd1a-00112444be1e"); return u.version() + " " + u.variant() + " " + u.node() + " " + u.clockSequence() + " " + u.timestamp(); });
+    s("uuid name based", () -> UUID.nameUUIDFromBytes("hello".getBytes()));
+    s("uuid name based empty", () -> UUID.nameUUIDFromBytes(new byte[0]));
+    s("uuid node on random", () -> UUID.fromString("00000000-0000-4000-8000-000000000000").node());
+    s("uuid node wrong version", () -> UUID.fromString("00000000-0000-4000-8000-000000000000").timestamp());
+    // --- the bignums
+    s("bigdec sqrt", () -> new BigDecimal("2").sqrt(MathContext.DECIMAL64));
+    s("bigdec sqrt exact", () -> new BigDecimal("16").sqrt(new MathContext(10)));
+    s("bigint sqrt rem", () -> Arrays.toString(BigInteger.valueOf(17).sqrtAndRemainder()));
+    // --- Path
+  }
+}
+"#
+);
+
+// The registry a JDK's whole platform has, and the buffer-and-coder half of
+// `java.nio.charset` — caturra carries six charsets and converts through
+// `String.getBytes(charset)`.
+stricter_than_javac!(
+    strict_no_charset_registry,
+    "StrictCharsetRegistry",
+    "import java.nio.charset.*;\npublic class StrictCharsetRegistry { static void r() { Charset.availableCharsets(); } }"
+);
+
+// A `Path` walks by INDEX here — `getNameCount()` and `getName(i)`, which is
+// the accessor caturra's for-each is built on.
+stricter_than_javac!(
+    strict_a_path_walks_by_index,
+    "StrictPathCursor",
+    "import java.nio.file.*;\npublic class StrictPathCursor { static void r() { Paths.get(\"a/b\").iterator(); } }"
+);
+
+// A `Collector` is a value caturra builds from a `Collectors` factory and
+// reads in a terminal; the five functions inside it are not values it hands
+// back.
+stricter_than_javac!(
+    strict_a_collector_is_opaque,
+    "StrictCollectorParts",
+    "import java.util.stream.*;\npublic class StrictCollectorParts { static void r() { Collectors.toList().supplier(); } }"
+);

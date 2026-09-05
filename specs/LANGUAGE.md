@@ -9061,6 +9061,17 @@ counting catches: a divergence that stopped being one.
   separators and the grouping character are the ones its locale draws with,
   and are not a value a program can take apart.
   (`strict_no_format_symbols`)
+- `Charset.availableCharsets()` — caturra carries six charsets, not the
+  registry a JDK's whole platform has. `Charset.isSupported(name)` asks about
+  one. `encode`/`decode`/`newEncoder`/`newDecoder` go with it: they answer
+  buffers and coders, where `String.getBytes(charset)` does the conversion.
+  (`strict_no_charset_registry`)
+- `aPath.iterator()` / `forEach(...)` — a path walks by INDEX here,
+  `getNameCount()` and `getName(i)`, which is the accessor caturra's for-each
+  is built on. (`strict_a_path_walks_by_index`)
+- `aCollector.supplier()` and the four beside it — caturra builds a `Collector`
+  from a `Collectors` factory and reads it in a terminal; the functions inside
+  are not values it hands back. (`strict_a_collector_is_opaque`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -14882,3 +14893,61 @@ available `Locale`s, and the attributed text a Swing field would style.
 Pinned as `what_a_number_format_is_asked` and
 `the_pattern_a_format_writes_back`. The measurement reads 3121/3385 across 225
 classes; `DecimalFormat` went 41% → 88%, `NumberFormat` 70% → 85%.
+
+## Every name says something
+
+This is the last of the list the widened measurement produced, and the point at
+which the property it was built to check holds whole:
+
+> **`scripts/coverage/measure.py --why` exits zero.** Every method name a real
+> JDK 11 offers on every one of the 225 classes caturra models — 3385 of them —
+> either RUNS or says why it does not. None reads as "cannot find symbol",
+> which is what a typo looks like.
+
+What this unit built to get there:
+
+**A charset's own five questions.** `contains` asks about the character
+REPERTOIRE and not the encoding, which is why `UTF-8.contains(UTF-16)` is true
+and `US-ASCII` contains nothing but itself. `isSupported` asks a JDK's two
+questions in the same order `forName` does — is this a legal charset NAME, and
+is that charset one we have — so an illegal name is an
+`IllegalCharsetNameException` either way.
+
+`aliases()` came with a repair. The six charsets' aliases and the names
+`forName` accepts were two hand-written lists, and the second was a subset:
+`Charset.forName("646")` failed for an alias a JDK answers. They are one table
+now, read both ways, so a name `aliases()` reports is a name `forName` takes.
+
+**An era carries the one field it IS.** `IsoEra` answers `isSupported`, `get`,
+`getLong` and `range` for `ERA` and refuses everything else, which is the
+reader surface every other `java.time` value has. Its three STANDALONE display
+styles fall back to the era's NUMBER — a JDK prints what its data has, and its
+data carries no standalone era names.
+
+**`ValueRange.of`** in all three shapes, with the bound checks a JDK makes
+against each other, and the complaint naming which pair is out of order.
+
+**A UUID's time fields** — `timestamp`, `clockSequence`, `node`, each refused
+on a UUID that is not version 1 rather than answering a number that means
+nothing. And `nameUUIDFromBytes`, which needed MD5: it is the one deterministic
+UUID a program can rely on, the same name giving the same id on every run.
+The digest is here for that and nothing else — `java.security.MessageDigest` is
+not modelled.
+
+**`BigDecimal.sqrt(MathContext)`** — Newton's method run at guard precision and
+rounded ONCE at the end, so the last digit is the one a JDK writes rather than
+a rounding of a rounding; an exact root comes back stripped (`16.sqrt()` is
+`4`). And `BigInteger.sqrtAndRemainder`, which is the pair in one pass.
+
+What is refused, and why, completes the list: the charset REGISTRY (a JDK's is
+its whole platform's) and the buffer-and-coder half of `java.nio.charset`; a
+`Path`'s cursor (a path walks by index here — `getNameCount()` and
+`getName(i)`, which is the accessor caturra's for-each is built on); a
+`Collector`'s five functions (it is built from a factory and read in a
+terminal); and `BigInteger.probablePrime`, where caturra has
+`nextProbablePrime` but not a JDK's candidate generation — the same `Random`
+would not give the same prime, and a number that is merely A prime is not the
+answer the program asked for.
+
+Pinned as `what_a_charset_says_about_itself` and `the_last_of_the_measured_list`.
+The measurement reads 3138/3385 across 225 classes.

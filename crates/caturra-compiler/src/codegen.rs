@@ -11279,6 +11279,9 @@ enum BRet {
     Stream,
     /// `Iterator<E>` of the receiver's element type (`collection.iterator()`).
     Iterator,
+    /// A `Set<String>` — a charset's aliases, whose element is not the
+    /// receiver's (a charset has none) but always text.
+    StringSet,
     /// An `Iterator<Object>` — a cursor over a source with no element type
     /// of its own to pass on (a `StringTokenizer`'s, which is raw in Java too).
     ObjectIterator,
@@ -12327,6 +12330,57 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
         "checkValidIntValue",
         "caturra models a ValueRange as the two bounds it prints; checking a value against a FIELD is the field's own job",
     ),
+    // ---- A `Collector` is a VALUE a program passes on: caturra builds one
+    // from a `Collectors` factory and reads it in a terminal, and the five
+    // functions inside are not values it can hand back.
+    ("Collector", "supplier", COLLECTOR_IS_OPAQUE),
+    ("Collector", "accumulator", COLLECTOR_IS_OPAQUE),
+    ("Collector", "combiner", COLLECTOR_IS_OPAQUE),
+    ("Collector", "finisher", COLLECTOR_IS_OPAQUE),
+    ("Collector", "characteristics", COLLECTOR_IS_OPAQUE),
+    ("Collector", "of", COLLECTOR_IS_OPAQUE),
+    ("DoubleStream", "builder", STREAM_BUILDER),
+    ("LongStream", "builder", STREAM_BUILDER),
+    ("TemporalAdjuster", "adjustInto", BARE_TEMPORAL),
+    // ---- java.nio.file.Path: a path walks by INDEX here (`getNameCount()`
+    // and `getName(i)`), which is the accessor caturra's for-each is built on;
+    // a cursor over one would need a second kind of indexed loop.
+    ("Path", "iterator", PATH_WALKS_BY_INDEX),
+    ("Path", "forEach", PATH_WALKS_BY_INDEX),
+    ("Path", "spliterator", PATH_WALKS_BY_INDEX),
+    (
+        "Path",
+        "getFileSystem",
+        "caturra models one in-memory filesystem and no java.nio.file.FileSystem value",
+    ),
+    (
+        "Path",
+        "register",
+        "caturra does not model java.nio.file.WatchService - nothing here changes a file behind the program's back",
+    ),
+    (
+        "Path",
+        "toRealPath",
+        "caturra's filesystem has no links, so toAbsolutePath().normalize() is the same path",
+    ),
+    ("Path", "toUri", "caturra does not model java.net.URI"),
+    // ---- java.nio.charset.Charset: what needs a buffer, a coder, or the
+    // whole platform's registry.
+    (
+        "Charset",
+        "availableCharsets",
+        "caturra carries six charsets, not the registry a JDK's whole platform has - Charset.isSupported(name) asks about one",
+    ),
+    ("Charset", "encode", NO_BUFFERS),
+    ("Charset", "decode", NO_BUFFERS),
+    ("Charset", "newEncoder", NO_CODERS),
+    ("Charset", "newDecoder", NO_CODERS),
+    // ---- and the one prime a program cannot ask for.
+    (
+        "BigInteger",
+        "probablePrime",
+        "caturra's BigInteger has nextProbablePrime, but not a JDK's candidate generation - the same Random would not give the same prime",
+    ),
     // ---- java.text: what a number format is asked that is not about the
     // NUMBER — the currency it names, the symbols it draws with, the locales
     // it could have used.
@@ -12452,6 +12506,11 @@ const ERASED_SIGNATURE: &str =
 const CODE_SIGNING: &str = "caturra does not model code signing";
 const NO_CLASS_PATH: &str = "caturra has no class path to load a resource from";
 const NEST_MATES: &str = "caturra does not model nest mates";
+const COLLECTOR_IS_OPAQUE: &str = "caturra builds a Collector from a Collectors factory and reads it in a terminal; the five functions inside it are not values it hands back";
+const PATH_WALKS_BY_INDEX: &str =
+    "caturra walks a path by index - getNameCount() and getName(i) - and models no cursor over one";
+const NO_BUFFERS: &str = "caturra does not model java.nio.ByteBuffer or CharBuffer - String.getBytes(charset) and new String(bytes, charset) do the same conversion";
+const NO_CODERS: &str = "caturra does not model java.nio.charset.CharsetEncoder or CharsetDecoder";
 const NO_CURRENCY: &str =
     "caturra does not model java.util.Currency - the pattern's currency sign is what it draws";
 const NO_FORMAT_SYMBOLS: &str = "caturra does not model java.text.DecimalFormatSymbols - the separators are the ones its locale draws with";
@@ -12522,6 +12581,15 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::IsoEra => "IsoEra",
         JType::ChronoField => "ChronoField",
         JType::ValueRange => "ValueRange",
+        JType::Path => "Path",
+        JType::DecimalFormat => "DecimalFormat",
+        JType::TemporalAdjuster => "TemporalAdjuster",
+        JType::NumberFormat => "NumberFormat",
+        JType::Collector(_) => "Collector",
+        JType::DoubleStream => "DoubleStream",
+        JType::LongStream => "LongStream",
+        JType::Charset => "Charset",
+        JType::BigInteger => "BigInteger",
         JType::Field => "Field",
         JType::Method => "Method",
         JType::Constructor => "Constructor",
@@ -16241,6 +16309,13 @@ const CHRONO_FIELD_METHODS: &[BuiltinMethod] = &[
 /// takes another `BigInteger` (never an `int`), which is the first thing a
 /// program written against `long` gets wrong.
 const BIG_INTEGER_METHODS: &[BuiltinMethod] = &[
+    // The integer square root and what it left over, in one pass.
+    bm(
+        "sqrtAndRemainder",
+        &[],
+        BRet::BigIntegerArray,
+        "()[Ljava/math/BigInteger;",
+    ),
     // The number as TWO'S-COMPLEMENT bytes, big-endian and as short as it can
     // be while keeping the sign bit — the form `new BigInteger(byte[])` reads
     // back, and the only way a program moves a bignum through bytes.
@@ -16570,6 +16645,13 @@ const BIG_DECIMAL_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "round",
+        &[BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    // Java 9's square root, to the context's precision.
+    bm(
+        "sqrt",
         &[BParam::MathContext],
         BRet::BigDecimal,
         "(Ljava/math/MathContext;)Ljava/math/BigDecimal;",
@@ -17407,6 +17489,11 @@ const TOKENIZER_METHODS: &[BuiltinMethod] = &[
 
 /// `java.util.UUID` — two longs, and what is asked of them.
 const UUID_METHODS: &[BuiltinMethod] = &[
+    // The three pieces a TIME-BASED (version 1) UUID carries; a JDK refuses
+    // all three on any other version.
+    bm("timestamp", &[], BRet::Long, "()J"),
+    bm("clockSequence", &[], BRet::Int, "()I"),
+    bm("node", &[], BRet::Long, "()J"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getMostSignificantBits", &[], BRet::Long, "()J"),
     bm("getLeastSignificantBits", &[], BRet::Long, "()J"),
@@ -17430,6 +17517,14 @@ const UUID_METHODS: &[BuiltinMethod] = &[
 
 /// `UUID.fromString` and `UUID.randomUUID`.
 const UUID_STATIC_METHODS: &[BuiltinMethod] = &[
+    // A version-3 UUID from a NAME: deterministic, which is the point — the
+    // same bytes are the same id on every run.
+    bm(
+        "nameUUIDFromBytes",
+        &[BParam::ByteArray],
+        BRet::Uuid,
+        "([B)Ljava/util/UUID;",
+    ),
     bm(
         "fromString",
         &[BParam::Str],
@@ -17857,6 +17952,29 @@ const NUMBER_FORMAT_STATIC_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.temporal.ValueRange` — four numbers, and the questions asked
 /// of them.
+/// `ValueRange.of(min, max)` and the two wider forms — a program builds one to
+/// describe a field of its own.
+const VALUE_RANGE_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "of",
+        &[BParam::Long, BParam::Long],
+        BRet::ValueRange,
+        "(JJ)Ljava/time/temporal/ValueRange;",
+    ),
+    bm(
+        "of",
+        &[BParam::Long, BParam::Long, BParam::Long],
+        BRet::ValueRange,
+        "(JJJ)Ljava/time/temporal/ValueRange;",
+    ),
+    bm(
+        "of",
+        &[BParam::Long, BParam::Long, BParam::Long, BParam::Long],
+        BRet::ValueRange,
+        "(JJJJ)Ljava/time/temporal/ValueRange;",
+    ),
+];
+
 const VALUE_RANGE_METHODS: &[BuiltinMethod] = &[
     bm("getMinimum", &[], BRet::Long, "()J"),
     bm("getLargestMinimum", &[], BRet::Long, "()J"),
@@ -17961,6 +18079,32 @@ const TEMPORAL_ADJUSTERS_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.chrono.IsoEra` — an enum with two constants.
 const ISO_ERA_METHODS: &[BuiltinMethod] = &[
+    // An era carries the one FIELD it is, so it answers the reader surface
+    // every other `java.time` value does.
+    bm(
+        "isSupported",
+        &[BParam::ChronoField],
+        BRet::Boolean,
+        "(Ljava/time/temporal/TemporalField;)Z",
+    ),
+    bm(
+        "get",
+        &[BParam::ChronoField],
+        BRet::Int,
+        "(Ljava/time/temporal/TemporalField;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::ChronoField],
+        BRet::Long,
+        "(Ljava/time/temporal/TemporalField;)J",
+    ),
+    bm(
+        "range",
+        &[BParam::ChronoField],
+        BRet::ValueRange,
+        "(Ljava/time/temporal/TemporalField;)Ljava/time/temporal/ValueRange;",
+    ),
     bm("getValue", &[], BRet::Int, "()I"),
     bm(
         "compareTo",
@@ -21982,6 +22126,12 @@ const MATCHER_STATIC_METHODS: &[BuiltinMethod] = &[bm(
 /// `java.nio.charset.Charset`'s own factories.
 const CHARSET_STATIC_METHODS: &[BuiltinMethod] = &[
     bm(
+        "isSupported",
+        &[BParam::Str],
+        BRet::Boolean,
+        "(Ljava/lang/String;)Z",
+    ),
+    bm(
         "forName",
         &[BParam::Str],
         BRet::Charset,
@@ -21998,6 +22148,24 @@ const CHARSET_STATIC_METHODS: &[BuiltinMethod] = &[
 /// `java.nio.charset.Charset` — a name and nothing else, which is what
 /// `toString`, `name` and `displayName` all answer.
 const CHARSET_METHODS: &[BuiltinMethod] = &[
+    // What a charset says about ITSELF, beside its name. `contains` asks about
+    // the character REPERTOIRE and not the encoding, which is why
+    // `UTF-8.contains(UTF-16)` is true.
+    bm("isRegistered", &[], BRet::Boolean, "()Z"),
+    bm("canEncode", &[], BRet::Boolean, "()Z"),
+    bm(
+        "contains",
+        &[BParam::Charset],
+        BRet::Boolean,
+        "(Ljava/nio/charset/Charset;)Z",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::Charset],
+        BRet::Int,
+        "(Ljava/nio/charset/Charset;)I",
+    ),
+    bm("aliases", &[], BRet::StringSet, "()Ljava/util/Set;"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("displayName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -22484,6 +22652,8 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "DayOfWeek" => Some(("java/time/DayOfWeek", DAY_OF_WEEK_STATIC_METHODS)),
         "Month" => Some(("java/time/Month", MONTH_STATIC_METHODS)),
         "ChronoUnit" => Some(("java/time/temporal/ChronoUnit", CHRONO_UNIT_STATIC_METHODS)),
+        // `ValueRange.of(...)` — the three shapes a program builds one in.
+        "ValueRange" => Some(("java/time/temporal/ValueRange", VALUE_RANGE_STATIC_METHODS)),
         "ChronoField" => Some((
             "java/time/temporal/ChronoField",
             CHRONO_FIELD_STATIC_METHODS,
@@ -22521,6 +22691,9 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         // to reach the refusal path rather than report the CLASS as unknown:
         // `PrintStream.nullOutputStream()` said "cannot find symbol:
         // 'PrintStream'" about a class a program can name and hold.
+        // No static of its own is modelled, but the CALL has to reach the
+        // refusal path rather than report the class as unknown.
+        "Collector" => Some(("java/util/stream/Collector", &[])),
         "PrintStream" => Some(("java/io/PrintStream", NULL_STREAM_METHODS)),
         "ByteArrayOutputStream" => Some(("java/io/ByteArrayOutputStream", NULL_STREAM_METHODS)),
         // `Reader.nullReader()`, `Writer.nullWriter()` and
@@ -23622,6 +23795,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             _ => JType::Error,
         }),
         BRet::Keys => Some(args.first.map_or(JType::Error, JType::library_set)),
+        BRet::StringSet => Some(JType::library_set(ElemType::Str)),
         BRet::Values => Some(args.second.map_or(JType::Error, JType::Collection)),
         BRet::Entries => Some(match (args.first, args.second) {
             (Some(key), Some(value)) => JType::EntrySet { key, value },
@@ -31858,7 +32032,9 @@ impl BodyGen<'_> {
     fn type_of_builtin_call(&mut self, receiver_ty: JType, method: &str, args: &[Expr]) -> JType {
         // The one call whose arguments are CONSTANTS rather than values, so no
         // table describes it — the emit path reads them, and this has to agree.
-        if matches!(receiver_ty, JType::Month | JType::DayOfWeek) && method == "getDisplayName" {
+        if matches!(receiver_ty, JType::Month | JType::DayOfWeek | JType::IsoEra)
+            && method == "getDisplayName"
+        {
             return JType::Str;
         }
         let elem = TypeArgs::of(receiver_ty);
@@ -32103,7 +32279,9 @@ impl BodyGen<'_> {
         // arguments are CONSTANTS rather than values — the style enums are
         // read while compiling — so no method table can describe the call, and
         // both this and `type_of` have to say the same thing about it.
-        if matches!(receiver_ty, JType::Month | JType::DayOfWeek) && method == "getDisplayName" {
+        if matches!(receiver_ty, JType::Month | JType::DayOfWeek | JType::IsoEra)
+            && method == "getDisplayName"
+        {
             return self.emit_display_name(receiver_ty, args, span);
         }
         // The reflective lookups take `Class<?>...`, and everybody writes them
@@ -33067,10 +33245,10 @@ impl BodyGen<'_> {
     ) -> Option<Option<JType>> {
         let [style, locale] = args else {
             self.no_suitable_library_method(
-                if receiver_ty == JType::Month {
-                    "Month"
-                } else {
-                    "DayOfWeek"
+                match receiver_ty {
+                    JType::Month => "Month",
+                    JType::IsoEra => "IsoEra",
+                    _ => "DayOfWeek",
                 },
                 "getDisplayName",
                 args,

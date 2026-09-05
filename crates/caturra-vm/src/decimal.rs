@@ -108,6 +108,8 @@ pub enum DecError {
     Overflow,
     /// `pow` with a negative exponent.
     InvalidOperation,
+    /// `sqrt` of a negative value.
+    NegativeSqrt,
 }
 
 impl BigDec {
@@ -418,6 +420,48 @@ impl BigDec {
     ///
     /// # Errors
     /// A negative exponent, which a JDK calls an invalid operation.
+    /// The square root, to `digits` significant digits — Newton's method, run
+    /// at extra precision and rounded once at the end so the last digit is the
+    /// one a JDK writes rather than a rounding of a rounding.
+    ///
+    /// An EXACT root comes back stripped (`16.sqrt()` is `4`, not `4.000000`),
+    /// which is what a JDK does when the answer needs fewer digits than were
+    /// asked for.
+    pub fn sqrt(&self, digits: u32, mode: Rounding) -> Result<Self, DecError> {
+        if self.signum() < 0 {
+            return Err(DecError::NegativeSqrt);
+        }
+        if self.signum() == 0 {
+            return Ok(Self::zero());
+        }
+        // Work to a handful of guard digits, so the final rounding sees a
+        // value that is already correct further right than it needs.
+        let working = digits.max(1) + 6;
+        let two = Self::from_i64(2);
+        // A first guess of the right ORDER: half the digits before the point.
+        let mut guess = {
+            let exponent = i32::try_from(self.precision()).unwrap_or(0) - self.scale();
+            Self::from_i64(1).scale_by_power_of_ten(exponent.div_euclid(2) + 1)
+        };
+        for _ in 0..100 {
+            let quotient = self.divide_with_precision(&guess, working, mode)?;
+            let next = guess
+                .add(&quotient)
+                .divide_with_precision(&two, working, mode)?;
+            if next.compare(&guess) == Ordering::Equal {
+                break;
+            }
+            guess = next;
+        }
+        let rounded = guess.with_precision(digits.max(1), mode)?;
+        // Exact? Then the stripped form is the answer a JDK gives.
+        let stripped = rounded.stripped();
+        if stripped.multiply(&stripped).compare(self) == Ordering::Equal {
+            return Ok(stripped);
+        }
+        Ok(rounded)
+    }
+
     pub fn pow(&self, exponent: i32) -> Result<Self, DecError> {
         if exponent < 0 {
             return Err(DecError::InvalidOperation);

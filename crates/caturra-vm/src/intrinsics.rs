@@ -1759,6 +1759,7 @@ fn field_value(value: Temporal, field: u8) -> Result<i64, VmError> {
         Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
         Temporal::DayOfWeek(day) if field == 15 => return Ok(i64::from(day)),
         Temporal::Month(month) if field == 23 => return Ok(i64::from(month)),
+        Temporal::Era(era) if field == 27 => return Ok(i64::from(era)),
         // A partial date reads through the date it fills out to; only the
         // fields it really carries reach here, so nothing is invented.
         partial if partial_as_date(partial).is_some() => (partial_as_date(partial), None),
@@ -1862,6 +1863,8 @@ fn field_range_of(value: Temporal, field: u8) -> Result<crate::time::ValueRange,
                 1,
                 i64::from(crate::time::length_of_month(2024, month)),
             ),
+            // The ISO calendar has exactly two eras.
+            (Temporal::Era(_), 27) => crate::time::ValueRange::fixed(0, 1),
             _ => crate::time::field_range(field),
         });
     };
@@ -2199,6 +2202,8 @@ fn supports_field(value: Temporal, field: u8) -> bool {
         Temporal::Year(_) => matches!(field, 25..=27),
         Temporal::YearMonth(_, _) => matches!(field, 23..=27),
         Temporal::MonthDay(_, _) => matches!(field, 18 | 23),
+        // An ERA carries the one field it IS.
+        Temporal::Era(_) => field == 27,
         _ => false,
     }
 }
@@ -2577,6 +2582,28 @@ fn temporal_method(
         Temporal::Era(era) => {
             return match method {
                 "getValue" | "ordinal" => Ok(Some(JValue::Int(i32::from(era)))),
+                // The two eras' names, by style. The three STANDALONE styles
+                // fall back to the era's NUMBER — the CLDR data a JDK reads
+                // carries no standalone era names, and it prints what it has.
+                "getDisplayName" => {
+                    let style = match args.first() {
+                        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                            Some(HeapObject::Temporal(Temporal::TextStyle(style))) => *style,
+                            _ => 0,
+                        },
+                        _ => 0,
+                    };
+                    let text = match (style, era) {
+                        (0, 1) => "Anno Domini".to_owned(),
+                        (0, _) => "Before Christ".to_owned(),
+                        (2, 1) => "AD".to_owned(),
+                        (2, _) => "BC".to_owned(),
+                        (4, 1) => "A".to_owned(),
+                        (4, _) => "B".to_owned(),
+                        _ => era.to_string(),
+                    };
+                    Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+                }
                 "compareTo" => match args.first() {
                     Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
                         Some(HeapObject::Temporal(Temporal::Era(other))) => {
@@ -2955,6 +2982,138 @@ fn detail_from_exception_message(class: &str, message: &str) -> Option<String> {
 enum Folded {
     Long(i64, i64, i64, i64),
     Double(i64, f64, f64, f64),
+}
+
+/// MD5 (RFC 1321), for the one thing in the Java library that needs it:
+/// `UUID.nameUUIDFromBytes`, which is how a program turns a NAME into a stable
+/// id. Not offered as a digest of its own — `java.security.MessageDigest` is
+/// not modelled, and this exists only to make that one UUID reproducible.
+// The four working words and the round's two derived values keep RFC 1321's
+// own single-letter names, and the table of constants is long: renaming or
+// splitting either would make this harder to check against the standard.
+#[allow(clippy::many_single_char_names, clippy::too_many_lines)]
+fn md5(message: &[u8]) -> [u8; 16] {
+    const SHIFTS: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    // K[i] = floor(2^32 * abs(sin(i + 1))), written out so no float rounding
+    // can differ between hosts.
+    const K: [u32; 64] = [
+        0xd76a_a478,
+        0xe8c7_b756,
+        0x2420_70db,
+        0xc1bd_ceee,
+        0xf57c_0faf,
+        0x4787_c62a,
+        0xa830_4613,
+        0xfd46_9501,
+        0x6980_98d8,
+        0x8b44_f7af,
+        0xffff_5bb1,
+        0x895c_d7be,
+        0x6b90_1122,
+        0xfd98_7193,
+        0xa679_438e,
+        0x49b4_0821,
+        0xf61e_2562,
+        0xc040_b340,
+        0x265e_5a51,
+        0xe9b6_c7aa,
+        0xd62f_105d,
+        0x0244_1453,
+        0xd8a1_e681,
+        0xe7d3_fbc8,
+        0x21e1_cde6,
+        0xc337_07d6,
+        0xf4d5_0d87,
+        0x455a_14ed,
+        0xa9e3_e905,
+        0xfcef_a3f8,
+        0x676f_02d9,
+        0x8d2a_4c8a,
+        0xfffa_3942,
+        0x8771_f681,
+        0x6d9d_6122,
+        0xfde5_380c,
+        0xa4be_ea44,
+        0x4bde_cfa9,
+        0xf6bb_4b60,
+        0xbebf_bc70,
+        0x289b_7ec6,
+        0xeaa1_27fa,
+        0xd4ef_3085,
+        0x0488_1d05,
+        0xd9d4_d039,
+        0xe6db_99e5,
+        0x1fa2_7cf8,
+        0xc4ac_5665,
+        0xf429_2244,
+        0x432a_ff97,
+        0xab94_23a7,
+        0xfc93_a039,
+        0x655b_59c3,
+        0x8f0c_cc92,
+        0xffef_f47d,
+        0x8584_5dd1,
+        0x6fa8_7e4f,
+        0xfe2c_e6e0,
+        0xa301_4314,
+        0x4e08_11a1,
+        0xf753_7e82,
+        0xbd3a_f235,
+        0x2ad7_d2bb,
+        0xeb86_d391,
+    ];
+    let mut padded = message.to_vec();
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    let bits = (message.len() as u64).wrapping_mul(8);
+    padded.extend_from_slice(&bits.to_le_bytes());
+
+    let (mut a0, mut b0, mut c0, mut d0) = (
+        0x6745_2301u32,
+        0xefcd_ab89u32,
+        0x98ba_dcfeu32,
+        0x1032_5476u32,
+    );
+    for chunk in padded.chunks_exact(64) {
+        let mut words = [0u32; 16];
+        for (at, word) in words.iter_mut().enumerate() {
+            *word = u32::from_le_bytes([
+                chunk[at * 4],
+                chunk[at * 4 + 1],
+                chunk[at * 4 + 2],
+                chunk[at * 4 + 3],
+            ]);
+        }
+        let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
+        for i in 0..64usize {
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | (!b & d), i),
+                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | !d), (7 * i) % 16),
+            };
+            let f = f.wrapping_add(a).wrapping_add(K[i]).wrapping_add(words[g]);
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(f.rotate_left(SHIFTS[i]));
+        }
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+    let mut digest = [0u8; 16];
+    for (at, word) in [a0, b0, c0, d0].iter().enumerate() {
+        digest[at * 4..at * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    digest
 }
 
 /// Whether a string is a legal charset NAME at all (`java.nio.charset.Charset`
@@ -4531,6 +4690,53 @@ pub fn invoke_virtual(
         // A `Charset` hashes as its name, the same answer a collection gets
         // from `native_hash` — written in both places, so a program can ask
         // either way and a `HashSet<Charset>` holds one of each charset.
+        // The five questions a charset answers about ITSELF.
+        (
+            HeapObject::Charset(name),
+            "isRegistered" | "canEncode" | "contains" | "compareTo" | "aliases",
+        ) => {
+            let name = name.clone();
+            let other = |heap: &Heap| match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::Charset(theirs)) => Some(theirs.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match method {
+                // All six are IANA-registered, and all six encode: caturra
+                // carries no charset that can only decode.
+                "isRegistered" | "canEncode" => Ok(Some(JValue::Int(1))),
+                "contains" => {
+                    let Some(theirs) = other(heap) else {
+                        return Err(throw("java.lang.NullPointerException"));
+                    };
+                    Ok(Some(JValue::Int(i32::from(charset_contains(
+                        &name, &theirs,
+                    )))))
+                }
+                // Charsets order by their canonical names, ignoring case.
+                "compareTo" => {
+                    let Some(theirs) = other(heap) else {
+                        return Err(throw("java.lang.NullPointerException"));
+                    };
+                    let order = name.to_ascii_uppercase().cmp(&theirs.to_ascii_uppercase()) as i32;
+                    Ok(Some(JValue::Int(order)))
+                }
+                _ => {
+                    // A JDK answers a Set whose iteration order it does not
+                    // specify, so a program that prints one sorts it first.
+                    let mut set = JavaHashMap::new();
+                    for alias in charset_aliases(&name) {
+                        let text = heap.alloc_string(alias);
+                        let key = JValue::Ref(Some(text));
+                        set.insert_new(java_string_hash(alias), key, JValue::Int(1));
+                    }
+                    let reference = heap.alloc(HeapObject::HashSet(set));
+                    Ok(Some(JValue::Ref(Some(reference))))
+                }
+            }
+        }
         (HeapObject::Charset(name), "hashCode") => {
             Ok(Some(JValue::Int(java_string_hash(&name.clone()))))
         }
@@ -9438,15 +9644,100 @@ fn collector_text(reference: HeapRef) -> String {
 #[must_use]
 pub fn canonical_charset(name: &str) -> Option<&'static str> {
     let folded = name.to_ascii_uppercase();
-    Some(match folded.as_str() {
-        "UTF-8" | "UTF8" | "UNICODE-1-1-UTF-8" => "UTF-8",
-        "US-ASCII" | "ASCII" | "ANSI_X3.4-1968" | "ISO646-US" => "US-ASCII",
-        "ISO-8859-1" | "ISO8859-1" | "LATIN1" | "ISO_8859-1" | "L1" | "8859_1" => "ISO-8859-1",
-        "UTF-16" | "UTF16" => "UTF-16",
-        "UTF-16BE" | "UTF16BE" | "UNICODEBIGUNMARKED" => "UTF-16BE",
-        "UTF-16LE" | "UTF16LE" | "UNICODELITTLEUNMARKED" => "UTF-16LE",
-        _ => return None,
-    })
+    CHARSETS
+        .iter()
+        .find(|(canonical, aliases)| {
+            canonical.eq_ignore_ascii_case(name)
+                || aliases
+                    .iter()
+                    .any(|alias| alias.to_ascii_uppercase() == folded)
+        })
+        .map(|(canonical, _)| *canonical)
+}
+
+/// The six charsets caturra carries, each with the ALIASES a JDK answers for
+/// it. One table, read both ways: a name `aliases()` reports is a name
+/// `forName` accepts, which is not something two hand-written lists stay
+/// agreed on. (The alias spellings are a JDK's own — `default` really is one
+/// of `US-ASCII`'s.)
+pub const CHARSETS: &[(&str, &[&str])] = &[
+    (
+        "US-ASCII",
+        &[
+            "646",
+            "ANSI_X3.4-1968",
+            "ANSI_X3.4-1986",
+            "ASCII",
+            "IBM367",
+            "ISO646-US",
+            "ISO_646.irv:1991",
+            "ascii7",
+            "cp367",
+            "csASCII",
+            "default",
+            "iso-ir-6",
+            "iso_646.irv:1983",
+            "us",
+        ],
+    ),
+    (
+        "ISO-8859-1",
+        &[
+            "819",
+            "8859_1",
+            "IBM-819",
+            "IBM819",
+            "ISO8859-1",
+            "ISO8859_1",
+            "ISO_8859-1",
+            "ISO_8859-1:1987",
+            "ISO_8859_1",
+            "cp819",
+            "csISOLatin1",
+            "iso-ir-100",
+            "l1",
+            "latin1",
+        ],
+    ),
+    ("UTF-8", &["UTF8", "unicode-1-1-utf-8"]),
+    ("UTF-16", &["UTF_16", "UnicodeBig", "unicode", "utf16"]),
+    (
+        "UTF-16BE",
+        &[
+            "ISO-10646-UCS-2",
+            "UTF_16BE",
+            "UnicodeBigUnmarked",
+            "X-UTF-16BE",
+        ],
+    ),
+    (
+        "UTF-16LE",
+        &["UTF_16LE", "UnicodeLittleUnmarked", "X-UTF-16LE"],
+    ),
+];
+
+/// The aliases a charset answers with, by canonical name.
+#[must_use]
+pub fn charset_aliases(canonical: &str) -> &'static [&'static str] {
+    CHARSETS
+        .iter()
+        .find(|(name, _)| *name == canonical)
+        .map_or(&[], |(_, aliases)| *aliases)
+}
+
+/// Whether every character `other` can represent, `charset` can too.
+///
+/// A JDK answers this from the character REPERTOIRE, not from the encoding:
+/// `UTF-8.contains(UTF-16)` is true, because the two spell the same set of
+/// characters different ways. Only the two byte charsets are narrower.
+#[must_use]
+pub fn charset_contains(charset: &str, other: &str) -> bool {
+    match charset {
+        "US-ASCII" => other == "US-ASCII",
+        "ISO-8859-1" => matches!(other, "US-ASCII" | "ISO-8859-1"),
+        // The Unicode ones all reach every character there is.
+        _ => true,
+    }
 }
 
 /// Encode UTF-16 units the way `String.getBytes(charset)` does. An unmappable
@@ -12168,6 +12459,37 @@ pub fn invoke_static(
                     heap.alloc(HeapObject::Uuid(high, low)),
                 ))))
             }
+            // A version-3 UUID: the MD5 of the bytes, with the version and
+            // variant bits stamped over it. Deterministic, which is the whole
+            // point — the same name is the same id on every run and on every
+            // engine.
+            "nameUUIDFromBytes" => {
+                let bytes = match args.first() {
+                    Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                        Some(HeapObject::ByteArray(bytes)) => {
+                            bytes.iter().map(|b| b.cast_unsigned()).collect::<Vec<u8>>()
+                        }
+                        _ => return Err(throw("java.lang.ClassCastException: not a byte array")),
+                    },
+                    _ => return Err(throw("java.lang.NullPointerException")),
+                };
+                let digest = md5(&bytes);
+                let mut high: u64 = 0;
+                let mut low: u64 = 0;
+                for (at, byte) in digest.iter().enumerate() {
+                    if at < 8 {
+                        high = (high << 8) | u64::from(*byte);
+                    } else {
+                        low = (low << 8) | u64::from(*byte);
+                    }
+                }
+                high = (high & !0xf000_u64) | 0x3000;
+                low = (low & !(0xc000_u64 << 48)) | (0x8000_u64 << 48);
+                Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Uuid(
+                    high.cast_signed(),
+                    low.cast_signed(),
+                ))))))
+            }
             "randomUUID" => {
                 // Version 4 in the high half, variant 2 in the low — the four
                 // bits and two bits a JDK stamps over its random draw.
@@ -12284,6 +12606,49 @@ pub fn invoke_static(
                 heap.alloc(HeapObject::MathContext { precision, mode }),
             ))))
         }
+        // `ValueRange.of(min, max)`, `(min, smallestMax, max)` and the whole
+        // four-argument form. A JDK checks the bounds against each other, and
+        // the complaint names WHICH pair is out of order.
+        "java/time/temporal/ValueRange" => {
+            let at = |index: usize| match args.get(index) {
+                Some(JValue::Long(value)) => *value,
+                Some(JValue::Int(value)) => i64::from(*value),
+                _ => 0,
+            };
+            let range = match args.len() {
+                2 => crate::time::ValueRange::fixed(at(0), at(1)),
+                3 => crate::time::ValueRange {
+                    min: at(0),
+                    largest_min: at(0),
+                    smallest_max: at(1),
+                    max: at(2),
+                },
+                _ => crate::time::ValueRange {
+                    min: at(0),
+                    largest_min: at(1),
+                    smallest_max: at(2),
+                    max: at(3),
+                },
+            };
+            if range.min > range.max {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: Minimum value must be less than maximum value",
+                ));
+            }
+            if range.largest_min > range.max {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: Smallest minimum value must be less than largest minimum value",
+                ));
+            }
+            if range.smallest_max > range.max {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: Smallest maximum value must be less than largest maximum value",
+                ));
+            }
+            Ok(Some(JValue::Ref(Some(
+                heap.intern_temporal(Temporal::Range(range)),
+            ))))
+        }
         // `Charset.forName(name)` — and the `StandardCharsets` constants, which
         // the compiler lowers to the same call.
         //
@@ -12296,6 +12661,19 @@ pub fn invoke_static(
             "defaultCharset" => Ok(Some(JValue::Ref(Some(
                 heap.alloc(HeapObject::Charset(String::from("UTF-8"))),
             )))),
+            // The same two questions in the same order as `forName`, with a
+            // boolean for the second instead of a charset.
+            "isSupported" => {
+                let written = arg_string(heap, &args[0])?;
+                if !is_legal_charset_name(&written) {
+                    return Err(throw(format!(
+                        "java.nio.charset.IllegalCharsetNameException: {written}"
+                    )));
+                }
+                Ok(Some(JValue::Int(i32::from(
+                    canonical_charset(&written).is_some(),
+                ))))
+            }
             "forName" | "__standard" => {
                 let written = arg_string(heap, &args[0])?;
                 if !is_legal_charset_name(&written) {
@@ -15155,6 +15533,9 @@ fn rounding_argument(
 fn decimal_error(error: crate::decimal::DecError) -> VmError {
     use crate::decimal::DecError;
     throw(match error {
+        DecError::NegativeSqrt => {
+            "java.lang.ArithmeticException: Attempt to take square root of negative BigDecimal"
+        }
         DecError::DivisionByZero => "java.lang.ArithmeticException: Division by zero",
         DecError::ByZero => "java.lang.ArithmeticException: / by zero",
         DecError::BigByZero => "java.lang.ArithmeticException: BigInteger divide by zero",
@@ -15386,6 +15767,12 @@ fn big_decimal_method(
             let (digits, mode) = context_at(heap, 0)?;
             let rounded = value.with_precision(digits, mode).map_err(decimal_error)?;
             answer(heap, rounded)
+        }
+        // Java 9's square root, to the context's precision.
+        "sqrt" => {
+            let (digits, mode) = context_at(heap, 0)?;
+            let root = value.sqrt(digits, mode).map_err(decimal_error)?;
+            answer(heap, root)
         }
         "movePointLeft" | "movePointRight" => {
             let by = int_at(0);
@@ -15864,6 +16251,35 @@ fn uuid_method(
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
         }
         "getMostSignificantBits" => Ok(Some(JValue::Long(high))),
+        // The three pieces a TIME-BASED (version 1) UUID carries. A JDK
+        // refuses all three on any other version rather than answering a
+        // number that means nothing.
+        "timestamp" | "clockSequence" | "node" => {
+            let version = (high >> 12) & 0x0f;
+            if version != 1 {
+                return Err(throw(
+                    "java.lang.UnsupportedOperationException: Not a time-based UUID",
+                ));
+            }
+            let magnitude = high.cast_unsigned();
+            // `clockSequence` is an `int` and the other two are `long`s, which
+            // is the one place the three differ.
+            if method == "clockSequence" {
+                let sequence = ((low.cast_unsigned() >> 48) & 0x3fff).cast_signed();
+                return Ok(Some(JValue::Int(i32::try_from(sequence).unwrap_or(0))));
+            }
+            Ok(Some(JValue::Long(if method == "timestamp" {
+                // The 60-bit timestamp is stitched from three fields the
+                // layout scatters: low, mid, then high with its version
+                // nibble removed.
+                (((magnitude >> 32) & 0xffff_ffff)
+                    | ((magnitude >> 16) & 0xffff) << 32
+                    | (magnitude & 0x0fff) << 48)
+                    .cast_signed()
+            } else {
+                (low.cast_unsigned() & 0xffff_ffff_ffff).cast_signed()
+            })))
+        }
         "getLeastSignificantBits" => Ok(Some(JValue::Long(low))),
         "version" => Ok(Some(JValue::Int(((high >> 12) & 0x0f) as i32))),
         "variant" => {
@@ -15875,17 +16291,6 @@ fn uuid_method(
             // Java's `>>>` masks the count to six bits, and so does this.
             let shifted = magnitude.wrapping_shr(64 - top).cast_signed();
             Ok(Some(JValue::Int((shifted & (low >> 63)) as i32)))
-        }
-        "timestamp" => {
-            if (high >> 12) & 0x0f != 1 {
-                return Err(throw(
-                    "java.lang.UnsupportedOperationException: Not a time-based UUID",
-                ));
-            }
-            let time = ((high >> 32) & 0xffff_ffff)
-                | ((high >> 16) & 0xffff) << 32
-                | (high & 0x0fff) << 48;
-            Ok(Some(JValue::Long(time)))
         }
         "compareTo" => {
             let Some((theirs_high, theirs_low)) = other() else {
@@ -16205,6 +16610,23 @@ fn big_integer_method(
         }
         "signum" => Ok(Some(JValue::Int(value.signum()))),
         "bitLength" => Ok(Some(JValue::Int(value.bit_length().cast_signed()))),
+        // The integer square root AND what it left over, as a two-element
+        // array — the pair a JDK answers in one pass.
+        "sqrtAndRemainder" => {
+            let Some(root) = value.sqrt() else {
+                return Err(throw("java.lang.ArithmeticException: negative BigInteger"));
+            };
+            let remainder = value.subtract(&root.multiply(&root));
+            let pair: Vec<JValue> = [root, remainder]
+                .into_iter()
+                .map(|part| JValue::Ref(Some(heap.alloc(HeapObject::BigInteger(part)))))
+                .collect();
+            let array = heap.alloc(HeapObject::RefArray(
+                String::from("[Ljava/math/BigInteger;"),
+                pair,
+            ));
+            Ok(Some(JValue::Ref(Some(array))))
+        }
         // The JDK's minimal two's-complement, big-endian: as many bytes as
         // `bitLength()/8 + 1`, which is exactly enough to keep the sign bit —
         // so zero is one byte and -1 is one byte, not none.
