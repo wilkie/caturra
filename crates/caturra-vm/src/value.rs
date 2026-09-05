@@ -677,6 +677,16 @@ pub enum HeapObject {
         /// input's leading and trailing whitespace away rather than yielding
         /// an empty token for it.
         delimiter: Option<String>,
+        /// The radix `nextInt`/`nextLong`/`hasNextInt` read in, as
+        /// `useRadix` set it. Ten until a program says otherwise, and back to
+        /// ten after `reset()`. It does NOT reach `nextDouble`, which is
+        /// always decimal — a JDK's `useRadix(16)` leaves `1.5` alone.
+        radix: u32,
+        /// What the LAST successful read matched: the token's text and where
+        /// it was, which is all `match()` answers. `None` until a read
+        /// succeeds — `hasNext()` alone does not set one, and asking before
+        /// then is an `IllegalStateException`.
+        matched: Option<(String, usize, usize)>,
     },
     /// A `java.io.BufferedReader`/`FileReader`/`InputStreamReader` — one reader
     /// kind. A file reader slurps the whole file into `buffer` up front; a

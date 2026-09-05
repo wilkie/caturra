@@ -2635,6 +2635,8 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             stdin: true,
             closed: false,
             delimiter: None,
+            radix: 10,
+            matched: None,
         }),
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
         "java/util/LinkedList" => Some(HeapObject::LinkedList(Vec::new())),
@@ -6031,6 +6033,125 @@ fn scanner_method(
         Some(HeapObject::Scanner { stdin, closed, .. }) => (*stdin, *closed),
         _ => unreachable!("receiver kind checked by caller"),
     };
+    // The CONFIGURATION methods work on a CLOSED scanner: a JDK refuses only
+    // the ones that read. Answered before the closed check for that reason —
+    // `sc.close(); sc.delimiter()` is legal, and `sc.close(); sc.next()` is
+    // not.
+    match method {
+        "delimiter" => {
+            let pattern = match heap.get(receiver) {
+                Some(HeapObject::Scanner { delimiter, .. }) => delimiter
+                    .clone()
+                    // The default is not `\s+`: a JDK's is this, and a program
+                    // that prints `sc.delimiter()` sees it.
+                    .unwrap_or_else(|| String::from(r"\p{javaWhitespace}+")),
+                _ => String::new(),
+            };
+            let compiled = heap.alloc(HeapObject::Pattern {
+                source: pattern.encode_utf16().collect(),
+                flags: 0,
+            });
+            return Ok(Some(JValue::Ref(Some(compiled))));
+        }
+        // `useDelimiter(pattern)` answers the SCANNER, so it chains onto the
+        // constructor the way a program writes it — and it is CONFIGURATION,
+        // so a closed scanner still takes it.
+        "useDelimiter" => {
+            // Either spelling: the string a program writes, or the `Pattern`
+            // it compiled first. A pattern IS its source here.
+            let pattern = match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::Pattern { source, .. }) => {
+                        Some(String::from_utf16_lossy(source))
+                    }
+                    _ => heap.string_text(*reference),
+                },
+                _ => None,
+            };
+            let Some(pattern) = pattern else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            // Reject a malformed pattern HERE, where the JDK's
+            // `Pattern.compile` does, rather than at the first read.
+            compile_scanner_delimiter(&pattern)?;
+            if let Some(HeapObject::Scanner { delimiter, .. }) = heap.get_mut(receiver) {
+                *delimiter = Some(pattern);
+            }
+            return Ok(Some(JValue::Ref(Some(receiver))));
+        }
+        "radix" => {
+            let radix = match heap.get(receiver) {
+                Some(HeapObject::Scanner { radix, .. }) => *radix,
+                _ => 10,
+            };
+            return Ok(Some(JValue::Int(i32::try_from(radix).unwrap_or(10))));
+        }
+        "useRadix" => {
+            let wanted = match args.first() {
+                Some(JValue::Int(radix)) => *radix,
+                _ => 10,
+            };
+            if !(2..=36).contains(&wanted) {
+                return Err(throw(format!(
+                    "java.lang.IllegalArgumentException: radix:{wanted}"
+                )));
+            }
+            if let Some(HeapObject::Scanner { radix, .. }) = heap.get_mut(receiver) {
+                *radix = u32::try_from(wanted).unwrap_or(10);
+            }
+            return Ok(Some(JValue::Ref(Some(receiver))));
+        }
+        // `reset()` puts the delimiter and the radix back to what a new
+        // scanner has. It does NOT rewind the input — the name is about
+        // configuration, which is a trap worth being exact about.
+        "reset" => {
+            if let Some(HeapObject::Scanner {
+                delimiter, radix, ..
+            }) = heap.get_mut(receiver)
+            {
+                *delimiter = None;
+                *radix = 10;
+            }
+            return Ok(Some(JValue::Ref(Some(receiver))));
+        }
+        // `match()` is the last SUCCESSFUL read's result, and asking before
+        // there is one is an IllegalStateException rather than null.
+        "match" => {
+            let Some((text, start, end)) = (match heap.get(receiver) {
+                Some(HeapObject::Scanner { matched, .. }) => matched.clone(),
+                _ => None,
+            }) else {
+                return Err(throw(
+                    "java.lang.IllegalStateException: No match result available",
+                ));
+            };
+            // The whole INPUT, so `start`/`end` mean what they say — a
+            // `MatchResult` reports positions in the text it matched against,
+            // not in the token.
+            // The whole INPUT, and the span in UTF-16 units rather than the
+            // bytes the scanner counts in — a `MatchResult` reports positions
+            // in the text, and the two only coincide while it is ASCII.
+            let buffer = match heap.get(receiver) {
+                Some(HeapObject::Scanner { buffer, .. }) => buffer.clone(),
+                _ => text.clone(),
+            };
+            let units = |at: usize| buffer.get(..at).unwrap_or(&buffer).encode_utf16().count();
+            let result = heap.alloc(HeapObject::MatchResult {
+                input: buffer.encode_utf16().collect(),
+                groups: vec![Some((units(start), units(end)))],
+            });
+            return Ok(Some(JValue::Ref(Some(result))));
+        }
+        // A JDK's `Scanner` reads from a stream that can fail; caturra's reads
+        // a buffer that cannot, so there is never an exception to report.
+        "ioException" => return Ok(Some(JValue::NULL)),
+        // `Scanner` implements `Iterator<String>`, and an iterator over tokens
+        // has nothing to remove.
+        "remove" => return Err(throw("java.lang.UnsupportedOperationException")),
+        _ => {}
+    }
+    // Every READING method refuses a closed Scanner, as the JDK's does.
+    // Closing twice is a no-op there, so `close` is exempt.
     if closed && method != "close" {
         return Err(throw("java.lang.IllegalStateException: Scanner closed"));
     }
@@ -6046,20 +6167,22 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(has))))
         }
         "nextLong" => {
+            let radix = scanner_radix(heap, receiver);
             let value = scanner_take_msg(heap, console, receiver, |t| {
                 let digits = scanner_ungroup(t).ok_or(None)?;
-                digits.parse::<i64>().map_err(|_| {
-                    scanner_numeric_token(&digits, 10)
+                i64::from_str_radix(&digits, radix).map_err(|_| {
+                    scanner_numeric_token(&digits, radix)
                         .then(|| format!("For input string: \"{digits}\""))
                 })
             })?;
             Ok(Some(JValue::Long(value)))
         }
         "hasNextLong" => {
+            let radix = scanner_radix(heap, receiver);
             let token = scanner_peek_token(heap, console, receiver)?;
             let ok = token
                 .and_then(|t| scanner_ungroup(&t))
-                .is_some_and(|t| t.parse::<i64>().is_ok());
+                .is_some_and(|t| i64::from_str_radix(&t, radix).is_ok());
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         // The two BIG numbers. They were refused with "BigInteger is not
@@ -6189,24 +6312,7 @@ fn scanner_method(
             }
             Ok(None)
         }
-        // `useDelimiter(pattern)` answers the SCANNER, so it chains onto the
-        // constructor the way a program writes it.
-        "useDelimiter" => {
-            let pattern = match args.first() {
-                Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
-                _ => None,
-            };
-            let Some(pattern) = pattern else {
-                return Err(throw("java.lang.NullPointerException"));
-            };
-            // Reject a malformed pattern HERE, where the JDK's
-            // `Pattern.compile` does, rather than at the first read.
-            compile_scanner_delimiter(&pattern)?;
-            if let Some(HeapObject::Scanner { delimiter, .. }) = heap.get_mut(receiver) {
-                *delimiter = Some(pattern);
-            }
-            Ok(Some(JValue::Ref(Some(receiver))))
-        }
+
         // `next(pattern)` — the next token, but only if it MATCHES the
         // pattern in full; anything else is an `InputMismatchException`, the
         // same refusal `nextInt` gives a token that is not a number. The token
@@ -6246,9 +6352,12 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(token.is_some()))))
         }
         "nextInt" => {
+            // An explicit radix wins; otherwise the one `useRadix` set, which
+            // is ten until a program says otherwise. It reaches the INTEGER
+            // reads only — a JDK's `useRadix(16)` leaves `nextDouble` decimal.
             let radix = match args {
                 [JValue::Int(radix)] => u32::try_from(*radix).unwrap_or(10),
-                _ => 10,
+                _ => scanner_radix(heap, receiver),
             };
             let value = scanner_take_msg(heap, console, receiver, |t| {
                 let digits = scanner_ungroup(t).ok_or(None)?;
@@ -6262,9 +6371,12 @@ fn scanner_method(
             Ok(Some(JValue::Int(value)))
         }
         "hasNextInt" => {
+            // An explicit radix wins; otherwise the one `useRadix` set, which
+            // is ten until a program says otherwise. It reaches the INTEGER
+            // reads only — a JDK's `useRadix(16)` leaves `nextDouble` decimal.
             let radix = match args {
                 [JValue::Int(radix)] => u32::try_from(*radix).unwrap_or(10),
-                _ => 10,
+                _ => scanner_radix(heap, receiver),
             };
             let token = scanner_peek_token(heap, console, receiver)?;
             let ok = token
@@ -6705,6 +6817,10 @@ fn scanner_next_line(
             // The JDK's line separator matches `\r\n` as one terminator, so a
             // CRLF source yields `a`, not `a\r` — strip the carriage return.
             let line = strip_cr(&buffer[pos..pos + offset]).to_owned();
+            // What `match()` answers after a `nextLine`: the line WITH its
+            // terminator, which is what the line pattern consumed — a JDK's
+            // group for "one\ntwo" is "one\n", spanning 0 to 4.
+            scanner_record_match(heap, receiver, &buffer[pos..=pos + offset], pos);
             scanner_set_pos(heap, receiver, pos + offset + 1);
             return Ok(Some(line));
         }
@@ -6712,6 +6828,7 @@ fn scanner_next_line(
             // Trailing text without a newline still counts as a line.
             if pos < buffer.len() {
                 let line = strip_cr(&buffer[pos..]).to_owned();
+                scanner_record_match(heap, receiver, &buffer[pos..], pos);
                 scanner_set_pos(heap, receiver, buffer.len());
                 return Ok(Some(line));
             }
@@ -6867,6 +6984,24 @@ fn is_java_float_token(token: &str) -> bool {
 }
 
 /// Advance past whitespace and read one token; `None` at EOF.
+/// Record what the last successful read matched, for `match()` to answer.
+/// Every read that succeeds passes through here — a token's, and a line's with
+/// its terminator — so no path can set the cursor without saying what it just
+/// consumed.
+fn scanner_record_match(heap: &mut Heap, receiver: HeapRef, text: &str, start: usize) {
+    if let Some(HeapObject::Scanner { matched, .. }) = heap.get_mut(receiver) {
+        *matched = Some((text.to_owned(), start, start + text.len()));
+    }
+}
+
+/// The radix a scanner reads integers in — ten, or whatever `useRadix` set.
+fn scanner_radix(heap: &Heap, receiver: HeapRef) -> u32 {
+    match heap.get(receiver) {
+        Some(HeapObject::Scanner { radix, .. }) => *radix,
+        _ => 10,
+    }
+}
+
 fn scanner_next_token(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
@@ -6876,6 +7011,11 @@ fn scanner_next_token(
         return Ok(None);
     };
     let (_, pos, _) = scanner_state(heap, receiver);
+    // What `match()` will answer: the token and where it sat. Recorded HERE,
+    // in the one place every token read passes through, rather than at each
+    // `next*` — a `hasNext` does not come this way, which is why asking after
+    // one alone is still the JDK's "No match result available".
+    scanner_record_match(heap, receiver, &token.clone(), pos + consumed - token.len());
     scanner_set_pos(heap, receiver, pos + consumed);
     Ok(Some(token))
 }

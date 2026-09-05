@@ -8987,6 +8987,17 @@ counting catches: a divergence that stopped being one.
   (`strict_a_file_has_no_free_space`)
 - `aFile.toURI()` / `toURL()` — the answer would be a `java.net.URI`, a type
   the program could then do nothing with. (`strict_a_file_has_no_uri`)
+- `scanner.locale()` / `useLocale(l)` — a `java.util.Locale` VALUE, and caturra
+  models `Locale` only as a constant read where it is written. The default is
+  host state besides. (`strict_a_scanner_has_no_locale`)
+- `aDate.query(q)` and `adjustInto(t)` — the `TemporalAccessor`/
+  `TemporalAdjuster` plumbing every `java.time` value declares, over interfaces
+  caturra does not model. A program never writes one itself; they are how the
+  JDK's own types talk to each other. (`strict_a_date_has_no_query`)
+- `aDateTime.atZone(z)`, `atOffset(o)`, `toInstant()`, `toEpochSecond(o)`,
+  `ofInstant(...)` and `getChronology()` — everything carrying an INSTANT, a
+  ZONE or a calendar choice, which needs the timezone database caturra does not
+  vendor. (`strict_a_date_time_has_no_zone`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -14394,3 +14405,60 @@ could then do nothing with).
 Pinned as `what_a_file_says_about_itself` and
 `file_permissions_at_their_edges`, with the two strictness entries listed
 above.
+
+## The rest of what a Scanner is
+
+`Scanner` is the most-used class in the curriculum and was the lowest-scoring
+one a student actually writes: 29 of 39 method names. The ten missing were not
+exotic — they are the delimiter and radix a program reads back and sets, what
+the last read matched, and the `Iterator<String>` face `Scanner` has always
+implemented.
+
+Measured first, and three answers were not guessable:
+
+- **The CONFIGURATION methods work on a CLOSED scanner.** `sc.close();
+  sc.delimiter()` is legal, and so are `radix()`, `useRadix`, `useDelimiter`,
+  `reset()` and `match()`. Only the ones that READ refuse, with
+  `IllegalStateException: Scanner closed`. caturra had one check covering
+  everything.
+- **The default delimiter prints as `\p{javaWhitespace}+`**, not `\s+` — a
+  program that prints `sc.delimiter()` sees the JDK's own pattern.
+- **`match()` after `nextLine()` includes the terminator**: the group for
+  `"one\ntwo"` is `"one\n"`, spanning 0 to 4, where the line the program got
+  has no newline in it.
+
+`reset()` is a trap worth being exact about: it puts the delimiter and the
+radix back to a new scanner's, and does NOT rewind the input, whatever the name
+suggests.
+
+The radix reaches the INTEGER reads only — a JDK's `useRadix(16)` leaves
+`nextDouble` decimal — and an explicit `nextInt(radix)` still wins over it.
+What `match()` answers is recorded in the one place every successful read
+passes through, so no path can move the cursor without saying what it
+consumed; a `hasNext()` does not come that way, which is why asking after one
+alone is still "No match result available".
+
+**A `Scanner` IS an `Iterator<String>`.** It implements the interface — that is
+what `hasNext`/`next` on one are — so it holds as one, casts to one, and
+answers `instanceof Iterator`. It is not a cursor OVER a collection, though,
+so it is named in the runtime face test rather than caught by the kind check,
+and its `forEachRemaining` drives itself by reading. That is the tenth type to
+need an arm in both `widens` and the assignment matrix.
+
+**One thing deliberately not copied.** `match().groupCount()` after a
+`nextInt()` is 35 in a JDK — the group count of the internal regex its integer
+parser uses. Reproducing that would be copying an implementation detail no
+engine should have; caturra's answer is its own pattern's, and the pin covers
+the token case, where both say 0.
+
+Refused by name, and listed in the strictness table above: `locale()` and
+`useLocale()` (a `Locale` VALUE, which caturra models only as a written
+constant), and — swept from the same measurement — the `TemporalAccessor`
+plumbing (`query`, `adjustInto`, `addTo`, `subtractFrom`) and everything
+carrying an instant, a zone or a calendar choice (`atZone`, `atOffset`,
+`toInstant`, `toEpochSecond`, `ofInstant`, `ofEpochSecond`, `getChronology`) on
+all six `java.time` values that declare them. Those had been reading as "cannot
+find symbol" — the class-level honest-refusal sweep never reached METHODS, and
+the coverage script is what makes that list exhaustive rather than a guess.
+
+Pinned as `the_rest_of_what_a_scanner_is` and `a_scanner_in_every_position`.

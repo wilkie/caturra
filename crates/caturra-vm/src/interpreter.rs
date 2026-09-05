@@ -4143,7 +4143,14 @@ impl<'run> Interpreter<'run> {
         use crate::value::HeapObject as H;
         let object = self.heap.get(reference);
         match target {
-            "java/util/Iterator" | "Iterator" | "java/util/ListIterator" | "ListIterator" => {
+            // A `Scanner` IS an `Iterator<String>` — it implements the
+            // interface, which is what `hasNext`/`next`/`remove` on one are —
+            // but it is not a cursor OVER a collection, so it is named here
+            // rather than caught by the kind test.
+            "java/util/Iterator" | "Iterator" => {
+                matches!(object, Some(H::Iterator { .. } | H::Scanner { .. }))
+            }
+            "java/util/ListIterator" | "ListIterator" => {
                 matches!(object, Some(H::Iterator { .. }))
             }
             "java/lang/Iterable" | "Iterable" => {
@@ -11461,6 +11468,24 @@ impl<'run> Interpreter<'run> {
         consumer: HeapRef,
         from_iterable: bool,
     ) -> Result<(), VmError> {
+        // A `Scanner` IS an `Iterator<String>`, and the tokens it has left are
+        // what `forEachRemaining` walks. It is not a cursor OVER anything, so
+        // the loop below cannot drive it — it drives itself, by reading.
+        if matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::Scanner { .. })
+        ) {
+            loop {
+                let more = self.call_zero_arg(receiver, "hasNext", "()Z")?;
+                if !matches!(more, Some(JValue::Int(flag)) if flag != 0) {
+                    return Ok(());
+                }
+                let token = self
+                    .call_zero_arg(receiver, "next", "()Ljava/lang/String;")?
+                    .unwrap_or(JValue::NULL);
+                self.call_functional(consumer, "accept", "(Ljava/lang/Object;)V", token)?;
+            }
+        }
         let cursor = if from_iterable {
             let answered = self.call_zero_arg(receiver, "iterator", "()Ljava/util/Iterator;")?;
             match answered {
@@ -16157,6 +16182,24 @@ impl<'run> Interpreter<'run> {
             Some((method_name, descriptor, args)) => (method_name, descriptor, args),
             None => (method_name, descriptor, args),
         };
+        // `scanner.forEachRemaining(c)` — a `Scanner` IS an `Iterator<String>`,
+        // and the tokens it has left are what the loop walks. Answered here
+        // rather than in the intrinsic layer because it CALLS the consumer,
+        // which needs the interpreter.
+        if method_name == "forEachRemaining"
+            && matches!(
+                self.heap.get(receiver),
+                Some(crate::value::HeapObject::Scanner { .. })
+            )
+        {
+            let Some(JValue::Ref(Some(consumer))) = args.first().copied() else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
+            self.run_for_each(receiver, consumer, false)?;
+            return Ok(None);
+        }
         // Likewise for comparing elements or keys, which may call a user
         // `equals` and `hashCode`.
         let compared = match self.stream_dispatch(receiver, method_name, descriptor, &args)? {

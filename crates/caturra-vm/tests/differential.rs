@@ -51704,3 +51704,134 @@ stricter_than_javac!(
     "StrictFileUri",
     "import java.io.*;\npublic class StrictFileUri { static void r() { new File(\"x\").toURI(); } }"
 );
+
+// `Scanner` was the most-used class in the curriculum and the lowest-scoring
+// one a student writes: the delimiter and radix a program reads back and sets,
+// what the last read matched, and the `Iterator<String>` face it has always
+// implemented. Measured first — which is how the CONFIGURATION methods turned
+// out to work on a CLOSED scanner while every reading one refuses.
+differential_test!(
+    the_rest_of_what_a_scanner_is,
+    "Sc1",
+    r#"
+import java.util.*;
+import java.util.regex.*;
+public class Sc1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    // --- the delimiter, read and written
+    s("default delimiter", () -> new Scanner("a b").delimiter().pattern());
+    s("set delimiter", () -> { Scanner sc = new Scanner("a,b"); sc.useDelimiter(","); return sc.delimiter().pattern() + " " + sc.next(); });
+    s("delimiter chaining", () -> { Scanner sc = new Scanner("a;b"); return sc.useDelimiter(";").next(); });
+    s("delimiter pattern arg", () -> { Scanner sc = new Scanner("x1y"); sc.useDelimiter(Pattern.compile("\\d")); return sc.next() + sc.next(); });
+    // --- the radix
+    s("default radix", () -> new Scanner("10").radix());
+    s("use radix", () -> { Scanner sc = new Scanner("ff 10"); sc.useRadix(16); return sc.radix() + " " + sc.nextInt() + " " + sc.nextInt(); });
+    s("radix then reset", () -> { Scanner sc = new Scanner("10"); sc.useRadix(16); sc.reset(); return sc.radix() + " " + sc.nextInt(); });
+    s("bad radix", () -> new Scanner("1").useRadix(1));
+    // --- reset
+    s("reset delimiter", () -> { Scanner sc = new Scanner("a,b c"); sc.useDelimiter(","); sc.reset(); return sc.delimiter().pattern().length() > 0; });
+    s("reset returns this", () -> { Scanner sc = new Scanner("z"); return sc.reset().next(); });
+    // --- match
+    s("match after next", () -> { Scanner sc = new Scanner("hello world"); sc.next(); return sc.match().group(); });
+    s("match before next", () -> new Scanner("x").match());
+    // --- the Iterator face
+    s("is an iterator", () -> { Object o = new Scanner("a"); return o instanceof Iterator; });
+    s("iterator next", () -> { Iterator<String> it = new Scanner("p q"); return it.next() + it.next(); });
+    s("for each remaining", () -> { Scanner sc = new Scanner("m n o"); StringBuilder out = new StringBuilder(); sc.forEachRemaining(t -> out.append(t)); return out.toString(); });
+    s("remove refuses", () -> { Scanner sc = new Scanner("a"); sc.next(); sc.remove(); return "?"; });
+    // --- ioException
+    s("io exception none", () -> new Scanner("a").ioException());
+    // --- the locale
+    // --- closed scanner
+    s("closed delimiter", () -> { Scanner sc = new Scanner("a"); sc.close(); return sc.delimiter().pattern().length() > 0; });
+    s("closed radix", () -> { Scanner sc = new Scanner("a"); sc.close(); return sc.radix(); });
+    s("closed match", () -> { Scanner sc = new Scanner("a"); sc.next(); sc.close(); return sc.match().group(); });
+    s("closed useDelimiter", () -> { Scanner sc = new Scanner("a"); sc.close(); sc.useDelimiter(","); return "?"; });
+  }
+}
+"#
+);
+
+// The same as a parameter, an element, a cast and a chain — and the ways the
+// radix, the delimiter and the match interact with each other.
+differential_test!(
+    a_scanner_in_every_position,
+    "Sc2",
+    r#"
+import java.util.*;
+import java.util.regex.*;
+public class Sc2 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static String walk(Iterator<String> it) { StringBuilder o = new StringBuilder(); while (it.hasNext()) o.append(it.next()).append('.'); return o.toString(); }
+  public static void main(String[] a) {
+    // --- a Scanner as an Iterator, in every position
+    s("as a parameter", () -> walk(new Scanner("a b c")));
+    s("in a list", () -> { List<Iterator<String>> its = new ArrayList<>(); its.add(new Scanner("q r")); return its.get(0).next(); });
+    s("cast", () -> { Object o = new Scanner("z"); return ((Iterator<?>) o).next(); });
+    s("cast to scanner", () -> { Object o = new Scanner("7"); return ((Scanner) o).nextInt(); });
+    s("iterator hasNext", () -> { Iterator<String> it = new Scanner(""); return it.hasNext(); });
+    // --- radix interactions
+    s("radix and explicit", () -> { Scanner sc = new Scanner("10 10"); sc.useRadix(2); return sc.nextInt() + " " + sc.nextInt(16); });
+    s("radix survives reads", () -> { Scanner sc = new Scanner("a b"); sc.useRadix(16); return sc.nextInt() + " " + sc.radix() + " " + sc.nextInt(); });
+    s("radix and hasNextLong", () -> { Scanner sc = new Scanner("ff"); sc.useRadix(16); return sc.hasNextLong() + " " + sc.nextLong(); });
+    s("radix 2 rejects 2", () -> { Scanner sc = new Scanner("2"); sc.useRadix(2); return sc.hasNextInt(); });
+    s("radix chaining", () -> new Scanner("11").useRadix(2).nextInt());
+    // --- delimiter interactions
+    s("delimiter then reset then read", () -> { Scanner sc = new Scanner("a,b c"); sc.useDelimiter(","); String first = sc.next(); sc.reset(); return first + "/" + sc.next(); });
+    s("delimiter regex", () -> { Scanner sc = new Scanner("1a2b3"); sc.useDelimiter("[ab]"); return sc.nextInt() + sc.nextInt() + sc.nextInt(); });
+    s("delimiter getter after Pattern", () -> { Scanner sc = new Scanner("x"); sc.useDelimiter(Pattern.compile("\\s*,\\s*")); return sc.delimiter().pattern(); });
+    s("delimiter equals default", () -> new Scanner("x").delimiter().pattern().equals(new Scanner("y").delimiter().pattern()));
+    // --- match
+    s("match after nextLine", () -> { Scanner sc = new Scanner("one\ntwo"); sc.nextLine(); MatchResult m = sc.match(); return "[" + m.group() + "]" + m.start() + m.end(); });
+    s("match twice", () -> { Scanner sc = new Scanner("p q"); sc.next(); String one = sc.match().group(); sc.next(); return one + sc.match().group(); });
+    s("match after hasNext only", () -> { Scanner sc = new Scanner("t"); sc.hasNext(); return sc.match(); });
+    s("match positions second token", () -> { Scanner sc = new Scanner("ab cde"); sc.next(); sc.next(); MatchResult m = sc.match(); return m.start() + " " + m.end() + " " + m.group(); });
+    // --- forEachRemaining
+    s("for each all", () -> { StringBuilder o = new StringBuilder(); new Scanner("x y z").forEachRemaining(o::append); return o.toString(); });
+    s("for each after next", () -> { Scanner sc = new Scanner("1 2 3"); sc.next(); StringBuilder o = new StringBuilder(); sc.forEachRemaining(t -> o.append(t).append('-')); return o.toString(); });
+    s("for each empties", () -> { Scanner sc = new Scanner("a"); sc.forEachRemaining(t -> {}); return sc.hasNext(); });
+    s("for each with delimiter", () -> { Scanner sc = new Scanner("a,b"); sc.useDelimiter(","); StringBuilder o = new StringBuilder(); sc.forEachRemaining(o::append); return o.toString(); });
+    // --- the refusals
+    s("remove", () -> { Scanner sc = new Scanner("a"); sc.next(); sc.remove(); return "?"; });
+    s("io exception", () -> new Scanner("a").ioException());
+    s("bad radix low", () -> new Scanner("1").useRadix(0));
+    s("bad radix high", () -> new Scanner("1").useRadix(99));
+  }
+}
+"#
+);
+
+// `locale()`/`useLocale()` would answer a `java.util.Locale` VALUE, and caturra
+// models `Locale` only as a constant read where it is written — so there is
+// nothing to hand back, and the default is host state besides.
+stricter_than_javac!(
+    strict_a_scanner_has_no_locale,
+    "StrictScannerLocale",
+    "import java.util.*;\npublic class StrictScannerLocale { static void r() { new Scanner(\"a\").locale(); } }"
+);
+
+// The `TemporalAccessor` plumbing every `java.time` value declares: a
+// `TemporalQuery` is an interface caturra does not model, so there is nothing
+// to pass — and a program never writes one itself.
+stricter_than_javac!(
+    strict_a_date_has_no_query,
+    "StrictDateQuery",
+    "import java.time.*;\npublic class StrictDateQuery { static void r() { LocalDate.of(2024, 1, 1).query(null); } }"
+);
+
+// ...and everything that carries an INSTANT or a ZONE, which needs the
+// timezone database caturra does not vendor.
+stricter_than_javac!(
+    strict_a_date_time_has_no_zone,
+    "StrictDateZone",
+    "import java.time.*;\npublic class StrictDateZone { static void r() { LocalDateTime.of(2024, 1, 1, 0, 0).atZone(null); } }"
+);

@@ -7680,6 +7680,10 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                     | JType::Vector(b),
             ) if elem_matches(a, b, table)
         )
+        // A `Scanner` IS an `Iterator<String>` — it implements the interface,
+        // and holding one as its interface was "Scanner cannot be converted to
+        // Iterator<String>".
+        || matches!((from, to), (JType::Scanner, JType::Iterator(elem)) if elem == ElemType::Str)
         // Every reader IS a `java.io.Reader`, and a `FileReader` reaches it
         // through the `InputStreamReader` it extends. The four are distinct
         // types here (only a `BufferedReader` has `readLine`), so the widening
@@ -12021,6 +12025,87 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // modelled — so the answer would be a type the program cannot then use.
     ("File", "toURI", "caturra does not model java.net.URI"),
     ("File", "toURL", "caturra does not model java.net.URL"),
+    // `locale()`/`useLocale()` answer a `java.util.Locale` VALUE, and caturra
+    // models `Locale` only as a constant read where it is written — so there
+    // is nothing to hand back. The default is host state besides.
+    (
+        "Scanner",
+        "locale",
+        "caturra models no java.util.Locale value to answer with",
+    ),
+    (
+        "Scanner",
+        "useLocale",
+        "caturra formats in the US locale and models no Locale value",
+    ),
+    // The `TemporalAccessor`/`TemporalAdjuster` plumbing, on every value that
+    // declares it. A `TemporalQuery` and a bare `Temporal` are interfaces
+    // caturra does not model, so there is nothing to pass or answer — and a
+    // program never writes these itself; they are how the JDK's own types talk
+    // to each other.
+    ("LocalDate", "query", "caturra does not model java.time.temporal.TemporalQuery"),
+    ("LocalTime", "query", "caturra does not model java.time.temporal.TemporalQuery"),
+    (
+        "LocalDateTime",
+        "query",
+        "caturra does not model java.time.temporal.TemporalQuery",
+    ),
+    ("DayOfWeek", "query", "caturra does not model java.time.temporal.TemporalQuery"),
+    ("Month", "query", "caturra does not model java.time.temporal.TemporalQuery"),
+    (
+        "LocalDate",
+        "adjustInto",
+        "caturra does not model java.time.temporal.Temporal as a type",
+    ),
+    (
+        "LocalTime",
+        "adjustInto",
+        "caturra does not model java.time.temporal.Temporal as a type",
+    ),
+    (
+        "LocalDateTime",
+        "adjustInto",
+        "caturra does not model java.time.temporal.Temporal as a type",
+    ),
+    (
+        "DayOfWeek",
+        "adjustInto",
+        "caturra does not model java.time.temporal.Temporal as a type",
+    ),
+    (
+        "Month",
+        "adjustInto",
+        "caturra does not model java.time.temporal.Temporal as a type",
+    ),
+    ("Period", "addTo", "caturra does not model java.time.temporal.Temporal as a type"),
+    (
+        "Period",
+        "subtractFrom",
+        "caturra does not model java.time.temporal.Temporal as a type",
+    ),
+    // Everything that carries an INSTANT or a ZONE. caturra models the
+    // arithmetic slice of `java.time`, and answering a zone honestly needs a
+    // timezone database it does not vendor (see specs/SCOPE.md).
+    ("LocalDate", "ofInstant", "caturra does not model java.time.Instant"),
+    ("LocalTime", "ofInstant", "caturra does not model java.time.Instant"),
+    ("LocalDateTime", "ofInstant", "caturra does not model java.time.Instant"),
+    ("LocalDateTime", "ofEpochSecond", "caturra does not model java.time.ZoneOffset"),
+    ("LocalDateTime", "toInstant", "caturra does not model java.time.Instant"),
+    ("LocalDate", "toEpochSecond", "caturra does not model java.time.ZoneOffset"),
+    ("LocalTime", "toEpochSecond", "caturra does not model java.time.ZoneOffset"),
+    ("LocalDateTime", "toEpochSecond", "caturra does not model java.time.ZoneOffset"),
+    ("LocalTime", "atOffset", "caturra does not model java.time.ZoneOffset"),
+    ("LocalDateTime", "atOffset", "caturra does not model java.time.ZoneOffset"),
+    ("LocalDateTime", "atZone", "caturra does not model java.time.ZoneId"),
+    // The CHRONOLOGY every date carries. caturra models the ISO calendar and
+    // no other, so the handle would answer for a choice that was never made.
+    ("LocalDate", "getChronology", "caturra models the ISO calendar and no Chronology type"),
+    (
+        "LocalDateTime",
+        "getChronology",
+        "caturra models the ISO calendar and no Chronology type",
+    ),
+    ("Period", "getChronology", "caturra models the ISO calendar and no Chronology type"),
     ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
     ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
     ("Scanner", "skip", "caturra's Scanner reads whole tokens and cannot skip by pattern"),
@@ -12062,6 +12147,17 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::Optional(_) => "Optional",
         JType::Stream(_) => "Stream",
         JType::File => "File",
+        // The `java.time` values, which declare the interface plumbing and the
+        // zone-carrying methods caturra refuses BY NAME — and could not, while
+        // this answered "" for every one of them.
+        JType::LocalDate => "LocalDate",
+        JType::LocalTime => "LocalTime",
+        JType::LocalDateTime => "LocalDateTime",
+        JType::Duration => "Duration",
+        JType::Period => "Period",
+        JType::DayOfWeek => "DayOfWeek",
+        JType::Month => "Month",
+        JType::DateFormat => "DateTimeFormatter",
         _ => "",
     }
 }
@@ -12082,6 +12178,58 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         &[BParam::Str],
         BRet::Scanner,
         "(Ljava/lang/String;)Ljava/util/Scanner;",
+    ),
+    // ...and the compiled form, which is the same call: a `Pattern` IS its
+    // source here.
+    bm(
+        "useDelimiter",
+        &[BParam::Pattern],
+        BRet::Scanner,
+        "(Ljava/util/regex/Pattern;)Ljava/util/Scanner;",
+    ),
+    // What the delimiter and the radix currently ARE — the getters beside the
+    // two setters, which a program uses to put them back.
+    bm(
+        "delimiter",
+        &[],
+        BRet::Pattern,
+        "()Ljava/util/regex/Pattern;",
+    ),
+    bm("radix", &[], BRet::Int, "()I"),
+    bm(
+        "useRadix",
+        &[BParam::Int],
+        BRet::Scanner,
+        "(I)Ljava/util/Scanner;",
+    ),
+    // `reset()` puts the delimiter and the radix back to a new scanner's. It
+    // does NOT rewind the input, whatever the name suggests.
+    bm("reset", &[], BRet::Scanner, "()Ljava/util/Scanner;"),
+    // The last successful read's result — its text, and where it was.
+    bm(
+        "match",
+        &[],
+        BRet::MatchResult,
+        "()Ljava/util/regex/MatchResult;",
+    ),
+    // A `Scanner` reads a buffer that cannot fail here, so there is never an
+    // exception to report — but the method is real, and answering `null` is
+    // what a JDK does when nothing went wrong.
+    bm(
+        "ioException",
+        &[],
+        BRet::Throwable,
+        "()Ljava/io/IOException;",
+    ),
+    // `Scanner` implements `Iterator<String>`: it walks tokens, and an
+    // iterator over them has nothing to remove.
+    bm("remove", &[], BRet::Void, "()V"),
+    // ...and the loop over what is left, which is the other half of that face.
+    bm(
+        "forEachRemaining",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
     ),
     BuiltinMethod {
         name: "nextInt",
@@ -42333,6 +42481,9 @@ impl BodyGen<'_> {
             ) => {}
             // ...and the readers wearing theirs. The ninth.
             (JType::Reader(_), JType::Reader(_)) if widens(from, to, self.table) => {}
+            // ...and a `Scanner` as the `Iterator<String>` it implements. The
+            // tenth type to need both gates.
+            (JType::Scanner, JType::Iterator(_)) if widens(from, to, self.table) => {}
             // A PARAMETERIZED value assigned to a supertype, raw or
             // parameterized: `Iterable<String> it = bag` for a
             // `class Bag<T> implements Iterable<T>`. Nothing here matched a

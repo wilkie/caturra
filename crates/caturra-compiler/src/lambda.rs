@@ -6990,6 +6990,15 @@ fn declared_array_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 
 #[allow(clippy::too_many_lines)] // one arm per receiver shape
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    // A `Scanner` IS an `Iterator<String>`, so its `forEachRemaining` hands
+    // each TOKEN to the callback. Read here beside the collections rather than
+    // in an arm of its own, because the question the caller is asking — "what
+    // does walking this yield?" — is the same one.
+    if static_type_of(receiver, ctx)
+        .is_some_and(|ty| matches!(&ty, TypeRef::Named(name) if simple_base(name) == "Scanner"))
+    {
+        return Some(TypeRef::Named(String::from("String")));
+    }
     // A RANGE or DESCENDING view of a sorted SET holds the same element it
     // does, the way `subList` and `unmodifiableList` below already do.
     if let Expr::Call {
