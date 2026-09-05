@@ -64,8 +64,44 @@ class Random {
         .limit(streamSize);
   }
 
+  public java.util.stream.LongStream longs(long streamSize) {
+    return java.util.stream.LongStream.generate(() -> nextLong()).limit(streamSize);
+  }
+
+  public java.util.stream.LongStream longs(long streamSize, long origin, long bound) {
+    return java.util.stream.LongStream.generate(() -> __boundedLong(origin, bound))
+        .limit(streamSize);
+  }
+
   public java.util.stream.DoubleStream doubles(long streamSize) {
     return java.util.stream.DoubleStream.generate(() -> nextDouble()).limit(streamSize);
+  }
+
+  // `internalNextLong`: the JDK draws a whole long, then folds it into the
+  // range by repeated modulus — rejecting a draw that would bias the result,
+  // which is why the loop is there rather than a single remainder.
+  private long __boundedLong(long origin, long bound) {
+    long drawn = nextLong();
+    long span = bound - origin;
+    long limit = span - 1;
+    if (span > 0) {
+      if ((span & limit) == 0L) {
+        drawn = (drawn & limit) + origin;
+      } else {
+        long candidate = drawn >>> 1;
+        long value = candidate % span;
+        while (candidate + limit - value < 0L) {
+          candidate = nextLong() >>> 1;
+          value = candidate % span;
+        }
+        drawn = value + origin;
+      }
+    } else {
+      while (drawn < origin || drawn >= bound) {
+        drawn = nextLong();
+      }
+    }
+    return drawn;
   }
 
   // `internalNextInt`: a positive span is one bounded draw shifted, and a span

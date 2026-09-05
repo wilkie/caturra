@@ -429,6 +429,49 @@ class Arrays {
   // before a non-null one, and each element pair is compared the way the
   // wrapper's own `compare` does, so `Double.NaN` is greater than everything
   // and `-0.0` is less than `0.0` — the same total order `sort` imposes.
+  // `compareUnsigned` reads every element as if it had no sign, so
+  // `{-1}` sorts ABOVE `{1}` where `compare` puts it below. The two integer
+  // widths answer a SIGN (their `compareUnsigned` does); the two narrow ones
+  // answer the DIFFERENCE of the unsigned values, because that is what
+  // `Byte.compareUnsigned` and `Short.compareUnsigned` return — measured, not
+  // assumed, and the reason `{-1}` against `{1}` is 254 for bytes and 1 for
+  // ints.
+  public static int compareUnsigned(int[] a, int[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return __Integer.compareUnsigned(a[i], b[i]);
+    }
+    return a.length - b.length;
+  }
+  public static int compareUnsigned(long[] a, long[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return __Long.compareUnsigned(a[i], b[i]);
+    }
+    return a.length - b.length;
+  }
+  public static int compareUnsigned(byte[] a, byte[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return (a[i] & 0xff) - (b[i] & 0xff);
+    }
+    return a.length - b.length;
+  }
+  public static int compareUnsigned(short[] a, short[] b) {
+    if (a == b) return 0;
+    if (a == null || b == null) return a == null ? -1 : 1;
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) {
+      if (a[i] != b[i]) return (a[i] & 0xffff) - (b[i] & 0xffff);
+    }
+    return a.length - b.length;
+  }
   public static int compare(int[] a, int[] b) {
     if (a == b) return 0;
     if (a == null || b == null) return a == null ? -1 : 1;

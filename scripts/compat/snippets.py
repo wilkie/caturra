@@ -2334,6 +2334,29 @@ public class Threads {
 ''',
     ),
     dict(
+        id="class-object",
+        category="Library",
+        title="What a Class object answers",
+        summary="Every question caturra's class files can be asked: the names, the shape, a checked cast, an enum's constants, and the nesting read off the name.",
+        main="ClassFacts",
+        source="""
+public class ClassFacts {
+    enum Suit { HEARTS, SPADES }
+
+    static class Card {}
+
+    public static void main(String[] args) {
+        System.out.println(String.class.getPackageName());
+        System.out.println(java.util.Arrays.toString(Suit.class.getEnumConstants()));
+        System.out.println(String.class.getEnumConstants());
+        System.out.println(Card.class.isMemberClass() + " " + Card.class.getDeclaringClass().getSimpleName());
+        System.out.println(((String) String.class.cast("hi")).length());
+        System.out.println(Integer.class.asSubclass(Number.class).getSimpleName());
+    }
+}
+""",
+    ),
+    dict(
         id="class-modifiers",
         category="Library",
         title="Class.getModifiers",

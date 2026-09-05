@@ -3625,6 +3625,40 @@ pub fn invoke_virtual(
             Ok(None)
         }
 
+        // `writeBytes(array)` — the whole array at once — and `writeTo(out)`,
+        // which pours what has been gathered into another stream.
+        (HeapObject::ByteStream(_), "writeBytes") => {
+            let Some(JValue::Ref(Some(array))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let incoming = match heap.get(*array) {
+                // A `byte` is signed in Java and the stream holds the same
+                // eight bits: the reinterpretation is the whole point.
+                Some(HeapObject::ByteArray(bytes)) => {
+                    bytes.iter().map(|b| (*b).cast_unsigned()).collect()
+                }
+                _ => Vec::new(),
+            };
+            if let Some(HeapObject::ByteStream(bytes)) = heap.get_mut(receiver) {
+                bytes.extend_from_slice(&incoming);
+            }
+            Ok(None)
+        }
+        (HeapObject::ByteStream(_), "writeTo") => {
+            let Some(JValue::Ref(Some(target))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let target = *target;
+            let gathered = match heap.get(receiver) {
+                Some(HeapObject::ByteStream(bytes)) => bytes.clone(),
+                _ => Vec::new(),
+            };
+            match heap.get_mut(target) {
+                Some(HeapObject::ByteStream(bytes)) => bytes.extend_from_slice(&gathered),
+                _ => return Err(throw("java.lang.ClassCastException: not an OutputStream")),
+            }
+            Ok(None)
+        }
         (HeapObject::ByteStream(_), "write") => {
             if let [JValue::Int(byte)] = args {
                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]

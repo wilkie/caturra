@@ -3667,6 +3667,79 @@ impl<'run> Interpreter<'run> {
         })
     }
 
+    /// Run a user class's `<clinit>` chain RIGHT NOW. The dispatch loop
+    /// initializes a class by pushing the frames it is given; a call made from
+    /// inside an instruction cannot push, so it runs them nested instead.
+    fn initialize_now(&mut self, class_name: &str) -> Result<(), VmError> {
+        let Some(frames) = self.begin_initialization(class_name)? else {
+            return Ok(());
+        };
+        for frame in frames {
+            self.run_nested(frame)?;
+        }
+        Ok(())
+    }
+
+    /// Call a user class's no-argument static method from inside an intrinsic,
+    /// initializing the class first.
+    fn call_static_no_args(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> Result<Option<JValue>, VmError> {
+        self.initialize_now(class_name)?;
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        let Some(class) = classes.get(class_name) else {
+            return Ok(None);
+        };
+        let Some(method) = find_static_method(class, method_name, descriptor) else {
+            return Ok(None);
+        };
+        let frame = self.make_frame(class, method, Vec::new())?;
+        self.run_nested(frame)
+    }
+
+    /// An enum's constants in order, as the array `Class.getEnumConstants()`
+    /// answers with. `None` for a class that is not an enum — which is what a
+    /// JDK answers there, rather than an empty array.
+    ///
+    /// Both kinds of enum already HAVE the list: a library one behind its
+    /// `values()` intrinsic, a user one behind the `values()` the desugaring
+    /// synthesized. Asking those is what keeps this answer and a program's own
+    /// `Day.values()` from ever disagreeing.
+    fn enum_constant_values(&mut self, class_name: &str) -> Result<Option<JValue>, VmError> {
+        let descriptor = format!("()[L{class_name};");
+        if is_library_enum(class_name) {
+            return intrinsics::invoke_static(
+                &mut self.heap,
+                &mut self.rng,
+                self.console,
+                self.vfs,
+                class_name,
+                "values",
+                &descriptor,
+                &[],
+            );
+        }
+        if !self.is_enum_class(class_name) {
+            return Ok(None);
+        }
+        self.call_static_no_args(class_name, "values", &descriptor)
+    }
+
+    /// Whether a class name is one caturra SYNTHESIZED rather than one the
+    /// program wrote — a lambda's, a method reference's, an anonymous body's,
+    /// a local class's. Each carries a `$` the way a member class does, and
+    /// none of them is a member class.
+    ///
+    /// Both kinds are already recognised by name elsewhere (a canonical name
+    /// is null for either), so this asks THOSE rather than spelling the naming
+    /// convention a third time.
+    fn is_synthetic_class(name: &str) -> bool {
+        is_synthesized_anonymous(name) || is_hoisted_local(name)
+    }
+
     /// `Object`'s own `hashCode`/`toString`/`equals` for an instance, whatever
     /// the class overrides — what a `super.hashCode()` means.
     /// Whether this class (or an ancestor) declares `interface_name` among its
@@ -15775,8 +15848,23 @@ impl<'run> Interpreter<'run> {
             return self.reflect_invoke(receiver, &args);
         }
         // `getClass()` on any object (library intrinsics included, e.g. a
-        // String or a boxed Integer from a reflective `Object[]`).
-        if method_name == "getClass" && descriptor == "()Ljava/lang/Class;" {
+        // String or a boxed Integer from a reflective `Object[]`), and
+        // `getDeclaringClass()` on an enum CONSTANT — which is the same
+        // question for every library enum, none of which has a constant body.
+        // (A user enum's constant CAN have one, and there the two differ:
+        // `getClass` names the body's subclass and `getDeclaringClass` the
+        // enum. That path is the user one, above.)
+        // ...but NOT on a `Class` itself, whose `getDeclaringClass()` asks
+        // which class DECLARES the one it stands for — answered below with the
+        // rest of `java.lang.Class`. Read as the enum question it would have
+        // said every class declares `java.lang.Class`.
+        let class_object = matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::Class { .. })
+        );
+        if (method_name == "getClass" || (method_name == "getDeclaringClass" && !class_object))
+            && descriptor == "()Ljava/lang/Class;"
+        {
             let name = self.object_class_name(receiver);
             let reference = self.intern_class(name);
             frame.stack.push(JValue::Ref(Some(reference)));
@@ -17575,6 +17663,43 @@ impl<'run> Interpreter<'run> {
                     "isAnonymousClass" => Ok(Some(JValue::Int(i32::from(
                         is_synthesized_anonymous(&name),
                     )))),
+                    "isLocalClass" => Ok(Some(JValue::Int(i32::from(is_hoisted_local(&name))))),
+                    // The classes caturra itself writes: the one a lambda
+                    // becomes and the one a method reference becomes. An
+                    // anonymous class is NOT synthetic — the program wrote its
+                    // body.
+                    "isSynthetic" => Ok(Some(JValue::Int(i32::from(
+                        name.starts_with("Lambda$") || name.starts_with("MethodRef$"),
+                    )))),
+                    // caturra compiles `assert` to `if (false)`: that is a run
+                    // with assertions disabled, and this is the honest answer
+                    // to what it would report.
+                    "desiredAssertionStatus" => Ok(Some(JValue::Int(0))),
+                    // The classes this one declares — every loaded class named
+                    // `ThisClass$Something`, minus the ones caturra
+                    // synthesized. The inverse of `getDeclaringClass`, read off
+                    // the same names so the two cannot disagree.
+                    "getDeclaredClasses" => {
+                        let prefix = format!("{name}$");
+                        let mut declared: Vec<String> = self
+                            .classes
+                            .keys()
+                            .filter(|other| {
+                                other.starts_with(&prefix) && !Self::is_synthetic_class(other)
+                            })
+                            .cloned()
+                            .collect();
+                        declared.sort();
+                        let refs: Vec<JValue> = declared
+                            .into_iter()
+                            .map(|each| JValue::Ref(Some(self.intern_class(each))))
+                            .collect();
+                        let array = self.heap.alloc(HeapObject::RefArray(
+                            String::from("[Ljava/lang/Class;"),
+                            refs,
+                        ));
+                        Ok(Some(JValue::Ref(Some(array))))
+                    }
                     // `int[].class.isArray()` — the heap stores an array's
                     // class under its DESCRIPTOR, which is exactly the test.
                     "isArray" => Ok(Some(JValue::Int(i32::from(name.starts_with('['))))),
@@ -17619,6 +17744,79 @@ impl<'run> Interpreter<'run> {
                     "hashCode" => Ok(Some(JValue::Int(
                         i32::try_from(receiver).unwrap_or(i32::MAX),
                     ))),
+                    // An enum's constants, in order — and `null` for anything
+                    // that is not an enum, which is what a JDK answers rather
+                    // than an empty array.
+                    "getEnumConstants" => {
+                        let constants = self.enum_constant_values(&name)?;
+                        Ok(Some(constants.unwrap_or(JValue::NULL)))
+                    }
+                    // Whether the class is declared INSIDE another, and which.
+                    // caturra flattens a nested class to a top-level one named
+                    // `Outer$Inner`, so the `$` is what is left of the nesting
+                    // — and it is enough for both questions.
+                    "isMemberClass" => Ok(Some(JValue::Int(i32::from(
+                        name.contains('$') && !Self::is_synthetic_class(&name),
+                    )))),
+                    "getDeclaringClass" => {
+                        let outer = name
+                            .rsplit_once('$')
+                            .filter(|_| !Self::is_synthetic_class(&name))
+                            .map(|(head, _)| head.to_owned());
+                        let Some(outer) = outer else {
+                            return Ok(Some(JValue::NULL));
+                        };
+                        let reference = self.intern_class(outer);
+                        Ok(Some(JValue::Ref(Some(reference))))
+                    }
+                    // The package a class is in, as text — "" for the default
+                    // package, which is where a student's own classes live.
+                    "getPackageName" => {
+                        let package = name.rsplit_once('/').map_or("", |(head, _)| head);
+                        let text = package.replace('/', ".");
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
+                    }
+                    // `cast(o)` is a checked downcast written as a call: the
+                    // object back, or a `ClassCastException` naming both.
+                    "cast" => {
+                        let Some(JValue::Ref(target)) = args.first().copied() else {
+                            return Ok(Some(args.first().copied().unwrap_or(JValue::NULL)));
+                        };
+                        let Some(target) = target else {
+                            return Ok(Some(JValue::NULL));
+                        };
+                        let actual = self.object_class_name(target);
+                        if class_is_assignable(&actual, &name)
+                            || self.is_runtime_subtype(&actual, &name)
+                        {
+                            return Ok(Some(JValue::Ref(Some(target))));
+                        }
+                        Err(VmError::UncaughtException(format!(
+                            "java.lang.ClassCastException: Cannot cast {} to {}",
+                            actual.replace('/', "."),
+                            name.replace('/', ".")
+                        )))
+                    }
+                    // ...and `asSubclass(c)` the same check on the CLASS.
+                    "asSubclass" => {
+                        let wanted = match args.first() {
+                            Some(JValue::Ref(Some(other))) => match self.heap.get(*other) {
+                                Some(HeapObject::Class { name }) => Some(name.clone()),
+                                _ => None,
+                            },
+                            _ => None,
+                        }
+                        .unwrap_or_default();
+                        if class_is_assignable(&name, &wanted)
+                            || self.is_runtime_subtype(&name, &wanted)
+                        {
+                            return Ok(Some(JValue::Ref(Some(receiver))));
+                        }
+                        Err(VmError::UncaughtException(format!(
+                            "java.lang.ClassCastException: class {}",
+                            name.replace('/', ".")
+                        )))
+                    }
                     "getSimpleName" => {
                         // JLS: an ANONYMOUS class has no simple name — the JDK
                         // returns "". caturra synthesizes one (`Anon$N`) so it
@@ -17792,13 +17990,20 @@ impl<'run> Interpreter<'run> {
                             None => Ok(Some(JValue::NULL)),
                         }
                     }
-                    "getDeclaredFields" => {
+                    "getDeclaredFields" | "getFields" => {
+                        let public_only = method == "getFields";
                         let fields: Vec<(String, String, u16, Option<String>)> = self
                             .classes
                             .get(&name)
                             .map(|cf| {
                                 cf.fields
                                     .iter()
+                                    .filter(|fi| {
+                                        !public_only
+                                            || fi.access_flags.contains(
+                                                caturra_classfile::FieldAccessFlags::PUBLIC,
+                                            )
+                                    })
                                     .map(|fi| {
                                         (
                                             cf.constant_pool
@@ -20996,6 +21201,41 @@ fn library_faces(class: &str) -> &'static [&'static str] {
 /// test `instanceof`/`checkcast` needs. Every wrapper is an `Object` and a
 /// `Comparable`; the numeric ones are also a `Number`. An `Integer` is NOT a
 /// `Double`, which is the whole point: real Java throws on `(Double) anInt`.
+/// Whether a value of class `actual` is also a `wanted` — the question
+/// `Class.cast` and `Class.asSubclass` ask about LIBRARY classes. A user class
+/// is answered by `is_runtime_subtype` beside it; this covers the kinds that
+/// have no class file to walk, which is what the `instanceof` opcode does with
+/// its own arms.
+fn class_is_assignable(actual: &str, wanted: &str) -> bool {
+    if actual == wanted || wanted == "java/lang/Object" {
+        return true;
+    }
+    if matches!(
+        actual,
+        "java/lang/Integer"
+            | "java/lang/Long"
+            | "java/lang/Double"
+            | "java/lang/Float"
+            | "java/lang/Short"
+            | "java/lang/Byte"
+            | "java/lang/Character"
+            | "java/lang/Boolean"
+    ) {
+        return wrapper_is(actual, wanted);
+    }
+    if actual == "java/lang/String"
+        && (matches!(wanted, "java/lang/CharSequence" | "CharSequence") || is_comparable(wanted))
+    {
+        return true;
+    }
+    if caturra_classfile::exceptions::is_exception_class(actual)
+        && caturra_classfile::exceptions::is_exception_subclass(actual, wanted)
+    {
+        return true;
+    }
+    library_faces(actual).contains(&qualified_face(wanted))
+}
+
 fn wrapper_is(wrapper: &str, target: &str) -> bool {
     // `Comparable` is the BUNDLED interface, so it reaches the VM under its
     // flattened name — every wrapper implements it, and answering `false`

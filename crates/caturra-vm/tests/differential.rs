@@ -51835,3 +51835,151 @@ stricter_than_javac!(
     "StrictDateZone",
     "import java.time.*;\npublic class StrictDateZone { static void r() { LocalDateTime.of(2024, 1, 1, 0, 0).atZone(null); } }"
 );
+
+// ---- The long tail: the method names a JDK offers on a class caturra
+// already models, chosen by `scripts/coverage/measure.py` rather than
+// guessed at, and captured from a real JDK before any of it was written.
+//
+// `ArrayDeque.clone()` answers an `ArrayDeque<E>` — not the `Object` that
+// `ArrayList.clone()` answers; `getDeclaringClass()` on an enum constant is
+// the enum itself; `Arrays.compareUnsigned` answers a SIGN for int/long and a
+// DIFFERENCE for byte/short; `Random.longs` is the JDK's own
+// reject-until-unbiased loop, byte for byte; and `java.lang.Class` answers
+// every question its class file can be asked.
+differential_test!(
+    the_long_tail_of_a_modelled_class,
+    "TailT1",
+    r#"
+import java.io.*;
+import java.time.*;
+import java.time.temporal.*;
+import java.math.*;
+import java.util.*;
+import java.util.stream.*;
+public class TailT1 {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  enum Colour { RED, GREEN }
+  static class Outer { static class Nested {} class Inner {} }
+  public static void main(String[] a) throws Exception {
+    // --- ArrayDeque.clone
+    s("deque clone", () -> { ArrayDeque<String> d = new ArrayDeque<>(List.of("a","b")); Object c = d.clone(); return c + " " + (c == d) + " " + c.getClass().getName(); });
+    s("deque clone independent", () -> { ArrayDeque<String> d = new ArrayDeque<>(List.of("a")); ArrayDeque<String> c = d.clone(); c.add("b"); return d + " " + c; });
+    // --- getDeclaringClass on the library enums
+    s("enum declaring", () -> DayOfWeek.MONDAY.getDeclaringClass().getName() + " " + Month.MAY.getDeclaringClass().getSimpleName());
+    s("chrono declaring", () -> ChronoUnit.DAYS.getDeclaringClass().getName());
+    s("rounding declaring", () -> RoundingMode.HALF_UP.getDeclaringClass().getName());
+    s("user enum declaring", () -> Colour.RED.getDeclaringClass().getName());
+    s("declaring is the class", () -> DayOfWeek.MONDAY.getDeclaringClass() == DayOfWeek.class);
+    // --- Arrays.compareUnsigned
+    s("compare unsigned ints", () -> Arrays.compareUnsigned(new int[]{-1}, new int[]{1}));
+    s("compare unsigned bytes", () -> Arrays.compareUnsigned(new byte[]{-1}, new byte[]{1}));
+    s("compare unsigned equal", () -> Arrays.compareUnsigned(new int[]{5,6}, new int[]{5,6}));
+    s("compare unsigned prefix", () -> Arrays.compareUnsigned(new int[]{1}, new int[]{1,2}));
+    s("compare signed for contrast", () -> Arrays.compare(new int[]{-1}, new int[]{1}));
+    // --- Random.longs
+    s("random longs count", () -> new Random(42).longs(3).count());
+    s("random longs values", () -> Arrays.toString(new Random(42).longs(3).toArray()));
+    s("random ints for contrast", () -> Arrays.toString(new Random(42).ints(3).toArray()));
+    s("random longs bounded", () -> Arrays.toString(new Random(7).longs(3, 0L, 10L).toArray()));
+    // --- ByteArrayOutputStream
+    s("write bytes", () -> { ByteArrayOutputStream o = new ByteArrayOutputStream(); o.writeBytes(new byte[]{65,66}); return o.toString(); });
+    s("write to", () -> { ByteArrayOutputStream src = new ByteArrayOutputStream(); src.write(67); ByteArrayOutputStream dst = new ByteArrayOutputStream(); src.writeTo(dst); return dst.toString(); });
+    // --- Class, the answerable part
+    s("class cast", () -> ((String) String.class.cast("hi")).length());
+    s("class cast wrong", () -> Integer.class.cast("hi"));
+    s("enum constants", () -> Arrays.toString(Colour.class.getEnumConstants()));
+    s("enum constants of a non-enum", () -> String.class.getEnumConstants());
+    s("package name", () -> String.class.getPackageName() + " " + Colour.class.getPackageName());
+    s("is member class", () -> Outer.Nested.class.isMemberClass() + " " + String.class.isMemberClass());
+    s("declaring class of nested", () -> Outer.Nested.class.getDeclaringClass().getSimpleName());
+    s("declaring class of top", () -> String.class.getDeclaringClass());
+    s("as subclass", () -> Integer.class.asSubclass(Number.class).getSimpleName());
+    s("as subclass wrong", () -> String.class.asSubclass(Number.class));
+  }
+}
+"#
+);
+
+// ---- The refusals the same measurement found. Each is ordinary Java that a
+// real JDK compiles and caturra will not, and each says WHY rather than
+// "cannot find symbol" — the measurement's `--why` mode asserts that for
+// every missing name at once; these pin one per family, so a family cannot
+// quietly come back as a typo-shaped error.
+
+// `wait`/`notify`/`notifyAll` are `Object`'s, so every receiver has them.
+// caturra runs a program on one thread: there is no second thread to wake.
+stricter_than_javac!(
+    strict_no_thread_to_wait_for,
+    "StrictWait",
+    "public class StrictWait { static void r() throws Exception { new Object().wait(); } }"
+);
+
+// A `Spliterator` is a parallel-decomposition handle, and the documentation
+// shows one on every collection — so this must explain itself rather than read
+// as a missing method.
+stricter_than_javac!(
+    strict_no_spliterator,
+    "StrictSpliterator",
+    "import java.util.*;\npublic class StrictSpliterator { static void r() { new ArrayList<String>().spliterator(); } }"
+);
+
+// System properties (and the three wrapper readers that look like parsers:
+// `Integer.getInteger`, `Long.getLong`, `Boolean.getBoolean`) are the host's,
+// and caturra has no process around it.
+stricter_than_javac!(
+    strict_no_system_properties,
+    "StrictProperties",
+    "public class StrictProperties { static void r() { System.getProperty(\"user.dir\"); } }"
+);
+
+// Annotations are parsed and discarded, so none survives to be read back off a
+// `Class`.
+stricter_than_javac!(
+    strict_no_annotations_at_runtime,
+    "StrictAnnotations",
+    "public class StrictAnnotations { static void r() { String.class.getAnnotations(); } }"
+);
+
+// caturra's `DateTimeFormatter` is a pattern that RENDERS a value; text is read
+// back through `LocalDate.parse(text, formatter)`, which the message says.
+stricter_than_javac!(
+    strict_a_formatter_does_not_parse,
+    "StrictFormatterParse",
+    "import java.time.format.*;\npublic class StrictFormatterParse { static void r() { DateTimeFormatter.ofPattern(\"yyyy\").parse(\"2024\"); } }"
+);
+
+// The `checked*` views type-check every write at RUNTIME against a `Class`.
+// caturra's compiler is the check that runs here.
+stricter_than_javac!(
+    strict_no_checked_views,
+    "StrictChecked",
+    "import java.util.*;\npublic class StrictChecked { static void r() { Collections.checkedList(new ArrayList<String>(), String.class); } }"
+);
+
+// `Stream.builder()` answers a `Stream.Builder`, a mutable accumulator caturra
+// models no type for.
+stricter_than_javac!(
+    strict_no_stream_builder,
+    "StrictStreamBuilder",
+    "import java.util.stream.*;\npublic class StrictStreamBuilder { static void r() { Stream.builder(); } }"
+);
+
+// The concurrent collectors collect into a `java.util.concurrent` map. On one
+// thread the ordinary ones do the same job, which the message says.
+stricter_than_javac!(
+    strict_no_concurrent_collectors,
+    "StrictConcurrentCollector",
+    "import java.util.stream.*;\npublic class StrictConcurrentCollector { static void r() { Collectors.toConcurrentMap(x -> x, x -> x); } }"
+);
+
+// caturra carries Unicode's character CATEGORIES — enough for `isLetter` and
+// the rest — not the character database of names.
+stricter_than_javac!(
+    strict_no_unicode_character_names,
+    "StrictCharacterName",
+    "public class StrictCharacterName { static void r() { Character.getName(65); } }"
+);

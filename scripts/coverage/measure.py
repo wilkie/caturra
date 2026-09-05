@@ -6,6 +6,9 @@ writes a call with that overload's own ARITY and `null` for every argument,
 then reads which complaint comes back:
 
 * "cannot find symbol" — the name is unknown to caturra;
+* "X.y exists in Java, but ..." — the name is REFUSED, on purpose and with a
+  reason. That is not coverage: the call does not run. It counts as unknown
+  here, and `--why` lists every one of them with the reason it gives;
 * anything else ("no suitable method found", "incompatible types", or no
   error at all) — the name is known, and only these arguments are wrong.
 
@@ -25,7 +28,7 @@ cannot be written as one expression.
 Needs a real `javac`/`java` on PATH (the denominator comes from reflection,
 `ApiList.java`) and a built `target/release/examples/diagnostics`.
 
-    scripts/coverage/measure.py [--verbose]
+    scripts/coverage/measure.py [--verbose] [--why]
 """
 import json, os, re, subprocess, sys, tempfile
 
@@ -70,7 +73,9 @@ def measure(class_name, receiver, methods):
         # Line 3 is the first call.
         index = row - 3
         if 0 <= index < len(order) and (
-            "cannot find symbol" in message or "not supported by caturra" in message
+            "cannot find symbol" in message
+            or "not supported by caturra" in message
+            or "exists in Java, but" in message
         ):
             unknown_at.add(index)
     known, missing = set(), set()
@@ -80,6 +85,39 @@ def measure(class_name, receiver, methods):
     # even where `substring(1, 2)` is the one that failed.
     missing -= known
     return sorted(known), sorted(missing)
+
+
+def complaint(class_name, receiver, name, methods):
+    """The single diagnostic caturra gives for one missing method name.
+
+    A missing name should EXPLAIN itself — "Collections.checkedList exists in
+    Java, but ..." — rather than read as a typo. `--why` prints these so the
+    refusals can be read as a list, and fails when one of them is still a bare
+    "cannot find symbol".
+    """
+    arity = min(a for n, _, a in methods if n == name)
+    is_static = next(s for n, s, a in methods if n == name and a == arity)
+    # The same target expression `measure` writes — a fully qualified static
+    # receiver resolves down a different path from a simple one, and the two
+    # spellings gave different complaints for the same missing name.
+    target = class_name if is_static else receiver
+    call = f"{target}.{name}({', '.join(['null'] * arity)});"
+    source = (
+        "public class Probe {\n    public static void main(String[] args) {\n        "
+        + call
+        + "\n    }\n}\n"
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "Probe.java")
+        with open(path, "w") as handle:
+            handle.write(source)
+        out = subprocess.run(
+            [ENGINE, path], capture_output=True, text=True, cwd=REPO, timeout=300
+        ).stdout
+    for line in out.splitlines():
+        if line.startswith("Error@"):
+            return line.split(": ", 1)[1]
+    return "(no error)"
 
 
 def inventory(class_names):
@@ -124,17 +162,24 @@ def modelled_classes():
 
 def main():
     verbose = "--verbose" in sys.argv
+    why = "--why" in sys.argv
     receivers = json.load(
         open(os.path.join(REPO, "scripts/coverage/receivers.json"))
     )
     api = inventory(sorted(receivers))
     total_known = total_all = 0
-    rows = []
+    rows, unexplained = [], []
     for class_name, methods in sorted(api.items()):
         receiver = receivers.get(class_name)
         if receiver in (None, "SKIP"):
             continue
         known, missing = measure(class_name, receiver, methods)
+        if why:
+            for name in missing:
+                said = complaint(class_name, receiver, name, methods)
+                if "cannot find symbol" in said:
+                    unexplained.append(f"{class_name}.{name}")
+                print(f"{class_name}.{name}: {said}")
         total_known += len(known)
         total_all += len(known) + len(missing)
         rows.append((class_name, len(known), len(known) + len(missing), missing))
@@ -149,6 +194,12 @@ def main():
     # The other half of the estimate: how many classes there are to have
     # methods on. A share is meaningless here — nobody models all of the JDK —
     # so this is an inventory, not a percentage.
+    if why and unexplained:
+        print(f"\n{len(unexplained)} missing names say only \"cannot find symbol\":")
+        for name in unexplained:
+            print(f"  {name}")
+        sys.exit(1)
+
     packages = modelled_classes()
     print("\nclasses caturra names, by package:")
     core = 0

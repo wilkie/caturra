@@ -11034,6 +11034,10 @@ fn is_true_literal(expr: &Expr) -> bool {
 /// A parameter of an intrinsic method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BParam {
+    /// A `java.io.OutputStream` — what `writeTo` pours into. The only one
+    /// caturra models is a `ByteArrayOutputStream`, which is why the abstract
+    /// name is a face of it.
+    ByteStream,
     /// A LOOKUP argument: `Map.get`, `containsKey`, `Collection.contains`,
     /// `indexOf` and friends all take `Object` in Java, not the collection's
     /// own element type — `map.get(somethingElse)` compiles and answers null.
@@ -11383,6 +11387,9 @@ enum BRet {
     NavigableMapFace,
     /// A `List` of the receiver's OWN element — `subList`'s live view.
     SelfList,
+    /// An `ArrayDeque<E>` of the receiver's element — what `ArrayDeque.clone`
+    /// answers, the JDK having overridden the return type covariantly there.
+    SelfDeque,
     /// `java.nio.file.Path` (`Path.of`, `path.getFileName()`).
     Path,
     /// `java.io.File` (`path.toFile()`).
@@ -12031,57 +12038,57 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     (
         "Scanner",
         "locale",
-        "caturra models no java.util.Locale value to answer with",
+        NO_LOCALE_VALUE,
     ),
     (
         "Scanner",
         "useLocale",
-        "caturra formats in the US locale and models no Locale value",
+        NO_LOCALE_VALUE,
     ),
     // The `TemporalAccessor`/`TemporalAdjuster` plumbing, on every value that
     // declares it. A `TemporalQuery` and a bare `Temporal` are interfaces
     // caturra does not model, so there is nothing to pass or answer — and a
     // program never writes these itself; they are how the JDK's own types talk
     // to each other.
-    ("LocalDate", "query", "caturra does not model java.time.temporal.TemporalQuery"),
-    ("LocalTime", "query", "caturra does not model java.time.temporal.TemporalQuery"),
+    ("LocalDate", "query", TEMPORAL_QUERY),
+    ("LocalTime", "query", TEMPORAL_QUERY),
     (
         "LocalDateTime",
         "query",
-        "caturra does not model java.time.temporal.TemporalQuery",
+        TEMPORAL_QUERY,
     ),
-    ("DayOfWeek", "query", "caturra does not model java.time.temporal.TemporalQuery"),
-    ("Month", "query", "caturra does not model java.time.temporal.TemporalQuery"),
+    ("DayOfWeek", "query", TEMPORAL_QUERY),
+    ("Month", "query", TEMPORAL_QUERY),
     (
         "LocalDate",
         "adjustInto",
-        "caturra does not model java.time.temporal.Temporal as a type",
+        BARE_TEMPORAL,
     ),
     (
         "LocalTime",
         "adjustInto",
-        "caturra does not model java.time.temporal.Temporal as a type",
+        BARE_TEMPORAL,
     ),
     (
         "LocalDateTime",
         "adjustInto",
-        "caturra does not model java.time.temporal.Temporal as a type",
+        BARE_TEMPORAL,
     ),
     (
         "DayOfWeek",
         "adjustInto",
-        "caturra does not model java.time.temporal.Temporal as a type",
+        BARE_TEMPORAL,
     ),
     (
         "Month",
         "adjustInto",
-        "caturra does not model java.time.temporal.Temporal as a type",
+        BARE_TEMPORAL,
     ),
-    ("Period", "addTo", "caturra does not model java.time.temporal.Temporal as a type"),
+    ("Period", "addTo", BARE_TEMPORAL),
     (
         "Period",
         "subtractFrom",
-        "caturra does not model java.time.temporal.Temporal as a type",
+        BARE_TEMPORAL,
     ),
     // Everything that carries an INSTANT or a ZONE. caturra models the
     // arithmetic slice of `java.time`, and answering a zone honestly needs a
@@ -12099,32 +12106,211 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("LocalDateTime", "atZone", "caturra does not model java.time.ZoneId"),
     // The CHRONOLOGY every date carries. caturra models the ISO calendar and
     // no other, so the handle would answer for a choice that was never made.
-    ("LocalDate", "getChronology", "caturra models the ISO calendar and no Chronology type"),
+    ("LocalDate", "getChronology", ISO_ONLY),
     (
         "LocalDateTime",
         "getChronology",
-        "caturra models the ISO calendar and no Chronology type",
+        ISO_ONLY,
     ),
-    ("Period", "getChronology", "caturra models the ISO calendar and no Chronology type"),
+    ("Period", "getChronology", ISO_ONLY),
     ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
     ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
     ("Scanner", "skip", "caturra's Scanner reads whole tokens and cannot skip by pattern"),
     ("Scanner", "tokens", "caturra's Scanner does not expose its tokens as a stream"),
     ("Scanner", "findAll", "caturra's Scanner does not expose matches as a stream"),
-    // A `Spliterator` is a parallel-decomposition handle. caturra runs on one
-    // thread and models no such type, so there is nothing honest to answer —
-    // and "cannot find symbol" would read as a bug for a method the
-    // documentation shows on every collection.
-    ("ArrayList", "spliterator", "caturra does not model java.util.Spliterator"),
-    ("Set", "spliterator", "caturra does not model java.util.Spliterator"),
-    ("TreeSet", "spliterator", "caturra does not model java.util.Spliterator"),
-    ("SortedSet", "spliterator", "caturra does not model java.util.Spliterator"),
-    ("NavigableSet", "spliterator", "caturra does not model java.util.Spliterator"),
-    ("Collection", "spliterator", "caturra does not model java.util.Spliterator"),
-    ("LinkedList", "spliterator", "caturra does not model java.util.Spliterator"),
     ("HashMap", "of", "the immutable factories live on Map, not HashMap - write Map.of(...)"),
     ("HashMap", "ofEntries", "the immutable factories live on Map, not HashMap - write Map.ofEntries(...)"),
+    // ---- java.lang.System: the facilities that are the HOST's, not the
+    // program's. caturra runs in a browser tab with no process around it.
+    ("System", "getProperty", SYSTEM_PROPERTIES),
+    ("System", "getProperties", SYSTEM_PROPERTIES),
+    ("System", "setProperty", SYSTEM_PROPERTIES),
+    ("System", "setProperties", SYSTEM_PROPERTIES),
+    ("System", "clearProperty", SYSTEM_PROPERTIES),
+    ("System", "getenv", "caturra has no process around it to read an environment from"),
+    ("System", "console", "caturra's console is the page's, not a terminal a java.io.Console could describe"),
+    (
+        "System",
+        "setIn",
+        "caturra's System.in is the input the page supplies and cannot be replaced (System.setOut and setErr can)",
+    ),
+    ("System", "getLogger", "caturra does not model java.lang.System.Logger"),
+    ("System", "inheritedChannel", "caturra does not model java.nio.channels"),
+    ("System", "getSecurityManager", NO_SECURITY_MANAGER),
+    ("System", "setSecurityManager", NO_SECURITY_MANAGER),
+    ("System", "load", NATIVE_CODE),
+    ("System", "loadLibrary", NATIVE_CODE),
+    ("System", "mapLibraryName", NATIVE_CODE),
+    (
+        "System",
+        "runFinalization",
+        "caturra's collector never finalizes: finalize() is deprecated in Java 9 and is not run here",
+    ),
+    // ---- The three system-property readers that live on a wrapper. Their
+    // names read like parsers and are not: `Integer.getInteger("x")` reads the
+    // PROPERTY "x". (`Integer.getInteger` has its own row above.)
+    ("Boolean", "getBoolean", SYSTEM_PROPERTIES),
+    ("Long", "getLong", SYSTEM_PROPERTIES),
+    // ---- java.lang.Character: the three questions that need the whole
+    // Unicode character database, not the classification tables caturra
+    // carries.
+    ("Character", "getName", UNICODE_DATABASE),
+    ("Character", "codePointOf", UNICODE_DATABASE),
+    (
+        "Character",
+        "getDirectionality",
+        "caturra does not carry the Unicode bidirectional categories",
+    ),
+    // ---- java.lang.Class, the questions a caturra class file cannot answer.
+    ("Class", "getAnnotation", ANNOTATIONS_DISCARDED),
+    ("Class", "getAnnotations", ANNOTATIONS_DISCARDED),
+    ("Class", "getAnnotationsByType", ANNOTATIONS_DISCARDED),
+    ("Class", "getDeclaredAnnotation", ANNOTATIONS_DISCARDED),
+    ("Class", "getDeclaredAnnotations", ANNOTATIONS_DISCARDED),
+    ("Class", "getDeclaredAnnotationsByType", ANNOTATIONS_DISCARDED),
+    ("Class", "getAnnotatedSuperclass", ANNOTATIONS_DISCARDED),
+    ("Class", "getAnnotatedInterfaces", ANNOTATIONS_DISCARDED),
+    ("Class", "isAnnotation", ANNOTATIONS_DISCARDED),
+    ("Class", "isAnnotationPresent", ANNOTATIONS_DISCARDED),
+    ("Class", "getGenericSuperclass", ERASED_SIGNATURE),
+    ("Class", "getGenericInterfaces", ERASED_SIGNATURE),
+    ("Class", "getTypeParameters", ERASED_SIGNATURE),
+    ("Class", "toGenericString", ERASED_SIGNATURE),
+    (
+        "Class",
+        "getClassLoader",
+        "caturra compiles a whole program at once and has no class loader",
+    ),
+    ("Class", "getModule", "caturra does not model the module system"),
+    ("Class", "getProtectionDomain", CODE_SIGNING),
+    ("Class", "getSigners", CODE_SIGNING),
+    ("Class", "getResource", NO_CLASS_PATH),
+    ("Class", "getResourceAsStream", NO_CLASS_PATH),
+    ("Class", "getNestHost", NEST_MATES),
+    ("Class", "getNestMembers", NEST_MATES),
+    ("Class", "isNestmateOf", NEST_MATES),
+    (
+        "Class",
+        "newInstance",
+        "Class.newInstance is deprecated in Java 9 - write getDeclaredConstructor().newInstance()",
+    ),
+    (
+        "Class",
+        "getClasses",
+        "caturra records no nested class's access flags, so it cannot tell which are public - getDeclaredClasses() lists them all",
+    ),
+    ("Class", "getEnclosingMethod", NO_ENCLOSING_METHOD),
+    ("Class", "getEnclosingConstructor", NO_ENCLOSING_METHOD),
+    // ---- java.util.Collections: the views caturra does not build.
+    ("Collections", "checkedCollection", CHECKED_VIEWS),
+    ("Collections", "checkedList", CHECKED_VIEWS),
+    ("Collections", "checkedSet", CHECKED_VIEWS),
+    ("Collections", "checkedSortedSet", CHECKED_VIEWS),
+    ("Collections", "checkedNavigableSet", CHECKED_VIEWS),
+    ("Collections", "checkedQueue", CHECKED_VIEWS),
+    ("Collections", "checkedMap", CHECKED_VIEWS),
+    ("Collections", "checkedSortedMap", CHECKED_VIEWS),
+    ("Collections", "checkedNavigableMap", CHECKED_VIEWS),
+    (
+        "Collections",
+        "asLifoQueue",
+        "caturra does not model a Deque read back to front as a Queue - an ArrayDeque IS a stack (push/pop)",
+    ),
+    (
+        "Collections",
+        "newSetFromMap",
+        "caturra does not model a Set backed by a Map you supply - write a HashSet or a LinkedHashSet",
+    ),
+    // ---- The concurrent collectors, which collect into java.util.concurrent
+    // maps: one thread, so the ordinary ones do the same job.
+    (
+        "Collectors",
+        "groupingByConcurrent",
+        "caturra runs on one thread and models no concurrent map - Collectors.groupingBy does the same job here",
+    ),
+    (
+        "Collectors",
+        "toConcurrentMap",
+        "caturra runs on one thread and models no concurrent map - Collectors.toMap does the same job here",
+    ),
+    // ---- `Stream.builder()` answers a `Stream.Builder`, a mutable
+    // accumulator caturra models no type for.
+    ("Stream", "builder", STREAM_BUILDER),
+    ("IntStream", "builder", STREAM_BUILDER),
+    // ---- `OutputStream.nullOutputStream()` (inherited by every stream) hands
+    // back a plain `OutputStream`, which is not a type caturra models.
+    ("PrintStream", "nullOutputStream", NULL_STREAM),
+    ("ByteArrayOutputStream", "nullOutputStream", NULL_STREAM),
+    // ---- java.time: the interface plumbing (`TemporalAmount`,
+    // `TemporalAccessor`) that a program never writes by hand.
+    ("Duration", "addTo", BARE_TEMPORAL),
+    ("Duration", "subtractFrom", BARE_TEMPORAL),
+    ("Duration", "from", NO_TEMPORAL_AMOUNT),
+    ("Period", "from", NO_TEMPORAL_AMOUNT),
+    ("ChronoUnit", "addTo", BARE_TEMPORAL),
+    // ---- java.time.format.DateTimeFormatter. caturra's formatter is a
+    // PATTERN that renders a value; everything below is either the parsing
+    // half (which a program reaches through LocalDate.parse) or one of the
+    // four settings a pattern is resolved against.
+    ("DateTimeFormatter", "parse", FORMATTER_PARSES_ELSEWHERE),
+    ("DateTimeFormatter", "parseBest", FORMATTER_PARSES_ELSEWHERE),
+    ("DateTimeFormatter", "parseUnresolved", FORMATTER_PARSES_ELSEWHERE),
+    ("DateTimeFormatter", "parsedExcessDays", TEMPORAL_QUERY),
+    ("DateTimeFormatter", "parsedLeapSecond", TEMPORAL_QUERY),
+    ("DateTimeFormatter", "getLocale", NO_LOCALE_VALUE),
+    ("DateTimeFormatter", "withLocale", NO_LOCALE_VALUE),
+    ("DateTimeFormatter", "localizedBy", NO_LOCALE_VALUE),
+    ("DateTimeFormatter", "getChronology", ISO_ONLY),
+    ("DateTimeFormatter", "withChronology", ISO_ONLY),
+    ("DateTimeFormatter", "getZone", FORMATTER_HAS_NO_ZONE),
+    ("DateTimeFormatter", "withZone", FORMATTER_HAS_NO_ZONE),
+    ("DateTimeFormatter", "getDecimalStyle", NO_DECIMAL_STYLE),
+    ("DateTimeFormatter", "withDecimalStyle", NO_DECIMAL_STYLE),
+    ("DateTimeFormatter", "getResolverStyle", RESOLUTION_IS_PARSING),
+    ("DateTimeFormatter", "withResolverStyle", RESOLUTION_IS_PARSING),
+    ("DateTimeFormatter", "getResolverFields", RESOLUTION_IS_PARSING),
+    ("DateTimeFormatter", "withResolverFields", RESOLUTION_IS_PARSING),
+    ("DateTimeFormatter", "toFormat", "caturra does not model java.text.Format"),
+    (
+        "DateTimeFormatter",
+        "formatTo",
+        "caturra does not model java.lang.Appendable - write format(value) and append the String",
+    ),
 ];
+
+/// The reasons shared by several rows above. Written once so that two members
+/// refused for the SAME reason cannot end up explaining it differently.
+const SYSTEM_PROPERTIES: &str = "system properties are not supported by caturra";
+const NO_SECURITY_MANAGER: &str =
+    "caturra does not model java.lang.SecurityManager (removed from Java itself in 17)";
+const NATIVE_CODE: &str = "caturra cannot load native code";
+const UNICODE_DATABASE: &str =
+    "caturra carries Unicode's character CATEGORIES, not the full character database of names";
+const ANNOTATIONS_DISCARDED: &str =
+    "caturra parses annotations and discards them, so none survives to be read back";
+const ERASED_SIGNATURE: &str =
+    "type arguments are erased in caturra's class files, so there is no generic signature to read";
+const CODE_SIGNING: &str = "caturra does not model code signing";
+const NO_CLASS_PATH: &str = "caturra has no class path to load a resource from";
+const NEST_MATES: &str = "caturra does not model nest mates";
+const NO_ENCLOSING_METHOD: &str =
+    "caturra hoists a local or anonymous class to the top level and records no enclosing method";
+const CHECKED_VIEWS: &str = "caturra does not model a dynamically type-checked view - the compiler's own check is the one that runs here";
+const STREAM_BUILDER: &str = "caturra does not model java.util.stream.Stream.Builder - collect the elements and call stream()";
+const NULL_STREAM: &str = "caturra models no plain java.io.OutputStream value to answer with";
+const BARE_TEMPORAL: &str = "caturra does not model java.time.temporal.Temporal as a type";
+const NO_TEMPORAL_AMOUNT: &str =
+    "caturra does not model java.time.temporal.TemporalAmount as a type";
+const FORMATTER_PARSES_ELSEWHERE: &str = "caturra's DateTimeFormatter formats - to read text back, write LocalDate.parse(text, formatter) (or LocalTime/LocalDateTime)";
+const TEMPORAL_QUERY: &str = "caturra does not model java.time.temporal.TemporalQuery";
+const NO_LOCALE_VALUE: &str =
+    "caturra formats in the US locale and models no java.util.Locale value";
+const ISO_ONLY: &str = "caturra models the ISO calendar and no Chronology type";
+const FORMATTER_HAS_NO_ZONE: &str =
+    "caturra's java.time is zone-free, so a formatter has no zone to override";
+const NO_DECIMAL_STYLE: &str = "caturra does not model java.time.format.DecimalStyle";
+const RESOLUTION_IS_PARSING: &str =
+    "the resolver settings apply while PARSING, which caturra's formatter does not do";
 
 /// The source-level class name of a receiver that [`UNSUPPORTED_MEMBERS`]
 /// has entries for. Empty for every other receiver, so that (say) a `File`
@@ -12158,12 +12344,29 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::DayOfWeek => "DayOfWeek",
         JType::Month => "Month",
         JType::DateFormat => "DateTimeFormatter",
+        JType::ChronoUnit => "ChronoUnit",
         _ => "",
     }
 }
 
 /// The honest not-supported reason for a class member, if known.
 fn unsupported_member(class: &str, method: &str) -> Option<&'static str> {
+    // Two names EVERY receiver has, because they come from `Object` and from
+    // `Collection`. A row per class is a class to forget: `spliterator` had
+    // seven rows and still said "cannot find symbol" on a `Stack`, on
+    // `Arrays`, and on both stream kinds.
+    if matches!(method, "wait" | "notify" | "notifyAll") {
+        return Some(
+            "caturra runs a program on one thread, so there is no other thread to wait for or to wake",
+        );
+    }
+    // A `Spliterator` is a parallel-decomposition handle. caturra runs on one
+    // thread and models no such type, so there is nothing honest to answer —
+    // and "cannot find symbol" would read as a bug for a method the
+    // documentation shows on every collection.
+    if method == "spliterator" {
+        return Some("caturra does not model java.util.Spliterator");
+    }
     UNSUPPORTED_MEMBERS
         .iter()
         .find(|(c, m, _)| *c == class && *m == method)
@@ -13150,6 +13353,20 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
 /// `java.util.Deque<E>` — everything a `Queue` has, plus the two-ended and
 /// stack (`push`/`pop`) operations.
 const DEQUE_METHODS: &[BuiltinMethod] = &[
+    // `clone()` is the CLASS's, and `ArrayDeque` is a class: a `Deque`-typed
+    // variable does not offer it, which is what the face gate says. Every
+    // other collection had this and the deque did not.
+    //
+    // It answers an `ArrayDeque<E>`, not the `Object` an `ArrayList`'s does —
+    // the JDK overrode the return covariantly on this one, so
+    // `ArrayDeque<String> c = d.clone();` needs no cast.
+    bm_at(
+        "clone",
+        &[],
+        BRet::SelfDeque,
+        "()Ljava/lang/Object;",
+        TableFace::Concrete,
+    ),
     // The bulk operations every `Collection` declares. They were on the list
     // and set tables and on no other, so `deque.removeAll(...)` — a method
     // the interface itself promises — was "cannot find symbol" while the
@@ -14758,6 +14975,10 @@ const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
     bm("getValue", &[], BRet::Int, "()I"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
+    // The enum a constant belongs to. `Enum` declares it, so every library
+    // enum has it — and each was answering "cannot find symbol" for a method
+    // its own supertype promises.
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "compareTo",
         &[BParam::DayOfWeek],
@@ -14821,6 +15042,10 @@ const MONTH_METHODS: &[BuiltinMethod] = &[
     bm("getValue", &[], BRet::Int, "()I"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
+    // The enum a constant belongs to. `Enum` declares it, so every library
+    // enum has it — and each was answering "cannot find symbol" for a method
+    // its own supertype promises.
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("length", &[BParam::Boolean], BRet::Int, "(Z)I"),
     bm(
         "compareTo",
@@ -15626,6 +15851,10 @@ const CHRONO_UNIT_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
+    // The enum a constant belongs to. `Enum` declares it, so every library
+    // enum has it — and each was answering "cannot find symbol" for a method
+    // its own supertype promises.
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "equals",
         &[BParam::Object],
@@ -15692,6 +15921,10 @@ const CHRONO_FIELD_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
+    // The enum a constant belongs to. `Enum` declares it, so every library
+    // enum has it — and each was answering "cannot find symbol" for a method
+    // its own supertype promises.
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "equals",
         &[BParam::Object],
@@ -16135,6 +16368,10 @@ const ROUNDING_MODE_METHODS: &[BuiltinMethod] = &[
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
+    // The enum a constant belongs to. `Enum` declares it, so every library
+    // enum has it — and each was answering "cannot find symbol" for a method
+    // its own supertype promises.
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "compareTo",
         &[BParam::RoundingMode],
@@ -17169,6 +17406,10 @@ const ISO_ERA_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
+    // The enum a constant belongs to. `Enum` declares it, so every library
+    // enum has it — and each was answering "cannot find symbol" for a method
+    // its own supertype promises.
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "equals",
         &[BParam::Object],
@@ -17184,6 +17425,10 @@ const STYLE_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
+    // The enum a constant belongs to. `Enum` declares it, so every library
+    // enum has it — and each was answering "cannot find symbol" for a method
+    // its own supertype promises.
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "compareTo",
         &[BParam::Temporal],
@@ -17205,6 +17450,10 @@ const TEXT_STYLE_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("name", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("ordinal", &[], BRet::Int, "()I"),
+    // The enum a constant belongs to. `Enum` declares it, so every library
+    // enum has it — and each was answering "cannot find symbol" for a method
+    // its own supertype promises.
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "compareTo",
         &[BParam::Temporal],
@@ -17727,6 +17976,17 @@ const BYTE_STREAM_METHODS: &[BuiltinMethod] = &[
     bm("toByteArray", &[], BRet::ByteArray, "()[B"),
     bm("reset", &[], BRet::Void, "()V"),
     bm("write", &[BParam::Int], BRet::Void, "(I)V"),
+    // Java 11's `writeBytes(byte[])` — the whole array at once, which is the
+    // shape a program that already has bytes reaches for.
+    bm("writeBytes", &[BParam::ByteArray], BRet::Void, "([B)V"),
+    // ...and `writeTo(out)`, which pours what has been gathered into another
+    // stream.
+    bm(
+        "writeTo",
+        &[BParam::ByteStream],
+        BRet::Void,
+        "(Ljava/io/OutputStream;)V",
+    ),
     bm("close", &[], BRet::Void, "()V"),
     bm("flush", &[], BRet::Void, "()V"),
 ];
@@ -18749,6 +19009,35 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getSimpleName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
+    // The PACKAGE a class is in, as a string — the one `Package` question
+    // that needs no `java.lang.Package` object to answer.
+    bm("getPackageName", &[], BRet::Str, "()Ljava/lang/String;"),
+    // `cast(o)` is a checked downcast written as a call, and `asSubclass(c)`
+    // the same check on the CLASS rather than on a value. Both answer what
+    // they were given, and both throw a `ClassCastException` naming the pair.
+    bm(
+        "cast",
+        &[BParam::Object],
+        BRet::Object,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "asSubclass",
+        &[BParam::Class],
+        BRet::Class,
+        "(Ljava/lang/Class;)Ljava/lang/Class;",
+    ),
+    // An enum's constants, in order — `null` for anything that is not one.
+    bm(
+        "getEnumConstants",
+        &[],
+        BRet::ObjectArray,
+        "()[Ljava/lang/Object;",
+    ),
+    // Whether the class is declared INSIDE another, and which one — `null`
+    // for a top-level class, as a JDK answers.
+    bm("isMemberClass", &[], BRet::Boolean, "()Z"),
+    bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // The kind predicates. `isInterface` is the one a program actually asks —
     // the others come with it, and each is a fact the VM already knows.
     bm("isInterface", &[], BRet::Boolean, "()Z"),
@@ -18766,6 +19055,15 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
     bm("getCanonicalName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getEnclosingClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("isAnonymousClass", &[], BRet::Boolean, "()Z"),
+    // The other two name-derived questions. A LOCAL class is hoisted under
+    // `Name$LocalN` and a lambda's under `Lambda$N`, so both are read off the
+    // name exactly as `isAnonymousClass` and `isMemberClass` are.
+    bm("isLocalClass", &[], BRet::Boolean, "()Z"),
+    bm("isSynthetic", &[], BRet::Boolean, "()Z"),
+    // caturra compiles `assert` to `if (false)`, which is a JDK with
+    // assertions DISABLED — so this is not a guess, it is the truth about
+    // every run: `false`.
+    bm("desiredAssertionStatus", &[], BRet::Boolean, "()Z"),
     // `Class` does not override `Object`'s — a class has exactly one `Class`
     // instance, so both are identity — but they still have to RESOLVE.
     bm(
@@ -18803,6 +19101,24 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
         &[],
         BRet::FieldArray,
         "()[Ljava/lang/reflect/Field;",
+    ),
+    // The public ones, beside `getField` (the public one BY NAME) which was
+    // already answered.
+    bm(
+        "getFields",
+        &[],
+        BRet::FieldArray,
+        "()[Ljava/lang/reflect/Field;",
+    ),
+    // The classes a class declares — the inverse of `getDeclaringClass`, and
+    // read from the same place: the `Outer$Inner` names. `getClasses` is NOT
+    // beside it, because that one wants the PUBLIC nested classes and a
+    // nested class's access flags are the very thing caturra does not record.
+    bm(
+        "getDeclaredClasses",
+        &[],
+        BRet::ClassArray,
+        "()[Ljava/lang/Class;",
     ),
     bm(
         "getDeclaredMethods",
@@ -21350,6 +21666,12 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         // target, and `emit_stream_source` answers each one.
         "Stream" => Some(("java/util/stream/Stream", &[])),
         "Class" => Some(("java/lang/Class", CLASS_STATIC_METHODS)),
+        // Neither has a static caturra models — but a static CALL on one has
+        // to reach the refusal path rather than report the CLASS as unknown:
+        // `PrintStream.nullOutputStream()` said "cannot find symbol:
+        // 'PrintStream'" about a class a program can name and hold.
+        "PrintStream" => Some(("java/io/PrintStream", &[])),
+        "ByteArrayOutputStream" => Some(("java/io/ByteArrayOutputStream", &[])),
         // `Charset.forName(name)` / `defaultCharset()`, and the
         // `StandardCharsets` constants, which lower to the same call.
         "BigInteger" => Some(("java/math/BigInteger", BIG_INTEGER_STATIC_METHODS)),
@@ -21739,6 +22061,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         },
         BParam::Collector => JType::Collector(ElemType::Object(table.object_id)),
         BParam::WriterFace => JType::WriterFace,
+        BParam::ByteStream => JType::ByteStream,
     }
 }
 
@@ -21801,6 +22124,7 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
                 )
         }
         BParam::Collector => matches!(arg, JType::Collector(_) | JType::Null),
+        BParam::ByteStream => matches!(arg, JType::ByteStream | JType::Null),
         BParam::WriterFace => matches!(
             arg,
             JType::WriterFace | JType::Writer | JType::StringWriter | JType::Null
@@ -22239,6 +22563,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             dims: 1,
         }),
         BRet::SelfList => Some(args.first.map_or(JType::Error, JType::library_list)),
+        BRet::SelfDeque => Some(args.first.map_or(JType::Error, |elem| JType::LinkedList {
+            elem,
+            role: SeqRole::ArrayDeque,
+        })),
         BRet::Elem => Some(
             args.first
                 .map_or(JType::Error, |elem| elem_value_type(elem, table)),
@@ -30656,6 +30984,30 @@ impl BodyGen<'_> {
         None
     }
 
+    /// A member of a BUNDLED library class — `Collections`, `Arrays`,
+    /// `Object` — that caturra deliberately does not offer. Those classes are
+    /// real compiled Java here, so their calls resolve through the ordinary
+    /// user-class lookup and never reach [`UNSUPPORTED_MEMBERS`], which is
+    /// only consulted for the types with a builtin method table. That is why
+    /// `ArrayList.spliterator` explained itself while `Collections.checkedList`
+    /// and `new Object().wait()` said "cannot find symbol".
+    ///
+    /// Reports the reason and answers `true` when it did.
+    fn bundled_member_refusal(&mut self, class: &str, method: &str, span: SourceSpan) -> bool {
+        if !self.table.info(class).is_some_and(|info| info.is_bundled) {
+            return false;
+        }
+        let Some(reason) = unsupported_member(class, method) else {
+            return false;
+        };
+        // The class as the PROGRAM spells it: the receiver here is an
+        // internal name (`java/lang/Object`) on the instance path.
+        let named = source_type_name(class);
+        let at = self.member_span(span);
+        self.error(at, format!("{named}.{method} exists in Java, but {reason}"));
+        true
+    }
+
     #[allow(clippy::too_many_lines)] // one dispatch arm per intrinsic receiver
     #[allow(clippy::option_option)] // outer None = not handled, inner = void
     fn builtin_instance_call(
@@ -32335,6 +32687,9 @@ impl BodyGen<'_> {
                         .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
                     self.code.drop_stack(1 + args_width);
                     return Some(ret);
+                }
+                if self.bundled_member_refusal(&class_name, method, span) {
+                    return None;
                 }
                 let at = self.member_span(span);
                 self.error(
@@ -34053,6 +34408,9 @@ impl BodyGen<'_> {
         let sig = match table.resolve(class, method, &arg_types) {
             Resolution::Found(sig) => sig.clone(),
             Resolution::UnknownName => {
+                if self.bundled_member_refusal(class, method, span) {
+                    return None;
+                }
                 let at = self.member_span(span);
                 self.error(
                     at,

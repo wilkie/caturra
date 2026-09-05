@@ -8998,6 +8998,44 @@ counting catches: a divergence that stopped being one.
   `ofInstant(...)` and `getChronology()` — everything carrying an INSTANT, a
   ZONE or a calendar choice, which needs the timezone database caturra does not
   vendor. (`strict_a_date_time_has_no_zone`)
+- `anObject.wait()`, `notify()`, `notifyAll()` — `Object`'s monitor methods,
+  so EVERY receiver has them. caturra runs a program on one thread: there is no
+  second thread to wake, and a `wait()` that returned immediately would be a
+  lie about a program that deadlocks on a JDK.
+  (`strict_no_thread_to_wait_for`)
+- `aCollection.spliterator()`, and the same name on `Arrays`, `Stream` and
+  `IntStream` — a `Spliterator` is a parallel-decomposition handle for a
+  machine with threads. (`strict_no_spliterator`)
+- `System.getProperty(...)` and the fifteen other `System` members that reach
+  for the HOST — properties, the environment, a `Console`, a native library, a
+  `SecurityManager`. caturra runs in a page with no process around it. The
+  three wrapper readers whose names read like parsers (`Integer.getInteger`,
+  `Long.getLong`, `Boolean.getBoolean`) read properties too, and go the same
+  way. (`strict_no_system_properties`)
+- `aClass.getAnnotations()` and the nine other annotation questions — caturra
+  parses annotations and discards them, so none survives to be read back.
+  Beside them, the four questions about a GENERIC signature
+  (`getGenericSuperclass`, `getTypeParameters`, ...), which erasure has already
+  removed. (`strict_no_annotations_at_runtime`)
+- `formatter.parse(text)` and the rest of `DateTimeFormatter`'s parsing half —
+  caturra's formatter is a pattern that RENDERS a value; text is read back
+  through `LocalDate.parse(text, formatter)`, which is what the refusal says.
+  (`strict_a_formatter_does_not_parse`)
+- `Collections.checkedList(...)` and its nine siblings — a view that type-checks
+  every write at RUNTIME against a `Class`. caturra's compiler is the check
+  that runs here. `asLifoQueue` and `newSetFromMap` are refused beside them, as
+  adapters over a collection caturra can already spell directly.
+  (`strict_no_checked_views`)
+- `Stream.builder()` / `IntStream.builder()` — a `Stream.Builder` is a mutable
+  accumulator caturra models no type for; collect the elements and call
+  `stream()`. (`strict_no_stream_builder`)
+- `Collectors.toConcurrentMap(...)` / `groupingByConcurrent(...)` — they collect
+  into a `java.util.concurrent` map. On one thread the ordinary ones do the
+  same job. (`strict_no_concurrent_collectors`)
+- `Character.getName(cp)`, `codePointOf(name)` and `getDirectionality(c)` —
+  caturra carries Unicode's character CATEGORIES, which is what `isLetter` and
+  its siblings need, not the character database of NAMES.
+  (`strict_no_unicode_character_names`)
 - `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
   namespace for its static members cannot name a variable, though javac
   accepts the declaration (they are ordinary class types). Nobody writes one,
@@ -14462,3 +14500,91 @@ find symbol" — the class-level honest-refusal sweep never reached METHODS, and
 the coverage script is what makes that list exhaustive rather than a guess.
 
 Pinned as `the_rest_of_what_a_scanner_is` and `a_scanner_in_every_position`.
+
+## The long tail, and the reason for every name that is missing
+
+The coverage script names its own next unit: run
+`scripts/coverage/measure.py --verbose` and it prints, per class, the method
+names a real JDK 11 offers that caturra does not. This is that list, worked
+through. The seven things it found worth building were captured from a JDK
+first, and every one of them was something a JDK does differently from the
+obvious guess.
+
+**`ArrayDeque.clone()` answers an `ArrayDeque<E>`.** Not the `Object` that
+`ArrayList.clone()` answers — the deque overrides the return type and the list
+does not, so the two need different rows and `d.clone().add(x)` compiles for
+one and not the other.
+
+**`getDeclaringClass()` on an enum constant is the enum.** It sits beside
+`ordinal()` on all eight library enum tables. For a LIBRARY enum it is the same
+question as `getClass()` (none of them has a constant body), which is why the
+two share an arm in the VM — but only for a value, never for a `Class`, whose
+`getDeclaringClass()` asks something else entirely and was answering
+`java.lang.Class` for every class in the program.
+
+**`Arrays.compareUnsigned` answers two different things.** For `int[]` and
+`long[]` it answers a SIGN (`Integer.compareUnsigned` of the first differing
+pair); for `byte[]` and `short[]` it answers their unsigned DIFFERENCE — `254`,
+not `1`. Both spellings are in the same javadoc paragraph, and only a capture
+tells them apart.
+
+**`Random.longs` is the JDK's reject-until-unbiased loop.** A bounded stream
+of longs is not `nextLong() % range`: the JDK draws and redraws until the value
+is in an unbiased window, and caturra runs the same loop, so the streams are
+byte-for-byte identical for a given seed.
+
+**`ByteArrayOutputStream.writeBytes`/`writeTo`**, and a new parameter kind for
+a stream passed to a stream.
+
+**`java.lang.Class`, as far as a class file goes.** `getPackageName`, `cast`,
+`asSubclass`, `getEnumConstants`, `isMemberClass`, `getDeclaringClass`,
+`isLocalClass`, `isSynthetic`, `getFields`, `getDeclaredClasses` and
+`desiredAssertionStatus`. Three notes:
+
+* `cast` and `asSubclass` ask the question `instanceof` asks, so they read one
+  shared rule — written once precisely so that two calls and an opcode cannot
+  disagree about what a `ClassCastException` is.
+* `getEnumConstants` does not build the list: it CALLS the enum's own
+  `values()` — the intrinsic for a library enum, the synthesized static for a
+  user one — so this answer and a program's own `Day.values()` cannot diverge.
+  Reaching a user `values()` from inside an instruction meant running the
+  class's `<clinit>` chain nested, since the dispatch loop's way of
+  initializing a class is to PUSH frames.
+* `isMemberClass`, `isLocalClass` and `getDeclaringClass` are read off the
+  NAME, which is where caturra records nesting (`Outer$Inner`, `Name$Local1`,
+  `Lambda$1`). The two predicates that recognise the synthesized shapes already
+  existed for `getCanonicalName`; a third copy of the naming convention would
+  have been a third chance to forget one.
+* `desiredAssertionStatus()` is `false`, and that is not a guess: caturra
+  compiles `assert` to `if (false)`, which is exactly a JDK run without `-ea`.
+
+**Everything else answers with a reason.** The other 146 names a JDK offers on
+these classes are refused ON PURPOSE, and each now says why — "`X.y` exists in
+Java, but …" — rather than "cannot find symbol", which reads as a typo about a
+method the documentation shows. `measure.py --why` prints the complaint for
+every missing name and FAILS if any of them is still a bare "cannot find
+symbol", so the property is checked rather than asserted. The families are
+enumerated in the strictness table above.
+
+Three things had to change for that to be true everywhere:
+
+* Two names — `wait`/`notify`/`notifyAll` and `spliterator` — are on every
+  receiver in Java, so they are answered by a rule rather than by a row per
+  class. `spliterator` had seven rows and still said "cannot find symbol" on a
+  `Stack`, on `Arrays` and on both stream kinds.
+* The BUNDLED library classes (`Collections`, `Arrays`, `Object`, `Character`)
+  are real compiled Java here, so their calls resolve through the ordinary
+  user-class lookup and never reached the refusal table at all.
+* A static call on a modelled class with no statics of its own reported the
+  CLASS as unknown — "cannot find symbol: 'PrintStream'" about a type the
+  program can name and hold two lines earlier.
+
+The reasons themselves are now shared constants, because the same sentence had
+been written out three times for a `Locale`, seven times for a `Temporal` and
+five for a `TemporalQuery`.
+
+Pinned as `the_long_tail_of_a_modelled_class` and the nine `strict_no_*` pins
+above. The measurement reads 1406/1552 method names answered across 56 classes
+— down from the 1449 it reported before, because an honest refusal now counts
+as a name that is MISSING rather than one that is known. It is the same engine;
+the number is just no longer flattered by its own good manners.
