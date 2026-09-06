@@ -86,6 +86,99 @@ BANK = {
     "[B": ["new byte[] {1, 2}"],
     "[Ljava.lang.String;": ['new String[] {"a", "b"}'],
     "[Ljava.lang.Object;": ['new Object[] {"a"}'],
+    # The rest of what the sweep's own report asked for. It named 639
+    # overloads it could not build a call for, and 106 distinct types; these
+    # are its head, in the order it counted them. Every one is a VALUE that is
+    # the same twice — a lambda written out rather than a method reference to
+    # something with state, and a fixed path rather than a temporary file.
+    "java.nio.file.Path": ['java.nio.file.Path.of("f.txt")'],
+    "[Ljava.lang.StackTraceElement;": [
+        'new StackTraceElement[] {new StackTraceElement("C", "m", "C.java", 1)}'
+    ],
+    "java.util.function.Function": ["java.util.function.Function.identity()"],
+    "java.util.function.BiFunction": [
+        "(java.util.function.BiFunction<Object, Object, Object>) ((x, y) -> x)"
+    ],
+    "java.util.function.Predicate": ['java.util.function.Predicate.isEqual("a")'],
+    "java.lang.Enum": ["java.time.Month.MARCH"],
+    "java.util.function.Consumer": ["(java.util.function.Consumer<Object>) (v -> {})"],
+    "java.util.Locale": ["java.util.Locale.US"],
+    "java.util.function.IntFunction": [
+        '(java.util.function.IntFunction<Object>) (n -> "" + n)'
+    ],
+    "[S": ["new short[] {3, 1}"],
+    "[F": ["new float[] {1.5f, 0.5f}"],
+    "[Z": ["new boolean[] {true, false}"],
+    "java.util.function.Supplier": ['(java.util.function.Supplier<Object>) (() -> "s")'],
+    "java.util.function.BiConsumer": [
+        "(java.util.function.BiConsumer<Object, Object>) ((x, y) -> {})"
+    ],
+    "java.time.temporal.TemporalAccessor": ["java.time.LocalDate.of(2024, 3, 14)"],
+    "java.time.temporal.Temporal": ["java.time.LocalDate.of(2024, 3, 14)"],
+    "java.time.temporal.TemporalAmount": ["java.time.Period.ofDays(3)"],
+    "java.time.temporal.TemporalAdjuster": [
+        "java.time.temporal.TemporalAdjusters.firstDayOfMonth()"
+    ],
+    "java.time.chrono.ChronoLocalDate": ["java.time.LocalDate.of(2024, 3, 14)"],
+    "java.time.format.FormatStyle": ["java.time.format.FormatStyle.SHORT"],
+    "java.util.function.BinaryOperator": [
+        "(java.util.function.BinaryOperator<Object>) ((x, y) -> x)"
+    ],
+    "java.util.function.UnaryOperator": [
+        "(java.util.function.UnaryOperator<Object>) (v -> v)"
+    ],
+    "java.util.function.DoublePredicate": [
+        "(java.util.function.DoublePredicate) (n -> n > 1)"
+    ],
+    "java.util.function.IntPredicate": ["(java.util.function.IntPredicate) (n -> n > 1)"],
+    "java.util.function.LongPredicate": ["(java.util.function.LongPredicate) (n -> n > 1)"],
+    "java.util.function.IntUnaryOperator": [
+        "(java.util.function.IntUnaryOperator) (n -> n * 2)"
+    ],
+    "java.util.function.LongUnaryOperator": [
+        "(java.util.function.LongUnaryOperator) (n -> n * 2)"
+    ],
+    "java.util.function.DoubleUnaryOperator": [
+        "(java.util.function.DoubleUnaryOperator) (n -> n * 2)"
+    ],
+    "java.util.function.IntConsumer": ["(java.util.function.IntConsumer) (n -> {})"],
+    "java.util.function.LongConsumer": ["(java.util.function.LongConsumer) (n -> {})"],
+    "java.util.function.DoubleConsumer": ["(java.util.function.DoubleConsumer) (n -> {})"],
+    "java.util.function.IntSupplier": ["(java.util.function.IntSupplier) (() -> 4)"],
+    "java.util.function.LongSupplier": ["(java.util.function.LongSupplier) (() -> 4L)"],
+    "java.util.function.DoubleSupplier": [
+        "(java.util.function.DoubleSupplier) (() -> 4.0)"
+    ],
+    "java.util.function.IntBinaryOperator": [
+        "(java.util.function.IntBinaryOperator) ((x, y) -> x + y)"
+    ],
+    "java.util.function.ToIntFunction": [
+        "(java.util.function.ToIntFunction<Object>) (v -> 1)"
+    ],
+    "java.util.function.ToLongFunction": [
+        "(java.util.function.ToLongFunction<Object>) (v -> 1L)"
+    ],
+    "java.util.function.ToDoubleFunction": [
+        "(java.util.function.ToDoubleFunction<Object>) (v -> 1.5)"
+    ],
+    "java.util.function.IntToLongFunction": [
+        "(java.util.function.IntToLongFunction) (n -> n)"
+    ],
+    "java.util.function.IntToDoubleFunction": [
+        "(java.util.function.IntToDoubleFunction) (n -> n)"
+    ],
+    "java.lang.Runnable": ["(Runnable) (() -> {})"],
+    "java.util.stream.Collector": ["java.util.stream.Collectors.toList()"],
+    "java.io.Writer": ["new java.io.StringWriter()"],
+    "[Ljava.lang.Class;": ["new Class<?>[] {String.class}"],
+    "[Ljava.lang.Comparable;": ['new Comparable[] {"a"}'],
+    "java.lang.StringBuilder": ['new StringBuilder("ab")'],
+    "java.io.File": ['new java.io.File("f.txt")'],
+    "java.util.Optional": ['java.util.Optional.of("a")'],
+    "java.util.Iterator": ['java.util.List.of("a").iterator()'],
+    "java.util.stream.Stream": ['java.util.stream.Stream.of("a", "b")'],
+    "java.util.stream.IntStream": ["java.util.stream.IntStream.of(1, 2)"],
+    "java.time.LocalDate": ["java.time.LocalDate.of(2024, 3, 14)"],
 }
 
 # Receivers this sweep needs that differ from the measurement's.

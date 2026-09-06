@@ -53350,3 +53350,139 @@ refused_at_run!(
     "import java.lang.reflect.*;\npublic class ReflectiveMonitor { public static void main(String[] a) throws Exception { Object.class.getDeclaredMethod(\"notify\").invoke(new ReflectiveMonitor()); } }",
     "caturra runs one thread and holds no monitors"
 );
+
+// The primitive functional interfaces, held as VALUES. A parameter kind names
+// one interface for a whole family — there is a single `BParam::Predicate`
+// behind `Stream.filter` and `IntStream.filter` — so an `IntPredicate`
+// variable was "IntPredicate cannot be converted to Predicate" while the same
+// lambda written inline compiled. The descriptor says which interface is
+// really meant, and one primitive-stream table serves all three families, so
+// the receiver's element type says which flavour. At run time a lambda's class
+// carries the SAM of the interface it was written for, and the primitive ones
+// do not share a name: `applyAsInt`, not `apply`.
+differential_test!(
+    the_primitive_functional_interfaces,
+    "PrimitiveFunctions",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+public class PrimitiveFunctions {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    IntPredicate ip = n -> n > 1;
+    IntUnaryOperator iu = n -> n * 2;
+    IntFunction<String> ifn = n -> "" + n;
+    IntConsumer ic = n -> {};
+    IntBinaryOperator ib = (x, y) -> x + y;
+    IntSupplier is = () -> 4;
+    s("i-filter", () -> IntStream.of(1, 2).filter(ip).sum());
+    s("i-map", () -> IntStream.of(1, 2).map(iu).sum());
+    s("i-obj", () -> IntStream.of(1, 2).mapToObj(ifn).count());
+    s("i-each", () -> { IntStream.of(1, 2).forEach(ic); return "ok"; });
+    s("i-reduce", () -> IntStream.of(1, 2).reduce(0, ib));
+    s("i-gen", () -> IntStream.generate(is).limit(2).sum());
+    s("i-any", () -> IntStream.of(1, 2).anyMatch(ip) + " " + IntStream.of(1, 2).allMatch(ip));
+    LongUnaryOperator lu = n -> n * 2;
+    LongPredicate lp = n -> n > 1;
+    LongSupplier ls = () -> 4L;
+    s("l-map", () -> LongStream.of(1L, 2L).map(lu).sum());
+    s("l-filter", () -> LongStream.of(1L, 2L).filter(lp).sum());
+    s("l-gen", () -> LongStream.generate(ls).limit(2).sum());
+    DoubleUnaryOperator du = n -> n * 2;
+    DoublePredicate dp = n -> n > 1;
+    DoubleSupplier ds = () -> 4.0;
+    s("d-map", () -> DoubleStream.of(1.0, 2.0).map(du).sum());
+    s("d-filter", () -> DoubleStream.of(1.0, 2.0).filter(dp).sum());
+    s("d-gen", () -> DoubleStream.generate(ds).limit(2).sum());
+    IntToLongFunction il = n -> n;
+    IntToDoubleFunction id = n -> n;
+    s("i-long", () -> IntStream.of(1, 2).mapToLong(il).sum());
+    s("i-dbl", () -> IntStream.of(1, 2).mapToDouble(id).sum());
+    ToIntFunction<String> ti = String::length;
+    s("to-int", () -> Stream.of("ab", "c").mapToInt(ti).sum());
+    s("to-int-ref", () -> Stream.of("ab", "c").mapToInt(String::length).sum());
+    ToDoubleFunction<String> td = t -> t.length();
+    s("to-dbl", () -> Stream.of("ab").mapToDouble(td).sum());
+    ToLongFunction<String> tl = t -> t.length();
+    s("to-long", () -> Stream.of("ab").mapToLong(tl).sum());
+    Function<String, String> fn = String::trim;
+    s("fn", () -> Stream.of(" a ").map(fn).collect(Collectors.toList()));
+    UnaryOperator<String> uo = t -> t + "!";
+    s("uo", () -> Stream.of("a").map(uo).collect(Collectors.toList()));
+    BinaryOperator<String> bo = (x, y) -> x + y;
+    s("bo", () -> Stream.of("a", "b").reduce(bo).get());
+    Supplier<String> sp = () -> "s";
+    s("sup", () -> Optional.<String>empty().orElseGet(sp));
+    Predicate<String> pr = String::isEmpty;
+    s("pred", () -> new ArrayList<>(List.of("", "a")).removeIf(pr));
+    Consumer<String> cs = t -> {};
+    s("cons", () -> { List.of("a").forEach(cs); return "ok"; });
+    Comparator<String> cm = Comparator.naturalOrder();
+    s("cmp", () -> Stream.of("b", "a").sorted(cm).collect(Collectors.toList()));
+  }
+}
+"#
+);
+
+// A class literal for a name caturra does not model used to compile and answer
+// a `Class` with the SIMPLE name — `javax.sound.midi.Track.class` was a
+// `Class` called `Track`. Every other position said what it does not model;
+// the literal was the one hole in that wall. The names it DOES model still
+// answer, qualified, and a primitive or an array is unaffected.
+differential_test!(
+    what_a_class_literal_names,
+    "ClassLiteralNames",
+    r#"
+public class ClassLiteralNames {
+  static class Own {}
+  public static void main(String[] a) {
+    System.out.println(String.class.getName());
+    System.out.println(java.lang.String.class.getName());
+    System.out.println(Math.class.getName());
+    System.out.println(java.util.ArrayList.class.getName());
+    System.out.println(java.nio.file.Path.class.getName());
+    System.out.println(Own.class.getName());
+    System.out.println(int.class.getName() + " " + void.class.getName());
+    System.out.println(int[].class.getName() + " " + String[][].class.getName());
+    System.out.println(IllegalStateException.class.getName());
+  }
+}
+"#
+);
+
+// `until(end, unit)` asks the same question `plus` asks and `isSupported`
+// answers: a unit the receiver does not have is refused, not computed.
+// `Year.until(other, DAYS)` filled the year out to a date and counted 366 of
+// them. And a `NoSuchMethodException` names its parameters the way a JDK does
+// — `java.lang.String`, not the internal `java/lang/String` a `Class` handle
+// carries.
+differential_test!(
+    the_unit_a_partial_date_measures_in,
+    "PartialUntil",
+    r#"
+import java.time.*;
+import java.time.temporal.*;
+public class PartialUntil {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    Year y = Year.of(2024);
+    YearMonth ym = YearMonth.of(2024, 3);
+    for (ChronoUnit u : ChronoUnit.values()) {
+      s("y-" + u, () -> y.until(Year.of(2025), u));
+      s("ym-" + u, () -> ym.until(YearMonth.of(2025, 4), u));
+    }
+    s("no-method", () -> PartialUntil.class.getDeclaredMethod("nope", String.class));
+    s("no-ctor", () -> PartialUntil.class.getDeclaredConstructor(String.class, int.class));
+  }
+}
+"#
+);

@@ -2533,6 +2533,16 @@ fn temporal_method(
         && let Some(unit) = unit_argument(heap, args.get(1))
         && let Some(end) = args.first().copied()
     {
+        // The SAME question `plus` asks, and `isSupported` answers: measuring
+        // in a unit the receiver does not have is refused, not computed.
+        // `Year.until(other, DAYS)` filled the year out to a date and counted
+        // 366 of them, where a JDK says the unit is unsupported.
+        if !supports_unit(value, unit) {
+            return Err(VmError::UncaughtException(format!(
+                "java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: {}",
+                crate::time::unit_name(unit)
+            )));
+        }
         let start = JValue::Ref(Some(heap.intern_temporal(value)));
         return unit_method(unit, heap, "between", &[start, end]);
     }

@@ -15185,3 +15185,62 @@ One thing this cost: the behaviour sweep's receiver for `java.lang.Class` was
 `String.class`, so its member questions began aborting the probe and 40 calls
 were bisected away. `Probe.class` is the representative receiver anyway —
 reflection here answers about the classes a program declares.
+
+### The sweep's own blind spot (2026-09-06)
+
+`behaviour.py` reported it itself, in a line nobody had read: **639 overloads
+have no argument in the bank.** It runs a method only when it can build a value
+for every parameter, and 106 distinct types had none — nearly a third of the
+answered surface was never actually run. Widening the bank took that to 125,
+and what the new calls reached is the rest of this section.
+
+**A parameter kind names ONE interface for a whole family.** There is a single
+`BParam::Predicate` behind `Stream.filter` and `IntStream.filter`, so an
+`IntPredicate` variable was "IntPredicate cannot be converted to Predicate" —
+while the same lambda written inline compiled, because a lambda has no type
+until it is targeted. The descriptor beside the parameter kind has said
+`Ljava/util/function/IntPredicate;` all along; the check now reads it. Twenty
+four interfaces reach those seven parameter kinds, so this is one rule where
+twenty-four enum variants would have been twenty-four chances to drift. One
+table serves all three primitive streams, so its descriptors are spelled in the
+`Int` flavour and the receiver's element type says which family a call is in.
+
+Both faces are accepted, not only the descriptor's: a LAMBDA is still compiled
+against the parameter kind's interface, and re-aiming the lambda pass is the
+other half of that fact rather than something to fall out of tightening a
+check. Tightening alone broke `mapToInt(String::length)`, which the compat
+manifest caught.
+
+**And the SAM's name is not shared.** At run time a lambda's class carries the
+single abstract method of whatever interface it was written for, and the
+primitive specializations do not all call it `apply`: an `IntUnaryOperator`
+answers `applyAsInt`. The VM named the object interface's SAM at four separate
+call sites — `apply`, `apply`, `accept`, `compare` — and all four would have
+had to learn the same lesson. One `dispatch_functional` now asks for the SAM by
+name and falls back to the ONE method a lambda's class declares.
+
+**A class literal was the one hole in the honest-refusal wall.**
+`javax.sound.midi.Track.class` compiled and answered a `Class` called `Track`:
+the literal fell back to the simple name for any name nothing knew, where every
+other position says what it does not model. It refuses now, with the reason the
+variable position gives — and `java.nio.file` turned out to be the one
+partly-modelled package missing from that list entirely, so its forty-one other
+classes were told "cannot find symbol", javac's wording for a class that does
+not exist, about forty-one that do.
+
+**`until` did not ask what `plus` asks.** `Year.until(other, DAYS)` filled the
+year out to a date and counted 366 of them; a JDK refuses the unit.
+`supports_unit` was already there and already right — `isSupported` and `plus`
+both read it — and `until` computed instead of asking.
+
+**Two parameter lists, two separators.** A `NoSuchMethodException` names its
+parameters `java.lang.String, int` — comma AND space — where `Method.toString`
+joins the same list with a bare comma. caturra wrote the internal
+`java/lang/String` in the first, and no space.
+
+**Still open, and named by the sweep rather than guessed at:** 55 probes do not
+run at all, each losing its whole class — a `BufferedWriter` has no `toString`,
+a `ByteArrayOutputStream` refuses a `byte[]`. And 288 calls are dropped because
+caturra offers no such OVERLOAD: `measure.py` checks method NAMES, so an arity
+or a parameter type it does not have has never been counted. That is the next
+measurement this tool owes.

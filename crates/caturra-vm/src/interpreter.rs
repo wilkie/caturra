@@ -11457,12 +11457,65 @@ impl<'run> Interpreter<'run> {
             )));
         };
         let class_name = class_name.clone();
+        self.dispatch_functional(target, &class_name, method, descriptor, &[element])
+    }
+
+    /// Call a functional object's single abstract method.
+    ///
+    /// The caller names the OBJECT interface's SAM (`apply`, `test`,
+    /// `accept`, `compare`), and the primitive specializations do not all
+    /// share it: an `IntUnaryOperator` answers `applyAsInt`. A lambda's class
+    /// has exactly one method — the SAM of whatever interface it was written
+    /// for — so when the named one is not there, that is the one meant.
+    ///
+    /// Written once because it was written four times, and the four were about
+    /// to disagree the moment a primitive interface reached any of them.
+    fn dispatch_functional(
+        &mut self,
+        target: HeapRef,
+        class_name: &str,
+        method: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Option<JValue>, VmError> {
+        let (method, descriptor) =
+            if resolve_virtual(self.classes, class_name, method, descriptor).is_some() {
+                (method.to_owned(), descriptor.to_owned())
+            } else if let Some(sole) = self.sole_declared_method(class_name) {
+                sole
+            } else {
+                (method.to_owned(), descriptor.to_owned())
+            };
         let dispatched =
-            self.user_virtual_dispatch(target, &class_name, method, descriptor, &[element])?;
+            self.user_virtual_dispatch(target, class_name, &method, &descriptor, args)?;
         Ok(match dispatched {
             UserDispatch::Call(frame) => self.run_nested(frame)?,
             UserDispatch::Value(value) => value,
         })
+    }
+
+    /// The one method a class declares, name and descriptor — `None` unless
+    /// there is exactly one. A synthesized lambda class has exactly one.
+    fn sole_declared_method(&self, class_name: &str) -> Option<(String, String)> {
+        let class = self.classes.get(class_name)?;
+        let mut found = None;
+        for member in &class.methods {
+            let name = class.constant_pool.get_utf8(member.name_index)?;
+            if name == "<init>" || name == "<clinit>" {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some((
+                name.to_owned(),
+                class
+                    .constant_pool
+                    .get_utf8(member.descriptor_index)?
+                    .to_owned(),
+            ));
+        }
+        found
     }
 
     /// The next match a `results()` stream yields: the matcher's own `find`,
@@ -11748,17 +11801,13 @@ impl<'run> Interpreter<'run> {
             )));
         };
         let class_name = class_name.clone();
-        let dispatched = self.user_virtual_dispatch(
+        let result = self.dispatch_functional(
             function,
             &class_name,
             "apply",
             "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
             &[left, right],
         )?;
-        let result = match dispatched {
-            UserDispatch::Call(frame) => self.run_nested(frame)?,
-            UserDispatch::Value(value) => value,
-        };
         Ok(self.unbox_functional_result(result))
     }
 
@@ -11867,18 +11916,13 @@ impl<'run> Interpreter<'run> {
             )));
         };
         let class_name = class_name.clone();
-        match self.user_virtual_dispatch(
+        self.dispatch_functional(
             target,
             &class_name,
             "accept",
             "(Ljava/lang/Object;Ljava/lang/Object;)V",
             &[a, b],
-        )? {
-            UserDispatch::Call(frame) => {
-                self.run_nested(frame)?;
-            }
-            UserDispatch::Value(_) => {}
-        }
+        )?;
         Ok(())
     }
 
@@ -11927,12 +11971,8 @@ impl<'run> Interpreter<'run> {
             )));
         };
         let class_name = class_name.clone();
-        let dispatched =
-            self.user_virtual_dispatch(supplier, &class_name, "get", "()Ljava/lang/Object;", &[])?;
-        let result = match dispatched {
-            UserDispatch::Call(frame) => self.run_nested(frame)?,
-            UserDispatch::Value(value) => value,
-        };
+        let result =
+            self.dispatch_functional(supplier, &class_name, "get", "()Ljava/lang/Object;", &[])?;
         Ok(self.unbox_functional_result(result))
     }
 
@@ -16542,6 +16582,19 @@ impl<'run> Interpreter<'run> {
         object_class_name_of(&self.heap, receiver)
     }
 
+    /// The `Class` names inside a `Class[]` argument (for `getConstructor`),
+    /// as a JDK spells them in the exception it throws when nothing matches:
+    /// `java.lang.String`, not the internal `java/lang/String` the handles
+    /// carry. Its callers join them with a comma AND A SPACE — where
+    /// `Method.toString` joins the same list with a bare comma. Two lists of
+    /// parameter types, two separators, both recorded.
+    fn class_array_binary_names(&self, arg: Option<&JValue>) -> Vec<String> {
+        self.class_array_names(arg)
+            .iter()
+            .map(|name| class_binary_name(name))
+            .collect()
+    }
+
     /// The `Class` names inside a `Class[]` argument (for `getConstructor`).
     fn class_array_names(&self, arg: Option<&JValue>) -> Vec<String> {
         let Some(JValue::Ref(Some(reference))) = arg else {
@@ -17094,17 +17147,13 @@ impl<'run> Interpreter<'run> {
                     )));
                 };
                 let class_name = class_name.clone();
-                let dispatched = self.user_virtual_dispatch(
+                let result = self.dispatch_functional(
                     comparator,
                     &class_name,
                     "compare",
                     "(Ljava/lang/Object;Ljava/lang/Object;)I",
                     &[a, b],
                 )?;
-                let result = match dispatched {
-                    UserDispatch::Call(frame) => self.run_nested(frame)?,
-                    UserDispatch::Value(value) => value,
-                };
                 Ok(match result {
                     Some(JValue::Int(n)) => n,
                     _ => 0,
@@ -18504,7 +18553,7 @@ impl<'run> Interpreter<'run> {
                             None => Err(VmError::UncaughtException(format!(
                                 "java.lang.NoSuchMethodException: {}.<init>({})",
                                 class_binary_name(&name),
-                                param_class_names.join(",")
+                                self.class_array_binary_names(args.first()).join(", ")
                             ))),
                         }
                     }
@@ -18607,7 +18656,7 @@ impl<'run> Interpreter<'run> {
                             None => Err(VmError::UncaughtException(format!(
                                 "java.lang.NoSuchMethodException: {}.{method_name}({})",
                                 class_binary_name(&name),
-                                param_class_names.join(",")
+                                self.class_array_binary_names(args.get(1)).join(", ")
                             ))),
                         }
                     }

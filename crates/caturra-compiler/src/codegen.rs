@@ -23186,8 +23186,47 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
     }
 }
 
+/// The bundled interface a builtin parameter's DESCRIPTOR names — `__Predicate`
+/// for `Ljava/util/function/Predicate;`, `__IntPredicate` for the primitive
+/// specialization beside it.
+///
+/// The erased functional parameters used to name their interface from the
+/// [`BParam`] alone, and there is one `BParam::Predicate` for both. So
+/// `IntStream.filter`, whose descriptor plainly says `IntPredicate`, asked
+/// whether the argument was a `Predicate`: a LAMBDA compiled (it has no type
+/// until it is targeted) and a variable of the interface's own type did not.
+/// Twenty-four interfaces reach these seven parameter kinds; reading the
+/// descriptor is one rule where twenty-four enum variants would have been
+/// twenty-four chances to drift.
+fn descriptor_functional_face(descriptor: &str, at: usize) -> Option<String> {
+    let inner = descriptor.strip_prefix('(')?.split(')').next()?;
+    let mut rest = inner;
+    for _ in 0..at {
+        rest = match rest.as_bytes().first()? {
+            b'L' => &rest[rest.find(';')? + 1..],
+            b'[' => {
+                let base = rest.trim_start_matches('[');
+                let skipped = rest.len() - base.len();
+                match base.as_bytes().first()? {
+                    b'L' => &rest[skipped + base.find(';')? + 1..],
+                    _ => &rest[skipped + 1..],
+                }
+            }
+            _ => &rest[1..],
+        };
+    }
+    let name = rest.strip_prefix('L')?.split(';').next()?;
+    Some(format!("__{}", name.rsplit('/').next().unwrap_or(name)))
+}
+
 /// Whether an argument type satisfies a builtin parameter (widening).
-fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable) -> bool {
+fn bparam_matches(
+    param: BParam,
+    arg: JType,
+    args: TypeArgs,
+    table: &MethodTable,
+    face: Option<&str>,
+) -> bool {
     match param {
         BParam::Throwable => {
             // `null` is a Throwable too — `addSuppressed(null)` and
@@ -23219,7 +23258,18 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         | BParam::Supplier
         | BParam::Runnable
         | BParam::BiFunction => {
-            let erased = match param {
+            // The parameter kind names ONE interface for a whole family:
+            // there is a single `BParam::Predicate` behind both
+            // `Stream.filter` and `IntStream.filter`. The descriptor says
+            // which is really meant, so a value of the primitive
+            // specialization's own type is accepted where it used to be
+            // "IntPredicate cannot be converted to Predicate".
+            //
+            // Both faces are accepted, not just the descriptor's: a LAMBDA is
+            // compiled against the parameter kind's interface, and re-aiming
+            // the lambda pass is the other half of this fact rather than a
+            // side effect of tightening the check.
+            let default = match param {
                 BParam::BiConsumer => "__BiConsumer",
                 BParam::Consumer => "__Consumer",
                 BParam::Runnable => "__Runnable",
@@ -23228,12 +23278,26 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
                 BParam::Supplier => "__Supplier",
                 _ => "__BiFunction",
             };
+            // One table serves all three primitive streams, so its descriptors
+            // are spelled in the `Int` flavour. A `LongStream`'s `filter`
+            // really takes a `LongPredicate`; the receiver's element type says
+            // which family this call is in.
+            let flavoured = face.map(|name| match args.first {
+                Some(ElemType::Long) => name.replacen("__Int", "__Long", 1),
+                Some(ElemType::Double) => name.replacen("__Int", "__Double", 1),
+                _ => name.to_owned(),
+            });
             arg == JType::Null
-                || matches!(
-                    (arg, table.class_id(erased)),
-                    (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
-                        if table.is_subtype(id, target)
-                )
+                || [Some(default), face, flavoured.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|name| {
+                        matches!(
+                            (arg, table.class_id(name)),
+                            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
+                                if table.is_subtype(id, target)
+                        )
+                    })
         }
         // `list.sort(null)` is legal and means natural ordering (JDK), so
         // `null` satisfies a `Comparator` parameter like any other reference.
@@ -23392,10 +23456,15 @@ fn pick_builtin_in<'m>(
             m.name == name
                 && type_args.role.offers(m.needs)
                 && m.params.len() == args.len()
-                && m.params
-                    .iter()
-                    .zip(args)
-                    .all(|(p, a)| bparam_matches(*p, *a, type_args, table))
+                && m.params.iter().zip(args).enumerate().all(|(at, (p, a))| {
+                    bparam_matches(
+                        *p,
+                        *a,
+                        type_args,
+                        table,
+                        descriptor_functional_face(m.descriptor, at).as_deref(),
+                    )
+                })
         })
         .collect();
     if let Some(exact) = applicable.iter().find(|m| {
@@ -32214,7 +32283,16 @@ impl BodyGen<'_> {
                     && m.params
                         .iter()
                         .zip(arg_types)
-                        .all(|(p, a)| bparam_matches(*p, *a, elem, self.table))
+                        .enumerate()
+                        .all(|(at, (p, a))| {
+                            bparam_matches(
+                                *p,
+                                *a,
+                                elem,
+                                self.table,
+                                descriptor_functional_face(m.descriptor, at).as_deref(),
+                            )
+                        })
             })
             .collect();
         // The parameter kinds at the null position that are REFERENCE types.
@@ -33747,7 +33825,7 @@ impl BodyGen<'_> {
             && let Some(simple) =
                 crate::imports::canonical_library_class(&String::from_utf16_lossy(name))
         {
-            return Some(Some(self.class_literal(simple)));
+            return Some(Some(self.class_literal(simple, simple, span)));
         }
         let (jvm_class, methods) = builtin_static_table(class).expect("caller checked");
         let mut arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
@@ -40132,7 +40210,9 @@ impl BodyGen<'_> {
     /// Field access on a value: only `.length` on arrays exists so far.
     /// Emit a `Type.class` literal: push the type's canonical name and turn it
     /// into a `Class` handle via the `Class.__forType` intrinsic.
-    fn class_literal(&mut self, type_name: &str) -> JType {
+    /// `Type.class`. `written` is the name as the program spelled it — the
+    /// qualified path when there was one — so a refusal can name the package.
+    fn class_literal(&mut self, type_name: &str, written: &str, span: SourceSpan) -> JType {
         // Array class literals (`int[].class`, `String[][].class`) carry a
         // trailing `[]` per dimension; their `Class` name is the JVM array
         // descriptor (`[I`, `[[Ljava/lang/String;`).
@@ -40143,9 +40223,8 @@ impl BodyGen<'_> {
             dims += 1;
         }
         let base_name = match base {
-            "int" | "double" | "boolean" | "char" | "long" | "float" | "short" | "byte" => {
-                base.to_owned()
-            }
+            "int" | "double" | "boolean" | "char" | "long" | "float" | "short" | "byte"
+            | "void" => base.to_owned(),
             "String" => String::from("java/lang/String"),
             "Object" => String::from("java/lang/Object"),
             "Integer" | "Double" | "Boolean" | "Character" | "Long" | "Float" | "Short"
@@ -40161,26 +40240,44 @@ impl BodyGen<'_> {
             {
                 qualified
             }
-            other => self.table.class_id(other).map_or_else(
-                || {
-                    // `IllegalStateException.class` — a library throwable, whose
-                    // Class carries its qualified name so `getName()` reports
-                    // `java.lang.IllegalStateException` and a runtime type test
-                    // can climb the exception hierarchy.
-                    caturra_classfile::exceptions::internal_name_of(other).map_or_else(
-                        || {
-                            // Every other library class is qualified from
-                            // the import table. Falling back to the simple
-                            // name made `Math.class.getName()` answer
-                            // `Math` where a JDK answers `java.lang.Math`.
-                            crate::imports::qualified_library_class(other)
-                                .unwrap_or_else(|| other.to_owned())
-                        },
-                        str::to_owned,
-                    )
+            // A QUALIFIED literal (`java.lang.String[].class`) arrives as one
+            // name, so every lookup below is made on its last segment — the
+            // same simple name an unqualified literal would have brought.
+            other => match self
+                .table
+                .class_id(other.rsplit('.').next().unwrap_or(other))
+            {
+                Some(id) => self.table.class_name(id).to_owned(),
+                // `IllegalStateException.class` — a library throwable, whose
+                // Class carries its qualified name so `getName()` reports
+                // `java.lang.IllegalStateException` and a runtime type test
+                // can climb the exception hierarchy.
+                None => match caturra_classfile::exceptions::internal_name_of(
+                    other.rsplit('.').next().unwrap_or(other),
+                ) {
+                    Some(internal) => internal.to_owned(),
+                    // Every other library class is qualified from the import
+                    // table. Falling back to the simple name made
+                    // `Math.class.getName()` answer `Math` where a JDK answers
+                    // `java.lang.Math`.
+                    //
+                    // A name NOTHING knows used to fall back too, so
+                    // `javax.sound.midi.Track.class` compiled and answered a
+                    // `Class` called `Track`: a class literal was the one hole
+                    // in the wall that makes every other position say what it
+                    // does not model.
+                    None => match crate::imports::qualified_library_class(
+                        other.rsplit('.').next().unwrap_or(other),
+                    ) {
+                        Some(qualified) => qualified,
+                        None => self.unknown_class_literal(
+                            other.rsplit('.').next().unwrap_or(other),
+                            written,
+                            span,
+                        ),
+                    },
                 },
-                |id| self.table.class_name(id).to_owned(),
-            ),
+            },
         };
         let canonical = if dims == 0 {
             base_name
@@ -40212,6 +40309,24 @@ impl BodyGen<'_> {
         JType::Class
     }
 
+    /// The name a class literal was written with, once nothing has resolved
+    /// it: a diagnostic, and the name itself so the emitter can carry on and
+    /// report the rest of the file's errors too.
+    fn unknown_class_literal(&mut self, simple: &str, written: &str, span: SourceSpan) -> String {
+        // The dimensions belong to the literal, not to the name being looked
+        // up: `java.lang.Foo[]` is a missing `Foo`, not a missing `Foo[]`.
+        let written = written.trim_end_matches("[]");
+        let reason = if written.contains('.') {
+            crate::imports::unknown_qualified_message(written)
+        } else {
+            crate::imports::unusable_library_type_reason(simple)
+                .or_else(|| crate::imports::unsupported_class_reason(simple))
+                .unwrap_or_else(|| format!("cannot find symbol: class {simple}"))
+        };
+        self.error(span, reason);
+        simple.to_owned()
+    }
+
     fn field(&mut self, object: &Expr, name: &str, span: SourceSpan) -> JType {
         // A field access names its receiver the same way a call does.
         self.enter_member_access(Some(object));
@@ -40220,7 +40335,11 @@ impl BodyGen<'_> {
         if name == "class"
             && let Expr::Name { path, .. } = object
         {
-            return self.class_literal(path.last().map_or("", String::as_str));
+            return self.class_literal(
+                path.last().map_or("", String::as_str),
+                &path.join("."),
+                span,
+            );
         }
         // `Integer.TYPE` and friends ARE the primitive class literals:
         // `Integer.TYPE == int.class`, and `Void.TYPE == void.class`.
@@ -40230,7 +40349,7 @@ impl BodyGen<'_> {
             && !self.table.has_class(wrapper)
             && let Some(primitive) = wrapper_primitive_name(wrapper)
         {
-            return self.class_literal(primitive);
+            return self.class_literal(primitive, primitive, span);
         }
         let object_ty = self.expr(object);
         if object_ty == JType::Error {
@@ -41003,7 +41122,7 @@ impl BodyGen<'_> {
             && self.lookup(&path[0]).is_none()
             && let Some(primitive) = wrapper_primitive_name(&path[0])
         {
-            return self.class_literal(primitive);
+            return self.class_literal(primitive, primitive, span);
         }
         // `x.field` on a local object, or `Class.staticField`.
         if path.len() == 2 {
@@ -41053,7 +41172,15 @@ impl BodyGen<'_> {
             return self.field(&object, &last[0], span);
         }
         if path.len() != 1 {
-            self.error(span, format!("cannot find symbol: '{}'", path.join(".")));
+            // A CONSTANT of a class caturra models only as a namespace — the
+            // `Locale.US` a `String.format` call takes at its call site.
+            // Saying "cannot find symbol" about it names the wrong problem:
+            // the symbol is real, and what is missing is a value of the type.
+            // The variable position already said so; a value position said
+            // the name did not exist.
+            let reason = crate::imports::unusable_library_type_reason(&path[0])
+                .unwrap_or_else(|| format!("cannot find symbol: '{}'", path.join(".")));
+            self.error(span, reason);
             return JType::Error;
         }
         let name = &path[0];

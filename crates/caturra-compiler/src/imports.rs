@@ -611,6 +611,57 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // `StreamSupport` builds one from a `Spliterator` — which caturra does not
     // model either.
     ("java.util.stream", &["BaseStream", "StreamSupport"]),
+    // `java.nio.file` past the three caturra models (`Files`, `Path`,
+    // `Paths`): the whole rest of the package, recorded from a JDK 11 module
+    // image. Every other partly-modelled package was on this list already, so
+    // these forty-one alone were told "cannot find symbol" — javac's wording
+    // for a class that does not exist, about forty-one that do.
+    (
+        "java.nio.file",
+        &[
+            "AccessDeniedException",
+            "AccessMode",
+            "AtomicMoveNotSupportedException",
+            "ClosedDirectoryStreamException",
+            "ClosedFileSystemException",
+            "ClosedWatchServiceException",
+            "CopyOption",
+            "DirectoryIteratorException",
+            "DirectoryNotEmptyException",
+            "DirectoryStream",
+            "FileAlreadyExistsException",
+            "FileStore",
+            "FileSystem",
+            "FileSystemAlreadyExistsException",
+            "FileSystemException",
+            "FileSystemLoopException",
+            "FileSystemNotFoundException",
+            "FileSystems",
+            "FileVisitOption",
+            "FileVisitResult",
+            "FileVisitor",
+            "InvalidPathException",
+            "LinkOption",
+            "LinkPermission",
+            "NoSuchFileException",
+            "NotDirectoryException",
+            "NotLinkException",
+            "OpenOption",
+            "PathMatcher",
+            "ProviderMismatchException",
+            "ProviderNotFoundException",
+            "ReadOnlyFileSystemException",
+            "SecureDirectoryStream",
+            "SimpleFileVisitor",
+            "StandardCopyOption",
+            "StandardOpenOption",
+            "StandardWatchEventKinds",
+            "WatchEvent",
+            "WatchKey",
+            "WatchService",
+            "Watchable",
+        ],
+    ),
     // The rest of `java.text`. `DecimalFormat`/`NumberFormat` are modelled;
     // collation, bidi, break iteration and message formatting each need the
     // locale data caturra deliberately does not vendor.
