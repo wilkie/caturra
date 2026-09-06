@@ -15244,3 +15244,43 @@ a `ByteArrayOutputStream` refuses a `byte[]`. And 288 calls are dropped because
 caturra offers no such OVERLOAD: `measure.py` checks method NAMES, so an arity
 or a parameter type it does not have has never been counted. That is the next
 measurement this tool owes.
+
+### The overload list was wrong, and then it was useful (2026-09-06)
+
+That list of 288 was worth reading before acting on: `Integer.parseInt(String)`
+and `BitSet.set(int)` were on it, and both plainly work. **The tool dropped by
+NAME.** When caturra refused a probe it took every call sharing the method's
+name with it, so one missing `write(char[])` cost `write(String)`,
+`write(char)` and `write(String, int, int)` their runs — and then reported all
+four as overloads caturra does not offer.
+
+caturra's own diagnostic names the SIGNATURE ("no suitable method found for
+`write(char[])`"), which is what the drop now matches on; a message that names
+none falls back to the name and says so, because an "overload caturra does not
+offer" that is really its innocent sibling is worse than no list at all. 2312
+calls became 2432, the honest list 144 → 69, and **seven divergences that had
+been hidden behind the over-drop appeared at once.**
+
+**All seven were `Random`'s stream factories.** `ints()`, `ints(origin, bound)`
+and their `long`/`double` siblings did not exist — only the two `streamSize`
+forms did — and neither of those checked its arguments. A negative size reached
+`limit`, whose complaint is the number alone, where a JDK says "size must be
+non-negative"; a bound at or below the origin drew from an empty range, where a
+JDK says "bound must be greater than origin". Both are checked before the
+stream is handed back, as a JDK's are.
+
+**`write(char[])` was missing from every writer.** A `char[]` is what
+`Reader.read` fills, so it is the shape a copy loop has in hand, and neither it
+nor `write(chars, off, len)` was offered anywhere; `PrintWriter` was also
+missing `write(s, off, len)`, `print(char[])` and the three-argument `append`,
+and `System.out`'s direct route silently swallowed any `append` that was not
+one argument wide.
+
+Four range complaints came with it, all recorded rather than assumed. The
+`char[]` form throws an `IndexOutOfBoundsException` with NO message at all.
+`append(cs, start, end)` takes an END and says `StringIndexOutOfBoundsException:
+begin …`. A `BufferedWriter`'s `write(s, off, len)` says the same, because it
+reaches a JDK through `String.getChars` — and every OTHER writer's
+`write(s, off, len)` says `IndexOutOfBoundsException: start …`. caturra had one
+reading of the argument list per writer, five of them, and clamped where all
+four of these throw. One `written_units` answers for all five now.

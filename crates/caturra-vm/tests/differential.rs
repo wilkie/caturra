@@ -53486,3 +53486,104 @@ public class PartialUntil {
 }
 "#
 );
+
+// `write(char[])` and its range form, which every writer here lacked — a
+// `char[]` is what `Reader.read` fills, so it is the shape a copy loop has in
+// hand. Four range complaints, all recorded: the `char[]` form throws an
+// `IndexOutOfBoundsException` with NO message; `append(cs, start, end)` takes
+// an END and says `StringIndexOutOfBoundsException: begin …`; a
+// `BufferedWriter`'s `write(s, off, len)` says the same, because it reaches a
+// JDK through `String.getChars`; and every other `write(s, off, len)` says
+// `IndexOutOfBoundsException: start …`. caturra clamped instead of throwing.
+differential_test!(
+    the_char_array_a_writer_takes,
+    "WriterChars",
+    r#"
+import java.io.*;
+public class WriterChars {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    StringWriter sw = new StringWriter();
+    s("ca", () -> { sw.write(new char[] {'a', 'b'}); return sw.toString(); });
+    s("ca3", () -> { sw.write(new char[] {'x', 'y', 'z'}, 1, 2); return sw.toString(); });
+    s("ca-bad", () -> { sw.write(new char[] {'x'}, 0, 5); return sw.toString(); });
+    s("ca-neg", () -> { sw.write(new char[] {'x'}, -1, 1); return sw.toString(); });
+    s("ca-null", () -> { sw.write((char[]) null); return "ok"; });
+    s("sw-w", () -> { StringWriter w = new StringWriter(); w.write("ab", 0, 5); return w.toString(); });
+    s("sw-w-neg", () -> { StringWriter w = new StringWriter(); w.write("ab", -1, 1); return w.toString(); });
+    s("sw-a", () -> { StringWriter w = new StringWriter(); w.append("ab", 0, 5); return w.toString(); });
+    s("bw-w", () -> { StringWriter u = new StringWriter(); BufferedWriter w = new BufferedWriter(u); w.write("ab", 0, 5); w.flush(); return u.toString(); });
+    s("bw-a", () -> { StringWriter u = new StringWriter(); BufferedWriter w = new BufferedWriter(u); w.append("ab", 0, 5); w.flush(); return u.toString(); });
+    s("pw-w", () -> { StringWriter u = new StringWriter(); PrintWriter w = new PrintWriter(u); w.write("ab", 0, 5); w.flush(); return u.toString(); });
+    s("pw-a", () -> { StringWriter u = new StringWriter(); PrintWriter w = new PrintWriter(u); w.append("ab", 0, 5); w.flush(); return u.toString(); });
+    s("face-w", () -> { Writer w = new StringWriter(); w.write("ab", 0, 5); return w.toString(); });
+    s("face-a", () -> { Writer w = new StringWriter(); w.append("ab", 0, 5); return w.toString(); });
+    s("ps-a", () -> { System.out.append("ab", 0, 5); return "ok"; });
+    StringWriter s2 = new StringWriter();
+    BufferedWriter bw = new BufferedWriter(s2);
+    s("bw", () -> { bw.write(new char[] {'p', 'q'}); bw.write(new char[] {'r', 's'}, 1, 1); bw.flush(); return s2.toString(); });
+    StringWriter s3 = new StringWriter();
+    PrintWriter pw = new PrintWriter(s3);
+    s("pw-print", () -> { pw.print(new char[] {'m', 'n'}); pw.flush(); return s3.toString(); });
+    s("pw-write-ca", () -> { pw.write(new char[] {'o'}); pw.flush(); return s3.toString(); });
+    s("pw-app3", () -> { pw.append("xyz", 1, 2); pw.flush(); return s3.toString(); });
+    s("pw-app-null", () -> { pw.append(null); pw.flush(); return s3.toString(); });
+    s("pw-println-ca", () -> { pw.println(new char[] {'z'}); pw.flush(); return s3.toString().length(); });
+    s("ps-app3", () -> { System.out.append("abc", 0, 2); System.out.println(); return "ok"; });
+    s("ps-print-ca", () -> { System.out.print(new char[] {'k'}); System.out.println(); return "ok"; });
+    Writer face = new StringWriter();
+    s("face-ca", () -> { face.write(new char[] {'f'}); return face.toString(); });
+    FileWriter fw = new FileWriter("t.txt");
+    s("fw", () -> { fw.write(new char[] {'g', 'h'}); fw.write("abcd", 1, 2); fw.write(new char[] {'i', 'j'}, 0, 1); fw.close(); return "ok"; });
+    s("fw-read", () -> java.nio.file.Files.readString(java.nio.file.Path.of("t.txt")));
+  }
+}
+"#
+);
+
+// A `Random`'s stream factories: the unbounded and (origin, bound) arities it
+// had never offered, and the two complaints a JDK makes before it hands back a
+// stream. Unchecked, a negative size reached `limit`, which reports the number
+// alone, and a bound at or below the origin drew from an empty range.
+differential_test!(
+    what_a_random_stream_refuses,
+    "RandomStreams",
+    r#"
+import java.util.*;
+public class RandomStreams {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    Random r = new Random(1);
+    s("ints-neg", () -> r.ints(-2L).count());
+    s("ints-zero", () -> r.ints(0L).count());
+    s("ints-ok", () -> r.ints(3L).count());
+    s("ints-bad-bound", () -> r.ints(3L, 5, 5).count());
+    s("ints-bad-bound2", () -> r.ints(3L, 5, 1).count());
+    s("ints-ok-bound", () -> r.ints(3L, 1, 5).count());
+    s("ints-2-bad", () -> r.ints(5, 5).limit(1).count());
+    s("ints-2-ok", () -> r.ints(1, 5).limit(2).count());
+    s("longs-neg", () -> r.longs(-2L).count());
+    s("longs-bad", () -> r.longs(3L, 5L, 5L).count());
+    s("longs-2-bad", () -> r.longs(5L, 5L).limit(1).count());
+    s("doubles-neg", () -> r.doubles(-2L).count());
+    s("doubles-bad", () -> r.doubles(3L, 5.0, 5.0).count());
+    s("doubles-2-bad", () -> r.doubles(5.0, 5.0).limit(1).count());
+    s("nextInt-neg", () -> r.nextInt(-1));
+    s("ints-plain", () -> r.ints().limit(2).count());
+    s("longs-plain", () -> r.longs().limit(2).count());
+    s("doubles-plain", () -> r.doubles().limit(2).count());
+    s("seeded", () -> new Random(7).ints(3L, 0, 10).boxed().collect(java.util.stream.Collectors.toList()));
+    s("seeded-l", () -> new Random(7).longs(2L, 0L, 10L).boxed().collect(java.util.stream.Collectors.toList()));
+    s("seeded-d", () -> new Random(7).doubles(2L, 0.0, 1.0).boxed().collect(java.util.stream.Collectors.toList()));
+  }
+}
+"#
+);

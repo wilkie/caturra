@@ -17543,6 +17543,17 @@ const UUID_STATIC_METHODS: &[BuiltinMethod] = &[
 const WRITER_FACE_METHODS: &[BuiltinMethod] = &[
     bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
     bm("write", &[BParam::Char], BRet::Void, "(I)V"),
+    // `write(char[])` and its range form. A `char[]` is what a `Reader.read`
+    // fills, so it is the shape a copy loop has in hand; every writer here
+    // lacked both, and a JDK's range complaint on this form carries NO message
+    // where the `String` form's names start, end and length.
+    bm("write", &[BParam::CharArray], BRet::Void, "([C)V"),
+    bm(
+        "write",
+        &[BParam::CharArray, BParam::Int, BParam::Int],
+        BRet::Void,
+        "([CII)V",
+    ),
     bm(
         "write",
         &[BParam::Str, BParam::Int, BParam::Int],
@@ -17554,6 +17565,14 @@ const WRITER_FACE_METHODS: &[BuiltinMethod] = &[
         &[BParam::CharSeq],
         BRet::WriterFace,
         "(Ljava/lang/CharSequence;)Ljava/io/Writer;",
+    ),
+    // `append(cs, start, end)` — the range form every `Writer` has, and the
+    // one shape of it that takes an END rather than a length.
+    bm(
+        "append",
+        &[BParam::CharSeq, BParam::Int, BParam::Int],
+        BRet::WriterFace,
+        "(Ljava/lang/CharSequence;II)Ljava/io/Writer;",
     ),
     bm(
         "append",
@@ -17585,6 +17604,17 @@ const WRITER_FACE_METHODS: &[BuiltinMethod] = &[
 const BUFFERED_WRITER_METHODS: &[BuiltinMethod] = &[
     bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
     bm("write", &[BParam::Char], BRet::Void, "(I)V"),
+    // `write(char[])` and its range form. A `char[]` is what a `Reader.read`
+    // fills, so it is the shape a copy loop has in hand; every writer here
+    // lacked both, and a JDK's range complaint on this form carries NO message
+    // where the `String` form's names start, end and length.
+    bm("write", &[BParam::CharArray], BRet::Void, "([C)V"),
+    bm(
+        "write",
+        &[BParam::CharArray, BParam::Int, BParam::Int],
+        BRet::Void,
+        "([CII)V",
+    ),
     bm(
         "write",
         &[BParam::Str, BParam::Int, BParam::Int],
@@ -17596,6 +17626,14 @@ const BUFFERED_WRITER_METHODS: &[BuiltinMethod] = &[
         &[BParam::CharSeq],
         BRet::WriterFace,
         "(Ljava/lang/CharSequence;)Ljava/io/Writer;",
+    ),
+    // `append(cs, start, end)` — the range form every `Writer` has, and the
+    // one shape of it that takes an END rather than a length.
+    bm(
+        "append",
+        &[BParam::CharSeq, BParam::Int, BParam::Int],
+        BRet::WriterFace,
+        "(Ljava/lang/CharSequence;II)Ljava/io/Writer;",
     ),
     bm(
         "append",
@@ -17635,6 +17673,17 @@ const STRING_WRITER_METHODS: &[BuiltinMethod] = &[
     ),
     bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
     bm("write", &[BParam::Char], BRet::Void, "(I)V"),
+    // `write(char[])` and its range form. A `char[]` is what a `Reader.read`
+    // fills, so it is the shape a copy loop has in hand; every writer here
+    // lacked both, and a JDK's range complaint on this form carries NO message
+    // where the `String` form's names start, end and length.
+    bm("write", &[BParam::CharArray], BRet::Void, "([C)V"),
+    bm(
+        "write",
+        &[BParam::CharArray, BParam::Int, BParam::Int],
+        BRet::Void,
+        "([CII)V",
+    ),
     bm(
         "write",
         &[BParam::Str, BParam::Int, BParam::Int],
@@ -18657,6 +18706,8 @@ const PRINT_STREAM_METHODS: &[BuiltinMethod] = &[
     bm("print", &[BParam::Boolean], BRet::Void, "(Z)V"),
     bm("print", &[BParam::Char], BRet::Void, "(C)V"),
     bm("write", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("print", &[BParam::CharArray], BRet::Void, "([C)V"),
+    bm("println", &[BParam::CharArray], BRet::Void, "([C)V"),
     // `append` is `print` by another name, and answers the stream.
     bm(
         "append",
@@ -18669,6 +18720,12 @@ const PRINT_STREAM_METHODS: &[BuiltinMethod] = &[
         &[BParam::CharSeq],
         BRet::PrintStream,
         "(Ljava/lang/CharSequence;)Ljava/io/PrintStream;",
+    ),
+    bm(
+        "append",
+        &[BParam::CharSeq, BParam::Int, BParam::Int],
+        BRet::PrintStream,
+        "(Ljava/lang/CharSequence;II)Ljava/io/PrintStream;",
     ),
     bm("close", &[], BRet::Void, "()V"),
     bm("flush", &[], BRet::Void, "()V"),
@@ -18702,6 +18759,30 @@ const BYTE_STREAM_METHODS: &[BuiltinMethod] = &[
 ];
 
 const WRITER_METHODS: &[BuiltinMethod] = &[
+    // The `Writer` half of a `PrintWriter`/`FileWriter`: the same `write` and
+    // `append` shapes every other writer here offers, which this table was
+    // missing while its `print` family was complete.
+    bm("write", &[BParam::CharArray], BRet::Void, "([C)V"),
+    bm(
+        "write",
+        &[BParam::CharArray, BParam::Int, BParam::Int],
+        BRet::Void,
+        "([CII)V",
+    ),
+    bm(
+        "write",
+        &[BParam::Str, BParam::Int, BParam::Int],
+        BRet::Void,
+        "(Ljava/lang/String;II)V",
+    ),
+    bm("print", &[BParam::CharArray], BRet::Void, "([C)V"),
+    bm("println", &[BParam::CharArray], BRet::Void, "([C)V"),
+    bm(
+        "append",
+        &[BParam::CharSeq, BParam::Int, BParam::Int],
+        BRet::Writer,
+        "(Ljava/lang/CharSequence;II)Ljava/io/PrintWriter;",
+    ),
     BuiltinMethod {
         name: "println",
         params: &[],
@@ -34991,10 +35072,12 @@ impl BodyGen<'_> {
                         // value `System.out` now IS — without which the same
                         // object answered `close()` through a variable and
                         // "cannot find symbol" through `System.out`.
-                        if matches!(
-                            method.as_str(),
-                            "println" | "print" | "printf" | "write" | "append" | "flush"
-                        ) {
+                        // ...and `write`/`append` only in the ONE-argument
+                        // shape that route knows. `append(cs, start, end)` is
+                        // an ordinary call on the value, like `close()`.
+                        if matches!(method.as_str(), "println" | "print" | "printf" | "flush")
+                            || (matches!(method.as_str(), "write" | "append") && args.len() == 1)
+                        {
                             self.print_call(stream, method, args, *span);
                             None
                         } else {

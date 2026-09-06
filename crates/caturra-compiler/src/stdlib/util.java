@@ -55,26 +55,88 @@ class Random {
   // The STREAM factories (Java 8). Each is lazy, as the JDK's are, so the
   // generator advances once per element PULLED — a `limit`ed or short-circuited
   // pipeline leaves the seed exactly where a real one would.
+  // The two complaints a JDK makes before it hands back a stream, in its own
+  // words. Unchecked, a negative size reached `limit`, which reports the
+  // number alone, and a bound at or below the origin drew from an empty range.
+  private void __checkSize(long streamSize) {
+    if (streamSize < 0L) throw new IllegalArgumentException("size must be non-negative");
+  }
+
+  private void __checkRange(boolean ordered) {
+    if (!ordered) throw new IllegalArgumentException("bound must be greater than origin");
+  }
+
+  public java.util.stream.IntStream ints() {
+    return java.util.stream.IntStream.generate(() -> nextInt());
+  }
+
   public java.util.stream.IntStream ints(long streamSize) {
+    __checkSize(streamSize);
     return java.util.stream.IntStream.generate(() -> nextInt()).limit(streamSize);
   }
 
+  public java.util.stream.IntStream ints(int origin, int bound) {
+    __checkRange(origin < bound);
+    return java.util.stream.IntStream.generate(() -> __boundedInt(origin, bound));
+  }
+
   public java.util.stream.IntStream ints(long streamSize, int origin, int bound) {
+    __checkSize(streamSize);
+    __checkRange(origin < bound);
     return java.util.stream.IntStream.generate(() -> __boundedInt(origin, bound))
         .limit(streamSize);
   }
 
+  public java.util.stream.LongStream longs() {
+    return java.util.stream.LongStream.generate(() -> nextLong());
+  }
+
   public java.util.stream.LongStream longs(long streamSize) {
+    __checkSize(streamSize);
     return java.util.stream.LongStream.generate(() -> nextLong()).limit(streamSize);
   }
 
+  public java.util.stream.LongStream longs(long origin, long bound) {
+    __checkRange(origin < bound);
+    return java.util.stream.LongStream.generate(() -> __boundedLong(origin, bound));
+  }
+
   public java.util.stream.LongStream longs(long streamSize, long origin, long bound) {
+    __checkSize(streamSize);
+    __checkRange(origin < bound);
     return java.util.stream.LongStream.generate(() -> __boundedLong(origin, bound))
         .limit(streamSize);
   }
 
+  public java.util.stream.DoubleStream doubles() {
+    return java.util.stream.DoubleStream.generate(() -> nextDouble());
+  }
+
   public java.util.stream.DoubleStream doubles(long streamSize) {
+    __checkSize(streamSize);
     return java.util.stream.DoubleStream.generate(() -> nextDouble()).limit(streamSize);
+  }
+
+  public java.util.stream.DoubleStream doubles(double origin, double bound) {
+    __checkRange(origin < bound);
+    return java.util.stream.DoubleStream.generate(() -> __boundedDouble(origin, bound));
+  }
+
+  public java.util.stream.DoubleStream doubles(long streamSize, double origin, double bound) {
+    __checkSize(streamSize);
+    __checkRange(origin < bound);
+    return java.util.stream.DoubleStream.generate(() -> __boundedDouble(origin, bound))
+        .limit(streamSize);
+  }
+
+  // `internalNextDouble`: scale one draw into the range, and pull the result
+  // back under the bound if rounding pushed it over.
+  private double __boundedDouble(double origin, double bound) {
+    double drawn = nextDouble() * (bound - origin) + origin;
+    if (drawn >= bound) {
+      drawn = Double.longBitsToDouble(Double.doubleToLongBits(bound) - 1L);
+    }
+    return drawn;
   }
 
   // `internalNextLong`: the JDK draws a whole long, then folds it into the

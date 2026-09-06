@@ -4357,6 +4357,11 @@ pub fn invoke_virtual(
                     let unit = u32::from((*byte & 0xFF) as u8);
                     char::from_u32(unit).map(String::from).unwrap_or_default()
                 }
+                // `append(cs, start, end)` writes a RANGE, which the print
+                // family has no shape for.
+                ("append", [_, JValue::Int(_), JValue::Int(_)]) => {
+                    String::from_utf16_lossy(&written_units(heap, method, descriptor, args, true)?)
+                }
                 _ => print_argument_text(heap, descriptor, args)?,
             };
             if stream == PrintSink::Std(StdStream::Out) && console.capturing() {
@@ -6307,6 +6312,81 @@ fn check_offset(offset: i32, count: usize) -> Result<usize, VmError> {
 /// A `delete`/`replace` range: `start` must be a valid offset no greater
 /// than `end`, and `end` is clamped to the length (Java tolerates a large
 /// `end` here, unlike `substring`).
+/// The UTF-16 units a `write`/`append`/`print` call is asked to emit.
+///
+/// One helper because there are five writers and each had its own reading of
+/// the same argument list. A `(I)` or `(C)` descriptor is a single character;
+/// a `char[]` is its contents; a null `CharSequence` appends the four
+/// characters "null" where a null `char[]` is a `NullPointerException`.
+///
+/// The optional range is spelled four ways, all recorded from a JDK.
+/// `write(s, off, len)` takes a LENGTH and `append(cs, start, end)` takes an
+/// END; a bad range on the `char[]` form throws an `IndexOutOfBoundsException`
+/// with NO message at all; and the two `String` complaints differ in both
+/// class and wording — `append` (and a `BufferedWriter`'s `write`, which
+/// reaches a JDK through `String.getChars`) says
+/// `StringIndexOutOfBoundsException: begin …`, where every other `write` says
+/// `IndexOutOfBoundsException: start …`. `begin_style` is which of the two the
+/// caller is.
+pub(crate) fn written_units(
+    heap: &Heap,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+    begin_style: bool,
+) -> Result<Vec<u16>, VmError> {
+    let single = descriptor.starts_with("(I)") || descriptor.starts_with("(C)");
+    let mut chars = false;
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let mut units: Vec<u16> = match args.first() {
+        _ if single => match args.first() {
+            Some(JValue::Int(code)) => vec![*code as u16],
+            _ => Vec::new(),
+        },
+        Some(JValue::Int(code)) => vec![*code as u16],
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::IntArray(IntKind::Char, values)) => {
+                chars = true;
+                values.iter().map(|v| *v as u16).collect()
+            }
+            _ => heap.string_units(*reference).unwrap_or_default().to_vec(),
+        },
+        Some(JValue::Ref(None)) if descriptor.starts_with("([C") => {
+            return Err(throw("java.lang.NullPointerException"));
+        }
+        Some(JValue::Ref(None)) => "null".encode_utf16().collect(),
+        _ => Vec::new(),
+    };
+    if let (Some(JValue::Int(first)), Some(JValue::Int(second))) = (args.get(1), args.get(2)) {
+        let (start, end) = if method == "append" {
+            (*first, *second)
+        } else {
+            (*first, first.saturating_add(*second))
+        };
+        let count = i32::try_from(units.len()).unwrap_or(i32::MAX);
+        if start < 0 || end > count || start > end {
+            return Err(if chars {
+                throw("java.lang.IndexOutOfBoundsException")
+            } else if begin_style {
+                throw(format!(
+                    "java.lang.StringIndexOutOfBoundsException: \
+                     begin {start}, end {end}, length {count}"
+                ))
+            } else {
+                throw(format!(
+                    "java.lang.IndexOutOfBoundsException: \
+                     start {start}, end {end}, length {count}"
+                ))
+            });
+        }
+        #[allow(clippy::cast_sign_loss)]
+        {
+            units = units[start as usize..end as usize].to_vec();
+        }
+    }
+    Ok(units)
+}
+
 fn check_range(
     start: i32,
     end: i32,
@@ -7351,34 +7431,10 @@ fn buffered_writer_method(
             // `write(int)` is one character; everything else is text, and
             // `append`'s range form takes an end where `write`'s takes a
             // length — the same pair a `StringWriter` tells apart.
-            let mut units: Vec<u16> = if descriptor.starts_with("(I)") {
-                match args.first() {
-                    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-                    Some(JValue::Int(ch)) => vec![*ch as u16],
-                    _ => Vec::new(),
-                }
-            } else {
-                match args.first() {
-                    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-                    Some(JValue::Int(ch)) => vec![*ch as u16],
-                    Some(JValue::Ref(Some(text))) => {
-                        heap.string_units(*text).unwrap_or_default().to_vec()
-                    }
-                    Some(JValue::Ref(None)) => "null".encode_utf16().collect::<Vec<u16>>(),
-                    _ => Vec::new(),
-                }
-            };
-            if let (Some(JValue::Int(first)), Some(JValue::Int(second))) =
-                (args.get(1), args.get(2))
-            {
-                let (start, end) = if method == "append" {
-                    (*first, *second)
-                } else {
-                    (*first, first.saturating_add(*second))
-                };
-                let (start, end) = check_range(start, end, units.len(), "begin")?;
-                units = units[start..end].to_vec();
-            }
+            // A `BufferedWriter`'s `write(s, off, len)` reaches a JDK through
+            // `String.getChars`, so it words its complaint the way `append`
+            // does — where every other writer's `write` does not.
+            let units = written_units(heap, method, descriptor, args, true)?;
             if let Some(HeapObject::BufferedWriter { buffer, .. }) = heap.get_mut(receiver) {
                 buffer.extend_from_slice(&units);
             }
@@ -10921,15 +10977,6 @@ fn path_method(
     }
 }
 
-/// `java.io.PrintWriter` methods: formatting matches `PrintStream`, but
-/// output appends to the writer's file in the virtual filesystem.
-/// The single character a `write(int)`/`append(char)` code denotes — its low 16
-/// bits, one UTF-16 code unit.
-fn char_from_code(code: i32) -> String {
-    let unit = u32::try_from(code & 0xFFFF).unwrap_or(0);
-    char::from_u32(unit).map(String::from).unwrap_or_default()
-}
-
 fn writer_method(
     heap: &mut Heap,
     vfs: &mut VirtualFileSystem,
@@ -10984,40 +11031,15 @@ fn writer_method(
         // `write(String)` writes the whole string; `write(int)` writes a single
         // character (its low 16 bits).
         "write" => {
-            let text = if descriptor.starts_with("(I)") {
-                match args.first() {
-                    Some(JValue::Int(code)) => char_from_code(*code),
-                    _ => String::new(),
-                }
-            } else {
-                match args.first() {
-                    Some(JValue::Ref(Some(reference))) => {
-                        heap.string_text(*reference).unwrap_or_default()
-                    }
-                    _ => String::new(),
-                }
-            };
-            put(heap, vfs, &text)?;
+            let units = written_units(heap, method, descriptor, args, false)?;
+            put(heap, vfs, &String::from_utf16_lossy(&units))?;
             Ok(None)
         }
         // `append(char)` writes the character; `append(CharSequence)` the text
         // (a null appends the four characters "null"). Returns the writer.
         "append" => {
-            let text = if descriptor.starts_with("(C)") {
-                match args.first() {
-                    Some(JValue::Int(code)) => char_from_code(*code),
-                    _ => String::new(),
-                }
-            } else {
-                match args.first() {
-                    Some(JValue::Ref(Some(reference))) => {
-                        heap.string_text(*reference).unwrap_or_default()
-                    }
-                    Some(JValue::Ref(None)) => String::from("null"),
-                    _ => String::new(),
-                }
-            };
-            put(heap, vfs, &text)?;
+            let units = written_units(heap, method, descriptor, args, true)?;
+            put(heap, vfs, &String::from_utf16_lossy(&units))?;
             Ok(Some(JValue::Ref(Some(receiver))))
         }
         "print" | "println" => {
@@ -16583,25 +16605,11 @@ fn string_writer_method(
         "write" | "append" | "print" => {
             // `write(int)` writes a single CHARACTER — its low sixteen bits —
             // where `print(int)` would write the number.
-            let param = if method == "write" && descriptor.starts_with("(I)") {
-                "C"
+            let units = if method == "print" {
+                let param = descriptor_param(descriptor);
+                builder_value_text(heap, param, &args[0])?
             } else {
-                descriptor_param(descriptor)
-            };
-            let units = builder_value_text(heap, param, &args[0])?;
-            // `write(text, off, len)` writes a RANGE, and `append(cs, start,
-            // end)` two INDEXES — the same two numbers meaning different things.
-            let units = match (method, args.get(1), args.get(2)) {
-                (_, Some(JValue::Int(first)), Some(JValue::Int(second))) => {
-                    let (start, end) = if method == "append" {
-                        (*first, *second)
-                    } else {
-                        (*first, first.saturating_add(*second))
-                    };
-                    let (start, end) = check_range(start, end, units.len(), "begin")?;
-                    units[start..end].to_vec()
-                }
-                _ => units,
+                written_units(heap, method, descriptor, args, method == "append")?
             };
             if let Some(HeapObject::StringWriter(buffer)) = heap.get_mut(receiver) {
                 buffer.extend_from_slice(&units);

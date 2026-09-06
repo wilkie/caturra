@@ -291,6 +291,42 @@ def calls_for(class_name, receiver, overloads, answered):
     return calls, unbuildable
 
 
+def simple_type(name):
+    """A parameter type as caturra's diagnostics spell it: `[C` is `char[]`,
+    `java.lang.String` is `String`."""
+    primitive = {
+        "[I": "int[]", "[J": "long[]", "[D": "double[]", "[C": "char[]",
+        "[B": "byte[]", "[S": "short[]", "[F": "float[]", "[Z": "boolean[]",
+    }
+    if name in primitive:
+        return primitive[name]
+    if name.startswith("[L") and name.endswith(";"):
+        return name[2:-1].rsplit(".", 1)[-1] + "[]"
+    return name.rsplit(".", 1)[-1]
+
+
+def call_signature(label):
+    """`write([C,int,int)#0` -> `("write", ("char[]", "int", "int"))`."""
+    name, rest = label.split("(", 1)
+    params = rest.rsplit(")", 1)[0]
+    return (name, tuple(simple_type(p) for p in params.split(",") if p))
+
+
+def refused_signatures(message):
+    """The calls caturra's diagnostic actually named, by signature.
+
+    Its "no suitable method found for write(char[])" says which OVERLOAD was
+    not offered; the name alone says only which family it was in.
+    """
+    found = set()
+    for name, args in re.findall(r"for (\w+)\(([^)]*)\)", message):
+        if args.strip() in ("", "no arguments"):
+            found.add((name, ()))
+        else:
+            found.add((name, tuple(a.strip() for a in args.split(","))))
+    return found
+
+
 def probe_source(cls, calls):
     """One program: every call wrapped so a THROW is compared too."""
     lines = [
@@ -397,7 +433,7 @@ def main():
         # caturra does not offer — should not cost the whole class its sweep.
         # Everything dropped is reported rather than quietly lost.
         jdk, cat = None, ""
-        for _ in range(8):
+        for _ in range(30):
             jdk, cat = run_both(probe_source(class_name, calls))
             if jdk is not None:
                 break
@@ -410,10 +446,23 @@ def main():
                 # caturra names the METHOD, not the line: an overload it does
                 # not offer. (The measurement is name-level, so this is an
                 # expected answer and not a divergence.)
-                named = set(re.findall(r"for (\w+)\(|method (\w+)\b", cat))
-                names = {n for pair in named for n in pair if n}
-                keep = [c for c in calls if c[0].split("(")[0] not in names]
+                #
+                # By the SIGNATURE, not the name. Dropping every call with the
+                # name cost `write(String)` its run because `write(char[])` was
+                # missing, and then reported both as missing: a list of 144
+                # "overloads caturra does not offer" in which `Integer.parseInt`
+                # and `BitSet.set` were flatly wrong.
+                refused_sigs = refused_signatures(cat)
+                keep = [c for c in calls if call_signature(c[0]) not in refused_sigs]
                 why = "caturra offers no such overload"
+                if not refused_sigs or len(keep) == len(calls):
+                    # A message that names no signature at all: fall back to the
+                    # name, and SAY that the drop was by name — the overloads
+                    # beside it may work perfectly.
+                    named = set(re.findall(r"for (\w+)\(|method (\w+)\b", cat))
+                    names = {n for pair in named for n in pair if n}
+                    keep = [c for c in calls if c[0].split("(")[0] not in names]
+                    why = "dropped with a sibling overload caturra does not offer"
             if not keep or len(keep) == len(calls):
                 break
             dropped = [c for c in calls if c not in keep]
