@@ -660,16 +660,6 @@
     "reason": "Class.getModifiers exists in Java, but caturra does not model a class's access flags"
   },
   {
-    "id": "scanner-text",
-    "category": "Library",
-    "title": "A Scanner's own toString",
-    "summary": "The JDK prints its delimiters, position and locale separators \u2014 internal state caturra does not model.",
-    "main": "ScannerText",
-    "source": "import java.util.Scanner;\n\npublic class ScannerText {\n    public static void main(String[] args) {\n        Scanner scanner = new Scanner(\"7 x\");\n        System.out.println(scanner.toString().startsWith(\"java.util.Scanner\"));\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "the text of a Scanner is an implementation detail caturra does not model"
-  },
-  {
     "id": "records",
     "category": "Beyond Java 11",
     "title": "Records (Java 16)",

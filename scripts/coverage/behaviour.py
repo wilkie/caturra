@@ -220,6 +220,20 @@ KNOWN = [
         "a comparator caturra synthesized is not one of a JDK's named classes",
     ),
     (
+        r"^java\.io\.InputStreamReader\.(read|skip|transferTo)",
+        "the JDK side runs with stdin CLOSED, so a reader over System.in "
+        "throws where caturra's console — which has an input box behind it — "
+        "answers end of input; a fact about the harness, not about either "
+        "engine",
+    ),
+    (
+        r"^java\.util\.Scanner\.toString",
+        "a JDK's Scanner prints its internal bookkeeping — `need input`, "
+        "`skipped`, and a `source closed` that turns true when the source runs "
+        "dry rather than when `close()` is called — none of which caturra "
+        "models; it answers Object's default rather than guess at six fields",
+    ),
+    (
         r"^java\.util\.stream\.(Int|Long|Double)Stream\.iterator",
         "the three primitive streams share one method table, so which adapter family "
         "a cursor came from is not recorded (an OBJECT stream's is exact)",

@@ -53587,3 +53587,146 @@ public class RandomStreams {
 }
 "#
 );
+
+// Every object has `Object`'s four methods, whatever its own table wrote down.
+// Each library table used to spell them out for itself — 70 wrote `toString`,
+// 56 `hashCode`, 33 `getClass` — so which of the four a receiver answered
+// depended on which table it landed in, and each forgot a different one. Nine
+// classes had no `toString` at all: `println(aBufferedReader)` ABORTED the
+// program where a JDK prints `java.io.BufferedReader@1b6d3586`. A class with a
+// text of its own still wins (a `Pattern` prints its pattern, a `StringWriter`
+// its buffer, a `BitSet` its members).
+differential_test!(
+    the_text_every_object_has,
+    "DefaultText",
+    r#"
+import java.io.*;
+import java.util.*;
+public class DefaultText {
+  // A default toString is `getClass().getName() + "@" + hex(hashCode())`; an
+  // OVERRIDE is anything else. Printed as a verdict, so no address is compared.
+  static void p(String label, Object o) {
+    String want = o.getClass().getName() + "@" + Integer.toHexString(o.hashCode());
+    System.out.println(label + " | " + o.getClass().getName()
+        + " | " + (o.toString().equals(want) ? "<default>" : o.toString())
+        + " | " + (String.valueOf(o).equals(want) ? "<default>" : String.valueOf(o))
+        + " | " + (("" + o).equals(want) ? "<default>" : "" + o));
+  }
+  public static void main(String[] a) throws Exception {
+    p("BufferedReader", new BufferedReader(new StringReader("x")));
+    p("StringReader", new StringReader("x"));
+    p("Reader-face", (Reader) new StringReader("x"));
+    p("StringWriter", new StringWriter());
+    p("BufferedWriter", new BufferedWriter(new StringWriter()));
+    p("PrintWriter", new PrintWriter(new StringWriter()));
+    p("PrintStream", System.out);
+    p("ByteArrayOutputStream", new ByteArrayOutputStream());
+    p("StringTokenizer", new StringTokenizer("a b"));
+    p("Base64.Encoder", Base64.getEncoder());
+    p("Base64.Decoder", Base64.getDecoder());
+    p("Pattern", java.util.regex.Pattern.compile("a+"));
+    p("Random", new Random(1));
+    p("BitSet", new BitSet());
+    p("File", new File("f.txt"));
+    // ...and the same four asked directly, on the receivers whose own type is
+    // written down rather than widened to Object.
+    Reader r = new StringReader("x");
+    PrintWriter w = new PrintWriter(new StringWriter());
+    System.out.println(("" + r).startsWith("java.io.StringReader@")
+        + " " + r.toString().startsWith("java.io.StringReader@")
+        + " " + (r.hashCode() == System.identityHashCode(r))
+        + " " + r.equals(r) + r.equals(w)
+        + " " + w.toString().startsWith("java.io.PrintWriter@"));
+  }
+}
+"#
+);
+
+// What a reader refuses, and it is not the same for any two of them. A
+// `StringReader` marks and takes a negative `skip`; a `BufferedReader` marks
+// but refuses that skip and a `reset()` with no mark; an `InputStreamReader`
+// (and the `FileReader` that extends it) does not mark at all. caturra had one
+// answer for all three. Beside them: `mark(-1)` is refused everywhere,
+// `read(char[], off, len)` complains with NO message and does not clamp, and
+// `Reader.nullReader()` is an anonymous `Reader$1` — as `nullWriter()` already
+// was.
+differential_test!(
+    what_a_reader_refuses,
+    "ReaderRefusals",
+    r#"
+import java.io.*;
+import java.util.*;
+public class ReaderRefusals {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    try (PrintWriter w = new PrintWriter("rr.txt")) { w.print("abcde"); }
+    s("sr-mark-neg", () -> { StringReader r = new StringReader("abc"); r.mark(-2); return "ok"; });
+    s("br-mark-neg", () -> { BufferedReader r = new BufferedReader(new StringReader("abc")); r.mark(-2); return "ok"; });
+    s("face-mark-neg", () -> { Reader r = new StringReader("abc"); r.mark(-2); return "ok"; });
+    s("fr-mark-ok", () -> { FileReader r = new FileReader("rr.txt"); r.mark(2); return "ok"; });
+    s("fr-marks", () -> new FileReader("rr.txt").markSupported());
+    s("sr-marks", () -> new StringReader("a").markSupported());
+    s("brf-marks", () -> new BufferedReader(new FileReader("rr.txt")).markSupported());
+    s("fr-reset", () -> { FileReader r = new FileReader("rr.txt"); r.reset(); return "ok"; });
+    s("br-reset-nomark", () -> { BufferedReader r = new BufferedReader(new StringReader("abc")); r.reset(); return "ok"; });
+    s("sr-reset-nomark", () -> { StringReader r = new StringReader("abc"); r.reset(); return "ok"; });
+    s("sr-skip-neg", () -> new StringReader("abc").skip(-2));
+    s("br-skip-neg", () -> new BufferedReader(new StringReader("abc")).skip(-2));
+    s("fr-skip-neg", () -> new FileReader("rr.txt").skip(-2));
+    s("sr-skip-past", () -> new StringReader("abc").skip(99));
+    s("sr-mark-reset", () -> { StringReader r = new StringReader("abc"); r.read(); r.mark(9); r.read(); r.reset(); return (char) r.read(); });
+    s("br-mark-reset", () -> { BufferedReader r = new BufferedReader(new StringReader("abc")); r.read(); r.mark(9); r.read(); r.reset(); return (char) r.read(); });
+    for (int[] range : new int[][] {{0, 5}, {-1, 1}, {0, -1}, {2, 2}, {1, 1}}) {
+      int off = range[0], len = range[1];
+      s("read(" + off + "," + len + ")", () -> new StringReader("abcde").read(new char[4], off, len));
+    }
+    s("null-reader", () -> Reader.nullReader().getClass().getName());
+    s("null-reader-read", () -> Reader.nullReader().read());
+    s("null-writer", () -> Writer.nullWriter().getClass().getName());
+    s("fw-class", () -> { FileWriter w = new FileWriter("rr.txt"); String n = w.getClass().getName(); w.close(); return n; });
+    s("pw-class", () -> new PrintWriter(new StringWriter()).getClass().getName());
+    s("tok-iter", () -> new StringTokenizer("a b").asIterator().getClass().getName());
+    new File("rr.txt").delete();
+  }
+}
+"#
+);
+
+// One argument list, four writers, four rules — every one recorded. A
+// `StringWriter` and a `PrintWriter` check `write(s, off, len)` themselves
+// (`IndexOutOfBoundsException: start …`); a `BufferedWriter` takes a length of
+// zero or less as writing NOTHING and sends the rest through `String.getChars`
+// (`StringIndexOutOfBoundsException: begin …`); a `FileWriter` keeps only the
+// negative-length check, and says nothing about it. caturra clamped.
+differential_test!(
+    the_range_each_writer_refuses,
+    "WriterRanges",
+    r#"
+import java.io.*;
+public class WriterRanges {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    for (int[] r : new int[][] {{0, 5}, {-1, 1}, {-2, -4}, {1, 1}, {3, 0}, {0, -1}, {2, 2}}) {
+      int off = r[0], len = r[1];
+      String tag = "(" + off + "," + len + ")";
+      s("sw" + tag, () -> { StringWriter w = new StringWriter(); w.write("abc", off, len); return "[" + w + "]"; });
+      s("bw" + tag, () -> { StringWriter u = new StringWriter(); BufferedWriter w = new BufferedWriter(u); w.write("abc", off, len); w.flush(); return "[" + u + "]"; });
+      s("pw" + tag, () -> { StringWriter u = new StringWriter(); PrintWriter w = new PrintWriter(u); w.write("abc", off, len); w.flush(); return "[" + u + "]"; });
+      s("ca" + tag, () -> { StringWriter w = new StringWriter(); w.write(new char[] {'a','b','c'}, off, len); return "[" + w + "]"; });
+      s("bwca" + tag, () -> { StringWriter u = new StringWriter(); BufferedWriter w = new BufferedWriter(u); w.write(new char[] {'a','b','c'}, off, len); w.flush(); return "[" + u + "]"; });
+      s("ap" + tag, () -> { StringWriter w = new StringWriter(); w.append("abc", off, len); return "[" + w + "]"; });
+      s("fw" + tag, () -> { FileWriter w = new FileWriter("wr.txt"); w.write("abc", off, len); w.close(); return "[" + java.nio.file.Files.readString(java.nio.file.Path.of("wr.txt")) + "]"; });
+    }
+    new File("wr.txt").delete();
+  }
+}
+"#
+);

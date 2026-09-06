@@ -722,9 +722,10 @@ pub enum HeapObject {
         /// Where `reset()` returns to, set by `mark(readAheadLimit)`. A
         /// `StringReader` and a `BufferedReader` both support marks (a JDK's
         /// `markSupported` says so), and `reset()` before any `mark` returns
-        /// to the START for a `StringReader` — which is what its own mark
-        /// field is initialized to.
-        mark: usize,
+        /// to the START for a `StringReader`, where a `BufferedReader` has
+        /// nothing to return to and says so — which is why this is an
+        /// `Option`: `None` is never marked, not marked at zero.
+        mark: Option<usize>,
     },
     /// A `java.util.ArrayList` (element types erased; values are
     /// stored directly — boxing is a no-op in this VM).

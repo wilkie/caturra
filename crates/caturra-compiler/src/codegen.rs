@@ -21708,10 +21708,16 @@ fn is_empty_optional(receiver: &Expr) -> bool {
 /// cannot write `"" + scanner` must not be able to write `scanner.toString()`
 /// and get an invented answer.
 fn renders_as_text(ty: JType) -> bool {
-    !matches!(
-        ty,
-        JType::Scanner | JType::Writer | JType::Reader(_) | JType::PrintStream
-    )
+    // A reader, a writer and a print stream have no text of their OWN: a JDK
+    // gives each `Object`'s default, which is a class name and an address, and
+    // caturra can spell that exactly. They were refused with the Scanner, back
+    // when caturra could not.
+    //
+    // A `Scanner` is still refused, and is the reason this rule exists: its
+    // text is a dump of the delimiters, the position and six locale
+    // separators — real state, three bits of which caturra does not model, so
+    // the choice there is an honest refusal or a confident wrong answer.
+    !matches!(ty, JType::Scanner)
 }
 
 /// Whether a library type is modelled as ONE class — no interface/concrete
@@ -23493,9 +23499,19 @@ const COLLECTOR_METHODS: &[BuiltinMethod] = &[
     ),
 ];
 
+/// The four methods EVERY object has, whatever else it is.
+///
+/// Each library table used to spell them out for itself — 70 wrote
+/// `toString`, 56 `hashCode`, 33 `getClass` — so which of the four a receiver
+/// answered depended on which table it landed in, and each table forgot a
+/// different one. `new StringTokenizer("a b").toString()` was "cannot find
+/// symbol"; nine other classes had a hole somewhere else. Consulted as a
+/// FALLBACK now, after the receiver's own table, so a type that overrides
+/// `toString` still answers with its own.
 const OBJECT_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm(
         "equals",
         &[BParam::Object],
@@ -29208,7 +29224,10 @@ impl BodyGen<'_> {
                 // A `FileWriter` is the same thing this engine calls a
                 // writer, plus the APPEND flag: `new FileWriter(path, true)`
                 // adds to what is there instead of truncating.
-                "PrintWriter" | "FileWriter" => return self.new_writer(args, span),
+                // ...and which of the two was WRITTEN is kept: they are one
+                // object here, and `getClass()` still has to tell them apart.
+                "PrintWriter" => return self.new_writer("java/io/PrintWriter", args, span),
+                "FileWriter" => return self.new_writer("java/io/FileWriter", args, span),
                 "BufferedWriter" => return self.new_buffered_writer(args, span),
                 "ByteArrayOutputStream" => return self.new_byte_stream(args, span),
                 "PrintStream" => return self.new_print_stream(args, span),
@@ -30460,8 +30479,8 @@ impl BodyGen<'_> {
     }
 
     /// `new PrintWriter(pathString)` or `new PrintWriter(fileExpr)`.
-    fn new_writer(&mut self, args: &[Expr], span: SourceSpan) -> JType {
-        let writer_class = intern_class(self.pool, "java/io/PrintWriter");
+    fn new_writer(&mut self, class: &'static str, args: &[Expr], span: SourceSpan) -> JType {
+        let writer_class = intern_class(self.pool, class);
         self.code.push_op_u16(op::NEW, writer_class, 1);
         self.code.push_op(op::DUP, 1);
         if let [target] | [target, _] = args {
@@ -30497,8 +30516,7 @@ impl BodyGen<'_> {
                 _ => None,
             };
             if let Some(descriptor) = descriptor {
-                let init_ref =
-                    intern_method_ref(self.pool, "java/io/PrintWriter", "<init>", descriptor);
+                let init_ref = intern_method_ref(self.pool, class, "<init>", descriptor);
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(if appends { 3 } else { 2 });
                 return JType::Writer;
@@ -32667,7 +32685,18 @@ impl BodyGen<'_> {
             }
             return None;
         }
-        let Some(chosen) = pick_builtin(methods, method, &arg_types, elem, self.table) else {
+        // A type with no text of its own refuses `toString` — a REASON, not a
+        // missing symbol — whichever table the receiver landed in.
+        let chosen = if method == "toString" && !renders_as_text(receiver_ty) {
+            None
+        } else {
+            pick_builtin(methods, method, &arg_types, elem, self.table).or_else(|| {
+                // Every object has `toString`, `hashCode`, `getClass` and
+                // `equals`, whatever its own table remembered to write down.
+                pick_builtin(OBJECT_METHODS, method, &arg_types, elem, self.table)
+            })
+        };
+        let Some(chosen) = chosen else {
             // A member the receiver's FACE does not declare is not a bad
             // overload, it is a missing symbol — `SortedSet` simply has no
             // `floor`, and javac says "cannot find symbol" for it.
@@ -34260,6 +34289,12 @@ impl BodyGen<'_> {
             JType::StringWriter => String::from("java/io/StringWriter"),
             JType::WriterFace => String::from("java/io/Writer"),
             JType::BufferedWriter => String::from("java/io/BufferedWriter"),
+            // The three that have no text of their OWN still have `Object`'s,
+            // which is a class name and an address — and which they now
+            // answer, so appending one calls its `toString` like any other.
+            JType::Writer => String::from("java/io/PrintWriter"),
+            JType::Reader(_) => String::from("java/io/BufferedReader"),
+            JType::PrintStream => String::from("java/io/PrintStream"),
             JType::DecimalFormat => String::from("java/text/DecimalFormat"),
             JType::NumberFormat => String::from("java/text/NumberFormat"),
             JType::Charset => String::from("java/nio/charset/Charset"),
@@ -43572,8 +43607,17 @@ impl BodyGen<'_> {
             | JType::DateFormat
             | JType::DayOfWeek
             | JType::Month
+            // A reader, a writer and a print stream were refused here beside
+            // the Scanner and no longer are: each answers `Object`'s default
+            // now, which is exactly what a JDK prints.
+            | JType::Writer
+            | JType::Reader(_)
+            | JType::PrintStream
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
-            JType::Scanner | JType::Writer | JType::Reader(_) | JType::PrintStream => {
+            // The one type with no text caturra can spell — `renders_as_text`
+            // is the same fact the `toString` refusal reads, so the two cannot
+            // come apart.
+            JType::Scanner => {
                 self.error(
                     span,
                     format!(

@@ -15284,3 +15284,59 @@ reaches a JDK through `String.getChars` — and every OTHER writer's
 `write(s, off, len)` says `IndexOutOfBoundsException: start …`. caturra had one
 reading of the argument list per writer, five of them, and clamped where all
 four of these throw. One `written_units` answers for all five now.
+
+### The text every object has (2026-09-06)
+
+Nine modelled classes had no `toString`, and the failure was not a wrong answer
+but a CRASH: `println(aBufferedReader)` aborted the program with "unknown
+native member" where a JDK prints `java.io.BufferedReader@1b6d3586`. A
+`StringTokenizer` and a `Base64.Encoder` did not even compile.
+
+The cause is the drift machine at its plainest. Each library table spells the
+`Object` methods out for itself — **70 tables wrote `toString`, 56 `hashCode`,
+33 `getClass`** — so which of the four a receiver answered depended on which
+table it landed in, and each table forgot a different one. They are a FALLBACK
+now, consulted after the receiver's own table, so a type with a text of its own
+still wins: a `Pattern` prints its pattern, a `StringWriter` its buffer, a
+`BitSet` its members. The VM answers the same way, once, after dispatch —
+`getClass().getName() + "@" + hex(identityHashCode())`, which is what the
+renderer already spelled for arrays.
+
+**A `Scanner` is the one that still refuses**, and it is why the rule that
+governs this exists. Its text is a dump of the delimiters, the position and six
+locale separators — real state, three bits of which (`need input`, `skipped`,
+and a `source closed` that turns true when the source runs dry rather than when
+`close()` is called) caturra does not model. An honest refusal beats a
+confident wrong answer, and `renders_as_text` is now the single fact both the
+`toString` refusal and the concatenation refusal read, so the two cannot come
+apart. A reader, a writer and a print stream were refused beside it and no
+longer are.
+
+**And what that unlocked.** Nine probes had been dying at the first `toString`,
+so nine classes were never swept at all; the sweep went from 2474 calls to 2608
+and reported **32 divergences at once**. They came to six facts, every one
+captured rather than reasoned about:
+
+* **No two readers refuse alike.** A `StringReader` marks, and takes a negative
+  `skip` (answering zero) and a `reset()` with no mark (returning to the
+  start). A `BufferedReader` marks, but refuses both. An `InputStreamReader` —
+  and the `FileReader` that extends it — does not mark at all: `mark` and
+  `reset` are `IOException: mark() not supported`, whatever they are handed,
+  and `markSupported()` is false. caturra had one answer for all three.
+* **`mark(-1)` is refused everywhere** with `IllegalArgumentException:
+  Read-ahead limit < 0`, and `read(char[], off, len)` complains with NO message
+  and does not clamp — `read(new char[2], 0, 5)` is a failure, not a read of
+  two.
+* **`Reader.nullReader()` is an anonymous `Reader$1`**, as `nullWriter()`
+  already was, and a `StringTokenizer`'s `asIterator()` is the
+  `Enumeration$1` an `Enumeration`'s own already reported.
+* **A `FileWriter` is the object a `PrintWriter` is here** and still has to
+  name itself: `fileWriter.append('a')` answers a `FileWriter` on a JDK. Which
+  class was WRITTEN is kept now, as the readers' already was.
+* **Four writers, four range rules** — the fourth found here: a `FileWriter`
+  keeps only the negative-length check and says nothing about it, where a
+  `BufferedWriter` treats that same length as writing nothing.
+* And one fact about the harness rather than either engine: the JDK side runs
+  with stdin CLOSED, so a reader over `System.in` throws where caturra's
+  console — which has an input box behind it — answers end of input. Declared,
+  not counted.

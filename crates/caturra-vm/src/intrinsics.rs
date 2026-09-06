@@ -2875,7 +2875,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             pos: 0,
             stdin: false,
             closed: false,
-            mark: 0,
+            mark: None,
         }),
         // A default context is a JDK's `UNLIMITED`; every constructor replaces
         // it.
@@ -2888,7 +2888,9 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         // Where it writes is decided by the constructor; standard out until
         // then, which is also `new PrintStream(System.out)`.
         "java/io/PrintStream" => Some(HeapObject::PrintStream(PrintSink::Std(StdStream::Out))),
-        "java/io/PrintWriter" => Some(HeapObject::Writer {
+        // Two classes, one object: which was written is recorded as a view
+        // class by `invoke_special`, so `getClass()` can still tell them apart.
+        "java/io/PrintWriter" | "java/io/FileWriter" => Some(HeapObject::Writer {
             path: String::new(),
             text: None,
             closed: false,
@@ -2899,7 +2901,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
                 pos: 0,
                 stdin: false,
                 closed: false,
-                mark: 0,
+                mark: None,
             })
         }
         _ => {
@@ -3207,6 +3209,12 @@ pub fn invoke_special(
     if class == "java/lang/Object" && method == "<init>" && descriptor == "()V" {
         return Ok(());
     }
+    // A `FileWriter` is the same object a `PrintWriter` is here, and it still
+    // has to name itself: `fileWriter.append('a')` answers a `FileWriter` on a
+    // JDK, not the `PrintWriter` one shared kind would report.
+    if class == "java/io/FileWriter" && method == "<init>" {
+        heap.set_view_class(receiver, "java/io/FileWriter");
+    }
 
     let string_arg = |heap: &Heap, value: &JValue| -> Result<String, VmError> {
         match value {
@@ -3366,7 +3374,7 @@ pub fn invoke_special(
                 pos: 0,
                 stdin: false,
                 closed: false,
-                mark: 0,
+                mark: None,
             };
         }
         return Ok(());
@@ -4154,7 +4162,49 @@ pub fn invoke_special(
 /// intrinsic the VM knows.
 #[allow(clippy::too_many_arguments)] // one boundary call from the dispatch loop
 #[allow(clippy::too_many_lines)] // one intrinsic-dispatch matrix
+/// `Object.toString()`: the class's binary name, an `@`, and the identity hash
+/// in hex. What every object answers unless its own class says otherwise.
+pub(crate) fn default_to_string(heap: &Heap, receiver: HeapRef) -> String {
+    format!(
+        "{}@{:x}",
+        crate::interpreter::heap_binary_name(heap, receiver),
+        identity_hash(receiver)
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // the dispatch signature, plus a wrapper
 pub fn invoke_virtual(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    vfs: &mut VirtualFileSystem,
+    receiver: HeapRef,
+    class: &str,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let answer = invoke_virtual_dispatch(
+        heap, console, vfs, receiver, class, method, descriptor, args,
+    );
+    // Every object has `Object.toString`, whatever else it has. A modelled
+    // class that did not write one ABORTED the program —
+    // `println(aBufferedReader)` was "unknown native member" where a JDK
+    // prints `java.io.BufferedReader@1b6d3586` — and nine classes had that
+    // hole. Answered AFTER dispatch, so a class with a `toString` of its own
+    // (a `Pattern` prints its pattern, a `StringWriter` its buffer) still
+    // wins; only the ones that never had an answer reach here.
+    if matches!(answer, Err(VmError::UnknownIntrinsic(_)))
+        && method == "toString"
+        && args.is_empty()
+    {
+        let text = default_to_string(heap, receiver);
+        return Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))));
+    }
+    answer
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one dispatch point
+fn invoke_virtual_dispatch(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
     vfs: &mut VirtualFileSystem,
@@ -4359,9 +4409,9 @@ pub fn invoke_virtual(
                 }
                 // `append(cs, start, end)` writes a RANGE, which the print
                 // family has no shape for.
-                ("append", [_, JValue::Int(_), JValue::Int(_)]) => {
-                    String::from_utf16_lossy(&written_units(heap, method, descriptor, args, true)?)
-                }
+                ("append", [_, JValue::Int(_), JValue::Int(_)]) => String::from_utf16_lossy(
+                    &written_units(heap, method, descriptor, args, RangeStyle::Begin)?,
+                ),
                 _ => print_argument_text(heap, descriptor, args)?,
             };
             if stream == PrintSink::Std(StdStream::Out) && console.capturing() {
@@ -5137,6 +5187,14 @@ pub(crate) fn uses_identity_equality(object: &HeapObject) -> bool {
             // a JDK gives them no `equals` of their own.
             | HeapObject::StringTokenizer { .. }
             | HeapObject::StringWriter(_)
+            // ...and so is a BUFFERED writer, which was the one writer kind
+            // missing here — `println` on one aborted where `hashCode` on
+            // every other writer answered.
+            | HeapObject::BufferedWriter { .. }
+            // A `ByteArrayOutputStream` prints its CONTENTS from `toString`
+            // and yet compares by identity — the two are not the same
+            // question, and it had neither.
+            | HeapObject::ByteStream(_)
             | HeapObject::Base64 { .. }
             // A `RoundingMode` is an ENUM, so `equals` is identity — and since
             // the constants are interned, identity IS value equality.
@@ -6319,21 +6377,34 @@ fn check_offset(offset: i32, count: usize) -> Result<usize, VmError> {
 /// a `char[]` is its contents; a null `CharSequence` appends the four
 /// characters "null" where a null `char[]` is a `NullPointerException`.
 ///
-/// The optional range is spelled four ways, all recorded from a JDK.
-/// `write(s, off, len)` takes a LENGTH and `append(cs, start, end)` takes an
-/// END; a bad range on the `char[]` form throws an `IndexOutOfBoundsException`
-/// with NO message at all; and the two `String` complaints differ in both
-/// class and wording — `append` (and a `BufferedWriter`'s `write`, which
-/// reaches a JDK through `String.getChars`) says
-/// `StringIndexOutOfBoundsException: begin …`, where every other `write` says
-/// `IndexOutOfBoundsException: start …`. `begin_style` is which of the two the
-/// caller is.
+/// The optional range, and what a bad one is called, are [`RangeStyle`]'s
+/// business: `write(s, off, len)` takes a LENGTH where `append(cs, start,
+/// end)` takes an END, and no two of the writers refuse a bad one alike.
+///
+/// How a writer words a bad range, which is not the same for any two of them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RangeStyle {
+    /// `IndexOutOfBoundsException: start …` — a `StringWriter`'s and a
+    /// `PrintWriter`'s `write(s, off, len)`, which check the range themselves.
+    Start,
+    /// `StringIndexOutOfBoundsException: begin …` — every `append`, which
+    /// reaches a JDK through `CharSequence.subSequence`.
+    Begin,
+    /// A `BufferedWriter`'s `write(s, off, len)`: its loop is `while (len >
+    /// 0)`, so a length of zero or less writes NOTHING and checks nothing;
+    /// the rest goes through `String.getChars`.
+    BufferedWrite,
+    /// A `FileWriter`'s: a negative length is a BARE complaint of its own, and
+    /// everything else reaches `getChars`.
+    FileWrite,
+}
+
 pub(crate) fn written_units(
     heap: &Heap,
     method: &str,
     descriptor: &str,
     args: &[JValue],
-    begin_style: bool,
+    style: RangeStyle,
 ) -> Result<Vec<u16>, VmError> {
     let single = descriptor.starts_with("(I)") || descriptor.starts_with("(C)");
     let mut chars = false;
@@ -6364,18 +6435,26 @@ pub(crate) fn written_units(
             (*first, first.saturating_add(*second))
         };
         let count = i32::try_from(units.len()).unwrap_or(i32::MAX);
+        // ...only for the STRING form: a `BufferedWriter`'s `write(char[],
+        // off, len)` is `Writer.write`, which checks its range like every
+        // other, and only its `write(String, off, len)` has the forgiving loop.
+        if style == RangeStyle::BufferedWrite && !chars && end <= start {
+            return Ok(Vec::new());
+        }
         if start < 0 || end > count || start > end {
             return Err(if chars {
                 throw("java.lang.IndexOutOfBoundsException")
-            } else if begin_style {
-                throw(format!(
-                    "java.lang.StringIndexOutOfBoundsException: \
-                     begin {start}, end {end}, length {count}"
-                ))
-            } else {
+            } else if style == RangeStyle::Start {
                 throw(format!(
                     "java.lang.IndexOutOfBoundsException: \
                      start {start}, end {end}, length {count}"
+                ))
+            } else if style == RangeStyle::FileWrite && end < start {
+                throw("java.lang.IndexOutOfBoundsException")
+            } else {
+                throw(format!(
+                    "java.lang.StringIndexOutOfBoundsException: \
+                     begin {start}, end {end}, length {count}"
                 ))
             });
         }
@@ -7433,8 +7512,18 @@ fn buffered_writer_method(
             // length — the same pair a `StringWriter` tells apart.
             // A `BufferedWriter`'s `write(s, off, len)` reaches a JDK through
             // `String.getChars`, so it words its complaint the way `append`
-            // does — where every other writer's `write` does not.
-            let units = written_units(heap, method, descriptor, args, true)?;
+            // does — and takes a length of zero or less as writing nothing.
+            let units = written_units(
+                heap,
+                method,
+                descriptor,
+                args,
+                if method == "append" {
+                    RangeStyle::Begin
+                } else {
+                    RangeStyle::BufferedWrite
+                },
+            )?;
             if let Some(HeapObject::BufferedWriter { buffer, .. }) = heap.get_mut(receiver) {
                 buffer.extend_from_slice(&units);
             }
@@ -7475,6 +7564,24 @@ fn buffered_writer_method(
 }
 
 #[allow(clippy::too_many_lines)] // one arm per reader method
+/// Which of the three readers this is. A JDK answers `markSupported`, `mark`,
+/// `reset` and a negative `skip` differently for each, and caturra had one
+/// answer for all three: the class is read from the view map, which is the
+/// same fact `getClass()` reports.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReaderKind {
+    /// `StringReader`: marks, and `reset()` without one returns to the START.
+    Chars,
+    /// `BufferedReader`: marks, but `reset()` without one is an `IOException`,
+    /// and a negative `skip` is refused.
+    Buffered,
+    /// `InputStreamReader` and the `FileReader` that extends it: no marks at
+    /// all, so `mark` and `reset` refuse whatever they are handed.
+    Bytes,
+}
+
+// One reader's whole surface; the three kinds differ inside it, not per arm.
+#[allow(clippy::too_many_lines)]
 fn reader_method(
     heap: &mut Heap,
     vfs: &mut VirtualFileSystem,
@@ -7486,6 +7593,11 @@ fn reader_method(
     let (stdin, closed) = match heap.get(receiver) {
         Some(HeapObject::Reader { stdin, closed, .. }) => (*stdin, *closed),
         _ => unreachable!("receiver kind checked by caller"),
+    };
+    let kind = match crate::interpreter::object_class_name_of(heap, receiver).as_str() {
+        "java/io/BufferedReader" => ReaderKind::Buffered,
+        "java/io/InputStreamReader" | "java/io/FileReader" => ReaderKind::Bytes,
+        _ => ReaderKind::Chars,
     };
     // Reading a CLOSED reader is a JDK's `IOException`, not an end of stream —
     // which matters, because a program that closes early then reads gets a
@@ -7534,12 +7646,19 @@ fn reader_method(
                 Some(HeapObject::IntArray(_, values)) => values.len(),
                 _ => return Err(throw("java.lang.ClassCastException: not a char[]")),
             };
+            // A JDK checks `off`, `len` and `off + len` against the ARRAY and
+            // throws a bare `IndexOutOfBoundsException` — no message at all,
+            // and no clamping: `read(new char[2], 0, 5)` is a failure, not a
+            // read of two.
             let (offset, wanted) = match (args.get(1), args.get(2)) {
                 (Some(JValue::Int(offset)), Some(JValue::Int(length))) => {
-                    let offset = check_offset(*offset, room)?;
+                    let room = i32::try_from(room).unwrap_or(i32::MAX);
+                    if *offset < 0 || *length < 0 || offset.saturating_add(*length) > room {
+                        return Err(throw("java.lang.IndexOutOfBoundsException"));
+                    }
                     (
-                        offset,
-                        usize::try_from(*length).unwrap_or(0).min(room - offset),
+                        usize::try_from(*offset).unwrap_or(0),
+                        usize::try_from(*length).unwrap_or(0),
                     )
                 }
                 _ => (0, room),
@@ -7571,6 +7690,13 @@ fn reader_method(
                 Some(JValue::Int(count)) => i64::from(*count),
                 _ => 0,
             };
+            // A `StringReader` takes a negative skip and answers zero; every
+            // other reader refuses it.
+            if wanted < 0 && kind != ReaderKind::Chars {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: skip value is negative",
+                ));
+            }
             let mut skipped = 0;
             while skipped < wanted && !closed && !stdin && reader_next_char(heap, receiver) >= 0 {
                 skipped += 1;
@@ -7600,21 +7726,40 @@ fn reader_method(
                 && matches!(heap.get(receiver), Some(HeapObject::Reader { buffer, pos, .. }) if *pos < buffer.len());
             Ok(Some(JValue::Int(i32::from(ready))))
         }
-        // Every reader caturra models supports a mark: a `StringReader` and a
-        // `BufferedReader` both say so, and the two it has left read from a
-        // buffer that is all in memory anyway. The read-ahead LIMIT is a hint
+        // A `StringReader` and a `BufferedReader` mark; the byte readers do
+        // NOT, whatever caturra keeps them in. The read-ahead LIMIT is a hint
         // about how much a real one would have to keep, and nothing here has
-        // to forget.
-        "markSupported" => Ok(Some(JValue::Int(1))),
+        // to forget — but a NEGATIVE one is still refused, as a JDK's is.
+        "markSupported" => Ok(Some(JValue::Int(i32::from(kind != ReaderKind::Bytes)))),
         "mark" => {
+            if kind == ReaderKind::Bytes {
+                return Err(throw("java.io.IOException: mark() not supported"));
+            }
+            if matches!(args.first(), Some(JValue::Int(limit)) if *limit < 0) {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: Read-ahead limit < 0",
+                ));
+            }
             if let Some(HeapObject::Reader { pos, mark, .. }) = heap.get_mut(receiver) {
-                *mark = *pos;
+                *mark = Some(*pos);
             }
             Ok(Some(JValue::NULL))
         }
         "reset" => {
-            if let Some(HeapObject::Reader { pos, mark, .. }) = heap.get_mut(receiver) {
-                *pos = *mark;
+            if kind == ReaderKind::Bytes {
+                return Err(throw("java.io.IOException: reset() not supported"));
+            }
+            let marked = match heap.get(receiver) {
+                Some(HeapObject::Reader { mark, .. }) => *mark,
+                _ => None,
+            };
+            // Never marked: a `StringReader` returns to the start, and a
+            // `BufferedReader` says it has nothing to return to.
+            if marked.is_none() && kind == ReaderKind::Buffered {
+                return Err(throw("java.io.IOException: Stream not marked"));
+            }
+            if let Some(HeapObject::Reader { pos, .. }) = heap.get_mut(receiver) {
+                *pos = marked.unwrap_or(0);
             }
             Ok(Some(JValue::NULL))
         }
@@ -11031,14 +11176,24 @@ fn writer_method(
         // `write(String)` writes the whole string; `write(int)` writes a single
         // character (its low 16 bits).
         "write" => {
-            let units = written_units(heap, method, descriptor, args, false)?;
+            // One arm serves both, and they do NOT agree: a `PrintWriter`
+            // checks the range itself, a `FileWriter` lets `getChars` do it
+            // and keeps only the negative-length check of its own.
+            let style = if crate::interpreter::object_class_name_of(heap, receiver)
+                == "java/io/FileWriter"
+            {
+                RangeStyle::FileWrite
+            } else {
+                RangeStyle::Start
+            };
+            let units = written_units(heap, method, descriptor, args, style)?;
             put(heap, vfs, &String::from_utf16_lossy(&units))?;
             Ok(None)
         }
         // `append(char)` writes the character; `append(CharSequence)` the text
         // (a null appends the four characters "null"). Returns the writer.
         "append" => {
-            let units = written_units(heap, method, descriptor, args, true)?;
+            let units = written_units(heap, method, descriptor, args, RangeStyle::Begin)?;
             put(heap, vfs, &String::from_utf16_lossy(&units))?;
             Ok(Some(JValue::Ref(Some(receiver))))
         }
@@ -12570,13 +12725,20 @@ pub fn invoke_static(
         // discard — which is exactly an empty `StringReader` and a
         // `StringWriter`/`ByteArrayOutputStream` nobody reads back.
         "java/io/Reader" | "java/io/Writer" | "java/io/OutputStream" => match method {
-            "nullReader" => Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Reader {
-                buffer: String::new(),
-                pos: 0,
-                stdin: false,
-                closed: false,
-                mark: 0,
-            }))))),
+            "nullReader" => {
+                // ...and the null READER needs the same marking the null
+                // writer got: it is an empty `StringReader` here, and a JDK's
+                // is an anonymous `Reader$1`.
+                let reader = heap.alloc(HeapObject::Reader {
+                    buffer: String::new(),
+                    pos: 0,
+                    stdin: false,
+                    closed: false,
+                    mark: None,
+                });
+                heap.set_view_class(reader, "java/io/Reader$1");
+                Ok(Some(JValue::Ref(Some(reader))))
+            }
             // A null writer IS a `StringWriter` here — one nobody reads back
             // — but it must not PRINT as one: a `StringWriter`'s `toString` is
             // its buffer, and a JDK's null writer is an ordinary object with a
@@ -16422,7 +16584,12 @@ fn tokenizer_method(
     match method {
         // A tokenizer IS its own cursor here, so the bridge hands it back and
         // `hasNext`/`next` read the two names below.
-        "asIterator" => Ok(Some(JValue::Ref(Some(receiver)))),
+        // The same wrapper an `Enumeration`'s own `asIterator` records: one
+        // cursor answers both names here, so only its class differs.
+        "asIterator" => {
+            heap.set_view_class(receiver, "java/util/Enumeration$1");
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
         "hasMoreTokens" | "hasMoreElements" | "hasNext" => {
             Ok(Some(JValue::Int(i32::from(next(pos).is_some()))))
         }
@@ -16609,7 +16776,17 @@ fn string_writer_method(
                 let param = descriptor_param(descriptor);
                 builder_value_text(heap, param, &args[0])?
             } else {
-                written_units(heap, method, descriptor, args, method == "append")?
+                written_units(
+                    heap,
+                    method,
+                    descriptor,
+                    args,
+                    if method == "append" {
+                        RangeStyle::Begin
+                    } else {
+                        RangeStyle::Start
+                    },
+                )?
             };
             if let Some(HeapObject::StringWriter(buffer)) = heap.get_mut(receiver) {
                 buffer.extend_from_slice(&units);

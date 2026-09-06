@@ -2372,23 +2372,6 @@ public class Modifiers {
 }
 """,
     ),
-    dict(
-        id="scanner-text",
-        category="Library",
-        title="A Scanner's own toString",
-        summary="The JDK prints its delimiters, position and locale separators — internal state caturra does not model.",
-        main="ScannerText",
-        source="""
-import java.util.Scanner;
-
-public class ScannerText {
-    public static void main(String[] args) {
-        Scanner scanner = new Scanner("7 x");
-        System.out.println(scanner.toString().startsWith("java.util.Scanner"));
-    }
-}
-""",
-    ),
 ]
 
 # Java that is NEWER than 11. caturra rejects these, and so does javac 11 — which is
