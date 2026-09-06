@@ -121,7 +121,10 @@ a typo looks like. That is checked rather than claimed:
 and exits non-zero if one of them is a bare "cannot find symbol". That asks
 whether a name EXISTS; `scripts/coverage/behaviour.py` asks whether it answers
 the same thing a JDK does, by calling every answered method with real arguments
-and diffing — 2532 calls over 233 classes. The same run
+and diffing — 2751 calls over 233 classes; and
+`scripts/coverage/signatures.py` asks whether the DESCRIPTOR beside each table
+entry is the signature a JDK declares, which is what decides the argument
+check — 1608 of them over 81 classes. The first run
 reports how much is answered, with a refusal counting as MISSING rather than as
 known.
 

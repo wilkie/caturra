@@ -11153,6 +11153,11 @@ enum BParam {
     ChronoUnit,
     /// A `ChronoField`, which the field surface takes.
     ChronoField,
+    /// The two format STYLES, which only their own `compareTo` takes. An
+    /// enum's `compareTo` is `Enum`'s, so it takes the enum's own type — these
+    /// two took an `Object`, and `TextStyle.FULL.compareTo("x")` compiled.
+    TextStyle,
+    FormatStyle,
     /// A `TemporalAdjuster`, which `with` takes.
     TemporalAdjuster,
     /// Any `java.time` value at all — what `between` takes.
@@ -14361,17 +14366,23 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
     ),
     // `takeWhile`/`dropWhile` (Java 9): `takeWhile` STOPS at the first
     // element that fails, where `filter` keeps looking.
+    //
+    // Spelled `Predicate` here — the OBJECT stream's — where a JDK's takes an
+    // `IntPredicate`, which is what `filter` beside them says. The descriptor
+    // is what tells the check which interface a call really wants, so the two
+    // that had it wrong refused a variable of the right type while every other
+    // method on the table took one.
     bm(
         "takeWhile",
         &[BParam::Predicate],
         BRet::SameStream,
-        "(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;",
+        "(Ljava/util/function/IntPredicate;)Ljava/util/stream/IntStream;",
     ),
     bm(
         "dropWhile",
         &[BParam::Predicate],
         BRet::SameStream,
-        "(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;",
+        "(Ljava/util/function/IntPredicate;)Ljava/util/stream/IntStream;",
     ),
     bm(
         "map",
@@ -15294,14 +15305,6 @@ const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
     ),
-    // ...and the same question about a UNIT, which is the other half of
-    // `isSupported` and reads the same on every value that has it.
-    bm(
-        "isSupported",
-        &[BParam::ChronoUnit],
-        BRet::Boolean,
-        "(Ljava/time/temporal/TemporalUnit;)Z",
-    ),
     bm(
         "get",
         &[BParam::ChronoField],
@@ -15368,14 +15371,6 @@ const MONTH_METHODS: &[BuiltinMethod] = &[
         &[BParam::ChronoField],
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
-    ),
-    // ...and the same question about a UNIT, which is the other half of
-    // `isSupported` and reads the same on every value that has it.
-    bm(
-        "isSupported",
-        &[BParam::ChronoUnit],
-        BRet::Boolean,
-        "(Ljava/time/temporal/TemporalUnit;)Z",
     ),
     bm(
         "get",
@@ -17250,14 +17245,6 @@ const MONTH_DAY_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/time/temporal/TemporalField;)Z",
     ),
-    // ...and the same question about a UNIT, which is the other half of
-    // `isSupported` and reads the same on every value that has it.
-    bm(
-        "isSupported",
-        &[BParam::ChronoUnit],
-        BRet::Boolean,
-        "(Ljava/time/temporal/TemporalUnit;)Z",
-    ),
     bm(
         "compareTo",
         &[BParam::MonthDay],
@@ -18190,9 +18177,9 @@ const STYLE_METHODS: &[BuiltinMethod] = &[
     bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "compareTo",
-        &[BParam::Temporal],
+        &[BParam::FormatStyle],
         BRet::Int,
-        "(Ljava/lang/Object;)I",
+        "(Ljava/time/format/FormatStyle;)I",
     ),
     bm(
         "equals",
@@ -18215,9 +18202,9 @@ const TEXT_STYLE_METHODS: &[BuiltinMethod] = &[
     bm("getDeclaringClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "compareTo",
-        &[BParam::Temporal],
+        &[BParam::TextStyle],
         BRet::Int,
-        "(Ljava/lang/Object;)I",
+        "(Ljava/time/format/TextStyle;)I",
     ),
     bm(
         "equals",
@@ -23184,6 +23171,8 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Duration => JType::Duration,
         BParam::DateFormat => JType::DateFormat,
         BParam::ChronoUnit => JType::ChronoUnit,
+        BParam::TextStyle => JType::TextStyle,
+        BParam::FormatStyle => JType::FormatStyle,
         BParam::ChronoField => JType::ChronoField,
         BParam::TemporalAdjuster => JType::TemporalAdjuster,
         BParam::LocalDateTime => JType::LocalDateTime,

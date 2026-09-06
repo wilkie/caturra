@@ -15340,3 +15340,46 @@ captured rather than reasoned about:
   with stdin CLOSED, so a reader over `System.in` throws where caturra's
   console — which has an input box behind it — answers end of input. Declared,
   not counted.
+
+### Nothing had ever read the descriptors (2026-09-06)
+
+`IntStream.takeWhile` was spelled with the OBJECT stream's `Predicate` where a
+JDK's takes an `IntPredicate`, so it refused a variable of the right type while
+`filter` on the same table took one. The descriptor beside a table entry is not
+decoration — it is what tells the argument check which functional interface a
+call really wants — and no tool read it: `measure.py` asks whether a NAME
+exists, `behaviour.py` whether the answer matches.
+
+So `scripts/coverage/signatures.py`: **every builtin table's descriptor,
+against the JDK's own signature.** The class ↔ table pairing is read out of
+`builtin_instance_table` and `builtin_static_table` rather than kept in a
+second list, so a table added to the compiler is checked without anyone
+remembering to add it. **1608 descriptors over 81 classes.**
+
+Most of what it first reported was caturra's model rather than drift, and each
+of those is decided by asking rather than by a hand-kept list:
+
+- **A descriptor that NARROWS.** `LocalDate.isBefore(LocalDate)` where a JDK
+  says `(ChronoLocalDate)` accepts strictly less, and `LocalDate` is the only
+  one modelled. Whether one type narrows another is a question for a JDK, so
+  the tool asks it (`Assignable.java`) instead of listing families that would
+  go stale.
+- **An ERASED parameter.** The functional interfaces and `Temporal` are opaque
+  `Object`s here, and the parameter KIND beside the descriptor carries the
+  check.
+- **A varargs method's zero-varargs form**, which caturra declares as its own
+  arity: `getMethod(name)` is a real call on a JDK too.
+
+What was left were three real defects. `takeWhile` and `dropWhile` were the
+two entries on the primitive-stream table with the wrong interface. And two
+overloads caturra offered that Java does not: a `DayOfWeek`, a `Month` and a
+`MonthDay` are `TemporalAccessor`s only, so a JDK gives them the FIELD question
+and not the unit one — `DayOfWeek.MONDAY.isSupported(ChronoUnit.DAYS)` does not
+compile there and answered `false` here; and an enum's `compareTo` takes the
+enum's own type, where `TextStyle` and `FormatStyle` took an `Object`, so
+`TextStyle.FULL.compareTo("x")` compiled and threw. Both are accepts-invalid —
+the direction that hurts, since the program runs in the playground and fails on
+a real JDK.
+
+The sweep went from 2608 calls to 2751 once the primitive predicates were
+takeable.

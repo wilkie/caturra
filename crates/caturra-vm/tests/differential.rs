@@ -53730,3 +53730,54 @@ public class WriterRanges {
 }
 "#
 );
+
+// `takeWhile`/`dropWhile` on a primitive stream. Their descriptors were
+// spelled with the OBJECT stream's `Predicate` where a JDK's take an
+// `IntPredicate` — the two entries on that table that had it wrong — so they
+// refused a variable of the right type while `filter` beside them took one.
+// The descriptor is what tells the argument check which interface a call
+// really wants, and nothing had ever checked the descriptors.
+differential_test!(
+    the_predicate_a_primitive_stream_takes,
+    "PrimitiveTakeWhile",
+    r#"
+import java.util.function.*;
+import java.util.stream.*;
+public class PrimitiveTakeWhile {
+  public static void main(String[] a) {
+    IntPredicate ip = n -> n < 3;
+    LongPredicate lp = n -> n < 3;
+    DoublePredicate dp = n -> n < 3;
+    Predicate<String> sp = s -> s.length() < 3;
+    System.out.println(IntStream.of(1, 2, 5, 1).takeWhile(ip).sum());
+    System.out.println(IntStream.of(1, 2, 5, 1).dropWhile(ip).sum());
+    System.out.println(LongStream.of(1L, 2L, 5L, 1L).takeWhile(lp).sum());
+    System.out.println(LongStream.of(1L, 2L, 5L, 1L).dropWhile(lp).sum());
+    System.out.println(DoubleStream.of(1.0, 2.0, 5.0, 1.0).takeWhile(dp).sum());
+    System.out.println(DoubleStream.of(1.0, 2.0, 5.0, 1.0).dropWhile(dp).sum());
+    System.out.println(Stream.of("a", "b", "long", "c").takeWhile(sp).count());
+    System.out.println(Stream.of("a", "b", "long", "c").dropWhile(sp).count());
+    System.out.println(IntStream.of(1, 2, 5).takeWhile(n -> n < 3).sum());
+    System.out.println(IntStream.of(1, 2, 5).takeWhile(ip).boxed().count());
+    System.out.println(IntStream.of(1, 2, 5).dropWhile(ip).max().getAsInt());
+  }
+}
+"#
+);
+
+// The same audit found two overloads caturra offered that Java does not. A
+// `DayOfWeek`, a `Month` and a `MonthDay` are `TemporalAccessor`s only, so a
+// JDK gives them the FIELD question and not the unit one.
+differential_reject!(
+    reject_a_unit_question_to_a_partial,
+    "UnitToPartial",
+    "import java.time.*;\nimport java.time.temporal.*;\npublic class UnitToPartial { public static void main(String[] a) { System.out.println(DayOfWeek.MONDAY.isSupported(ChronoUnit.DAYS)); } }"
+);
+
+// ...and an enum's `compareTo` takes the enum's own type. These two took an
+// `Object`, so a `TextStyle` compared against a String compiled and threw.
+differential_reject!(
+    reject_comparing_a_style_to_a_string,
+    "StyleToString",
+    "import java.time.format.*;\npublic class StyleToString { public static void main(String[] a) { System.out.println(TextStyle.FULL.compareTo(\"x\")); } }"
+);
