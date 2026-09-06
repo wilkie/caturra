@@ -4794,8 +4794,11 @@ fn invoke_virtual_dispatch(
                     ops: Vec::new(),
                 })))));
             }
+            // The ARRAY's class, not its element's — `String.split` records
+            // it correctly and this one did not, so the same array printed as
+            // `java.lang.String@x` through a `Pattern`.
             Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::RefArray(
-                String::from("java/lang/String"),
+                String::from("[Ljava/lang/String;"),
                 refs,
             ))))))
         }
@@ -15083,9 +15086,12 @@ fn small_int_static(
             [text @ JValue::Ref(_)] | [text @ JValue::Ref(_), JValue::Int(_)],
         ) => {
             let text = parse_int_text(heap, text)?;
-            // ...and in a RADIX, which these two took as late as `Integer` did.
+            // ...and in a RADIX, which these two took as late as `Integer`
+            // did — through the SAME check, which is the whole reason it is a
+            // function: Rust's own parser PANICS outside [2, 36], where a JDK
+            // says "radix 1 less than Character.MIN_RADIX".
             let radix = match args.get(1) {
-                Some(JValue::Int(radix)) => u32::try_from(*radix).unwrap_or(10),
+                Some(JValue::Int(radix)) => checked_radix(*radix)?,
                 _ => 10,
             };
             let value: i32 = if radix == 10 {
@@ -15094,6 +15100,15 @@ fn small_int_static(
                 i32::from_str_radix(&text.raw, radix).map_err(|_| number_format(&text.raw))?
             };
             if value < lo || value > hi {
+                // A radix parse names the radix in its complaint, where a
+                // plain one reports the range it fell outside.
+                if radix != 10 {
+                    return Err(throw(format!(
+                        "java.lang.NumberFormatException: Value out of range. \
+                         Value:\"{}\" Radix:{radix}",
+                        text.raw
+                    )));
+                }
                 return Err(number_format_range(&text));
             }
             if method == "valueOf" {
@@ -16493,9 +16508,14 @@ fn number_format_method(
                 text.clone()
             };
             let Some(value) = pattern.parse_number(&read) else {
-                return Err(throw(format!(
-                    "java.text.ParseException: Unparseable number: \"{text}\""
-                )));
+                // Two methods, two complaints: `parse` names the text it could
+                // not read, and `parseObject` — which a JDK inherits from
+                // `Format` — names only itself.
+                return Err(throw(if method == "parseObject" {
+                    String::from("java.text.ParseException: Format.parseObject(String) failed")
+                } else {
+                    format!("java.text.ParseException: Unparseable number: \"{text}\"")
+                }));
             };
             // A whole number comes back as a `Long`, anything else as a
             // `Double` — which is what a program's `intValue()` then reads.

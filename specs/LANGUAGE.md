@@ -15419,3 +15419,53 @@ PATHS and so a new element type; `Files.createDirectories`/`createLink`/
 `getFileStore`/`newDirectoryStream`/`readSymbolicLink`, which want types
 caturra does not model; `BigDecimal.divide(BigDecimal, int)`; and
 `String.getBytes(int, int, byte[], int)`, deprecated since 1.1.
+
+### The harness was dropping the line (2026-09-06)
+
+Forty-three probes did not run at all, each losing its whole class, and the
+reasons were almost all the sweep's own doing. Three fixes, none of them to the
+engine:
+
+* **A REFUSAL now drops the call that caused it.** The bisect knew two message
+  shapes — javac's, and caturra's "no suitable method found" — and a refusal
+  ("`Collection.spliterator` exists in Java, but …") matched neither, so the
+  loop gave up and lost the class. Seven classes went to `spliterator` alone,
+  for a fact already declared.
+* **`java.util.Locale` came out of the argument bank.** caturra models it as a
+  namespace with no VALUE of the type and says so — an honest refusal, and one
+  that killed six more classes. The overloads that take one are reported as
+  unbuildable, which is what they are.
+* **And the harness passes the LINE on.** javac names the line a probe failed
+  at and caturra's diagnostics carry one; only `compatrun` dropped it, so a
+  message that named no method — "incompatible types: String cannot be
+  converted to Integer", from an argument the bank chose badly — left the
+  bisect nothing to drop. It is in the JSON now, and the sweep uses it exactly
+  as it uses javac's.
+
+**2745 calls became 4274**, a fifty-per-cent widening of what is actually run,
+and 41 differences appeared behind those dead probes. Three were fixed at once
+because they were serious or shared a cause already known here:
+
+* **A radix outside `[2, 36]` PANICKED the engine.** Rust's own parser panics
+  there, and a panic prints no diagnostics at all, so `Byte.parseByte("1", 1)`
+  took the whole program down where a JDK says "radix 1 less than
+  Character.MIN_RADIX". The check existed and had a name; the two sites added
+  the same afternoon were the ones that did not call it. The `panics.py` fuzzer
+  had not caught it — it writes constructor calls, not two-argument statics —
+  which is a fact about that tool worth keeping.
+* **A `Pattern`'s `split` recorded its result's ELEMENT class**, so the array
+  printed as `java.lang.String@x`. The sixth site of that single mistake;
+  `String.split` had it right.
+* **`parseObject` has a complaint of its own** — `Format.parseObject(String)
+  failed`, inherited from `Format` — where `parse` names the text it could not
+  read. One shared function, two callers needing different words, again.
+
+**The other 38 are reported rather than suppressed**, which is what this tool
+is for. They come to about fifteen facts, and the shapes are the familiar ones:
+a `BitSet`'s range methods say `bitIndex` where a JDK says `fromIndex` (and
+`previousSetBit` allows −1); `EnumSet.contains(aString)` throws where a JDK
+answers false; three `java.time` `parse` messages omit "at index 0" and two
+`from` messages omit " of type java.time.LocalDate"; `Duration.between` on two
+DATES answers where a JDK refuses the unit; `Collections.rotate` writes to a
+list a JDK never touches; and four more objects report a sibling's class from
+`getClass()`.

@@ -53873,3 +53873,75 @@ public class FilesMetadata {
 }
 "#
 );
+
+// A radix outside `[2, 36]`. Rust's own parser PANICS there, and a panic
+// prints no diagnostics at all — so `Byte.parseByte("1", 1)` took the whole
+// engine down where a JDK says "radix 1 less than Character.MIN_RADIX". The
+// check existed and had a name; the two sites added last were the ones that
+// did not call it. A radix parse also names the RADIX when the value does not
+// fit, where a plain one reports the range.
+differential_test!(
+    the_radix_a_parse_refuses,
+    "BadRadix",
+    r#"
+public class BadRadix {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("byte-1", () -> Byte.parseByte("1", 1));
+    s("byte-37", () -> Byte.parseByte("1", 37));
+    s("byte-0", () -> Byte.parseByte("1", 0));
+    s("byte-neg", () -> Byte.parseByte("1", -2));
+    s("short-1", () -> Short.parseShort("1", 1));
+    s("short-vo", () -> Short.valueOf("1", 1));
+    s("int-1", () -> Integer.parseInt("1", 1));
+    s("int-37", () -> Integer.parseInt("1", 37));
+    s("long-1", () -> Long.parseLong("1", 1));
+    s("int-ok", () -> Integer.parseInt("11", 2));
+    s("byte-over", () -> Byte.parseByte("777", 8));
+    s("byte-ok", () -> Byte.parseByte("-11", 2));
+  }
+}
+"#
+);
+
+// Two more the sweep found once it could see past a probe's first bad line: a
+// `Pattern`'s `split` recorded its result's ELEMENT class where `String.split`
+// records the array's — the sixth site of that one mistake — and `parseObject`
+// has a complaint of its own, inherited from `Format`, where `parse` names the
+// text it could not read.
+differential_test!(
+    the_class_a_split_answers,
+    "SplitAndParse",
+    // Two hashes: the pattern `"#0.0"` holds a `"#`, which would close a
+    // one-hash raw string.
+    r##"
+import java.text.*;
+import java.util.regex.*;
+public class SplitAndParse {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    Pattern p = Pattern.compile(",");
+    s("split-len", () -> p.split("a,b,c").length);
+    s("split-0", () -> p.split("a,b,c")[0]);
+    s("split-class", () -> p.split("a,b").getClass().getName());
+    s("split-limit", () -> p.split("a,b,c", 2).length);
+    s("split-str-class", () -> "a,b,c".split(",").getClass().getName());
+    NumberFormat f = NumberFormat.getInstance();
+    s("parseObject", () -> f.parseObject("ab"));
+    s("parseObject-ok", () -> f.parseObject("12"));
+    s("parse", () -> f.parse("ab"));
+    DecimalFormat d = new DecimalFormat("#0.0");
+    s("d-parseObject", () -> d.parseObject("ab"));
+    s("d-parse", () -> d.parse("ab"));
+  }
+}
+"##
+);

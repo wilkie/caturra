@@ -102,7 +102,10 @@ BANK = {
     "java.util.function.Predicate": ['java.util.function.Predicate.isEqual("a")'],
     "java.lang.Enum": ["java.time.Month.MARCH"],
     "java.util.function.Consumer": ["(java.util.function.Consumer<Object>) (v -> {})"],
-    "java.util.Locale": ["java.util.Locale.US"],
+    # NOT `java.util.Locale`: caturra models it as a namespace with no VALUE
+    # of the type, and says so — an honest refusal, but one that kills the
+    # probe it appears in, and six classes with it. The overloads that take one
+    # are reported as unbuildable, which is what they are.
     "java.util.function.IntFunction": [
         '(java.util.function.IntFunction<Object>) (n -> "" + n)'
     ],
@@ -218,6 +221,13 @@ KNOWN = [
     (
         r"^java\.util\.Comparator\.(naturalOrder|reverseOrder|nullsFirst|nullsLast)",
         "a comparator caturra synthesized is not one of a JDK's named classes",
+    ),
+    (
+        r"^java\.util\.(Set|Map)\.(of|copyOf|ofEntries)",
+        "a JDK's immutable Set and Map iterate in an order randomized per JVM "
+        "run (the SALT), so the same call answers `[a, b]` on one run and "
+        "`[b, a]` on the next; caturra's is stable, which is the only thing a "
+        "second engine can be",
     ),
     (
         r"^java\.io\.InputStreamReader\.(read|skip|transferTo)",
@@ -399,7 +409,13 @@ def run_both(source):
     except ValueError:
         return None, "caturra produced no JSON"
     if answer.get("error"):
-        return None, "caturra: " + answer["error"].splitlines()[0]
+        # The LINE, when the diagnostic carried one: it is what lets the bisect
+        # drop the offending call rather than guess from the wording. Without
+        # it a message that names no method — "incompatible types: String
+        # cannot be converted to Integer", from an argument the bank chose
+        # badly — cost the whole class its sweep.
+        line = answer.get("line") or 0
+        return None, f"caturra:{line}: " + answer["error"].splitlines()[0]
     return jdk, answer.get("stdout") or ""
 
 
@@ -451,11 +467,17 @@ def main():
             jdk, cat = run_both(probe_source(class_name, calls))
             if jdk is not None:
                 break
+            caturra_line = re.match(r"caturra:(\d+): ", cat)
             if cat.startswith("javac: "):
                 # javac names the LINE, and the preamble is a fixed height.
                 bad = {n - HEADER_LINES - 1 for n in javac_rejected_lines(cat)}
                 keep = [c for at, c in enumerate(calls) if at not in bad]
                 why = "javac would not take the probe"
+            elif caturra_line and caturra_line.group(1) != "0":
+                # ...and so does caturra, now that the harness passes it on.
+                at = int(caturra_line.group(1)) - HEADER_LINES - 1
+                keep = [c for n, c in enumerate(calls) if n != at]
+                why = "caturra would not take the probe"
             else:
                 # caturra names the METHOD, not the line: an overload it does
                 # not offer. (The measurement is name-level, so this is an
@@ -473,7 +495,20 @@ def main():
                     # A message that names no signature at all: fall back to the
                     # name, and SAY that the drop was by name — the overloads
                     # beside it may work perfectly.
-                    named = set(re.findall(r"for (\w+)\(|method (\w+)\b", cat))
+                    # ...and the REFUSALS, which name the method rather than
+                    # the call: "Collection.spliterator exists in Java, but
+                    # …" and "unknown native member: X.y". A refusal used to
+                    # match neither pattern, so the loop gave up and the whole
+                    # CLASS was lost — seven classes to `spliterator` alone,
+                    # for a fact already declared.
+                    named = set(
+                        re.findall(
+                            r"for (\w+)\(|method (\w+)\b"
+                            r"|[\w.$]*\.(\w+) exists in Java"
+                            r"|unknown native member: [\w/$]*\.?(\w+)",
+                            cat,
+                        )
+                    )
                     names = {n for pair in named for n in pair if n}
                     keep = [c for c in calls if c[0].split("(")[0] not in names]
                     why = "dropped with a sibling overload caturra does not offer"

@@ -70,9 +70,17 @@ fn main() {
         let first = compilation
             .diagnostics
             .iter()
-            .find(|d| format!("{:?}", d.severity) == "Error")
-            .map_or_else(String::new, |d| d.message.clone());
-        println!("{{\"ok\": false, \"error\": \"{}\"}}", escape(&first));
+            .find(|d| format!("{:?}", d.severity) == "Error");
+        let message = first.map_or_else(String::new, |d| d.message.clone());
+        // ...and the LINE it is on. javac names one and caturra's diagnostics
+        // carry one; only this harness dropped it, so a reader with several
+        // candidate lines — the coverage sweep, deciding which call to leave
+        // out — had to guess from the wording and gave up when it could not.
+        let line = first.and_then(|d| d.span).map_or(0, |span| span.start.line);
+        println!(
+            "{{\"ok\": false, \"error\": \"{}\", \"line\": {line}}}",
+            escape(&message)
+        );
         return;
     }
 
