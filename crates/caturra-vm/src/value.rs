@@ -579,9 +579,14 @@ impl ClassLayout {
 pub enum StreamSource {
     Fixed(Vec<JValue>),
     /// `Stream.iterate(seed, next)`: the seed, then `next` of the one before.
+    ///
+    /// With a `while` (Java 9's three-argument form) the source is FINITE: it
+    /// stops at the first element the predicate rejects, and that element is
+    /// not produced — the loop shape of a `for`, written as a stream.
     Iterate {
         seed: JValue,
         next: HeapRef,
+        while_true: Option<HeapRef>,
     },
     /// `Stream.generate(supplier)`: a fresh call per element.
     Generate {
@@ -1321,9 +1326,18 @@ impl StreamSource {
                     visit_value(*value, visit);
                 }
             }
-            StreamSource::Iterate { seed, next } => {
+            StreamSource::Iterate {
+                seed,
+                next,
+                while_true,
+            } => {
                 visit_value(*seed, visit);
                 visit(*next);
+                // The bound is a lambda too, and a collector that did not walk
+                // it would free the predicate out from under a live stream.
+                if let Some(test) = while_true {
+                    visit(*test);
+                }
             }
             StreamSource::Generate { supplier } => visit(*supplier),
             StreamSource::Matches { matcher } => visit(*matcher),

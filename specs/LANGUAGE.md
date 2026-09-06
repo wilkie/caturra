@@ -15383,3 +15383,39 @@ a real JDK.
 
 The sweep went from 2608 calls to 2751 once the primitive predicates were
 takeable.
+
+### The overloads the sweep named (2026-09-06)
+
+With the drop list trustworthy, the "caturra offers no such overload" column is
+a work list rather than a rumour. Its ordinary end, closed:
+
+- **`write(int)`**, on all three writers. A JDK takes an int and writes its low
+  sixteen bits, so `w.write(65)` writes an `A`; typed as a `char`, that call
+  was "int cannot be converted to char".
+- **`Byte`/`Short` parse in a RADIX** — `valueOf(s, 2)` and `parseByte(s, 2)`,
+  which `Integer` and `Long` had all along.
+- **`LocalDate.atTime`** to the nanosecond, and taking a `LocalTime` whole. The
+  VM already read a fourth field; only the table was short.
+- **`BitSet.clear()`** (every bit at once) and **`set(from, to, value)`** (a
+  range to an explicit value).
+- **Java 9's three-argument `iterate`**, on all four stream kinds. It is
+  BOUNDED: it tests before it yields, so the element that fails is never seen —
+  a `for` loop written as a stream. The source is a rule with a predicate now,
+  and the collector walks that predicate too.
+- **`java.nio.file.Files` past the read-and-write pair**: `readAllBytes`,
+  `size`, `isReadable`/`isWritable`/`isExecutable` (the permissions are real
+  state here and enforced), `isHidden`, `isSameFile`, `isSymbolicLink`,
+  `probeContentType`, and `newBufferedReader`.
+
+Two of those are edges only a capture gives. `isSameFile` SHORT-CIRCUITS on
+equal paths, so it is true for a file that is not there and only a real
+comparison needs both to exist. And `probeContentType` never looks for the file
+at all — the NAME is what a JDK reads, so a missing `gone.txt` is still
+`text/plain`.
+
+**What is left on that list**, and why: the ranged `Arrays.compare(a, from, to,
+b, from, to)` for four primitive kinds; `Files.list`, which wants a stream of
+PATHS and so a new element type; `Files.createDirectories`/`createLink`/
+`getFileStore`/`newDirectoryStream`/`readSymbolicLink`, which want types
+caturra does not model; `BigDecimal.divide(BigDecimal, int)`; and
+`String.getBytes(int, int, byte[], int)`, deprecated since 1.1.

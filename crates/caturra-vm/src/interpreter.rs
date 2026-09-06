@@ -10924,14 +10924,29 @@ impl<'run> Interpreter<'run> {
             // nothing bounds a JDK's — an unbounded terminal over one runs
             // until the instruction budget ends the program, which is the
             // nearest thing this engine has to never returning.
-            crate::value::StreamSource::Iterate { seed, next } => {
+            crate::value::StreamSource::Iterate {
+                seed,
+                next,
+                while_true,
+            } => {
+                let (next, while_true) = (*next, *while_true);
                 let mut element = *seed;
                 loop {
+                    // Java 9's three-argument form tests BEFORE it yields, so
+                    // the element that fails is never seen — `for (i = seed;
+                    // test(i); i = step(i))` written as a stream.
+                    if let Some(test) = while_true {
+                        let keep =
+                            self.call_functional(test, "test", "(Ljava/lang/Object;)Z", element)?;
+                        if !matches!(keep, Some(JValue::Int(flag)) if flag != 0) {
+                            break;
+                        }
+                    }
                     if !self.stream_feed(ops, states, sink, 0, element)? {
                         break;
                     }
                     let stepped = self.call_functional(
-                        *next,
+                        next,
                         "apply",
                         "(Ljava/lang/Object;)Ljava/lang/Object;",
                         element,
@@ -14295,7 +14310,13 @@ impl<'run> Interpreter<'run> {
             // unimplemented member about a method it implements.
             if matches!(
                 (method_name, args),
-                ("generate", [JValue::Ref(None)]) | ("iterate", [_, JValue::Ref(None)])
+                ("generate", [JValue::Ref(None)])
+                    | (
+                        "iterate",
+                        [_, JValue::Ref(None)]
+                            | [_, JValue::Ref(None), _]
+                            | [_, _, JValue::Ref(None)],
+                    )
             ) {
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.NullPointerException",
@@ -14306,6 +14327,16 @@ impl<'run> Interpreter<'run> {
                     Some(crate::value::StreamSource::Iterate {
                         seed: *seed,
                         next: *step,
+                        while_true: None,
+                    })
+                }
+                // Java 9's bounded form: the predicate comes SECOND, and the
+                // step last.
+                ("iterate", [seed, JValue::Ref(Some(test)), JValue::Ref(Some(step))]) => {
+                    Some(crate::value::StreamSource::Iterate {
+                        seed: *seed,
+                        next: *step,
+                        while_true: Some(*test),
                     })
                 }
                 ("generate", [JValue::Ref(Some(supplier))]) => {

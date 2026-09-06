@@ -53781,3 +53781,95 @@ differential_reject!(
     "StyleToString",
     "import java.time.format.*;\npublic class StyleToString { public static void main(String[] a) { System.out.println(TextStyle.FULL.compareTo(\"x\")); } }"
 );
+
+// Overloads the behaviour sweep named, once its drop list could be trusted.
+// Each is ordinary Java a program reaches for: `write(int)` takes an int and
+// writes its low sixteen bits (typed as a char, `w.write(65)` was "int cannot
+// be converted to char"); `Byte`/`Short` parse in a RADIX as `Integer` and
+// `Long` already did; a date takes a time whole or to the nanosecond; a
+// `BitSet` clears every bit at once and sets a RANGE to a value; and Java 9's
+// three-argument `iterate` is bounded — it tests before it yields, so the
+// element that fails is never seen.
+differential_test!(
+    the_overloads_the_sweep_named,
+    "NamedOverloads",
+    r#"
+import java.io.*;
+import java.time.*;
+import java.util.*;
+import java.util.stream.*;
+public class NamedOverloads {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    s("w-int", () -> { StringWriter w = new StringWriter(); w.write(65); w.write(0x4e2d); return w.toString(); });
+    s("bw-int", () -> { StringWriter u = new StringWriter(); BufferedWriter w = new BufferedWriter(u); w.write(65); w.flush(); return u.toString(); });
+    s("face-int", () -> { Writer w = new StringWriter(); w.write(66); return w.toString(); });
+    s("byte-radix", () -> Byte.valueOf("11", 2));
+    s("short-radix", () -> Short.valueOf("11", 2));
+    s("parse-radix", () -> Byte.parseByte("-11", 2) + Short.parseShort("11", 16));
+    s("byte-radix-bad", () -> Byte.valueOf("99", 2));
+    s("atTime4", () -> LocalDate.of(2024, 3, 14).atTime(1, 2, 3, 4));
+    s("atTime-lt", () -> LocalDate.of(2024, 3, 14).atTime(LocalTime.of(1, 2)));
+    s("bitset-clear", () -> { BitSet b = new BitSet(); b.set(3); b.clear(); return b.toString(); });
+    s("bitset-set3", () -> { BitSet b = new BitSet(); b.set(1, 4, true); b.set(2, 3, false); return b.toString(); });
+    s("int-iterate", () -> IntStream.iterate(1, n -> n < 20, n -> n * 2).boxed().collect(Collectors.toList()));
+    s("long-iterate", () -> LongStream.iterate(1L, n -> n < 20, n -> n * 2).boxed().collect(Collectors.toList()));
+    s("dbl-iterate", () -> DoubleStream.iterate(1.0, n -> n < 20, n -> n * 2).boxed().collect(Collectors.toList()));
+    s("obj-iterate", () -> Stream.iterate("a", t -> t.length() < 4, t -> t + "a").collect(Collectors.toList()));
+    s("iterate-none", () -> IntStream.iterate(9, n -> n < 3, n -> n + 1).count());
+    s("iterate-2arg", () -> IntStream.iterate(1, n -> n * 2).limit(4).sum());
+  }
+}
+"#
+);
+
+// `java.nio.file.Files`, past the read-and-write pair. The permissions are
+// real state here and enforced, so the three `is…` questions have something to
+// answer; `isHidden` is a leading dot and never a directory; nothing is a
+// symbolic link, since caturra has none. Two edges only a capture gives:
+// `isSameFile` short-circuits on equal paths, so it is true for a file that is
+// not there, and `probeContentType` never looks for the file at all — the NAME
+// is all a JDK reads.
+differential_test!(
+    what_files_answers_about_a_path,
+    "FilesMetadata",
+    r#"
+import java.nio.file.*;
+public class FilesMetadata {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    Path p = Path.of("fm.txt");
+    Files.writeString(p, "hello\nworld\n");
+    Path missing = Path.of("gone.txt");
+    s("readAllBytes", () -> new String(Files.readAllBytes(p)));
+    s("readAllBytes-missing", () -> Files.readAllBytes(missing).length);
+    s("size", () -> Files.size(p));
+    s("size-missing", () -> Files.size(missing));
+    s("isReadable", () -> Files.isReadable(p));
+    s("isWritable", () -> Files.isWritable(p));
+    s("isExecutable", () -> Files.isExecutable(p));
+    s("isReadable-missing", () -> Files.isReadable(missing));
+    s("isHidden", () -> Files.isHidden(p));
+    s("isSameFile", () -> Files.isSameFile(p, Path.of("fm.txt")));
+    s("isSameFile-missing-both", () -> Files.isSameFile(missing, missing));
+    s("isSameFile-missing-one", () -> Files.isSameFile(missing, p));
+    s("isSymbolicLink", () -> Files.isSymbolicLink(p));
+    s("newBufferedReader", () -> Files.newBufferedReader(p).readLine());
+    s("newBufferedReader-cs", () -> Files.newBufferedReader(p, java.nio.charset.StandardCharsets.UTF_8).readLine());
+    s("newBufferedReader-missing", () -> Files.newBufferedReader(missing).readLine());
+    s("probeContentType", () -> Files.probeContentType(p));
+    s("probe-missing", () -> Files.probeContentType(missing));
+    s("probe-noext", () -> Files.probeContentType(Path.of("gone")));
+    Files.delete(p);
+  }
+}
+"#
+);

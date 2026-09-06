@@ -602,6 +602,16 @@ fn date_builder(
             )))))
         }
         "atTime" => {
+            // `atTime(time)` takes the time WHOLE, where the rest name its
+            // fields.
+            if let Some(JValue::Ref(Some(reference))) = args.first()
+                && let Some(HeapObject::Temporal(Temporal::Time(time))) = heap.get(*reference)
+            {
+                let time = *time;
+                return Ok(Some(JValue::Ref(Some(heap.intern_temporal(
+                    Temporal::DateTime(crate::time::DateTime { date, time }),
+                )))));
+            }
             let field = |at: usize| match args.get(at) {
                 Some(JValue::Int(value)) => *value,
                 _ => 0,
@@ -13065,6 +13075,8 @@ fn path_arg(heap: &Heap, value: &JValue) -> Result<String, VmError> {
 }
 
 /// `java.nio.file.Files` static methods, over the virtual filesystem.
+// One arm per question `Files` answers; the list is the point.
+#[allow(clippy::too_many_lines)]
 fn files_static(
     heap: &mut Heap,
     vfs: &mut VirtualFileSystem,
@@ -13078,6 +13090,100 @@ fn files_static(
             let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
             let text = String::from_utf8_lossy(&content).into_owned();
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        // The same bytes `readString` decodes, handed over raw.
+        "readAllBytes" => {
+            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            #[allow(clippy::cast_possible_wrap)]
+            let bytes: Vec<i8> = content.iter().map(|b| *b as i8).collect();
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::ByteArray(bytes)),
+            ))))
+        }
+        "size" => {
+            if !vfs.exists(&path) {
+                return Err(not_found());
+            }
+            #[allow(clippy::cast_possible_wrap)]
+            Ok(Some(JValue::Long(vfs.len(&path) as i64)))
+        }
+        // The three permission bits, which are real state here and enforced.
+        // A path that does not exist is not readable, and says so rather than
+        // failing — a JDK's answer is false for every one of the three.
+        "isReadable" | "isWritable" | "isExecutable" => {
+            let (read, write, execute) = vfs.permissions(&path);
+            let answer = vfs.exists(&path)
+                && match method {
+                    "isReadable" => read,
+                    "isWritable" => write,
+                    _ => execute,
+                };
+            Ok(Some(JValue::Int(i32::from(answer))))
+        }
+        // A hidden file is one whose name begins with a dot on this platform,
+        // and a DIRECTORY is never hidden however it is named — which is what
+        // a JDK answers on the filesystem this one imitates.
+        "isHidden" => {
+            let name = path.rsplit('/').next().unwrap_or(&path);
+            let hidden = name.starts_with('.') && !vfs.is_directory(&path);
+            Ok(Some(JValue::Int(i32::from(hidden))))
+        }
+        // caturra has no links, so nothing is one — and the question is not a
+        // failure for a path that is missing either.
+        "isSymbolicLink" => Ok(Some(JValue::Int(0))),
+        // Two paths are the same file when they NORMALIZE to one, and a JDK
+        // insists both exist before it answers.
+        "isSameFile" => {
+            let other = path_arg(heap, &args[1])?;
+            // Two paths that normalize to ONE are the same file without either
+            // being looked for — a JDK short-circuits on equality, so
+            // `isSameFile(gone, gone)` is true for a file that is not there.
+            // Only a real comparison needs both to exist.
+            if VirtualFileSystem::normalize(&path) == VirtualFileSystem::normalize(&other) {
+                return Ok(Some(JValue::Int(1)));
+            }
+            if !vfs.exists(&path) {
+                return Err(not_found());
+            }
+            if !vfs.exists(&other) {
+                return Err(throw(format!("java.nio.file.NoSuchFileException: {other}")));
+            }
+            Ok(Some(JValue::Int(0)))
+        }
+        // A JDK probes the CONTENT and the name; this filesystem stores text,
+        // so the name is all there is — and `text/plain` is what a JDK
+        // answers for the extensions a program here writes.
+        // ...and it does not look for the file: the NAME is all a JDK reads
+        // here, so a path that is not there still answers by its extension.
+        "probeContentType" => {
+            let name = path.rsplit('/').next().unwrap_or(&path);
+            let kind = match name.rsplit_once('.').map_or("", |(_, ext)| ext) {
+                "txt" | "text" => Some("text/plain"),
+                "csv" => Some("text/csv"),
+                "html" | "htm" => Some("text/html"),
+                "json" => Some("application/json"),
+                "xml" => Some("text/xml"),
+                _ => None,
+            };
+            Ok(Some(match kind {
+                Some(kind) => JValue::Ref(Some(heap.alloc_string(kind))),
+                None => JValue::NULL,
+            }))
+        }
+        // `newBufferedReader(path)` — the reader a line-by-line program opens.
+        // It reads the file NOW, as every other reader here does; a JDK opens
+        // it now too, which is why a missing file fails at this call.
+        "newBufferedReader" => {
+            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            let reader = heap.alloc(HeapObject::Reader {
+                buffer: String::from_utf8_lossy(&content).into_owned(),
+                pos: 0,
+                stdin: false,
+                closed: false,
+                mark: None,
+            });
+            heap.set_view_class(reader, "java/io/BufferedReader");
+            Ok(Some(JValue::Ref(Some(reader))))
         }
         "readAllLines" => {
             let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
@@ -14972,9 +15078,21 @@ fn small_int_static(
         (i32::from(i8::MIN), i32::from(i8::MAX))
     };
     match (method, args) {
-        ("parseShort" | "parseByte" | "valueOf", [text @ JValue::Ref(_)]) => {
+        (
+            "parseShort" | "parseByte" | "valueOf",
+            [text @ JValue::Ref(_)] | [text @ JValue::Ref(_), JValue::Int(_)],
+        ) => {
             let text = parse_int_text(heap, text)?;
-            let value: i32 = text.parse().map_err(|_| number_format(&text.raw))?;
+            // ...and in a RADIX, which these two took as late as `Integer` did.
+            let radix = match args.get(1) {
+                Some(JValue::Int(radix)) => u32::try_from(*radix).unwrap_or(10),
+                _ => 10,
+            };
+            let value: i32 = if radix == 10 {
+                text.parse().map_err(|_| number_format(&text.raw))?
+            } else {
+                i32::from_str_radix(&text.raw, radix).map_err(|_| number_format(&text.raw))?
+            };
             if value < lo || value > hi {
                 return Err(number_format_range(&text));
             }
@@ -17351,14 +17469,19 @@ fn bitset_method(
             .is_some_and(|w| (w >> (bit % 64)) & 1 == 1)
     };
     match method {
+        // `clear()` empties the whole set: there is no bit to name, so it is
+        // its own answer rather than a range of none.
+        "clear" if args.is_empty() => store(heap, Vec::new()),
         "set" | "setValue" | "clear" | "flip" => {
             let from = index(0)?;
-            // The three shapes: one bit, a RANGE (`set(from, to)`), and one bit
-            // with an explicit value (`set(bit, false)`). The caller renames the
-            // last two so the arity alone tells them apart.
-            let (from, to, value) = match (method, args.get(1)) {
-                ("setValue", Some(JValue::Int(flag))) => (from, from + 1, *flag != 0),
-                (_, Some(JValue::Int(end))) => (from, *end, true),
+            // The four shapes: one bit, a RANGE (`set(from, to)`), one bit with
+            // an explicit value (`set(bit, false)`), and a range with one
+            // (`set(from, to, false)`). The caller renames the third so the
+            // arity alone tells it from the second.
+            let (from, to, value) = match (method, args.get(1), args.get(2)) {
+                ("setValue", Some(JValue::Int(flag)), _) => (from, from + 1, *flag != 0),
+                (_, Some(JValue::Int(end)), Some(JValue::Int(flag))) => (from, *end, *flag != 0),
+                (_, Some(JValue::Int(end)), _) => (from, *end, true),
                 _ => (from, from + 1, true),
             };
             let value = if method == "clear" { false } else { value };

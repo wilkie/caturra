@@ -15176,6 +15176,20 @@ const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
         BRet::LocalDateTime,
         "(III)Ljava/time/LocalDateTime;",
     ),
+    // ...and the two forms that were missing: the NANOSECOND one, which the VM
+    // already read a fourth field for, and the one that takes the time whole.
+    bm(
+        "atTime",
+        &[BParam::Int, BParam::Int, BParam::Int, BParam::Int],
+        BRet::LocalDateTime,
+        "(IIII)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "atTime",
+        &[BParam::LocalTime],
+        BRet::LocalDateTime,
+        "(Ljava/time/LocalTime;)Ljava/time/LocalDateTime;",
+    ),
     bm(
         "plusDays",
         &[BParam::Long],
@@ -17390,6 +17404,15 @@ const BITSET_METHODS: &[BuiltinMethod] = &[
     bm("set", &[BParam::Int, BParam::Int], BRet::Void, "(II)V"),
     bm("clear", &[BParam::Int], BRet::Void, "(I)V"),
     bm("clear", &[BParam::Int, BParam::Int], BRet::Void, "(II)V"),
+    // ...and the two the JDK has that this table did not: every bit at once,
+    // and a RANGE set to an explicit value.
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "set",
+        &[BParam::Int, BParam::Int, BParam::Boolean],
+        BRet::Void,
+        "(IIZ)V",
+    ),
     bm("flip", &[BParam::Int], BRet::Void, "(I)V"),
     bm("flip", &[BParam::Int, BParam::Int], BRet::Void, "(II)V"),
     bm("get", &[BParam::Int], BRet::Boolean, "(I)Z"),
@@ -17529,7 +17552,10 @@ const UUID_STATIC_METHODS: &[BuiltinMethod] = &[
 /// reachable through this face — which is what a JDK's compiler says too.
 const WRITER_FACE_METHODS: &[BuiltinMethod] = &[
     bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
-    bm("write", &[BParam::Char], BRet::Void, "(I)V"),
+    // `write(int)`, not `write(char)`: a JDK takes an int and writes its low
+    // sixteen bits, so `w.write(65)` writes an `A`. Typed as a char, that call
+    // was "int cannot be converted to char".
+    bm("write", &[BParam::Int], BRet::Void, "(I)V"),
     // `write(char[])` and its range form. A `char[]` is what a `Reader.read`
     // fills, so it is the shape a copy loop has in hand; every writer here
     // lacked both, and a JDK's range complaint on this form carries NO message
@@ -17590,7 +17616,10 @@ const WRITER_FACE_METHODS: &[BuiltinMethod] = &[
 /// method it adds.
 const BUFFERED_WRITER_METHODS: &[BuiltinMethod] = &[
     bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
-    bm("write", &[BParam::Char], BRet::Void, "(I)V"),
+    // `write(int)`, not `write(char)`: a JDK takes an int and writes its low
+    // sixteen bits, so `w.write(65)` writes an `A`. Typed as a char, that call
+    // was "int cannot be converted to char".
+    bm("write", &[BParam::Int], BRet::Void, "(I)V"),
     // `write(char[])` and its range form. A `char[]` is what a `Reader.read`
     // fills, so it is the shape a copy loop has in hand; every writer here
     // lacked both, and a JDK's range complaint on this form carries NO message
@@ -17659,7 +17688,10 @@ const STRING_WRITER_METHODS: &[BuiltinMethod] = &[
         "()Ljava/lang/StringBuffer;",
     ),
     bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
-    bm("write", &[BParam::Char], BRet::Void, "(I)V"),
+    // `write(int)`, not `write(char)`: a JDK takes an int and writes its low
+    // sixteen bits, so `w.write(65)` writes an `A`. Typed as a char, that call
+    // was "int cannot be converted to char".
+    bm("write", &[BParam::Int], BRet::Void, "(I)V"),
     // `write(char[])` and its range form. A `char[]` is what a `Reader.read`
     // fills, so it is the shape a copy loop has in hand; every writer here
     // lacked both, and a JDK's range complaint on this form carries NO message
@@ -19514,6 +19546,15 @@ const SHORT_METHODS: &[BuiltinMethod] = &[
         BRet::Wrapper(ElemType::Short),
         "(Ljava/lang/String;)Ljava/lang/Short;",
     ),
+    // ...and in a RADIX, which `Integer` and `Long` already offered and these
+    // two did not.
+    bm(
+        "valueOf",
+        &[S, I],
+        BRet::Wrapper(ElemType::Short),
+        "(Ljava/lang/String;I)Ljava/lang/Short;",
+    ),
+    bm("parseShort", &[S, I], BRet::Short, "(Ljava/lang/String;I)S"),
     bm(
         "compare",
         &[BParam::Short, BParam::Short],
@@ -19564,6 +19605,13 @@ const BYTE_METHODS: &[BuiltinMethod] = &[
         BRet::Wrapper(ElemType::Byte),
         "(Ljava/lang/String;)Ljava/lang/Byte;",
     ),
+    bm(
+        "valueOf",
+        &[S, I],
+        BRet::Wrapper(ElemType::Byte),
+        "(Ljava/lang/String;I)Ljava/lang/Byte;",
+    ),
+    bm("parseByte", &[S, I], BRet::Byte, "(Ljava/lang/String;I)B"),
     bm("compare", &[BParam::Byte, BParam::Byte], BRet::Int, "(BB)I"),
     bm("hashCode", &[BParam::Byte], BRet::Int, "(B)I"),
     bm(
@@ -33264,7 +33312,7 @@ impl BodyGen<'_> {
                 "Ljava/nio/file/Path;",
                 Some(JType::Path),
             )),
-            ("Files", "readString") => Some((
+            ("Files", "readString" | "probeContentType") => Some((
                 "java/nio/file/Files",
                 &[(JType::Path, "Ljava/nio/file/Path;")],
                 "Ljava/lang/String;",
@@ -33309,7 +33357,8 @@ impl BodyGen<'_> {
             // itself without a `try`.
             (
                 "Files",
-                "exists" | "notExists" | "isDirectory" | "isRegularFile" | "deleteIfExists",
+                "exists" | "notExists" | "isDirectory" | "isRegularFile" | "deleteIfExists"
+                | "isReadable" | "isWritable" | "isExecutable" | "isHidden" | "isSymbolicLink",
             ) => Some((
                 "java/nio/file/Files",
                 &[(JType::Path, "Ljava/nio/file/Path;")],
@@ -33331,6 +33380,39 @@ impl BodyGen<'_> {
                 },
             )),
 
+            ("Files", "isSameFile") => Some((
+                "java/nio/file/Files",
+                &[
+                    (JType::Path, "Ljava/nio/file/Path;"),
+                    (JType::Path, "Ljava/nio/file/Path;"),
+                ],
+                "Z",
+                Some(JType::Boolean),
+            )),
+            ("Files", "size") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                "J",
+                Some(JType::Long),
+            )),
+            ("Files", "readAllBytes") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                "[B",
+                Some(JType::Array {
+                    elem: ElemType::Byte,
+                    dims: 1,
+                }),
+            )),
+            // `newBufferedReader(path)` — the reader every line-by-line
+            // program opens, and the one shape of `Files` that hands back an
+            // object rather than an answer.
+            ("Files", "newBufferedReader") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                "Ljava/io/BufferedReader;",
+                Some(JType::Reader(ReaderFace::Buffered)),
+            )),
             _ => None,
         };
         let Some((internal, params, ret_desc, ret_ty)) = plan else {
@@ -37506,7 +37588,10 @@ impl BodyGen<'_> {
             for arg in args {
                 arg_types.push(self.expr(arg));
             }
-            if !matches!((method, args.len()), ("iterate", 2) | ("generate", 1)) {
+            // ...and Java 9's THREE-argument `iterate`, which is bounded: the
+            // predicate comes second and the step last, so the stream stops at
+            // the first element the predicate rejects.
+            if !matches!((method, args.len()), ("iterate", 2 | 3) | ("generate", 1)) {
                 self.no_suitable_library_method(class, method, args, span);
                 return None;
             }
@@ -37525,8 +37610,12 @@ impl BodyGen<'_> {
                     .and_then(|ty| self.supplier_element(*ty))
                     .unwrap_or(object_elem)
             };
-            let descriptor = match method {
-                "iterate" => {
+            let descriptor = match (method, args.len()) {
+                ("iterate", 3) => {
+                    "(Ljava/lang/Object;Ljava/util/function/Predicate;\
+                     Ljava/util/function/UnaryOperator;)Ljava/util/stream/Stream;"
+                }
+                ("iterate", _) => {
                     "(Ljava/lang/Object;Ljava/util/function/UnaryOperator;)\
                      Ljava/util/stream/Stream;"
                 }

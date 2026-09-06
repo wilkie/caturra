@@ -3179,9 +3179,32 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     );
                     return;
                 }
-                if method == "iterate" && args.len() == 2 {
+                if method == "iterate" && matches!(args.len(), 2 | 3) {
                     let elem = static_type_of(&args[0], ctx).unwrap_or_else(|| object.clone());
                     desugar_expr(&mut args[0], None, ctx);
+                    // Java 9's bounded form: a PREDICATE over the element sits
+                    // between the seed and the step. Same element, same shape
+                    // as `filter`'s.
+                    if args.len() == 3 {
+                        let test = Sam {
+                            method: String::from("test"),
+                            params: vec![elem.clone()],
+                            ret: TypeRef::Boolean,
+                        };
+                        if matches!(args[1], Expr::MethodRef { .. }) {
+                            args[1] = method_ref_to_lambda(&args[1], &test, ctx);
+                        }
+                        args[1] = build_erased_lambda(
+                            &mut args[1],
+                            "__Predicate",
+                            "test",
+                            &TypeRef::Boolean,
+                            std::slice::from_ref(&elem),
+                            None,
+                            ctx,
+                        );
+                    }
+                    let step = args.len() - 1;
                     // A method REFERENCE first becomes the equivalent lambda,
                     // as every other library callback does — handing one
                     // straight to the erased-lambda builder was a compiler
@@ -3191,11 +3214,11 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         params: vec![elem.clone()],
                         ret: object.clone(),
                     };
-                    if matches!(args[1], Expr::MethodRef { .. }) {
-                        args[1] = method_ref_to_lambda(&args[1], &sam, ctx);
+                    if matches!(args[step], Expr::MethodRef { .. }) {
+                        args[step] = method_ref_to_lambda(&args[step], &sam, ctx);
                     }
-                    args[1] = build_erased_lambda(
-                        &mut args[1],
+                    args[step] = build_erased_lambda(
+                        &mut args[step],
                         "__UnaryOperator",
                         "apply",
                         &object,
@@ -6137,6 +6160,8 @@ fn named_stream_elem(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     }
 }
 
+// One arm per source and per op that changes the element.
+#[allow(clippy::too_many_lines)]
 fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     if let Some(elem) = supplied_stream_elem(receiver, ctx) {
         return Some(elem);
@@ -6194,7 +6219,10 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // `Stream.iterate(seed, next)` — every element is a `next` of the seed, so
     // the seed's type is the element's. `generate`'s supplier answers a type
     // this pass cannot read, so that one erases.
-    if method == "iterate" && args.len() == 2 && names_library_class(prev.as_ref(), "Stream") {
+    if method == "iterate"
+        && matches!(args.len(), 2 | 3)
+        && names_library_class(prev.as_ref(), "Stream")
+    {
         return static_type_of(&args[0], ctx);
     }
     // `Stream.generate(supplier)` — the element is what the supplier ANSWERS,
