@@ -238,20 +238,29 @@ impl Date {
     }
 }
 
+/// A year as `java.time` writes it INSIDE a longer value: four digits, a `+`
+/// above 9999, and a `-` before four digits below zero — so -2 is `-0002` and
+/// not `-002`, which is what `{year:04}` gives when the sign eats a place.
+///
+/// A `YearMonth` had its own copy of this and got that wrong. (A bare `Year`
+/// is different again: it prints the plain number.)
+#[must_use]
+pub fn iso_year(year: i32) -> String {
+    if (0..=9999).contains(&year) {
+        format!("{year:04}")
+    } else if year > 9999 {
+        format!("+{year}")
+    } else if year > -10000 {
+        format!("-{:04}", -year)
+    } else {
+        year.to_string()
+    }
+}
+
 impl std::fmt::Display for Date {
-    /// ISO-8601, with `java.time`'s year rule: four digits, a `+` above 9999
-    /// and a `-` below zero.
+    /// ISO-8601, with `java.time`'s year rule.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let year = self.year;
-        if (0..=9999).contains(&year) {
-            write!(f, "{year:04}")?;
-        } else if year > 9999 {
-            write!(f, "+{year}")?;
-        } else if year > -10000 {
-            write!(f, "-{:04}", -year)?;
-        } else {
-            write!(f, "{year}")?;
-        }
+        write!(f, "{}", iso_year(self.year))?;
         write!(f, "-{:02}-{:02}", self.month, self.day)
     }
 }

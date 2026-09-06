@@ -479,7 +479,16 @@ impl Temporal {
             Temporal::Month(month) => crate::time::month_name(month).to_owned(),
             Temporal::Field(field) => crate::time::field_info(field).text.to_owned(),
             Temporal::Range(range) => range.text(),
-            Temporal::Adjuster(adjuster) => format!("{adjuster:?}"),
+            // An adjuster is a LAMBDA in a JDK, and its text is that lambda's
+            // class and an address — different on every run, so unmatchable
+            // either way. caturra INTERNS its adjusters (two
+            // `firstDayOfMonth()` calls are one object), so an address here
+            // would suggest something untrue as well as unmatchable; the class
+            // alone is the honest answer, and it is the same answer from every
+            // path that prints one. It used to be Rust's own `{:?}` —
+            // `Adjuster { kind: FirstDayOfMonth, day: 1, ordinal: 0 }` — which
+            // is not Java-shaped at all, and reached a student's console.
+            Temporal::Adjuster(_) => String::from("java.time.temporal.TemporalAdjusters$$Lambda"),
             Temporal::Era(era) => String::from(if era == 0 { "BCE" } else { "CE" }),
             // An enum's default `toString` IS its constant, and neither of
             // these overrides it.
@@ -492,7 +501,12 @@ impl Temporal {
             Temporal::Year(year) => year.to_string(),
             // A month-day carries the two leading dashes that say it has no
             // year at all.
-            Temporal::YearMonth(year, month) => format!("{year:04}-{month:02}"),
+            // The same year rule a date writes, which this used to spell out
+            // for itself — and got wrong below zero, where the sign eats one
+            // of the four places (`-002-03` for `-0002-03`).
+            Temporal::YearMonth(year, month) => {
+                format!("{}-{month:02}", crate::time::iso_year(year))
+            }
             Temporal::MonthDay(month, day) => format!("--{month:02}-{day:02}"),
         }
     }

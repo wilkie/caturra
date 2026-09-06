@@ -2,7 +2,10 @@ import java.lang.reflect.*;
 import java.util.*;
 
 /** Public methods a JDK offers on each named class, one
- * `class<TAB>name<TAB>static<TAB>arity` per overload. */
+ * `class<TAB>name<TAB>static<TAB>arity` per overload — and with
+ * `--signatures`, `class<TAB>name<TAB>static<TAB>returnType<TAB>paramTypes`
+ * instead, which is what a probe needs to write a call with real ARGUMENTS
+ * rather than nulls. */
 public class ApiList {
     public static void main(String[] args) throws Exception {
         Set<String> objectMethods = new HashSet<>();
@@ -12,8 +15,10 @@ public class ApiList {
         // needs to write `new X(...)`, which is a code path of its own and one
         // the method walk never reaches.
         boolean constructors = false;
+        boolean signatures = false;
         for (String arg : args) {
             constructors |= arg.equals("--constructors");
+            signatures |= arg.equals("--signatures");
         }
         for (String name : args) {
             if (name.startsWith("--")) continue;
@@ -38,6 +43,16 @@ public class ApiList {
                 // arguments some overload really takes, or a compiler that
                 // reports a wrong arity as a missing symbol reads as not
                 // knowing the name at all.
+                if (signatures) {
+                    StringBuilder params = new StringBuilder();
+                    for (Class<?> p : m.getParameterTypes()) {
+                        if (params.length() > 0) params.append(',');
+                        params.append(p.getName());
+                    }
+                    seen.add(m.getName() + "\t" + Modifier.isStatic(m.getModifiers())
+                            + "\t" + m.getReturnType().getName() + "\t" + params);
+                    continue;
+                }
                 seen.add(m.getName() + "\t" + Modifier.isStatic(m.getModifiers())
                         + "\t" + m.getParameterCount());
             }

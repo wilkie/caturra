@@ -33285,10 +33285,14 @@ impl BodyGen<'_> {
                 }
             }
         }
-        let internal = if receiver_ty == JType::Month {
-            "java/time/Month"
-        } else {
-            "java/time/DayOfWeek"
+        // The class the call is written against. An `IsoEra` reaching the
+        // `DayOfWeek` branch here is how its display names came back as a
+        // day's — every style read as FULL, because the VM's era arm was
+        // never the one that ran.
+        let internal = match receiver_ty {
+            JType::Month => "java/time/Month",
+            JType::IsoEra => "java/time/chrono/IsoEra",
+            _ => "java/time/DayOfWeek",
         };
         let method_ref = intern_method_ref(
             self.pool,

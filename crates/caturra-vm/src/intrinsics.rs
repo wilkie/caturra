@@ -159,7 +159,12 @@ fn temporal_object_method(
         // the two constants — the style as an int, the locale checked to be an
         // English one — so what arrives is the style alone. caturra's text is
         // en-US throughout, where a STANDALONE form is the plain one.
-        "getDisplayName" if matches!(value, Temporal::DayOfWeek(_) | Temporal::Month(_)) => {
+        "getDisplayName"
+            if matches!(
+                value,
+                Temporal::DayOfWeek(_) | Temporal::Month(_) | Temporal::Era(_)
+            ) =>
+        {
             // The style arrives either as an ordinal the compiler read out of
             // a written constant, or — now that `TextStyle` is a real enum —
             // as the value itself.
@@ -181,6 +186,22 @@ fn temporal_object_method(
                     2 | 3 => crate::time::day_text(day, true),
                     4 | 5 => crate::time::day_text(day, false)[..1].to_owned(),
                     _ => crate::time::day_text(day, false),
+                },
+                // An ERA is the one value whose STANDALONE styles differ: they
+                // fall back to the era's NUMBER, because the data a JDK reads
+                // carries no standalone era names and it prints what it has.
+                // The styles run FULL, FULL_STANDALONE, SHORT,
+                // SHORT_STANDALONE, NARROW, NARROW_STANDALONE — so the odd
+                // ones are the standalone half and half the index is the
+                // WIDTH.
+                (Temporal::Era(era), s) if s % 2 == 1 => era.to_string(),
+                (Temporal::Era(era), s) => match (s / 2, era) {
+                    (0, 1) => String::from("Anno Domini"),
+                    (0, _) => String::from("Before Christ"),
+                    (1, 1) => String::from("AD"),
+                    (1, _) => String::from("BC"),
+                    (_, 1) => String::from("A"),
+                    (_, _) => String::from("B"),
                 },
                 _ => return None,
             };
@@ -2582,28 +2603,6 @@ fn temporal_method(
         Temporal::Era(era) => {
             return match method {
                 "getValue" | "ordinal" => Ok(Some(JValue::Int(i32::from(era)))),
-                // The two eras' names, by style. The three STANDALONE styles
-                // fall back to the era's NUMBER — the CLDR data a JDK reads
-                // carries no standalone era names, and it prints what it has.
-                "getDisplayName" => {
-                    let style = match args.first() {
-                        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
-                            Some(HeapObject::Temporal(Temporal::TextStyle(style))) => *style,
-                            _ => 0,
-                        },
-                        _ => 0,
-                    };
-                    let text = match (style, era) {
-                        (0, 1) => "Anno Domini".to_owned(),
-                        (0, _) => "Before Christ".to_owned(),
-                        (2, 1) => "AD".to_owned(),
-                        (2, _) => "BC".to_owned(),
-                        (4, 1) => "A".to_owned(),
-                        (4, _) => "B".to_owned(),
-                        _ => era.to_string(),
-                    };
-                    Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
-                }
                 "compareTo" => match args.first() {
                     Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
                         Some(HeapObject::Temporal(Temporal::Era(other))) => {
@@ -3114,6 +3113,18 @@ fn md5(message: &[u8]) -> [u8; 16] {
         digest[at * 4..at * 4 + 4].copy_from_slice(&word.to_le_bytes());
     }
     digest
+}
+
+/// A library enum's `values()` array.
+///
+/// The class a `RefArray` records is the ARRAY's, not its element's — every
+/// one of these sites passed the element's, so `DayOfWeek.values()` printed as
+/// `java.time.DayOfWeek@2a` where a JDK writes `[Ljava.time.DayOfWeek;@2a`,
+/// and `getClass().getSimpleName()` said `DayOfWeek` where a JDK says
+/// `DayOfWeek[]`. Five sites made the same mistake, which is what a rule
+/// written five times gets.
+fn enum_values_array(heap: &mut Heap, class: &str, constants: Vec<JValue>) -> HeapRef {
+    heap.alloc(HeapObject::RefArray(format!("[L{class};"), constants))
 }
 
 /// Whether a string is a legal charset NAME at all (`java.nio.charset.Charset`
@@ -5651,7 +5662,7 @@ fn string_method(
                          count {copied}, length {destination}"
                     )));
                 }
-                get_chars(heap, &units, *begin, *end, *target, *at)
+                get_chars(heap, &units, *begin, *end, *target, *at, "begin")
             }
             // A NULL destination is an ordinary NullPointerException; the arm
             // used to require a reference, so the call fell through to
@@ -5688,11 +5699,17 @@ fn get_chars(
     end: i32,
     target: HeapRef,
     at: i32,
+    // Which word names the low end of the range. A `String` says `begin` and
+    // a `StringBuilder` says `start` — the two go through different checks in
+    // a JDK (`String.checkBoundsBeginEnd` against
+    // `AbstractStringBuilder.checkRangeSIOOBE`), and their `substring`
+    // messages already differ here for the same reason. Sharing this function
+    // without sharing the WORD is what made a String's `getChars` say
+    // `start`.
+    low: &str,
 ) -> Result<Option<JValue>, VmError> {
-    // The JDK words the SOURCE range failure as `start … end … length` (it goes
-    // through `AbstractStringBuilder.checkRangeSIOOBE`), and the DESTINATION
-    // one as a plain IndexOutOfBoundsException describing the destination's
-    // range — not an array-index message about one element.
+    // The DESTINATION failure is a plain IndexOutOfBoundsException describing
+    // the destination's range — not an array-index message about one element.
     let source = usize::try_from(begin)
         .ok()
         .zip(usize::try_from(end).ok())
@@ -5700,7 +5717,7 @@ fn get_chars(
         .map(|(b, e)| units[b..e].to_vec())
         .ok_or_else(|| {
             throw(format!(
-                "java.lang.StringIndexOutOfBoundsException: start {begin}, end {end}, \
+                "java.lang.StringIndexOutOfBoundsException: {low} {begin}, end {end}, \
                  length {}",
                 units.len()
             ))
@@ -6067,7 +6084,7 @@ fn builder_method(
                 JValue::Int(at),
             ],
         ) => match target {
-            Some(target) => get_chars(heap, &units, *begin, *end, *target, *at),
+            Some(target) => get_chars(heap, &units, *begin, *end, *target, *at, "start"),
             // A NULL destination is an ordinary NullPointerException; the arm
             // used to require a reference, so the call fell through to
             // "unknown native member" and aborted the whole run.
@@ -9894,10 +9911,21 @@ fn matcher_method(
     let regex = compile_regex(&source)?;
     let bounds = state.bounds();
     let input = state.input.clone();
-    let no_match = || throw("java.lang.IllegalStateException: No match found");
+    // A JDK has TWO wordings for asking a matcher that has not matched, and
+    // which one comes back is decided by the METHOD: `start` and `end` say
+    // "No match available", every form of `group` says "No match found". One
+    // message for both was right half the time.
+    let unmatched = |method: &str| {
+        throw(if method == "group" {
+            "java.lang.IllegalStateException: No match found"
+        } else {
+            "java.lang.IllegalStateException: No match available"
+        })
+    };
+    let no_match = || unmatched("group");
     let spans = state.last.clone();
-    let group_span = |index: usize| -> Result<Option<(usize, usize)>, VmError> {
-        let spans = spans.clone().ok_or_else(no_match)?;
+    let group_span = |index: usize, asked_by: &str| -> Result<Option<(usize, usize)>, VmError> {
+        let spans = spans.clone().ok_or_else(|| unmatched(asked_by))?;
         spans.get(index).copied().ok_or_else(|| {
             throw(format!(
                 "java.lang.IndexOutOfBoundsException: No group {index}"
@@ -10001,7 +10029,7 @@ fn matcher_method(
         }
         "group" => {
             let index = group_index(args)?;
-            match group_span(index)? {
+            match group_span(index, "group")? {
                 Some((start, end)) => Ok(Some(JValue::Ref(Some(
                     heap.alloc_string_units(&input[start..end]),
                 )))),
@@ -10011,7 +10039,7 @@ fn matcher_method(
         }
         "start" | "end" => {
             let index = group_index(args)?;
-            let Some((start, end)) = group_span(index)? else {
+            let Some((start, end)) = group_span(index, method)? else {
                 return Ok(Some(JValue::Int(-1)));
             };
             let value = if method == "start" { start } else { end };
@@ -11981,7 +12009,7 @@ pub fn invoke_static(
                     let constants: Vec<JValue> = (0..names.len())
                         .map(|at| made(heap, u8::try_from(at).unwrap_or(0)))
                         .collect();
-                    let array = heap.alloc(HeapObject::RefArray(String::from(class), constants));
+                    let array = enum_values_array(heap, class, constants);
                     Ok(Some(JValue::Ref(Some(array))))
                 }
                 "valueOf" => {
@@ -12018,7 +12046,7 @@ pub fn invoke_static(
             match method {
                 "values" => {
                     let constants = vec![made(heap, 0), made(heap, 1)];
-                    let array = heap.alloc(HeapObject::RefArray(String::from(class), constants));
+                    let array = enum_values_array(heap, class, constants);
                     Ok(Some(JValue::Ref(Some(array))))
                 }
                 "valueOf" => {
@@ -12036,13 +12064,21 @@ pub fn invoke_static(
                         ))),
                     }
                 }
+                // `IsoEra.of(value)` — the ISO calendar has exactly two eras,
+                // and a JDK REFUSES anything else rather than clamping. This
+                // clamped, so `of(-2)` answered BCE and `of(7)` answered CE:
+                // an accepts-invalid, and the kind a program never sees until
+                // its arithmetic has already gone somewhere wrong.
                 _ => {
-                    let ordinal = match args.first() {
+                    let value = match args.first() {
                         Some(JValue::Int(value)) => *value,
                         _ => 0,
                     };
+                    if !(0..=1).contains(&value) {
+                        return Err(date_time_exception(&format!("Invalid era: {value}")));
+                    }
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let ordinal = ordinal.clamp(0, 1) as u8;
+                    let ordinal = value as u8;
                     Ok(Some(made(heap, ordinal)))
                 }
             }
@@ -12071,7 +12107,7 @@ pub fn invoke_static(
                         let ordinal = u8::try_from(ordinal).unwrap_or(0);
                         constants.push(made(heap, ordinal));
                     }
-                    let array = heap.alloc(HeapObject::RefArray(class.to_owned(), constants));
+                    let array = enum_values_array(heap, class, constants);
                     Ok(Some(JValue::Ref(Some(array))))
                 }
                 "valueOf" => {
@@ -12124,7 +12160,7 @@ pub fn invoke_static(
                         };
                         constants.push(JValue::Ref(Some(heap.intern_temporal(value))));
                     }
-                    let array = heap.alloc(HeapObject::RefArray(class.to_owned(), constants));
+                    let array = enum_values_array(heap, class, constants);
                     Ok(Some(JValue::Ref(Some(array))))
                 }
                 // `from(temporal)` — the day or the month a date falls on.
@@ -12193,8 +12229,14 @@ pub fn invoke_static(
                         } else {
                             "MonthOfYear"
                         };
+                        // An ENUM's own `of` words this WITHOUT the range,
+                        // where a field range check on a date includes it:
+                        // `Month.of(0)` is "Invalid value for MonthOfYear: 0"
+                        // and `LocalDate.of(2024, 0, 1)` is the same sentence
+                        // with "(valid values 1 - 12)" in it. Two checks, two
+                        // wordings, and a JDK uses both.
                         return Err(date_time_exception(&format!(
-                            "Invalid value for {field} (valid values 1 - {limit}): {ordinal}"
+                            "Invalid value for {field}: {ordinal}"
                         )));
                     }
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -12563,7 +12605,7 @@ pub fn invoke_static(
                 let constants: Vec<JValue> = (0..8)
                     .map(|ordinal| JValue::Ref(Some(heap.intern_rounding_mode(ordinal))))
                     .collect();
-                let array = heap.alloc(HeapObject::RefArray(String::from(class), constants));
+                let array = enum_values_array(heap, class, constants);
                 Ok(Some(JValue::Ref(Some(array))))
             }
             "valueOf" | "__of" => {
@@ -15108,11 +15150,15 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
                 line,
             }) => crate::interpreter::stack_frame_text(declaring, method, file.as_deref(), *line),
             Some(HeapObject::Instance { class_name, .. }) => format!("{class_name}@{reference:x}"),
-            // A stream is an ordinary object for display purposes: the JDK
-            // prints its pipeline class and identity hash, and printing one is
-            // usually a mistake — but it must not be an internal error.
+            // A stream prints as what its `getClass()` says it is — the SOURCE
+            // stage, `ReferencePipeline$Head`, which is exactly a JDK's answer
+            // for a fresh stream and stale after an intermediate operation (a
+            // JDK renames the pipeline `$2`, `$3`, … per op). This used to
+            // write `java.util.stream.ReferencePipeline$2a`: a different
+            // answer from `getClass`, and not even the `name@hash` shape a
+            // default `toString` has.
             Some(HeapObject::Stream { .. }) => {
-                format!("java.util.stream.ReferencePipeline${reference:x}")
+                format!("java.util.stream.ReferencePipeline$Head@{reference:x}")
             }
             // The library objects that print as a VALUE. A collection renders
             // its elements through here, and every one of these printed as
@@ -16650,7 +16696,18 @@ fn big_integer_method(
         "getLowestSetBit" => Ok(Some(JValue::Int(
             value.lowest_set_bit().map_or(-1, u32::cast_signed),
         ))),
-        "isProbablePrime" => Ok(Some(JValue::Int(i32::from(value.is_probable_prime())))),
+        // A CERTAINTY of zero or less means the caller does not care, and a
+        // JDK answers `true` without testing anything — even for 8. Reading
+        // the certainty as a number of rounds and answering honestly is the
+        // obvious implementation and the wrong one.
+        "isProbablePrime" => {
+            let certainty = match args.first() {
+                Some(JValue::Int(rounds)) => *rounds,
+                _ => 1,
+            };
+            let answer = certainty <= 0 || value.is_probable_prime();
+            Ok(Some(JValue::Int(i32::from(answer))))
+        }
         "nextProbablePrime" => {
             let next = value.next_probable_prime();
             answer(heap, next)
@@ -17204,7 +17261,7 @@ fn partial_date_method(
             made(heap, Temporal::Date(date))
         }
         (Temporal::Year(year), "atMonth") => {
-            let month = month_argument(heap, args.first(), int_at(0))?;
+            let month = month_argument(heap, args.first(), int_at(0), true)?;
             made(heap, Temporal::YearMonth(year, month))
         }
         (Temporal::Year(year), "atMonthDay") => match other(heap) {
@@ -17263,7 +17320,7 @@ fn partial_date_method(
             made(heap, Temporal::YearMonth(shifted_year(int_at(0))?, month))
         }
         (Temporal::YearMonth(year, _), "withMonth") => {
-            let month = month_argument(heap, args.first(), int_at(0))?;
+            let month = month_argument(heap, args.first(), int_at(0), true)?;
             made(heap, Temporal::YearMonth(year, month))
         }
         (Temporal::YearMonth(year, month), "atDay") => {
@@ -17324,7 +17381,7 @@ fn partial_date_method(
         // LEAP February: `--01-31.with(FEBRUARY)` is `--02-29`, not the 28th,
         // because a month-day has no year to make February short.
         (Temporal::MonthDay(_, day), "with") => {
-            let month = month_argument(heap, args.first(), int_at(0))?;
+            let month = month_argument(heap, args.first(), int_at(0), false)?;
             let length = crate::time::length_of_month(2024, month);
             made(heap, Temporal::MonthDay(month, day.min(length)))
         }
@@ -17338,7 +17395,7 @@ fn partial_date_method(
             Ok(Some(JValue::Int(i32::from(valid))))
         }
         (Temporal::MonthDay(_, day), "withMonth") => {
-            let month = month_argument(heap, args.first(), int_at(0))?;
+            let month = month_argument(heap, args.first(), int_at(0), false)?;
             made(heap, Temporal::MonthDay(month, day))
         }
         (Temporal::MonthDay(month, _), "withDayOfMonth") => {
@@ -17379,16 +17436,27 @@ fn shifted_year(year: i64) -> Result<i32, VmError> {
 }
 
 /// The month an argument names — a `Month` constant or the number.
-fn month_argument(heap: &Heap, value: Option<&JValue>, number: i64) -> Result<u8, VmError> {
+fn month_argument(
+    heap: &Heap,
+    value: Option<&JValue>,
+    number: i64,
+    ranged: bool,
+) -> Result<u8, VmError> {
     if let Some(JValue::Ref(Some(reference))) = value
         && let Some(HeapObject::Temporal(Temporal::Month(month))) = heap.get(*reference)
     {
         return Ok(*month);
     }
     if !(1..=12).contains(&number) {
-        return Err(date_time_exception(&format!(
-            "Invalid value for MonthOfYear (valid values 1 - 12): {number}"
-        )));
+        // Which wording depends on WHO is asking: a `YearMonth` checks the
+        // field and gets the range in its message, a `MonthDay` goes through
+        // `Month.of` and does not.
+        let text = if ranged {
+            format!("Invalid value for MonthOfYear (valid values 1 - 12): {number}")
+        } else {
+            format!("Invalid value for MonthOfYear: {number}")
+        };
+        return Err(date_time_exception(&text));
     }
     Ok(u8::try_from(number).unwrap_or(1))
 }
@@ -17457,11 +17525,11 @@ fn partial_date_static(
         ("java/time/Year", "of") => made(heap, Temporal::Year(shifted_year(int_at(0))?)),
         ("java/time/YearMonth", "of") => {
             let year = shifted_year(int_at(0))?;
-            let month = month_argument(heap, args.get(1), int_at(1))?;
+            let month = month_argument(heap, args.get(1), int_at(1), true)?;
             made(heap, Temporal::YearMonth(year, month))
         }
         ("java/time/MonthDay", "of") => {
-            let month = month_argument(heap, args.first(), int_at(0))?;
+            let month = month_argument(heap, args.first(), int_at(0), false)?;
             let day = int_at(1);
             check_month_day(month, day)?;
             made(

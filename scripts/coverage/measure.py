@@ -28,7 +28,12 @@ cannot be written as one expression.
 Needs a real `javac`/`java` on PATH (the denominator comes from reflection,
 `ApiList.java`) and a built `target/release/examples/diagnostics`.
 
-    scripts/coverage/measure.py [--verbose] [--why]
+    scripts/coverage/measure.py [--verbose] [--why] [--write-answered]
+
+`--write-answered` records which names came back ANSWERED, as
+`scripts/coverage/answered.json`. `behaviour.py` reads it: whether a name
+exists and whether it answers CORRECTLY are two questions, and the second one
+should be asked of exactly the names the first one passed.
 """
 import json, os, re, subprocess, sys, tempfile
 
@@ -187,6 +192,8 @@ def modelled_classes():
 def main():
     verbose = "--verbose" in sys.argv
     why = "--why" in sys.argv
+    write_answered = "--write-answered" in sys.argv
+    answered = {}
     receivers = json.load(
         open(os.path.join(REPO, "scripts/coverage/receivers.json"))
     )
@@ -209,6 +216,7 @@ def main():
                 if "cannot find symbol" in said:
                     unexplained.append(f"{class_name}.{name}")
                 print(f"{class_name}.{name}: {said}")
+        answered[class_name] = known
         total_known += len(known)
         total_all += len(known) + len(missing)
         rows.append((class_name, len(known), len(known) + len(missing), missing))
@@ -233,6 +241,13 @@ def main():
         for name in unexplained:
             print(f"  {name}")
         sys.exit(1)
+
+    if write_answered:
+        path = os.path.join(REPO, "scripts/coverage/answered.json")
+        with open(path, "w") as handle:
+            json.dump(answered, handle, indent=1, sort_keys=True)
+            handle.write("\n")
+        print(f"wrote {path}")
 
     packages = modelled_classes()
     print("\nclasses caturra names, by package:")

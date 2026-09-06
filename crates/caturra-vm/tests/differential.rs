@@ -52713,3 +52713,223 @@ stricter_than_javac!(
     "StrictCollectorParts",
     "import java.util.stream.*;\npublic class StrictCollectorParts { static void r() { Collectors.toList().supplier(); } }"
 );
+
+// The style an era is asked for, written as a CONSTANT and held in a VARIABLE.
+//
+// This was a bug the coverage measurement could not see. `getDisplayName` was
+// among the names it counted as ANSWERED — the call compiled, and it ran —
+// and every style came back "Anno Domini". The emitter names the class the
+// call is written against, and an `IsoEra` fell through to the `DayOfWeek`
+// branch, so the VM's era arm was never the one that ran. Presence was
+// measured; behaviour was not.
+differential_test!(
+    the_style_an_era_is_asked_for,
+    "EraNames",
+    r#"
+import java.time.*;
+import java.time.chrono.*;
+import java.time.format.*;
+import java.util.*;
+public class EraNames {
+  public static void main(String[] a) {
+    // The style as a WRITTEN CONSTANT, which the compiler folds.
+    System.out.println(IsoEra.CE.getDisplayName(TextStyle.FULL, Locale.US));
+    System.out.println(IsoEra.BCE.getDisplayName(TextStyle.SHORT, Locale.US));
+    System.out.println(IsoEra.CE.getDisplayName(TextStyle.NARROW, Locale.US));
+    System.out.println(IsoEra.CE.getDisplayName(TextStyle.FULL_STANDALONE, Locale.US));
+    // ...and as a VALUE, which it cannot.
+    for (TextStyle st : TextStyle.values())
+      System.out.println(st + " = " + IsoEra.CE.getDisplayName(st, Locale.US) + " / " + IsoEra.BCE.getDisplayName(st, Locale.US));
+    // The two beside it, which read the same style the same way.
+    for (TextStyle st : TextStyle.values())
+      System.out.println(st + " = " + Month.JANUARY.getDisplayName(st, Locale.US) + " / " + DayOfWeek.MONDAY.getDisplayName(st, Locale.US));
+  }
+}
+"#
+);
+
+// ---- What the BEHAVIOUR sweep found. `measure.py` asks whether a name
+// exists; `behaviour.py` calls it with real arguments and diffs the answer.
+// Ten of these were caught the first time it ran.
+//
+// A `String` says `begin` and a `StringBuilder` says `start` — two checks in a
+// JDK, and one shared function here that hard-coded the second. `substring`
+// already had it right, which is what made `getChars` easy to miss.
+differential_test!(
+    the_word_a_range_complaint_uses,
+    "RangeWord",
+    r#"
+public class RangeWord {
+  static void s(String l, Runnable r) {
+    try { r.run(); System.out.println(l + " = ok"); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    char[] d = new char[8];
+    s("string getChars low", () -> "abcd".getChars(-2, -2, d, 0));
+    s("string getChars high", () -> "abcd".getChars(1, 9, d, 0));
+    s("string getChars crossed", () -> "abcd".getChars(3, 1, d, 0));
+    s("builder getChars low", () -> new StringBuilder("abcd").getChars(-2, -2, d, 0));
+    s("builder getChars high", () -> new StringBuilder("abcd").getChars(1, 9, d, 0));
+    s("string substring", () -> "abcd".substring(-2, 2));
+    s("builder substring", () -> new StringBuilder("abcd").substring(-2, 2));
+  }
+}
+"#
+);
+
+// A matcher has TWO wordings for being asked before it has matched, and which
+// one comes back is decided by the METHOD: `start` and `end` say "No match
+// available", every form of `group` says "No match found".
+differential_test!(
+    what_an_unmatched_matcher_says,
+    "MatcherWording",
+    r#"
+import java.util.regex.*;
+public class MatcherWording {
+  static void s(String l, Runnable r) {
+    try { r.run(); System.out.println(l + " = ok"); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getSimpleName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    Matcher m = Pattern.compile("(?<w>a+)").matcher("bbb");
+    s("end", () -> m.end());
+    s("start", () -> m.start());
+    s("group", () -> m.group());
+    s("group index", () -> m.group(1));
+    s("group name", () -> m.group("w"));
+    s("group missing name", () -> m.group("zz"));
+    Matcher n = Pattern.compile("(?<w>a+)").matcher("aaa");
+    n.find();
+    s("after match missing name", () -> n.group("zz"));
+    s("after match name", () -> n.group("w"));
+  }
+}
+"#
+);
+
+// A `Vector` has THREE cursors and a JDK names them apart — `Vector$Itr`,
+// `Vector$ListItr`, and the anonymous `Vector$1` its `elements()` answers.
+// All three said `$Itr`. Its `indexOf(o, from)` with a negative start reaches
+// a JDK's ARRAY access, not a range check, so the complaint is the array one.
+differential_test!(
+    a_vectors_three_cursors,
+    "VectorCursors",
+    r#"
+import java.util.*;
+public class VectorCursors {
+  static void s(String l, Runnable r) {
+    try { r.run(); System.out.println(l + " = ok"); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    Vector<String> v = new Vector<>(List.of("a","b","c"));
+    List<String> l = new ArrayList<>(List.of("a","b","c"));
+    Stack<String> st = new Stack<>(); st.push("a");
+    System.out.println(v.elements().getClass().getName());
+    System.out.println(v.iterator().getClass().getName());
+    System.out.println(v.listIterator().getClass().getName());
+    System.out.println(st.iterator().getClass().getName());
+    System.out.println(st.elements().getClass().getName());
+    s("vector indexOf neg", () -> v.indexOf("a", -2));
+    s("vector indexOf big", () -> v.indexOf("a", 9));
+    s("vector lastIndexOf neg", () -> v.lastIndexOf("a", -2));
+    s("list subList neg", () -> l.subList(-2, 1));
+  }
+}
+"#
+);
+
+// An enum's own `of` words an out-of-range value WITHOUT the range, where a
+// field check on a date includes it: `Month.of(0)` is "Invalid value for
+// MonthOfYear: 0" and `LocalDate.of(2024, 0, 1)` is the same sentence with
+// "(valid values 1 - 12)" in it. Which one a `MonthDay` gets depends on which
+// check it goes through.
+differential_test!(
+    two_wordings_for_one_bad_month,
+    "MonthWording",
+    r#"
+import java.time.*;
+public class MonthWording {
+  static void s(String l, Runnable r) {
+    try { r.run(); System.out.println(l + " = ok"); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("localdate month", () -> LocalDate.of(2024, 0, 1));
+    s("localdate day", () -> LocalDate.of(2024, 1, 40));
+    s("yearmonth month", () -> YearMonth.of(2024, 0));
+    s("monthday month", () -> MonthDay.of(0, 14));
+    s("monthday day", () -> MonthDay.of(2, 40));
+    s("monthday withMonth", () -> MonthDay.of(3, 14).withMonth(0));
+    s("monthday withDay", () -> MonthDay.of(3, 14).withDayOfMonth(40));
+    s("month of", () -> Month.of(0));
+    s("dayofweek of", () -> DayOfWeek.of(9));
+  }
+}
+"#
+);
+
+// A year INSIDE a longer value is four digits after the sign, so -2 is
+// `-0002`: `{year:04}` gives `-002`, because the sign eats a place. A
+// `YearMonth` had its own copy of the rule and got that wrong. `toArray()`
+// recorded its ELEMENT class rather than the array's, so it printed as
+// `java.lang.Object@2a`. And a certainty of zero or less makes
+// `isProbablePrime` answer true without testing anything — even for 8.
+differential_test!(
+    a_negative_year_an_array_and_a_prime,
+    "YearArrayPrime",
+    r#"
+import java.math.*;
+import java.time.*;
+import java.util.*;
+public class YearArrayPrime {
+  static void s(String l, Runnable r) {
+    try { r.run(); System.out.println(l + " = ok"); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static void p(Object o) { System.out.println(String.valueOf(o).replaceAll("@[0-9a-f]+", "@x")); }
+  public static void main(String[] a) {
+    p(YearMonth.of(-2, 3)); p(YearMonth.of(-12345, 3)); p(LocalDate.of(-2, 3, 4)); p(Year.of(-2));
+    p(LocalDateTime.of(-2, 3, 4, 5, 6));
+    p(new ArrayList<String>(List.of("a")).toArray());
+    p(new HashSet<String>(Set.of("a")).toArray());
+    p(new ArrayList<String>().toArray(new String[0]));
+    System.out.println(new ArrayList<String>(List.of("a")).toArray().getClass().getName());
+    System.out.println(BigInteger.valueOf(7).isProbablePrime(1) + " " + BigInteger.valueOf(7).isProbablePrime(0)
+        + " " + BigInteger.valueOf(7).isProbablePrime(-2) + " " + BigInteger.valueOf(8).isProbablePrime(0)
+        + " " + BigInteger.valueOf(8).isProbablePrime(10));
+    s("initCause twice", () -> { RuntimeException e = new RuntimeException("a", new Error("b")); e.initCause(new Error("c")); });
+    s("initCause once", () -> { RuntimeException e = new RuntimeException("a"); e.initCause(new Error("c")); });
+    s("initCause self", () -> { RuntimeException e = new RuntimeException("a"); e.initCause(e); });
+  }
+}
+"#
+);
+
+// Reflecting through the wrong object is an `IllegalArgumentException` naming
+// both sides. Both of caturra's used to build an "exception" whose CLASS was
+// an English sentence, which surfaces as an engine abort rather than as
+// something a program can catch.
+differential_test!(
+    a_field_read_through_the_wrong_object,
+    "WrongReceiver",
+    r#"
+import java.lang.reflect.*;
+public class WrongReceiver {
+  int n = 1;
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  interface Body { Object get() throws Throwable; }
+  public static void main(String[] a) throws Exception {
+    Field f = WrongReceiver.class.getDeclaredField("n");
+    s("get wrong object", () -> f.get("ab"));
+    s("get null object", () -> f.get(null));
+    s("set wrong object", () -> { f.set("ab", 2); return "ok"; });
+    s("get right object", () -> f.get(new WrongReceiver()));
+  }
+}
+"#
+);

@@ -7585,6 +7585,12 @@ impl<'run> Interpreter<'run> {
                 });
                 JValue::Ref(Some(iterator))
             }
+            // The class a `RefArray` records is the ARRAY's, not its element's
+            // — every `toArray()` here passed `java/lang/Object`, so the
+            // answer printed as `java.lang.Object@2a` and reported that as
+            // its class, where a JDK gives `[Ljava.lang.Object;`. The TYPED
+            // `toArray(new String[0])` was right all along, which is what made
+            // it hard to notice.
             ("toArray", []) => {
                 let items = self.list_items(receiver);
                 let boxed: Vec<JValue> = items
@@ -7603,7 +7609,7 @@ impl<'run> Interpreter<'run> {
                     })
                     .collect();
                 let array = self.heap.alloc(crate::value::HeapObject::RefArray(
-                    String::from("java/lang/Object"),
+                    String::from("[Ljava/lang/Object;"),
                     boxed,
                 ));
                 JValue::Ref(Some(array))
@@ -7837,9 +7843,15 @@ impl<'run> Interpreter<'run> {
             ("indexOf" | "lastIndexOf", _, [probe, JValue::Int(from)]) => {
                 let items = self.list_items(receiver);
                 let forwards = method_name == "indexOf";
+                // A negative start reaches a JDK's ARRAY access, not a range
+                // check, so the complaint is the array one and names the
+                // vector's length. (`subList`'s `fromIndex = -2` is the range
+                // check, and a different method.)
                 if forwards && *from < 0 {
                     return Err(VmError::UncaughtException(format!(
-                        "java.lang.IndexOutOfBoundsException: fromIndex = {from}"
+                        "java.lang.ArrayIndexOutOfBoundsException: Index {from} out of bounds \
+                         for length {}",
+                        items.len()
                     )));
                 }
                 if !forwards && usize::try_from(*from).is_ok_and(|at| at >= items.len()) {
@@ -8943,7 +8955,7 @@ impl<'run> Interpreter<'run> {
                     })
                     .collect();
                 JValue::Ref(Some(self.heap.alloc(HeapObject::RefArray(
-                    String::from("java/lang/Object"),
+                    String::from("[Ljava/lang/Object;"),
                     values,
                 ))))
             }
@@ -9339,7 +9351,7 @@ impl<'run> Interpreter<'run> {
                     })
                     .collect();
                 JValue::Ref(Some(self.heap.alloc(HeapObject::RefArray(
-                    String::from("java/lang/Object"),
+                    String::from("[Ljava/lang/Object;"),
                     values,
                 ))))
             }
@@ -9852,7 +9864,7 @@ impl<'run> Interpreter<'run> {
                     })
                     .collect();
                 JValue::Ref(Some(self.heap.alloc(HeapObject::RefArray(
-                    String::from("java/lang/Object"),
+                    String::from("[Ljava/lang/Object;"),
                     values,
                 ))))
             }
@@ -16207,7 +16219,7 @@ impl<'run> Interpreter<'run> {
                 })
                 .collect();
             let array = self.heap.alloc(crate::value::HeapObject::RefArray(
-                String::from("java/lang/Object"),
+                String::from("[Ljava/lang/Object;"),
                 values,
             ));
             frame.stack.push(JValue::Ref(Some(array)));
@@ -18420,15 +18432,25 @@ impl<'run> Interpreter<'run> {
                     "getInt" | "getLong" | "getDouble" | "getBoolean" | "getByte" | "getChar"
                     | "getShort" | "getFloat" => {
                         // Primitive accessors widen the field's value, or refuse.
-                        let raw =
-                            self.read_reflected_field(&declaring, &name, access, args.first())?;
+                        let raw = self.read_reflected_field(
+                            &declaring,
+                            &name,
+                            &descriptor,
+                            access,
+                            args.first(),
+                        )?;
                         Self::reflect_get_as(method, &declaring, &name, &descriptor, raw).map(Some)
                     }
                     "get" => {
                         // `Field.get` returns Object — a primitive field boxes
                         // (real Java returns an Integer/Double/… wrapper).
-                        let raw =
-                            self.read_reflected_field(&declaring, &name, access, args.first())?;
+                        let raw = self.read_reflected_field(
+                            &declaring,
+                            &name,
+                            &descriptor,
+                            access,
+                            args.first(),
+                        )?;
                         Ok(Some(self.box_if_primitive(raw, &descriptor)))
                     }
                     "set" | "setInt" | "setLong" | "setDouble" | "setBoolean" | "setByte"
@@ -18451,7 +18473,14 @@ impl<'run> Interpreter<'run> {
                             Some(value) => Some(self.unbox_for(value, &descriptor)),
                             other => other,
                         };
-                        self.write_reflected_field(&declaring, &name, access, args.first(), value)?;
+                        self.write_reflected_field(
+                            &declaring,
+                            &name,
+                            &descriptor,
+                            access,
+                            args.first(),
+                            value,
+                        )?;
                         Ok(None)
                     }
                     other => Err(VmError::UnknownIntrinsic(format!("Field.{other}"))),
@@ -18794,6 +18823,7 @@ impl<'run> Interpreter<'run> {
         &mut self,
         declaring: &str,
         name: &str,
+        descriptor: &str,
         access: u16,
         obj: Option<&JValue>,
     ) -> Result<JValue, VmError> {
@@ -18819,8 +18849,16 @@ impl<'run> Interpreter<'run> {
                     VmError::UncaughtException(format!("java.lang.NoSuchFieldException: {name}"))
                 })
             }
-            _ => Err(VmError::UncaughtException(format!(
-                "cannot read field {name}"
+            // An object that is not an instance of the declaring class. A JDK
+            // says so as an `IllegalArgumentException` naming both; this used
+            // to build an "exception" whose CLASS was the sentence
+            // `cannot read field n`, which surfaces as an engine abort rather
+            // than something a program can catch.
+            other => Err(VmError::UncaughtException(format!(
+                "java.lang.IllegalArgumentException: Can not set {} field {}.{name} to {}",
+                intrinsics::type_name_of_descriptor(descriptor),
+                declaring.replace('/', "."),
+                other.map_or_else(|| String::from("null"), heap_object_binary_name)
             ))),
         }
     }
@@ -18851,6 +18889,7 @@ impl<'run> Interpreter<'run> {
         &mut self,
         declaring: &str,
         name: &str,
+        descriptor: &str,
         access: u16,
         obj: Option<&JValue>,
         value: Option<JValue>,
@@ -18875,9 +18914,21 @@ impl<'run> Interpreter<'run> {
                 })? = value;
                 Ok(())
             }
-            _ => Err(VmError::UncaughtException(format!(
-                "cannot set field {name}"
-            ))),
+            // The same complaint the READ side gives, and for the same
+            // reason: an object that is not an instance of the declaring
+            // class. Both used to build an "exception" whose class was an
+            // English sentence.
+            other => {
+                let given = other.map_or_else(
+                    || String::from("null"),
+                    |object| heap_object_binary_name(object),
+                );
+                Err(VmError::UncaughtException(format!(
+                    "java.lang.IllegalArgumentException: Can not set {} field {}.{name} to {given}",
+                    intrinsics::type_name_of_descriptor(descriptor),
+                    declaring.replace('/', "."),
+                )))
+            }
         }
     }
 
@@ -21683,12 +21734,15 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
             (crate::value::SortedFace::Map, false) => "java/util/TreeMap$AscendingSubMap",
             (crate::value::SortedFace::Map, true) => "java/util/TreeMap$DescendingSubMap",
         }),
-        // A stream is deliberately absent: a JDK names a pipeline after
-        // its LAST operation AND its element family
-        // (`ReferencePipeline$3` for a mapped object stream,
-        // `IntPipeline$9` for a filtered int one), and caturra's single
-        // `Stream` object does not record which family it is. Guessing one
-        // would be a new wrong answer in place of a known one.
+        // A stream names the SOURCE stage. A JDK renames a pipeline after
+        // every operation and by element family (`ReferencePipeline$3` for a
+        // mapped object stream, `IntPipeline$9` for a filtered int one), and
+        // caturra's single `Stream` object records neither — so this is exact
+        // for a fresh stream and stale after an intermediate op, which is a
+        // better answer than `java.lang.Object`, the one it gave before and
+        // which was wrong for every stream there is. It is also what its
+        // default `toString` says, and the two used to disagree.
+        Some(HeapObject::Stream { .. }) => String::from("java/util/stream/ReferencePipeline$Head"),
         Some(HeapObject::Comparator(spec)) => String::from(match spec {
             crate::value::ComparatorSpec::Natural => "java/util/Comparators$NaturalOrderComparator",
             crate::value::ComparatorSpec::Reversed(_) => "java/util/Collections$ReverseComparator",
@@ -21780,7 +21834,16 @@ fn cursor_class_name_of(
         // A LinkedList has ONE cursor class: `iterator()` returns its
         // `ListItr` too.
         Some(H::LinkedList(_)) => "java/util/LinkedList$ListItr",
-        Some(H::Stack(_)) => "java/util/Vector$Itr",
+        // A `Vector` has THREE cursors, and a JDK names them apart: its
+        // `iterator()` is `Vector$Itr`, its `listIterator()` is
+        // `Vector$ListItr`, and its `elements()` is an ANONYMOUS class,
+        // `Vector$1` — the `Enumeration` it kept from before `Iterator`
+        // existed. All three said `$Itr`.
+        Some(H::Stack(_)) => match writes {
+            W::Enumerator => "java/util/Vector$1",
+            _ if list => "java/util/Vector$ListItr",
+            _ => "java/util/Vector$Itr",
+        },
         Some(H::ArrayDeque(_)) => "java/util/ArrayDeque$DeqIterator",
         Some(H::PriorityQueue { .. }) => "java/util/PriorityQueue$Itr",
         // A HashSet IS a HashMap's key set, and a TreeSet a TreeMap's, so

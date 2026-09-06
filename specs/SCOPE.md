@@ -118,7 +118,10 @@ The same is now true one level down, of METHODS. Every method name a real JDK
 exists in Java, but …" — and never reads as "cannot find symbol", which is what
 a typo looks like. That is checked rather than claimed:
 `scripts/coverage/measure.py --why` prints the complaint for every missing name
-and exits non-zero if one of them is a bare "cannot find symbol". The same run
+and exits non-zero if one of them is a bare "cannot find symbol". That asks
+whether a name EXISTS; `scripts/coverage/behaviour.py` asks whether it answers
+the same thing a JDK does, by calling every answered method with real arguments
+and diffing — 2532 calls over 233 classes. The same run
 reports how much is answered, with a refusal counting as MISSING rather than as
 known.
 

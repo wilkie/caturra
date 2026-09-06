@@ -14951,3 +14951,84 @@ answer the program asked for.
 
 Pinned as `what_a_charset_says_about_itself` and `the_last_of_the_measured_list`.
 The measurement reads 3138/3385 across 225 classes.
+
+## Presence was measured; behaviour was not
+
+`measure.py` asks whether a name EXISTS. It calls with `null` arguments and
+reads the diagnostic — it never runs anything. That is a real question, and it
+is not the only one. A name it counts as answered can still be wrong:
+
+> `IsoEra.getDisplayName` compiled, ran, and gave "Anno Domini" for all six
+> styles. The emitter names the class a call is written against, and an
+> `IsoEra` fell through to the `DayOfWeek` branch — so the VM arm that knew
+> better was never the one that ran. The measurement had counted the name as
+> answered.
+
+So `scripts/coverage/behaviour.py`: for every method the measurement counts as
+answered, write a call with REAL arguments, run it on a JDK and on caturra, and
+diff. One program per class, each call wrapped so a thrown exception is
+compared too — the class and the message, which is where half the interesting
+differences live. **2532 calls over 233 classes.**
+
+The first run found 170 differences. Ten were engine defects:
+
+* **A `String` says `begin` and a `StringBuilder` says `start`.** Two checks in
+  a JDK (`String.checkBoundsBeginEnd` against
+  `AbstractStringBuilder.checkRangeSIOOBE`), one shared function here, and it
+  hard-coded the second. `substring` already had it right, which is what made
+  `getChars` easy to miss.
+* **A matcher has two wordings** for being asked before it has matched, and the
+  METHOD decides: `start`/`end` say "No match available", every form of `group`
+  says "No match found". One message was right half the time.
+* **A `Vector` has three cursors** and a JDK names them apart — `Vector$Itr`,
+  `Vector$ListItr`, and the anonymous `Vector$1` its `elements()` answers. All
+  three said `$Itr`. Its `indexOf(o, from)` with a negative start reaches a
+  JDK's ARRAY access rather than a range check, so the complaint is the array
+  one and names the length.
+* **An enum's own `of` words a bad value without the range** — `Month.of(0)` is
+  "Invalid value for MonthOfYear: 0", where `LocalDate.of(2024, 0, 1)` is the
+  same sentence with "(valid values 1 - 12)" in it. Which one a `MonthDay`
+  gets depends on which check it goes through.
+* **`IsoEra.of(-2)` answered BCE.** It clamped where a JDK refuses — an
+  accepts-invalid, and the kind a program does not see until its arithmetic has
+  already gone somewhere wrong.
+* **A year inside a longer value is four digits AFTER the sign**, so -2 is
+  `-0002`. `{year:04}` gives `-002`, because the sign eats a place; a
+  `YearMonth` had its own copy of the rule and got that wrong where a date's
+  copy did not.
+* **Every library enum's `values()` recorded its ELEMENT class**, not the
+  array's, so `DayOfWeek.values()` printed as `java.time.DayOfWeek@2a` and
+  `getSimpleName()` said `DayOfWeek` where a JDK says `DayOfWeek[]`. Five
+  sites, the same mistake. **`toArray()` had it too** — the TYPED
+  `toArray(new String[0])` was right all along, which is what hid it.
+* **`isProbablePrime(certainty)` with a certainty of zero or less answers
+  true** without testing anything, even for 8. Reading the certainty as a
+  number of rounds and answering honestly is the obvious implementation and the
+  wrong one.
+* **`TemporalAdjusters.firstDayOfMonth()` printed
+  `Adjuster { kind: FirstDayOfMonth, day: 1, ordinal: 0 }`** — Rust's own
+  `{:?}`, reaching a student's console.
+* **Reflecting through the wrong object built an "exception" whose CLASS was an
+  English sentence** (`cannot read field n`), which surfaces as an engine abort
+  rather than as something a program can catch.
+
+And one thing the sweep got the engine to settle rather than fix: a stream's
+`getClass()` said `java.lang.Object` while its `toString` invented
+`java.util.stream.ReferencePipeline$2a` — two answers, and the second not even
+the `name@hash` shape a default `toString` has. Both now say
+`ReferencePipeline$Head`, which is a JDK's exact answer for a fresh stream and
+stale after an intermediate operation (a JDK renames the pipeline per op and by
+element family). One wrong answer where there were two.
+
+**What the sweep declares rather than reports.** A lambda's class is its
+address in a JDK; caturra's filesystem is rooted at `/` with no working
+directory; a comparator caturra synthesized is not one of a JDK's named
+classes. Those are facts about what is modelled, and the script names them with
+their reasons rather than counting them.
+
+**47 differences remain**, and they are the honest residue rather than a clean
+sheet: reflection is looser about its arguments than a JDK (a `newInstance`
+with the wrong count constructs anyway), a few cursor classes still report a
+sibling's name, and `initCause` does not refuse a second cause on the two
+throwables whose constructor initialises it to null. They are visible and
+named, which is the point of having the tool at all.
