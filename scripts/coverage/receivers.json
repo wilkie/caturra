@@ -176,7 +176,7 @@
   "java.util.StringTokenizer": "new java.util.StringTokenizer(\"a b\")",
   "java.util.TreeMap": "new java.util.TreeMap<String, Integer>()",
   "java.util.TreeSet": "new java.util.TreeSet<String>()",
-  "java.util.UUID": "java.util.UUID.randomUUID()",
+  "java.util.UUID": "java.util.UUID.fromString(\"a8098c1a-f86e-11da-bd1a-00112444be1e\")",
   "java.util.UnknownFormatConversionException": "new java.util.UnknownFormatConversionException(\"m\")",
   "java.util.Vector": "new java.util.Vector<String>()",
   "java.util.function.BiConsumer": "((java.util.function.BiConsumer<String, String>) ((x, y) -> {}))",

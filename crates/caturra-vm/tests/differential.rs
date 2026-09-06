@@ -52933,3 +52933,81 @@ public class WrongReceiver {
 }
 "#
 );
+
+// ---- The residue the behaviour sweep named, worked down. Every cursor a JDK
+// hands out has a class of its own, and the name depends on three facts:
+// which collection made it, whether it walks BACKWARDS, and whether the map
+// under it is linked or a `Hashtable`. An empty `Hashtable` does not hand out
+// a cursor at all — a JDK answers the shared `Collections$EmptyEnumeration`.
+differential_test!(
+    the_class_every_cursor_reports,
+    "CursorClasses",
+    r#"
+import java.util.*;
+public class CursorClasses {
+  static void p(Object o) { System.out.println(o.getClass().getName()); }
+  public static void main(String[] a) {
+    p(new ArrayDeque<String>(List.of("a")).descendingIterator());
+    p(new LinkedList<String>(List.of("a")).descendingIterator());
+    p(new TreeSet<String>(Set.of("a")).descendingIterator());
+    p(new TreeSet<String>(Set.of("a")).iterator());
+    p(new LinkedHashSet<String>(Set.of("a")).iterator());
+    p(new HashSet<String>(Set.of("a")).iterator());
+    p(new LinkedHashMap<String,String>().keySet().iterator());
+    p(new LinkedHashMap<String,String>().values().iterator());
+    p(new LinkedHashMap<String,String>().entrySet().iterator());
+    p(new Hashtable<String,String>().keys());
+    p(new Hashtable<String,String>().elements());
+    Hashtable<String,String> h = new Hashtable<>(); h.put("k","v");
+    p(h.keys()); p(h.elements());
+    p(new Vector<String>(List.of("a")).elements().asIterator());
+    p(new TreeSet<String>(Set.of("a")).descendingSet().iterator());
+  }
+}
+"#
+);
+
+// A `Vector` words two failures its own way: `listIterator(int)` without the
+// size an `ArrayList` includes, and `indexOf(o, from)` with the length of the
+// BACKING ARRAY — its capacity, so a fresh `Stack` says 10 while holding
+// nothing.
+differential_test!(
+    what_a_vector_says_about_a_bad_index,
+    "VectorIndexes",
+    r#"
+import java.util.*;
+public class VectorIndexes {
+  static void s(String l, Runnable r) {
+    try { r.run(); System.out.println(l + " = ok"); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("stack", () -> new Stack<String>().listIterator(1));
+    s("vector", () -> new Vector<String>().listIterator(1));
+    s("arraylist", () -> new ArrayList<String>().listIterator(1));
+    s("linkedlist", () -> new LinkedList<String>().listIterator(1));
+  }
+}
+"#
+);
+
+// The two throwables that WRAP a cause rather than being caused by one pass a
+// null message up, so `getMessage()` is null and `toString()` is the bare
+// class name — where every other single-Throwable constructor derives the
+// message from the cause.
+differential_test!(
+    a_throwable_that_wraps_a_cause,
+    "WrapsACause",
+    r#"
+import java.lang.reflect.*;
+public class WrapsACause {
+  static void p(Throwable t) { System.out.println(t.getMessage() + " | " + t + " | " + t.getCause()); }
+  public static void main(String[] a) {
+    p(new RuntimeException(new Exception("m")));
+    p(new InvocationTargetException(new Exception("m")));
+    p(new java.io.UncheckedIOException(new java.io.IOException("m")));
+    p(new ExceptionInInitializerError(new Exception("m")));
+  }
+}
+"#
+);

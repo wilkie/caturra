@@ -15026,9 +15026,46 @@ directory; a comparator caturra synthesized is not one of a JDK's named
 classes. Those are facts about what is modelled, and the script names them with
 their reasons rather than counting them.
 
-**47 differences remain**, and they are the honest residue rather than a clean
-sheet: reflection is looser about its arguments than a JDK (a `newInstance`
-with the wrong count constructs anyway), a few cursor classes still report a
-sibling's name, and `initCause` does not refuse a second cause on the two
-throwables whose constructor initialises it to null. They are visible and
-named, which is the point of having the tool at all.
+**The residue, worked down.** The sweep named 47; a second pass took it to 16.
+What that pass found, beyond the two it had already reported:
+
+* **Every cursor a JDK hands out has a class of its own**, and the name turns
+  on three facts caturra was reading only the first of: which collection made
+  it, whether it walks BACKWARDS (`ArrayDeque$DescendingIterator`,
+  `LinkedList$DescendingIterator`,
+  `TreeMap$NavigableSubMap$DescendingSubMapKeyIterator`), and whether the map
+  under it is linked or a `Hashtable`. An EMPTY `Hashtable` hands out no cursor
+  at all — a JDK answers the shared `Collections$EmptyEnumeration`. Fifteen
+  spellings, and thirteen of them were one of two names.
+* **A `Vector` words two failures its own way**: `listIterator(int)` without
+  the size an `ArrayList` includes, and `indexOf(o, from)` with the length of
+  the BACKING ARRAY — its capacity, so a fresh `Stack` reports 10 while holding
+  nothing.
+* **`Writer.append(cs, a, b)` says `begin`**, because it reaches a JDK through
+  `CharSequence.subSequence` — the same String-versus-builder split `getChars`
+  had, in a second shared range checker that had the same single hard-coded
+  word.
+* **The two throwables that WRAP a cause** (`InvocationTargetException`,
+  `ExceptionInInitializerError`) pass a null message up, where every other
+  single-`Throwable` constructor derives one from the cause.
+* **A matcher asks whether it has matched before it looks at the group
+  number** — `end(-2)` on an unmatched matcher is "No match available", not
+  "No group -2". The same ordering a `Field`'s typed accessors need, which
+  check the CONVERSION before the object.
+* **Two more arrays recording their element class** — a stream's `toArray()`
+  and the deque/queue one — bringing that single mistake to six sites found by
+  one probe shape.
+* **`Comparator.reversed()` disagreed with itself**, as the stream had:
+  `getClass()` named `Collections$ReverseComparator` while `toString` always
+  wrote `$$Lambda`.
+
+And one lesson about the sweep rather than the engine: `UUID.randomUUID()` was
+the receiver for `java.util.UUID`, so every value on that class was noise that
+read as a finding on each run. `measure.py` does not care — it never runs
+anything — so the check that a receiver is the same twice belongs here.
+
+**16 differences remain**: reflection is looser about its arguments than a JDK
+(a `newInstance` with the wrong count constructs anyway), `Writer.nullWriter()`
+prints its empty buffer where a JDK prints a class, and `initCause` does not
+refuse a second cause on the two throwables whose constructor initialises it to
+null. They are visible and named, which is the point of having the tool.

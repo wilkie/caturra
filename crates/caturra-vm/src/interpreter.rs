@@ -7848,10 +7848,13 @@ impl<'run> Interpreter<'run> {
                 // vector's length. (`subList`'s `fromIndex = -2` is the range
                 // check, and a different method.)
                 if forwards && *from < 0 {
+                    // The length a JDK names is the BACKING ARRAY's, which for
+                    // a vector is its CAPACITY — a fresh `Stack` reports 10
+                    // while holding nothing.
+                    let length = intrinsics::vector_capacity(&self.heap, receiver, items.len());
                     return Err(VmError::UncaughtException(format!(
                         "java.lang.ArrayIndexOutOfBoundsException: Index {from} out of bounds \
-                         for length {}",
-                        items.len()
+                         for length {length}"
                     )));
                 }
                 if !forwards && usize::try_from(*from).is_ok_and(|at| at >= items.len()) {
@@ -12571,7 +12574,8 @@ impl<'run> Interpreter<'run> {
             // An object `Stream.toArray()` answers an `Object[]` of the
             // elements, boxing any primitive as a collection would.
             ("toArray", []) if descriptor.ends_with(")[Ljava/lang/Object;") => {
-                let object = String::from("java/lang/Object");
+                // The ARRAY's class, not its element's.
+                let object = String::from("[Ljava/lang/Object;");
                 let values: Vec<JValue> = elements
                     .iter()
                     .map(|element| match element {
@@ -18431,6 +18435,13 @@ impl<'run> Interpreter<'run> {
                     }
                     "getInt" | "getLong" | "getDouble" | "getBoolean" | "getByte" | "getChar"
                     | "getShort" | "getFloat" => {
+                        // The CONVERSION is checked before the OBJECT is: a JDK
+                        // asks whether an `int` field can be read as a
+                        // `boolean` at all before it asks whose field it is, so
+                        // `getBoolean("ab")` complains about the type and not
+                        // about the receiver. Asked here with a placeholder,
+                        // whose value the check does not read.
+                        Self::reflect_get_as(method, &declaring, &name, &descriptor, JValue::NULL)?;
                         // Primitive accessors widen the field's value, or refuse.
                         let raw = self.read_reflected_field(
                             &declaring,
@@ -21625,8 +21636,15 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
             source,
             writes,
             list,
+            descending,
             ..
-        }) => String::from(cursor_class_name_of(heap, *source, *writes, *list)),
+        }) => String::from(cursor_class_name_of(
+            heap,
+            *source,
+            *writes,
+            *list,
+            *descending,
+        )),
         // The I/O and reflection kinds. Reachable since `getClass` became
         // an `Object` method every receiver answers rather than one each
         // table had to remember — before that a File's `getClass()` could
@@ -21814,6 +21832,7 @@ fn cursor_class_name_of(
     source: HeapRef,
     writes: IteratorWrites,
     list: bool,
+    descending: bool,
 ) -> &'static str {
     use crate::value::{HeapObject as H, IteratorWrites as W, MapViewKind as K};
     match writes {
@@ -21832,7 +21851,8 @@ fn cursor_class_name_of(
             }
         }
         // A LinkedList has ONE cursor class: `iterator()` returns its
-        // `ListItr` too.
+        // `ListItr` too — but `descendingIterator()` is its own.
+        Some(H::LinkedList(_)) if descending => "java/util/LinkedList$DescendingIterator",
         Some(H::LinkedList(_)) => "java/util/LinkedList$ListItr",
         // A `Vector` has THREE cursors, and a JDK names them apart: its
         // `iterator()` is `Vector$Itr`, its `listIterator()` is
@@ -21844,23 +21864,79 @@ fn cursor_class_name_of(
             _ if list => "java/util/Vector$ListItr",
             _ => "java/util/Vector$Itr",
         },
+        Some(H::ArrayDeque(_)) if descending => "java/util/ArrayDeque$DescendingIterator",
         Some(H::ArrayDeque(_)) => "java/util/ArrayDeque$DeqIterator",
         Some(H::PriorityQueue { .. }) => "java/util/PriorityQueue$Itr",
         // A HashSet IS a HashMap's key set, and a TreeSet a TreeMap's, so
-        // both report the MAP's cursor.
-        Some(H::HashSet(_) | H::UnmodifiableSet(_)) => "java/util/HashMap$KeyIterator",
+        // both report the MAP's cursor — and a LINKED hash set the linked
+        // map's, which is a different class again.
+        // A `HashSet` holds the map itself; an unmodifiable view holds a
+        // REFERENCE to the set it wraps.
+        Some(H::HashSet(map)) if map.is_linked() => "java/util/LinkedHashMap$LinkedKeyIterator",
+        Some(H::HashSet(_)) => "java/util/HashMap$KeyIterator",
+        Some(H::UnmodifiableSet(inner)) => match heap.get(*inner) {
+            Some(H::HashSet(map)) if map.is_linked() => "java/util/LinkedHashMap$LinkedKeyIterator",
+            _ => "java/util/HashMap$KeyIterator",
+        },
+        // A DESCENDING walk of a sorted set goes through the sub-map view a
+        // JDK builds for it, whose cursor has a name of its own.
+        Some(H::TreeSet { .. }) if descending => {
+            "java/util/TreeMap$NavigableSubMap$DescendingSubMapKeyIterator"
+        }
         Some(H::TreeSet { .. }) => "java/util/TreeMap$KeyIterator",
         Some(H::MapView { map, kind, .. }) => {
-            let sorted = matches!(heap.get(*map), Some(H::TreeMap { .. }));
-            match (kind, sorted) {
-                (K::Keys, false) => "java/util/HashMap$KeyIterator",
-                (K::Keys, true) => "java/util/TreeMap$KeyIterator",
-                (K::Values, false) => "java/util/HashMap$ValueIterator",
-                (K::Values, true) => "java/util/TreeMap$ValueIterator",
-                (K::Entries, false) => "java/util/HashMap$EntryIterator",
-                (K::Entries, true) => "java/util/TreeMap$EntryIterator",
+            // Which MAP made the view decides the cursor's class, and there
+            // are four kinds of map here, not two: a `Hashtable` walks with
+            // its own `Enumerator` (one class for keys and for values), and an
+            // EMPTY one does not walk at all — a JDK hands back the shared
+            // `Collections$EmptyEnumeration` rather than a cursor over
+            // nothing. A `LinkedHashMap`'s three cursors are its own as well.
+            let (sorted, linked, hashtable, empty) = match heap.get(*map) {
+                Some(H::TreeMap { .. }) => (true, false, false, false),
+                Some(H::HashMap(table)) => (
+                    false,
+                    table.is_linked(),
+                    table.is_hashtable(),
+                    table.is_empty(),
+                ),
+                _ => (false, false, false, false),
+            };
+            if hashtable && matches!(writes, W::Enumerator) {
+                return if empty {
+                    "java/util/Collections$EmptyEnumeration"
+                } else {
+                    "java/util/Hashtable$Enumerator"
+                };
+            }
+            match (kind, sorted, linked) {
+                (K::Keys, true, _) => "java/util/TreeMap$KeyIterator",
+                (K::Values, true, _) => "java/util/TreeMap$ValueIterator",
+                (K::Entries, true, _) => "java/util/TreeMap$EntryIterator",
+                (K::Keys, _, true) => "java/util/LinkedHashMap$LinkedKeyIterator",
+                (K::Values, _, true) => "java/util/LinkedHashMap$LinkedValueIterator",
+                (K::Entries, _, true) => "java/util/LinkedHashMap$LinkedEntryIterator",
+                (K::Keys, ..) => "java/util/HashMap$KeyIterator",
+                (K::Values, ..) => "java/util/HashMap$ValueIterator",
+                (K::Entries, ..) => "java/util/HashMap$EntryIterator",
             }
         }
+        // A cursor over a sorted VIEW (`descendingSet`, `headSet`, `subMap`)
+        // walks the sub-map a JDK builds, whose cursor classes are named for
+        // the direction rather than for the set.
+        Some(H::SortedView {
+            face,
+            descending: reversed,
+            ..
+        }) => match (face, *reversed || descending) {
+            (crate::value::SortedFace::Map, true) => {
+                "java/util/TreeMap$NavigableSubMap$DescendingSubMapEntryIterator"
+            }
+            (crate::value::SortedFace::Map, false) => {
+                "java/util/TreeMap$NavigableSubMap$SubMapEntryIterator"
+            }
+            (_, true) => "java/util/TreeMap$NavigableSubMap$DescendingSubMapKeyIterator",
+            (_, false) => "java/util/TreeMap$NavigableSubMap$SubMapKeyIterator",
+        },
         _ => "java/util/Iterator",
     }
 }

@@ -3904,7 +3904,19 @@ pub fn invoke_special(
             if caturra_classfile::exceptions::is_exception_class(class) =>
         {
             let cause = ref_arg(&args[0]);
-            let message = cause.map(|c| throwable_to_string(heap, c));
+            // `Throwable(Throwable)` derives the message from the cause's
+            // `toString`. The two that WRAP a cause rather than being caused
+            // by one do not: they pass a null message up and keep the cause
+            // beside it, so `getMessage()` is null and `toString()` is the
+            // bare class name.
+            let wraps = matches!(
+                class,
+                "java/lang/reflect/InvocationTargetException"
+                    | "java/lang/ExceptionInInitializerError"
+            );
+            let message = cause
+                .filter(|_| !wraps)
+                .map(|c| throwable_to_string(heap, c));
             set_exception_cause(heap, receiver, class, message, cause);
             Ok(())
         }
@@ -4566,8 +4578,23 @@ pub fn invoke_virtual(
         // an identity hash — rather than invented to look like a JDK's.
         // A comparator the PROGRAM declared is an ordinary instance and prints
         // its own `toString`; this covers only the ones caturra synthesized.
-        (HeapObject::Comparator(_), "toString") => {
-            let text = format!("java.util.Comparator$$Lambda@{:x}", identity_hash(receiver));
+        (HeapObject::Comparator(spec), "toString") => {
+            // The class `getClass()` reports, in `Object`'s shape. The two used
+            // to disagree: `naturalOrder()` and `reversed()` ARE named classes
+            // in a JDK and `object_class_name` says so, while this always
+            // wrote `$$Lambda` — one object, two answers.
+            let named = match spec {
+                crate::value::ComparatorSpec::Natural => {
+                    "java.util.Comparators$NaturalOrderComparator"
+                }
+                crate::value::ComparatorSpec::Reversed(_) => {
+                    "java.util.Collections$ReverseComparator"
+                }
+                // Everything else is built from a lambda, whose class a JDK
+                // names after its address — unstable between runs.
+                _ => "java.util.Comparator$$Lambda",
+            };
+            let text = format!("{named}@{:x}", identity_hash(receiver));
             let reference = heap.alloc_string(&text);
             Ok(Some(JValue::Ref(Some(reference))))
         }
@@ -5995,7 +6022,7 @@ fn builder_method(
             Ok(Some(JValue::Ref(Some(receiver))))
         }
         ("delete", [JValue::Int(start), JValue::Int(end)]) => {
-            let (start, end) = check_range(*start, *end, count)?;
+            let (start, end) = check_range(*start, *end, count, "start")?;
             let mut deleted = units;
             deleted.drain(start..end);
             builder_store(heap, receiver, deleted);
@@ -6010,7 +6037,7 @@ fn builder_method(
         }
         ("replace", [JValue::Int(start), JValue::Int(end), value]) => {
             let value_units = arg_units(value)?;
-            let (start, end) = check_range(*start, *end, count)?;
+            let (start, end) = check_range(*start, *end, count, "start")?;
             let mut replaced = units;
             replaced.splice(start..end, value_units);
             builder_store(heap, receiver, replaced);
@@ -6244,14 +6271,23 @@ fn check_offset(offset: i32, count: usize) -> Result<usize, VmError> {
 /// A `delete`/`replace` range: `start` must be a valid offset no greater
 /// than `end`, and `end` is clamped to the length (Java tolerates a large
 /// `end` here, unlike `substring`).
-fn check_range(start: i32, end: i32, count: usize) -> Result<(usize, usize), VmError> {
+fn check_range(
+    start: i32,
+    end: i32,
+    count: usize,
+    // Which word names the low end. A `StringBuilder`'s own range methods say
+    // `start`; a `Writer.append(cs, a, b)` reaches a JDK through
+    // `CharSequence.subSequence`, which on a String is `begin`. The same split
+    // `getChars` has, and the same one function serving both.
+    low: &str,
+) -> Result<(usize, usize), VmError> {
     // JDK 11 clamps `end` to the length FIRST, so the message reports the
     // clamped value: `replace(9, 10, ...)` on a length-3 builder is
     // "start 9, end 3, length 3", not "end 10".
     let clamped_end = end.min(i32::try_from(count).unwrap_or(i32::MAX));
     let bad = || {
         throw(format!(
-            "java.lang.StringIndexOutOfBoundsException: start {start}, \
+            "java.lang.StringIndexOutOfBoundsException: {low} {start}, \
              end {clamped_end}, length {count}"
         ))
     };
@@ -7304,7 +7340,7 @@ fn buffered_writer_method(
                 } else {
                     (*first, first.saturating_add(*second))
                 };
-                let (start, end) = check_range(start, end, units.len())?;
+                let (start, end) = check_range(start, end, units.len(), "begin")?;
                 units = units[start..end].to_vec();
             }
             if let Some(HeapObject::BufferedWriter { buffer, .. }) = heap.get_mut(receiver) {
@@ -8782,6 +8818,11 @@ fn iterator_method(
     // `asIterator()`, Java 9's bridge between the two names, is that cursor
     // itself. (Its `remove` still refuses: an enumerator writes nothing.)
     if method == "asIterator" {
+        // A JDK WRAPS the enumeration in an anonymous `Enumeration$1`; here
+        // the same cursor answers both names, so the wrapper is recorded as a
+        // view class rather than built — the object is the same, and only its
+        // `getClass()` differs.
+        heap.set_view_class(receiver, "java/util/Enumeration$1");
         return Ok(Some(JValue::Ref(Some(receiver))));
     }
     let method = match method {
@@ -9110,9 +9151,15 @@ fn list_method(
                     .ok()
                     .filter(|at| *at <= expected_len)
                     .ok_or_else(|| {
-                        throw(format!(
-                            "java.lang.IndexOutOfBoundsException: Index: {at}, Size: {expected_len}"
-                        ))
+                        // A `Vector` words this WITHOUT the size — its own
+                        // `listIterator(int)` throws `Index: 1` where an
+                        // `ArrayList` says `Index: 1, Size: 0`.
+                        let detail = if matches!(heap.get(receiver), Some(HeapObject::Stack(_))) {
+                            format!("Index: {at}")
+                        } else {
+                            format!("Index: {at}, Size: {expected_len}")
+                        };
+                        throw(format!("java.lang.IndexOutOfBoundsException: {detail}"))
                     })?,
                 _ => 0,
             };
@@ -9164,8 +9211,10 @@ fn list_method(
                     ))),
                 })
                 .collect();
+            // The ARRAY's class, not its element's — a `RefArray` records
+            // the former, and this is the sixth site that passed the latter.
             let array = heap.alloc(HeapObject::RefArray(
-                String::from("java/lang/Object"),
+                String::from("[Ljava/lang/Object;"),
                 values,
             ));
             Ok(Some(JValue::Ref(Some(array))))
@@ -9932,13 +9981,21 @@ fn matcher_method(
             ))
         })
     };
-    let group_index = |args: &[JValue]| -> Result<usize, VmError> {
+    let group_index = |args: &[JValue], asked_by: &str| -> Result<usize, VmError> {
         match args.first() {
-            Some(JValue::Int(index)) => usize::try_from(*index).map_err(|_| {
-                throw(format!(
-                    "java.lang.IndexOutOfBoundsException: No group {index}"
-                ))
-            }),
+            // Whether the matcher has matched AT ALL is asked first, before
+            // the group number is looked at — `end(-2)` on an unmatched
+            // matcher is "No match available", not "No group -2".
+            Some(JValue::Int(index)) => {
+                if spans.is_none() {
+                    return Err(unmatched(asked_by));
+                }
+                usize::try_from(*index).map_err(|_| {
+                    throw(format!(
+                        "java.lang.IndexOutOfBoundsException: No group {index}"
+                    ))
+                })
+            }
             // `group("name")` — the group a `(?<name>…)` stands for. Whether
             // there IS a match is asked FIRST, as a JDK asks it: naming a
             // group that does not exist on a matcher that has not matched is
@@ -10028,7 +10085,7 @@ fn matcher_method(
             Ok(Some(JValue::Int(i32::from(matched))))
         }
         "group" => {
-            let index = group_index(args)?;
+            let index = group_index(args, "group")?;
             match group_span(index, "group")? {
                 Some((start, end)) => Ok(Some(JValue::Ref(Some(
                     heap.alloc_string_units(&input[start..end]),
@@ -10038,7 +10095,7 @@ fn matcher_method(
             }
         }
         "start" | "end" => {
-            let index = group_index(args)?;
+            let index = group_index(args, method)?;
             let Some((start, end)) = group_span(index, method)? else {
                 return Ok(Some(JValue::Int(-1)));
             };
@@ -16403,7 +16460,7 @@ fn string_writer_method(
                     } else {
                         (*first, first.saturating_add(*second))
                     };
-                    let (start, end) = check_range(start, end, units.len())?;
+                    let (start, end) = check_range(start, end, units.len(), "begin")?;
                     units[start..end].to_vec()
                 }
                 _ => units,

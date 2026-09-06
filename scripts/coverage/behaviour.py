@@ -153,7 +153,15 @@ def signatures(class_names):
 
 
 def calls_for(class_name, receiver, overloads, answered):
-    """The calls to exercise, and the overloads no argument bank could build."""
+    """The calls to exercise, and the overloads no argument bank could build.
+
+    A receiver that is not itself DETERMINISTIC would make every value on the
+    class noise — `UUID.randomUUID()` was one, and its bits read as a finding
+    on each run. `measure.py` does not care (it never runs anything), so this
+    is checked here.
+    """
+    if re.search(r"random|now\(\)|currentTimeMillis|nanoTime", receiver):
+        return [], [f"{class_name}: {receiver} is not the same twice"]
     calls, unbuildable = [], []
     for name, is_static, returns, params in overloads:
         if name not in answered or name in NON_DETERMINISTIC:
