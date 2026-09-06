@@ -998,7 +998,8 @@ impl<'run> Interpreter<'run> {
                     declaring,
                     descriptor,
                     access,
-                }) => intrinsics::constructor_to_string(declaring, descriptor, *access),
+                    throws,
+                }) => intrinsics::constructor_to_string(declaring, descriptor, *access, throws),
                 Some(crate::value::HeapObject::Class { name }) => format!("class {name}"),
                 Some(crate::value::HeapObject::Scanner { .. }) => String::from("Scanner"),
                 Some(crate::value::HeapObject::File(path)) => format!("File({path})"),
@@ -12486,7 +12487,7 @@ impl<'run> Interpreter<'run> {
                 let backing = self
                     .heap
                     .alloc(crate::value::HeapObject::ArrayList(elements.clone()));
-                JValue::Ref(Some(self.heap.alloc(crate::value::HeapObject::Iterator {
+                let cursor = self.heap.alloc(crate::value::HeapObject::Iterator {
                     source: backing,
                     index: 0,
                     last: None,
@@ -12494,7 +12495,21 @@ impl<'run> Interpreter<'run> {
                     writes: IteratorWrites::All,
                     list: false,
                     descending: false,
-                })))
+                });
+                // A JDK reaches a stream's cursor through its SPLITERATOR, and
+                // names the adapter per element family — `$1Adapter` for an
+                // object stream, `$2`/`$3`/`$4` for int, long and double. The
+                // cursor here is an ordinary one over the materialized
+                // elements, so which it is has to be recorded rather than
+                // read off the object.
+                let adapter = match descriptor.rsplit(')').next().unwrap_or("") {
+                    "Ljava/util/PrimitiveIterator$OfInt;" => "java/util/Spliterators$2Adapter",
+                    "Ljava/util/PrimitiveIterator$OfLong;" => "java/util/Spliterators$3Adapter",
+                    "Ljava/util/PrimitiveIterator$OfDouble;" => "java/util/Spliterators$4Adapter",
+                    _ => "java/util/Spliterators$1Adapter",
+                };
+                self.heap.set_view_class(cursor, adapter);
+                JValue::Ref(Some(cursor))
             }
             // `sum()` adds in the pipeline's own numeric width — a
             // `DoubleStream`'s is a `double`, and the descriptor is the only
@@ -16593,6 +16608,30 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NoSuchMethodException: {declaring}.<init>"
                 ))
             })?;
+        // The same two checks `Method.invoke` makes, and for the same reason:
+        // a `zip` truncates silently, so a `newInstance` with the wrong number
+        // of arguments used to construct the object anyway and leave the
+        // program with something half-initialised.
+        if initargs.len() != param_descs.len() {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.IllegalArgumentException: wrong number of arguments",
+            )));
+        }
+        for (arg, desc) in initargs.iter().zip(&param_descs) {
+            match self.reflect_argument_fits(*arg, desc) {
+                ArgFit::Fits => {}
+                ArgFit::Mismatch => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.IllegalArgumentException: argument type mismatch",
+                    )));
+                }
+                ArgFit::NullToPrimitive => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.IllegalArgumentException",
+                    )));
+                }
+            }
+        }
         let object = self.new_instance(&declaring);
         let instance = self.heap.alloc(object);
         let mut locals = vec![JValue::Ref(Some(instance))];
@@ -16624,6 +16663,7 @@ impl<'run> Interpreter<'run> {
                 name,
                 descriptor,
                 access,
+                ..
             }) => (declaring.clone(), name.clone(), descriptor.clone(), *access),
             _ => return Ok(None),
         };
@@ -16695,6 +16735,26 @@ impl<'run> Interpreter<'run> {
                 "java.lang.IllegalArgumentException: wrong number of arguments",
             )));
         }
+        // ...and the argument TYPES, which a JDK checks before it runs
+        // anything. Unchecked, a `String` handed to an `int` parameter reached
+        // `unbox_for`, which answered a zero — so the method ran with a made-up
+        // value and whatever it did with that came back as an
+        // `InvocationTargetException` from somewhere the program never wrote.
+        for (arg, desc) in call_args.iter().zip(&param_descs) {
+            match self.reflect_argument_fits(*arg, desc) {
+                ArgFit::Fits => {}
+                ArgFit::Mismatch => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.IllegalArgumentException: argument type mismatch",
+                    )));
+                }
+                ArgFit::NullToPrimitive => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.IllegalArgumentException",
+                    )));
+                }
+            }
+        }
 
         let mut locals = Vec::new();
         if !is_static {
@@ -16713,6 +16773,93 @@ impl<'run> Interpreter<'run> {
         new_frame.box_return_as = Some(ret_desc);
         new_frame.wraps_invocation_target = true;
         Ok(Some(new_frame))
+    }
+
+    /// Whether a reflective argument can stand in for a parameter of this
+    /// descriptor. A primitive parameter takes the matching WRAPPER (or one
+    /// that widens into it); a reference parameter takes null or a reference.
+    fn reflect_argument_fits(&self, argument: JValue, descriptor: &str) -> ArgFit {
+        let JValue::Ref(reference) = argument else {
+            // An unboxed primitive never reaches here from `invoke` — its
+            // arguments arrive as an `Object[]` — but a caller inside the
+            // engine may pass one, and it is by construction the right width.
+            return ArgFit::Fits;
+        };
+        if !descriptor.starts_with(|c: char| "BCDFIJSZ".contains(c)) || descriptor.len() != 1 {
+            // A reference parameter takes null, and otherwise whatever the
+            // assignment rules allow — the same question `instanceof` asks,
+            // so it reads the same rule.
+            let Some(reference) = reference else {
+                return ArgFit::Fits;
+            };
+            let wanted = descriptor
+                .strip_prefix('L')
+                .and_then(|rest| rest.strip_suffix(';'));
+            let Some(wanted) = wanted else {
+                // An ARRAY parameter takes an array of an assignable element:
+                // `Object[]` does NOT fit a `String[]` parameter, which is the
+                // whole difference between a reflective call that runs and one
+                // a JDK refuses before it starts.
+                let Some(actual) = self.heap.get(reference).map(heap_object_binary_name) else {
+                    return ArgFit::Mismatch;
+                };
+                let actual = actual.replace('.', "/");
+                if actual == descriptor {
+                    return ArgFit::Fits;
+                }
+                let (Some(from), Some(to)) = (
+                    actual
+                        .strip_prefix("[L")
+                        .and_then(|rest| rest.strip_suffix(';')),
+                    descriptor
+                        .strip_prefix("[L")
+                        .and_then(|rest| rest.strip_suffix(';')),
+                ) else {
+                    // A primitive array only fits its own exact type.
+                    return ArgFit::Mismatch;
+                };
+                return if class_is_assignable(from, to) || self.is_runtime_subtype(from, to) {
+                    ArgFit::Fits
+                } else {
+                    ArgFit::Mismatch
+                };
+            };
+            let actual = self.object_class_name(reference);
+            return if class_is_assignable(&actual, wanted)
+                || self.is_runtime_subtype(&actual, wanted)
+            {
+                ArgFit::Fits
+            } else {
+                ArgFit::Mismatch
+            };
+        }
+        let Some(reference) = reference else {
+            // A primitive parameter cannot take null — and a JDK says so with
+            // a BARE `IllegalArgumentException`, not the "argument type
+            // mismatch" a wrong-typed value gets.
+            return ArgFit::NullToPrimitive;
+        };
+        let Some(crate::value::HeapObject::Boxed { class_name, .. }) = self.heap.get(reference)
+        else {
+            return ArgFit::Mismatch;
+        };
+        let held = match &**class_name {
+            "java/lang/Byte" => "B",
+            "java/lang/Short" => "S",
+            "java/lang/Character" => "C",
+            "java/lang/Integer" => "I",
+            "java/lang/Long" => "J",
+            "java/lang/Float" => "F",
+            "java/lang/Double" => "D",
+            "java/lang/Boolean" => "Z",
+            _ => return ArgFit::Mismatch,
+        };
+        // The same widening rule the typed field accessors read.
+        if Self::widens_into(held).contains(&descriptor) {
+            ArgFit::Fits
+        } else {
+            ArgFit::Mismatch
+        }
     }
 
     /// Box an unboxed primitive value into its wrapper on the heap, so it can
@@ -18124,7 +18271,7 @@ impl<'run> Interpreter<'run> {
                     }
                     "getDeclaredMethods" | "getMethods" => {
                         let public_only = method == "getMethods";
-                        let methods: Vec<(String, String, u16)> = self
+                        let methods: Vec<(String, String, u16, Vec<String>)> = self
                             .classes
                             .get(&name)
                             .map(|cf| {
@@ -18152,6 +18299,7 @@ impl<'run> Interpreter<'run> {
                                                 .unwrap_or_default()
                                                 .to_owned(),
                                             m.access_flags.0,
+                                            member_exceptions(cf, m),
                                         )
                                     })
                                     .collect()
@@ -18160,12 +18308,13 @@ impl<'run> Interpreter<'run> {
                         let simple = simple_class_name(&name).to_owned();
                         let refs: Vec<JValue> = methods
                             .into_iter()
-                            .map(|(mname, descriptor, access)| {
+                            .map(|(mname, descriptor, access, throws)| {
                                 JValue::Ref(Some(self.heap.alloc(HeapObject::Method {
                                     declaring: simple.clone(),
                                     name: mname,
                                     descriptor,
                                     access,
+                                    throws,
                                 })))
                             })
                             .collect();
@@ -18177,7 +18326,7 @@ impl<'run> Interpreter<'run> {
                     }
                     "getDeclaredConstructors" | "getConstructors" => {
                         let public_only = method == "getConstructors";
-                        let ctors: Vec<(String, u16)> = self
+                        let ctors: Vec<(String, u16, Vec<String>)> = self
                             .classes
                             .get(&name)
                             .map(|cf| {
@@ -18199,6 +18348,7 @@ impl<'run> Interpreter<'run> {
                                                 .unwrap_or_default()
                                                 .to_owned(),
                                             m.access_flags.0,
+                                            member_exceptions(cf, m),
                                         )
                                     })
                                     .collect()
@@ -18207,11 +18357,12 @@ impl<'run> Interpreter<'run> {
                         let simple = simple_class_name(&name).to_owned();
                         let refs: Vec<JValue> = ctors
                             .into_iter()
-                            .map(|(descriptor, access)| {
+                            .map(|(descriptor, access, throws)| {
                                 JValue::Ref(Some(self.heap.alloc(HeapObject::Constructor {
                                     declaring: simple.clone(),
                                     descriptor,
                                     access,
+                                    throws,
                                 })))
                             })
                             .collect();
@@ -18235,18 +18386,24 @@ impl<'run> Interpreter<'run> {
                                         .constant_pool
                                         .get_utf8(m.descriptor_index)
                                         .unwrap_or_default();
-                                    constructor_params_match(desc, &param_class_names)
-                                        .then(|| (desc.to_owned(), m.access_flags.0))
+                                    constructor_params_match(desc, &param_class_names).then(|| {
+                                        (
+                                            desc.to_owned(),
+                                            m.access_flags.0,
+                                            member_exceptions(cf, m),
+                                        )
+                                    })
                                 })
                         });
                         match found {
-                            Some((descriptor, access)) => {
+                            Some((descriptor, access, throws)) => {
                                 let declaring = simple_class_name(&name).to_owned();
                                 Ok(Some(JValue::Ref(Some(self.heap.alloc(
                                     HeapObject::Constructor {
                                         declaring,
                                         descriptor,
                                         access,
+                                        throws,
                                     },
                                 )))))
                             }
@@ -18346,12 +18503,13 @@ impl<'run> Interpreter<'run> {
                                     .constant_pool
                                     .get_utf8(m.descriptor_index)
                                     .unwrap_or_default();
-                                constructor_params_match(desc, &param_class_names)
-                                    .then(|| (desc.to_owned(), m.access_flags.0))
+                                constructor_params_match(desc, &param_class_names).then(|| {
+                                    (desc.to_owned(), m.access_flags.0, member_exceptions(cf, m))
+                                })
                             })
                         });
                         match found {
-                            Some((descriptor, access)) => {
+                            Some((descriptor, access, throws)) => {
                                 let declaring = simple_class_name(&name).to_owned();
                                 Ok(Some(JValue::Ref(Some(self.heap.alloc(
                                     HeapObject::Method {
@@ -18359,6 +18517,7 @@ impl<'run> Interpreter<'run> {
                                         name: method_name,
                                         descriptor,
                                         access,
+                                        throws,
                                     },
                                 )))))
                             }
@@ -18426,7 +18585,16 @@ impl<'run> Interpreter<'run> {
                         access & caturra_classfile::FieldAccessFlags::SYNTHETIC != 0,
                     )))),
                     "isAccessible" | "canAccess" | "trySetAccessible" => {
-                        Ok(Some(self.reflect_access_answer(receiver, method, access)))
+                        let text =
+                            intrinsics::field_to_string(&declaring, &name, &descriptor, access);
+                        self.reflect_access_answer(
+                            receiver,
+                            method,
+                            Some((&declaring, &text)),
+                            args.first(),
+                            access & caturra_classfile::MethodAccessFlags::STATIC == 0,
+                        )
+                        .map(Some)
                     }
                     // `setAccessible` is a no-op (caturra enforces no access control).
                     "setAccessible" => {
@@ -18501,15 +18669,24 @@ impl<'run> Interpreter<'run> {
                 declaring,
                 descriptor,
                 access,
+                throws,
             }) => {
-                let (declaring, descriptor, access) =
-                    (declaring.clone(), descriptor.clone(), *access);
+                let (declaring, descriptor, access, throws) = (
+                    declaring.clone(),
+                    descriptor.clone(),
+                    *access,
+                    throws.clone(),
+                );
                 match method {
                     "getName" => Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&declaring))))),
                     "getModifiers" => Ok(Some(JValue::Int(i32::from(access)))),
                     "toString" => {
-                        let text =
-                            intrinsics::constructor_to_string(&declaring, &descriptor, access);
+                        let text = intrinsics::constructor_to_string(
+                            &declaring,
+                            &descriptor,
+                            access,
+                            &throws,
+                        );
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
                     // A constructor's shape reads off the same descriptor a
@@ -18519,6 +18696,7 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(reference))))
                     }
                     "getParameterTypes" => Ok(Some(self.parameter_class_array(&descriptor))),
+                    "getExceptionTypes" => Ok(Some(self.exception_class_array(&throws))),
                     "getParameterCount" => Ok(Some(JValue::Int(
                         i32::try_from(parse_descriptor_params(&descriptor).len()).unwrap_or(0),
                     ))),
@@ -18533,7 +18711,20 @@ impl<'run> Interpreter<'run> {
                         Ok(None)
                     }
                     "isAccessible" | "canAccess" | "trySetAccessible" => {
-                        Ok(Some(self.reflect_access_answer(receiver, method, access)))
+                        let text = intrinsics::constructor_to_string(
+                            &declaring,
+                            &descriptor,
+                            access,
+                            &throws,
+                        );
+                        self.reflect_access_answer(
+                            receiver,
+                            method,
+                            Some((&declaring, &text)),
+                            args.first(),
+                            false,
+                        )
+                        .map(Some)
                     }
                     other => Err(VmError::UnknownIntrinsic(format!("Constructor.{other}"))),
                 }
@@ -18543,9 +18734,15 @@ impl<'run> Interpreter<'run> {
                 name,
                 descriptor,
                 access,
+                throws,
             }) => {
-                let (declaring, name, descriptor, access) =
-                    (declaring.clone(), name.clone(), descriptor.clone(), *access);
+                let (declaring, name, descriptor, access, throws) = (
+                    declaring.clone(),
+                    name.clone(),
+                    descriptor.clone(),
+                    *access,
+                    throws.clone(),
+                );
                 match method {
                     "getName" => Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&name))))),
                     "getModifiers" => Ok(Some(JValue::Int(i32::from(access)))),
@@ -18556,6 +18753,7 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(reference))))
                     }
                     "getParameterTypes" => Ok(Some(self.parameter_class_array(&descriptor))),
+                    "getExceptionTypes" => Ok(Some(self.exception_class_array(&throws))),
                     "getParameterCount" => {
                         let count = parse_descriptor_params(&descriptor).len();
                         Ok(Some(JValue::Int(i32::try_from(count).unwrap_or(0))))
@@ -18565,22 +18763,12 @@ impl<'run> Interpreter<'run> {
                     // descriptor, which is what a harness printing a method
                     // would have shown a student.
                     "toString" => {
-                        let modifiers = reflect_modifier_names(access);
-                        let ret = intrinsics::type_name_of_descriptor(
-                            descriptor.rsplit(')').next().unwrap_or("V"),
-                        );
-                        let params: Vec<String> = parse_descriptor_params(&descriptor)
-                            .iter()
-                            .map(|p| intrinsics::type_name_of_descriptor(p))
-                            .collect();
-                        let text = format!(
-                            "{}{ret} {declaring}.{name}({})",
-                            if modifiers.is_empty() {
-                                String::new()
-                            } else {
-                                format!("{modifiers} ")
-                            },
-                            params.join(",")
+                        let text = intrinsics::method_to_string(
+                            &declaring,
+                            &name,
+                            &descriptor,
+                            access,
+                            &throws,
                         );
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
@@ -18617,7 +18805,21 @@ impl<'run> Interpreter<'run> {
                         Ok(None)
                     }
                     "isAccessible" | "canAccess" | "trySetAccessible" => {
-                        Ok(Some(self.reflect_access_answer(receiver, method, access)))
+                        let text = intrinsics::method_to_string(
+                            &declaring,
+                            &name,
+                            &descriptor,
+                            access,
+                            &throws,
+                        );
+                        self.reflect_access_answer(
+                            receiver,
+                            method,
+                            Some((&declaring, &text)),
+                            args.first(),
+                            access & caturra_classfile::MethodAccessFlags::STATIC == 0,
+                        )
+                        .map(Some)
                     }
                     other => Err(VmError::UnknownIntrinsic(format!("Method.{other}"))),
                 }
@@ -18672,6 +18874,22 @@ impl<'run> Interpreter<'run> {
     /// A descriptor's parameter types as a `Class[]` — the same reading for a
     /// method and for a constructor, which differ only in having a return type
     /// after the parentheses.
+    /// The `Class[]` a member's `throws` clause names.
+    ///
+    /// A fresh array every call — a JDK hands out a COPY, so writing into one
+    /// leaves the next caller's answer alone.
+    fn exception_class_array(&mut self, throws: &[String]) -> JValue {
+        let refs: Vec<JValue> = throws
+            .iter()
+            .map(|name| JValue::Ref(Some(self.intern_class(name.clone()))))
+            .collect();
+        let array = self.heap.alloc(crate::value::HeapObject::RefArray(
+            String::from("[Ljava/lang/Class;"),
+            refs,
+        ));
+        JValue::Ref(Some(array))
+    }
+
     fn parameter_class_array(&mut self, descriptor: &str) -> JValue {
         let names: Vec<String> = parse_descriptor_params(descriptor)
             .iter()
@@ -18693,21 +18911,81 @@ impl<'run> Interpreter<'run> {
     /// caturra enforces no access control, so `setAccessible(true)` has always
     /// been a no-op — but these three REPORT that flag, and a program that
     /// checks `isAccessible()` before setting it would have been told the
-    /// wrong thing. So the flag is now recorded (per reflective object), and
-    /// `canAccess` answers what a JDK answers for a member that is already
-    /// public or has been opened. `trySetAccessible` opens it and says so; it
-    /// can never fail here, since there is no module to refuse.
-    fn reflect_access_answer(&mut self, receiver: HeapRef, method: &str, access: u16) -> JValue {
-        let public = access & caturra_classfile::MethodAccessFlags::PUBLIC != 0;
+    /// wrong thing. So the flag is now recorded (per reflective object).
+    ///
+    /// `canAccess(obj)` CHECKS its argument first, the way a JDK does, and
+    /// then answers yes: caturra enforces no access control, so once the
+    /// object is right there is nothing left to refuse. `trySetAccessible`
+    /// opens the member and says so; it can never fail here, since there is no
+    /// module to refuse.
+    fn reflect_access_answer(
+        &mut self,
+        receiver: HeapRef,
+        method: &str,
+        // What `canAccess(obj)` needs to CHECK its argument: whose member this
+        // is, how it prints itself, and whether it is static.
+        member: Option<(&str, &str)>,
+        argument: Option<&JValue>,
+        // Whether the member needs an INSTANCE to be reached through. A
+        // constructor never does — there is no instance yet — so it wants a
+        // null object exactly as a static member does.
+        needs_instance: bool,
+    ) -> Result<JValue, VmError> {
         let answer = match method {
             "isAccessible" => self.reflect_opened.contains(&receiver),
-            "canAccess" => public || self.reflect_opened.contains(&receiver),
+            "canAccess" => {
+                if let Some((declaring, text)) = member {
+                    self.check_can_access(declaring, text, needs_instance, argument)?;
+                }
+                // caturra enforces no access control, so once the argument is
+                // right the answer is yes. A JDK's depends on the CALLER, and
+                // would say no for a private member of another class — the
+                // same stance `setAccessible` being a no-op already takes.
+                true
+            }
             _ => {
                 self.reflect_opened.insert(receiver);
                 true
             }
         };
-        JValue::Int(i32::from(answer))
+        Ok(JValue::Int(i32::from(answer)))
+    }
+
+    /// The three ways `canAccess(obj)` refuses its argument, which a JDK
+    /// checks BEFORE it decides anything about access: a STATIC member wants
+    /// null and nothing else, an instance member wants an instance.
+    fn check_can_access(
+        &self,
+        declaring: &str,
+        member_text: &str,
+        needs_instance: bool,
+        argument: Option<&JValue>,
+    ) -> Result<(), VmError> {
+        let is_static = !needs_instance;
+        let bad = |what: String| {
+            Err(VmError::UncaughtException(format!(
+                "java.lang.IllegalArgumentException: {what}"
+            )))
+        };
+        match (is_static, argument) {
+            (true, Some(JValue::Ref(None)) | None) => Ok(()),
+            (true, _) => bad(format!("non-null object for {member_text}")),
+            (false, Some(JValue::Ref(None)) | None) => {
+                bad(format!("null object for {member_text}"))
+            }
+            (false, Some(JValue::Ref(Some(object)))) => {
+                let actual = self.object_class_name(*object);
+                if actual == declaring || self.is_runtime_subtype(&actual, declaring) {
+                    Ok(())
+                } else {
+                    bad(format!(
+                        "object is not an instance of {}",
+                        declaring.replace('/', ".")
+                    ))
+                }
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Which primitive descriptors a value of this one WIDENS into, in the
@@ -20626,7 +20904,21 @@ fn class_matches_descriptor(class_name: &str, desc: &str) -> bool {
         "byte" => desc == "B",
         // Array class literals carry the JVM descriptor as their name (`[I`).
         name if name.starts_with('[') => desc == name,
-        _ => desc == format!("L{class_name};"),
+        // A library type caturra models without a bundled class file gets an
+        // UNQUALIFIED descriptor (`LNumber;` for `java.lang.Number`), while the
+        // `Class` handed in names itself in full — so the two are compared by
+        // simple name once the exact spelling has failed. Without it,
+        // `getDeclaredMethod("f", Number.class)` reported the method missing.
+        _ => {
+            desc == format!("L{class_name};")
+                || desc
+                    .strip_prefix('L')
+                    .and_then(|rest| rest.strip_suffix(';'))
+                    .is_some_and(|name| {
+                        !name.contains('/')
+                            && name == class_name.rsplit(['/', '.']).next().unwrap_or(class_name)
+                    })
+        }
     }
 }
 
@@ -20755,7 +21047,7 @@ fn library_superclass(internal: &str) -> Option<&'static str> {
 }
 
 /// The modifier words Java prints, in the order `Modifier.toString` uses.
-fn reflect_modifier_names(access: u16) -> String {
+pub(crate) fn reflect_modifier_names(access: u16) -> String {
     const WORDS: &[(u16, &str)] = &[
         (0x0001, "public"),
         (0x0004, "protected"),
@@ -21816,6 +22108,47 @@ fn map_member_class_of(heap: &Heap, map: HeapRef, kind: Option<MapViewKind>) -> 
         }
     };
     format!("java/util/{owner}${member}")
+}
+
+/// Java's own format for a method — modifiers, return type, then the qualified
+/// name and parameter TYPES, not the JVM descriptor. Written once because
+/// `toString` and `canAccess`'s complaint are the same text, and a JDK's
+/// `canAccess` message really is the member printing itself.
+/// The `throws` clause a member records, as source-level class names.
+///
+/// Read from the `Exceptions` attribute (JVMS §4.7.5), which keeps the names
+/// in the order they were WRITTEN — unchecked exceptions included, since a
+/// compiler records what the clause says rather than what it needs to.
+fn member_exceptions(class: &ClassFile, member: &MethodInfo) -> Vec<String> {
+    let Some(attribute) = member.attributes.iter().find(|a| {
+        class.constant_pool.get_utf8(a.name_index) == Some(caturra_classfile::EXCEPTIONS_ATTRIBUTE)
+    }) else {
+        return Vec::new();
+    };
+    attribute
+        .info
+        .chunks_exact(2)
+        .skip(1)
+        .filter_map(|pair| {
+            let index = u16::from_be_bytes([pair[0], pair[1]]);
+            class
+                .constant_pool
+                .get_class_name(index)
+                .map(|name| name.replace('/', "."))
+        })
+        .collect()
+}
+
+/// Whether a reflective argument stands in for a parameter — and, when it does
+/// not, which of a JDK's two complaints it earns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArgFit {
+    Fits,
+    /// "argument type mismatch".
+    Mismatch,
+    /// A bare `IllegalArgumentException`, with no message at all: what null
+    /// against a primitive parameter gets.
+    NullToPrimitive,
 }
 
 /// The class a cursor reports from `getClass()`.

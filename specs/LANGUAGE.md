@@ -9047,10 +9047,6 @@ counting catches: a divergence that stopped being one.
   `Field`, a `Method` and a `Constructor` — caturra parses annotations and
   discards them, the same reason a `Class` cannot be asked.
   (`strict_a_member_has_no_annotations`)
-- `aMethod.getExceptionTypes()` — caturra's class files carry no `Exceptions`
-  attribute, so a member does not record what it throws. Answering an empty
-  array would be a lie about every method that declares a `throws` clause.
-  (`strict_a_member_records_no_throws`)
 - `aMethod.getParameters()` — a `java.lang.reflect.Parameter` is a NAME as well
   as a type, and a class file only carries names under `-parameters`.
   `getParameterTypes()` gives the types. (`strict_no_parameter_objects`)
@@ -15064,8 +15060,58 @@ the receiver for `java.util.UUID`, so every value on that class was noise that
 read as a finding on each run. `measure.py` does not care — it never runs
 anything — so the check that a receiver is the same twice belongs here.
 
-**16 differences remain**: reflection is looser about its arguments than a JDK
-(a `newInstance` with the wrong count constructs anyway), `Writer.nullWriter()`
-prints its empty buffer where a JDK prints a class, and `initCause` does not
-refuse a second cause on the two throwables whose constructor initialises it to
-null. They are visible and named, which is the point of having the tool.
+**The residue, closed.** 16 became 0. The last pass is the one worth reading,
+because everything in it is a rule caturra already had somewhere else:
+
+* **`canAccess` has three refusals**, and each names the member: a non-null
+  object for a static member, a null one for an instance member, and an object
+  that is not an instance of the declaring class. Answering `true` regardless
+  was right about the access (caturra enforces none) and wrong about the
+  question.
+* **A reflective call checks its arguments before it runs anything.** Three
+  facts, each recorded from a JDK. A lone `Object[]` IS the argument array —
+  the lone-array rule (JLS §15.12.4.2), which `newInstance` had and `invoke`
+  did not, so every argument passed through `invoke` arrived wrapped one array
+  too deep and a `String[]` parameter got a one-element `Object[]`. An array
+  argument must match the parameter's ELEMENT type, so `Object[]` does not
+  stand in for a `String[]`. And null against a PRIMITIVE parameter is a bare
+  `IllegalArgumentException` with no message at all, where a wrong-typed value
+  gets "argument type mismatch".
+* **`getDeclaredMethod("f", Number.class)` reported the method missing.** A
+  library type caturra models without a bundled class file gets an unqualified
+  descriptor (`LNumber;`), while the `Class` handed in names itself in full —
+  so the two never matched, and a NoSuchMethodException named a class that was
+  right there.
+* **A `MatchResult` parsed the group number before asking whether there had
+  been a match** — the same ordering already fixed in `Matcher`, at the second
+  site that parses an index. The rule written twice, wrong at one of them.
+* **`initCause` always refuses** on the three throwables whose constructor
+  initialises the cause: `InvocationTargetException`,
+  `ExceptionInInitializerError`, `ClassNotFoundException`.
+* **`Writer.nullWriter()` and a stream's `iterator()`** are each modelled as
+  something else (a `StringWriter`, a plain cursor) and each has to name itself
+  — `java.io.Writer$1`, `java.util.Spliterators$1Adapter` — which is what the
+  heap's view-class side map is for. The three primitive stream families share
+  one method table here, so which of them made a cursor is not recorded; the
+  sweep declares that rather than counting it.
+
+**A member's `throws` clause is recorded now.** The last of these was a real
+gap rather than a wrong answer: caturra's class files carried no `Exceptions`
+attribute (JVMS §4.7.5), so `getExceptionTypes` was an honest refusal and a
+`Method`'s `toString` stopped at the parameter list where a JDK's ends
+` throws java.lang.Exception`. The compiler writes the attribute now — what the
+clause SAYS, in the order written, unchecked exceptions included, since javac
+records the clause rather than what the body needs — and both questions read
+it. Pinned by `the_clause_a_member_declares`; the strictness bullet it replaces
+is gone.
+
+Two things fell out of writing it. A `Method` rendered through
+`object_display` printed `Probe.main([Ljava/lang/String;)V` — the raw
+descriptor, which no JDK ever shows — because that renderer had its own arm
+rather than calling the one `toString` uses; the throws clause is now carried
+on the heap object itself, so every path that renders a member reads one fact.
+And reflecting on a LIBRARY class's members still finds nothing:
+`String.class.getDeclaredMethods()` is empty and
+`Runnable.class.getDeclaredMethod("run")` throws, because those classes have no
+class file here. That is a silent wrong answer, not a refusal, and it is the
+next thing this corner owes.

@@ -27,6 +27,11 @@ pub use writer::{write_class_file, write_code_attribute};
 /// Name of the `Code` attribute (JVMS §4.7.3).
 pub const CODE_ATTRIBUTE: &str = "Code";
 
+/// Name of the `Exceptions` attribute (JVMS §4.7.5) — the names in a
+/// member's `throws` clause, which is the only place a compiled member records
+/// them.
+pub const EXCEPTIONS_ATTRIBUTE: &str = "Exceptions";
+
 /// The `0xCAFEBABE` magic number that begins every class file.
 pub const MAGIC: u32 = 0xCAFE_BABE;
 

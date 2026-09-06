@@ -4914,6 +4914,32 @@ pub fn invoke_virtual(
         // `initCause(Throwable)` sets the cause ONCE and returns `this`. A
         // second call is an error, not an overwrite: the JDK refuses so that a
         // cause set at construction cannot be silently replaced.
+        // The three that WRAP a cause set it at CONSTRUCTION — to null if they
+        // were given nothing — so `initCause` always has one to overwrite and
+        // always refuses. Every other throwable only has a cause once it was
+        // given one. (`ClassNotFoundException` is here for its cause and not
+        // for its message: its `(String)` constructor still records one.)
+        (
+            HeapObject::Exception {
+                class_name, cause, ..
+            },
+            "initCause",
+        ) if matches!(
+            class_name.as_str(),
+            "java.lang.reflect.InvocationTargetException"
+                | "java.lang.ExceptionInInitializerError"
+                | "java.lang.ClassNotFoundException"
+        ) =>
+        {
+            let given = match args.first() {
+                Some(JValue::Ref(Some(reference))) => throwable_to_string(heap, *reference),
+                _ => String::from("null"),
+            };
+            let _ = cause;
+            Err(throw(format!(
+                "java.lang.IllegalStateException: Can't overwrite cause with {given}"
+            )))
+        }
         (HeapObject::Exception { .. }, "initCause") => {
             let cause = args.first().and_then(ref_arg);
             if let Some(JValue::Ref(Some(_))) = args.first().copied()
@@ -10308,8 +10334,18 @@ fn matcher_method(
             Ok(Some(JValue::Ref(Some(builder))))
         }
         // A frozen copy of the current match, which outlives the next `find`.
+        // A JDK freezes a matcher that has NOT matched too: the result simply
+        // has no groups, and `groupCount()` on it answers 0 rather than
+        // refusing. Only the accessors that would read a span complain.
         "toMatchResult" => {
-            let groups = spans.clone().ok_or_else(no_match)?;
+            // An unmatched matcher freezes to a result with the PATTERN's
+            // groups, all unset — so `groupCount()` still answers, and group 0
+            // being unset is what says there was no match. (A match always
+            // sets group 0; that is a JDK's own invariant, not one invented
+            // here to carry a flag.)
+            let groups = spans
+                .clone()
+                .unwrap_or_else(|| vec![None; regex.group_count() + 1]);
             Ok(Some(JValue::Ref(Some(heap.alloc(
                 HeapObject::MatchResult {
                     input: input.clone(),
@@ -10344,15 +10380,26 @@ fn match_result_method(
     method: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
+    // Group 0 unset means the frozen matcher had not matched, and a JDK says
+    // so BEFORE it looks at the group number — `end(-2)` on one is "No match
+    // found", not "No group -2". The same ordering `Matcher` itself needs.
+    let matched = groups.first().copied().flatten().is_some();
     let index = match args.first() {
         Some(JValue::Int(index)) => usize::try_from(*index).map_err(|_| {
-            throw(format!(
-                "java.lang.IndexOutOfBoundsException: No group {index}"
-            ))
+            if matched {
+                throw(format!(
+                    "java.lang.IndexOutOfBoundsException: No group {index}"
+                ))
+            } else {
+                throw("java.lang.IllegalStateException: No match found")
+            }
         })?,
         _ => 0,
     };
     let span = || -> Result<Option<(usize, usize)>, VmError> {
+        if !matched {
+            return Err(throw("java.lang.IllegalStateException: No match found"));
+        }
         groups.get(index).copied().ok_or_else(|| {
             throw(format!(
                 "java.lang.IndexOutOfBoundsException: No group {index}"
@@ -12498,9 +12545,16 @@ pub fn invoke_static(
                 closed: false,
                 mark: 0,
             }))))),
-            "nullWriter" => Ok(Some(JValue::Ref(Some(
-                heap.alloc(HeapObject::StringWriter(Vec::new())),
-            )))),
+            // A null writer IS a `StringWriter` here — one nobody reads back
+            // — but it must not PRINT as one: a `StringWriter`'s `toString` is
+            // its buffer, and a JDK's null writer is an ordinary object with a
+            // class and an address. Marking the class is what tells the two
+            // apart, in `getClass()` and in the renderer both.
+            "nullWriter" => {
+                let writer = heap.alloc(HeapObject::StringWriter(Vec::new()));
+                heap.set_view_class(writer, "java/io/Writer$1");
+                Ok(Some(JValue::Ref(Some(writer))))
+            }
             "nullOutputStream" => Ok(Some(JValue::Ref(Some(
                 heap.alloc(HeapObject::ByteStream(Vec::new())),
             )))),
@@ -12989,7 +13043,12 @@ pub fn param_type_names(descriptor: &str) -> Vec<String> {
 /// Java's canonical `Constructor.toString()`:
 /// `<modifiers> <DeclaringClass>(<param types>)`.
 #[must_use]
-pub fn constructor_to_string(declaring: &str, descriptor: &str, access: u16) -> String {
+pub fn constructor_to_string(
+    declaring: &str,
+    descriptor: &str,
+    access: u16,
+    exceptions: &[String],
+) -> String {
     use caturra_classfile::MethodAccessFlags as M;
     let mut out = String::new();
     for (flag, word) in [
@@ -13006,7 +13065,43 @@ pub fn constructor_to_string(declaring: &str, descriptor: &str, access: u16) -> 
     out.push('(');
     out.push_str(&param_type_names(descriptor).join(","));
     out.push(')');
+    if !exceptions.is_empty() {
+        out.push_str(" throws ");
+        out.push_str(&exceptions.join(","));
+    }
     out
+}
+
+/// The ` throws A,B` tail a member's `toString` ends with — no space after the
+/// comma, and nothing at all when the clause is empty.
+fn throws_clause_text(exceptions: &[String]) -> String {
+    if exceptions.is_empty() {
+        String::new()
+    } else {
+        format!(" throws {}", exceptions.join(","))
+    }
+}
+
+pub fn method_to_string(
+    declaring: &str,
+    name: &str,
+    descriptor: &str,
+    access: u16,
+    exceptions: &[String],
+) -> String {
+    let modifiers = crate::interpreter::reflect_modifier_names(access);
+    let ret = type_name_of_descriptor(descriptor.rsplit(')').next().unwrap_or("V"));
+    let params: Vec<String> = param_type_names(descriptor);
+    format!(
+        "{}{ret} {declaring}.{name}({}){}",
+        if modifiers.is_empty() {
+            String::new()
+        } else {
+            format!("{modifiers} ")
+        },
+        params.join(","),
+        throws_clause_text(exceptions)
+    )
 }
 
 /// Java's `Math.max`/`min` double semantics: NaN wins, `+0.0 > -0.0`.
@@ -15154,6 +15249,8 @@ pub(crate) fn array_to_string(heap: &Heap, reference: HeapRef) -> Option<String>
     Some(format!("{name}@{:x}", identity_hash(reference)))
 }
 
+// One arm per object that has a text of its own; the list is the point.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
     match value {
         JValue::Ref(None) => String::from("null"),
@@ -15185,13 +15282,18 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
                 declaring,
                 descriptor,
                 access,
-            }) => constructor_to_string(declaring, descriptor, *access),
+                throws,
+            }) => constructor_to_string(declaring, descriptor, *access, throws),
+            // A member prints the SAME text however it is rendered: this arm
+            // used to spell a method as its raw descriptor, which no JDK ever
+            // shows.
             Some(HeapObject::Method {
                 declaring,
                 name,
                 descriptor,
-                ..
-            }) => format!("{declaring}.{name}{descriptor}"),
+                access,
+                throws,
+            }) => method_to_string(declaring, name, descriptor, *access, throws),
             Some(HeapObject::ReflectType { raw, args }) => {
                 let dotted = raw.replace('/', ".");
                 if args.is_empty() {
@@ -15230,6 +15332,17 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::BigDecimal(value)) => value.to_text(),
             Some(HeapObject::Uuid(high, low)) => uuid_text(*high, *low),
             Some(HeapObject::BitSet(words)) => bitset_text(words),
+            // ...unless it is the NULL writer, which is a `StringWriter`
+            // nobody reads back and which prints as the plain object a JDK's
+            // is — its marked class and an address, not its (empty) buffer.
+            Some(HeapObject::StringWriter(_)) if heap.view_class_of(reference).is_some() => {
+                format!(
+                    "{}@{reference:x}",
+                    heap.view_class_of(reference)
+                        .unwrap_or_default()
+                        .replace('/', ".")
+                )
+            }
             Some(HeapObject::StringWriter(units)) => String::from_utf16_lossy(units),
             // A JDK's `Format.toString` is the default one; the identity hash
             // in it is normalized away by every comparison that reads this.
@@ -16429,6 +16542,16 @@ fn string_writer_method(
 ) -> Result<Option<JValue>, VmError> {
     match method {
         "toString" | "getBuffer" => {
+            // The NULL writer is a `StringWriter` nobody reads back, and it
+            // prints as the plain object a JDK's is rather than as its (empty)
+            // buffer. Asked here as well as in the renderer, because a
+            // `Writer`-typed variable reaches `toString()` as a call.
+            if method == "toString"
+                && let Some(named) = heap.view_class_of(receiver)
+            {
+                let text = format!("{}@{receiver:x}", named.replace('/', "."));
+                return Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))));
+            }
             let units = match heap.get(receiver) {
                 Some(HeapObject::StringWriter(units)) => units.clone(),
                 _ => unreachable!("receiver kind checked by caller"),

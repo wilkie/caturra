@@ -1123,6 +1123,8 @@ pub enum HeapObject {
         descriptor: String,
         /// Raw `MethodAccessFlags` bits.
         access: u16,
+        /// The `throws` clause, as source-level names in the order written.
+        throws: Vec<String>,
     },
     /// A `java.lang.reflect.Method` from `Class.getMethod(name, Class[])`.
     Method {
@@ -1132,6 +1134,9 @@ pub enum HeapObject {
         descriptor: String,
         /// Raw `MethodAccessFlags` bits.
         access: u16,
+        /// The `throws` clause, as source-level names in the order written.
+        /// Read once, at lookup, so every renderer of this member agrees.
+        throws: Vec<String>,
     },
 }
 

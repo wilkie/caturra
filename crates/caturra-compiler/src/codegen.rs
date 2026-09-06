@@ -18,7 +18,7 @@ use std::fmt::Write as _;
 use caturra_classfile::opcodes as op;
 use caturra_classfile::{
     AttributeInfo, CODE_ATTRIBUTE, ClassFile, CodeAttribute, Constant, ConstantPool, CpIndex,
-    MethodAccessFlags, MethodInfo, write_code_attribute,
+    EXCEPTIONS_ATTRIBUTE, MethodAccessFlags, MethodInfo, write_code_attribute,
 };
 
 use crate::CompiledClass;
@@ -10614,7 +10614,7 @@ fn emit_method(
     } else {
         &decl.name
     };
-    finish_method_info(
+    let mut info = finish_method_info(
         pool,
         jvm_name,
         &descriptor,
@@ -10625,7 +10625,11 @@ fn emit_method(
         &line_numbers,
         &local_var_debug,
         exception_table,
-    )
+    );
+    if let Some(attribute) = exceptions_attribute(pool, table, &decl.throws) {
+        info.attributes.push(attribute);
+    }
+    info
 }
 
 #[allow(clippy::too_many_lines)] // one type-descriptor matcher
@@ -12451,8 +12455,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Constructor", "getGenericReturnType", ERASED_SIGNATURE),
     ("Constructor", "getTypeParameters", ERASED_SIGNATURE),
     ("Constructor", "toGenericString", ERASED_SIGNATURE),
-    ("Method", "getExceptionTypes", NO_THROWS_RECORDED),
-    ("Constructor", "getExceptionTypes", NO_THROWS_RECORDED),
     ("Method", "getParameters", NO_PARAMETER_NAMES),
     ("Constructor", "getParameters", NO_PARAMETER_NAMES),
     (
@@ -12516,7 +12518,6 @@ const NO_CURRENCY: &str =
 const NO_FORMAT_SYMBOLS: &str = "caturra does not model java.text.DecimalFormatSymbols - the separators are the ones its locale draws with";
 const NO_CHARACTER_ITERATOR: &str =
     "caturra does not model java.text.AttributedCharacterIterator - format(value) gives the text";
-const NO_THROWS_RECORDED: &str = "caturra's class files carry no Exceptions attribute, so a member does not record what it throws";
 const NO_PARAMETER_NAMES: &str =
     "caturra does not model java.lang.reflect.Parameter - getParameterTypes() gives the types";
 const NO_MODULES: &str = "caturra does not model the module system";
@@ -19974,6 +19975,13 @@ const CONSTRUCTOR_METHODS: &[BuiltinMethod] = &[
         BRet::ClassArray,
         "()[Ljava/lang/Class;",
     ),
+    // The `throws` clause, read from the member's `Exceptions` attribute.
+    bm(
+        "getExceptionTypes",
+        &[],
+        BRet::ClassArray,
+        "()[Ljava/lang/Class;",
+    ),
     bm("getParameterCount", &[], BRet::Int, "()I"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getModifiers", &[], BRet::Int, "()I"),
@@ -20185,6 +20193,13 @@ const METHOD_METHODS: &[BuiltinMethod] = &[
     bm("getReturnType", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "getParameterTypes",
+        &[],
+        BRet::ClassArray,
+        "()[Ljava/lang/Class;",
+    ),
+    // The `throws` clause, read from the member's `Exceptions` attribute.
+    bm(
+        "getExceptionTypes",
         &[],
         BRet::ClassArray,
         "()[Ljava/lang/Class;",
@@ -32721,24 +32736,7 @@ impl BodyGen<'_> {
     /// twin did not, so `ctor.newInstance(7)` matched nothing.
     fn emit_new_instance(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let object_ty = JType::Object(self.table.object_id);
-        // An explicit `Object[]` is already the shape the descriptor wants.
-        let already_packed = args.len() == 1
-            && matches!(
-                self.type_of(&args[0]),
-                JType::Array {
-                    elem: ElemType::Object(_),
-                    dims: 1
-                }
-            );
-        if already_packed {
-            self.expr(&args[0]);
-        } else {
-            let array_ty = JType::Array {
-                elem: ElemType::Object(self.table.object_id),
-                dims: 1,
-            };
-            self.emit_array_literal(args, array_ty, span);
-        }
+        self.emit_reflective_varargs(args, span);
         let method_ref = intern_method_ref(
             self.pool,
             "java/lang/reflect/Constructor",
@@ -40633,11 +40631,7 @@ impl BodyGen<'_> {
             None => self.code.push_op(op::ACONST_NULL, 1),
         }
         let rest = if args.len() > 1 { &args[1..] } else { &[] };
-        let array_ty = JType::Array {
-            elem: ElemType::Object(self.table.object_id),
-            dims: 1,
-        };
-        self.emit_array_literal(rest, array_ty, span);
+        self.emit_reflective_varargs(rest, span);
         let method_ref = intern_method_ref(
             self.pool,
             "java/lang/reflect/Method",
@@ -40647,6 +40641,33 @@ impl BodyGen<'_> {
         self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
         self.code.drop_stack(3); // Method receiver + object + array
         Some(Some(object_ty))
+    }
+
+    /// The trailing `Object...` of a reflective call.
+    ///
+    /// A lone `Object[]` IS the argument array (JLS §15.12.4.2's lone-array
+    /// rule); anything else packs into one. Written once because it was
+    /// written twice: `newInstance` had the rule and `invoke` did not, so
+    /// `m.invoke(o, argArray)` wrapped the array again and every argument in
+    /// it arrived as one array-shaped parameter.
+    fn emit_reflective_varargs(&mut self, args: &[Expr], span: SourceSpan) {
+        let array_ty = JType::Array {
+            elem: ElemType::Object(self.table.object_id),
+            dims: 1,
+        };
+        if let [single] = args
+            && matches!(
+                self.type_of(single),
+                JType::Array {
+                    elem: ElemType::Object(_),
+                    dims: 1
+                }
+            )
+        {
+            self.expr(single);
+        } else {
+            self.emit_array_literal(args, array_ty, span);
+        }
     }
 
     fn emit_array_literal(&mut self, elements: &[Expr], array_ty: JType, span: SourceSpan) {
@@ -44413,6 +44434,45 @@ fn descriptor_arg_width(descriptor: &str) -> u16 {
 fn intern_class(pool: &mut ConstantPool, binary_name: &str) -> CpIndex {
     let name_index = pool.intern_utf8(binary_name);
     pool.intern(Constant::Class { name_index })
+}
+
+/// The `Exceptions` attribute (JVMS §4.7.5) for a member's `throws` clause.
+///
+/// javac records what is WRITTEN — in source order, unchecked exceptions
+/// included — and this attribute is the only thing `getExceptionTypes` and a
+/// member's own `toString` have to read. A name that resolves to nothing is
+/// skipped rather than guessed at; the thrown pass has already complained
+/// about it.
+fn exceptions_attribute(
+    pool: &mut ConstantPool,
+    table: &MethodTable,
+    throws: &[String],
+) -> Option<AttributeInfo> {
+    let mut indexes = Vec::new();
+    for name in throws {
+        let binary = match crate::thrown::resolve_exc(name, table)? {
+            crate::thrown::Exc::Lib(internal) => internal.to_owned(),
+            // The BINARY name: a nested `Boom` is `Probe$Boom`, which is what
+            // the class the attribute names has to be.
+            crate::thrown::Exc::User(simple) => table
+                .class_id(&simple)
+                .map(|id| table.class_name(id))?
+                .to_owned(),
+        };
+        indexes.push(intern_class(pool, &binary));
+    }
+    if indexes.is_empty() {
+        return None;
+    }
+    let mut info = u16::try_from(indexes.len())
+        .unwrap_or(u16::MAX)
+        .to_be_bytes()
+        .to_vec();
+    for index in indexes {
+        info.extend_from_slice(&index.to_be_bytes());
+    }
+    let name_index = pool.intern_utf8(EXCEPTIONS_ATTRIBUTE);
+    Some(AttributeInfo { name_index, info })
 }
 
 fn intern_name_and_type(pool: &mut ConstantPool, name: &str, descriptor: &str) -> CpIndex {

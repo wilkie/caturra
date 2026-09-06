@@ -620,6 +620,16 @@
     "expected": "[zero, one, two] one 10\n7 2\n[1, 2, 3] true\nzero one two\n[zero, one, two]\n{five=4, two=3, one=3, three=5, four=4}\n[five, two, one, three, four]\na Hashtable stores no null\n"
   },
   {
+    "id": "class-object",
+    "category": "Library",
+    "title": "What a Class object answers",
+    "summary": "Every question caturra's class files can be asked: the names, the shape, a checked cast, an enum's constants, and the nesting read off the name.",
+    "main": "ClassFacts",
+    "source": "public class ClassFacts {\n    enum Suit { HEARTS, SPADES }\n\n    static class Card {}\n\n    public static void main(String[] args) {\n        System.out.println(String.class.getPackageName());\n        System.out.println(java.util.Arrays.toString(Suit.class.getEnumConstants()));\n        System.out.println(String.class.getEnumConstants());\n        System.out.println(Card.class.isMemberClass() + \" \" + Card.class.getDeclaringClass().getSimpleName());\n        System.out.println(((String) String.class.cast(\"hi\")).length());\n        System.out.println(Integer.class.asSubclass(Number.class).getSimpleName());\n    }\n}\n",
+    "status": "supported",
+    "expected": "java.lang\n[HEARTS, SPADES]\nnull\ntrue ClassFacts\n2\nInteger\n"
+  },
+  {
     "id": "abstract-collections",
     "category": "Collections",
     "title": "The AbstractCollection skeletons",
@@ -638,16 +648,6 @@
     "source": "public class Threads {\n    public static void main(String[] args) throws InterruptedException {\n        Thread worker = new Thread(() -> System.out.println(\"working\"));\n        worker.start();\n        worker.join();\n    }\n}\n",
     "status": "unsupported",
     "reason": "java.lang.Thread is not supported by caturra (the class library covers the AP CS A subset)"
-  },
-  {
-    "id": "class-object",
-    "category": "Library",
-    "title": "What a Class object answers",
-    "summary": "Every question caturra's class files can be asked: the names, the shape, a checked cast, an enum's constants, and the nesting read off the name.",
-    "main": "ClassFacts",
-    "source": "public class ClassFacts {\n    enum Suit { HEARTS, SPADES }\n\n    static class Card {}\n\n    public static void main(String[] args) {\n        System.out.println(String.class.getPackageName());\n        System.out.println(java.util.Arrays.toString(Suit.class.getEnumConstants()));\n        System.out.println(String.class.getEnumConstants());\n        System.out.println(Card.class.isMemberClass() + \" \" + Card.class.getDeclaringClass().getSimpleName());\n        System.out.println(((String) String.class.cast(\"hi\")).length());\n        System.out.println(Integer.class.asSubclass(Number.class).getSimpleName());\n    }\n}\n",
-    "status": "supported",
-    "expected": "java.lang\n[HEARTS, SPADES]\nnull\ntrue ClassFacts\n2\nInteger\n"
   },
   {
     "id": "class-modifiers",

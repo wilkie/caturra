@@ -52469,17 +52469,12 @@ public class ReflF2 {
 
 // What a caturra class file does not carry, and so cannot be asked for: the
 // annotations it parses and discards, the generic signature erasure removed,
-// the `Exceptions` attribute it never writes, and parameter NAMES.
+// and parameter NAMES. The `Exceptions` attribute WAS on this list; it is
+// written now, and `the_clause_a_member_declares` pins what it answers.
 stricter_than_javac!(
     strict_a_member_has_no_annotations,
     "StrictMemberAnnotations",
     "import java.lang.reflect.*;\npublic class StrictMemberAnnotations { static void r() throws Exception { StrictMemberAnnotations.class.getDeclaredMethods()[0].getAnnotations(); } }"
-);
-
-stricter_than_javac!(
-    strict_a_member_records_no_throws,
-    "StrictMemberThrows",
-    "import java.lang.reflect.*;\npublic class StrictMemberThrows { static void r() throws Exception { StrictMemberThrows.class.getDeclaredMethods()[0].getExceptionTypes(); } }"
 );
 
 stricter_than_javac!(
@@ -53007,6 +53002,133 @@ public class WrapsACause {
     p(new InvocationTargetException(new Exception("m")));
     p(new java.io.UncheckedIOException(new java.io.IOException("m")));
     p(new ExceptionInInitializerError(new Exception("m")));
+  }
+}
+"#
+);
+
+// A member's `throws` clause is recorded now: caturra's class files carry an
+// `Exceptions` attribute (JVMS §4.7.5), so `getExceptionTypes` answers instead
+// of refusing, and a member's `toString` ends in the clause a JDK's does —
+// unchecked exceptions included, in the order they were WRITTEN, joined by a
+// comma with no space. `getExceptionTypes` hands out a fresh array each call,
+// so writing into one leaves the next caller's answer alone.
+differential_test!(
+    the_clause_a_member_declares,
+    "DeclaredThrows",
+    r#"
+import java.io.IOException;
+import java.lang.reflect.*;
+import java.util.Arrays;
+public class DeclaredThrows {
+  static class Boom extends Exception { Boom(String m) { super(m); } }
+  void one() throws IOException {}
+  void two() throws IOException, Boom {}
+  void none() {}
+  static void three() throws RuntimeException {}
+  DeclaredThrows() throws Boom {}
+  DeclaredThrows(int n) {}
+  public static void main(String[] a) throws Exception {
+    for (String n : new String[] {"one", "two", "none", "three"}) {
+      Method m = DeclaredThrows.class.getDeclaredMethod(n);
+      System.out.println(n + " = " + Arrays.toString(m.getExceptionTypes()));
+      System.out.println(n + " s = " + m);
+    }
+    for (Constructor<?> k : DeclaredThrows.class.getDeclaredConstructors()) {
+      System.out.println("ctor = " + Arrays.toString(k.getExceptionTypes()));
+      System.out.println("ctor s = " + k);
+    }
+    Method main = DeclaredThrows.class.getDeclaredMethod("main", String[].class);
+    System.out.println("main = " + main);
+    System.out.println("len = " + main.getExceptionTypes().length);
+    main.getExceptionTypes()[0] = null;
+    System.out.println("after = " + Arrays.toString(main.getExceptionTypes()));
+  }
+}
+"#
+);
+
+// What a reflective call does with the arguments it is handed. Three separate
+// facts, each recorded from a JDK: a lone `Object[]` IS the argument array
+// (the lone-array rule — `newInstance` had it and `invoke` did not, so every
+// argument arrived wrapped one array too deep); an array argument must match
+// the parameter's ELEMENT type, so `Object[]` does not stand in for a
+// `String[]`; and null against a PRIMITIVE parameter is a bare
+// `IllegalArgumentException` with no message at all, where a wrong-typed value
+// gets "argument type mismatch".
+differential_test!(
+    an_argument_a_reflective_call_refuses,
+    "ReflectiveArgs",
+    r#"
+import java.lang.reflect.*;
+public class ReflectiveArgs {
+  static class Box { Box(int n, String s) {} Box(Object[] o) {} }
+  static void take(String[] a) { System.out.println("ran " + (a == null ? "null" : a.length)); }
+  static void num(int n) { System.out.println("num " + n); }
+  static void objs(Object[] o) { System.out.println("objs " + o.length); }
+  static void nums(Number n) { System.out.println("nums " + n); }
+  public static void main(String[] a) throws Exception {
+    Method m = ReflectiveArgs.class.getDeclaredMethod("take", String[].class);
+    for (Object[] call : new Object[][] {
+        new Object[] {"a"}, new Object[] {new String[0]}, new Object[] {null},
+        new Object[] {new Object[0]}, new Object[] {new int[0]}}) {
+      try { System.out.println("= " + m.invoke("ab", call)); }
+      catch (Throwable t) { System.out.println("! " + t); }
+    }
+    Method k = ReflectiveArgs.class.getDeclaredMethod("num", int.class);
+    for (Object v : new Object[] {"a", 3, (short) 3, 3L, null, 'x'}) {
+      try { System.out.println("n = " + k.invoke(null, new Object[] {v})); }
+      catch (Throwable t) { System.out.println("n ! " + t); }
+    }
+    Method o = ReflectiveArgs.class.getDeclaredMethod("objs", Object[].class);
+    for (Object v : new Object[] {new String[] {"a"}, new int[1], new Object[2], "x"}) {
+      try { System.out.println("o = " + o.invoke(null, new Object[] {v})); }
+      catch (Throwable t) { System.out.println("o ! " + t); }
+    }
+    Method n = ReflectiveArgs.class.getDeclaredMethod("nums", Number.class);
+    for (Object v : new Object[] {3, 3.5, "s", null, 'c'}) {
+      try { System.out.println("n2 = " + n.invoke(null, new Object[] {v})); }
+      catch (Throwable t) { System.out.println("n2 ! " + t); }
+    }
+    Constructor<?> c = Box.class.getDeclaredConstructor(int.class, String.class);
+    for (Object[] call : new Object[][] {
+        new Object[] {1, "s"}, new Object[] {null, "s"}, new Object[] {1, 2},
+        new Object[] {1}, new Object[] {1, "s", 3}}) {
+      try { System.out.println("c = " + (c.newInstance(call) != null)); }
+      catch (Throwable t) { System.out.println("c ! " + t); }
+    }
+    Constructor<?> arr = Box.class.getDeclaredConstructor(Object[].class);
+    System.out.println("arr = " + (arr.newInstance(new Object[] {new Object[0]}) != null));
+  }
+}
+"#
+);
+
+// An unmatched `MatchResult` asks whether there WAS a match before it looks at
+// the group number: `end(-2)` on one is "No match found", not "No group -2".
+// The same ordering `Matcher` itself needed, at the second site that parses an
+// index — the rule written twice, wrong at one of them.
+differential_test!(
+    a_frozen_match_that_never_matched,
+    "FrozenNoMatch",
+    r#"
+import java.util.regex.*;
+public class FrozenNoMatch {
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  interface Body { Object get(); }
+  public static void main(String[] a) {
+    Matcher m = Pattern.compile("(a)(b)").matcher("zz");
+    System.out.println("found = " + m.find());
+    MatchResult r = m.toMatchResult();
+    s("start", () -> r.start());
+    s("end-2", () -> r.end(-2));
+    s("group-2", () -> r.group(-2));
+    s("start-2", () -> r.start(-2));
+    s("group9", () -> r.group(9));
+    s("count", () -> r.groupCount());
   }
 }
 "#

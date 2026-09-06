@@ -120,6 +120,11 @@ KNOWN = [
         r"^java\.util\.Comparator\.(naturalOrder|reverseOrder|nullsFirst|nullsLast)",
         "a comparator caturra synthesized is not one of a JDK's named classes",
     ),
+    (
+        r"^java\.util\.stream\.(Int|Long|Double)Stream\.iterator",
+        "the three primitive streams share one method table, so which adapter family "
+        "a cursor came from is not recorded (an OBJECT stream's is exact)",
+    ),
 ]
 
 
