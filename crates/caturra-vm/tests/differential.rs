@@ -53945,3 +53945,134 @@ public class SplitAndParse {
 }
 "##
 );
+
+// The work list the widened sweep produced, worked down. Every one is a
+// message, a class or a check that a JDK words its own way, and none of them
+// was reachable while the probe for its class died on an earlier line.
+//
+// A `BitSet` names its index THREE ways — `bitIndex` for a single bit,
+// `fromIndex` for a range and for the forward scans, and `fromIndex < -1` for
+// the backward ones, which take −1 for "nothing at or below here". Past the
+// stored words every bit is clear, so a backward search for one answers where
+// it started. `Collections.rotate` and `replaceAll` write NOTHING when nothing
+// changes, so a JDK never reaches a read-only list's refusal, and `swap` is
+// `set(i, set(j, get(i)))` — an order that decides which of the two failures a
+// bad index gets. And the immutable lists have an index wording of their own:
+// `Index: 2 Size: 2`, the same two words a `LinkedList` uses without the comma.
+differential_test!(
+    the_wording_a_collection_refuses_with,
+    "CollectionRefusals",
+    r#"
+import java.util.*;
+public class CollectionRefusals {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static BitSet made() { BitSet b = new BitSet(); b.set(1); b.set(3); return b; }
+  public static void main(String[] a) {
+    s("clear-neg", () -> { made().clear(-2, 1); return "ok"; });
+    s("flip-neg", () -> { made().flip(-2, 1); return "ok"; });
+    s("set-neg", () -> { made().set(-2, 1); return "ok"; });
+    s("set3-neg", () -> { made().set(-2, 1, true); return "ok"; });
+    s("clear-to-lt", () -> { made().clear(3, 1); return "ok"; });
+    s("nextSet-neg", () -> made().nextSetBit(-2));
+    s("prevSet-neg", () -> made().previousSetBit(-2));
+    s("prevClear-neg", () -> made().previousClearBit(-2));
+    s("get-neg", () -> made().get(-2));
+    s("get-range-neg", () -> made().get(-2, 1));
+    s("get-range", () -> made().get(1, 4));
+    s("set-one-neg", () -> { made().set(-2); return "ok"; });
+    BitSet empty = new BitSet();
+    for (int i = -1; i < 4; i++) {
+      int at = i;
+      s("empty-prevClear-" + at, () -> empty.previousClearBit(at));
+      s("empty-prevSet-" + at, () -> empty.previousSetBit(at));
+    }
+    s("swap-of-neg", () -> { Collections.swap(List.of("a", "b"), -2, 1); return "ok"; });
+    s("swap-of-past", () -> { Collections.swap(List.of("a", "b"), 0, 5); return "ok"; });
+    s("swap-asList", () -> { Collections.swap(Arrays.asList("a", "b"), -2, 1); return "ok"; });
+    s("swap-array", () -> { Collections.swap(new ArrayList<>(List.of("a", "b")), -2, 1); return "ok"; });
+    s("swap-ok", () -> { List<String> l = new ArrayList<>(List.of("a", "b")); Collections.swap(l, 0, 1); return l; });
+    s("rotate-0", () -> { Collections.rotate(List.of("a", "b"), 0); return "ok"; });
+    s("rotate-2", () -> { Collections.rotate(List.of("a", "b"), 2); return "ok"; });
+    s("rotate-1", () -> { Collections.rotate(List.of("a", "b"), 1); return "ok"; });
+    s("replaceAll-none", () -> Collections.replaceAll(List.of("a"), "z", "y"));
+    s("replaceAll-some", () -> Collections.replaceAll(List.of("a"), "a", "y"));
+    s("enumeration", () -> Collections.enumeration(List.of("a")).getClass().getName());
+    s("unmodMap", () -> Collections.unmodifiableMap(Map.of("k", "v")).toString());
+    s("unmodSet", () -> Collections.unmodifiableSet(Set.of("a")).toString());
+    s("of-get-neg", () -> List.of("a", "b").get(-2));
+    s("of-get-past", () -> List.of("a", "b").get(5));
+    s("copyOf-get-neg", () -> List.copyOf(List.of("a")).get(-2));
+    s("al-get-neg", () -> new ArrayList<>(List.of("a")).get(-2));
+    Set<java.time.DayOfWeek> e = EnumSet.of(java.time.DayOfWeek.MONDAY);
+    s("es-contains", () -> e.contains("ab"));
+    s("es-remove", () -> e.remove("ab"));
+    s("es-contains-real", () -> e.contains(java.time.DayOfWeek.MONDAY));
+    s("es-iter", () -> e.iterator().getClass().getName());
+    s("null-out", () -> java.io.OutputStream.nullOutputStream().getClass().getName());
+  }
+}
+"#
+);
+
+// ...and the same for `java.time` and `Character`. A parse names the INDEX it
+// stopped at, and a `LocalDateTime`'s is the one in the whole string rather
+// than in the half it was reading; `from(temporal)` names the type it was
+// handed; an adjuster refuses the FIELD, not the cast; a `Duration` between
+// two DATES has no seconds to measure in; and `highSurrogate` is a JDK's
+// arithmetic exactly, which agreed for a real supplementary point and parted
+// for every other int.
+differential_test!(
+    the_index_a_message_names,
+    "IndexedMessages",
+    r#"
+import java.time.*;
+import java.time.temporal.*;
+import java.nio.file.*;
+public class IndexedMessages {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    for (String t : new String[] {"ab", "", "2024-03-14", "2024-03-14X", "2024-03-14T", "2024-03-14T99", "abcdefghijk"}) {
+      s("ldt[" + t + "]", () -> LocalDateTime.parse(t));
+    }
+    s("y-parse", () -> Year.parse("ab"));
+    s("ym-parse", () -> YearMonth.parse("ab"));
+    s("md-parse", () -> MonthDay.parse("ab"));
+    s("ldt-from", () -> LocalDateTime.from(LocalDate.of(2024, 3, 14)));
+    s("lt-from", () -> LocalTime.from(LocalDate.of(2024, 3, 14)));
+    s("ld-from", () -> LocalDate.from(LocalTime.of(1, 2)));
+    s("lt-with", () -> LocalTime.of(1, 2).with(TemporalAdjusters.firstDayOfMonth()));
+    s("dur-dates", () -> Duration.between(LocalDate.of(2024, 3, 14), LocalDate.of(2024, 3, 15)));
+    s("dur-times", () -> Duration.between(LocalTime.of(1, 0), LocalTime.of(2, 0)));
+    s("dur-nanos-neg", () -> Duration.ofHours(2).withNanos(-2));
+    s("dur-nanos-big", () -> Duration.ofHours(2).withNanos(1000000000));
+    s("dur-nanos-ok", () -> Duration.ofHours(2).withNanos(5));
+    s("path-name-1", () -> Path.of("a").getName(1));
+    s("path-name-neg", () -> Path.of("a").getName(-2));
+    s("path-cmp", () -> Path.of("a").compareTo(Path.of("f.txt")));
+    s("path-cmp2", () -> Path.of("b").compareTo(Path.of("a")));
+    s("path-cmp3", () -> Path.of("a").compareTo(Path.of("a")));
+    s("at-neg", () -> Character.codePointAt("ab", -2));
+    s("at-past", () -> Character.codePointAt("ab", 5));
+    s("at-ok", () -> Character.codePointAt("ab", 1));
+    s("before-0", () -> Character.codePointBefore("ab", 0));
+    s("before-neg", () -> Character.codePointBefore("ab", -2));
+    s("before-ok", () -> Character.codePointBefore("ab", 1));
+    for (int cp : new int[] {0x1F600, 1, 0, -2, 0xFFFF}) {
+      s("high-" + cp, () -> (int) Character.highSurrogate(cp));
+      s("low-" + cp, () -> (int) Character.lowSurrogate(cp));
+    }
+    s("uint-empty", () -> Integer.parseUnsignedInt("", 0));
+    s("ulong-empty", () -> Long.parseUnsignedLong("", 0));
+    s("int-empty-radix", () -> Integer.parseInt("", 0));
+  }
+}
+"#
+);

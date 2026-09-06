@@ -524,7 +524,19 @@ impl std::fmt::Display for Time {
 
 /// `LocalTime.parse` — the ISO forms `HH:mm`, `HH:mm:ss` and `HH:mm:ss.fff`.
 pub fn parse_time(text: &str) -> Result<Time, String> {
-    let invalid = |index: usize| format!("Text '{text}' could not be parsed at index {index}");
+    parse_time_within(text, text, 0)
+}
+
+/// The same parse, reporting against a LONGER text at an offset — which is how
+/// a `LocalDateTime` names the index its TIME half failed at, in the whole
+/// string a program handed over rather than in the half.
+fn parse_time_within(text: &str, whole: &str, base: usize) -> Result<Time, String> {
+    let invalid = |index: usize| {
+        format!(
+            "Text '{whole}' could not be parsed at index {}",
+            base + index
+        )
+    };
     let bytes = text.as_bytes();
     let two = |at: usize| -> Result<i32, String> {
         if at + 2 > bytes.len() || !bytes[at].is_ascii_digit() || !bytes[at + 1].is_ascii_digit() {
@@ -593,11 +605,20 @@ impl std::fmt::Display for DateTime {
 /// `LocalDateTime.parse` — the ISO form, a date and a time joined by `T`.
 pub fn parse_date_time(text: &str) -> Result<DateTime, String> {
     let invalid = |index: usize| format!("Text '{text}' could not be parsed at index {index}");
+    // Where a JDK says the parse stopped: at 0 when the DATE half is not a
+    // date at all, at the `T`'s place when the date is good and the separator
+    // is not, and inside the TIME half at its own index — which is why the
+    // time parse reports against the whole string rather than its slice.
     let Some(split) = text.find('T') else {
-        return Err(invalid(text.len().min(10)));
+        let head = &text[..text.len().min(10)];
+        return Err(if parse_date(head).is_ok() {
+            invalid(text.len().min(10))
+        } else {
+            invalid(0)
+        });
     };
     let date = parse_date(&text[..split]).map_err(|_| invalid(0))?;
-    let time = parse_time(&text[split + 1..]).map_err(|_| invalid(split + 1))?;
+    let time = parse_time_within(&text[split + 1..], text, split + 1)?;
     Ok(DateTime { date, time })
 }
 

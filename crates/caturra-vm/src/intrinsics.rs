@@ -1077,6 +1077,14 @@ fn duration_rebuilt(
                 Some(JValue::Int(value)) => *value,
                 _ => 0,
             };
+            // A nanosecond is a FIELD, and out of its range it is refused the
+            // way every other field value is. Unchecked, a negative one built
+            // a duration that rendered as `PT2H0.S`.
+            if !(0..=999_999_999).contains(&nanos) {
+                return Err(date_time_exception(&format!(
+                    "Invalid value for NanoOfSecond (valid values 0 - 999999999): {nanos}"
+                )));
+            }
             made(
                 heap,
                 crate::time::Duration {
@@ -2000,8 +2008,15 @@ fn adjust_with(
     };
     match adjuster {
         Temporal::Adjuster(rule) => {
+            // An adjuster sets a DATE field, and a value that has no date
+            // refuses the FIELD rather than the cast: a JDK's
+            // `LocalTime.with(firstDayOfMonth())` is "Unsupported field:
+            // DayOfMonth", which is the field every one of these writes.
             let Some(date) = date else {
-                return Err(throw("java.lang.ClassCastException: not a date"));
+                return Err(VmError::UncaughtException(String::from(
+                    "java.time.temporal.UnsupportedTemporalTypeException: \
+                     Unsupported field: DayOfMonth",
+                )));
             };
             rebuild(heap, Some(rule.apply(date)), time)
         }
@@ -2090,10 +2105,13 @@ fn temporal_from(heap: &mut Heap, args: &[JValue], whole: bool) -> Result<Option
         (Temporal::DateTime(when), false) => Temporal::Time(when.time),
         (Temporal::DateTime(when), true) => Temporal::DateTime(when),
         (other, _) => {
+            // ...and the CLASS of what was handed over, which is the half of
+            // the sentence that says why it could not be read.
             return Err(date_time_exception(&format!(
-                "Unable to obtain {} from TemporalAccessor: {}",
+                "Unable to obtain {} from TemporalAccessor: {} of type {}",
                 if whole { "LocalDateTime" } else { "LocalTime" },
-                other.text()
+                other.text(),
+                other.class_name().replace('/', ".")
             )));
         }
     };
@@ -4301,7 +4319,13 @@ fn invoke_virtual_dispatch(
         // `java.io.ByteArrayOutputStream` — the bytes a capture collected.
         // `toString()` decodes them as UTF-8, which is what wrote them.
         (HeapObject::ByteStream(bytes), "toString") => {
-            let text = String::from_utf8_lossy(bytes).into_owned();
+            // ...unless it is the NULL output stream, which is one of these
+            // that nobody reads back and prints as the plain object a JDK's
+            // is. The same question the null writer asks, one kind over.
+            let text = heap.view_class_of(receiver).map_or_else(
+                || String::from_utf8_lossy(bytes).into_owned(),
+                |named| format!("{}@{receiver:x}", named.replace('/', ".")),
+            );
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
         }
         (HeapObject::ByteStream(bytes), "size") => Ok(Some(JValue::Int(
@@ -6477,6 +6501,14 @@ pub(crate) fn written_units(
         }
     }
     Ok(units)
+}
+
+/// `String index out of range: {index}` — the shape `Character`'s code-point
+/// pair throws, where `String`'s own methods name the length beside it.
+fn string_index_out_of_range(index: i32) -> VmError {
+    throw(format!(
+        "java.lang.StringIndexOutOfBoundsException: String index out of range: {index}"
+    ))
 }
 
 fn check_range(
@@ -11004,10 +11036,9 @@ fn path_method(
         "getNameCount" => Ok(Some(JValue::Int(i32::try_from(names.len()).unwrap_or(0)))),
         "getName" => {
             let at = index(args, 0);
+            // A JDK's complaint here carries NO message at all.
             let Some(name) = usize::try_from(at).ok().and_then(|at| names.get(at)) else {
-                return Err(throw(format!(
-                    "java.lang.IllegalArgumentException: Invalid index: {at}"
-                )));
+                return Err(throw("java.lang.IllegalArgumentException"));
             };
             path_value(heap, (*name).to_owned())
         }
@@ -11109,13 +11140,20 @@ fn path_method(
         "toFile" => Ok(Some(JValue::Ref(Some(
             heap.alloc(HeapObject::File(abstract_path(&path))),
         )))),
+        // A JDK compares a path's TEXT the way `String.compareTo` does — the
+        // DIFFERENCE at the first character that differs, not a sign.
         "compareTo" => {
             let other = other(heap, args.first())?;
-            Ok(Some(JValue::Int(match path.cmp(&other) {
-                std::cmp::Ordering::Less => -1,
-                std::cmp::Ordering::Equal => 0,
-                std::cmp::Ordering::Greater => 1,
-            })))
+            let mine: Vec<u16> = path.encode_utf16().collect();
+            let theirs: Vec<u16> = other.encode_utf16().collect();
+            let answer = mine.iter().zip(&theirs).find(|(a, b)| a != b).map_or_else(
+                || {
+                    i32::try_from(mine.len()).unwrap_or(0)
+                        - i32::try_from(theirs.len()).unwrap_or(0)
+                },
+                |(a, b)| i32::from(*a) - i32::from(*b),
+            );
+            Ok(Some(JValue::Int(answer)))
         }
         // Two paths are equal when their TEXT is, which is what a JDK's
         // UnixPath compares; `hashCode` follows it.
@@ -11881,8 +11919,9 @@ pub fn invoke_static(
                         heap.intern_temporal(Temporal::Date(when.date)),
                     )))),
                     other => Err(date_time_exception(&format!(
-                        "Unable to obtain LocalDate from TemporalAccessor: {}",
-                        other.text()
+                        "Unable to obtain LocalDate from TemporalAccessor: {} of type {}",
+                        other.text(),
+                        other.class_name().replace('/', ".")
                     ))),
                 }
             }
@@ -12135,12 +12174,11 @@ pub fn invoke_static(
                         },
                         _ => None,
                     };
+                    // A DATE has no seconds, so a JDK refuses to measure one
+                    // in them — `Duration.between(date, date)` is
+                    // "Unsupported unit: Seconds", not a whole number of days.
                     let instant = |value: Temporal| match value {
                         Temporal::Time(time) => Some(time.nano_of_day),
-                        Temporal::Date(date) => Some(
-                            date.to_epoch_day()
-                                .saturating_mul(crate::time::NANOS_PER_DAY),
-                        ),
                         Temporal::DateTime(when) => Some(
                             when.date
                                 .to_epoch_day()
@@ -12152,6 +12190,12 @@ pub fn invoke_static(
                     let (Some(start), Some(end)) = (read(0), read(1)) else {
                         return Err(throw("java.lang.ClassCastException: not a temporal"));
                     };
+                    if matches!(start, Temporal::Date(_)) || matches!(end, Temporal::Date(_)) {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.time.temporal.UnsupportedTemporalTypeException: \
+                             Unsupported unit: Seconds",
+                        )));
+                    }
                     let (Some(from), Some(to)) = (instant(start), instant(end)) else {
                         return Err(throw("java.lang.ClassCastException: not a temporal"));
                     };
@@ -12762,9 +12806,14 @@ pub fn invoke_static(
                 heap.set_view_class(writer, "java/io/Writer$1");
                 Ok(Some(JValue::Ref(Some(writer))))
             }
-            "nullOutputStream" => Ok(Some(JValue::Ref(Some(
-                heap.alloc(HeapObject::ByteStream(Vec::new())),
-            )))),
+            // A null OUTPUT stream is a `ByteArrayOutputStream` nobody reads
+            // back, and must not PRINT as one — the same marking the null
+            // reader and the null writer already carry.
+            "nullOutputStream" => {
+                let stream = heap.alloc(HeapObject::ByteStream(Vec::new()));
+                heap.set_view_class(stream, "java/io/OutputStream$1");
+                Ok(Some(JValue::Ref(Some(stream))))
+            }
             _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
         },
         // `Year.of` and the two beside it, and the same three for a
@@ -14069,8 +14118,14 @@ fn integer_static(
             let reference = heap.box_wrapper("java/lang/Integer", JValue::Int(value));
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // An EMPTY string is refused before the radix is looked at, where
+        // `parseInt` looks at the radix first: the two orders are a JDK's, and
+        // `parseUnsignedInt("", 0)` tells them apart.
         ("parseUnsignedInt", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
             let text = parse_int_text(heap, text)?;
+            if text.raw.is_empty() {
+                return Err(number_format(&text.raw));
+            }
             let radix = checked_radix(*radix)?;
             parse_unsigned_int(&text, radix)
         }
@@ -14689,12 +14744,21 @@ fn character_static(
         // The CODE POINT half. `String` already answers these about itself;
         // `Character` answers them about any `CharSequence`, with the same
         // rules underneath.
+        // ...with `Character`'s own complaint, which is not `String`'s: it
+        // names the index and nothing else, and `codePointBefore` names the
+        // index it would have READ — one before the argument.
         ("codePointAt", [text, JValue::Int(at)]) => {
             let units = code_point_source(heap, text)?;
+            if *at < 0 || *at >= i32::try_from(units.len()).unwrap_or(i32::MAX) {
+                return Err(string_index_out_of_range(*at));
+            }
             code_point_at(&units, *at).map(|point| Some(JValue::Int(point)))
         }
         ("codePointBefore", [text, JValue::Int(at)]) => {
             let units = code_point_source(heap, text)?;
+            if *at <= 0 || *at > i32::try_from(units.len()).unwrap_or(i32::MAX) {
+                return Err(string_index_out_of_range(at.wrapping_sub(1)));
+            }
             code_point_before(&units, *at).map(|point| Some(JValue::Int(point)))
         }
         ("offsetByCodePoints", [text, JValue::Int(index), JValue::Int(offset)]) => {
@@ -14707,9 +14771,14 @@ fn character_static(
         // The two halves of the pair a supplementary code point is written
         // as. A JDK does not check the range first: the arithmetic is the
         // whole method.
-        ("highSurrogate", [JValue::Int(v)]) => Ok(Some(JValue::Int(
-            0xD800 + ((v.wrapping_sub(0x1_0000) >> 10) & 0x3FF),
-        ))),
+        // ...and the arithmetic is a JDK's exactly: `(cp >>> 10) + 0xD7C0`,
+        // with NO subtraction of the supplementary base and no masking. The
+        // two agreed for a real supplementary point and parted for every
+        // other int, which is what `highSurrogate(1)` is.
+        ("highSurrogate", [JValue::Int(v)]) => {
+            let shifted = i32::try_from((*v).cast_unsigned() >> 10).unwrap_or(0);
+            Ok(Some(JValue::Int(shifted.wrapping_add(0xD7C0) & 0xFFFF)))
+        }
         ("lowSurrogate", [JValue::Int(v)]) => Ok(Some(JValue::Int(0xDC00 + (v & 0x3FF)))),
         ("isSurrogatePair", [JValue::Int(high), JValue::Int(low)]) => {
             z((0xD800..0xDC00).contains(high) && (0xDC00..0xE000).contains(low))
@@ -14963,8 +15032,12 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
             let text = parse_int_text(heap, text)?;
             parse_unsigned_long(&text, 10)
         }
+        // ...and the same order, one width up.
         ("parseUnsignedLong", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
             let text = parse_int_text(heap, text)?;
+            if text.raw.is_empty() {
+                return Err(number_format(&text.raw));
+            }
             let radix = checked_radix(*radix)?;
             parse_unsigned_long(&text, radix)
         }
@@ -17454,9 +17527,26 @@ fn bitset_method(
         Some(HeapObject::BitSet(words)) => words.clone(),
         _ => unreachable!("receiver kind checked by caller"),
     };
-    let index = |at: usize| -> Result<i32, VmError> {
+    // A `BitSet` names its index three ways, and which one is the METHOD's
+    // business: a single-bit method calls it `bitIndex`, a RANGE method (and
+    // the two `next…Bit` scans) call it `fromIndex`, and the two `previous…`
+    // scans call it `fromIndex` too but allow −1 — the answer for "nothing at
+    // or below here" is the argument they take back.
+    let names_a_range = matches!(
+        method,
+        "setRange" | "clearRange" | "flipRange" | "getRange" | "nextSetBit" | "nextClearBit"
+    ) || (matches!(method, "set" | "clear" | "flip" | "get") && args.len() > 1);
+    let allows_minus_one = matches!(method, "previousSetBit" | "previousClearBit");
+    let index = move |at: usize| -> Result<i32, VmError> {
+        let floor = if allows_minus_one { -1 } else { 0 };
         match args.get(at) {
-            Some(JValue::Int(value)) if *value >= 0 => Ok(*value),
+            Some(JValue::Int(value)) if *value >= floor => Ok(*value),
+            Some(JValue::Int(value)) if allows_minus_one => Err(throw(format!(
+                "java.lang.IndexOutOfBoundsException: fromIndex < -1: {value}"
+            ))),
+            Some(JValue::Int(value)) if names_a_range => Err(throw(format!(
+                "java.lang.IndexOutOfBoundsException: fromIndex < 0: {value}"
+            ))),
             Some(JValue::Int(value)) => Err(throw(format!(
                 "java.lang.IndexOutOfBoundsException: bitIndex < 0: {value}"
             ))),
@@ -17504,6 +17594,12 @@ fn bitset_method(
                 (_, Some(JValue::Int(end)), _) => (from, *end, true),
                 _ => (from, from + 1, true),
             };
+            // A range that runs backwards is refused, and names both ends.
+            if method != "setValue" && args.len() > 1 && from > to {
+                return Err(throw(format!(
+                    "java.lang.IndexOutOfBoundsException: fromIndex: {from} > toIndex: {to}"
+                )));
+            }
             let value = if method == "clear" { false } else { value };
             let mut words = words;
             let needed = usize::try_from(to.max(from)).unwrap_or(0) / 64 + 1;
@@ -17524,7 +17620,34 @@ fn bitset_method(
             }
             store(heap, words)
         }
-        "get" => Ok(Some(JValue::Int(i32::from(get(&words, index(0)?))))),
+        "get" if args.len() == 1 => Ok(Some(JValue::Int(i32::from(get(&words, index(0)?))))),
+        // `get(from, to)` — the bits of that range as a new set, re-based to
+        // zero, which is what makes it a `BitSet` and not a bit.
+        "get" => {
+            let from = index(0)?;
+            let to = match args.get(1) {
+                Some(JValue::Int(value)) => *value,
+                _ => from,
+            };
+            if from > to {
+                return Err(throw(format!(
+                    "java.lang.IndexOutOfBoundsException: fromIndex: {from} > toIndex: {to}"
+                )));
+            }
+            let mut taken: Vec<u64> = Vec::new();
+            for bit in from..to {
+                if get(&words, bit) {
+                    let at = usize::try_from(bit - from).unwrap_or(0);
+                    while taken.len() <= at / 64 {
+                        taken.push(0);
+                    }
+                    taken[at / 64] |= 1u64 << (at % 64);
+                }
+            }
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::BitSet(taken)),
+            ))))
+        }
         // Whether the two share a set bit. Asked word by word rather than by
         // building the whole intersection, which is what makes it worth having
         // beside `and`.
@@ -17597,6 +17720,13 @@ fn bitset_method(
                     bit += 1;
                 }
                 return Ok(Some(JValue::Int(if want { -1 } else { bit })));
+            }
+            // Past the stored words every bit is CLEAR here too, so a
+            // BACKWARD search for one succeeds at the index it started from.
+            // Clamping to the stored width first answered 0 for every
+            // `previousClearBit` on a set that had never been written to.
+            if !want && from >= limit {
+                return Ok(Some(JValue::Int(from)));
             }
             let mut bit = from.min(limit);
             while bit >= 0 {
@@ -18094,8 +18224,11 @@ fn partial_date_static(
         (_, "parse") => {
             let text = arg_string(heap, &args[0])?;
             let parsed = parse_partial_date(class, &text).ok_or_else(|| {
+                // ...AT AN INDEX, as every other parse message here does:
+                // these three said only that it could not be parsed.
                 VmError::UncaughtException(format!(
-                    "java.time.format.DateTimeParseException: Text '{text}' could not be parsed"
+                    "java.time.format.DateTimeParseException: \
+                     Text '{text}' could not be parsed at index 0"
                 ))
             })?;
             made(heap, parsed)

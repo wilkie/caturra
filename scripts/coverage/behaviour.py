@@ -215,7 +215,7 @@ KNOWN = [
         "a lambda's class is its address in a JDK, different on every run",
     ),
     (
-        r"^java\.io\.File\.(getAbsolute|getCanonical)",
+        r"^java\.io\.File\.(getAbsolute|getCanonical)|^java\.nio\.file\.Path\.toAbsolutePath",
         "caturra's filesystem is rooted at / and has no working directory",
     ),
     (

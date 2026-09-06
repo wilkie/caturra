@@ -4585,6 +4585,14 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::UnmodifiableList(_) | HeapObject::ArrayBackedList(_)) => {
                 Renderable::List(self.list_items(reference))
             }
+            // ...and the two other wrappers, which print what they WRAP. The
+            // list one was here and its siblings were not, so an unmodifiable
+            // map printed as `object@1f` where the list beside it printed its
+            // entries.
+            Some(HeapObject::UnmodifiableSet(inner) | HeapObject::UnmodifiableMap(inner)) => {
+                let inner = *inner;
+                return self.string_value_of(JValue::Ref(Some(inner)), depth);
+            }
             // Rendering a view iterates it, and iterating one checks that the
             // backing list has not been structurally changed around it — which
             // is where a JDK's `AbstractList.toString` throws.
@@ -4970,6 +4978,10 @@ impl<'run> Interpreter<'run> {
                 list: false,
                 descending: false,
             });
+            // ...and it names itself as a JDK's does: the wrapper
+            // `Collections.enumeration` builds is its own anonymous class, not
+            // the collection's cursor, however it is implemented here.
+            self.heap.set_view_class(cursor, "java/util/Collections$3");
             frame.stack.push(JValue::Ref(Some(cursor)));
             return Ok(true);
         }
@@ -5192,14 +5204,20 @@ impl<'run> Interpreter<'run> {
                 let Some((reference, items)) = items else {
                     return Ok(true);
                 };
-                if unmodifiable {
-                    return Err(VmError::UncaughtException(String::from(
-                        "java.lang.UnsupportedOperationException",
-                    )));
-                }
                 if !items.is_empty() {
                     let size = i64::try_from(items.len()).unwrap_or(i64::MAX);
                     let shift = ((i64::from(*distance) % size) + size) % size;
+                    // A rotation of NOTHING writes nothing, so a JDK never
+                    // reaches the list's refusal: `rotate(List.of(a, b), 2)`
+                    // returns quietly where caturra refused it on sight.
+                    if shift == 0 {
+                        return Ok(true);
+                    }
+                    if unmodifiable {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.UnsupportedOperationException",
+                        )));
+                    }
                     let split = items.len() - usize::try_from(shift).unwrap_or(0);
                     let mut rotated = items[split..].to_vec();
                     rotated.extend_from_slice(&items[..split]);
@@ -5254,11 +5272,6 @@ impl<'run> Interpreter<'run> {
                     frame.stack.push(JValue::Int(0));
                     return Ok(true);
                 };
-                if unmodifiable {
-                    return Err(VmError::UncaughtException(String::from(
-                        "java.lang.UnsupportedOperationException",
-                    )));
-                }
                 let mut changed = false;
                 let mut out = items.clone();
                 for slot in &mut out {
@@ -5266,6 +5279,18 @@ impl<'run> Interpreter<'run> {
                         *slot = *new;
                         changed = true;
                     }
+                }
+                // Nothing MATCHED, so a JDK writes nothing and never reaches
+                // the list's refusal — it answers false, on a read-only list
+                // like any other.
+                if !changed {
+                    frame.stack.push(JValue::Int(0));
+                    return Ok(true);
+                }
+                if unmodifiable {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
                 }
                 if let Some(values) = self.heap.list_values_mut(reference) {
                     *values = out;
@@ -8176,6 +8201,7 @@ impl<'run> Interpreter<'run> {
                         "java/util/ImmutableCollections$ListN"
                     },
                 );
+                self.view_index_style.insert(view, IndexStyle::SizeNoComma);
                 view
             }
             "__setOf" => {
@@ -9246,8 +9272,30 @@ impl<'run> Interpreter<'run> {
         // An ENUM set knows null is not one of its constants, so a null probe
         // answers absent instead of comparing — `contains(null)` is false on a
         // JDK's EnumSet where a TreeSet's throws.
-        if probe == JValue::NULL && self.is_enum_collection(set) {
-            return Ok(None);
+        if self.is_enum_collection(set) {
+            // ...and the same reasoning covers a probe of the WRONG TYPE: a
+            // JDK's EnumSet asks `elementType.isInstance(e)` and answers false,
+            // where comparing a `String` against a `DayOfWeek` is a
+            // ClassCastException.
+            if probe == JValue::NULL {
+                return Ok(None);
+            }
+            let probe_class = match probe {
+                JValue::Ref(Some(reference)) => Some(self.object_class_name(reference)),
+                _ => None,
+            };
+            let element_class = self
+                .tree_set_values(set)
+                .first()
+                .and_then(|value| match value {
+                    JValue::Ref(Some(reference)) => Some(self.object_class_name(*reference)),
+                    _ => None,
+                });
+            if let (Some(probe_class), Some(element_class)) = (probe_class, element_class)
+                && probe_class != element_class
+            {
+                return Ok(None);
+            }
         }
         let comparator = self.tree_set_comparator(set);
         for (index, existing) in self.tree_set_values(set).into_iter().enumerate() {
@@ -15772,6 +15820,7 @@ impl<'run> Interpreter<'run> {
                     let detail = match style {
                         IndexStyle::WithSize => format!("Index: {index}, Size: {size}"),
                         IndexStyle::IndexOnly => format!("Index: {index}"),
+                        IndexStyle::SizeNoComma => format!("Index: {index} Size: {size}"),
                     };
                     return Err(VmError::UncaughtException(format!(
                         "java.lang.IndexOutOfBoundsException: {detail}"
@@ -19878,6 +19927,9 @@ enum IndexStyle {
     WithSize,
     /// The shared empty list: `Index: 0`, with no size at all.
     IndexOnly,
+    /// `ImmutableCollections`, which writes the same two words WITHOUT the
+    /// comma: `Index: 2 Size: 2`. A fourth wording for one question.
+    SizeNoComma,
 }
 
 enum UserDispatch<'run> {
@@ -22607,6 +22659,14 @@ fn cursor_class_name_of(
         // JDK builds for it, whose cursor has a name of its own.
         Some(H::TreeSet { .. }) if descending => {
             "java/util/TreeMap$NavigableSubMap$DescendingSubMapKeyIterator"
+        }
+        // An ENUM set is a `TreeSet` here and a `RegularEnumSet` on a JDK, so
+        // its cursor is that class's, not the tree's — the view class it
+        // already reports from `getClass()` says which.
+        Some(H::TreeSet { .. })
+            if heap.view_class_of(source) == Some("java/util/RegularEnumSet") =>
+        {
+            "java/util/RegularEnumSet$EnumSetIterator"
         }
         Some(H::TreeSet { .. }) => "java/util/TreeMap$KeyIterator",
         Some(H::MapView { map, kind, .. }) => {

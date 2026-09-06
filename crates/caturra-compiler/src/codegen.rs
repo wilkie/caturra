@@ -17416,6 +17416,14 @@ const BITSET_METHODS: &[BuiltinMethod] = &[
     bm("flip", &[BParam::Int], BRet::Void, "(I)V"),
     bm("flip", &[BParam::Int, BParam::Int], BRet::Void, "(II)V"),
     bm("get", &[BParam::Int], BRet::Boolean, "(I)Z"),
+    // `get(from, to)` is a new SET of that range, re-based to zero — the one
+    // `get` that answers a `BitSet` rather than a bit.
+    bm(
+        "get",
+        &[BParam::Int, BParam::Int],
+        BRet::BitSet,
+        "(II)Ljava/util/BitSet;",
+    ),
     bm("cardinality", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("length", &[], BRet::Int, "()I"),

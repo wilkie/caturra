@@ -233,10 +233,12 @@ class Collections {
     }
   }
 
+  // Written as a JDK writes it — `set(i, set(j, get(i)))` — because the ORDER
+  // is observable: on a `List.of` a swap past the end reaches the refused
+  // `set` before the bad index, so it is an UnsupportedOperationException and
+  // not an IndexOutOfBounds.
   public static void swap(java.util.ArrayList<Object> list, int i, int j) {
-    Object tmp = list.get(i);
-    list.set(i, list.get(j));
-    list.set(j, tmp);
+    list.set(i, list.set(j, list.get(i)));
   }
 
   // Fisher-Yates from the end, exactly as java.util.Collections does it, so a

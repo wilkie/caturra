@@ -15460,12 +15460,44 @@ because they were serious or shared a cause already known here:
   failed`, inherited from `Format` — where `parse` names the text it could not
   read. One shared function, two callers needing different words, again.
 
-**The other 38 are reported rather than suppressed**, which is what this tool
-is for. They come to about fifteen facts, and the shapes are the familiar ones:
-a `BitSet`'s range methods say `bitIndex` where a JDK says `fromIndex` (and
-`previousSetBit` allows −1); `EnumSet.contains(aString)` throws where a JDK
-answers false; three `java.time` `parse` messages omit "at index 0" and two
-`from` messages omit " of type java.time.LocalDate"; `Duration.between` on two
-DATES answers where a JDK refuses the unit; `Collections.rotate` writes to a
-list a JDK never touches; and four more objects report a sibling's class from
-`getClass()`.
+**The other 38 were reported rather than suppressed**, which is what this tool
+is for — and worked down to zero in the same afternoon. They came to fifteen
+facts, and the shapes are the ones this document keeps recording.
+
+**The same question, worded once per implementation.** A `BitSet` names its
+index THREE ways: `bitIndex` for a single bit, `fromIndex` for a range and for
+the two forward scans, and `fromIndex < -1` for the two backward ones, which
+take −1 for "nothing at or below here". A LIST names it four ways, the fourth
+found here: `ImmutableCollections` writes `Index: 2 Size: 2` — a `LinkedList`'s
+two words without the comma. `Character`'s code-point pair says `String index
+out of range: N` where `String`'s own methods name the length beside it, and
+`codePointBefore` names the index it would have READ, one before the argument.
+
+**An order that is observable.** `Collections.swap` is `set(i, set(j, get(i)))`,
+and which of two failures a bad index gets depends on that: on a `List.of` a
+negative index reaches the read and an index past the end reaches the refused
+write. `rotate` and `replaceAll` write NOTHING when nothing changes, so a JDK
+never reaches the refusal at all. And `parseUnsignedInt` checks its TEXT before
+its radix where `parseInt` checks the radix first — `parseUnsignedInt("", 0)`
+is what tells them apart.
+
+**A scan that runs off the end.** Past a `BitSet`'s stored words every bit is
+clear, which the forward scan knew and the backward one did not: every
+`previousClearBit` on a set that had never been written to answered 0.
+
+**Objects that report a sibling's class.** `Collections.enumeration` is its own
+anonymous class, an `EnumSet`'s cursor is `RegularEnumSet$EnumSetIterator` and
+not the tree's, and `OutputStream.nullOutputStream()` is `OutputStream$1` — the
+third of the three null streams to need the marking, after the reader and the
+writer. The two unmodifiable wrappers printed `object@1f` because only the LIST
+one had a renderer.
+
+**And the arithmetic.** `Character.highSurrogate` is `(cp >>> 10) + 0xD7C0`
+with no subtraction of the supplementary base; caturra's subtracted it, which
+agreed for a real supplementary code point and parted for every other int. A
+`Duration` between two DATES has no seconds to measure in, and a JDK says so
+rather than answering a whole number of days. An adjuster refuses the FIELD it
+would set (`Unsupported field: DayOfMonth`), not the cast. A `Path` compares
+its text the way `String.compareTo` does — the difference, not the sign. And an
+`EnumSet` asks whether a probe is one of its constants before comparing, where
+a `TreeSet` would throw.
