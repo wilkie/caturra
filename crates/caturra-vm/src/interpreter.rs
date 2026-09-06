@@ -6,7 +6,7 @@
 //! know yet is a `VmError`, never undefined behavior.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use caturra_classfile::{
@@ -51,7 +51,7 @@ pub(crate) struct Interpreter<'run> {
     /// but `isAccessible()`/`canAccess(o)` REPORT the flag, and answering
     /// them without recording it would tell a program the wrong thing about a
     /// call it had just made.
-    reflect_opened: std::collections::HashSet<HeapRef>,
+    reflect_opened: HashSet<HeapRef>,
     /// The first `Scanner(System.in)` to read anything. A JDK's Scanner
     /// BUFFERS the stream, so whatever it took is gone: a second one over
     /// standard input finds nothing — a real trap in a program that makes two,
@@ -105,15 +105,15 @@ pub(crate) struct Interpreter<'run> {
     /// class name and then walked the superclass chain scanning every method and
     /// comparing names — on every call.
     static_targets: HashMap<(usize, u16), StaticTarget<'run>>,
-    static_inited: std::collections::HashSet<(usize, u16)>,
+    static_inited: HashSet<(usize, u16)>,
     /// Defaulted instance-field map per class, cloned on each `new`.
     field_templates: HashMap<String, InstanceTemplate>,
     /// Classes whose initialization has started (JVMS §5.5: recursive
     /// initialization by the same thread proceeds).
-    init_started: std::collections::HashSet<String>,
+    init_started: HashSet<String>,
     /// Classes whose `<clinit>` threw: permanently Erroneous (JLS §12.4.2).
     /// Every later active use throws `NoClassDefFoundError`.
-    init_failed: std::collections::HashSet<String>,
+    init_failed: HashSet<String>,
     remaining_instructions: u64,
     /// How many bytes of LIVE objects the program may hold. Checked after a
     /// collection: what a program has dropped does not count against it.
@@ -184,7 +184,7 @@ pub(crate) struct Interpreter<'run> {
     /// an `IllegalStateException` where `unmodifiableList`'s is an
     /// `UnsupportedOperationException`. Held aside rather than in the wrapper
     /// because it changes nothing else about the collection.
-    checked_cursor_views: std::collections::HashSet<HeapRef>,
+    checked_cursor_views: HashSet<HeapRef>,
     /// Immutable list views whose out-of-range message is NOT `ArrayList`'s.
     /// `Collections.nCopies`/`singletonList` are `AbstractList`s
     /// (`Index: 2, Size: 2`) and the shared empty list reports the index alone
@@ -216,14 +216,14 @@ pub(crate) struct Interpreter<'run> {
     /// (JDK: "stream has already been operated upon or closed"), and both a
     /// terminal and an intermediate op spend it. Held aside rather than in the
     /// heap object so the twelve places that build one stay unchanged.
-    spent_streams: std::collections::HashSet<HeapRef>,
+    spent_streams: HashSet<HeapRef>,
     /// The streams a program asked for in PARALLEL. caturra runs on one
     /// thread, and a JDK's `parallelStream()` is documented as being allowed
     /// to answer a sequential stream — so the pipeline really is sequential
     /// and this set exists for one reason: `isParallel()` must answer what a
     /// JDK answers. Kept beside the stream rather than in it, like
     /// `spent_streams`, so no construction site has to learn a new field.
-    parallel_streams: std::collections::HashSet<HeapRef>,
+    parallel_streams: HashSet<HeapRef>,
     /// The handlers `onClose` registered, per stream. A JDK runs them when the
     /// pipeline is closed — which try-with-resources does for `Files.lines` —
     /// and they travel the pipeline, so an op on a stream that has one carries
@@ -250,7 +250,7 @@ struct CurrentLocation<'run> {
 /// Live debugger state for one run.
 struct DebugState<'run> {
     host: &'run mut dyn DebugHost,
-    breakpoints: std::collections::HashSet<(String, u32)>,
+    breakpoints: HashSet<(String, u32)>,
     /// Active step goal from the last pause.
     step: Option<StepGoal>,
     /// The source line we just resumed from; suppress re-pausing anywhere
@@ -288,7 +288,7 @@ impl<'run> Interpreter<'run> {
             intrinsic_statics: IntrinsicStatics::default(),
             string_pool: HashMap::new(),
             class_pool: HashMap::new(),
-            reflect_opened: std::collections::HashSet::new(),
+            reflect_opened: HashSet::new(),
             stdin_scanner: None,
             rng: intrinsics::JavaRng::new(random_seed),
             statics: HashMap::new(),
@@ -303,10 +303,10 @@ impl<'run> Interpreter<'run> {
             new_site_ids: HashMap::new(),
             static_widths: HashMap::new(),
             static_targets: HashMap::new(),
-            static_inited: std::collections::HashSet::new(),
+            static_inited: HashSet::new(),
             field_templates: HashMap::new(),
-            init_started: std::collections::HashSet::new(),
-            init_failed: std::collections::HashSet::new(),
+            init_started: HashSet::new(),
+            init_failed: HashSet::new(),
             heap_budget: usize::MAX,
             gc_requested: false,
             temp_roots: Vec::new(),
@@ -323,7 +323,7 @@ impl<'run> Interpreter<'run> {
             last_thrown: None,
             exception_traces: HashMap::new(),
             map_views: HashMap::new(),
-            checked_cursor_views: std::collections::HashSet::new(),
+            checked_cursor_views: HashSet::new(),
             view_index_style: HashMap::new(),
             trace_names: classes
                 .iter()
@@ -341,8 +341,8 @@ impl<'run> Interpreter<'run> {
                 })
                 .collect(),
             cursor_pending: HashMap::new(),
-            spent_streams: std::collections::HashSet::new(),
-            parallel_streams: std::collections::HashSet::new(),
+            spent_streams: HashSet::new(),
+            parallel_streams: HashSet::new(),
             stream_close_handlers: HashMap::new(),
             stream_origins: HashMap::new(),
         }
@@ -15936,7 +15936,7 @@ impl<'run> Interpreter<'run> {
                 Some(crate::value::HeapObject::Method { .. })
             )
         {
-            return self.reflect_invoke(receiver, &args);
+            return self.reflect_invoke(receiver, &args, frame);
         }
         // `getClass()` on any object (library intrinsics included, e.g. a
         // String or a boxed Integer from a reflective `Object[]`), and
@@ -16651,10 +16651,14 @@ impl<'run> Interpreter<'run> {
     /// as a frame. For a static method `obj` is ignored; the (unboxed)
     /// arguments arrive as the `Object[]`. A primitive return is boxed on the
     /// way out so `invoke` hands back a wrapper (real Java semantics).
+    // The checks a JDK makes before it runs anything, then the dispatch: one
+    // sequence, and each step's reason is written where it stands.
+    #[allow(clippy::too_many_lines)]
     fn reflect_invoke(
         &mut self,
         receiver: HeapRef,
         args: &[JValue],
+        frame: &mut Frame<'run>,
     ) -> Result<Option<Frame<'run>>, VmError> {
         use crate::value::HeapObject;
         let (declaring, name, descriptor, access) = match self.heap.get(receiver) {
@@ -16678,22 +16682,6 @@ impl<'run> Interpreter<'run> {
         let param_descs = parse_descriptor_params(&descriptor);
         let ret_desc = descriptor.rsplit(')').next().unwrap_or("V").to_owned();
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        let target = classes.get(&declaring).ok_or_else(|| {
-            VmError::UncaughtException(format!("java.lang.NoSuchMethodException: {declaring}"))
-        })?;
-        let target_method = target
-            .methods
-            .iter()
-            .find(|m| {
-                target.constant_pool.get_utf8(m.name_index) == Some(name.as_str())
-                    && target.constant_pool.get_utf8(m.descriptor_index)
-                        == Some(descriptor.as_str())
-            })
-            .ok_or_else(|| {
-                VmError::UncaughtException(format!(
-                    "java.lang.NoSuchMethodException: {declaring}.{name}"
-                ))
-            })?;
         // Real `Method.invoke` checks the receiver and the arguments before it
         // runs anything, and throws rather than run a method with the wrong
         // ones. We used to just `zip` the arguments against the parameters,
@@ -16705,6 +16693,8 @@ impl<'run> Interpreter<'run> {
         // boxed int, and died deep inside on a call the student never wrote.
         // Java raises an IllegalArgumentException, the validator catches it,
         // and the test simply fails.
+        let mut runtime_class = None;
+        let mut receiver_object = None;
         if !is_static {
             let JValue::Ref(receiver_ref) = args.first().copied().unwrap_or(JValue::NULL) else {
                 return Err(VmError::UncaughtException(String::from(
@@ -16713,23 +16703,116 @@ impl<'run> Interpreter<'run> {
                 )));
             };
             let Some(receiver_ref) = receiver_ref else {
-                let _ = (declaring, name);
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.NullPointerException",
                 )));
             };
-            let belongs = matches!(
-                self.heap.get(receiver_ref),
-                Some(HeapObject::Instance { class_name, .. })
-                    if self.is_runtime_subtype(class_name, &declaring)
-            );
+            // Every reference is an instance of `java.lang.Object`, so a
+            // method declared there belongs to whatever it is handed.
+            let belongs = declaring == "java.lang.Object"
+                || matches!(
+                    self.heap.get(receiver_ref),
+                    Some(HeapObject::Instance { class_name, .. })
+                        if self.is_runtime_subtype(class_name, &declaring)
+                );
             if !belongs {
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.IllegalArgumentException: object is not an instance of \
                      declaring class",
                 )));
             }
+            runtime_class = match self.heap.get(receiver_ref) {
+                Some(HeapObject::Instance { class_name, .. }) => Some(class_name.clone()),
+                _ => None,
+            };
+            receiver_object = Some(receiver_ref);
         }
+        // `Method.invoke` dispatches DYNAMICALLY — "overriding based on the
+        // runtime type of obj", which is what `invokevirtual` does too. Only
+        // the DECLARING class was searched, so a method looked up on a
+        // superclass and invoked on a subclass instance ran the SUPERCLASS
+        // body: a validator testing that a student overrode `speak()` found
+        // the parent's answer and graded the override as if it were not there.
+        // A private method is not virtual (JLS §15.12.4.4), and neither is a
+        // static one.
+        let is_private = access & 0x0002 != 0;
+        let resolved = runtime_class
+            .as_deref()
+            .filter(|_| !is_private)
+            .and_then(|runtime| resolve_virtual(classes, runtime, &name, &descriptor))
+            .or_else(|| {
+                classes.get(&declaring).and_then(|cf| {
+                    cf.methods
+                        .iter()
+                        .find(|m| {
+                            cf.constant_pool.get_utf8(m.name_index) == Some(name.as_str())
+                                && cf.constant_pool.get_utf8(m.descriptor_index)
+                                    == Some(descriptor.as_str())
+                        })
+                        .map(|m| (cf, m))
+                })
+            });
+        let Some((target, target_method)) = resolved else {
+            // A method declared on `Object` that the receiver's class does not
+            // override: `toString`, `hashCode`, `equals` and `getClass` are
+            // answered by the same defaults an ordinary call gets, so a
+            // validator checking a student's `toString` reflectively sees what
+            // `println` would show. The monitor methods and `clone` are not
+            // modelled at all, and say so rather than answering.
+            if declaring == "java.lang.Object"
+                && matches!(
+                    name.as_str(),
+                    "wait" | "notify" | "notifyAll" | "clone" | "finalize" | "registerNatives"
+                )
+            {
+                return Err(VmError::Unsupported(format!(
+                    "Method.invoke(): java.lang.Object.{name} is not modelled here — caturra runs \
+                     one thread and holds no monitors, and the rest of that list a JDK refuses \
+                     outright for access."
+                )));
+            }
+            if declaring == "java.lang.Object"
+                && let Some(receiver_ref) = receiver_object
+                && let Some(runtime) = runtime_class.as_deref()
+            {
+                let dispatched = self.user_virtual_dispatch(
+                    receiver_ref,
+                    runtime,
+                    &name,
+                    &descriptor,
+                    &call_args,
+                )?;
+                return match dispatched {
+                    UserDispatch::Call(mut callee) => {
+                        callee.box_return_as = Some(ret_desc);
+                        callee.wraps_invocation_target = true;
+                        Ok(Some(callee))
+                    }
+                    UserDispatch::Value(value) => {
+                        // Boxed by the RETURN DESCRIPTOR, as a frame's answer
+                        // is: `equals` hands back a `Boolean`, not the
+                        // `Integer` an erased 0/1 would box as.
+                        let boxed = value.map_or(JValue::NULL, |value| {
+                            self.box_if_primitive(value, &ret_desc)
+                        });
+                        frame.stack.push(boxed);
+                        Ok(None)
+                    }
+                };
+            }
+            if declaring == "java.lang.Object" {
+                let receiver_class = receiver_object
+                    .map_or_else(|| String::from("null"), |r| heap_binary_name(&self.heap, r));
+                return Err(VmError::Unsupported(format!(
+                    "Method.invoke(): java.lang.Object.{name} against a {receiver_class} — a \
+                     library value has no class file here, so a method declared on Object cannot \
+                     be run against one."
+                )));
+            }
+            return Err(VmError::UncaughtException(format!(
+                "java.lang.NoSuchMethodException: {declaring}.{name}"
+            )));
+        };
         if call_args.len() != param_descs.len() {
             return Err(VmError::UncaughtException(String::from(
                 "java.lang.IllegalArgumentException: wrong number of arguments",
@@ -17909,6 +17992,9 @@ impl<'run> Interpreter<'run> {
                     // synthesized. The inverse of `getDeclaringClass`, read off
                     // the same names so the two cannot disagree.
                     "getDeclaredClasses" => {
+                        if self.has_no_class_file(&name) {
+                            return Err(Self::refuse_library_members(&name, method));
+                        }
                         let prefix = format!("{name}$");
                         let mut declared: Vec<String> = self
                             .classes
@@ -18220,6 +18306,9 @@ impl<'run> Interpreter<'run> {
                         }
                     }
                     "getDeclaredFields" | "getFields" => {
+                        if self.has_no_class_file(&name) {
+                            return Err(Self::refuse_library_members(&name, method));
+                        }
                         let public_only = method == "getFields";
                         let fields: Vec<(String, String, u16, Option<String>)> = self
                             .classes
@@ -18250,7 +18339,7 @@ impl<'run> Interpreter<'run> {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        let simple = simple_class_name(&name).to_owned();
+                        let simple = class_binary_name(&name);
                         let refs: Vec<JValue> = fields
                             .into_iter()
                             .map(|(field_name, descriptor, access, signature)| {
@@ -18270,51 +18359,25 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getDeclaredMethods" | "getMethods" => {
+                        if self.has_no_class_file(&name) {
+                            return Err(Self::refuse_library_members(&name, method));
+                        }
                         let public_only = method == "getMethods";
-                        let methods: Vec<(String, String, u16, Vec<String>)> = self
-                            .classes
-                            .get(&name)
-                            .map(|cf| {
-                                cf.methods
-                                    .iter()
-                                    .filter(|m| {
-                                        cf.constant_pool.get_utf8(m.name_index) != Some("<init>")
-                                            && cf.constant_pool.get_utf8(m.name_index)
-                                                != Some("<clinit>")
-                                    })
-                                    .filter(|m| {
-                                        !public_only
-                                            || m.access_flags.contains(
-                                                caturra_classfile::MethodAccessFlags::PUBLIC,
-                                            )
-                                    })
-                                    .map(|m| {
-                                        (
-                                            cf.constant_pool
-                                                .get_utf8(m.name_index)
-                                                .unwrap_or_default()
-                                                .to_owned(),
-                                            cf.constant_pool
-                                                .get_utf8(m.descriptor_index)
-                                                .unwrap_or_default()
-                                                .to_owned(),
-                                            m.access_flags.0,
-                                            member_exceptions(cf, m),
-                                        )
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let simple = simple_class_name(&name).to_owned();
+                        let methods = if name == "java/lang/Object" {
+                            object_declared_methods(public_only)
+                        } else {
+                            self.methods_seen_by(&name, public_only)
+                        };
                         let refs: Vec<JValue> = methods
                             .into_iter()
-                            .map(|(mname, descriptor, access, throws)| {
+                            .map(|found| {
                                 JValue::Ref(Some(self.heap.alloc(HeapObject::Method {
-                                    declaring: simple.clone(),
-                                    name: mname,
-                                    descriptor,
-                                    access,
-                                    throws,
+                                    declaring: found.declaring,
+                                    name: found.name,
+                                    descriptor: found.descriptor,
+                                    access: found.access,
+                                    throws: found.throws,
+                                    is_default: found.is_default,
                                 })))
                             })
                             .collect();
@@ -18325,36 +18388,47 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getDeclaredConstructors" | "getConstructors" => {
+                        if self.has_no_class_file(&name) {
+                            return Err(Self::refuse_library_members(&name, method));
+                        }
                         let public_only = method == "getConstructors";
-                        let ctors: Vec<(String, u16, Vec<String>)> = self
-                            .classes
-                            .get(&name)
-                            .map(|cf| {
-                                cf.methods
-                                    .iter()
-                                    .filter(|m| {
-                                        cf.constant_pool.get_utf8(m.name_index) == Some("<init>")
-                                    })
-                                    .filter(|m| {
-                                        !public_only
-                                            || m.access_flags.contains(
-                                                caturra_classfile::MethodAccessFlags::PUBLIC,
+                        let ctors: Vec<(String, u16, Vec<String>)> = if name == "java/lang/Object" {
+                            vec![(
+                                OBJECT_CONSTRUCTOR.0.to_owned(),
+                                OBJECT_CONSTRUCTOR.1,
+                                Vec::new(),
+                            )]
+                        } else {
+                            self.classes
+                                .get(&name)
+                                .map(|cf| {
+                                    cf.methods
+                                        .iter()
+                                        .filter(|m| {
+                                            cf.constant_pool.get_utf8(m.name_index)
+                                                == Some("<init>")
+                                        })
+                                        .filter(|m| {
+                                            !public_only
+                                                || m.access_flags.contains(
+                                                    caturra_classfile::MethodAccessFlags::PUBLIC,
+                                                )
+                                        })
+                                        .map(|m| {
+                                            (
+                                                cf.constant_pool
+                                                    .get_utf8(m.descriptor_index)
+                                                    .unwrap_or_default()
+                                                    .to_owned(),
+                                                m.access_flags.0,
+                                                member_exceptions(cf, m),
                                             )
-                                    })
-                                    .map(|m| {
-                                        (
-                                            cf.constant_pool
-                                                .get_utf8(m.descriptor_index)
-                                                .unwrap_or_default()
-                                                .to_owned(),
-                                            m.access_flags.0,
-                                            member_exceptions(cf, m),
-                                        )
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let simple = simple_class_name(&name).to_owned();
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        };
+                        let simple = class_binary_name(&name);
                         let refs: Vec<JValue> = ctors
                             .into_iter()
                             .map(|(descriptor, access, throws)| {
@@ -18373,31 +18447,48 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getConstructor" | "getDeclaredConstructor" => {
+                        if self.has_no_class_file(&name) {
+                            return Err(Self::refuse_library_members(&name, method));
+                        }
                         // args[0] is a Class[] of parameter types.
                         let param_class_names = self.class_array_names(args.first());
-                        let found = self.classes.get(&name).and_then(|cf| {
-                            cf.methods
-                                .iter()
-                                .filter(|m| {
-                                    cf.constant_pool.get_utf8(m.name_index) == Some("<init>")
-                                })
-                                .find_map(|m| {
-                                    let desc = cf
-                                        .constant_pool
-                                        .get_utf8(m.descriptor_index)
-                                        .unwrap_or_default();
-                                    constructor_params_match(desc, &param_class_names).then(|| {
-                                        (
-                                            desc.to_owned(),
-                                            m.access_flags.0,
-                                            member_exceptions(cf, m),
+                        let found = if name == "java/lang/Object" {
+                            constructor_params_match(OBJECT_CONSTRUCTOR.0, &param_class_names).then(
+                                || {
+                                    (
+                                        OBJECT_CONSTRUCTOR.0.to_owned(),
+                                        OBJECT_CONSTRUCTOR.1,
+                                        Vec::new(),
+                                    )
+                                },
+                            )
+                        } else {
+                            self.classes.get(&name).and_then(|cf| {
+                                cf.methods
+                                    .iter()
+                                    .filter(|m| {
+                                        cf.constant_pool.get_utf8(m.name_index) == Some("<init>")
+                                    })
+                                    .find_map(|m| {
+                                        let desc = cf
+                                            .constant_pool
+                                            .get_utf8(m.descriptor_index)
+                                            .unwrap_or_default();
+                                        constructor_params_match(desc, &param_class_names).then(
+                                            || {
+                                                (
+                                                    desc.to_owned(),
+                                                    m.access_flags.0,
+                                                    member_exceptions(cf, m),
+                                                )
+                                            },
                                         )
                                     })
-                                })
-                        });
+                            })
+                        };
                         match found {
                             Some((descriptor, access, throws)) => {
-                                let declaring = simple_class_name(&name).to_owned();
+                                let declaring = class_binary_name(&name);
                                 Ok(Some(JValue::Ref(Some(self.heap.alloc(
                                     HeapObject::Constructor {
                                         declaring,
@@ -18412,12 +18503,15 @@ impl<'run> Interpreter<'run> {
                             // the wrong CONSTRUCTOR should be told which one.
                             None => Err(VmError::UncaughtException(format!(
                                 "java.lang.NoSuchMethodException: {}.<init>({})",
-                                simple_class_name(&name),
+                                class_binary_name(&name),
                                 param_class_names.join(",")
                             ))),
                         }
                     }
                     "getDeclaredField" | "getField" => {
+                        if self.has_no_class_file(&name) {
+                            return Err(Self::refuse_library_members(&name, method));
+                        }
                         let field_name = match args.first() {
                             Some(JValue::Ref(Some(r))) => {
                                 self.heap.string_text(*r).unwrap_or_default()
@@ -18453,7 +18547,7 @@ impl<'run> Interpreter<'run> {
                         });
                         match found {
                             Some((fname, descriptor, access, signature)) => {
-                                let declaring = simple_class_name(&name).to_owned();
+                                let declaring = class_binary_name(&name);
                                 Ok(Some(JValue::Ref(Some(self.heap.alloc(
                                     HeapObject::Field {
                                         declaring,
@@ -18470,6 +18564,9 @@ impl<'run> Interpreter<'run> {
                         }
                     }
                     "getMethod" | "getDeclaredMethod" => {
+                        if self.has_no_class_file(&name) {
+                            return Err(Self::refuse_library_members(&name, method));
+                        }
                         let method_name = match args.first() {
                             Some(JValue::Ref(Some(r))) => {
                                 self.heap.string_text(*r).unwrap_or_default()
@@ -18485,47 +18582,31 @@ impl<'run> Interpreter<'run> {
                         // report it public — a student would pass a test about
                         // access that they should fail.
                         let public_only = method == "getMethod";
-                        let found = self.classes.get(&name).and_then(|cf| {
-                            cf.methods.iter().find_map(|m| {
-                                let mname =
-                                    cf.constant_pool.get_utf8(m.name_index).unwrap_or_default();
-                                if mname != method_name {
-                                    return None;
-                                }
-                                if public_only
-                                    && !m
-                                        .access_flags
-                                        .contains(caturra_classfile::MethodAccessFlags::PUBLIC)
-                                {
-                                    return None;
-                                }
-                                let desc = cf
-                                    .constant_pool
-                                    .get_utf8(m.descriptor_index)
-                                    .unwrap_or_default();
-                                constructor_params_match(desc, &param_class_names).then(|| {
-                                    (desc.to_owned(), m.access_flags.0, member_exceptions(cf, m))
-                                })
-                            })
+                        let candidates = if name == "java/lang/Object" {
+                            object_declared_methods(public_only)
+                        } else {
+                            self.methods_seen_by(&name, public_only)
+                        };
+                        let found = candidates.into_iter().find(|found| {
+                            found.name == method_name
+                                && constructor_params_match(&found.descriptor, &param_class_names)
                         });
                         match found {
-                            Some((descriptor, access, throws)) => {
-                                let declaring = simple_class_name(&name).to_owned();
-                                Ok(Some(JValue::Ref(Some(self.heap.alloc(
-                                    HeapObject::Method {
-                                        declaring,
-                                        name: method_name,
-                                        descriptor,
-                                        access,
-                                        throws,
-                                    },
-                                )))))
-                            }
+                            Some(found) => Ok(Some(JValue::Ref(Some(self.heap.alloc(
+                                HeapObject::Method {
+                                    declaring: found.declaring,
+                                    name: found.name,
+                                    descriptor: found.descriptor,
+                                    access: found.access,
+                                    throws: found.throws,
+                                    is_default: found.is_default,
+                                },
+                            ))))),
                             // The JDK names the PARAMETER LIST too, so a
                             // missing overload can be told from a missing name.
                             None => Err(VmError::UncaughtException(format!(
                                 "java.lang.NoSuchMethodException: {}.{method_name}({})",
-                                simple_class_name(&name),
+                                class_binary_name(&name),
                                 param_class_names.join(",")
                             ))),
                         }
@@ -18735,13 +18816,15 @@ impl<'run> Interpreter<'run> {
                 descriptor,
                 access,
                 throws,
+                is_default,
             }) => {
-                let (declaring, name, descriptor, access, throws) = (
+                let (declaring, name, descriptor, access, throws, is_default) = (
                     declaring.clone(),
                     name.clone(),
                     descriptor.clone(),
                     *access,
                     throws.clone(),
+                    *is_default,
                 );
                 match method {
                     "getName" => Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&name))))),
@@ -18769,6 +18852,7 @@ impl<'run> Interpreter<'run> {
                             &descriptor,
                             access,
                             &throws,
+                            is_default,
                         );
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
@@ -18789,17 +18873,9 @@ impl<'run> Interpreter<'run> {
                     "isBridge" => Ok(Some(JValue::Int(i32::from(access & 0x0040 != 0)))),
                     // A DEFAULT method is a method of an INTERFACE that has a
                     // body — neither abstract nor static.
-                    "isDefault" => {
-                        let on_interface = self
-                            .classes
-                            .get(&declaring)
-                            .is_some_and(|class| class.access_flags.0 & 0x0200 != 0);
-                        let concrete = access
-                            & (caturra_classfile::MethodAccessFlags::ABSTRACT
-                                | caturra_classfile::MethodAccessFlags::STATIC)
-                            == 0;
-                        Ok(Some(JValue::Int(i32::from(on_interface && concrete))))
-                    }
+                    // Recorded when the member was looked up, so the question
+                    // and the `toString` that spells the word cannot disagree.
+                    "isDefault" => Ok(Some(JValue::Int(i32::from(is_default)))),
                     "setAccessible" => {
                         self.reflect_opened.insert(receiver);
                         Ok(None)
@@ -18811,6 +18887,7 @@ impl<'run> Interpreter<'run> {
                             &descriptor,
                             access,
                             &throws,
+                            is_default,
                         );
                         self.reflect_access_answer(
                             receiver,
@@ -18874,6 +18951,148 @@ impl<'run> Interpreter<'run> {
     /// A descriptor's parameter types as a `Class[]` — the same reading for a
     /// method and for a constructor, which differ only in having a return type
     /// after the parentheses.
+    /// The methods a `Class` question sees, each with the class that DECLARES
+    /// it.
+    ///
+    /// `getDeclaredMethods` sees exactly what this class writes.
+    /// `getMethods` sees every PUBLIC method the type has, inherited ones
+    /// included — up the superclass chain, across the interfaces (a default
+    /// method counts), and finally `java.lang.Object`'s nine. caturra searched
+    /// the one class only, so `Kid.class.getMethod("getName")` on a getter
+    /// inherited from `Base` threw `NoSuchMethodException` for a method every
+    /// student's program has.
+    ///
+    /// Most-derived first, so an override hides the declaration it overrides —
+    /// which is what a JDK reports, and why the pair (name, descriptor) is the
+    /// key rather than the name alone.
+    fn methods_seen_by(&self, class: &str, public_only: bool) -> Vec<SeenMethod> {
+        let mut out: Vec<SeenMethod> = Vec::new();
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        let push =
+            |found: SeenMethod, out: &mut Vec<SeenMethod>, seen: &mut HashSet<(String, String)>| {
+                if seen.insert((found.name.clone(), found.descriptor.clone())) {
+                    out.push(found);
+                }
+            };
+        // The classes to search, in the order a JDK resolves them: this one,
+        // then its superclasses, then every interface either reaches.
+        let mut queue = vec![class.to_owned()];
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut interfaces: Vec<String> = Vec::new();
+        while let Some(current) = queue.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            let Some(cf) = self.classes.get(&current) else {
+                continue;
+            };
+            for m in &cf.methods {
+                let mname = cf.constant_pool.get_utf8(m.name_index).unwrap_or_default();
+                if mname == "<init>" || mname == "<clinit>" {
+                    continue;
+                }
+                if public_only
+                    && !m
+                        .access_flags
+                        .contains(caturra_classfile::MethodAccessFlags::PUBLIC)
+                {
+                    continue;
+                }
+                push(SeenMethod::of(&current, cf, m), &mut out, &mut seen);
+            }
+            if !public_only {
+                // `getDeclaredMethods` stops at the one class.
+                break;
+            }
+            for index in &cf.interfaces {
+                if let Some(face) = cf.constant_pool.get_class_name(*index) {
+                    interfaces.push(face.to_owned());
+                }
+            }
+            if let Some(parent) = cf.constant_pool.get_class_name(cf.super_class)
+                && self.classes.contains_key(parent)
+            {
+                queue.push(parent.to_owned());
+            }
+        }
+        if public_only {
+            // The interfaces after the classes: a concrete override hides the
+            // abstract declaration it implements, never the other way round.
+            let mut face_queue = interfaces;
+            while let Some(current) = face_queue.pop() {
+                if !visited.insert(current.clone()) {
+                    continue;
+                }
+                let Some(cf) = self.classes.get(&current) else {
+                    continue;
+                };
+                for m in &cf.methods {
+                    let mname = cf.constant_pool.get_utf8(m.name_index).unwrap_or_default();
+                    if mname == "<init>" || mname == "<clinit>" {
+                        continue;
+                    }
+                    if !m
+                        .access_flags
+                        .contains(caturra_classfile::MethodAccessFlags::PUBLIC)
+                    {
+                        continue;
+                    }
+                    push(SeenMethod::of(&current, cf, m), &mut out, &mut seen);
+                }
+                for index in &cf.interfaces {
+                    if let Some(face) = cf.constant_pool.get_class_name(*index) {
+                        face_queue.push(face.to_owned());
+                    }
+                }
+            }
+            // Every class has `Object`'s public methods, and a JDK lists them.
+            for found in object_declared_methods(true) {
+                push(found, &mut out, &mut seen);
+            }
+        }
+        out
+    }
+
+    /// Whether this `Class` names a library REFERENCE type — one caturra has
+    /// no class file for, so its members cannot be listed or looked up.
+    ///
+    /// A primitive and an array are deliberately not library classes here: a
+    /// JDK really does declare no members on either, so the empty answer for
+    /// `int.class` and `int[].class` is the right one and already matches.
+    fn has_no_class_file(&self, name: &str) -> bool {
+        !self.classes.contains_key(name)
+            && name != "java/lang/Object"
+            && !name.starts_with('[')
+            && !matches!(
+                name,
+                "int"
+                    | "long"
+                    | "double"
+                    | "float"
+                    | "short"
+                    | "byte"
+                    | "char"
+                    | "boolean"
+                    | "void"
+            )
+    }
+
+    /// Refuse a member question about a library class, naming the reason.
+    ///
+    /// The alternative was worse than a refusal and quieter: an empty array
+    /// said `java.lang.String` declares nothing, and a lookup threw
+    /// `NoSuchMethodException` for a method that plainly exists. A program
+    /// cannot notice either.
+    fn refuse_library_members(name: &str, method: &str) -> VmError {
+        VmError::Unsupported(format!(
+            "{}.{method}(): {} is a library class and caturra has no class file for it, so its \
+             members cannot be listed or looked up. Reflection here answers about the classes a \
+             program declares.",
+            "Class",
+            class_binary_name(name)
+        ))
+    }
+
     /// The `Class[]` a member's `throws` clause names.
     ///
     /// A fresh array every call — a JDK hands out a COPY, so writing into one
@@ -20980,6 +21199,99 @@ fn is_array_class_name(name: &str) -> bool {
 /// `Object` and the primitives have none. The six numeric wrappers extend
 /// `Number`; a throwable follows the exception table; an array and everything
 /// else extend `Object`.
+/// One method a `Class` question answers with — everything the `Method` it
+/// hands back has to remember, read once at lookup so no renderer of it has to
+/// go back to the class file.
+struct SeenMethod {
+    /// The class that DECLARES it, binary name: a method reached through
+    /// `getMethods` may come from a superclass or an interface.
+    declaring: String,
+    name: String,
+    descriptor: String,
+    access: u16,
+    throws: Vec<String>,
+    /// An interface method with a BODY — neither abstract nor static. A JDK
+    /// writes the word `default` into such a method's `toString`, which no
+    /// access flag records.
+    is_default: bool,
+}
+
+impl SeenMethod {
+    fn of(declaring: &str, class: &ClassFile, member: &MethodInfo) -> Self {
+        const ACC_INTERFACE: u16 = 0x0200;
+        let access = member.access_flags.0;
+        Self {
+            declaring: class_binary_name(declaring),
+            name: class
+                .constant_pool
+                .get_utf8(member.name_index)
+                .unwrap_or_default()
+                .to_owned(),
+            descriptor: class
+                .constant_pool
+                .get_utf8(member.descriptor_index)
+                .unwrap_or_default()
+                .to_owned(),
+            access,
+            throws: member_exceptions(class, member),
+            is_default: class.access_flags.0 & ACC_INTERFACE != 0
+                && access
+                    & (caturra_classfile::MethodAccessFlags::ABSTRACT
+                        | caturra_classfile::MethodAccessFlags::STATIC)
+                    == 0,
+        }
+    }
+}
+
+/// `java.lang.Object`'s declared members, recorded from a real JDK 11 — name,
+/// descriptor, access flags, and `throws` clause, in the order that JDK hands
+/// them out.
+///
+/// It is the one library class whose members a program here really does reach:
+/// every hierarchy walk ends at it, and 88 of the corpus's own validators ask
+/// a superclass for its fields. `Object` declares NO fields and no nested
+/// classes, so those two answers were right by accident; the methods and the
+/// constructor were not.
+const OBJECT_MEMBERS: &[(&str, &str, u16, &[&str])] = &[
+    ("finalize", "()V", 0x0004, &["java.lang.Throwable"]),
+    ("wait", "(J)V", 0x0111, &["java.lang.InterruptedException"]),
+    ("wait", "(JI)V", 0x0011, &["java.lang.InterruptedException"]),
+    ("wait", "()V", 0x0011, &["java.lang.InterruptedException"]),
+    ("equals", "(Ljava/lang/Object;)Z", 0x0001, &[]),
+    ("toString", "()Ljava/lang/String;", 0x0001, &[]),
+    ("hashCode", "()I", 0x0101, &[]),
+    ("getClass", "()Ljava/lang/Class;", 0x0111, &[]),
+    (
+        "clone",
+        "()Ljava/lang/Object;",
+        0x0104,
+        &["java.lang.CloneNotSupportedException"],
+    ),
+    ("notify", "()V", 0x0111, &[]),
+    ("notifyAll", "()V", 0x0111, &[]),
+    ("registerNatives", "()V", 0x010a, &[]),
+];
+
+/// `java.lang.Object`'s single public constructor.
+const OBJECT_CONSTRUCTOR: (&str, u16) = ("()V", 0x0001);
+
+/// [`OBJECT_MEMBERS`] as the tuples the class-file walk collects, so both
+/// sources feed one code path.
+fn object_declared_methods(public_only: bool) -> Vec<SeenMethod> {
+    OBJECT_MEMBERS
+        .iter()
+        .filter(|(_, _, access, _)| !public_only || access & 0x0001 != 0)
+        .map(|(name, descriptor, access, throws)| SeenMethod {
+            declaring: String::from("java.lang.Object"),
+            name: (*name).to_owned(),
+            descriptor: (*descriptor).to_owned(),
+            access: *access,
+            throws: throws.iter().map(|each| (*each).to_owned()).collect(),
+            is_default: false,
+        })
+        .collect()
+}
+
 fn library_superclass(internal: &str) -> Option<&'static str> {
     // The collection hierarchy, which a program can walk: answering `Object`
     // for an `ArrayList` is a confident wrong answer, not a missing one.

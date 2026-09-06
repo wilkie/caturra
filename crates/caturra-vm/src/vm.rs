@@ -33,6 +33,12 @@ pub enum VmError {
     UnsupportedOpcode(u8),
     #[error("unknown native member: {0} (not yet implemented by the caturra class library)")]
     UnknownIntrinsic(String),
+    /// Real Java that caturra models no answer for, refused with the reason
+    /// rather than answered wrongly. Unlike [`Self::UncaughtException`] this is
+    /// not a Java exception and a program cannot catch it — the alternative
+    /// was a confident lie, which a program cannot notice at all.
+    #[error("{0}")]
+    Unsupported(String),
     #[error("operand stack underflow (malformed bytecode)")]
     StackUnderflow,
     #[error("the program was stopped by the debugger")]

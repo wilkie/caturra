@@ -102,6 +102,12 @@ RECEIVER_OVERRIDES = {
     # unspecified, so an index picks a different method on each engine.
     "java.lang.reflect.Method": 'Probe.class.getDeclaredMethod("main", String[].class)',
     "java.lang.reflect.Constructor": "Probe.class.getDeclaredConstructors()[0]",
+    # A class the PROBE declares. caturra has no class file for a library
+    # class, so its member questions are refused rather than answered with an
+    # empty list — and a refusal aborts the run, which costs this sweep every
+    # call after it. The probe's own class is the representative receiver
+    # anyway: reflection here answers about the classes a program declares.
+    "java.lang.Class": "Probe.class",
 }
 
 # Divergences that are DECLARED, with the reason, rather than found. Each is a

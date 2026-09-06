@@ -13088,17 +13088,21 @@ pub fn method_to_string(
     descriptor: &str,
     access: u16,
     exceptions: &[String],
+    is_default: bool,
 ) -> String {
     let modifiers = crate::interpreter::reflect_modifier_names(access);
     let ret = type_name_of_descriptor(descriptor.rsplit(')').next().unwrap_or("V"));
     let params: Vec<String> = param_type_names(descriptor);
+    // A JDK writes `default` after the modifiers of an interface method with a
+    // body — it is not an access flag, so nothing else here could have said it.
     format!(
-        "{}{ret} {declaring}.{name}({}){}",
+        "{}{}{ret} {declaring}.{name}({}){}",
         if modifiers.is_empty() {
             String::new()
         } else {
             format!("{modifiers} ")
         },
+        if is_default { "default " } else { "" },
         params.join(","),
         throws_clause_text(exceptions)
     )
@@ -15293,7 +15297,8 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
                 descriptor,
                 access,
                 throws,
-            }) => method_to_string(declaring, name, descriptor, *access, throws),
+                is_default,
+            }) => method_to_string(declaring, name, descriptor, *access, throws, *is_default),
             Some(HeapObject::ReflectType { raw, args }) => {
                 let dotted = raw.replace('/', ".");
                 if args.is_empty() {

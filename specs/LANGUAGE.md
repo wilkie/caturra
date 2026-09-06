@@ -9050,6 +9050,23 @@ counting catches: a divergence that stopped being one.
 - `aMethod.getParameters()` — a `java.lang.reflect.Parameter` is a NAME as well
   as a type, and a class file only carries names under `-parameters`.
   `getParameterTypes()` gives the types. (`strict_no_parameter_objects`)
+- `String.class.getDeclaredMethods()` and every other member question about a
+  LIBRARY class — caturra has no class file for one, so its members cannot be
+  listed or looked up. Refused at RUN time, because whether a `Class` is a
+  library one is a fact about the value rather than about the text. The empty
+  array it used to answer said `java.lang.String` declares nothing, and the
+  `NoSuchMethodException` beside it named a method that plainly exists.
+  `java.lang.Object` is the exception: every hierarchy walk ends there, so its
+  twelve methods, its constructor and its two empty lists are recorded from a
+  real JDK. (`run_no_members_on_a_library_class`)
+- `Object.class.getDeclaredMethod("toString").invoke("hi")` — the same fact
+  from the other side. A method declared on `Object` runs against a class the
+  program declares (the override, or the default), but a library VALUE has no
+  class file to run one from. (`run_no_object_method_on_a_library_value`)
+- `Object.class.getDeclaredMethod("notify").invoke(o)` and the rest of
+  `Object`'s monitor list — caturra runs one thread and holds no monitors, and
+  `clone`, `finalize` and `registerNatives` are ones a JDK itself refuses for
+  access. (`run_no_monitors_through_reflection`)
 - `aFormat.getCurrency()` / `setCurrency(c)` — caturra does not model
   `java.util.Currency`; the pattern's currency sign is what it draws.
   (`strict_a_format_names_no_currency`)
@@ -15115,3 +15132,56 @@ And reflecting on a LIBRARY class's members still finds nothing:
 `Runnable.class.getDeclaredMethod("run")` throws, because those classes have no
 class file here. That is a silent wrong answer, not a refusal, and it is the
 next thing this corner owes.
+
+### What reflection sees, and what it runs (2026-09-05)
+
+Pulling on the thing the last section said was owed found two worse ones beside
+it, which is the usual reason to pull.
+
+**`Method.invoke` did not dispatch virtually.** The javadoc says "overriding
+based on the runtime type of obj", and `invokevirtual` says the same, but only
+the DECLARING class was searched. A method looked up on a superclass and
+invoked on a subclass instance ran the SUPERCLASS body — so a validator testing
+that a student overrode `speak()` got the parent's answer and graded the
+override as if it were not there. Resolution now starts at the receiver's
+runtime class, as `resolve_virtual` already did for every ordinary call; a
+private method is not virtual (JLS §15.12.4.4) and neither is a static one, and
+both were checked against a JDK.
+
+**`getMethods` and `getMethod` never looked past the one class.** A JDK's
+`getMethods` walks the superclass chain, then the interfaces (a default method
+counts, and its `toString` carries the word `default`, which no access flag
+records), and ends at `java.lang.Object`'s nine public methods. caturra listed
+only what the class itself declared, so `Kid.class.getMethod("getName")` on an
+inherited getter threw `NoSuchMethodException` for a method every such program
+has. One walk answers both questions now, most-derived first so an override
+hides what it overrides — which is why the key is the pair (name, descriptor)
+rather than the name.
+
+**And the owed thing itself.** A library class's members cannot be listed or
+looked up: there is no class file. The empty array said `java.lang.String`
+declares nothing and the lookup threw for a method that plainly exists, so both
+are refused now, with the reason, at RUN time — whether a `Class` is a library
+one is a fact about the value, not about the text. A primitive and an array
+keep answering: `int.class` and `int[].class` really do declare nothing, so the
+empty list there was right rather than lucky.
+
+`java.lang.Object` is the exception, and it had to be: every hierarchy walk
+ends there, and 88 of the corpus's own validators ask a superclass for its
+fields. Its twelve methods, its constructor and its two empty lists are
+recorded from a real JDK — access flags (`native`, `final`), `throws` clauses
+and the JDK's own ordering included. A method declared on `Object` and invoked
+runs the receiver's override, or the default `toString`/`hashCode`/`equals`/
+`getClass` an ordinary call would get; against a library VALUE it refuses,
+because there is still no class file to run it from, and the monitor methods
+refuse because caturra runs one thread.
+
+Three pins in a new family, `refused_at_run!` — the strictness families before
+it were all compile-time, and a refusal that depends on a VALUE cannot be. It
+asserts what the others do, plus that the reason is still the documented one,
+and the same guard test requires each to be enumerated above.
+
+One thing this cost: the behaviour sweep's receiver for `java.lang.Class` was
+`String.class`, so its member questions began aborting the probe and 40 calls
+were bisected away. `Probe.class` is the representative receiver anyway —
+reflection here answers about the classes a program declares.

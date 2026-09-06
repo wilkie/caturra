@@ -561,6 +561,65 @@ macro_rules! looser_than_javac {
     };
 }
 
+/// A program javac accepts and a JDK RUNS, which caturra compiles and then
+/// refuses at run time, naming the reason.
+///
+/// The strictness families above are compile-time: they ask whether a source
+/// file is accepted. Some refusals cannot be: whether a `Class` is a library
+/// one is a fact about the VALUE, not about the text. The alternative to
+/// refusing was a confident lie a program cannot notice — an empty member
+/// list, or a `NoSuchMethodException` for a method that plainly exists — so
+/// the pin asserts the REASON is still given, and the reason is enumerated in
+/// `specs/LANGUAGE.md` like every other divergence.
+macro_rules! refused_at_run {
+    ($name:ident, $class:literal, $source:literal, $reason:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            assert!(
+                javac_first_error($class, $source).is_none(),
+                "javac rejects {}, so this is a shared rule, not a strictness",
+                $class
+            );
+            let refusal = caturra_run_failure($class, $source).unwrap_or_else(|| {
+                panic!(
+                    "caturra now runs {} — the documented refusal is gone",
+                    $class
+                )
+            });
+            assert!(
+                refusal.contains($reason),
+                "{} was refused, but not for the documented reason: {refusal}",
+                $class
+            );
+        }
+    };
+}
+
+/// The message caturra's VM refused a program with, or `None` if it ran.
+fn caturra_run_failure(class_name: &str, source: &str) -> Option<String> {
+    let sources = vec![caturra_compiler::SourceFile {
+        path: format!("{class_name}.java"),
+        text: source.to_owned(),
+    }];
+    let compilation = caturra_compiler::compile(&sources);
+    assert!(
+        compilation.success(),
+        "caturra rejected {class_name}: {:?}",
+        compilation.diagnostics
+    );
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::with_input(Vec::<String>::new());
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("class loads");
+    }
+    vm.run_main(class_name, &[]).err().map(|e| e.to_string())
+}
+
 /// The same, for a program that reads a data FILE beside it.
 macro_rules! differential_test_files {
     ($name:ident, $class:literal, $source:literal, $files:expr) => {
@@ -36121,7 +36180,10 @@ fn every_divergence_pin_is_written_down() {
     let mut unnamed: Vec<&str> = Vec::new();
     let mut lines = source.lines().peekable();
     while let Some(line) = lines.next() {
-        if !(line.starts_with("stricter_than_javac!") || line.starts_with("looser_than_javac!")) {
+        if !(line.starts_with("stricter_than_javac!")
+            || line.starts_with("looser_than_javac!")
+            || line.starts_with("refused_at_run!"))
+        {
             continue;
         }
         let Some(name) = lines.peek().map(|next| next.trim().trim_end_matches(',')) else {
@@ -40911,7 +40973,10 @@ public class Imported {
         System.out.println(big.test(2) + " " + IntStream.of(1, 2).sum());
         System.out.println(Pattern.compile("a+").matcher("aa").matches());
         System.out.println(StandardCharsets.UTF_8);
-        Field[] fields = "x".getClass().getDeclaredFields();
+        // A class the PROGRAM declares: reflecting on a library class's
+        // members is refused now, and this pin is about the import that
+        // provides the name `Field`, not about what String declares.
+        Field[] fields = new Imported().getClass().getDeclaredFields();
         System.out.println(fields.length >= 0);
     }
 }
@@ -53132,4 +53197,156 @@ public class FrozenNoMatch {
   }
 }
 "#
+);
+
+// Reflection sees INHERITED members. `getMethods` walks the superclass chain,
+// then the interfaces (a default method counts), and ends at
+// `java.lang.Object`'s nine public methods; `getMethod(name)` finds any of
+// them. caturra searched the one class only, so a getter a student inherited
+// was reported missing — and `java.lang.Object`'s own members, which every
+// hierarchy walk ends at, are recorded from a real JDK rather than answered as
+// an empty list.
+differential_test!(
+    the_members_a_class_inherits,
+    "InheritedMembers",
+    r#"
+import java.lang.reflect.*;
+import java.util.*;
+public class InheritedMembers {
+  interface Face { default String hi() { return "face"; } String must(); }
+  static class Base implements Face {
+    public String must() { return "b"; }
+    public String pub() { return "p"; }
+    String pkg() { return "k"; }
+    private String priv() { return "v"; }
+  }
+  static class Kid extends Base { public String kidOnly() { return "k"; } }
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static void names(String l, Method[] ms) {
+    List<String> out = new ArrayList<>();
+    for (Method m : ms) out.add(m.getName());
+    Collections.sort(out);
+    System.out.println(l + " " + out);
+  }
+  public static void main(String[] a) {
+    names("getMethods", Kid.class.getMethods());
+    names("declared", Kid.class.getDeclaredMethods());
+    names("object", Object.class.getDeclaredMethods());
+    s("m-pub", () -> Kid.class.getMethod("pub"));
+    s("m-must", () -> Kid.class.getMethod("must"));
+    s("m-hi", () -> Kid.class.getMethod("hi"));
+    s("m-pkg", () -> Kid.class.getMethod("pkg"));
+    s("m-ts", () -> Kid.class.getMethod("toString"));
+    s("d-pub", () -> Kid.class.getDeclaredMethod("pub"));
+    s("o-ctor", () -> Object.class.getDeclaredConstructor());
+    s("o-fields", () -> Object.class.getDeclaredFields().length);
+    s("o-nested", () -> Object.class.getDeclaredClasses().length);
+    System.out.println(Arrays.toString(int.class.getDeclaredMethods()));
+    System.out.println(Arrays.toString(int[].class.getDeclaredFields()));
+  }
+}
+"#
+);
+
+// `Method.invoke` dispatches DYNAMICALLY — "overriding based on the runtime
+// type of obj", the same rule `invokevirtual` follows. Only the DECLARING
+// class was searched, so a method looked up on a superclass and invoked on a
+// subclass instance ran the superclass body: a validator testing that a
+// student overrode a method found the parent's answer and graded the override
+// as if it were not there. A private method is not virtual, and neither is a
+// static one.
+differential_test!(
+    which_body_a_reflective_call_runs,
+    "ReflectiveDispatch",
+    r#"
+import java.lang.reflect.*;
+public class ReflectiveDispatch {
+  interface Face { default String hi() { return "face"; } String must(); }
+  static abstract class Abs implements Face { abstract String must2(); String plain() { return "abs"; } }
+  static class Base extends Abs {
+    public String must() { return "base-must"; }
+    String must2() { return "base-must2"; }
+    String speak() { return "base"; }
+    private String secret() { return "base-secret"; }
+    static String stat() { return "base-stat"; }
+    String callsSecret() throws Exception {
+      Method m = Base.class.getDeclaredMethod("secret");
+      m.setAccessible(true);
+      return (String) m.invoke(this);
+    }
+  }
+  static class Kid extends Base {
+    public String must() { return "kid-must"; }
+    String must2() { return "kid-must2"; }
+    String speak() { return "kid"; }
+    private String secret() { return "kid-secret"; }
+    static String stat() { return "kid-stat"; }
+  }
+  static class Quiet extends Base {}
+  static class Plain {}
+  static class Nice { public String toString() { return "nice"; } public int hashCode() { return 7; } }
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    Kid kid = new Kid();
+    s("speak", () -> Base.class.getDeclaredMethod("speak").invoke(kid));
+    s("quiet", () -> Base.class.getDeclaredMethod("speak").invoke(new Quiet()));
+    s("must", () -> Abs.class.getMethod("must").invoke(kid));
+    s("must2", () -> Abs.class.getDeclaredMethod("must2").invoke(kid));
+    s("plain", () -> Abs.class.getDeclaredMethod("plain").invoke(kid));
+    s("face", () -> Face.class.getMethod("hi").invoke(kid));
+    s("stat", () -> Base.class.getDeclaredMethod("stat").invoke(null));
+    s("secret", () -> new Kid().callsSecret());
+    s("wrong", () -> Kid.class.getDeclaredMethod("speak").invoke(new Base()));
+    Plain p = new Plain();
+    Nice n = new Nice();
+    s("plain-ts", () -> Plain.class.getMethod("toString").invoke(p).toString()
+        .startsWith("ReflectiveDispatch$Plain@"));
+    s("plain-hc", () -> Plain.class.getMethod("hashCode").invoke(p).equals(p.hashCode()));
+    s("plain-eq", () -> Plain.class.getMethod("equals", Object.class).invoke(p, p));
+    s("plain-eq2", () -> Plain.class.getMethod("equals", Object.class).invoke(p, n));
+    s("plain-gc", () -> Plain.class.getMethod("getClass").invoke(p));
+    s("nice-ts", () -> Nice.class.getMethod("toString").invoke(n));
+    s("obj-ts", () -> Object.class.getDeclaredMethod("toString").invoke(n));
+  }
+}
+"#
+);
+
+// A library class's MEMBERS cannot be listed or looked up: caturra has no
+// class file for `java.lang.String`, and the empty array it used to answer
+// said that class declares nothing. `java.lang.Object` is the exception —
+// every hierarchy walk ends there, so its members are recorded exactly.
+refused_at_run!(
+    run_no_members_on_a_library_class,
+    "LibraryMembers",
+    "public class LibraryMembers { public static void main(String[] a) { System.out.println(String.class.getDeclaredMethods().length); } }",
+    "is a library class and caturra has no class file for it"
+);
+
+// The other half of the same fact: a method declared on `Object` runs against
+// a class the program declares (the defaults, or the override), but not
+// against a library VALUE, which has no class file to run it from.
+refused_at_run!(
+    run_no_object_method_on_a_library_value,
+    "ObjectOnLibraryValue",
+    "import java.lang.reflect.*;\npublic class ObjectOnLibraryValue { public static void main(String[] a) throws Exception { System.out.println(Object.class.getDeclaredMethod(\"toString\").invoke(\"hi\")); } }",
+    "a library value has no class file here"
+);
+
+// caturra runs one thread, so `Object`'s monitor methods have nothing to do —
+// and a JDK refuses `clone`, `finalize` and `registerNatives` outright for
+// access, which caturra does not model either.
+refused_at_run!(
+    run_no_monitors_through_reflection,
+    "ReflectiveMonitor",
+    "import java.lang.reflect.*;\npublic class ReflectiveMonitor { public static void main(String[] a) throws Exception { Object.class.getDeclaredMethod(\"notify\").invoke(new ReflectiveMonitor()); } }",
+    "caturra runs one thread and holds no monitors"
 );

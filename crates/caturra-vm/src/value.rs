@@ -1137,6 +1137,9 @@ pub enum HeapObject {
         /// The `throws` clause, as source-level names in the order written.
         /// Read once, at lookup, so every renderer of this member agrees.
         throws: Vec<String>,
+        /// An interface method with a BODY. No access flag records it, and a
+        /// JDK writes the word `default` into such a method's `toString`.
+        is_default: bool,
     },
 }
 
