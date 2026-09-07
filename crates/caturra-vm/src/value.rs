@@ -1981,6 +1981,27 @@ impl Heap {
         }
     }
 
+    /// The same text as a JDK would SHOW it: an unpaired surrogate is not a
+    /// character and cannot be encoded, so a JDK substitutes a plain `?` —
+    /// which is what an exception message quoting such a string carries.
+    ///
+    /// Not what `string_text` does, and deliberately so. `?` is a regex
+    /// metacharacter, and substituting it in a string that is about to be
+    /// COMPILED changed the pattern's meaning: `scanner.hasNext(lone)` became
+    /// "Dangling meta character '?'". Data keeps Rust's U+FFFD; only what is
+    /// displayed gets the question mark.
+    #[must_use]
+    pub fn string_display(&self, reference: HeapRef) -> Option<String> {
+        match self.get(reference)? {
+            HeapObject::JavaString(units) => Some(
+                char::decode_utf16(units.iter().copied())
+                    .map(|decoded| decoded.unwrap_or('?'))
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
     /// The string's own UTF-16 units, which `string_text` cannot hand back
     /// faithfully: an unpaired surrogate is a `char` no Rust `String` holds.
     #[must_use]

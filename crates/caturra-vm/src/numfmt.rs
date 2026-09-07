@@ -292,6 +292,18 @@ impl NumberPattern {
         }
     }
 
+    /// The four affixes, for the values that never reach the digits: a JDK
+    /// wraps an INFINITY in them and writes NaN with none at all.
+    #[must_use]
+    pub fn affix(&self, which: Affix) -> &str {
+        match which {
+            Affix::PositivePrefix => &self.positive_prefix,
+            Affix::PositiveSuffix => &self.positive_suffix,
+            Affix::NegativePrefix => &self.negative_prefix,
+            Affix::NegativeSuffix => &self.negative_suffix,
+        }
+    }
+
     /// The pattern a JDK's `toPattern` writes back — which is NOT always the
     /// one handed in: `0` comes back as `#0`, because the width one above the
     /// minimum is written out too. The affixes are echoed as they were WRITTEN.

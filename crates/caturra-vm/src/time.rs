@@ -64,6 +64,14 @@ pub fn day_name(day: u8) -> &'static str {
 
 #[must_use]
 pub fn is_leap_year(year: i32) -> bool {
+    is_leap_year_long(i64::from(year))
+}
+
+/// `Year.isLeap(long)` — the STATIC takes a long and a JDK reads it whole.
+/// Cutting it to an int first answered for a different year entirely
+/// (`isLeap(Long.MAX_VALUE)` became `isLeap(0)`, which is true).
+#[must_use]
+pub fn is_leap_year_long(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 

@@ -15778,3 +15778,123 @@ SCALE, as close to the preferred one as it allows, which is why the answer to
 three digits is `17.0`. `remainder(d, mc)` is defined THROUGH that quotient
 rather than by rounding a remainder. And `pow` with a negative exponent needs a
 precision to divide into — without one it is "Invalid operation".
+
+### The awkward end of every argument (2026-09-07)
+
+The behaviour sweep's argument bank was widened by TYPE twice; its VALUES were
+still `1`, `"ab"` and a single `'q'`. Widening it at the awkward end —
+`Integer.MAX_VALUE`, `Double.NaN`, a NUL, a lone surrogate, a surrogate pair —
+is where a library's own arithmetic and its range complaints live, and it found
+three things a `1` could never reach.
+
+**`codePointBefore` has three readings of one question.** On a `String` and on
+a `StringBuilder` it names the ARGUMENT at both ends (`String index out of
+range: 5`); `Character.codePointBefore(cs, i)` names `i - 1`; and `codePointAt`
+names the length as well (`index 5,length 4`). caturra had the second wording
+everywhere but the negative end, so an index PAST the string fell through to
+`codePointAt`'s message with the index one too low.
+
+**`String.repeat` checks the size before it builds anything**, and says so in
+its own words: `Repeating 4 bytes String 2147483647 times will produce a String
+exceeding maximum size.` The figure is BYTES — one per character while every
+character fits Latin-1, two once one does not — and past that check comes the
+array's own limit, two below `Integer.MAX_VALUE`, which is a different sentence
+again (`Requested array size exceeds VM limit`). caturra allocated until its
+heap gave out, which took a while and said "Java heap space".
+
+**And a regex SEARCH walks its start positions by code point or by code unit,
+depending on the PATTERN.** `java.util.regex` picks `StartS` over `Start` when
+the pattern mentions a supplementary code point or a surrogate —
+`Pattern.isSupplementary` counts a lone surrogate as one — and the difference is
+observable both ways:
+
+- `"\u{1F600}".replaceAll("[\uD800-\uDFFF]", "S")` leaves the emoji WHOLE,
+  because the scan never begins inside a pair. Stepping a unit at a time matched
+  the low half and produced a string cut through the middle of a character —
+  which is a corrupt result, not merely a wrong one.
+- `\X{2}` over a flag emoji really does match starting one unit in
+  (`[1,4)`), because that pattern mentions neither.
+- And a position asked for OUTRIGHT is tried either way: `find()` after a
+  zero-width match resumes one UNIT along, which is how `"\u{1F600}".split("")`
+  answers two lone surrogates.
+
+**The harness learned one thing too.** A widened bank reaches calls that never
+finish, and a `subprocess.TimeoutExpired` killed the whole sweep at whichever
+class hit it first. A timeout is an ANSWER — a run that never ends is as bad as
+a crash — so it is reported like one and the bisect drops the call that caused
+it.
+
+### The limits the same widening reached (2026-09-07)
+
+The widened bank found more than wordings. Four classes produced no comparable
+run at all because caturra **did not finish** — and a run that does not end is
+as bad a answer as a crash, and slower to notice.
+
+A JDK refuses each of these by NUMBER, before it builds anything:
+
+- **`BigInteger` holds at most `Integer.MAX_VALUE` bits**, and a value past
+  that is "BigInteger would overflow supported range". `ONE.flipBit(MAX)` tried
+  to allocate a quarter of a gigabyte of words here and never came back.
+  `clearBit` is the exception — clearing a bit that is already zero grows
+  nothing.
+- **A scale SHIFT is the same question one level up.** `ONE.setScale(MAX)`
+  writes two billion digits and `ONE.divide(x, MAX, HALF_UP)` writes them into
+  a division. A shift that leaves the `int` range is a JDK's "Underflow" — the
+  wording is inverted, because a scale too LARGE is a number too small — and
+  one that stays in range but would not fit a `BigInteger` reports that limit
+  instead.
+- **A capacity hint has one observable moment**: `ensureCapacity` and
+  `setSize` are hints with nothing to see about them until the number is one no
+  array can be, and then they throw at the call
+  (`Requested array size exceeds VM limit`, two below `Integer.MAX_VALUE`).
+- **`Collections.nCopies` is LAZY in a JDK** — it stores the value once and
+  answers `size()` from a number — where caturra's really holds that many
+  references. The array budget says so now rather than trying; the difference
+  is declared in the sweep.
+
+And `java.time` refuses by number too, where caturra clamped:
+`Period.multipliedBy` and `ofWeeks` are `Math.multiplyExact` and not a
+saturation; `Year.isLeap(long)` reads the long whole (cutting it to an int made
+`isLeap(Long.MAX_VALUE)` answer for year 0); `MonthDay.atYear` validates the
+year; and `minusX(Long.MIN_VALUE)`, which cannot be negated, is TWO steps with
+the check BETWEEN them — a JDK's `plusX(Long.MAX_VALUE).plusX(1)` — so it fails
+on the first, one short of where a single sum would land.
+
+**The harness learned two things.** A `subprocess.TimeoutExpired` is an ANSWER
+and no longer kills the sweep. And when a message names neither a line nor a
+signature nor a method, the bisect finds the offending call by BISECTION
+instead of giving up — one refusal with an unrecognised wording used to cost a
+whole class its run.
+
+**And a time of day wraps for every long.** `LocalTime.plusHours(n)` has an
+answer whatever `n` is — the clock comes round — but only if the amount is
+reduced to within a day BEFORE it is scaled and BEFORE the sign is applied.
+Scaling first saturated, so the time moved by `Long.MAX_VALUE` NANOSECONDS
+whatever unit was asked for; negating first lost `Long.MIN_VALUE`, which does
+not fit. A JDK writes both the other way round
+(`plusHours(-(hoursToSubtract % 24))`), and a `Month` and a `DayOfWeek` rotate
+by the same rule.
+
+A DATE has no such answer, and a JDK refuses rather than clamping: `long
+overflow` from `Math.addExact`, or the EpochDay/Year range. caturra's date and
+duration arithmetic still saturates there, which is declared in the sweep with
+its reason — making the whole of `time.rs` fallible is its own sitting, and it
+is the next one this list names.
+
+**And what a message SHOWS.** A JDK cannot encode an unpaired surrogate, so
+every complaint that quotes one shows a plain `?`; Rust cannot hold one either
+and substitutes U+FFFD. Making `string_text` substitute `?` fixed eight
+messages at once and BROKE `Scanner.hasNext(pattern)` — `?` is a regex
+metacharacter, and the pattern's meaning changed. So the rule is split: data
+keeps U+FFFD, a result STRING keeps its units (`Pattern.quote`,
+`Matcher.replaceAll`), and only what is DISPLAYED gets the question mark
+(`string_display`, at about a dozen named message sites).
+
+The same widening's tail: the float parsers strip every character at or below a
+space, not Rust's notion of whitespace, so a NUL string is "empty String";
+`BigDecimal.valueOf` of a NaN or an infinity goes through `Double.toString`, so
+a JDK's parser complains about the first letter it cannot read (the SIGN is
+read first and is not the complaint); a length no array can BE names the VM's
+limit rather than the heap; NaN and the infinities never reach a number pattern
+at all; and a writer's range complaint computes `off + len` as a plain int
+addition, which WRAPS.

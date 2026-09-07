@@ -54901,3 +54901,359 @@ stricter_than_javac!(
     "StrictAddAllPoly",
     "import java.util.*;\npublic class StrictAddAllPoly { static boolean r() { return Collections.addAll(List.of(\"a\", \"b\"), new Object[] {\"a\"}); } }"
 );
+
+// The bank widened at the AWKWARD end — `Integer.MAX_VALUE`, `Double.NaN`, a
+// NUL, a lone surrogate — which is where a library's own arithmetic and its
+// range complaints live. Three findings, none reachable with a 1 and a "ab".
+//
+// `codePointBefore` names the ARGUMENT at both ends on a String and on a
+// builder, where `Character.codePointBefore(cs, i)` names `i - 1` and
+// `codePointAt` names the length as well: three readings of one question, and
+// caturra had the second everywhere.
+//
+// `repeat` checks the SIZE before it builds anything, in BYTES — one per
+// character while every character fits Latin-1, two once one does not — and
+// past that check the array's own limit, two below `Integer.MAX_VALUE`.
+// caturra allocated until its heap gave out, which took a while and said
+// "Java heap space".
+//
+// And a regex SEARCH walks its start positions by code point when the pattern
+// mentions a supplementary code point or a surrogate (`Pattern.isSupplementary`
+// counts a lone one), and by code UNIT when it mentions neither. It is
+// observable both ways: `[\uD800-\uDFFF]` leaves an astral character whole,
+// and `\X{2}` really does match a flag emoji starting one unit in.
+differential_test!(
+    the_awkward_end_of_every_argument,
+    "AwkwardValues",
+    r#"
+import java.util.regex.*;
+public class AwkwardValues {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  static String show(String s) {
+    StringBuilder b = new StringBuilder();
+    for (int i = 0; i < s.length(); i++) b.append((int) s.charAt(i)).append(',');
+    return b.toString();
+  }
+  public static void main(String[] a) {
+    String four = "abcd";
+    StringBuilder sb = new StringBuilder("abcd");
+    // `codePointBefore` names the ARGUMENT at both ends, on a String and on a
+    // builder; `Character.codePointBefore(cs, i)` names `i - 1`; and
+    // `codePointAt` names the length as well. Three readings of one question.
+    s("str-before-0", () -> four.codePointBefore(0));
+    s("str-before-5", () -> four.codePointBefore(5));
+    s("str-before-max", () -> four.codePointBefore(Integer.MAX_VALUE));
+    s("str-before-min", () -> four.codePointBefore(Integer.MIN_VALUE));
+    s("str-before-big", () -> four.codePointBefore(1000000));
+    s("str-before-ok", () -> four.codePointBefore(2));
+    s("cs-before-0", () -> Character.codePointBefore(four, 0));
+    s("cs-before-5", () -> Character.codePointBefore(four, 5));
+    s("cs-before-max", () -> Character.codePointBefore(four, Integer.MAX_VALUE));
+    s("sb-before-0", () -> sb.codePointBefore(0));
+    s("sb-before-5", () -> sb.codePointBefore(5));
+    s("sb-before-max", () -> sb.codePointBefore(Integer.MAX_VALUE));
+    s("str-at-5", () -> four.codePointAt(5));
+    s("cs-at-5", () -> Character.codePointAt(four, 5));
+    s("sb-at-5", () -> sb.codePointAt(5));
+    s("str-at-max", () -> four.codePointAt(Integer.MAX_VALUE));
+    s("cpCount-max", () -> four.codePointCount(0, Integer.MAX_VALUE));
+    s("offsetByCP-max", () -> four.offsetByCodePoints(0, Integer.MAX_VALUE));
+    s("charAt-max", () -> four.charAt(Integer.MAX_VALUE));
+    s("substring-max", () -> four.substring(Integer.MAX_VALUE));
+    // `repeat` checks the SIZE before it builds anything, and says so in its
+    // own words. The figure is BYTES: one per character while every character
+    // fits Latin-1, two once one does not.
+    s("repeat-max", () -> four.repeat(Integer.MAX_VALUE));
+    s("repeat-min", () -> four.repeat(Integer.MIN_VALUE));
+    s("repeat-0", () -> four.repeat(0));
+    s("repeat-wide-max", () -> "\u00e9\u4e2d".repeat(Integer.MAX_VALUE));
+    s("repeat-wide-big", () -> "\u00e9\u4e2d".repeat(1000000000));
+    s("repeat-two-big", () -> "ab".repeat(1500000000));
+    s("repeat-two-half", () -> "ab".repeat(1073741824));
+    s("repeat-one-max", () -> "a".repeat(Integer.MAX_VALUE));
+    s("repeat-empty-max", () -> "".repeat(Integer.MAX_VALUE).length());
+    // A pattern that MENTIONS a surrogate walks its start positions by code
+    // point, so it never begins inside a pair; one that mentions none steps by
+    // unit, which `\X{2}` over a flag emoji depends on.
+    String pair = "\uD83D\uDE00";
+    String cls = "[\uD800-\uDFFF]";
+    s("class-replace", () -> show(pair.replaceAll(cls, "S")));
+    s("class-find", () -> { Matcher m = Pattern.compile(cls).matcher(pair); return m.find() ? m.start() + ".." + m.end() : "none"; });
+    s("low-only-find", () -> { Matcher m = Pattern.compile("[\uDC00-\uDFFF]").matcher(pair); return m.find() ? m.start() + ".." + m.end() : "none"; });
+    s("literal-low-find", () -> { Matcher m = Pattern.compile("\uDE00").matcher(pair); return m.find() ? m.start() + ".." + m.end() : "none"; });
+    s("dot-find", () -> { Matcher m = Pattern.compile(".").matcher(pair); return m.find() ? m.start() + ".." + m.end() : "none"; });
+    s("class-in-mixed", () -> { Matcher m = Pattern.compile(cls).matcher("a" + pair + "b"); return m.find() ? m.start() + ".." + m.end() : "none"; });
+    s("split-empty", () -> show(String.join("|", pair.split(""))));
+    s("split-class", () -> show(String.join("|", pair.split(cls))));
+    s("grapheme-two", () -> { Matcher m = Pattern.compile("\\X{2}").matcher("\uD83C\uDDFA\uD83C\uDDF8"); return m.find() ? m.start() + ".." + m.end() : "none"; });
+    s("pair-chars", () -> pair.chars().count());
+    s("pair-codepoints", () -> pair.codePoints().count());
+  }
+}
+"#
+);
+
+// ...and the LIMITS the same widening reached. Every one of these was a run
+// that did not END — a `BigInteger` past its supported range, a scale shift of
+// two billion digits, a copies list of two billion references — which is as bad
+// an answer as a crash and slower to notice.
+//
+// A JDK refuses each of them by NUMBER, before building anything: "BigInteger
+// would overflow supported range" for a magnitude, "Underflow" for a scale
+// (its wording is inverted, because a scale too large is a number too small),
+// and "Requested array size exceeds VM limit" for a capacity. `Period` and
+// `Year` refuse by number too — `multiplyExact` rather than a clamp — and
+// `minusX(Long.MIN_VALUE)`, which cannot be negated, is TWO steps with the
+// check between them, so it fails on the first.
+differential_test!(
+    the_limits_the_same_widening_reached,
+    "AwkwardLimits",
+    r#"
+import java.math.*;
+import java.time.*;
+import java.util.*;
+public class AwkwardLimits {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    BigDecimal one = BigDecimal.ONE;
+    BigDecimal half = new BigDecimal("2.5");
+    s("flip-max", () -> BigInteger.ONE.flipBit(Integer.MAX_VALUE).signum());
+    s("set-max", () -> BigInteger.ONE.setBit(Integer.MAX_VALUE).signum());
+    s("clear-max", () -> BigInteger.ONE.clearBit(Integer.MAX_VALUE).signum());
+    s("test-max", () -> BigInteger.ONE.testBit(Integer.MAX_VALUE));
+    s("shift-max", () -> BigInteger.ONE.shiftLeft(Integer.MAX_VALUE).signum());
+    s("shift-min", () -> BigInteger.ONE.shiftRight(Integer.MIN_VALUE).signum());
+    s("pow-max", () -> BigInteger.ONE.pow(Integer.MAX_VALUE).signum());
+    s("flip-neg", () -> BigInteger.ONE.flipBit(-1));
+    s("test-neg", () -> BigInteger.ONE.testBit(-1));
+    s("bigdec-scale-max", () -> BigDecimal.ONE.setScale(Integer.MAX_VALUE).signum());
+    s("bigdec-movepoint", () -> BigDecimal.ONE.movePointLeft(Integer.MAX_VALUE).signum());
+    s("bigdec-pow-max", () -> BigDecimal.ONE.pow(Integer.MAX_VALUE).signum());
+    s("bigdec-scalebypow", () -> BigDecimal.ONE.scaleByPowerOfTen(Integer.MAX_VALUE).signum());
+    s("ncopies-neg", () -> Collections.nCopies(-2, "x").size());
+    s("divide-scale-max", () -> one.divide(half, Integer.MAX_VALUE, RoundingMode.HALF_UP).scale());
+    s("divide-scale-min", () -> one.divide(half, Integer.MIN_VALUE, RoundingMode.HALF_UP).scale());
+    s("divide-scale-big", () -> one.divide(half, 1000000, RoundingMode.HALF_UP).scale());
+    s("divide-scale-2", () -> one.divide(half, 2, RoundingMode.HALF_UP));
+    s("setscale-max", () -> one.setScale(Integer.MAX_VALUE).scale());
+    s("setscale-min", () -> one.setScale(Integer.MIN_VALUE, RoundingMode.HALF_UP).scale());
+    s("movepointright-max", () -> one.movePointRight(Integer.MAX_VALUE).scale());
+    s("scalebypow-min", () -> one.scaleByPowerOfTen(Integer.MIN_VALUE).scale());
+    s("period-mul-max", () -> Period.ofDays(1).multipliedBy(Integer.MAX_VALUE));
+    s("period-mul-min", () -> Period.ofDays(1).multipliedBy(Integer.MIN_VALUE));
+    s("period-mul-2", () -> Period.ofDays(3).multipliedBy(2));
+    s("period-weeks-max", () -> Period.ofWeeks(Integer.MAX_VALUE));
+    s("period-weeks-2", () -> Period.ofWeeks(2));
+    s("period-minus-min", () -> Period.ofMonths(3).minusMonths(Long.MIN_VALUE));
+    s("period-minusyears-min", () -> Period.ofYears(3).minusYears(Long.MIN_VALUE));
+    s("period-plus-max", () -> Period.ofDays(1).plusDays(Long.MAX_VALUE));
+    s("year-isleap-max", () -> Year.isLeap(Long.MAX_VALUE));
+    s("year-isleap-min", () -> Year.isLeap(Long.MIN_VALUE));
+    s("year-isleap-2024", () -> Year.isLeap(2024));
+    s("year-minus-min", () -> Year.of(2024).minusYears(Long.MIN_VALUE));
+    s("ym-minus-min", () -> YearMonth.of(2024, 3).minusYears(Long.MIN_VALUE));
+    s("year-plus-max", () -> Year.of(2024).plusYears(Long.MAX_VALUE));
+    s("monthday-atyear-min", () -> MonthDay.of(3, 14).atYear(Integer.MIN_VALUE));
+    s("monthday-atyear-ok", () -> MonthDay.of(3, 14).atYear(2024));
+    s("arraylist-capacity-max", () -> { ArrayList<String> l = new ArrayList<>(); l.ensureCapacity(Integer.MAX_VALUE); return "ok"; });
+    s("arraylist-capacity-ok", () -> { ArrayList<String> l = new ArrayList<>(); l.ensureCapacity(30); return "ok"; });
+    s("vector-capacity-max", () -> { Vector<String> v = new Vector<>(); v.ensureCapacity(Integer.MAX_VALUE); return "ok"; });
+    s("vector-setsize-max", () -> { Vector<String> v = new Vector<>(); v.setSize(Integer.MAX_VALUE); return "ok"; });
+    s("vector-setsize-ok", () -> { Vector<String> v = new Vector<>(); v.setSize(2); return v; });
+  }
+}
+"#
+);
+
+// A time of DAY wraps rather than carrying, so it has an answer for every long
+// — but only if the amount is reduced to within a day BEFORE it is scaled and
+// BEFORE the sign is applied. Scaling first saturated, and the time then moved
+// by `Long.MAX_VALUE` NANOSECONDS whatever unit was asked for; negating first
+// lost `Long.MIN_VALUE`, which does not fit. A JDK writes both the other way
+// round (`plusHours(-(hoursToSubtract % 24))`), and a `Month` and a
+// `DayOfWeek` rotate by the same rule.
+differential_test!(
+    a_time_of_day_wraps_for_every_long,
+    "TimeWrap",
+    r#"
+import java.time.*;
+public class TimeWrap {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    LocalTime t = LocalTime.of(10, 15);
+    s("plusHours-max", () -> t.plusHours(Long.MAX_VALUE));
+    s("plusHours-min", () -> t.plusHours(Long.MIN_VALUE));
+    s("minusHours-max", () -> t.minusHours(Long.MAX_VALUE));
+    s("minusHours-min", () -> t.minusHours(Long.MIN_VALUE));
+    s("plusMinutes-max", () -> t.plusMinutes(Long.MAX_VALUE));
+    s("minusMinutes-min", () -> t.minusMinutes(Long.MIN_VALUE));
+    s("plusSeconds-max", () -> t.plusSeconds(Long.MAX_VALUE));
+    s("minusSeconds-min", () -> t.minusSeconds(Long.MIN_VALUE));
+    s("plusNanos-max", () -> t.plusNanos(Long.MAX_VALUE));
+    s("minusNanos-min", () -> t.minusNanos(Long.MIN_VALUE));
+    s("plusHours-2", () -> t.plusHours(2));
+    s("minusHours-2", () -> t.minusHours(2));
+    s("month-plus-max", () -> Month.MARCH.plus(Long.MAX_VALUE));
+    s("month-minus-min", () -> Month.MARCH.minus(Long.MIN_VALUE));
+    s("month-plus-2", () -> Month.MARCH.plus(2));
+    s("day-plus-max", () -> DayOfWeek.MONDAY.plus(Long.MAX_VALUE));
+    s("day-minus-min", () -> DayOfWeek.MONDAY.minus(Long.MIN_VALUE));
+  }
+}
+"#
+);
+
+// Two more the same widening reached. A length no array can BE is a different
+// sentence from a length there is no room for — HotSpot's limit is two below
+// `Integer.MAX_VALUE`, the header takes the rest — and `Arrays.copyOf` had its
+// own cap that only ever said the second.
+//
+// And NaN and the infinities never reach a number pattern at all: a JDK writes
+// the NaN symbol ALONE (no prefix, no suffix, not even the `%` of a percent
+// format) and an infinity with the affixes and nothing else, so a "#0.00"
+// prints one character. Falling through to the decimal path made every one of
+// them "0". (Two hashes: the source holds a `"#`.)
+differential_test!(
+    the_numbers_no_pattern_reaches,
+    "VmLimit",
+    r##"
+import java.util.*;
+import java.text.*;
+public class VmLimit {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  static String show(String s) {
+    StringBuilder b = new StringBuilder();
+    for (int i = 0; i < s.length(); i++) b.append((int) s.charAt(i)).append(',');
+    return b.toString();
+  }
+  public static void main(String[] a) {
+    s("copyof-max", () -> Arrays.copyOf(new int[] {1}, Integer.MAX_VALUE).length);
+    s("copyof-obj-max", () -> Arrays.copyOf(new String[] {"a"}, Integer.MAX_VALUE).length);
+    s("copyof-neg", () -> Arrays.copyOf(new int[] {1}, -2).length);
+    s("copyof-3", () -> Arrays.toString(Arrays.copyOf(new int[] {1}, 3)));
+    s("new-array-max", () -> new int[Integer.MAX_VALUE].length);
+    DecimalFormat d = new DecimalFormat("#0.00");
+    NumberFormat n = NumberFormat.getInstance();
+    s("dec-nan", () -> show(d.format(Double.NaN)));
+    s("dec-inf", () -> show(d.format(Double.POSITIVE_INFINITY)));
+    s("dec-neginf", () -> show(d.format(Double.NEGATIVE_INFINITY)));
+    s("num-nan", () -> show(n.format(Double.NaN)));
+    s("num-inf", () -> show(n.format(Double.POSITIVE_INFINITY)));
+    s("pct-nan", () -> show(NumberFormat.getPercentInstance().format(Double.NaN)));
+    s("pct-inf", () -> show(NumberFormat.getPercentInstance().format(Double.POSITIVE_INFINITY)));
+    s("dec-float-nan", () -> show(d.format(Float.NaN)));
+    s("dec-plain", () -> d.format(1.5));
+  }
+}
+"##
+);
+
+// What a message SHOWS, and what it must not change. A JDK cannot encode an
+// unpaired surrogate, so every complaint that quotes one shows a plain `?`;
+// Rust cannot hold one either and substitutes U+FFFD. Doing that substitution
+// in `string_text` fixed eight messages and BROKE `Scanner.hasNext(pattern)` —
+// `?` is a regex metacharacter, and the pattern's meaning changed. So data
+// keeps U+FFFD, a result STRING keeps its units, and only what is displayed
+// gets the question mark.
+//
+// With them: a NUL is trimmed by the float parsers (they strip every character
+// at or below a space, which `trim()` does not), and `BigDecimal.valueOf` of a
+// NaN or an infinity goes through `Double.toString`, so a JDK's parser
+// complains about the first letter it cannot read — the SIGN is read first and
+// is not the complaint.
+differential_test!(
+    what_a_message_shows,
+    "Displayed",
+    r#"
+import java.math.*;
+import java.nio.charset.*;
+public class Displayed {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  static String show(String q) {
+    StringBuilder b = new StringBuilder();
+    for (int i = 0; i < q.length(); i++) b.append((int) q.charAt(i)).append(',');
+    return b.toString();
+  }
+  public static void main(String[] a) {
+    String lone = "\uD83D";
+    String nul = "\u0000";
+    s("int-parse", () -> Integer.parseInt(lone));
+    s("long-decode", () -> Long.decode(lone));
+    s("short-valueof", () -> Short.valueOf(lone));
+    s("double-parse", () -> Double.parseDouble(lone));
+    s("rounding-valueof", () -> RoundingMode.valueOf(lone));
+    s("charset-forname", () -> Charset.forName(lone));
+    s("charset-supported", () -> Charset.isSupported(lone));
+    s("uuid", () -> java.util.UUID.fromString(lone));
+    s("bigdec-nan", () -> BigDecimal.valueOf(Double.NaN));
+    s("bigdec-inf", () -> BigDecimal.valueOf(Double.POSITIVE_INFINITY));
+    s("bigdec-neginf", () -> BigDecimal.valueOf(Double.NEGATIVE_INFINITY));
+    s("bigdec-plain", () -> BigDecimal.valueOf(1.5));
+    s("double-nul", () -> Double.parseDouble(nul));
+    s("float-nul", () -> Float.parseFloat(nul));
+    s("double-nul-pad", () -> Double.parseDouble(nul + "1.5" + nul));
+    s("scanner-lone", () -> new java.util.Scanner("abc").hasNext(lone));
+    s("pattern-quote", () -> show(java.util.regex.Pattern.quote(lone)));
+    s("quote-replacement", () -> show(java.util.regex.Matcher.quoteReplacement(lone)));
+  }
+}
+"#
+);
+
+// The same two facts one more layer out: a reflection complaint SHOWS the name
+// it was given, and a writer's range complaint computes `off + len` as a plain
+// int addition — which WRAPS. Saturating instead said `end 2147483647` where a
+// JDK says `end -2`.
+differential_test!(
+    what_a_reflection_complaint_shows,
+    "Reflected",
+    r#"
+import java.io.*;
+public class Reflected {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  int n = 1;
+  public static void main(String[] a) {
+    String lone = "\uD83D";
+    s("forName", () -> Class.forName(lone));
+    s("getField", () -> Reflected.class.getField(lone));
+    s("getDeclaredField", () -> Reflected.class.getDeclaredField(lone));
+    s("getMethod", () -> Reflected.class.getMethod(lone, String.class));
+    s("getDeclaredMethod", () -> Reflected.class.getDeclaredMethod(lone, String.class));
+    // `off + len` as a plain int addition, which WRAPS.
+    StringWriter w = new StringWriter();
+    s("write-max-max", () -> { w.write("ab", Integer.MAX_VALUE, Integer.MAX_VALUE); return "ok"; });
+    s("write-min-min", () -> { w.write("a", Integer.MIN_VALUE, Integer.MIN_VALUE); return "ok"; });
+    s("write-max-1", () -> { w.write("ab", Integer.MAX_VALUE, 1); return "ok"; });
+    s("write-0-9", () -> { w.write("ab", 0, 9); return "ok"; });
+    s("write-ok", () -> { w.write("abc", 1, 2); return w.toString(); });
+    PrintWriter p = new PrintWriter(new StringWriter());
+    s("pw-write-max-max", () -> { p.write("ab", Integer.MAX_VALUE, Integer.MAX_VALUE); return "ok"; });
+    s("pw-write-min-min", () -> { p.write("a", Integer.MIN_VALUE, Integer.MIN_VALUE); return "ok"; });
+  }
+}
+"#
+);

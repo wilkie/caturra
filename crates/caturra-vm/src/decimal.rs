@@ -108,8 +108,40 @@ pub enum DecError {
     Overflow,
     /// `pow` with a negative exponent.
     InvalidOperation,
+    /// A SCALE computation that leaves the `int` range. A JDK words it
+    /// "Underflow" — inverted from what one expects, because a scale too LARGE
+    /// is a number too small.
+    Underflow,
+    /// A scale that stays in range but whose unscaled value would not fit a
+    /// `BigInteger` — the same limit `BigInteger` itself reports.
+    HugeMagnitude,
     /// `sqrt` of a negative value.
     NegativeSqrt,
+}
+/// Whether a scale SHIFT can be carried out at all.
+///
+/// Shifting by more than the `int` range is a JDK's "Underflow" — its wording
+/// is inverted, because a scale too large is a number too small — and a shift
+/// that stays in range but would build an unscaled value past `BigInteger`'s
+/// own limit reports that limit instead. Unchecked, `ONE.setScale(MAX)` and
+/// `ONE.divide(x, MAX, HALF_UP)` each tried to write two billion digits and
+/// never came back.
+fn scale_shift_check(shift: i64, precision: u32) -> Result<(), DecError> {
+    if i32::try_from(shift).is_err() {
+        return Err(DecError::Underflow);
+    }
+    // Ten to the n-th needs a little over 3.32 bits per digit; four is a
+    // generous round number and the limit is `Integer.MAX_VALUE` bits. Raising
+    // the scale builds that number; LOWERING it divides by one, which is just
+    // as much work — and a JDK words the two differently.
+    if (u64::from(precision) + shift.unsigned_abs() * 4) > u64::from(i32::MAX.cast_unsigned()) {
+        return Err(if shift > 0 {
+            DecError::HugeMagnitude
+        } else {
+            DecError::Underflow
+        });
+    }
+    Ok(())
 }
 
 impl BigDec {
@@ -281,6 +313,7 @@ impl BigDec {
         // Compute `this / other` at the requested scale: the numerator is
         // shifted so the integer division lands exactly there.
         let lift = i64::from(scale) - i64::from(self.scale) + i64::from(other.scale);
+        scale_shift_check(lift, self.precision())?;
         let (numerator, denominator) = if lift >= 0 {
             (
                 shift_unscaled(&self.unscaled, clamp_scale(lift)),
@@ -336,6 +369,7 @@ impl BigDec {
     /// A rounding that `UNNECESSARY` forbids.
     pub fn with_scale(&self, scale: i32, mode: Rounding) -> Result<Self, DecError> {
         let shift = i64::from(scale) - i64::from(self.scale);
+        scale_shift_check(shift, self.precision())?;
         if shift >= 0 {
             return Ok(Self::new(
                 shift_unscaled(&self.unscaled, clamp_scale(shift)),
@@ -441,7 +475,9 @@ impl BigDec {
         // A first guess of the right ORDER: half the digits before the point.
         let mut guess = {
             let exponent = i32::try_from(self.precision()).unwrap_or(0) - self.scale();
-            Self::from_i64(1).scale_by_power_of_ten(exponent.div_euclid(2) + 1)
+            Self::from_i64(1)
+                .scale_by_power_of_ten(exponent.div_euclid(2) + 1)
+                .unwrap_or_else(|_| Self::from_i64(1))
         };
         for _ in 0..100 {
             let quotient = self.divide_with_precision(&guess, working, mode)?;
@@ -505,23 +541,34 @@ impl BigDec {
 
     /// `movePointLeft`/`movePointRight`, which never leave a NEGATIVE scale
     /// behind — unlike `scaleByPowerOfTen`, which does.
-    #[must_use]
-    pub fn move_point(&self, by: i32) -> Self {
+    /// `movePointLeft`/`movePointRight` — the same digits with the point moved.
+    /// A move that takes the scale BELOW zero pads the value out with that many
+    /// zeroes, so it can run past what a `BigInteger` holds.
+    ///
+    /// # Errors
+    /// A padding that would not fit.
+    pub fn move_point(&self, by: i32) -> Result<Self, DecError> {
         let scale = clamp_scale(i64::from(self.scale) + i64::from(by));
         let moved = Self::new(self.unscaled.clone(), scale);
         if scale < 0 {
-            Self::new(shift_unscaled(&moved.unscaled, -scale), 0)
-        } else {
-            moved
+            scale_shift_check(i64::from(-scale), self.precision())?;
+            return Ok(Self::new(shift_unscaled(&moved.unscaled, -scale), 0));
         }
+        Ok(moved)
     }
 
-    #[must_use]
-    pub fn scale_by_power_of_ten(&self, by: i32) -> Self {
-        Self::new(
-            self.unscaled.clone(),
-            clamp_scale(i64::from(self.scale) - i64::from(by)),
-        )
+    /// `scaleByPowerOfTen(n)` — the same digits at a scale `n` lower. Nothing
+    /// is built, but the SCALE must stay an int, and a JDK says "Underflow"
+    /// when it would not.
+    ///
+    /// # Errors
+    /// A scale that leaves the `int` range.
+    pub fn scale_by_power_of_ten(&self, by: i32) -> Result<Self, DecError> {
+        let scale = i64::from(self.scale) - i64::from(by);
+        if i32::try_from(scale).is_err() {
+            return Err(DecError::Underflow);
+        }
+        Ok(Self::new(self.unscaled.clone(), clamp_scale(scale)))
     }
 
     /// The unit in the last place: 1 at this value's scale.

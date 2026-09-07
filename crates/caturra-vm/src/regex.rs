@@ -30,6 +30,16 @@ pub struct Regex {
     group_count: usize,
     /// `(?<name>X)` names, and the group each stands for.
     names: Vec<(String, usize)>,
+    /// Whether the SEARCH steps by code point rather than by code unit —
+    /// `java.util.regex`'s `StartS` rather than `Start`, chosen when the
+    /// pattern mentions a supplementary code point or a surrogate
+    /// (`Pattern.isSupplementary` counts a lone surrogate as one).
+    ///
+    /// It is observable. `[\uD800-\uDFFF]` mentions surrogates, so the scan
+    /// never begins inside a pair and an astral character is left whole; `\X`
+    /// mentions none, so the scan tries every unit and `\X{2}` really does
+    /// match a flag emoji starting one unit in.
+    steps_by_code_point: bool,
 }
 
 /// A syntax error, carrying what Java's `PatternSyntaxException` reports.
@@ -2660,6 +2670,40 @@ pub struct Match {
     pub groups: Vec<Option<(usize, usize)>>,
 }
 
+/// Whether a compiled pattern MENTIONS a supplementary code point or a
+/// surrogate — `java.util.regex.Pattern.isSupplementary`, which counts a lone
+/// surrogate as one. It is what picks `StartS` over `Start`, and so whether the
+/// search walks its start positions by code point or by code unit.
+fn mentions_supplementary(node: &Node) -> bool {
+    let point = |value: u32| value >= 0x1_0000 || (0xD800..0xE000).contains(&value);
+    match node {
+        Node::Literal(unit) => point(u32::from(*unit)),
+        Node::Class(class) => class.mentions_supplementary(),
+        Node::Concat(nodes) | Node::Alt(nodes) => nodes.iter().any(mentions_supplementary),
+        Node::Repeat { node, .. } | Node::Group { node, .. } | Node::Look { node, .. } => {
+            mentions_supplementary(node)
+        }
+        _ => false,
+    }
+}
+
+impl CharClass {
+    /// Whether any single or range BOUND in the class is one — the bounds are
+    /// what a JDK appends, and what it asks about.
+    fn mentions_supplementary(&self) -> bool {
+        let point = |value: u32| value >= 0x1_0000 || (0xD800..0xE000).contains(&value);
+        self.items.iter().any(|item| match item {
+            ClassItem::Single(single) => point(*single),
+            ClassItem::Range(low, high) => point(*low) || point(*high),
+            ClassItem::Nested(nested) => nested.mentions_supplementary(),
+            ClassItem::Predefined(_) | ClassItem::Named { .. } => false,
+        }) || self
+            .intersections
+            .iter()
+            .any(CharClass::mentions_supplementary)
+    }
+}
+
 impl Regex {
     /// Parse `pattern`, or report where it is malformed.
     pub fn new(pattern: &[u16]) -> Result<Regex, SyntaxError> {
@@ -2680,10 +2724,12 @@ impl Regex {
                 isize::try_from(parser.at).unwrap_or(0) - 1,
             ));
         }
+        let steps_by_code_point = mentions_supplementary(&node);
         Ok(Regex {
             node,
             group_count: parser.groups,
             names: parser.names,
+            steps_by_code_point,
         })
     }
 
@@ -2729,6 +2775,27 @@ impl Regex {
         // which is a different string on the screen.
         let mut caps: Captures = vec![None; self.group_count + 1];
         for start in from..=bounds.end {
+            // A pattern that MENTIONS a supplementary code point or a
+            // surrogate advances by code point, so the scan never begins
+            // inside a pair — which is why `[\uD800-\uDFFF]`, and even a lone
+            // low surrogate written as a literal, find nothing in an astral
+            // character. A pattern that mentions neither steps by unit, which
+            // is why `\X{2}` really does match a flag emoji one unit in.
+            //
+            // A position asked for OUTRIGHT is still tried either way:
+            // `find()` after a zero-width match resumes one UNIT along, which
+            // is how `"\u{1F600}".split("")` answers two lone surrogates.
+            if self.steps_by_code_point
+                && start > from
+                && input
+                    .get(start.wrapping_sub(1))
+                    .is_some_and(|unit| (0xD800..0xDC00).contains(unit))
+                && input
+                    .get(start)
+                    .is_some_and(|unit| (0xDC00..0xE000).contains(unit))
+            {
+                continue;
+            }
             if let Some(end) = matcher.run(&self.node, start, &mut caps, &Cont::Done) {
                 caps[0] = Some((start, end));
                 return Attempt {

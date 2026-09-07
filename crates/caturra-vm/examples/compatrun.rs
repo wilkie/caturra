@@ -77,9 +77,22 @@ fn main() {
         // candidate lines — the coverage sweep, deciding which call to leave
         // out — had to guess from the wording and gave up when it could not.
         let line = first.and_then(|d| d.span).map_or(0, |span| span.start.line);
+        // ...and EVERY line, not only the first's. javac reports the whole
+        // list and its reader drops them all at once; caturra reports the
+        // whole list too, and passing only one of them made a probe with a
+        // hundred bad calls take a hundred rounds — which is how
+        // `java.util.Arrays` ran the sweep's retry budget out.
+        let mut lines: Vec<String> = compilation
+            .diagnostics
+            .iter()
+            .filter(|d| format!("{:?}", d.severity) == "Error")
+            .filter_map(|d| d.span.map(|span| span.start.line.to_string()))
+            .collect();
+        lines.dedup();
         println!(
-            "{{\"ok\": false, \"error\": \"{}\", \"line\": {line}}}",
-            escape(&message)
+            "{{\"ok\": false, \"error\": \"{}\", \"line\": {line}, \"lines\": [{}]}}",
+            escape(&message),
+            lines.join(",")
         );
         return;
     }

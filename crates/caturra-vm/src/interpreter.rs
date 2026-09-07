@@ -4760,6 +4760,15 @@ impl<'run> Interpreter<'run> {
                         "java.lang.IllegalArgumentException: List length = {count}"
                     )));
                 };
+                // A JDK's copies list is LAZY — it stores the value once and
+                // answers `size()` from a number — where this one really holds
+                // `count` references. The array budget is what says so: past
+                // it the answer is an OutOfMemoryError rather than an attempt
+                // that never comes back.
+                check_array_size(
+                    i32::try_from(count).unwrap_or(i32::MAX),
+                    size_of::<JValue>(),
+                )?;
                 // Immutable (JLS: `Collections.nCopies` returns an
                 // immutable list), so wrap the backing list — a `set` throws
                 // UnsupportedOperationException like every other mutator.
@@ -6479,12 +6488,14 @@ impl<'run> Interpreter<'run> {
             copy[..available].copy_from_slice(&values[from..from + available]);
             copy
         }
-        // `Arrays.copyOf(arr, hugeN)` is `new T[hugeN]` in one call — cap it
-        // exactly as the array-creation opcodes are capped (conservatively at
-        // the widest element; a JVM answers with OutOfMemoryError, not a crash).
-        if (length as u64).saturating_mul(size_of::<JValue>() as u64) > MAX_ARRAY_BYTES {
-            return Err(out_of_memory());
-        }
+        // `Arrays.copyOf(arr, hugeN)` is `new T[hugeN]` in one call — capped
+        // exactly as the array-creation opcodes are, and with the same two
+        // complaints: a length no array can BE names the VM's limit, and one
+        // there is merely no room for names the heap.
+        check_array_size(
+            i32::try_from(length).unwrap_or(i32::MAX),
+            size_of::<JValue>(),
+        )?;
         let object = match self.heap.get(source) {
             Some(Object::IntArray(kind, values)) => {
                 Object::IntArray(*kind, taken(values, from, length, 0))
@@ -14667,8 +14678,11 @@ impl<'run> Interpreter<'run> {
         // `Class.forName(name)` — a reflection handle for a loaded class.
         // Needs the class table, which the intrinsic layer lacks.
         if class_name == "java/lang/Class" && method_name == "forName" {
+            // The DISPLAY form: the name is quoted back in
+            // `ClassNotFoundException`, and no class is called `?` or U+FFFD
+            // either way.
             let name = match args.first() {
-                Some(JValue::Ref(Some(reference))) => self.heap.string_text(*reference),
+                Some(JValue::Ref(Some(reference))) => self.heap.string_display(*reference),
                 _ => None,
             };
             let value = match name {
@@ -18804,7 +18818,7 @@ impl<'run> Interpreter<'run> {
                         }
                         let field_name = match args.first() {
                             Some(JValue::Ref(Some(r))) => {
-                                self.heap.string_text(*r).unwrap_or_default()
+                                self.heap.string_display(*r).unwrap_or_default()
                             }
                             _ => String::new(),
                         };
@@ -18859,7 +18873,7 @@ impl<'run> Interpreter<'run> {
                         }
                         let method_name = match args.first() {
                             Some(JValue::Ref(Some(r))) => {
-                                self.heap.string_text(*r).unwrap_or_default()
+                                self.heap.string_display(*r).unwrap_or_default()
                             }
                             _ => String::new(),
                         };
@@ -21742,6 +21756,15 @@ fn check_array_size(size: i32, element_bytes: usize) -> Result<usize, VmError> {
     let length = usize::try_from(size).map_err(|_| {
         VmError::UncaughtException(format!("java.lang.NegativeArraySizeException: {size}"))
     })?;
+    // A length no array can BE is a different sentence from a length there is
+    // no room for: HotSpot's limit is two below `Integer.MAX_VALUE` — the
+    // header takes the rest — and past it the complaint names the limit rather
+    // than the heap.
+    if size > i32::MAX - 2 {
+        return Err(VmError::UncaughtException(String::from(
+            "java.lang.OutOfMemoryError: Requested array size exceeds VM limit",
+        )));
+    }
     if (length as u64).saturating_mul(element_bytes as u64) > MAX_ARRAY_BYTES {
         return Err(out_of_memory());
     }

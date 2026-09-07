@@ -266,7 +266,6 @@ fn temporal_enum_method(
                 Some(JValue::Int(value)) => i64::from(*value),
                 _ => 0,
             };
-            let by = if method == "minus" { -by } else { by };
             let (current, size) = match value {
                 Temporal::DayOfWeek(day) => (i64::from(day), 7),
                 Temporal::Month(month) => (i64::from(month), 12),
@@ -277,8 +276,13 @@ fn temporal_enum_method(
                     )));
                 }
             };
+            // The amount is reduced BEFORE the sign is applied — a JDK writes
+            // `plus(-(months % 12))` — because `-Long.MIN_VALUE` does not fit
+            // a long and wraps back to itself.
+            let reduced = by.rem_euclid(size);
+            let signed = if method == "minus" { -reduced } else { reduced };
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let rotated = ((current - 1 + by).rem_euclid(size) + 1) as u8;
+            let rotated = ((current - 1 + signed).rem_euclid(size) + 1) as u8;
             let made = match value {
                 Temporal::DayOfWeek(_) => Temporal::DayOfWeek(rotated),
                 _ => Temporal::Month(rotated),
@@ -435,7 +439,7 @@ fn nanos_per_unit(unit: &str) -> Option<i64> {
 
 /// The amount a one-argument `plusX`/`minusX` was given, signed by which of
 /// the two it was, with the unit's name.
-fn shift_by<'a>(method: &'a str, args: &[JValue]) -> Option<(&'a str, i64)> {
+fn shift_by<'a>(method: &'a str, args: &[JValue]) -> Option<(&'a str, i64, bool)> {
     let plus = method.starts_with("plus");
     if !plus && !method.starts_with("minus") {
         return None;
@@ -450,7 +454,10 @@ fn shift_by<'a>(method: &'a str, args: &[JValue]) -> Option<(&'a str, i64)> {
     } else {
         method.trim_start_matches("minus")
     };
-    Some((unit, if plus { amount } else { -amount }))
+    // The RAW amount and which way it goes, kept apart: negating first loses
+    // `Long.MIN_VALUE`, and a caller that reduces modulo something has to
+    // reduce before it applies the sign.
+    Some((unit, amount, plus))
 }
 
 /// `truncatedTo(unit)` — everything below the unit becomes zero. A unit
@@ -571,8 +578,21 @@ fn time_method(
         _ => match shift_by(method, args) {
             // A time WRAPS at midnight rather than carrying: `23:00` plus two
             // hours is `01:00`, and nothing about the day is remembered.
-            Some((unit, amount)) => match nanos_per_unit(unit) {
-                Some(nanos) => made(heap, time.plus_nanos(amount.saturating_mul(nanos))),
+            Some((unit, amount, plus)) => match nanos_per_unit(unit) {
+                // The amount is reduced to WITHIN A DAY before it is scaled,
+                // which is what a JDK does (`hoursToAdd % HOURS_PER_DAY`) and
+                // the only way `plusHours(Long.MAX_VALUE)` has an answer at
+                // all: multiplying first saturated, and the time then moved by
+                // `Long.MAX_VALUE` NANOSECONDS instead.
+                Some(nanos) => {
+                    // ...and the amount is reduced BEFORE the sign is applied:
+                    // `-Long.MIN_VALUE` does not fit a long, which is why a
+                    // JDK writes `plusHours(-(hoursToSubtract % 24))`.
+                    let per_day = crate::time::NANOS_PER_DAY / nanos;
+                    let reduced = amount.rem_euclid(per_day);
+                    let signed = if plus { reduced } else { -reduced };
+                    made(heap, time.plus_nanos(signed * nanos))
+                }
                 None => Err(VmError::UnknownIntrinsic(format!(
                     "java/time/LocalTime.{method}"
                 ))),
@@ -800,11 +820,12 @@ fn date_time_method(
             if method.starts_with("with") {
                 return date_time_with(when, heap, method, args);
             }
-            let Some((unit, amount)) = shift_by(method, args) else {
+            let Some((unit, amount, plus)) = shift_by(method, args) else {
                 return Err(VmError::UnknownIntrinsic(format!(
                     "java/time/LocalDateTime.{method}"
                 )));
             };
+            let amount = if plus { amount } else { -amount };
             // A time unit carries into the date; a date unit moves the date
             // and leaves the time alone.
             if let Some(nanos) = nanos_per_unit(unit) {
@@ -1249,11 +1270,12 @@ fn duration_method(
         // forms, which the one-argument `plus(duration)` below does not cover.
         "plus" | "minus" if args.len() == 2 => duration_rebuilt(amount, heap, method, args),
         _ => {
-            let Some((unit, count)) = shift_by(method, args) else {
+            let Some((unit, count, plus)) = shift_by(method, args) else {
                 return Err(VmError::UnknownIntrinsic(format!(
                     "java/time/Duration.{method}"
                 )));
             };
+            let count = if plus { count } else { -count };
             let nanos = match unit {
                 "Days" => crate::time::NANOS_PER_DAY,
                 "Hours" => crate::time::NANOS_PER_HOUR,
@@ -1356,16 +1378,24 @@ fn period_method(
             _ => 0,
         };
         let moved = |field: i32| -> Result<i32, VmError> {
-            let (first, second) = match (method.starts_with("minus"), amount) {
-                (true, i64::MIN) => (i64::MAX, 1),
-                (true, amount) => (-amount, 0),
-                (false, amount) => (amount, 0),
+            // The MIN_VALUE dance is TWO additions with the int conversion
+            // BETWEEN them, not one sum: `minusDays(Long.MIN_VALUE)` is a JDK's
+            // `plusDays(Long.MAX_VALUE).plusDays(1)`, and the first of those
+            // already fails — with "integer overflow", not "long overflow".
+            let steps: &[i64] = match (method.starts_with("minus"), amount) {
+                (true, i64::MIN) => &[i64::MAX, 1],
+                (true, amount) => &[-amount],
+                (false, amount) => &[amount],
             };
-            let sum = i64::from(field)
-                .checked_add(first)
-                .and_then(|total| total.checked_add(second))
-                .ok_or_else(|| throw("java.lang.ArithmeticException: long overflow"))?;
-            i32::try_from(sum).map_err(|_| throw("java.lang.ArithmeticException: integer overflow"))
+            let mut running = field;
+            for step in steps {
+                let sum = i64::from(running)
+                    .checked_add(*step)
+                    .ok_or_else(|| throw("java.lang.ArithmeticException: long overflow"))?;
+                running = i32::try_from(sum)
+                    .map_err(|_| throw("java.lang.ArithmeticException: integer overflow"))?;
+            }
+            Ok(running)
         };
         let _ = signed;
         let mut built = period;
@@ -1388,14 +1418,23 @@ fn period_method(
         return made(heap, built);
     }
     match method {
-        "multipliedBy" => made(
-            heap,
-            crate::time::Period {
-                years: period.years.saturating_mul(count),
-                months: period.months.saturating_mul(count),
-                days: period.days.saturating_mul(count),
-            },
-        ),
+        // `Math.multiplyExact` on each field, not a saturation: a JDK refuses
+        // a product that leaves the int range rather than clamping it.
+        "multipliedBy" => {
+            let times = |field: i32| {
+                field
+                    .checked_mul(count)
+                    .ok_or_else(|| throw("java.lang.ArithmeticException: integer overflow"))
+            };
+            made(
+                heap,
+                crate::time::Period {
+                    years: times(period.years)?,
+                    months: times(period.months)?,
+                    days: times(period.days)?,
+                },
+            )
+        }
         "negated" => made(
             heap,
             crate::time::Period {
@@ -5846,6 +5885,30 @@ fn string_method(
                     .unwrap_or_else(|| heap.alloc_string(""));
                 return Ok(Some(JValue::Ref(Some(empty))));
             }
+            // A JDK checks the SIZE before it builds anything, and says so in
+            // its own words. The figure is BYTES: one per character while every
+            // character fits Latin-1, two once one does not. Without the check
+            // caturra allocated until its heap gave out, which took a while and
+            // said "Java heap space".
+            let width = if units.iter().all(|unit| *unit <= 0xFF) {
+                1
+            } else {
+                2
+            };
+            let bytes = i32::try_from(units.len()).unwrap_or(i32::MAX) * width;
+            if i32::MAX / *count < bytes {
+                return Err(throw(format!(
+                    "java.lang.OutOfMemoryError: Repeating {bytes} bytes String {count} \
+                     times will produce a String exceeding maximum size."
+                )));
+            }
+            // ...and past that, the ARRAY's own limit, which is two below
+            // `Integer.MAX_VALUE` (the header takes the rest).
+            if i64::from(bytes) * i64::from(*count) > i64::from(i32::MAX - 2) {
+                return Err(throw(
+                    "java.lang.OutOfMemoryError: Requested array size exceeds VM limit",
+                ));
+            }
             let mut repeated =
                 Vec::with_capacity(units.len() * usize::try_from(*count).unwrap_or(0));
             for _ in 0..*count {
@@ -5983,7 +6046,10 @@ fn string_method(
             let name = match heap.get(*which) {
                 Some(HeapObject::Charset(name)) => name.clone(),
                 Some(HeapObject::JavaString(units)) => {
-                    let written = String::from_utf16_lossy(units);
+                    // The `?` a JDK shows for an unpaired surrogate, not Rust's
+                    // U+FFFD — the same substitution `string_text` makes, and
+                    // this is the one place that read the units directly.
+                    let written = console_text(units);
                     match canonical_charset(&written) {
                         Some(name) => name.to_owned(),
                         None => {
@@ -6139,9 +6205,14 @@ fn get_chars(
 /// `codePointBefore(index)`: the code point ending just before `index`.
 fn code_point_before(units: &[u16], index: i32) -> Result<i32, VmError> {
     let before = index - 1;
-    if before < 0 {
-        // `codePointBefore` reports the OTHER of the JDK's two String
-        // wordings — `codePointAt` names the length, this one does not.
+    // `codePointBefore` reports the OTHER of the JDK's two String wordings —
+    // `codePointAt` names the length, this one does not — and it names the
+    // ARGUMENT at BOTH ends. Only the upper end was checked here, so an index
+    // past the string fell through to `codePointAt`'s wording, with the index
+    // one too low. (`Character.codePointBefore(cs, i)` names `i - 1`: a third
+    // reading of one question, and it checks its own bounds before calling
+    // this.)
+    if before < 0 || before >= i32::try_from(units.len()).unwrap_or(i32::MAX) {
         return Err(throw(format!(
             "java.lang.StringIndexOutOfBoundsException: String index out of range: {index}"
         )));
@@ -6720,7 +6791,11 @@ pub(crate) fn written_units(
         let (start, end) = if method == "append" {
             (*first, *second)
         } else {
-            (*first, first.saturating_add(*second))
+            // `off + len` as a JDK computes it: a plain int addition that
+            // WRAPS. Saturating instead reported `end 2147483647` where the
+            // JDK's complaint says `end -2`, which is what a program comparing
+            // messages sees.
+            (*first, first.wrapping_add(*second))
         };
         let count = i32::try_from(units.len()).unwrap_or(i32::MAX);
         // ...only for the STRING form: a `BufferedWriter`'s `write(char[],
@@ -6728,6 +6803,14 @@ pub(crate) fn written_units(
         // other, and only its `write(String, off, len)` has the forgiving loop.
         if style == RangeStyle::BufferedWrite && !chars && end <= start {
             return Ok(Vec::new());
+        }
+        // ...and the array it allocates is `len` long, whatever the string is:
+        // `write(s, MAX, MAX)` asks for `new char[MAX]` and never reaches the
+        // range check at all.
+        if style == RangeStyle::FileWrite && !chars && *second > i32::MAX - 2 {
+            return Err(throw(
+                "java.lang.OutOfMemoryError: Requested array size exceeds VM limit",
+            ));
         }
         if start < 0 || end > count || start > end {
             return Err(if chars {
@@ -6737,7 +6820,11 @@ pub(crate) fn written_units(
                     "java.lang.IndexOutOfBoundsException: \
                      start {start}, end {end}, length {count}"
                 ))
-            } else if style == RangeStyle::FileWrite && end < start {
+            } else if style == RangeStyle::FileWrite && *second < 0 {
+                // A `FileWriter` allocates a `char[len]` before it reads
+                // anything, so a NEGATIVE LENGTH is its own bare complaint —
+                // the length, not the end, which wraps back above the start
+                // for `write(s, MIN, MIN)`.
                 throw("java.lang.IndexOutOfBoundsException")
             } else {
                 throw(format!(
@@ -8346,6 +8433,13 @@ fn scanner_take<T>(
     scanner_next_token(heap, console, receiver)?;
     Ok(value)
 }
+/// What the FLOAT parsers strip from both ends: every character at or below a
+/// space, not Rust's notion of whitespace. A NUL is one of them, so
+/// `Double.parseDouble("\u{0}")` is a JDK's "empty String" — where `trim()`
+/// kept it and the complaint quoted a control character instead.
+fn trim_float_text(text: &str) -> &str {
+    text.trim_matches(|c: char| c <= ' ')
+}
 
 /// Whether a token is a float/double literal *as `java.util.Scanner` reads it*:
 /// an optional sign, then either exactly `NaN` / `Infinity` or a decimal number.
@@ -9885,8 +9979,14 @@ fn list_method(
             }
             Ok(Some(JValue::Int(i32::from(changed))))
         }
-        // Capacity hints: real methods, observable-free here.
-        ("ensureCapacity", _, [JValue::Int(_)]) | ("trimToSize", _, []) => Ok(None),
+        // Capacity hints: real methods, observable-free here — EXCEPT that a
+        // capacity a JDK cannot allocate is an `OutOfMemoryError` at the call,
+        // which is the one thing a hint can be observed by.
+        ("ensureCapacity", _, [JValue::Int(wanted)]) => {
+            array_capacity_check(*wanted)?;
+            Ok(None)
+        }
+        ("trimToSize", _, []) => Ok(None),
         _ => Err(VmError::UnknownIntrinsic(format!(
             "List.{method}{descriptor}"
         ))),
@@ -10818,8 +10918,11 @@ fn matcher_method(
                 *hit_end = hit;
                 *require_end = require;
             }
-            let text = String::from_utf16_lossy(&out);
-            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+            // From the UNITS: a replacement carrying an unpaired surrogate is
+            // a legal Java string, and rebuilding it through a Rust `String`
+            // turned that surrogate into U+FFFD — a different character, and
+            // one a program may hold on purpose.
+            Ok(Some(JValue::Ref(Some(heap.alloc_string_units(&out)))))
         }
         // `appendReplacement(sb, replacement)` copies the text since the last
         // append, then the expanded replacement — the loop a program writes
@@ -12524,10 +12627,14 @@ pub fn invoke_static(
                             months: count,
                             days: 0,
                         },
+                        // Seven days a week, exactly: a count whose product
+                        // leaves the int range is refused, not clamped.
                         "ofWeeks" => crate::time::Period {
                             years: 0,
                             months: 0,
-                            days: count.saturating_mul(7),
+                            days: count.checked_mul(7).ok_or_else(|| {
+                                throw("java.lang.ArithmeticException: integer overflow")
+                            })?,
                         },
                         // `__of` is `ZERO`, which is `P0D`.
                         "__of" => crate::time::Period {
@@ -12634,8 +12741,10 @@ pub fn invoke_static(
                     Ok(Some(JValue::Ref(Some(array))))
                 }
                 "valueOf" => {
+                    // The DISPLAY form: the name only reaches a message, and
+                    // a JDK shows `?` for an unpaired surrogate.
                     let name = match args.first() {
-                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        Some(JValue::Ref(Some(reference))) => heap.string_display(*reference),
                         _ => None,
                     }
                     .unwrap_or_default();
@@ -12671,8 +12780,10 @@ pub fn invoke_static(
                     Ok(Some(JValue::Ref(Some(array))))
                 }
                 "valueOf" => {
+                    // The DISPLAY form: the name only reaches a message, and
+                    // a JDK shows `?` for an unpaired surrogate.
                     let name = match args.first() {
-                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        Some(JValue::Ref(Some(reference))) => heap.string_display(*reference),
                         _ => None,
                     }
                     .unwrap_or_default();
@@ -12732,8 +12843,10 @@ pub fn invoke_static(
                     Ok(Some(JValue::Ref(Some(array))))
                 }
                 "valueOf" => {
+                    // The DISPLAY form: the name only reaches a message, and
+                    // a JDK shows `?` for an unpaired surrogate.
                     let name = match args.first() {
-                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        Some(JValue::Ref(Some(reference))) => heap.string_display(*reference),
                         _ => None,
                     }
                     .unwrap_or_default();
@@ -12811,8 +12924,10 @@ pub fn invoke_static(
                     Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
                 }
                 "valueOf" => {
+                    // The DISPLAY form: the name only reaches a message, and
+                    // a JDK shows `?` for an unpaired surrogate.
                     let name = match args.first() {
-                        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
+                        Some(JValue::Ref(Some(reference))) => heap.string_display(*reference),
                         _ => None,
                     }
                     .unwrap_or_default();
@@ -13008,10 +13123,14 @@ pub fn invoke_static(
                 let regex = compile_regex(&source)?;
                 Ok(Some(JValue::Int(i32::from(regex.matches_whole(&input)))))
             }
+            // From the UNITS: the answer is a STRING, and an argument
+            // carrying an unpaired surrogate keeps it.
             "quote" => {
-                let text = arg_string(heap, &args[0])?;
-                let quoted = format!("\\Q{text}\\E");
-                Ok(Some(JValue::Ref(Some(heap.alloc_string(&quoted)))))
+                let units = string_units(heap, &args[0])?;
+                let mut quoted: Vec<u16> = "\\Q".encode_utf16().collect();
+                quoted.extend_from_slice(&units);
+                quoted.extend("\\E".encode_utf16());
+                Ok(Some(JValue::Ref(Some(heap.alloc_string_units(&quoted)))))
             }
             _ => Err(VmError::UnknownIntrinsic(format!("Pattern.{method}"))),
         },
@@ -13019,18 +13138,20 @@ pub fn invoke_static(
         // replacement literal, so a `$` in it is a dollar and not a group.
         "java/util/regex/Matcher" => match method {
             "quoteReplacement" => {
-                let text = arg_string(heap, &args[0])?;
-                if !text.contains('\\') && !text.contains('$') {
-                    return Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))));
+                let units = string_units(heap, &args[0])?;
+                let backslash = u16::from(b'\\');
+                let dollar = u16::from(b'$');
+                if !units.contains(&backslash) && !units.contains(&dollar) {
+                    return Ok(Some(JValue::Ref(Some(heap.alloc_string_units(&units)))));
                 }
-                let mut quoted = String::with_capacity(text.len() * 2);
-                for ch in text.chars() {
-                    if ch == '\\' || ch == '$' {
-                        quoted.push('\\');
+                let mut quoted: Vec<u16> = Vec::with_capacity(units.len() * 2);
+                for unit in units {
+                    if unit == backslash || unit == dollar {
+                        quoted.push(backslash);
                     }
-                    quoted.push(ch);
+                    quoted.push(unit);
                 }
-                Ok(Some(JValue::Ref(Some(heap.alloc_string(&quoted)))))
+                Ok(Some(JValue::Ref(Some(heap.alloc_string_units(&quoted)))))
             }
             _ => Err(VmError::UnknownIntrinsic(format!("Matcher.{method}"))),
         },
@@ -13193,9 +13314,15 @@ pub fn invoke_static(
         "java/util/UUID" => match method {
             "fromString" => {
                 let text = arg_string(heap, &args[0])?;
+                let shown = match args.first() {
+                    Some(JValue::Ref(Some(reference))) => heap
+                        .string_display(*reference)
+                        .unwrap_or_else(|| text.clone()),
+                    _ => text.clone(),
+                };
                 let Some((high, low)) = uuid_from_text(&text) else {
                     return Err(throw(format!(
-                        "java.lang.IllegalArgumentException: Invalid UUID string: {text}"
+                        "java.lang.IllegalArgumentException: Invalid UUID string: {shown}"
                     )));
                 };
                 Ok(Some(JValue::Ref(Some(
@@ -13277,6 +13404,20 @@ pub fn invoke_static(
         "java/math/BigDecimal" => match method {
             "valueOf" => {
                 let value = match args.first() {
+                    // `valueOf(double)` goes through `Double.toString`, so
+                    // NaN and the infinities arrive as WORDS, and a JDK's
+                    // parser complains about the first letter it cannot
+                    // read. Falling back to zero answered `0` for all three.
+                    Some(JValue::Double(number)) if number.is_nan() || number.is_infinite() => {
+                        // The SIGN is read first and is not the complaint:
+                        // `-Infinity` names the `I`, not the minus.
+                        let first = if number.is_nan() { 'N' } else { 'I' };
+                        return Err(throw(format!(
+                            "java.lang.NumberFormatException: Character {first} is neither \
+                             a decimal digit number, decimal point, nor \"e\" notation \
+                             exponential mark."
+                        )));
+                    }
                     Some(JValue::Double(number)) => crate::decimal::BigDec::parse(
                         &crate::floatdec::java_double_to_string(*number),
                     )
@@ -13318,7 +13459,9 @@ pub fn invoke_static(
                     }
                     u8::try_from(*ordinal).unwrap_or(4)
                 } else {
-                    let name = arg_string(heap, &args[0])?;
+                    // The DISPLAY form: the name is quoted back in "No enum
+                    // constant …" and is not a constant either way.
+                    let name = display_arg(heap, &args[0])?;
                     let found = ROUNDING_NAMES.iter().position(|known| *known == name);
                     let Some(found) = found else {
                         return Err(throw(format!(
@@ -13407,7 +13550,9 @@ pub fn invoke_static(
             // The same two questions in the same order as `forName`, with a
             // boolean for the second instead of a charset.
             "isSupported" => {
-                let written = arg_string(heap, &args[0])?;
+                // The DISPLAY form: the name is quoted back in the complaint,
+                // and neither `?` nor U+FFFD is a legal charset character.
+                let written = display_arg(heap, &args[0])?;
                 if !is_legal_charset_name(&written) {
                     return Err(throw(format!(
                         "java.nio.charset.IllegalCharsetNameException: {written}"
@@ -13418,7 +13563,7 @@ pub fn invoke_static(
                 ))))
             }
             "forName" | "__standard" => {
-                let written = arg_string(heap, &args[0])?;
+                let written = display_arg(heap, &args[0])?;
                 if !is_legal_charset_name(&written) {
                     return Err(throw(format!(
                         "java.nio.charset.IllegalCharsetNameException: {written}"
@@ -14533,6 +14678,18 @@ fn parse_int_text(heap: &Heap, value: &JValue) -> Result<NumberText, VmError> {
         raw,
     })
 }
+/// An argument as a JDK would SHOW it — the display form of a Java string,
+/// where an unpaired surrogate is a `?`. For the readers whose text is quoted
+/// back in a complaint and never used as data.
+fn display_arg(heap: &Heap, value: &JValue) -> Result<String, VmError> {
+    match value {
+        JValue::Ref(Some(reference)) => heap
+            .string_display(*reference)
+            .ok_or_else(|| throw("java.lang.ClassCastException: not a String")),
+        JValue::Ref(None) => Err(throw("java.lang.NullPointerException")),
+        _ => Err(throw("java.lang.VerifyError: expected a String argument")),
+    }
+}
 
 /// The argument text as WRITTEN, with the number parsers' shared handling of a
 /// null or non-string argument.
@@ -14543,8 +14700,11 @@ fn parse_int_text(heap: &Heap, value: &JValue) -> Result<NumberText, VmError> {
 /// 3.0 where a JDK throws.
 fn number_arg_text(heap: &Heap, value: &JValue) -> Result<String, VmError> {
     match value {
+        // The DISPLAY form: the text is quoted back in "For input string",
+        // where a JDK shows `?` for an unpaired surrogate — and neither `?`
+        // nor U+FFFD is a digit, so nothing about the parse changes.
         JValue::Ref(Some(reference)) => heap
-            .string_text(*reference)
+            .string_display(*reference)
             .ok_or_else(|| throw("java.lang.ClassCastException: not a String")),
         // JDK 11's message for a null string is literally "null".
         JValue::Ref(None) => Err(throw("java.lang.NumberFormatException: null")),
@@ -14901,7 +15061,7 @@ fn double_static(
                     return Err(throw("java.lang.NullPointerException"));
                 }
                 let text = number_arg_text(heap, text)?;
-                let trimmed = text.trim();
+                let trimmed = trim_float_text(&text);
                 if trimmed.is_empty() {
                     return Err(throw("java.lang.NumberFormatException: empty String"));
                 }
@@ -15905,7 +16065,7 @@ fn float_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option
                     return Err(throw("java.lang.NullPointerException"));
                 }
                 let text = number_arg_text(heap, text)?;
-                let trimmed = text.trim();
+                let trimmed = trim_float_text(&text);
                 if trimmed.is_empty() {
                     return Err(throw("java.lang.NumberFormatException: empty String"));
                 }
@@ -16785,6 +16945,10 @@ fn decimal_error(error: crate::decimal::DecError) -> VmError {
         DecError::RoundingNecessary => "java.lang.ArithmeticException: Rounding necessary",
         DecError::Overflow => "java.lang.ArithmeticException: Overflow",
         DecError::InvalidOperation => "java.lang.ArithmeticException: Invalid operation",
+        DecError::Underflow => "java.lang.ArithmeticException: Underflow",
+        DecError::HugeMagnitude => {
+            "java.lang.ArithmeticException: BigInteger would overflow supported range"
+        }
     })
 }
 
@@ -17068,6 +17232,11 @@ fn big_decimal_method(
                     .map_err(decimal_error)?;
                 return answer(heap, inverse);
             }
+            // A JDK's exponent range is 0..=999_999_999; past it the answer is
+            // its own complaint rather than an attempt.
+            if exponent > 999_999_999 {
+                return Err(throw("java.lang.ArithmeticException: Invalid operation"));
+            }
             let raised = value.pow(exponent).map_err(decimal_error)?;
             answer(heap, rounded(raised, context)?)
         }
@@ -17106,6 +17275,15 @@ fn big_decimal_method(
             } else {
                 Rounding::Unnecessary
             };
+            // Raising the scale multiplies the unscaled value by a power of
+            // ten, and a JDK refuses one that would not fit a `BigInteger`
+            // rather than building it. Unchecked, `ONE.setScale(MAX)` never
+            // came back.
+            let raise = i64::from(int_at(0)) - i64::from(value.scale());
+            if raise > 0 {
+                // Ten to the n-th needs a little over 3.32 bits per digit.
+                bigint_range_check(u64::from(value.precision()) + raise.cast_unsigned() * 4)?;
+            }
             let scaled = value.with_scale(int_at(0), mode).map_err(decimal_error)?;
             answer(heap, scaled)
         }
@@ -17122,11 +17300,15 @@ fn big_decimal_method(
         }
         "movePointLeft" | "movePointRight" => {
             let by = int_at(0);
-            let moved = value.move_point(if method == "movePointLeft" { by } else { -by });
+            let moved = value
+                .move_point(if method == "movePointLeft" { by } else { -by })
+                .map_err(decimal_error)?;
             answer(heap, moved)
         }
         "scaleByPowerOfTen" => {
-            let moved = value.scale_by_power_of_ten(int_at(0));
+            let moved = value
+                .scale_by_power_of_ten(int_at(0))
+                .map_err(decimal_error)?;
             answer(heap, moved)
         }
         "stripTrailingZeros" => {
@@ -17251,6 +17433,36 @@ fn number_format_method(
                     scaled.is_sign_negative(),
                 )
             };
+            // NaN and the infinities never reach the pattern. A JDK writes
+            // the NaN symbol ALONE — no prefix, no suffix, not even the `%` of
+            // a percent format — and an infinity with the affixes but nothing
+            // else, so a "#0.00" prints one character. Falling through to the
+            // decimal path made every one of them "0".
+            let special = match args.first() {
+                Some(JValue::Double(number)) => Some(*number),
+                Some(JValue::Float(number)) => Some(f64::from(*number)),
+                _ => None,
+            }
+            .filter(|number| number.is_nan() || number.is_infinite());
+            if let Some(number) = special {
+                use crate::numfmt::Affix;
+                let text = if number.is_nan() {
+                    String::from("NaN")
+                } else if number.is_sign_negative() {
+                    format!(
+                        "{}\u{221e}{}",
+                        pattern.affix(Affix::NegativePrefix),
+                        pattern.affix(Affix::NegativeSuffix)
+                    )
+                } else {
+                    format!(
+                        "{}\u{221e}{}",
+                        pattern.affix(Affix::PositivePrefix),
+                        pattern.affix(Affix::PositiveSuffix)
+                    )
+                };
+                return Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))));
+            }
             let (value, exact, negative) = match args.first() {
                 Some(JValue::Double(number)) => from_double(*number),
                 Some(JValue::Float(number)) => from_double(f64::from(*number)),
@@ -17312,7 +17524,15 @@ fn number_format_method(
                 return Err(throw(if method == "parseObject" {
                     String::from("java.text.ParseException: Format.parseObject(String) failed")
                 } else {
-                    format!("java.text.ParseException: Unparseable number: \"{text}\"")
+                    // The DISPLAY form: a JDK shows `?` for an unpaired
+                    // surrogate wherever a message quotes a string.
+                    let shown = match args.first() {
+                        Some(JValue::Ref(Some(reference))) => heap
+                            .string_display(*reference)
+                            .unwrap_or_else(|| text.clone()),
+                        _ => text.clone(),
+                    };
+                    format!("java.text.ParseException: Unparseable number: \"{shown}\"")
                 }));
             };
             // A whole number comes back as a `Long`, anything else as a
@@ -17805,6 +18025,19 @@ fn parse_big_integer(text: &str, radix: i32) -> Result<crate::bigint::BigInt, Vm
         ))
     })
 }
+/// A `BigInteger` whose magnitude would pass a JDK's supported range: it holds
+/// at most `Integer.MAX_VALUE` bits, and a value past that is refused rather
+/// than built. Without the check `BigInteger.ONE.flipBit(Integer.MAX_VALUE)`
+/// tried to allocate a quarter of a gigabyte of words and never came back — a
+/// run that does not end is as bad as one that crashes.
+fn bigint_range_check(bits: u64) -> Result<(), VmError> {
+    if bits > u64::from(i32::MAX.cast_unsigned()) {
+        return Err(throw(
+            "java.lang.ArithmeticException: BigInteger would overflow supported range",
+        ));
+    }
+    Ok(())
+}
 
 /// `java.math.BigInteger` — every question asked of one value, or of two.
 #[allow(clippy::too_many_lines)]
@@ -17970,6 +18203,13 @@ fn big_integer_method(
                 "clearBit" => BitOp::And,
                 _ => BitOp::Xor,
             };
+            // A bit ABOVE the supported range would need a magnitude longer
+            // than a JDK's `MAX_MAG_LENGTH`, and it refuses rather than
+            // building one. `clearBit` is the exception: clearing a bit that
+            // is already zero grows nothing.
+            if how != BitOp::And {
+                bigint_range_check(u64::from(at) + 1)?;
+            }
             let changed = value.with_bit(at, how);
             answer(heap, changed)
         }
@@ -17981,6 +18221,9 @@ fn big_integer_method(
             let by = shift();
             let left = (method == "shiftLeft") == (by >= 0);
             let by = by.unsigned_abs();
+            if left && value.signum() != 0 {
+                bigint_range_check(u64::from(value.bit_length()) + u64::from(by))?;
+            }
             let moved = if left {
                 value.shifted_left(by)
             } else {
@@ -18642,14 +18885,10 @@ fn partial_date_method(
                 365
             })))
         }
-        (Temporal::Year(year), "plusYears" | "minusYears") => {
-            let by = if method == "minusYears" {
-                -int_at(0)
-            } else {
-                int_at(0)
-            };
-            made(heap, Temporal::Year(shifted_year(i64::from(year) + by)?))
-        }
+        (Temporal::Year(year), "plusYears" | "minusYears") => made(
+            heap,
+            Temporal::Year(shifted_years(i64::from(year), method, int_at(0))?),
+        ),
         (Temporal::Year(year), "atDay") => {
             let day = int_at(0);
             let length = if crate::time::is_leap_year(year) {
@@ -18716,15 +18955,8 @@ fn partial_date_method(
             made(heap, Temporal::YearMonth(year, month))
         }
         (Temporal::YearMonth(year, month), "plusYears" | "minusYears") => {
-            let by = if method == "minusYears" {
-                -int_at(0)
-            } else {
-                int_at(0)
-            };
-            made(
-                heap,
-                Temporal::YearMonth(shifted_year(i64::from(year) + by)?, month),
-            )
+            let moved = shifted_years(i64::from(year), method, int_at(0))?;
+            made(heap, Temporal::YearMonth(moved, month))
         }
         (Temporal::YearMonth(_, month), "withYear") => {
             made(heap, Temporal::YearMonth(shifted_year(int_at(0))?, month))
@@ -18774,7 +19006,7 @@ fn partial_date_method(
             ))))
         }
         (Temporal::MonthDay(month, day), "atYear") => {
-            let year = i32::try_from(int_at(0)).unwrap_or(0);
+            let year = shifted_year(int_at(0))?;
             // A 29th of February in a common year becomes the 28th, which is
             // what a JDK does rather than refusing.
             let length = crate::time::length_of_month(year, month);
@@ -18833,6 +19065,28 @@ fn partial_date_method(
             value.class_name()
         ))),
     }
+}
+/// `plusYears(n)` / `minusYears(n)` on a `Year` or a `YearMonth`.
+///
+/// `Long.MIN_VALUE` cannot be negated, so a JDK adds `Long.MAX_VALUE` and then
+/// one — and the addition WRAPS rather than checking, so the year it then
+/// refuses is one below what negating would have given. Off by exactly one,
+/// and only at that single argument.
+fn shifted_years(year: i64, method: &str, amount: i64) -> Result<i32, VmError> {
+    let steps: &[i64] = if method == "minusYears" {
+        if amount == i64::MIN {
+            &[i64::MAX, 1]
+        } else {
+            return shifted_year(year.wrapping_sub(amount));
+        }
+    } else {
+        &[amount]
+    };
+    let mut running = year;
+    for step in steps {
+        running = i64::from(shifted_year(running.wrapping_add(*step))?);
+    }
+    i32::try_from(running).map_err(|_| date_time_exception("year"))
 }
 
 /// A year has to fit the range a JDK allows.
@@ -18930,8 +19184,10 @@ fn partial_date_static(
         }
     };
     match (class, method) {
+        // The static takes a LONG, and the rule reads it whole: cutting it to
+        // an int first made `isLeap(Long.MAX_VALUE)` answer for 0 instead.
         ("java/time/Year", "isLeap") => Ok(Some(JValue::Int(i32::from(
-            crate::time::is_leap_year(i32::try_from(int_at(0)).unwrap_or(0)),
+            crate::time::is_leap_year_long(int_at(0)),
         )))),
         ("java/time/Year", "of") => made(heap, Temporal::Year(shifted_year(int_at(0))?)),
         ("java/time/YearMonth", "of") => {
@@ -19134,6 +19390,18 @@ pub(crate) fn vector_capacity(heap: &Heap, receiver: HeapRef, for_size: usize) -
     }
     capacity
 }
+/// A capacity a JDK could not allocate. `ensureCapacity` and `setSize` are
+/// hints with nothing observable about them — until the number is one no array
+/// can be, and then they throw at the call. The limit is two below
+/// `Integer.MAX_VALUE`; the header takes the rest.
+fn array_capacity_check(wanted: i32) -> Result<(), VmError> {
+    if wanted > i32::MAX - 2 {
+        return Err(throw(
+            "java.lang.OutOfMemoryError: Requested array size exceeds VM limit",
+        ));
+    }
+    Ok(())
+}
 
 /// A `Vector`'s out-of-range wording — which is its own, and different for
 /// almost every method. `Vector` indexes a bare array, so the class is
@@ -19232,6 +19500,7 @@ fn vector_sizing(
             let Some(JValue::Int(wanted)) = args.first() else {
                 return Ok(None);
             };
+            array_capacity_check(*wanted)?;
             let wanted = usize::try_from(*wanted).unwrap_or(0);
             let (capacity, increment) = heap.vector_capacity_of(receiver).unwrap_or((10, 0));
             if wanted > capacity {
@@ -19253,6 +19522,7 @@ fn vector_sizing(
             let Some(JValue::Int(wanted)) = args.first() else {
                 return Ok(None);
             };
+            array_capacity_check(*wanted)?;
             let Ok(wanted) = usize::try_from(*wanted) else {
                 // A negative size reaches the array, which reports the
                 // CAPACITY — the same wording every other negative index into

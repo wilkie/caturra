@@ -27,16 +27,38 @@ ENGINE = os.path.join(REPO, "target/release/examples/compatrun")
 
 # One expression per parameter type. Values are deliberately awkward where an
 # awkward one is cheap: a negative int, a string with a space, an empty range.
+# The AWKWARD end of each primitive is where a library's own arithmetic and its
+# range complaints live, and the bank had none of it: three ints, one char, no
+# NaN. Widening it is the same lesson as widening the TYPES was — "a tool's own
+# report of what it skipped is a measurement" — one level down, at the values.
 BANK = {
-    "int": ["1", "0", "-2"],
-    "long": ["1L", "-2L"],
-    "double": ["1.5", "-0.5"],
-    "float": ["1.5f"],
-    "short": ["(short) 1"],
-    "byte": ["(byte) 1"],
-    "char": ["'q'"],
+    "int": ["1", "0", "-2", "Integer.MAX_VALUE", "Integer.MIN_VALUE"],
+    "long": ["1L", "-2L", "Long.MAX_VALUE", "Long.MIN_VALUE"],
+    "double": [
+        "1.5",
+        "-0.5",
+        "Double.NaN",
+        "Double.POSITIVE_INFINITY",
+        "-0.0",
+        "Double.MIN_VALUE",
+    ],
+    "float": ["1.5f", "Float.NaN", "Float.NEGATIVE_INFINITY", "-0.0f"],
+    "short": ["(short) 1", "Short.MIN_VALUE", "Short.MAX_VALUE"],
+    "byte": ["(byte) 1", "Byte.MIN_VALUE", "Byte.MAX_VALUE"],
+    # A NUL, a LONE surrogate (not a character at all) and the last unit.
+    "char": ["'q'", "'\\u0000'", "'\\uD83D'", "Character.MAX_VALUE"],
     "boolean": ["true", "false"],
-    "java.lang.String": ['"ab"', '""', '"a b"'],
+    # ...and a string carrying a surrogate PAIR, one carrying a lone surrogate,
+    # and one carrying a NUL — the three shapes that tell a code-unit walk from
+    # a code-point one.
+    "java.lang.String": [
+        '"ab"',
+        '""',
+        '"a b"',
+        '"\\uD83D\\uDE00"',
+        '"\\uD83D"',
+        '"\\u0000"',
+    ],
     "java.lang.CharSequence": ['"ab"'],
     "java.lang.Object": ['"ab"'],
     "java.lang.Integer": ["Integer.valueOf(1)"],
@@ -229,6 +251,41 @@ KNOWN = [
         "a comparator caturra synthesized is not one of a JDK's named classes",
     ),
     (
+        # The bank's `long` list is ["1L", "-2L", MAX, MIN]; #2 and #3 are the
+        # two extremes, so this declares those and leaves the ordinary values
+        # compared as before.
+        r"^java\.time\.(LocalDate|LocalDateTime|Duration)"
+        r"\.(plus|minus|of|multipliedBy)\w*\(long[,)][^#]*#[23]\b",
+        "caturra's date and duration arithmetic — and the factories that take "
+        "a raw count — SATURATE where a JDK refuses: `long overflow` from "
+        "`Math.addExact`, or the EpochDay/Year range, "
+        "so a shift by `Long.MAX_VALUE` answers a clamped value here and an "
+        "exception there. Making the whole of `time.rs` fallible is its own "
+        "sitting; `LocalTime` and the two enums are done, because a time of "
+        "day reduces modulo a day and has an answer for every long",
+    ),
+    (
+        r"^java\.nio\.file\.Path\w*\.\w+\(java\.lang\.String[,)][^#]*#[45]\b",
+        "a JDK validates the TEXT of a path — a NUL is refused outright and a "
+        "lone surrogate cannot be encoded in the platform charset — where "
+        "caturra's filesystem is in memory and takes any string as a name",
+    ),
+    (
+        r"^java\.lang\.String\.format|^java\.time\.format\.DateTimeFormatter\.ofPattern",
+        "a format TEMPLATE is read as Rust text, so an unpaired surrogate in "
+        "one becomes U+FFFD where a JDK carries it through and shows `?`. The "
+        "arguments and the result keep their units; only the template itself "
+        "is converted, and threading units through the whole formatter for a "
+        "template nobody writes is not worth what it would cost",
+    ),
+    (
+        r"^java\.util\.Collections\.nCopies",
+        "a JDK's copies list is LAZY — it stores the value once and answers "
+        "`size()` from a number — where caturra's really holds that many "
+        "references, so a count near `Integer.MAX_VALUE` is an "
+        "OutOfMemoryError here and a list there",
+    ),
+    (
         r"^java\.util\.stream\.\w*Stream\.flatMap",
         "caturra's `flatMap` runs its function when the pipeline is BUILT and "
         "a JDK's when a terminal pulls, so a function that answers something "
@@ -412,13 +469,23 @@ def run_both(source):
         # In the TEMP directory, not the repo: a probe that writes a file must
         # not leave one behind. (caturra's own filesystem is in memory, so only
         # the JDK side can.)
-        jdk = subprocess.run(
-            ["java", "-cp", directory, "Probe"],
-            capture_output=True, text=True, timeout=300, cwd=directory,
-        ).stdout
-        result = subprocess.run(
-            [ENGINE, path, "Probe"], capture_output=True, text=True, cwd=REPO, timeout=300
-        )
+        # A TIMEOUT on either side is an answer, not an accident: a run that
+        # never ends is as bad as a crash, and letting the exception out killed
+        # the whole sweep at whichever class reached it first. Reported like a
+        # crash, so the bisect drops the call that caused it.
+        try:
+            jdk = subprocess.run(
+                ["java", "-cp", directory, "Probe"],
+                capture_output=True, text=True, timeout=120, cwd=directory,
+            ).stdout
+        except subprocess.TimeoutExpired:
+            return None, "a JDK did not finish in 120s"
+        try:
+            result = subprocess.run(
+                [ENGINE, path, "Probe"], capture_output=True, text=True, cwd=REPO, timeout=120
+            )
+        except subprocess.TimeoutExpired:
+            return None, "caturra did not finish in 120s"
     try:
         answer = json.loads(result.stdout)
     except ValueError:
@@ -439,7 +506,10 @@ def run_both(source):
         # cannot be converted to Integer", from an argument the bank chose
         # badly — cost the whole class its sweep.
         line = answer.get("line") or 0
-        return None, f"caturra:{line}: " + answer["error"].splitlines()[0]
+        # EVERY line caturra complained about, so one round drops them all —
+        # the same reading the javac branch already gets from its own list.
+        every = ",".join(str(n) for n in answer.get("lines") or [line])
+        return None, f"caturra:{every}: " + answer["error"].splitlines()[0]
     return jdk, answer.get("stdout") or ""
 
 
@@ -461,6 +531,26 @@ def normalized(line):
     # element family, and caturra names the source stage always — exact for a
     # fresh stream, stale after an intermediate op.
     return re.sub(r"java\.util\.stream\.\w+\$\w+@x", "<a stream>@x", line)
+
+
+def drop_by_bisection(class_name, calls):
+    """The call list without the first call that makes the probe fail.
+
+    The last resort, for a message that names nothing the bisect can act on.
+    One `run_both` per halving, so it costs a handful of runs rather than one
+    per call.
+    """
+    if len(calls) <= 1:
+        return []
+    low, high = 0, len(calls)
+    while high - low > 1:
+        middle = (low + high) // 2
+        jdk, _ = run_both(probe_source(class_name, calls[:middle]))
+        if jdk is None:
+            high = middle
+        else:
+            low = middle
+    return calls[:low] + calls[low + 1 :]
 
 
 def main():
@@ -496,16 +586,22 @@ def main():
             jdk, cat = run_both(probe_source(class_name, calls))
             if jdk is not None:
                 break
-            caturra_line = re.match(r"caturra:(\d+): ", cat)
+            caturra_line = re.match(r"caturra:([\d,]+): ", cat)
             if cat.startswith("javac: "):
                 # javac names the LINE, and the preamble is a fixed height.
                 bad = {n - HEADER_LINES - 1 for n in javac_rejected_lines(cat)}
                 keep = [c for at, c in enumerate(calls) if at not in bad]
                 why = "javac would not take the probe"
             elif caturra_line and caturra_line.group(1) != "0":
-                # ...and so does caturra, now that the harness passes it on.
-                at = int(caturra_line.group(1)) - HEADER_LINES - 1
-                keep = [c for n, c in enumerate(calls) if n != at]
+                # ...and so does caturra, now that the harness passes them on —
+                # ALL of them, so one round drops every bad call rather than
+                # one per round.
+                bad = {
+                    int(n) - HEADER_LINES - 1
+                    for n in caturra_line.group(1).split(",")
+                    if n != "0"
+                }
+                keep = [c for n, c in enumerate(calls) if n not in bad]
                 why = "caturra would not take the probe"
                 # A LINE and a SIGNATURE both: caturra's "no suitable method
                 # found for compare(int[],int,int,int[],int,int)" names the
@@ -556,7 +652,17 @@ def main():
                     keep = [c for c in calls if c[0].split("(")[0] not in names]
                     why = "dropped with a sibling overload caturra does not offer"
             if not keep or len(keep) == len(calls):
-                break
+                # NOTHING could be dropped: a message that names neither a
+                # line nor a signature nor a method. Rather than lose the
+                # class, find the offending call by BISECTION — the smallest
+                # prefix that still fails ends on it — and drop that one.
+                # Without this a single refusal with an unrecognised wording
+                # (`Collections.addAll` on a poly expression, an argument the
+                # bank typed badly) cost the whole class its sweep.
+                keep = drop_by_bisection(class_name, calls)
+                why = "bisected: the message named nothing to drop"
+                if not keep or len(keep) == len(calls):
+                    break
             dropped = [c for c in calls if c not in keep]
             unbuildable += [f"{class_name}.{c[0]} ({why})" for c in dropped]
             calls = keep
