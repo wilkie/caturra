@@ -4121,6 +4121,7 @@ impl MethodTable {
                     JType::StackFrame => ElemType::StackFrame,
                     JType::MatchResult => ElemType::MatchResult,
                     JType::File => ElemType::File,
+                    JType::Path => ElemType::Path,
                     JType::BigInteger => ElemType::BigInteger,
                     JType::BigDecimal => ElemType::BigDecimal,
                     JType::RoundingMode => ElemType::RoundingMode,
@@ -4968,6 +4969,7 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::StackFrame => "java/lang/StackTraceElement",
         ElemType::MatchResult => "java/util/regex/MatchResult",
         ElemType::File => "java/io/File",
+        ElemType::Path => "java/nio/file/Path",
         ElemType::BigInteger => "java/math/BigInteger",
         ElemType::BigDecimal => "java/math/BigDecimal",
         ElemType::RoundingMode => "java/math/RoundingMode",
@@ -5315,6 +5317,7 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::StackFrame => String::from("StackTraceElement"),
         ElemType::MatchResult => String::from("MatchResult"),
         ElemType::File => String::from("File"),
+        ElemType::Path => String::from("Path"),
         ElemType::BigInteger => String::from("BigInteger"),
         ElemType::BigDecimal => String::from("BigDecimal"),
         ElemType::RoundingMode => String::from("RoundingMode"),
@@ -6037,6 +6040,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::StackFrame => Some(ElemType::StackFrame),
         JType::MatchResult => Some(ElemType::MatchResult),
         JType::File => Some(ElemType::File),
+        JType::Path => Some(ElemType::Path),
         JType::BigInteger => Some(ElemType::BigInteger),
         JType::BigDecimal => Some(ElemType::BigDecimal),
         JType::RoundingMode => Some(ElemType::RoundingMode),
@@ -8113,6 +8117,9 @@ enum ElemType {
     MatchResult,
     /// `java.io.File` (element of `File.listFiles()`).
     File,
+    /// A `java.nio.file.Path` — the element of the stream `Files.list`
+    /// answers.
+    Path,
     /// `java.math.BigInteger` — the element of the pair `divideAndRemainder`
     /// answers, and of any collection a program keeps them in.
     BigInteger,
@@ -8281,6 +8288,7 @@ impl ElemType {
             ElemType::StackFrame => String::from("Ljava/lang/StackTraceElement;"),
             ElemType::MatchResult => String::from("Ljava/util/regex/MatchResult;"),
             ElemType::File => String::from("Ljava/io/File;"),
+            ElemType::Path => String::from("Ljava/nio/file/Path;"),
             ElemType::BigInteger => String::from("Ljava/math/BigInteger;"),
             ElemType::BigDecimal => String::from("Ljava/math/BigDecimal;"),
             ElemType::RoundingMode => String::from("Ljava/math/RoundingMode;"),
@@ -8361,6 +8369,7 @@ impl ElemType {
             ElemType::StackFrame => JType::StackFrame,
             ElemType::MatchResult => JType::MatchResult,
             ElemType::File => JType::File,
+            ElemType::Path => JType::Path,
             ElemType::BigInteger => JType::BigInteger,
             ElemType::BigDecimal => JType::BigDecimal,
             ElemType::RoundingMode => JType::RoundingMode,
@@ -33415,6 +33424,16 @@ impl BodyGen<'_> {
             // `newBufferedReader(path)` — the reader every line-by-line
             // program opens, and the one shape of `Files` that hands back an
             // object rather than an answer.
+            // `list(dir)` — the entries of ONE directory, as a stream of
+            // paths. A JDK's is lazy and closeable; this one reads the
+            // directory at once, which a program that collects or counts them
+            // cannot tell.
+            ("Files", "list") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                "Ljava/util/stream/Stream;",
+                Some(JType::Stream(ElemType::Path)),
+            )),
             ("Files", "newBufferedReader") => Some((
                 "java/nio/file/Files",
                 &[(JType::Path, "Ljava/nio/file/Path;")],
@@ -40759,6 +40778,7 @@ impl BodyGen<'_> {
             ElemType::Class => Some(String::from("java/lang/Class")),
             ElemType::MatchResult => Some(String::from("java/util/regex/MatchResult")),
             ElemType::File => Some(String::from("java/io/File")),
+            ElemType::Path => Some(String::from("java/nio/file/Path")),
             ElemType::BigInteger => Some(String::from("java/math/BigInteger")),
             ElemType::BigDecimal => Some(String::from("java/math/BigDecimal")),
             ElemType::RoundingMode => Some(String::from("java/math/RoundingMode")),
@@ -43937,6 +43957,7 @@ impl BodyGen<'_> {
             | ElemType::StackFrame
             | ElemType::MatchResult
             | ElemType::File
+            | ElemType::Path
             | ElemType::BigInteger
             | ElemType::BigDecimal
             | ElemType::RoundingMode

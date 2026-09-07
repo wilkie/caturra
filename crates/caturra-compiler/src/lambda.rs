@@ -855,6 +855,13 @@ fn is_library_static(class: &str, method: &str) -> bool {
         // `split` and the predicates beside them are not.
         "Pattern" => matches!(method, "compile" | "quote" | "matches"),
         "Matcher" => method == "quoteReplacement",
+        // `Files` is a NAMESPACE: every method it has is static, so this needs
+        // no list to keep current — `Files::isDirectory` as a stream filter is
+        // the ordinary way to sift what `Files.list` answers. `Path` and
+        // `Paths` are not namespaces, so their one factory is named.
+        "Files" => true,
+        "Path" => method == "of",
+        "Paths" => method == "get",
         _ => false,
     };
     by_class
@@ -6188,6 +6195,11 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // below. Without this a lambda over one had no element and was refused.
     if method == "lines" && args.len() == 1 && names_library_class(prev.as_ref(), "Files") {
         return Some(TypeRef::Named(String::from("String")));
+    }
+    // ...and `Files.list(dir)`, whose elements are PATHS, so a lambda over one
+    // knows what it is handed.
+    if method == "list" && args.len() == 1 && names_library_class(prev.as_ref(), "Files") {
+        return Some(TypeRef::Named(String::from("Path")));
     }
     if let Some(elem) = regex_stream_elem(prev, method, ctx) {
         return Some(elem);

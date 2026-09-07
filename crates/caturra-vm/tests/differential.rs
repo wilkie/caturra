@@ -54076,3 +54076,52 @@ public class IndexedMessages {
 }
 "#
 );
+
+// `Files.list(dir)` — the entries of one directory, as a stream of PATHS. It
+// wanted an element type caturra did not have, which is eight mechanical sites
+// and the reason it had been left out; and once it existed,
+// `Files::isDirectory` as a filter wanted a method reference to a library
+// STATIC. `Files` is a namespace — every method it has is static — so that
+// needs no list to keep current, where `Path` and `Paths` have one factory
+// each and are named. `NotDirectoryException` became catchable beside its
+// siblings: a program that catches `IOException` around a directory walk
+// should catch it.
+differential_test!(
+    the_paths_a_directory_lists,
+    "DirectoryListing",
+    r#"
+import java.nio.file.*;
+import java.util.stream.*;
+public class DirectoryListing {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    Files.createDirectory(Path.of("dl"));
+    Files.writeString(Path.of("dl/b.txt"), "b");
+    Files.writeString(Path.of("dl/a.txt"), "a");
+    Files.createDirectory(Path.of("dl/sub"));
+    s("names", () -> Files.list(Path.of("dl")).map(Path::getFileName).map(Object::toString).sorted().collect(Collectors.toList()));
+    s("full", () -> Files.list(Path.of("dl")).map(Object::toString).sorted().collect(Collectors.toList()));
+    s("count", () -> Files.list(Path.of("dl")).count());
+    s("dirs", () -> Files.list(Path.of("dl")).filter(Files::isDirectory).count());
+    s("files", () -> Files.list(Path.of("dl")).filter(Files::isRegularFile).count());
+    s("sizes", () -> Files.list(Path.of("dl")).filter(Files::isRegularFile).mapToLong(p -> {
+      try { return Files.size(p); } catch (Exception e) { return -1; }
+    }).sum());
+    s("list-file", () -> Files.list(Path.of("dl/a.txt")).count());
+    s("list-missing", () -> Files.list(Path.of("nope")).count());
+    s("catch-io", () -> {
+      try { Files.list(Path.of("dl/a.txt")); return "no throw"; }
+      catch (java.io.IOException e) { return "caught " + e.getClass().getSimpleName(); }
+    });
+    Files.delete(Path.of("dl/a.txt"));
+    Files.delete(Path.of("dl/b.txt"));
+    Files.delete(Path.of("dl/sub"));
+    Files.delete(Path.of("dl"));
+  }
+}
+"#
+);

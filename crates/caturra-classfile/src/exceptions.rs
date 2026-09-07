@@ -258,6 +258,13 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/nio/file/DirectoryNotEmptyException",
         "java/nio/file/FileSystemException",
     ),
+    // ...and the one `Files.list` throws when the path is a FILE, which
+    // belongs here for the same reason: a program that catches `IOException`
+    // around a directory walk should catch it.
+    (
+        "java/nio/file/NotDirectoryException",
+        "java/nio/file/FileSystemException",
+    ),
     (
         "java/nio/file/AccessDeniedException",
         "java/nio/file/FileSystemException",

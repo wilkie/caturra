@@ -15492,6 +15492,25 @@ third of the three null streams to need the marking, after the reader and the
 writer. The two unmodifiable wrappers printed `object@1f` because only the LIST
 one had a renderer.
 
+**The last two on that list.** `EnumSet<Day>` as a declared type turned out to
+work already — the earlier failure had been something else in the same probe,
+which is what re-measuring before fixing is for. `Files.list(dir)` did not:
+it answers a stream of PATHS, and there was no path ELEMENT type. That is
+eight mechanical sites (the checklist a new element kind has always been) and
+it was the whole reason the method had been left out.
+
+Two things came with it. `Files::isDirectory` as a filter wanted a method
+reference to a library STATIC, and the list those are judged by is per class —
+`Files` is a namespace, every method it has is static, so it needs no list to
+keep current, where `Path` and `Paths` have one factory each and are named.
+And `NotDirectoryException` moved from the unsupported list into the exception
+table beside `NoSuchFileException`: a program that catches `IOException` around
+a directory walk should catch it, and could not.
+
+The pin then found one more: **`Files.isRegularFile` answered `exists`**, so a
+DIRECTORY was a regular file and a walk that sifted its entries counted the
+folders among them.
+
 **And the arithmetic.** `Character.highSurrogate` is `(cp >>> 10) + 0xD7C0`
 with no subtraction of the supplementary base; caturra's subtracted it, which
 agreed for a real supplementary code point and parted for every other int. A

@@ -13222,6 +13222,38 @@ fn files_static(
                 None => JValue::NULL,
             }))
         }
+        // `list(dir)` — the directory's entries, each a full path, as a
+        // stream. A JDK sorts nothing (the order is the filesystem's), and
+        // refuses a path that is not a directory before it reads anything.
+        "list" => {
+            let entries = vfs.list_dir(&path).map_err(|_| {
+                if vfs.exists(&path) {
+                    throw(format!("java.nio.file.NotDirectoryException: {path}"))
+                } else {
+                    not_found()
+                }
+            })?;
+            // The entries come back as WHOLE paths, and each is answered
+            // relative to the directory as it was written — a JDK's
+            // `list(Path.of("ld"))` answers `ld/a.txt`, not `/ld/a.txt`.
+            let root = VirtualFileSystem::normalize(&path);
+            let mut items = Vec::new();
+            for entry in entries {
+                let tail = entry.strip_prefix(&root).unwrap_or(&entry);
+                let tail = tail.strip_prefix('/').unwrap_or(tail);
+                let full = if path.is_empty() || path == "/" {
+                    tail.to_owned()
+                } else {
+                    format!("{}/{tail}", path.trim_end_matches('/'))
+                };
+                let made = heap.alloc(HeapObject::Path(full));
+                items.push(JValue::Ref(Some(made)));
+            }
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Stream {
+                source: crate::value::StreamSource::Fixed(items),
+                ops: Vec::new(),
+            })))))
+        }
         // `newBufferedReader(path)` — the reader a line-by-line program opens.
         // It reads the file NOW, as every other reader here does; a JDK opens
         // it now too, which is why a missing file fails at this call.
@@ -13286,7 +13318,11 @@ fn files_static(
                 .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
             Ok(Some(args[0]))
         }
-        "exists" | "isRegularFile" => Ok(Some(JValue::Int(i32::from(vfs.exists(&path))))),
+        "exists" => Ok(Some(JValue::Int(i32::from(vfs.exists(&path))))),
+        // A DIRECTORY is not a regular file, which sharing the `exists` answer
+        // said it was — so a directory walk that sifted the entries counted
+        // the folders among them.
+        "isRegularFile" => Ok(Some(JValue::Int(i32::from(vfs.is_file(&path))))),
         "notExists" => Ok(Some(JValue::Int(i32::from(!vfs.exists(&path))))),
         "isDirectory" => Ok(Some(JValue::Int(i32::from(vfs.is_directory(&path))))),
         "delete" => {

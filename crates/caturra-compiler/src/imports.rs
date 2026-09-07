@@ -644,7 +644,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "LinkOption",
             "LinkPermission",
             "NoSuchFileException",
-            "NotDirectoryException",
             "NotLinkException",
             "OpenOption",
             "PathMatcher",
