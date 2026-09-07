@@ -325,6 +325,20 @@ fn temporal_enum_method(
 
 /// `LocalDateTime`'s factories: from fields, from a date and a time, from
 /// text, and from the host's clock.
+/// A month argument as a NUMBER: `LocalDate.of(2024, Month.MARCH, 14)` writes
+/// the constant where `of(2024, 3, 14)` writes the number, and the two build
+/// the same date. Every `of` that takes a month has both spellings.
+fn month_field(heap: &Heap, value: Option<&JValue>) -> i32 {
+    match value {
+        Some(JValue::Int(number)) => *number,
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Temporal(Temporal::Month(month))) => i32::from(*month),
+            _ => 0,
+        },
+        _ => 0,
+    }
+}
+
 fn local_date_time_static(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
@@ -358,10 +372,11 @@ fn local_date_time_static(
                 Some(JValue::Int(value)) => *value,
                 _ => 0,
             };
-            let date = match crate::time::Date::of(field(0), field(1), field(2)) {
-                Ok(date) => date,
-                Err(message) => return Err(date_time_exception(&message)),
-            };
+            let date =
+                match crate::time::Date::of(field(0), month_field(heap, args.get(1)), field(2)) {
+                    Ok(date) => date,
+                    Err(message) => return Err(date_time_exception(&message)),
+                };
             let time = match crate::time::Time::of(field(3), field(4), field(5), field(6)) {
                 Ok(time) => time,
                 Err(message) => return Err(date_time_exception(&message)),
@@ -1042,6 +1057,48 @@ fn duration_rebuilt(
     };
     let total = amount.total_nanos();
     match method {
+        // `dividedBy(other)` (Java 9) answers HOW MANY of the other fit in
+        // this one — a long, not a Duration, which is the whole difference
+        // from the divisor form beside it.
+        "dividedBy" if matches!(args.first(), Some(JValue::Ref(Some(_)))) => {
+            let Some(JValue::Ref(Some(reference))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let Some(HeapObject::Temporal(Temporal::Duration(other))) = heap.get(*reference) else {
+                return Err(throw("java.lang.ClassCastException: not a Duration"));
+            };
+            let divisor = other.total_nanos();
+            if divisor == 0 {
+                return Err(throw("java.lang.ArithmeticException: Division by zero"));
+            }
+            Ok(Some(JValue::Long(total / divisor)))
+        }
+        // `plus(amount, unit)` / `minus(amount, unit)` — a length in any unit
+        // a duration can measure exactly. A unit with an ESTIMATED length
+        // (months and up) has no fixed number of seconds and is refused.
+        "plus" | "minus" if args.len() == 2 => {
+            let count = match args.first() {
+                Some(JValue::Int(value)) => i64::from(*value),
+                Some(JValue::Long(value)) => *value,
+                _ => 0,
+            };
+            let Some(unit) = unit_argument(heap, args.get(1)) else {
+                return Err(throw("java.lang.NullPointerException: unit"));
+            };
+            // DAYS is the one estimated unit a JDK allows here (it takes it as
+            // exactly 24 hours); WEEKS and everything above it are refused,
+            // even though a week has a fixed number of nanoseconds too.
+            let nanos = (unit <= 7).then(|| crate::time::unit_nanos(unit)).flatten();
+            let Some(nanos) = nanos else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.time.temporal.UnsupportedTemporalTypeException: \
+                     Unit must not have an estimated duration",
+                )));
+            };
+            let sign = if method == "minus" { -1 } else { 1 };
+            let moved = total.saturating_add(count.saturating_mul(nanos) * sign);
+            made(heap, crate::time::Duration::of_nanos(moved))
+        }
         "multipliedBy" | "dividedBy" => {
             let by = match args.first() {
                 Some(JValue::Int(value)) => i64::from(*value),
@@ -1188,6 +1245,9 @@ fn duration_method(
         "multipliedBy" | "dividedBy" | "withSeconds" | "withNanos" => {
             duration_rebuilt(amount, heap, method, args)
         }
+        // `plus(amount, unit)` / `minus(amount, unit)` — the two-argument
+        // forms, which the one-argument `plus(duration)` below does not cover.
+        "plus" | "minus" if args.len() == 2 => duration_rebuilt(amount, heap, method, args),
         _ => {
             let Some((unit, count)) = shift_by(method, args) else {
                 return Err(VmError::UnknownIntrinsic(format!(
@@ -1284,23 +1344,41 @@ fn period_method(
             count
         };
         let replace = method.starts_with("with");
+        // `plusX`/`minusX` take a LONG in a JDK (only `withX` takes an int),
+        // and BOTH overflows are reachable and worded differently: a sum that
+        // leaves the long range is "long overflow", and one that fits a long
+        // but not the int the field is, is "integer overflow".
+        // `minusX(Long.MIN_VALUE)` cannot be negated, so a JDK adds MAX and
+        // then one — which is why it lands on the second wording.
+        let amount = match args.first() {
+            Some(JValue::Int(value)) => i64::from(*value),
+            Some(JValue::Long(value)) => *value,
+            _ => 0,
+        };
+        let moved = |field: i32| -> Result<i32, VmError> {
+            let (first, second) = match (method.starts_with("minus"), amount) {
+                (true, i64::MIN) => (i64::MAX, 1),
+                (true, amount) => (-amount, 0),
+                (false, amount) => (amount, 0),
+            };
+            let sum = i64::from(field)
+                .checked_add(first)
+                .and_then(|total| total.checked_add(second))
+                .ok_or_else(|| throw("java.lang.ArithmeticException: long overflow"))?;
+            i32::try_from(sum).map_err(|_| throw("java.lang.ArithmeticException: integer overflow"))
+        };
+        let _ = signed;
         let mut built = period;
         match field {
-            "Years" => {
-                built.years = if replace {
-                    count
-                } else {
-                    period.years + signed
-                }
-            }
+            "Years" => built.years = if replace { count } else { moved(period.years)? },
             "Months" => {
                 built.months = if replace {
                     count
                 } else {
-                    period.months + signed
+                    moved(period.months)?
                 }
             }
-            "Days" => built.days = if replace { count } else { period.days + signed },
+            "Days" => built.days = if replace { count } else { moved(period.days)? },
             _ => {
                 return Err(VmError::UnknownIntrinsic(format!(
                     "java/time/Period.{method}"
@@ -1991,6 +2069,31 @@ fn adjust_with(
     adjuster: Temporal,
     heap: &mut Heap,
 ) -> Result<Option<JValue>, VmError> {
+    // A PARTIAL date adjusts by FIELD, not by rebuilding a date: a `Year` has
+    // no month or day to put back, so `year.with(Year.of(2030))` sets the year
+    // and `yearMonth.with(firstDayOfMonth())` is "Unsupported field:
+    // DayOfMonth" — the field every one of those rules writes.
+    if matches!(value, Temporal::Year(_) | Temporal::YearMonth(_, _)) {
+        return match adjuster {
+            Temporal::Year(year) => with_field(value, 26, i64::from(year), heap),
+            Temporal::Month(month) => with_field(value, 23, i64::from(month), heap),
+            Temporal::YearMonth(year, month) => {
+                let Some(JValue::Ref(Some(reference))) =
+                    with_field(value, 26, i64::from(year), heap)?
+                else {
+                    return Err(throw("java.lang.ClassCastException: not a temporal"));
+                };
+                let Some(HeapObject::Temporal(moved)) = heap.get(reference) else {
+                    return Err(throw("java.lang.ClassCastException: not a temporal"));
+                };
+                with_field(*moved, 23, i64::from(month), heap)
+            }
+            _ => Err(VmError::UncaughtException(String::from(
+                "java.time.temporal.UnsupportedTemporalTypeException: \
+                 Unsupported field: DayOfMonth",
+            ))),
+        };
+    }
     let (date, time) = match value {
         Temporal::Date(date) => (Some(date), None),
         Temporal::Time(time) => (None, Some(time)),
@@ -2494,11 +2597,34 @@ fn temporal_method(
         && let Some(HeapObject::Temporal(Temporal::Date(end))) = heap.get(*reference)
     {
         let end = *end;
+        // `datesUntil(end, step)` walks by a PERIOD rather than a day at a
+        // time. A step of zero would never reach the end, and a JDK says so
+        // rather than looping.
+        let step = match args.get(1) {
+            None => Some(crate::time::Period {
+                years: 0,
+                months: 0,
+                days: 1,
+            }),
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::Temporal(Temporal::Period(step))) => Some(*step),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(step) = step else {
+            return Err(throw("java.lang.NullPointerException"));
+        };
+        if step.years == 0 && step.months == 0 && step.days == 0 {
+            return Err(throw("java.lang.IllegalArgumentException: step is zero"));
+        }
         let mut dates: Vec<JValue> = Vec::new();
         let mut at = date;
         while at.to_epoch_day() < end.to_epoch_day() {
             dates.push(JValue::Ref(Some(heap.intern_temporal(Temporal::Date(at)))));
-            at = at.plus_days(1);
+            at = at
+                .plus_months(i64::from(step.years) * 12 + i64::from(step.months))
+                .plus_days(i64::from(step.days));
         }
         let stream = heap.alloc(HeapObject::Stream {
             source: crate::value::StreamSource::Fixed(dates),
@@ -2543,7 +2669,13 @@ fn temporal_method(
     }
     // `plus(amount, unit)` and `minus(amount, unit)` read the same on all
     // three values, and so does `until(end, unit)`.
+    //
+    // A `DURATION` is the exception: it moves by a LENGTH rather than along a
+    // calendar, and refuses an ESTIMATED unit with a sentence of its own
+    // ("Unit must not have an estimated duration"). It is answered by
+    // `duration_method` below, which is why this arm steps aside for it.
     if matches!(method, "plus" | "minus")
+        && !matches!(value, Temporal::Duration(_))
         && let Some(unit) = unit_argument(heap, args.get(1))
     {
         let amount = match args.first() {
@@ -2565,6 +2697,33 @@ fn temporal_method(
         // in a unit the receiver does not have is refused, not computed.
         // `Year.until(other, DAYS)` filled the year out to a date and counted
         // 366 of them, where a JDK says the unit is unsupported.
+        // A JDK converts the END to the receiver's own type FIRST
+        // (`LocalDateTime.from(endExclusive)`) and only then asks about the
+        // unit — so a `LocalDate` handed to a `LocalTime.until` is a
+        // `DateTimeException` naming both, even when the unit is one a time
+        // has not got.
+        match value {
+            Temporal::Time(_) | Temporal::DateTime(_) => {
+                temporal_from(heap, &[end], matches!(value, Temporal::DateTime(_)))?;
+            }
+            Temporal::Date(_) => {
+                let JValue::Ref(Some(reference)) = end else {
+                    return Err(throw("java.lang.NullPointerException"));
+                };
+                let Some(HeapObject::Temporal(given)) = heap.get(reference) else {
+                    return Err(throw("java.lang.ClassCastException: not a temporal"));
+                };
+                if !matches!(given, Temporal::Date(_) | Temporal::DateTime(_)) {
+                    let given = *given;
+                    return Err(date_time_exception(&format!(
+                        "Unable to obtain LocalDate from TemporalAccessor: {} of type {}",
+                        given.text(),
+                        given.class_name().replace('/', ".")
+                    )));
+                }
+            }
+            _ => {}
+        }
         if !supports_unit(value, unit) {
             return Err(VmError::UncaughtException(format!(
                 "java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: {}",
@@ -4346,6 +4505,40 @@ fn invoke_virtual_dispatch(
 
         // `writeBytes(array)` — the whole array at once — and `writeTo(out)`,
         // which pours what has been gathered into another stream.
+        // `write(bytes)` and `write(bytes, off, len)` — what `OutputStream`
+        // declares, where `writeBytes` is Java 11's shorter name for the first.
+        // The range complaint is `Objects.checkFromIndexSize`'s, which is what
+        // a JDK's `ByteArrayOutputStream` calls.
+        (HeapObject::ByteStream(_), "write") if !matches!(args, [JValue::Int(_)]) => {
+            let Some(JValue::Ref(Some(array))) = args.first() else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let Some(HeapObject::ByteArray(bytes)) = heap.get(*array) else {
+                return Err(throw("java.lang.ClassCastException: not a byte[]"));
+            };
+            let bytes = bytes.clone();
+            let length = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
+            let (from, count) = match args {
+                [_, JValue::Int(off), JValue::Int(len)] => (*off, *len),
+                _ => (0, length),
+            };
+            if from < 0 || count < 0 || from > length - count {
+                return Err(throw(format!(
+                    "java.lang.IndexOutOfBoundsException: \
+                     Range [{from}, {from} + {count}) out of bounds for length {length}"
+                )));
+            }
+            let start = usize::try_from(from).unwrap_or(0);
+            let end = start + usize::try_from(count).unwrap_or(0);
+            let incoming: Vec<u8> = bytes[start..end]
+                .iter()
+                .map(|b| (*b).cast_unsigned())
+                .collect();
+            if let Some(HeapObject::ByteStream(bytes)) = heap.get_mut(receiver) {
+                bytes.extend_from_slice(&incoming);
+            }
+            Ok(None)
+        }
         (HeapObject::ByteStream(_), "writeBytes") => {
             let Some(JValue::Ref(Some(array))) = args.first() else {
                 return Err(throw("java.lang.NullPointerException"));
@@ -5975,6 +6168,37 @@ fn code_point_before(units: &[u16], index: i32) -> Result<i32, VmError> {
 /// The units behind a `CharSequence` that `Character` was handed. Unlike the
 /// concatenating one, a null here is a `NullPointerException` rather than the
 /// four characters of "null".
+/// Whether an argument is a `char[]` — the one thing that tells `Character`'s
+/// array-reading overloads from the `CharSequence` ones beside them, which have
+/// the same arity and a different reading of the same arguments.
+fn is_char_array(heap: &Heap, value: &JValue) -> bool {
+    matches!(
+        value,
+        JValue::Ref(Some(reference))
+            if matches!(heap.get(*reference), Some(HeapObject::IntArray(_, _)))
+    )
+}
+
+/// The array itself refusing an index: `new ArrayIndexOutOfBoundsException`'s
+/// JDK 11 message, which names the length as well as the index. (`Arrays`'
+/// own range check words the SAME failure differently — see
+/// `array_index_error` — because it builds the exception itself.)
+fn array_index_check(index: i32, length: usize) -> Result<(), VmError> {
+    if index >= 0 && index < i32::try_from(length).unwrap_or(i32::MAX) {
+        return Ok(());
+    }
+    Err(throw(format!(
+        "java.lang.ArrayIndexOutOfBoundsException: Index {index} out of bounds for length {length}"
+    )))
+}
+
+fn array_object_mut<'heap>(heap: &'heap mut Heap, value: &JValue) -> Option<&'heap mut HeapObject> {
+    match value {
+        JValue::Ref(Some(reference)) => heap.get_mut(*reference),
+        _ => None,
+    }
+}
+
 fn code_point_source(heap: &Heap, value: &JValue) -> Result<Vec<u16>, VmError> {
     match value {
         JValue::Ref(Some(reference)) => match heap.get(*reference) {
@@ -11267,8 +11491,11 @@ fn writer_method(
             let format_args = crate::format::args_from_descriptor(heap, descriptor, &args[1..])?;
             let text = crate::format::java_format(heap, &template, &format_args)?;
             put(heap, vfs, &String::from_utf16_lossy(&text))?;
-            // `format` returns the writer for chaining; `printf` is void.
-            Ok((method == "format").then_some(JValue::Ref(Some(receiver))))
+            // Both answer the writer, for chaining — which the DESCRIPTOR
+            // says, since a statement-position call is emitted as void.
+            Ok(descriptor
+                .ends_with(")Ljava/io/PrintWriter;")
+                .then_some(JValue::Ref(Some(receiver))))
         }
         // `write(String)` writes the whole string; `write(int)` writes a single
         // character (its low 16 bits).
@@ -11869,7 +12096,7 @@ pub fn invoke_static(
         "java/time/LocalDate" => match method {
             "of" => {
                 let (year, month, day) = match args {
-                    [JValue::Int(y), JValue::Int(m), JValue::Int(d)] => (*y, *m, *d),
+                    [JValue::Int(y), _, JValue::Int(d)] => (*y, month_field(heap, args.get(1)), *d),
                     _ => {
                         return Err(throw(
                             "java.lang.VerifyError: LocalDate.of takes three ints",
@@ -12821,6 +13048,23 @@ pub fn invoke_static(
                 ))))))
             }
             _ => Err(VmError::UnknownIntrinsic(format!("BigInteger.{method}"))),
+        },
+        // `CharSequence.compare(a, b)` (Java 11) — lexicographic over any two
+        // sequences, which is `String.compareTo` when both are strings.
+        "java/lang/CharSequence" => match method {
+            "compare" => {
+                let left = code_point_source(heap, &args[0])?;
+                let right = code_point_source(heap, &args[1])?;
+                for (a, b) in left.iter().zip(right.iter()) {
+                    if a != b {
+                        return Ok(Some(JValue::Int(i32::from(*a) - i32::from(*b))));
+                    }
+                }
+                let difference = i32::try_from(left.len()).unwrap_or(i32::MAX)
+                    - i32::try_from(right.len()).unwrap_or(i32::MAX);
+                Ok(Some(JValue::Int(difference)))
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("CharSequence.{method}"))),
         },
         // `Reader.nullReader()`, `Writer.nullWriter()` and
         // `OutputStream.nullOutputStream()` (Java 11). Each is the stream that
@@ -14051,6 +14295,135 @@ fn checked_radix(radix: i32) -> Result<u32, VmError> {
     Ok(u32::try_from(radix).expect("2..=36"))
 }
 
+/// The Java 9 ranged parsers — `Integer.parseInt(CharSequence, begin, end,
+/// radix)` and the three beside it. They read a SLICE of a sequence without
+/// copying it, and their complaints are their own: `Error at index 1 in:
+/// "1a2"`, where the index is relative to the slice and the text quoted is the
+/// slice rather than the whole.
+///
+/// Between the four of them the wording is inconsistent in a way only a capture
+/// reveals. An EMPTY range is `For input string: ""` from `parseInt` and
+/// `parseUnsignedLong` and a message of no text at all from `parseLong` and
+/// `parseUnsignedInt`; and `parseUnsignedInt`'s two own complaints name the
+/// WHOLE sequence where `parseUnsignedLong`'s name the slice. Neither pattern
+/// is guessable, so both are copied.
+///
+/// The ORDER is fixed too, and checked before anything is read: a null
+/// sequence, then the range, then the radix.
+/// The low 32 bits of a 64-bit answer, as an `int`.
+fn low_word(value: i64) -> i32 {
+    u32::try_from(value.cast_unsigned() & u64::from(u32::MAX))
+        .unwrap_or(0)
+        .cast_signed()
+}
+
+fn parse_ranged(heap: &Heap, args: &[JValue], long: bool, unsigned: bool) -> Result<i64, VmError> {
+    let [
+        text,
+        JValue::Int(begin),
+        JValue::Int(end),
+        JValue::Int(radix),
+    ] = args
+    else {
+        return Err(throw(
+            "java.lang.VerifyError: expected (CharSequence, int, int, int)",
+        ));
+    };
+    let JValue::Ref(Some(reference)) = text else {
+        return Err(throw("java.lang.NullPointerException"));
+    };
+    let units = match heap.get(*reference) {
+        Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => units.clone(),
+        _ => return Err(throw("java.lang.ClassCastException: not a CharSequence")),
+    };
+    let length = i32::try_from(units.len()).unwrap_or(i32::MAX);
+    if *begin < 0 || *begin > *end || *end > length {
+        return Err(throw("java.lang.IndexOutOfBoundsException"));
+    }
+    let from = usize::try_from(*begin).unwrap_or(0);
+    let to = usize::try_from(*end).unwrap_or(0);
+    let slice = String::from_utf16_lossy(&units[from..to]);
+    // The two UNSIGNED parsers look at an empty range BEFORE the radix; the
+    // signed pair check the radix first. One more place where these four
+    // agree on nothing.
+    if unsigned && slice.is_empty() {
+        return Err(if long {
+            throw("java.lang.NumberFormatException: For input string: \"\"")
+        } else {
+            throw("java.lang.NumberFormatException: ")
+        });
+    }
+    let radix = checked_radix(*radix)?;
+    // Which text the two unsigned parsers name in their own two complaints.
+    let named = if unsigned && !long {
+        String::from_utf16_lossy(&units)
+    } else {
+        slice.clone()
+    };
+    let at = |index: usize| {
+        throw(format!(
+            "java.lang.NumberFormatException: Error at index {index} in: \"{slice}\""
+        ))
+    };
+    if slice.is_empty() {
+        return Err(if unsigned == long {
+            throw("java.lang.NumberFormatException: For input string: \"\"")
+        } else {
+            throw("java.lang.NumberFormatException: ")
+        });
+    }
+    let digits: Vec<char> = slice.chars().collect();
+    let mut cursor = 0;
+    let mut negative = false;
+    if matches!(digits[0], '+' | '-') {
+        if digits[0] == '-' {
+            if unsigned {
+                return Err(throw(format!(
+                    "java.lang.NumberFormatException: \
+                     Illegal leading minus sign on unsigned string {named}."
+                )));
+            }
+            negative = true;
+        }
+        cursor = 1;
+    }
+    if cursor == digits.len() {
+        return Err(at(digits.len()));
+    }
+    // The magnitude a JDK allows, which is one more on the negative side.
+    let limit: u128 = match (long, unsigned, negative) {
+        (false, false, false) => u128::from(i32::MAX.cast_unsigned()),
+        (false, false, true) => u128::from(i32::MAX.cast_unsigned()) + 1,
+        (false, true, _) => u128::from(u32::MAX),
+        (true, false, false) => u128::from(i64::MAX.cast_unsigned()),
+        (true, false, true) => u128::from(i64::MAX.cast_unsigned()) + 1,
+        (true, true, _) => u128::from(u64::MAX),
+    };
+    let mut value: u128 = 0;
+    for (step, digit) in digits[cursor..].iter().enumerate() {
+        let Some(digit) = digit.to_digit(radix) else {
+            return Err(at(cursor + step));
+        };
+        value = value * u128::from(radix) + u128::from(digit);
+        // A JDK reports the index of the digit that pushed it over, which is
+        // why the check is per digit rather than at the end.
+        if value > limit {
+            if unsigned {
+                let width = if long { "long" } else { "int" };
+                return Err(throw(format!(
+                    "java.lang.NumberFormatException: \
+                     String value {named} exceeds range of unsigned {width}."
+                )));
+            }
+            return Err(at(cursor + step));
+        }
+    }
+    // The BITS, not the value: an unsigned parse answers the same 32 or 64
+    // bits a JDK does, which read back as a negative number.
+    let bits = u64::try_from(value).unwrap_or(u64::MAX).cast_signed();
+    Ok(if negative { bits.wrapping_neg() } else { bits })
+}
+
 /// `Integer.decode`/`Long.decode`: an optional sign, then `0x`/`0X`/`#` (hex),
 /// a leading `0` (octal), or decimal. Returned as i64 for the caller to range.
 fn decode_integer(text: &str) -> Result<i64, VmError> {
@@ -14247,6 +14620,15 @@ fn integer_static(
         // An EMPTY string is refused before the radix is looked at, where
         // `parseInt` looks at the radix first: the two orders are a JDK's, and
         // `parseUnsignedInt("", 0)` tells them apart.
+        // The Java 9 RANGED forms, which read a slice of a sequence.
+        ("parseInt", [_, JValue::Int(_), JValue::Int(_), JValue::Int(_)]) => {
+            i(low_word(parse_ranged(heap, args, false, false)?))
+        }
+        // The low 32 BITS, not the value: an unsigned parse of 4294967295
+        // answers -1, exactly as a JDK's does.
+        ("parseUnsignedInt", [_, JValue::Int(_), JValue::Int(_), JValue::Int(_)]) => {
+            i(low_word(parse_ranged(heap, args, false, true)?))
+        }
         ("parseUnsignedInt", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
             let text = parse_int_text(heap, text)?;
             if text.raw.is_empty() {
@@ -14855,6 +15237,109 @@ fn character_static(
         }
         // `codePointCount(CharSequence, begin, end)`: surrogate PAIRS count
         // once, so it is not simply `end - begin`.
+        // The `char[]` forms. They are the same questions asked of an ARRAY
+        // and they check their bounds differently: the two-argument pair lets
+        // the array itself complain ("Index 9 out of bounds for length 3") —
+        // and `codePointBefore` names the index it would have READ, one before
+        // the argument — while every form that takes an explicit LIMIT throws
+        // a bare `IndexOutOfBoundsException` with no message at all.
+        //
+        // `codePointCount(char[], offset, count)` also takes a COUNT where the
+        // `CharSequence` form takes an END. Two methods of one name that read
+        // their third argument differently.
+        ("codePointAt", [array, JValue::Int(at)]) if is_char_array(heap, array) => {
+            let units = char_array_units(heap, array)?;
+            array_index_check(*at, units.len())?;
+            code_point_at(&units, *at).map(|point| Some(JValue::Int(point)))
+        }
+        ("codePointAt", [array, JValue::Int(at), JValue::Int(limit)])
+            if is_char_array(heap, array) =>
+        {
+            let units = char_array_units(heap, array)?;
+            let length = i32::try_from(units.len()).unwrap_or(i32::MAX);
+            if *at < 0 || *at >= *limit || *limit < 0 || *limit > length {
+                return Err(throw("java.lang.IndexOutOfBoundsException"));
+            }
+            code_point_at(&units[..usize::try_from(*limit).unwrap_or(0)], *at)
+                .map(|point| Some(JValue::Int(point)))
+        }
+        ("codePointBefore", [array, JValue::Int(at)]) if is_char_array(heap, array) => {
+            let units = char_array_units(heap, array)?;
+            array_index_check(at.wrapping_sub(1), units.len())?;
+            code_point_before(&units, *at).map(|point| Some(JValue::Int(point)))
+        }
+        ("codePointBefore", [array, JValue::Int(at), JValue::Int(start)])
+            if is_char_array(heap, array) =>
+        {
+            let units = char_array_units(heap, array)?;
+            let length = i32::try_from(units.len()).unwrap_or(i32::MAX);
+            if *at <= *start || *start < 0 || *start >= length {
+                return Err(throw("java.lang.IndexOutOfBoundsException"));
+            }
+            let at = usize::try_from(*at).unwrap_or(0);
+            let start = usize::try_from(*start).unwrap_or(0);
+            code_point_before(&units[start..at], i32::try_from(at - start).unwrap_or(0))
+                .map(|point| Some(JValue::Int(point)))
+        }
+        ("codePointCount", [array, JValue::Int(offset), JValue::Int(count)])
+            if is_char_array(heap, array) =>
+        {
+            let units = char_array_units(heap, array)?;
+            let length = i32::try_from(units.len()).unwrap_or(i32::MAX);
+            if *offset < 0 || *count < 0 || *count > length - *offset {
+                return Err(throw("java.lang.IndexOutOfBoundsException"));
+            }
+            code_point_count(&units, *offset, offset.wrapping_add(*count))
+                .map(|n| Some(JValue::Int(n)))
+        }
+        (
+            "offsetByCodePoints",
+            [
+                array,
+                JValue::Int(start),
+                JValue::Int(count),
+                JValue::Int(index),
+                JValue::Int(offset),
+            ],
+        ) if is_char_array(heap, array) => {
+            let units = char_array_units(heap, array)?;
+            let length = i32::try_from(units.len()).unwrap_or(i32::MAX);
+            if *count > length - *start
+                || *start < 0
+                || *count < 0
+                || *index < *start
+                || *index > start.wrapping_add(*count)
+            {
+                return Err(throw("java.lang.IndexOutOfBoundsException"));
+            }
+            let end = usize::try_from(start.wrapping_add(*count)).unwrap_or(0);
+            let start = usize::try_from(*start).unwrap_or(0);
+            offset_by_code_points(
+                &units[start..end.min(units.len())],
+                index.wrapping_sub(i32::try_from(start).unwrap_or(0)),
+                *offset,
+            )
+            .map(|at| Some(JValue::Int(at + i32::try_from(start).unwrap_or(0))))
+        }
+        // `toChars(codePoint, dst, dstIndex)` writes into an array the caller
+        // owns and answers how many units it wrote.
+        ("toChars", [JValue::Int(point), array, JValue::Int(at)]) => {
+            let units = char_array_units(heap, array)?;
+            let written = code_point_units(*point)?;
+            let at = *at;
+            array_index_check(at, units.len())?;
+            array_index_check(
+                at.wrapping_add(i32::try_from(written.len()).unwrap_or(0) - 1),
+                units.len(),
+            )?;
+            if let Some(HeapObject::IntArray(_, slots)) = array_object_mut(heap, array) {
+                for (step, unit) in written.iter().enumerate() {
+                    let index = usize::try_from(at).unwrap_or(0) + step;
+                    slots[index] = i32::from(*unit);
+                }
+            }
+            Ok(Some(JValue::Int(i32::try_from(written.len()).unwrap_or(0))))
+        }
         ("codePointCount", [text, JValue::Int(begin), JValue::Int(end)]) => {
             let units = match text {
                 JValue::Ref(Some(reference)) => match heap.get(*reference) {
@@ -15153,6 +15638,12 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
                 return Ok(Some(JValue::Ref(Some(reference))));
             }
             Ok(parsed)
+        }
+        ("parseLong", [_, JValue::Int(_), JValue::Int(_), JValue::Int(_)]) => {
+            Ok(Some(JValue::Long(parse_ranged(heap, args, true, false)?)))
+        }
+        ("parseUnsignedLong", [_, JValue::Int(_), JValue::Int(_), JValue::Int(_)]) => {
+            Ok(Some(JValue::Long(parse_ranged(heap, args, true, true)?)))
         }
         ("parseUnsignedLong", [text @ JValue::Ref(_)]) => {
             let text = parse_int_text(heap, text)?;
@@ -16369,6 +16860,65 @@ fn math_context_method(
 /// SCALE is half of every answer here, which is what separates this from
 /// `double` arithmetic.
 #[allow(clippy::too_many_lines)]
+/// A value ROUNDED to a `MathContext`, or left alone when there is none (or
+/// when the context is `UNLIMITED`, whose precision is zero).
+fn rounded(
+    value: crate::decimal::BigDec,
+    context: Option<(u32, crate::decimal::Rounding)>,
+) -> Result<crate::decimal::BigDec, VmError> {
+    match context {
+        Some((digits, mode)) if digits > 0 => {
+            value.with_precision(digits, mode).map_err(decimal_error)
+        }
+        _ => Ok(value),
+    }
+}
+
+/// `divideToIntegralValue(divisor[, mc])` — the integral part of the quotient.
+///
+/// With a context the answer must fit the precision, and a JDK refuses it
+/// outright when it does not ("Division impossible") rather than rounding
+/// digits off an INTEGER. What digits are left over go into the SCALE, as close
+/// to the preferred one (`this.scale() - divisor.scale()`) as the precision
+/// allows — which is why `123.456.divideToIntegralValue(7, new MathContext(3))`
+/// is `17.0` and not `17`.
+fn integral_quotient(
+    value: &crate::decimal::BigDec,
+    them: &crate::decimal::BigDec,
+    context: Option<(u32, crate::decimal::Rounding)>,
+) -> Result<crate::decimal::BigDec, VmError> {
+    let quotient = value.divide_to_integral(them).map_err(decimal_error)?;
+    let Some((digits, mode)) = context.filter(|(digits, _)| *digits > 0) else {
+        return Ok(quotient);
+    };
+    // The precision is asked of the INTEGER, not of the preferred-scale form
+    // the plain division answers: `123.456 / 7` is `17.000` there, five digits
+    // for a quotient of two.
+    let quotient = quotient
+        .with_scale(0, crate::decimal::Rounding::Down)
+        .map_err(decimal_error)?;
+    if quotient.precision() > digits {
+        return Err(throw("java.lang.ArithmeticException: Division impossible"));
+    }
+    // As close to the PREFERRED scale as the precision allows — which may be
+    // below zero (`1 / 2.5` is `0E+1`), so the scale moves in both directions.
+    // A move that would round is not a move: the smallest scale that still
+    // represents the quotient is kept instead.
+    let spare = i32::try_from(digits - quotient.precision()).unwrap_or(0);
+    let preferred = value.scale().saturating_sub(them.scale());
+    let wanted = quotient.scale().saturating_add(spare).min(preferred);
+    if wanted == quotient.scale() {
+        return Ok(quotient);
+    }
+    let moved = quotient.with_scale(wanted, mode).map_err(decimal_error)?;
+    Ok(if moved.compare(&quotient) == std::cmp::Ordering::Equal {
+        moved
+    } else {
+        quotient
+    })
+}
+
+#[allow(clippy::too_many_lines)] // one arm per documented method
 fn big_decimal_method(
     heap: &mut Heap,
     receiver: HeapRef,
@@ -16455,18 +17005,40 @@ fn big_decimal_method(
         }
         "divideToIntegralValue" => {
             let them = decimal_at(heap, 0)?;
-            let quotient = value.divide_to_integral(&them).map_err(decimal_error)?;
+            let context = is_context(heap, 1)
+                .then(|| context_at(heap, 1))
+                .transpose()?;
+            let quotient = integral_quotient(&value, &them, context)?;
             answer(heap, quotient)
         }
+        // `remainder(d, mc)` is `this - divideToIntegralValue(d, mc) * d`,
+        // which is how a JDK defines it — so the context reaches the
+        // remainder through the QUOTIENT rather than by rounding the answer.
         "remainder" => {
             let them = decimal_at(heap, 0)?;
-            let rest = value.remainder(&them).map_err(decimal_error)?;
+            let rest = match is_context(heap, 1)
+                .then(|| context_at(heap, 1))
+                .transpose()?
+            {
+                None => value.remainder(&them).map_err(decimal_error)?,
+                context => {
+                    let quotient = integral_quotient(&value, &them, context)?;
+                    value.subtract(&quotient.multiply(&them))
+                }
+            };
             answer(heap, rest)
         }
         "divideAndRemainder" => {
             let them = decimal_at(heap, 0)?;
-            let quotient = value.divide_to_integral(&them).map_err(decimal_error)?;
-            let rest = value.remainder(&them).map_err(decimal_error)?;
+            let context = is_context(heap, 1)
+                .then(|| context_at(heap, 1))
+                .transpose()?;
+            let quotient = integral_quotient(&value, &them, context)?;
+            let rest = if context.is_some() {
+                value.subtract(&quotient.multiply(&them))
+            } else {
+                value.remainder(&them).map_err(decimal_error)?
+            };
             let quotient = heap.alloc(HeapObject::BigDecimal(quotient));
             let rest = heap.alloc(HeapObject::BigDecimal(rest));
             let pair = heap.alloc(HeapObject::RefArray(
@@ -16475,18 +17047,45 @@ fn big_decimal_method(
             ));
             Ok(Some(JValue::Ref(Some(pair))))
         }
+        // `pow(n)` and `pow(n, mc)`. Without a context — or with an UNLIMITED
+        // one — a negative exponent has no exact answer and a JDK refuses it
+        // ("Invalid operation"); with a precision it divides one by the
+        // magnitude to that many digits.
         "pow" => {
-            let raised = value.pow(int_at(0)).map_err(decimal_error)?;
-            answer(heap, raised)
+            let context = is_context(heap, 1)
+                .then(|| context_at(heap, 1))
+                .transpose()?;
+            let exponent = int_at(0);
+            let digits = context.map_or(0, |(digits, _)| digits);
+            if exponent < 0 {
+                if digits == 0 {
+                    return Err(throw("java.lang.ArithmeticException: Invalid operation"));
+                }
+                let (_, mode) = context.unwrap_or((0, Rounding::HalfUp));
+                let magnitude = value.pow(-exponent).map_err(decimal_error)?;
+                let inverse = BigDec::from_i64(1)
+                    .divide_with_precision(&magnitude, digits, mode)
+                    .map_err(decimal_error)?;
+                return answer(heap, inverse);
+            }
+            let raised = value.pow(exponent).map_err(decimal_error)?;
+            answer(heap, rounded(raised, context)?)
         }
         "negate" => {
-            let negated = value.negated();
-            answer(heap, negated)
+            let context = is_context(heap, 0)
+                .then(|| context_at(heap, 0))
+                .transpose()?;
+            answer(heap, rounded(value.negated(), context)?)
         }
-        // `plus()` is the unary `+`: the value itself.
+        // `plus()` is the unary `+`: the value itself. With a context, both it
+        // and `abs` are the value ROUNDED to that many digits, which is the
+        // only thing the one-argument forms do.
         "abs" | "plus" => {
+            let context = is_context(heap, 0)
+                .then(|| context_at(heap, 0))
+                .transpose()?;
             let magnitude = if method == "abs" { value.abs() } else { value };
-            answer(heap, magnitude)
+            answer(heap, rounded(magnitude, context)?)
         }
         "min" | "max" => {
             let them = decimal_at(heap, 0)?;
@@ -18291,6 +18890,7 @@ fn check_month_day(month: u8, day: i64) -> Result<(), VmError> {
 }
 
 /// The factories of `Year`, `YearMonth` and `MonthDay`.
+#[allow(clippy::too_many_lines)] // one arm per documented method
 fn partial_date_static(
     class: &str,
     heap: &mut Heap,
@@ -18381,6 +18981,56 @@ fn partial_date_static(
         }
         (_, "parse") => {
             let text = arg_string(heap, &args[0])?;
+            // `parse(text, formatter)` reads it the formatter's way. The only
+            // resolver here builds a whole DATE, so a pattern that carries no
+            // year is given a stand-in one and the fields this class has not
+            // got are dropped again on the way out.
+            if args.len() > 1 {
+                let Some(JValue::Ref(Some(formatter))) = args.get(1) else {
+                    return Err(throw("java.lang.NullPointerException: formatter"));
+                };
+                let formatter = *formatter;
+                let pieces = formatter_pieces(heap, formatter)?;
+                let (pieces, text) = match pieces {
+                    Ok(pieces) => {
+                        // Whichever of year, month and day the pattern does
+                        // not write, in that order, with a stand-in value.
+                        let mut filled = Vec::new();
+                        let mut prefix = String::new();
+                        for (letter, width, stand_in) in
+                            [('u', 4, "2000"), ('M', 2, "01"), ('d', 2, "01")]
+                        {
+                            if pieces.iter().any(|piece| names_field(piece, letter)) {
+                                continue;
+                            }
+                            filled.push(crate::time::Piece::Field(letter, width));
+                            filled.push(crate::time::Piece::Literal(String::from("-")));
+                            prefix.push_str(stand_in);
+                            prefix.push('-');
+                        }
+                        filled.extend(pieces);
+                        (Ok(filled), format!("{prefix}{text}"))
+                    }
+                    other => (other, text.clone()),
+                };
+                let resolved = match pieces {
+                    Ok(pieces) => crate::time::parse_pieces(&pieces, &text),
+                    Err(_) => crate::time::parse_date(&text).map(|date| (Some(date), None)),
+                };
+                let Ok((Some(date), _)) = resolved else {
+                    let text = arg_string(heap, &args[0])?;
+                    return Err(VmError::UncaughtException(format!(
+                        "java.time.format.DateTimeParseException: \
+                         Text '{text}' could not be parsed at index 0"
+                    )));
+                };
+                let value = match class {
+                    "java/time/Year" => Temporal::Year(date.year),
+                    "java/time/YearMonth" => Temporal::YearMonth(date.year, date.month),
+                    _ => Temporal::MonthDay(date.month, date.day),
+                };
+                return made(heap, value);
+            }
             let parsed = parse_partial_date(class, &text).ok_or_else(|| {
                 // ...AT AN INDEX, as every other parse message here does:
                 // these three said only that it could not be parsed.
@@ -18392,6 +19042,22 @@ fn partial_date_static(
             made(heap, parsed)
         }
         _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
+    }
+}
+
+/// Whether a pattern writes a given date field anywhere — a year (`u`/`y`), a
+/// month (`M`/`L`) or a day (`d`). A partial date's parse has to supply for
+/// itself whichever the pattern leaves out.
+fn names_field(piece: &crate::time::Piece, want: char) -> bool {
+    match piece {
+        crate::time::Piece::Field(letter, _) => match want {
+            'u' => matches!(letter, 'u' | 'y'),
+            'M' => matches!(letter, 'M' | 'L'),
+            other => *letter == other,
+        },
+        crate::time::Piece::Optional(inner) => inner.iter().any(|piece| names_field(piece, want)),
+        crate::time::Piece::Pad(_, inner) => names_field(inner, want),
+        crate::time::Piece::Literal(_) => false,
     }
 }
 
@@ -18521,9 +19187,7 @@ pub(crate) fn vector_index_error(
     // the array by then, so it reports the capacity it would have had.
     if index < 0 {
         return match method {
-            "removeElementAt" | "addAll" => {
-                throw(format!("Array index out of range: {index}"))
-            }
+            "removeElementAt" | "addAll" => throw(format!("Array index out of range: {index}")),
             "insertElementAt" | "add" => {
                 // The insertion GREW the array before it reached the copy that
                 // failed, and the new length is what the message reports — and

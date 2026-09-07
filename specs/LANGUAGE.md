@@ -8956,6 +8956,12 @@ counting catches: a divergence that stopped being one.
 
 - `Arrays.fill(new String[1], 5)` — javac erases to `fill(Object[], Object)`
   and throws `ArrayStoreException` at run time. (`strict_fill_checks_the_element_type_of_a_reference_array`)
+- `Collections.addAll(List.of("a"), new Object[] {"x"})` — javac takes it
+  because `List.of` is itself an inference site and can answer a
+  `List<Object>`; the same call on a `List<String>` VARIABLE it refuses, which
+  is what caturra says to both. A poly expression standing in for the
+  collection is inference this engine does not run backwards.
+  (`strict_add_all_reads_the_collection_as_written`)
 - `AbstractList<Integer> v;` and the rest of the unmodeled library — a scope
   limit, reported by name wherever written rather than as a missing symbol.
   This bullet used to name `LinkedList`, `HashSet`, `TreeMap` and `TreeSet`
@@ -15708,3 +15714,67 @@ overloads, `Year`/`YearMonth`/`MonthDay.parse(text, formatter)`,
 `Year`/`YearMonth.with(adjuster)`, and `until(Temporal, unit)` taking any
 temporal). `java.io`'s two (`OutputStream.write(byte[])` and `PrintWriter.printf`
 answering the writer) belong with them.
+
+### The rest of the calls the sweep refused (2026-09-07)
+
+The other half of the list — `java.lang`, `java.io`, `java.math` and
+`java.time`. **155 refused calls down to 16**, and every one of those sixteen is
+now a DECLARED refusal (`spliterator`, the four `Files` methods whose types
+caturra does not model, `Arrays.stream(a, from, to)`) or the single strictness
+above.
+
+**`Character`'s `char[]` family reads its bounds three ways.** The two-argument
+forms let the ARRAY complain — "Index 9 out of bounds for length 3" — and
+`codePointBefore` names the index it would have READ, one before the argument.
+Every form that takes an explicit LIMIT throws a bare `IndexOutOfBoundsException`
+with no message at all. And `codePointCount(char[], offset, count)` takes a
+COUNT where the `CharSequence` form of the same name takes an END: two methods,
+one name, and a different reading of the third argument.
+
+**The Java 9 ranged parsers are inconsistent with each other**, which only a
+capture shows. `Integer.parseInt(cs, begin, end, radix)` and its three siblings
+read a slice without copying it, and complain as `Error at index 1 in: "1a2"` —
+the index relative to the slice, the text quoted being the slice. But an EMPTY
+range is `For input string: ""` from `parseInt` and `parseUnsignedLong` and a
+message of no text at all from `parseLong` and `parseUnsignedInt`; and
+`parseUnsignedInt`'s two own complaints (`Illegal leading minus sign on unsigned
+string …`, `String value … exceeds range of unsigned int.`) name the WHOLE
+sequence where `parseUnsignedLong`'s name the slice. The order is fixed too, and
+checked before anything is read: a null sequence, then the range, then the radix.
+
+**`java.io`.** `write(byte[])` and `write(byte[], off, len)` on the byte stream
+(the range complaint is `Objects.checkFromIndexSize`'s, which is what a JDK's
+`ByteArrayOutputStream` calls); and `PrintWriter.printf` answers the WRITER, as
+both `printf` and `format` do on a `PrintStream` — typing it void made
+`pw.printf(...)` in any expression position "'void' type not allowed here".
+
+**`java.time`.** A month written as the CONSTANT (`LocalDate.of(2024,
+Month.MARCH, 14)` and the three `LocalDateTime` siblings). `Period`'s six
+shifting methods take a LONG — only the three `withX` take an int — and both
+overflows are reachable and worded differently: a sum outside the long range is
+"long overflow", one that fits a long and not the int the field is, is "integer
+overflow", and `minusX(Long.MIN_VALUE)` cannot be negated so a JDK adds MAX and
+then one, which is why it lands on the second. Java 9's
+`Duration.dividedBy(Duration)` answers HOW MANY fit rather than a duration, and
+the two-argument `plus`/`minus` take DAYS — the one estimated unit allowed —
+while WEEKS and everything above it are refused. `datesUntil(end, step)` walks
+by a period and refuses a zero one. `until(end, unit)` converts the END to the
+receiver's own type first, so a `LocalDate` handed to a `LocalDateTime.until` is
+a `DateTimeException` naming both rather than a measurement taken from midnight.
+`parse(text, formatter)` works on all three partial dates now — the only
+resolver here builds a whole date, so whichever of year, month and day the
+pattern leaves out is given a stand-in and dropped again on the way out. And
+`with(adjuster)` on a `Year`/`YearMonth` sets a FIELD rather than rebuilding a
+date, which is why `yearMonth.with(firstDayOfMonth())` is "Unsupported field:
+DayOfMonth".
+
+**`java.math`.** `BigDecimal`'s seven `MathContext` overloads — `add`,
+`subtract`, `multiply` and `divide` already had theirs, so a program that rounds
+every step could round only some of them. `divideToIntegralValue(d, mc)` asks
+its precision of the INTEGER quotient (the plain division answers `17.000` for
+`123.456 / 7`, five digits for a quotient of two) and refuses outright rather
+than rounding digits off an integer; whatever precision is left goes into the
+SCALE, as close to the preferred one as it allows, which is why the answer to
+three digits is `17.0`. `remainder(d, mc)` is defined THROUGH that quotient
+rather than by rounding a remainder. And `pow` with a negative exponent needs a
+precision to divide into — without one it is "Invalid operation".

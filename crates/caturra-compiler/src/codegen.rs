@@ -12218,6 +12218,29 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
         ISO_ONLY,
     ),
     ("Period", "getChronology", ISO_ONLY),
+    // The `java.nio.file.Files` methods that want a type caturra does not
+    // model. Each is real Java, so it says so by name rather than reading as a
+    // missing symbol.
+    (
+        "Files",
+        "createLink",
+        "caturra's filesystem is in memory and has no hard links",
+    ),
+    (
+        "Files",
+        "readSymbolicLink",
+        "caturra's filesystem is in memory and has no symbolic links",
+    ),
+    (
+        "Files",
+        "getFileStore",
+        "caturra does not model java.nio.file.FileStore",
+    ),
+    (
+        "Files",
+        "newDirectoryStream",
+        "caturra does not model java.nio.file.DirectoryStream — use Files.list(dir)",
+    ),
     ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
     ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
     ("Scanner", "skip", "caturra's Scanner reads whole tokens and cannot skip by pattern"),
@@ -14712,6 +14735,15 @@ const ENTRY_ITERATOR_METHODS: &[BuiltinMethod] = &[
 /// `java.lang.CharSequence` — the read-only face shared by `String` and
 /// `StringBuilder`. The VM dispatches on the actual heap object, so these
 /// resolve against whichever the reference holds.
+/// `CharSequence`'s one static (Java 11): lexicographic order over any two
+/// sequences, which is `String.compareTo` when both are strings.
+const CHAR_SEQUENCE_STATIC_METHODS: &[BuiltinMethod] = &[bm(
+    "compare",
+    &[BParam::CharSeq, BParam::CharSeq],
+    BRet::Int,
+    "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)I",
+)];
+
 const CHAR_SEQUENCE_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // Every reference has these; a `CharSequence`-typed value is a String or a
@@ -15197,6 +15229,13 @@ const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
         BRet::DateStream,
         "(Ljava/time/LocalDate;)Ljava/util/stream/Stream;",
     ),
+    // ...and the form that walks by a PERIOD rather than a day at a time.
+    bm(
+        "datesUntil",
+        &[BParam::LocalDate, BParam::Temporal],
+        BRet::DateStream,
+        "(Ljava/time/LocalDate;Ljava/time/Period;)Ljava/util/stream/Stream;",
+    ),
     bm(
         "with",
         &[BParam::TemporalAdjuster],
@@ -15433,7 +15472,10 @@ const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "until",
-        &[BParam::LocalDate, BParam::ChronoUnit],
+        // ANY temporal, as `LocalTime` and `LocalDateTime` take: the end is
+        // converted to the receiver's own type first, and a wrong KIND is a
+        // `DateTimeException` at run time rather than a refusal.
+        &[BParam::Temporal, BParam::ChronoUnit],
         BRet::Long,
         "(Ljava/time/LocalDate;Ljava/time/temporal/ChronoUnit;)J",
     ),
@@ -15599,7 +15641,10 @@ const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "until",
-        &[BParam::LocalTime, BParam::ChronoUnit],
+        // ANY temporal, which is what the descriptor beside it already
+        // says: a JDK's parameter is `Temporal`, and reading one of the wrong
+        // KIND is a `DateTimeException` at run time rather than a refusal.
+        &[BParam::Temporal, BParam::ChronoUnit],
         BRet::Long,
         "(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J",
     ),
@@ -15815,7 +15860,7 @@ const LOCAL_DATE_TIME_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "until",
-        &[BParam::LocalDateTime, BParam::ChronoUnit],
+        &[BParam::Temporal, BParam::ChronoUnit],
         BRet::Long,
         "(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J",
     ),
@@ -16227,6 +16272,28 @@ const DURATION_METHODS: &[BuiltinMethod] = &[
         BRet::Duration,
         "(J)Ljava/time/Duration;",
     ),
+    // ...and Java 9's `dividedBy(other)`, which answers HOW MANY of the other
+    // fit in this one — a long, not a Duration.
+    bm(
+        "dividedBy",
+        &[BParam::Duration],
+        BRet::Long,
+        "(Ljava/time/Duration;)J",
+    ),
+    // `plus(amount, unit)` / `minus(amount, unit)` — a length in any unit a
+    // duration can measure exactly.
+    bm(
+        "plus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::Duration,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/Duration;",
+    ),
+    bm(
+        "minus",
+        &[BParam::Long, BParam::ChronoUnit],
+        BRet::Duration,
+        "(JLjava/time/temporal/TemporalUnit;)Ljava/time/Duration;",
+    ),
     bm(
         "withSeconds",
         &[BParam::Long],
@@ -16278,40 +16345,42 @@ const PERIOD_METHODS: &[BuiltinMethod] = &[
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm(
+        // The six shifting methods take a LONG in a JDK — only the three
+        // `withX` take an int — so a `plusDays(2L)` is ordinary Java.
         "plusYears",
-        &[BParam::Int],
+        &[BParam::Long],
         BRet::Period,
-        "(I)Ljava/time/Period;",
+        "(J)Ljava/time/Period;",
     ),
     bm(
         "plusMonths",
-        &[BParam::Int],
+        &[BParam::Long],
         BRet::Period,
-        "(I)Ljava/time/Period;",
+        "(J)Ljava/time/Period;",
     ),
     bm(
         "plusDays",
-        &[BParam::Int],
+        &[BParam::Long],
         BRet::Period,
-        "(I)Ljava/time/Period;",
+        "(J)Ljava/time/Period;",
     ),
     bm(
         "minusYears",
-        &[BParam::Int],
+        &[BParam::Long],
         BRet::Period,
-        "(I)Ljava/time/Period;",
+        "(J)Ljava/time/Period;",
     ),
     bm(
         "minusMonths",
-        &[BParam::Int],
+        &[BParam::Long],
         BRet::Period,
-        "(I)Ljava/time/Period;",
+        "(J)Ljava/time/Period;",
     ),
     bm(
         "minusDays",
-        &[BParam::Int],
+        &[BParam::Long],
         BRet::Period,
-        "(I)Ljava/time/Period;",
+        "(J)Ljava/time/Period;",
     ),
     bm(
         "withYears",
@@ -16753,6 +16822,51 @@ const BIG_DECIMAL_METHODS: &[BuiltinMethod] = &[
     bm("negate", &[], BRet::BigDecimal, "()Ljava/math/BigDecimal;"),
     bm("abs", &[], BRet::BigDecimal, "()Ljava/math/BigDecimal;"),
     bm("plus", &[], BRet::BigDecimal, "()Ljava/math/BigDecimal;"),
+    // ...and the seven `MathContext` forms of the same operations. `add`,
+    // `subtract`, `multiply` and `divide` already had theirs; these did not,
+    // so a program that rounds every step could round some steps only.
+    bm(
+        "divideToIntegralValue",
+        &[BParam::BigDecimal, BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "remainder",
+        &[BParam::BigDecimal, BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "divideAndRemainder",
+        &[BParam::BigDecimal, BParam::MathContext],
+        BRet::BigDecimalArray,
+        "(Ljava/math/BigDecimal;Ljava/math/MathContext;)[Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "pow",
+        &[BParam::Int, BParam::MathContext],
+        BRet::BigDecimal,
+        "(ILjava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "negate",
+        &[BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "abs",
+        &[BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    bm(
+        "plus",
+        &[BParam::MathContext],
+        BRet::BigDecimal,
+        "(Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
     bm(
         "stripTrailingZeros",
         &[],
@@ -17046,6 +17160,22 @@ const YEAR_METHODS: &[BuiltinMethod] = &[
         BRet::Year,
         "(Ljava/time/temporal/TemporalField;J)Ljava/time/Year;",
     ),
+    // ...and `with(adjuster)`, where the adjuster is another value (or one of
+    // `TemporalAdjusters`' rules) rather than a field and a number.
+    bm(
+        "with",
+        &[BParam::TemporalAdjuster],
+        BRet::Year,
+        "(Ljava/time/temporal/TemporalAdjuster;)Ljava/time/Year;",
+    ),
+    // A temporal VALUE is an adjuster too — `year.with(Year.of(2030))` — which
+    // is the second entry `LocalDate` already carries.
+    bm(
+        "with",
+        &[BParam::Temporal],
+        BRet::Year,
+        "(Ljava/time/temporal/TemporalAdjuster;)Ljava/time/Year;",
+    ),
     bm(
         "until",
         &[BParam::Temporal, BParam::ChronoUnit],
@@ -17130,6 +17260,13 @@ const YEAR_STATIC_METHODS: &[BuiltinMethod] = &[
         &[BParam::CharSeq],
         BRet::Year,
         "(Ljava/lang/CharSequence;)Ljava/time/Year;",
+    ),
+    // ...and the form that reads it with a pattern of the program's own.
+    bm(
+        "parse",
+        &[BParam::CharSeq, BParam::DateFormat],
+        BRet::Year,
+        "(Ljava/lang/CharSequence;Ljava/time/format/DateTimeFormatter;)Ljava/time/Year;",
     ),
     bm(
         "from",
@@ -17261,6 +17398,22 @@ const YEAR_MONTH_METHODS: &[BuiltinMethod] = &[
         BRet::YearMonth,
         "(Ljava/time/temporal/TemporalField;J)Ljava/time/YearMonth;",
     ),
+    // ...and `with(adjuster)`, where the adjuster is another value (or one of
+    // `TemporalAdjusters`' rules) rather than a field and a number.
+    bm(
+        "with",
+        &[BParam::TemporalAdjuster],
+        BRet::YearMonth,
+        "(Ljava/time/temporal/TemporalAdjuster;)Ljava/time/YearMonth;",
+    ),
+    // A temporal VALUE is an adjuster too — `year.with(Year.of(2030))` — which
+    // is the second entry `LocalDate` already carries.
+    bm(
+        "with",
+        &[BParam::Temporal],
+        BRet::YearMonth,
+        "(Ljava/time/temporal/TemporalAdjuster;)Ljava/time/YearMonth;",
+    ),
     bm(
         "until",
         &[BParam::Temporal, BParam::ChronoUnit],
@@ -17323,6 +17476,13 @@ const YEAR_MONTH_STATIC_METHODS: &[BuiltinMethod] = &[
         &[BParam::CharSeq],
         BRet::YearMonth,
         "(Ljava/lang/CharSequence;)Ljava/time/YearMonth;",
+    ),
+    // ...and the form that reads it with a pattern of the program's own.
+    bm(
+        "parse",
+        &[BParam::CharSeq, BParam::DateFormat],
+        BRet::YearMonth,
+        "(Ljava/lang/CharSequence;Ljava/time/format/DateTimeFormatter;)Ljava/time/YearMonth;",
     ),
     bm(
         "from",
@@ -17446,6 +17606,13 @@ const MONTH_DAY_STATIC_METHODS: &[BuiltinMethod] = &[
         &[BParam::CharSeq],
         BRet::MonthDay,
         "(Ljava/lang/CharSequence;)Ljava/time/MonthDay;",
+    ),
+    // ...and the form that reads it with a pattern of the program's own.
+    bm(
+        "parse",
+        &[BParam::CharSeq, BParam::DateFormat],
+        BRet::MonthDay,
+        "(Ljava/lang/CharSequence;Ljava/time/format/DateTimeFormatter;)Ljava/time/MonthDay;",
     ),
     bm(
         "from",
@@ -18664,6 +18831,13 @@ const LOCAL_DATE_STATIC_METHODS: &[BuiltinMethod] = &[
         BRet::LocalDate,
         "(III)Ljava/time/LocalDate;",
     ),
+    // ...and the same date with the month written as the CONSTANT.
+    bm(
+        "of",
+        &[BParam::Int, BParam::Month, BParam::Int],
+        BRet::LocalDate,
+        "(ILjava/time/Month;I)Ljava/time/LocalDate;",
+    ),
     bm(
         "ofEpochDay",
         &[BParam::Long],
@@ -18799,6 +18973,46 @@ const LOCAL_DATE_TIME_STATIC_METHODS: &[BuiltinMethod] = &[
         ],
         BRet::LocalDateTime,
         "(IIIIIII)Ljava/time/LocalDateTime;",
+    ),
+    // ...and the same three with the month written as the CONSTANT.
+    bm(
+        "of",
+        &[
+            BParam::Int,
+            BParam::Month,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+        ],
+        BRet::LocalDateTime,
+        "(ILjava/time/Month;III)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "of",
+        &[
+            BParam::Int,
+            BParam::Month,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+        ],
+        BRet::LocalDateTime,
+        "(ILjava/time/Month;IIII)Ljava/time/LocalDateTime;",
+    ),
+    bm(
+        "of",
+        &[
+            BParam::Int,
+            BParam::Month,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+            BParam::Int,
+        ],
+        BRet::LocalDateTime,
+        "(ILjava/time/Month;IIIII)Ljava/time/LocalDateTime;",
     ),
     bm(
         "parse",
@@ -18942,6 +19156,16 @@ const BYTE_STREAM_METHODS: &[BuiltinMethod] = &[
     bm("toByteArray", &[], BRet::ByteArray, "()[B"),
     bm("reset", &[], BRet::Void, "()V"),
     bm("write", &[BParam::Int], BRet::Void, "(I)V"),
+    // ...and the two `OutputStream` declares, which a program reaches for
+    // whenever it already has the bytes. `writeBytes` below is Java 11's
+    // shorter name for the first of them.
+    bm("write", &[BParam::ByteArray], BRet::Void, "([B)V"),
+    bm(
+        "write",
+        &[BParam::ByteArray, BParam::Int, BParam::Int],
+        BRet::Void,
+        "([BII)V",
+    ),
     // Java 11's `writeBytes(byte[])` — the whole array at once, which is the
     // shape a program that already has bytes reaches for.
     bm("writeBytes", &[BParam::ByteArray], BRet::Void, "([B)V"),
@@ -19421,6 +19645,13 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
     },
     bm("toString", &[I, I], BRet::Str, "(II)Ljava/lang/String;"),
     bm("parseInt", &[S, I], BRet::Int, "(Ljava/lang/String;I)I"),
+    // The Java 9 RANGED forms: a slice of a sequence, read without copying it.
+    bm(
+        "parseInt",
+        &[BParam::CharSeq, I, I, I],
+        BRet::Int,
+        "(Ljava/lang/CharSequence;III)I",
+    ),
     bm("toBinaryString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
     bm("toOctalString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
     bm("toHexString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
@@ -19458,6 +19689,12 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
     bm("rotateLeft", &[I, I], BRet::Int, "(II)I"),
     bm("rotateRight", &[I, I], BRet::Int, "(II)I"),
     bm("parseUnsignedInt", &[S], BRet::Int, "(Ljava/lang/String;)I"),
+    bm(
+        "parseUnsignedInt",
+        &[BParam::CharSeq, I, I, I],
+        BRet::Int,
+        "(Ljava/lang/CharSequence;III)I",
+    ),
     bm(
         "parseUnsignedInt",
         &[S, I],
@@ -19644,6 +19881,8 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
     bm("isDefined", &[I], BRet::Boolean, "(I)Z"),
     bm("isSpaceChar", &[I], BRet::Boolean, "(I)Z"),
     bm("toTitleCase", &[C], BRet::Char, "(C)C"),
+    // ...and the CODE POINT form, which the int-overload block above skipped.
+    bm("toTitleCase", &[I], BRet::Int, "(I)I"),
     bm("getNumericValue", &[C], BRet::Int, "(C)I"),
     bm("digit", &[C, I], BRet::Int, "(CI)I"),
     bm("forDigit", &[I, I], BRet::Char, "(II)C"),
@@ -19693,6 +19932,43 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
         BRet::Int,
         "(Ljava/lang/CharSequence;II)I",
     ),
+    // The `char[]` forms of the same four questions, plus the `toChars` that
+    // writes INTO an array the caller owns. They read their bounds
+    // differently from the `CharSequence` ones beside them —
+    // `codePointCount(char[], offset, COUNT)` where the sequence form takes an
+    // END — which is why each is written out rather than shared.
+    bm("codePointAt", &[BParam::CharArray, I], BRet::Int, "([CI)I"),
+    bm(
+        "codePointAt",
+        &[BParam::CharArray, I, I],
+        BRet::Int,
+        "([CII)I",
+    ),
+    bm(
+        "codePointBefore",
+        &[BParam::CharArray, I],
+        BRet::Int,
+        "([CI)I",
+    ),
+    bm(
+        "codePointBefore",
+        &[BParam::CharArray, I, I],
+        BRet::Int,
+        "([CII)I",
+    ),
+    bm(
+        "codePointCount",
+        &[BParam::CharArray, I, I],
+        BRet::Int,
+        "([CII)I",
+    ),
+    bm(
+        "offsetByCodePoints",
+        &[BParam::CharArray, I, I, I, I],
+        BRet::Int,
+        "([CIIII)I",
+    ),
+    bm("toChars", &[I, BParam::CharArray, I], BRet::Int, "(I[CI)I"),
     // Deprecated in Java 1.1 and still present in 11.
     bm("isJavaLetter", &[C], BRet::Boolean, "(C)Z"),
     bm("isJavaLetterOrDigit", &[C], BRet::Boolean, "(C)Z"),
@@ -19842,6 +20118,18 @@ const FLOAT_METHODS: &[BuiltinMethod] = &[
 const LONG_METHODS: &[BuiltinMethod] = &[
     bm("parseLong", &[S], BRet::Long, "(Ljava/lang/String;)J"),
     bm("parseLong", &[S, I], BRet::Long, "(Ljava/lang/String;I)J"),
+    bm(
+        "parseLong",
+        &[BParam::CharSeq, I, I, I],
+        BRet::Long,
+        "(Ljava/lang/CharSequence;III)J",
+    ),
+    bm(
+        "parseUnsignedLong",
+        &[BParam::CharSeq, I, I, I],
+        BRet::Long,
+        "(Ljava/lang/CharSequence;III)J",
+    ),
     bm(
         "parseUnsignedLong",
         &[S],
@@ -22997,6 +23285,10 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "Map.Entry" | "Entry" => Some(("java/util/Map$Entry", MAP_ENTRY_STATIC_METHODS)),
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
+        // `CharSequence.compare(a, b)` (Java 11) — the one static the
+        // interface has, and the reason the interface is nameable as a
+        // QUALIFIER at all.
+        "CharSequence" => Some(("java/lang/CharSequence", CHAR_SEQUENCE_STATIC_METHODS)),
         "IntStream" => Some(("java/util/stream/IntStream", INTSTREAM_STATIC_METHODS)),
         // The primitive Optionals' factories are argument-typed like
         // `Optional.of`, so no fixed table fits; the entries exist so the
@@ -32753,12 +33045,11 @@ impl BodyGen<'_> {
         }
         if receiver_ty == JType::Writer && matches!(method, "printf" | "format") {
             let (tags, width) = self.emit_format_varargs(args, span)?;
-            // `printf` returns void; `format` returns the writer (for chaining).
-            let (ret_desc, ret_width, ret_ty) = if method == "format" {
-                ("Ljava/io/PrintWriter;", 1, Some(JType::Writer))
-            } else {
-                ("V", 0, None)
-            };
+            // BOTH answer the writer, as both do on a `PrintStream`: a JDK's
+            // `PrintWriter.printf` is declared `PrintWriter printf(...)`, and
+            // typing it void made `pw.printf(...)` in any expression position
+            // "'void' type not allowed here".
+            let (ret_desc, ret_width, ret_ty) = ("Ljava/io/PrintWriter;", 1, Some(JType::Writer));
             let descriptor = format!("(Ljava/lang/String;{tags}){ret_desc}");
             let method_ref =
                 intern_method_ref(self.pool, "java/io/PrintWriter", method, &descriptor);
@@ -33656,6 +33947,16 @@ impl BodyGen<'_> {
             _ => None,
         };
         let Some((internal, params, ret_desc, ret_ty)) = plan else {
+            // A `Files` method caturra has NOT modelled says so by name: the
+            // four below want types it has none of, and "no suitable method
+            // found" reads as a bug for methods the documentation shows.
+            if let Some(reason) = unsupported_member(class, method) {
+                self.error(
+                    span,
+                    format!("{class}.{method} exists in Java, but {reason}"),
+                );
+                return None;
+            }
             self.no_suitable_library_method(class, method, args, span);
             return None;
         };

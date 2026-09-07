@@ -2768,6 +2768,14 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         None,
                         ctx,
                     );
+                } else {
+                    // A consumer that is neither a lambda nor a method
+                    // reference — a variable, or a CAST carrying its own
+                    // target — is desugared like any other expression. This
+                    // arm used to return without touching it, so a
+                    // `(Consumer) (v -> {})` reached codegen with its lambda
+                    // never given a functional position.
+                    desugar_expr(&mut args[0], None, ctx);
                 }
                 if matches!(&args[1], Expr::MethodRef { .. }) {
                     let synth = Sam {
@@ -2787,6 +2795,8 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         None,
                         ctx,
                     );
+                } else {
+                    desugar_expr(&mut args[1], None, ctx);
                 }
                 return;
             }

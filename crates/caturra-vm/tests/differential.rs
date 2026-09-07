@@ -54606,3 +54606,298 @@ public class RefusedUtil {
 }
 "#
 );
+
+// The `java.lang` and `java.io` end of the sweep's refusal list.
+//
+// `Character`'s `char[]` code-point family reads its bounds differently from
+// the `CharSequence` one beside it: the two-argument pair lets the ARRAY
+// complain (and `codePointBefore` names the index it would have READ, one
+// before the argument), while every form taking an explicit limit throws a
+// bare IndexOutOfBoundsException — and `codePointCount(char[], offset, COUNT)`
+// takes a count where the sequence form takes an end.
+//
+// The Java 9 ranged parsers are worse. Between the four of them an EMPTY range
+// is `For input string: ""` from `parseInt` and `parseUnsignedLong` and a
+// message of no text at all from `parseLong` and `parseUnsignedInt`; a bad
+// digit or an overflow names the SLICE and the index within it; but
+// `parseUnsignedInt`'s two own complaints name the WHOLE sequence where
+// `parseUnsignedLong`'s name the slice. None of it is guessable.
+differential_test!(
+    ordinary_java_lang_the_sweep_refused,
+    "RefusedLang",
+    r#"
+import java.io.*;
+public class RefusedLang {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) throws Exception {
+    char[] cs = {'a', 'b', 'c'};
+    char[] sur = {'\uD83D', '\uDE00', 'x'};
+    ByteArrayOutputStream sink = new ByteArrayOutputStream();
+    StringWriter caught = new StringWriter();
+    PrintWriter pw = new PrintWriter(caught);
+    s("ulong-empty-radix1", () -> Long.parseUnsignedLong("ab", 1, 1, 1));
+    s("ulong-empty-radix0", () -> Long.parseUnsignedLong("ab", 0, 0, 0));
+    s("ulong-badrange-radix", () -> Long.parseUnsignedLong("ab", -2, -2, -2));
+    s("uint-empty-radix1", () -> Integer.parseUnsignedInt("ab", 1, 1, 1));
+    s("int-empty-radix1", () -> Integer.parseInt("ab", 1, 1, 1));
+    s("long-empty-radix1", () -> Long.parseLong("ab", 1, 1, 1));
+    s("int-nonempty-radix1", () -> Integer.parseInt("a1b", 1, 2, 1));
+    s("cpAt-arr", () -> Character.codePointAt(cs, 1));
+    s("cpAt-arr-sur", () -> Character.codePointAt(sur, 0));
+    s("cpAt-arr-bad", () -> Character.codePointAt(cs, 9));
+    s("cpAt-arr-neg", () -> Character.codePointAt(cs, -1));
+    s("cpAt-arr-limit", () -> Character.codePointAt(sur, 0, 1));
+    s("cpAt-arr-limit2", () -> Character.codePointAt(sur, 0, 2));
+    s("cpAt-arr-limit-bad", () -> Character.codePointAt(cs, 1, 1));
+    s("cpBefore-arr", () -> Character.codePointBefore(cs, 2));
+    s("cpBefore-arr-sur", () -> Character.codePointBefore(sur, 2));
+    s("cpBefore-arr-bad", () -> Character.codePointBefore(cs, 0));
+    s("cpBefore-arr-start", () -> Character.codePointBefore(sur, 2, 1));
+    s("cpCount-arr", () -> Character.codePointCount(cs, 0, 3));
+    s("cpCount-arr-sur", () -> Character.codePointCount(sur, 0, 3));
+    s("cpCount-arr-bad", () -> Character.codePointCount(cs, 0, 9));
+    s("offset-arr", () -> Character.offsetByCodePoints(sur, 0, 3, 0, 2));
+    s("offset-arr-bad", () -> Character.offsetByCodePoints(cs, 0, 3, 0, 9));
+    s("toChars-into", () -> { char[] dst = new char[4]; int n = Character.toChars(0x1F600, dst, 1); StringBuilder b = new StringBuilder(); for (char c : dst) b.append((int) c).append(','); return n + " " + b; });
+    s("toChars-into-bmp", () -> { char[] dst = new char[2]; int n = Character.toChars(65, dst, 0); return n + " " + new String(dst).replace('\0', '.'); });
+    s("toChars-into-bad", () -> { char[] dst = new char[1]; return Character.toChars(0x1F600, dst, 0); });
+    s("titleCase-int", () -> (int) Character.toTitleCase(0x01C6));
+    s("titleCase-int-plain", () -> (int) Character.toTitleCase((int) 'a'));
+    s("titleCase-char", () -> (int) Character.toTitleCase('a'));
+    s("parseInt-cs", () -> Integer.parseInt("xx123yy", 2, 5, 10));
+    s("parseInt-cs-radix", () -> Integer.parseInt("xxffyy", 2, 4, 16));
+    s("parseInt-cs-bad", () -> Integer.parseInt("xxzzyy", 2, 4, 10));
+    s("parseInt-cs-range", () -> Integer.parseInt("xx1yy", 2, 9, 10));
+    s("parseInt-cs-badradix", () -> Integer.parseInt("xx1yy", 2, 3, 1));
+    s("parseUnsignedInt-cs", () -> Integer.parseUnsignedInt("xx123yy", 2, 5, 10));
+    s("parseLong-cs", () -> Long.parseLong("xx123yy", 2, 5, 10));
+    s("parseUnsignedLong-cs", () -> Long.parseUnsignedLong("xx123yy", 2, 5, 10));
+    s("cs-compare", () -> CharSequence.compare("ab", "ac"));
+    s("cs-compare-eq", () -> CharSequence.compare("ab", "ab"));
+    s("cs-compare-sb", () -> CharSequence.compare(new StringBuilder("ab"), "abc"));
+    s("baos-write-bytes", () -> { sink.write("hi".getBytes()); return sink.toString(); });
+    s("baos-write-range", () -> { sink.write("abc".getBytes(), 1, 2); return sink.toString(); });
+    s("baos-write-range-bad", () -> { sink.write("abc".getBytes(), 1, 9); return sink.toString(); });
+    s("pw-printf", () -> { PrintWriter r = pw.printf("%s-%d%n", "x", 3); pw.flush(); return (r == pw) + " " + caught.toString().trim(); });
+    s("pw-format", () -> { PrintWriter r = pw.format("[%s]", "y"); pw.flush(); return (r == pw) + " " + caught.toString().trim(); });
+    s("empty-range", () -> Integer.parseInt("abc", 1, 1, 10));
+    s("radix-37", () -> Integer.parseInt("ab1cd", 2, 3, 37));
+    s("radix-1", () -> Integer.parseInt("ab1cd", 2, 3, 1));
+    s("overflow", () -> Integer.parseInt("x99999999999y", 1, 12, 10));
+    s("signed", () -> Integer.parseInt("x-12y", 1, 4, 10));
+    s("plus", () -> Integer.parseInt("x+12y", 1, 4, 10));
+    s("bad-mid", () -> Integer.parseInt("x1a2y", 1, 4, 10));
+    s("neg-begin", () -> Integer.parseInt("x12y", -1, 3, 10));
+    s("end-past", () -> Integer.parseInt("x12y", 1, 99, 10));
+    s("null-cs", () -> Integer.parseInt(null, 0, 1, 10));
+    s("sb", () -> Integer.parseInt(new StringBuilder("x12y"), 1, 3, 10));
+    s("unsigned-neg", () -> Integer.parseUnsignedInt("x-1y", 1, 3, 10));
+    s("unsigned-big", () -> Integer.parseUnsignedInt("x4294967295y", 1, 11, 10));
+    s("long-overflow", () -> Long.parseLong("x99999999999999999999y", 1, 21, 10));
+    s("ulong-big", () -> Long.parseUnsignedLong("x18446744073709551615y", 1, 21, 10));
+    s("badrange-badradix", () -> Integer.parseInt("x12y", -1, 3, 99));
+    s("null-badradix", () -> Integer.parseInt(null, 0, 1, 99));
+    s("begin-gt-end", () -> Integer.parseInt("x12y", 3, 1, 10));
+    s("sign-only", () -> Integer.parseInt("x-y", 1, 2, 10));
+    s("unsigned-plus", () -> Integer.parseUnsignedInt("x+1y", 1, 3, 10));
+    s("unsigned-empty", () -> Integer.parseUnsignedInt("ab", 1, 1, 10));
+    s("unsigned-overflow", () -> Integer.parseUnsignedInt("x4294967296y", 1, 11, 10));
+    s("min-value", () -> Integer.parseInt("x-2147483648y", 1, 12, 10));
+    s("min-minus-one", () -> Integer.parseInt("x-2147483649y", 1, 12, 10));
+    s("empty-16", () -> Integer.parseInt("abc", 1, 1, 16));
+    s("bad-16", () -> Integer.parseInt("xzzy", 1, 3, 16));
+    s("overflow-16", () -> Integer.parseInt("xffffffffffy", 1, 11, 16));
+    s("plain-empty-16", () -> Integer.parseInt("", 16));
+    s("plain-bad-16", () -> Integer.parseInt("zz", 16));
+    s("uempty-16", () -> Integer.parseUnsignedInt("abc", 1, 1, 16));
+    s("ubad-16", () -> Integer.parseUnsignedInt("xzzy", 1, 3, 16));
+    s("long-empty", () -> Long.parseLong("abc", 1, 1, 10));
+    s("ulong-neg", () -> Long.parseUnsignedLong("x-1y", 1, 3, 10));
+    s("ulong-overflow", () -> Long.parseUnsignedLong("x18446744073709551616y", 1, 21, 10));
+    s("L-bad", () -> Long.parseLong("x1a2y", 1, 4, 10));
+    s("L-sign-only", () -> Long.parseLong("x-y", 1, 2, 10));
+    s("UL-empty", () -> Long.parseUnsignedLong("abc", 1, 1, 10));
+    s("UL-bad", () -> Long.parseUnsignedLong("x1a2y", 1, 4, 10));
+    s("UI-sign-only", () -> Integer.parseUnsignedInt("x-y", 1, 2, 10));
+    s("UI-empty-whole", () -> Integer.parseUnsignedInt("", 0, 0, 10));
+    s("I-empty-slice", () -> Integer.parseInt("zz", 1, 1, 10));
+    s("I-radix2", () -> Integer.parseInt("x101y", 1, 4, 2));
+    s("I-upper", () -> Integer.parseInt("xFFy", 1, 3, 16));
+  }
+}
+"#
+);
+
+// The `java.time` end. A month written as the CONSTANT, `Period`'s six
+// shifting methods taking a LONG (both overflows reachable and worded
+// differently), Java 9's `Duration.dividedBy(Duration)` and the two-argument
+// `plus`/`minus` (DAYS is the one estimated unit they take), `datesUntil` with
+// a step, `until` converting the END first, `parse(text, formatter)` on all
+// three partial dates, and `with(adjuster)` on the two that have fields to
+// set.
+differential_test!(
+    ordinary_java_time_the_sweep_refused,
+    "RefusedTime",
+    r#"
+import java.time.*;
+import java.time.format.*;
+import java.time.temporal.*;
+import java.util.stream.*;
+public class RefusedTime {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    s("time-until-date-days", () -> LocalTime.of(1, 0).until(LocalDate.of(2024, 3, 14), ChronoUnit.DAYS));
+    s("date-until-time-hours", () -> LocalDate.of(2024, 3, 14).until(LocalTime.of(1, 0), ChronoUnit.HOURS));
+    s("date-of-month", () -> LocalDate.of(2024, Month.MARCH, 14));
+    s("date-of-month-bad", () -> LocalDate.of(2024, Month.FEBRUARY, 30));
+    s("dt-of-month-5", () -> LocalDateTime.of(2024, Month.MARCH, 14, 1, 2));
+    s("dt-of-month-6", () -> LocalDateTime.of(2024, Month.MARCH, 14, 1, 2, 3));
+    s("dt-of-month-7", () -> LocalDateTime.of(2024, Month.MARCH, 14, 1, 2, 3, 4));
+    s("period-plusDays-long", () -> Period.ofDays(3).plusDays(2L));
+    s("period-plusMonths-long", () -> Period.ofMonths(3).plusMonths(2L));
+    s("period-plusYears-long", () -> Period.ofYears(3).plusYears(2L));
+    s("period-minusDays-long", () -> Period.ofDays(3).minusDays(5L));
+    s("period-minusMonths-long", () -> Period.ofMonths(3).minusMonths(5L));
+    s("period-minusYears-long", () -> Period.ofYears(3).minusYears(5L));
+    s("period-plusDays-overflow", () -> Period.ofDays(1).plusDays(Long.MAX_VALUE));
+    s("dur-dividedBy-dur", () -> Duration.ofHours(7).dividedBy(Duration.ofHours(2)));
+    s("dur-dividedBy-dur-zero", () -> Duration.ofHours(7).dividedBy(Duration.ZERO));
+    s("dur-plus-unit", () -> Duration.ofHours(2).plus(30, ChronoUnit.MINUTES));
+    s("dur-minus-unit", () -> Duration.ofHours(2).minus(30, ChronoUnit.MINUTES));
+    s("dur-plus-unit-bad", () -> Duration.ofHours(2).plus(1, ChronoUnit.MONTHS));
+    s("date-datesUntil-period", () -> LocalDate.of(2024, 1, 1).datesUntil(LocalDate.of(2024, 1, 10), Period.ofDays(3)).collect(Collectors.toList()));
+    s("date-datesUntil-zero", () -> LocalDate.of(2024, 1, 1).datesUntil(LocalDate.of(2024, 1, 10), Period.ZERO).count());
+    s("dt-until-temporal", () -> LocalDateTime.of(2024, 3, 14, 0, 0).until(LocalDateTime.of(2024, 3, 16, 0, 0), ChronoUnit.DAYS));
+    s("dt-until-wrongtype", () -> LocalDateTime.of(2024, 3, 14, 0, 0).until(LocalDate.of(2024, 3, 16), ChronoUnit.DAYS));
+    s("time-until-temporal", () -> LocalTime.of(1, 0).until(LocalTime.of(3, 0), ChronoUnit.HOURS));
+    s("time-until-wrongtype", () -> LocalTime.of(1, 0).until(LocalDate.of(2024, 3, 16), ChronoUnit.HOURS));
+    s("year-parse-fmt", () -> Year.parse("2024", DateTimeFormatter.ofPattern("yyyy")));
+    s("year-parse-fmt-bad", () -> Year.parse("xx", DateTimeFormatter.ofPattern("yyyy")));
+    s("ym-parse-fmt", () -> YearMonth.parse("2024-03", DateTimeFormatter.ofPattern("yyyy-MM")));
+    s("md-parse-fmt", () -> MonthDay.parse("03-14", DateTimeFormatter.ofPattern("MM-dd")));
+    s("year-with-adjuster", () -> Year.of(2024).with(Year.of(2030)));
+    s("ym-with-adjuster", () -> YearMonth.of(2024, 3).with(Year.of(2030)));
+    s("ym-with-adjuster-first", () -> YearMonth.of(2024, 3).with(TemporalAdjusters.firstDayOfMonth()));
+    s("int-overflow", () -> Period.ofDays(1).plusDays(3000000000L));
+    s("int-overflow-months", () -> Period.ofMonths(1).plusMonths(3000000000L));
+    s("minus-int-overflow", () -> Period.ofDays(-1).minusDays(3000000000L));
+    s("long-overflow", () -> Period.ofDays(-1).minusDays(Long.MIN_VALUE));
+    s("dur-div-neg", () -> Duration.ofHours(7).dividedBy(Duration.ofHours(-2)));
+    s("dur-div-bigger", () -> Duration.ofHours(1).dividedBy(Duration.ofHours(2)));
+    s("dur-plus-days", () -> Duration.ofHours(2).plus(1, ChronoUnit.DAYS));
+    s("dur-plus-half", () -> Duration.ofHours(2).plus(1, ChronoUnit.HALF_DAYS));
+    s("dur-plus-nanos", () -> Duration.ofHours(2).plus(5, ChronoUnit.NANOS));
+    s("dur-plus-forever", () -> Duration.ofHours(2).plus(1, ChronoUnit.FOREVER));
+    s("year-yy", () -> Year.parse("24", DateTimeFormatter.ofPattern("yy")));
+    s("ym-slash", () -> YearMonth.parse("03/2024", DateTimeFormatter.ofPattern("MM/yyyy")));
+    s("md-slash", () -> MonthDay.parse("14/03", DateTimeFormatter.ofPattern("dd/MM")));
+    s("md-iso", () -> MonthDay.parse("--03-14"));
+    s("md-bad", () -> MonthDay.parse("xx", DateTimeFormatter.ofPattern("MM-dd")));
+    s("year-null-fmt", () -> Year.parse("2024", null));
+  }
+}
+"#
+);
+
+// `BigDecimal`'s seven `MathContext` overloads — `add`/`subtract`/`multiply`/
+// `divide` already had theirs, so a program that rounds every step could round
+// some steps only. `divideToIntegralValue` asks its precision of the INTEGER
+// and refuses outright rather than rounding digits off one; what is left over
+// goes into the SCALE, which is why `123.456 / 7` to three digits is `17.0`.
+// And a `pow` with a negative exponent needs a precision to divide into.
+//
+// With them, the last two of the sweep's list: a raw `(Consumer)` cast into
+// `ifPresentOrElse`, whose arm returned without desugaring anything that was
+// not a bare lambda.
+differential_test!(
+    ordinary_java_math_the_sweep_refused,
+    "RefusedMath",
+    r#"
+import java.math.*;
+import java.util.*;
+import java.util.function.*;
+public class RefusedMath {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static BigDecimal d(String t) { return new BigDecimal(t); }
+  public static void main(String[] a) {
+    MathContext m3 = new MathContext(3);
+    MathContext m1 = new MathContext(1);
+    MathContext m0 = MathContext.UNLIMITED;
+    Consumer<String> shout = v -> System.out.print("[" + v + "]");
+    Runnable none = () -> System.out.print("[none]");
+    IntConsumer count = n -> System.out.print("<" + n + ">");
+    s("p-123.456-7", () -> d("123.456").divideToIntegralValue(d("7")));
+    s("p-1-2.5", () -> d("1").divideToIntegralValue(d("2.5")));
+    s("p-7.25-2.5", () -> d("7.25").divideToIntegralValue(d("2.5")));
+    s("p-10-3", () -> d("10").divideToIntegralValue(d("3")));
+    s("p-1.00-3", () -> d("1.00").divideToIntegralValue(d("3")));
+    s("r-123.456-7", () -> d("123.456").remainder(d("7")));
+    s("r-1-2.5", () -> d("1").remainder(d("2.5")));
+    s("r-7.25-2.5", () -> d("7.25").remainder(d("2.5")));
+    s("r-1.00-3", () -> d("1.00").remainder(d("3")));
+    s("m-123.456-7", () -> d("123.456").divideToIntegralValue(d("7"), new MathContext(3)));
+    s("m-1-2.5", () -> d("1").divideToIntegralValue(d("2.5"), MathContext.DECIMAL64));
+    s("m-7.25-2.5", () -> d("7.25").divideToIntegralValue(d("2.5"), MathContext.DECIMAL64));
+    s("mr-1-2.5", () -> d("1").remainder(d("2.5"), MathContext.DECIMAL64));
+    s("mr-7.25-2.5", () -> d("7.25").remainder(d("2.5"), MathContext.DECIMAL64));
+    s("divint-zero", () -> BigDecimal.ONE.divideToIntegralValue(new BigDecimal("2.5"), MathContext.DECIMAL64));
+    s("divint-zero-plain", () -> BigDecimal.ONE.divideToIntegralValue(new BigDecimal("2.5")));
+    s("rem-mc", () -> BigDecimal.ONE.remainder(new BigDecimal("2.5"), MathContext.DECIMAL64));
+    s("rem-plain", () -> BigDecimal.ONE.remainder(new BigDecimal("2.5")));
+    s("divint-2", () -> new BigDecimal("7.25").divideToIntegralValue(new BigDecimal("2.5"), MathContext.DECIMAL64));
+    s("rem-2", () -> new BigDecimal("7.25").remainder(new BigDecimal("2.5"), MathContext.DECIMAL64));
+    s("abs-mc", () -> d("-123.456").abs(m3));
+    s("abs-mc-unlimited", () -> d("-123.456").abs(m0));
+    s("negate-mc", () -> d("123.456").negate(m3));
+    s("plus-mc", () -> d("123.456").plus(m3));
+    s("plus-mc-1", () -> d("123.456").plus(m1));
+    s("pow-mc", () -> d("1.5").pow(3, m3));
+    s("pow-mc-neg", () -> d("1.5").pow(-2, m3));
+    s("pow-mc-unlimited-neg", () -> d("1.5").pow(-2, m0));
+    s("pow-mc-0", () -> d("1.5").pow(0, m3));
+    s("remainder-mc", () -> d("123.456").remainder(d("7"), m3));
+    s("remainder-mc-zero", () -> d("1").remainder(d("0"), m3));
+    s("divToIntegral-mc", () -> d("123.456").divideToIntegralValue(d("7"), m3));
+    s("divToIntegral-mc-small", () -> d("123.456").divideToIntegralValue(d("7"), m1));
+    s("divToIntegral-mc-zero", () -> d("1").divideToIntegralValue(d("0"), m3));
+    s("divAndRem-mc", () -> { BigDecimal[] r = d("123.456").divideAndRemainder(d("7"), m3); return r[0] + " | " + r[1]; });
+    s("divAndRem-mc-zero", () -> d("1").divideAndRemainder(d("0"), m3));
+    s("abs-plain", () -> d("-123.456").abs());
+    s("pow-plain", () -> d("1.5").pow(3));
+    s("rounding-half", () -> d("123.456").plus(new MathContext(4)));
+    s("rounding-mode", () -> d("123.456").plus(new MathContext(4, RoundingMode.DOWN)));
+    s("addAll-object-array", () -> { Collection<Object> c = new ArrayList<>(); Collections.addAll(c, new Object[] {"a", 1}); return c; });
+    s("addAll-collection-face", () -> { Collection<String> c = new ArrayList<>(); Collections.addAll(c, "a", "b"); return c; });
+    s("ifPresentOrElse-values", () -> { Optional.of("x").ifPresentOrElse(shout, none); return "ok"; });
+    s("ifPresentOrElse-empty-values", () -> { Optional.<String>empty().ifPresentOrElse(shout, none); return "ok"; });
+    s("optint-ifPresentOrElse-values", () -> { OptionalInt.of(4).ifPresentOrElse(count, none); return "ok"; });
+    s("ifPresentOrElse-mixed", () -> { Optional.of("y").ifPresentOrElse(shout, () -> System.out.print("[no]")); return "ok"; });
+    s("raw-consumer", () -> { Optional.of("x").ifPresentOrElse((java.util.function.Consumer) (v -> {}), (java.lang.Runnable) (() -> {})); return "ok"; });
+    s("raw-intconsumer", () -> { OptionalInt.of(3).ifPresentOrElse((java.util.function.IntConsumer) (n -> {}), (java.lang.Runnable) (() -> {})); return "ok"; });
+  }
+}
+"#
+);
+
+// javac takes `Collections.addAll(List.of("a"), new Object[] {"x"})` because
+// `List.of` is itself an inference site and can answer a `List<Object>`; the
+// same call on a `List<String>` VARIABLE it refuses, which is what caturra says
+// to both. A poly expression standing in for the collection is inference this
+// engine does not run backwards.
+stricter_than_javac!(
+    strict_add_all_reads_the_collection_as_written,
+    "StrictAddAllPoly",
+    "import java.util.*;\npublic class StrictAddAllPoly { static boolean r() { return Collections.addAll(List.of(\"a\", \"b\"), new Object[] {\"a\"}); } }"
+);
