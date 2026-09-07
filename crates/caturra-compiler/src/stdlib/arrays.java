@@ -265,6 +265,28 @@ class Arrays {
     for (int i = 0; i < shared; i++) if (a[i] != b[i]) return i;
     return a.length == b.length ? -1 : shared;
   }
+  public static int mismatch(short[] a, short[] b) {
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) if (a[i] != b[i]) return i;
+    return a.length == b.length ? -1 : shared;
+  }
+  public static int mismatch(byte[] a, byte[] b) {
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) if (a[i] != b[i]) return i;
+    return a.length == b.length ? -1 : shared;
+  }
+  public static int mismatch(boolean[] a, boolean[] b) {
+    int shared = a.length < b.length ? a.length : b.length;
+    for (int i = 0; i < shared; i++) if (a[i] != b[i]) return i;
+    return a.length == b.length ? -1 : shared;
+  }
+  public static int mismatch(float[] a, float[] b) {
+    int shared = a.length < b.length ? a.length : b.length;
+    // `Float.compare`, as the double form has it: two NaNs MATCH and 0.0f does
+    // not match -0.0f.
+    for (int i = 0; i < shared; i++) if (__Float.compare(a[i], b[i]) != 0) return i;
+    return a.length == b.length ? -1 : shared;
+  }
   public static int mismatch(Object[] a, Object[] b) {
     int shared = a.length < b.length ? a.length : b.length;
     for (int i = 0; i < shared; i++) {
@@ -584,5 +606,332 @@ class Arrays {
       }
     }
     return a.length - b.length;
+  }
+
+  // ...and the RANGE form of each, which compares two SLICES: the ranges are
+  // checked first (a bad one throws before anything is read, and names the
+  // index a JDK names), and when one slice is a prefix of the other the answer
+  // is the difference of their LENGTHS — not of the arrays'.
+  public static int compare(int[] a, int aFromIndex, int aToIndex, int[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return __Integer.compare(a[ai], b[bi]);
+    }
+    return aLength - bLength;
+  }
+  public static int compare(long[] a, int aFromIndex, int aToIndex, long[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return __Long.compare(a[ai], b[bi]);
+    }
+    return aLength - bLength;
+  }
+  public static int compare(double[] a, int aFromIndex, int aToIndex, double[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      int c = __Double.compare(a[ai], b[bi]);
+      if (c != 0) return c;
+    }
+    return aLength - bLength;
+  }
+  public static int compare(float[] a, int aFromIndex, int aToIndex, float[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      int c = __Float.compare(a[ai], b[bi]);
+      if (c != 0) return c;
+    }
+    return aLength - bLength;
+  }
+  public static int compare(char[] a, int aFromIndex, int aToIndex, char[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return a[ai] - b[bi];
+    }
+    return aLength - bLength;
+  }
+  public static int compare(short[] a, int aFromIndex, int aToIndex, short[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return __Short.compare(a[ai], b[bi]);
+    }
+    return aLength - bLength;
+  }
+  public static int compare(byte[] a, int aFromIndex, int aToIndex, byte[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return __Byte.compare(a[ai], b[bi]);
+    }
+    return aLength - bLength;
+  }
+  public static int compare(boolean[] a, int aFromIndex, int aToIndex, boolean[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return __Boolean.compare(a[ai], b[bi]);
+    }
+    return aLength - bLength;
+  }
+  public static int compare(String[] a, int aFromIndex, int aToIndex, String[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      String x = a[ai];
+      String y = b[bi];
+      if (x == null || y == null) {
+        if (x != y) return x == null ? -1 : 1;
+      } else {
+        int c = x.compareTo(y);
+        if (c != 0) return c;
+      }
+    }
+    return aLength - bLength;
+  }
+  public static int compare(Comparable[] a, int aFromIndex, int aToIndex, Comparable[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      Comparable x = a[ai];
+      Comparable y = b[bi];
+      if (x == null || y == null) {
+        if (x != y) return x == null ? -1 : 1;
+      } else {
+        int c = x.compareTo(y);
+        if (c != 0) return c;
+      }
+    }
+    return aLength - bLength;
+  }
+
+  // ...and the unsigned reading of the same slices.
+  public static int compareUnsigned(int[] a, int aFromIndex, int aToIndex, int[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return __Integer.compareUnsigned(a[ai], b[bi]);
+    }
+    return aLength - bLength;
+  }
+  public static int compareUnsigned(long[] a, int aFromIndex, int aToIndex, long[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return __Long.compareUnsigned(a[ai], b[bi]);
+    }
+    return aLength - bLength;
+  }
+  public static int compareUnsigned(byte[] a, int aFromIndex, int aToIndex, byte[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return (a[ai] & 0xff) - (b[bi] & 0xff);
+    }
+    return aLength - bLength;
+  }
+  public static int compareUnsigned(short[] a, int aFromIndex, int aToIndex, short[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      int ai = aFromIndex + i;
+      int bi = bFromIndex + i;
+      if (a[ai] != b[bi]) return (a[ai] & 0xffff) - (b[bi] & 0xffff);
+    }
+    return aLength - bLength;
+  }
+
+  // The RANGE forms of `mismatch` and `equals`: the same questions asked of two
+  // SLICES. `mismatch` answers an index RELATIVE to each slice's own start, so
+  // a difference at the same offset in both reads the same however far into the
+  // arrays the slices sit.
+  public static int mismatch(int[] a, int aFromIndex, int aToIndex, int[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) if (a[aFromIndex + i] != b[bFromIndex + i]) return i;
+    return aLength == bLength ? -1 : shared;
+  }
+  public static int mismatch(long[] a, int aFromIndex, int aToIndex, long[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) if (a[aFromIndex + i] != b[bFromIndex + i]) return i;
+    return aLength == bLength ? -1 : shared;
+  }
+  public static int mismatch(char[] a, int aFromIndex, int aToIndex, char[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) if (a[aFromIndex + i] != b[bFromIndex + i]) return i;
+    return aLength == bLength ? -1 : shared;
+  }
+  public static int mismatch(short[] a, int aFromIndex, int aToIndex, short[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) if (a[aFromIndex + i] != b[bFromIndex + i]) return i;
+    return aLength == bLength ? -1 : shared;
+  }
+  public static int mismatch(byte[] a, int aFromIndex, int aToIndex, byte[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) if (a[aFromIndex + i] != b[bFromIndex + i]) return i;
+    return aLength == bLength ? -1 : shared;
+  }
+  public static int mismatch(boolean[] a, int aFromIndex, int aToIndex, boolean[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) if (a[aFromIndex + i] != b[bFromIndex + i]) return i;
+    return aLength == bLength ? -1 : shared;
+  }
+  public static int mismatch(double[] a, int aFromIndex, int aToIndex, double[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      if (__Double.compare(a[aFromIndex + i], b[bFromIndex + i]) != 0) return i;
+    }
+    return aLength == bLength ? -1 : shared;
+  }
+  public static int mismatch(float[] a, int aFromIndex, int aToIndex, float[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      if (__Float.compare(a[aFromIndex + i], b[bFromIndex + i]) != 0) return i;
+    }
+    return aLength == bLength ? -1 : shared;
+  }
+  public static int mismatch(Object[] a, int aFromIndex, int aToIndex, Object[] b, int bFromIndex, int bToIndex) {
+    rangeCheck(a.length, aFromIndex, aToIndex);
+    rangeCheck(b.length, bFromIndex, bToIndex);
+    int aLength = aToIndex - aFromIndex;
+    int bLength = bToIndex - bFromIndex;
+    int shared = aLength < bLength ? aLength : bLength;
+    for (int i = 0; i < shared; i++) {
+      Object x = a[aFromIndex + i];
+      Object y = b[bFromIndex + i];
+      boolean same = x == null ? y == null : x.equals(y);
+      if (!same) return i;
+    }
+    return aLength == bLength ? -1 : shared;
+  }
+  public static boolean equals(int[] a, int aFromIndex, int aToIndex, int[] b, int bFromIndex, int bToIndex) {
+    return mismatch(a, aFromIndex, aToIndex, b, bFromIndex, bToIndex) < 0;
+  }
+  public static boolean equals(long[] a, int aFromIndex, int aToIndex, long[] b, int bFromIndex, int bToIndex) {
+    return mismatch(a, aFromIndex, aToIndex, b, bFromIndex, bToIndex) < 0;
+  }
+  public static boolean equals(char[] a, int aFromIndex, int aToIndex, char[] b, int bFromIndex, int bToIndex) {
+    return mismatch(a, aFromIndex, aToIndex, b, bFromIndex, bToIndex) < 0;
+  }
+  public static boolean equals(short[] a, int aFromIndex, int aToIndex, short[] b, int bFromIndex, int bToIndex) {
+    return mismatch(a, aFromIndex, aToIndex, b, bFromIndex, bToIndex) < 0;
+  }
+  public static boolean equals(byte[] a, int aFromIndex, int aToIndex, byte[] b, int bFromIndex, int bToIndex) {
+    return mismatch(a, aFromIndex, aToIndex, b, bFromIndex, bToIndex) < 0;
+  }
+  public static boolean equals(boolean[] a, int aFromIndex, int aToIndex, boolean[] b, int bFromIndex, int bToIndex) {
+    return mismatch(a, aFromIndex, aToIndex, b, bFromIndex, bToIndex) < 0;
+  }
+  public static boolean equals(double[] a, int aFromIndex, int aToIndex, double[] b, int bFromIndex, int bToIndex) {
+    return mismatch(a, aFromIndex, aToIndex, b, bFromIndex, bToIndex) < 0;
+  }
+  public static boolean equals(float[] a, int aFromIndex, int aToIndex, float[] b, int bFromIndex, int bToIndex) {
+    return mismatch(a, aFromIndex, aToIndex, b, bFromIndex, bToIndex) < 0;
+  }
+  public static boolean equals(Object[] a, int aFromIndex, int aToIndex, Object[] b, int bFromIndex, int bToIndex) {
+    return mismatch(a, aFromIndex, aToIndex, b, bFromIndex, bToIndex) < 0;
   }
 }

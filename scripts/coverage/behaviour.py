@@ -95,26 +95,32 @@ BANK = {
     "[Ljava.lang.StackTraceElement;": [
         'new StackTraceElement[] {new StackTraceElement("C", "m", "C.java", 1)}'
     ],
-    "java.util.function.Function": ["java.util.function.Function.identity()"],
+    # RAW, like the casts beside them: a `Function<Object, Object>` fits only a
+    # raw receiver, where the bare interface is an unchecked conversion javac
+    # takes against any element type. That is what let these run at all.
+    "java.util.function.Function": ["(java.util.function.Function) (v -> v)"],
     "java.util.function.BiFunction": [
-        "(java.util.function.BiFunction<Object, Object, Object>) ((x, y) -> x)"
+        "(java.util.function.BiFunction) ((x, y) -> x)"
     ],
-    "java.util.function.Predicate": ['java.util.function.Predicate.isEqual("a")'],
+    "java.util.function.Predicate": ["(java.util.function.Predicate) (v -> true)"],
     "java.lang.Enum": ["java.time.Month.MARCH"],
-    "java.util.function.Consumer": ["(java.util.function.Consumer<Object>) (v -> {})"],
+    "java.util.function.Consumer": ["(java.util.function.Consumer) (v -> {})"],
     # NOT `java.util.Locale`: caturra models it as a namespace with no VALUE
     # of the type, and says so — an honest refusal, but one that kills the
     # probe it appears in, and six classes with it. The overloads that take one
     # are reported as unbuildable, which is what they are.
+    # ...but this one keeps its type argument: a RAW `IntFunction` handed to
+    # `flatMap` builds a lambda whose parameter is a reference, and a primitive
+    # pipeline then feeds it an int.
     "java.util.function.IntFunction": [
         '(java.util.function.IntFunction<Object>) (n -> "" + n)'
     ],
     "[S": ["new short[] {3, 1}"],
     "[F": ["new float[] {1.5f, 0.5f}"],
     "[Z": ["new boolean[] {true, false}"],
-    "java.util.function.Supplier": ['(java.util.function.Supplier<Object>) (() -> "s")'],
+    "java.util.function.Supplier": ['(java.util.function.Supplier) (() -> "s")'],
     "java.util.function.BiConsumer": [
-        "(java.util.function.BiConsumer<Object, Object>) ((x, y) -> {})"
+        "(java.util.function.BiConsumer) ((x, y) -> {})"
     ],
     "java.time.temporal.TemporalAccessor": ["java.time.LocalDate.of(2024, 3, 14)"],
     "java.time.temporal.Temporal": ["java.time.LocalDate.of(2024, 3, 14)"],
@@ -125,10 +131,10 @@ BANK = {
     "java.time.chrono.ChronoLocalDate": ["java.time.LocalDate.of(2024, 3, 14)"],
     "java.time.format.FormatStyle": ["java.time.format.FormatStyle.SHORT"],
     "java.util.function.BinaryOperator": [
-        "(java.util.function.BinaryOperator<Object>) ((x, y) -> x)"
+        "(java.util.function.BinaryOperator) ((x, y) -> x)"
     ],
     "java.util.function.UnaryOperator": [
-        "(java.util.function.UnaryOperator<Object>) (v -> v)"
+        "(java.util.function.UnaryOperator) (v -> v)"
     ],
     "java.util.function.DoublePredicate": [
         "(java.util.function.DoublePredicate) (n -> n > 1)"
@@ -156,13 +162,13 @@ BANK = {
         "(java.util.function.IntBinaryOperator) ((x, y) -> x + y)"
     ],
     "java.util.function.ToIntFunction": [
-        "(java.util.function.ToIntFunction<Object>) (v -> 1)"
+        "(java.util.function.ToIntFunction) (v -> 1)"
     ],
     "java.util.function.ToLongFunction": [
-        "(java.util.function.ToLongFunction<Object>) (v -> 1L)"
+        "(java.util.function.ToLongFunction) (v -> 1L)"
     ],
     "java.util.function.ToDoubleFunction": [
-        "(java.util.function.ToDoubleFunction<Object>) (v -> 1.5)"
+        "(java.util.function.ToDoubleFunction) (v -> 1.5)"
     ],
     "java.util.function.IntToLongFunction": [
         "(java.util.function.IntToLongFunction) (n -> n)"
@@ -223,6 +229,13 @@ KNOWN = [
         "a comparator caturra synthesized is not one of a JDK's named classes",
     ),
     (
+        r"^java\.util\.stream\.\w*Stream\.flatMap",
+        "caturra's `flatMap` runs its function when the pipeline is BUILT and "
+        "a JDK's when a terminal pulls, so a function that answers something "
+        "other than a stream is refused at a different moment — the answer is "
+        "the same once anything asks for it",
+    ),
+    (
         r"^java\.util\.(Set|Map)\.(of|copyOf|ofEntries)",
         "a JDK's immutable Set and Map iterate in an order randomized per JVM "
         "run (the SALT), so the same call answers `[a, b]` on one run and "
@@ -237,11 +250,13 @@ KNOWN = [
         "engine",
     ),
     (
-        r"^java\.util\.Scanner\.toString",
+        r"^java\.util\.Scanner\.(toString|reset|useDelimiter|useRadix|useLocale|skip)",
         "a JDK's Scanner prints its internal bookkeeping — `need input`, "
         "`skipped`, and a `source closed` that turns true when the source runs "
         "dry rather than when `close()` is called — none of which caturra "
-        "models; it answers Object's default rather than guess at six fields",
+        "models; it answers Object's default rather than guess at six fields. "
+        "Every method that ANSWERS the scanner reads back through that same "
+        "toString, so the configuration setters are the same one fact",
     ),
     (
         r"^java\.util\.stream\.(Int|Long|Double)Stream\.iterator",
@@ -407,7 +422,16 @@ def run_both(source):
     try:
         answer = json.loads(result.stdout)
     except ValueError:
-        return None, "caturra produced no JSON"
+        # No JSON at all means the engine did not finish — a PANIC, which is
+        # the worst answer there is and reads like a clean run to anything
+        # comparing output. `scripts/fuzz/panics.py` asks this question of the
+        # COMPILER; a crash while running is only visible here, and
+        # `Scanner.nextInt(1)` was one.
+        crash = next(
+            (l for l in result.stderr.splitlines() if "panicked at" in l),
+            (result.stderr.strip().splitlines() or [""])[-1],
+        )
+        return None, f"caturra produced no JSON — {crash}"
     if answer.get("error"):
         # The LINE, when the diagnostic carried one: it is what lets the bisect
         # drop the offending call rather than guess from the wording. Without
@@ -462,8 +486,13 @@ def main():
         # probe re-run: one bad line — an inherited generic static, an overload
         # caturra does not offer — should not cost the whole class its sweep.
         # Everything dropped is reported rather than quietly lost.
+        #
+        # Sixty rounds, not thirty: a class with many missing overloads spends
+        # a round on each, and `java.util.Arrays` — 300 calls, a dozen shapes
+        # javac itself would not take from the bank — ran the budget out and
+        # reported the whole class as "did not run".
         jdk, cat = None, ""
-        for _ in range(30):
+        for _ in range(60):
             jdk, cat = run_both(probe_source(class_name, calls))
             if jdk is not None:
                 break
@@ -478,6 +507,20 @@ def main():
                 at = int(caturra_line.group(1)) - HEADER_LINES - 1
                 keep = [c for n, c in enumerate(calls) if n != at]
                 why = "caturra would not take the probe"
+                # A LINE and a SIGNATURE both: caturra's "no suitable method
+                # found for compare(int[],int,int,int[],int,int)" names the
+                # line it is on AND the overload, and dropping only the line
+                # spent one round per CALL. Eight primitive kinds x three
+                # arguments exhausted the retry budget on one missing overload
+                # and cost `java.util.Arrays` its whole sweep.
+                by_signature = refused_signatures(cat)
+                if by_signature:
+                    wider = [
+                        c for c in calls if call_signature(c[0]) not in by_signature
+                    ]
+                    if wider and len(wider) < len(keep):
+                        keep = wider
+                        why = "caturra offers no such overload"
             else:
                 # caturra names the METHOD, not the line: an overload it does
                 # not offer. (The measurement is name-level, so this is an

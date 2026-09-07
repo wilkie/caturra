@@ -700,6 +700,20 @@ fn substitute_member_type(
 /// parameter mentioning one of the METHOD's own variables — that one erases to
 /// its BOUND, which the erased parameter beside this already is.
 fn declared_parameters(class: &ClassDecl, method: &MethodDecl, table: &MethodTable) -> Vec<JType> {
+    // A bundled primitive functional interface writes its SAM parameter as
+    // `Object` — one erased shape for every synthesized lambda — while the
+    // interface a program NAMES declares a primitive. `declared` is the CHECK's
+    // view and never reaches a descriptor, so it can carry the real kind, and
+    // the call then widens to it (`op.applyAsDouble(5)` is 5.0) instead of
+    // boxing the argument at whatever type it already had.
+    if let Some(params) = crate::lambda::erased_sam_params(&class.name, &method.name)
+        && params.len() == method.params.len()
+    {
+        let resolved: Option<Vec<JType>> = params.iter().map(|ty| table.resolve_type(ty)).collect();
+        if let Some(resolved) = resolved {
+            return resolved;
+        }
+    }
     if class.type_params.is_empty() || method.declared_params.len() != method.params.len() {
         return Vec::new();
     }
@@ -7285,6 +7299,23 @@ fn varargs_param_at(m: &MethodSig, index: usize) -> Option<JType> {
     }
 }
 
+/// Whether a type is one of the eight primitives — the question the erased-SAM
+/// parameter rule asks, and the only case where what a signature DECLARES and
+/// what its descriptor SPELLS can differ in kind rather than in type argument.
+fn is_primitive(ty: JType) -> bool {
+    matches!(
+        ty,
+        JType::Int
+            | JType::Long
+            | JType::Double
+            | JType::Float
+            | JType::Short
+            | JType::Byte
+            | JType::Char
+            | JType::Boolean
+    )
+}
+
 fn widens_strictly(from: JType, to: JType, table: &MethodTable) -> bool {
     // These are exactly the boxing/unboxing arms of `widens`; identical types
     // still pass, since that is not a conversion at all. UNBOXING is asked of
@@ -12705,9 +12736,25 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         descriptor: "()I",
         needs: TableFace::Sorted,
     },
-    // `nextInt(radix)` / `hasNextInt(radix)` read the token in that radix.
+    // `nextInt(radix)` / `hasNextInt(radix)` read the token in that radix —
+    // and so does every other integer read, which had the no-argument form
+    // only. `nextInt` having the pair and its four siblings not having it is
+    // not a line a program can be expected to know is there.
     bm("nextInt", &[I], BRet::Int, "(I)I"),
     bm("hasNextInt", &[I], BRet::Boolean, "(I)Z"),
+    bm("nextLong", &[I], BRet::Long, "(I)J"),
+    bm("hasNextLong", &[I], BRet::Boolean, "(I)Z"),
+    bm("nextShort", &[I], BRet::Short, "(I)S"),
+    bm("hasNextShort", &[I], BRet::Boolean, "(I)Z"),
+    bm("nextByte", &[I], BRet::Byte, "(I)B"),
+    bm("hasNextByte", &[I], BRet::Boolean, "(I)Z"),
+    bm(
+        "nextBigInteger",
+        &[I],
+        BRet::BigInteger,
+        "(I)Ljava/math/BigInteger;",
+    ),
+    bm("hasNextBigInteger", &[I], BRet::Boolean, "(I)Z"),
     BuiltinMethod {
         name: "nextDouble",
         params: &[],
@@ -12751,6 +12798,19 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         &[BParam::Str],
         BRet::Str,
         "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
+    // ...and the compiled spelling of each, as `useDelimiter` already had.
+    bm(
+        "hasNext",
+        &[BParam::Pattern],
+        BRet::Boolean,
+        "(Ljava/util/regex/Pattern;)Z",
+    ),
+    bm(
+        "next",
+        &[BParam::Pattern],
+        BRet::Str,
+        "(Ljava/util/regex/Pattern;)Ljava/lang/String;",
     ),
     BuiltinMethod {
         name: "hasNextInt",
@@ -18742,6 +18802,15 @@ const PRINT_STREAM_METHODS: &[BuiltinMethod] = &[
     bm("print", &[BParam::Boolean], BRet::Void, "(Z)V"),
     bm("print", &[BParam::Char], BRet::Void, "(C)V"),
     bm("write", &[BParam::Int], BRet::Void, "(I)V"),
+    // ...and the BYTE forms, which are what a program that already encoded its
+    // text reaches for. `write(byte[])` is `OutputStream`'s, inherited.
+    bm("write", &[BParam::ByteArray], BRet::Void, "([B)V"),
+    bm(
+        "write",
+        &[BParam::ByteArray, BParam::Int, BParam::Int],
+        BRet::Void,
+        "([BII)V",
+    ),
     bm("print", &[BParam::CharArray], BRet::Void, "([C)V"),
     bm("println", &[BParam::CharArray], BRet::Void, "([C)V"),
     // `append` is `print` by another name, and answers the stream.
@@ -33924,6 +33993,26 @@ impl BodyGen<'_> {
             return None;
         }
         let rest = &args[1..];
+        // The LONE-ARRAY form (JLS §15.12.4.2): a single trailing `String[]`
+        // IS the varargs array and is passed through, not wrapped in another.
+        // `Paths.get(root, more)` — a path assembled from segments a program
+        // already has — was "String[] cannot be converted to String".
+        if let [single] = rest
+            && matches!(
+                self.type_of(single),
+                JType::Array {
+                    elem: ElemType::Str,
+                    dims: 1
+                }
+            )
+        {
+            self.expr(single);
+            let descriptor = "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;";
+            let method_ref = intern_method_ref(self.pool, internal, method, descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(2);
+            return Some(Some(JType::Path));
+        }
         self.push_int(i32::try_from(rest.len()).unwrap_or(0));
         self.emit_new_1d(ElemType::Str);
         for (position, arg) in rest.iter().enumerate() {
@@ -40896,7 +40985,15 @@ impl BodyGen<'_> {
             .copied()
             .unwrap_or_else(|| sig.params[at]);
         let Some((first, rest)) = self.receiver_args else {
-            return sig.params[at];
+            // Nothing to substitute. A parameter written with a type VARIABLE
+            // says nothing without one, so the erasure stands — but the
+            // primitive an erased SAM really declares needs no substituting and
+            // is the whole reason it was recorded.
+            return if mentions_type_var(param, self.table.object_id) {
+                sig.params[at]
+            } else {
+                param
+            };
         };
         let substituted = substitute_member_type(param, first, rest, self.table);
         // A class variable INSIDE a parameter's own arguments erases to a
@@ -40917,21 +41014,54 @@ impl BodyGen<'_> {
         })
     }
 
+    /// The parameter to convert this argument to. Ordinarily what the signature
+    /// declares — except that a bundled primitive functional interface declares
+    /// `double` where its erased SAM writes `Object`, and the bundled
+    /// IMPLEMENTATIONS of those interfaces (`__DoubleChain`, the predicate
+    /// combinators) pass their own `Object` parameter straight through. The
+    /// declared primitive is the right target only for an argument that really
+    /// widens to it; everything else stays in the erased world.
+    fn sam_parameter(&mut self, sig: &MethodSig, at: usize, arg: &Expr) -> JType {
+        let param = self.receiver_parameter(sig, at);
+        let erased = sig.params[at];
+        if param == erased || !is_primitive(param) {
+            return param;
+        }
+        if widens(self.type_of(arg), param, self.table) {
+            param
+        } else {
+            erased
+        }
+    }
+
+    /// An argument converted to the parameter a signature DECLARES still has to
+    /// arrive as the one its descriptor spells. The two differ only on a bundled
+    /// primitive functional interface, whose SAM erases `double` to `Object`:
+    /// widening to the declared kind and boxing AT it is what makes
+    /// `op.applyAsDouble(5)` a 5.0 rather than an Integer.
+    fn box_to_erased_parameter(&mut self, declared: JType, erased: JType, span: SourceSpan) {
+        if declared != erased && is_primitive(declared) {
+            self.convert_for_assignment(declared, erased, span);
+        }
+    }
+
     fn emit_call_args_inner(&mut self, args: &[Expr], sig: &MethodSig, span: SourceSpan) -> u16 {
         if !sig.is_varargs {
             for (at, arg) in args.iter().enumerate().take(sig.params.len()) {
-                let param = self.receiver_parameter(sig, at);
+                let param = self.sam_parameter(sig, at, arg);
                 let actual = self.expr_toward(arg, param);
                 self.convert_for_assignment(actual, param, arg.span());
+                self.box_to_erased_parameter(param, sig.params[at], arg.span());
             }
             return sig.params.iter().map(|p| p.width()).sum();
         }
         let fixed = sig.params.len() - 1;
         let array_ty = sig.params[fixed];
         for (at, arg) in args.iter().enumerate().take(fixed) {
-            let param = self.receiver_parameter(sig, at);
+            let param = self.sam_parameter(sig, at, arg);
             let actual = self.expr_toward(arg, param);
             self.convert_for_assignment(actual, param, arg.span());
+            self.box_to_erased_parameter(param, sig.params[at], arg.span());
         }
         // Array form: a single trailing argument assignable to the
         // varargs array is passed straight through.

@@ -54125,3 +54125,345 @@ public class DirectoryListing {
 }
 "#
 );
+
+// A RAW functional interface as a cast target — `(Function) v -> v` — is an
+// unchecked conversion javac takes, and caturra refused outright ("Function is
+// not a functional interface"). Every primitive specialization is here too:
+// the erased-name list the lambda pass read was a hand-copy of codegen's and
+// had none of them. What an unchecked call answers is cast where the library
+// READS it, which is the ClassCastException the last three lines pin.
+differential_test!(
+    a_raw_functional_interface_cast,
+    "RawFunctionalCast",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.regex.*;
+import java.util.stream.*;
+public class RawFunctionalCast {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    // A RAW library interface as a cast target: javac takes the lambda as an
+    // unchecked conversion, and the call site is unchecked from there on.
+    s("function", () -> ((Function) (v -> v + "!")).apply("x"));
+    s("supplier", () -> ((Supplier) (() -> 3)).get());
+    s("predicate", () -> ((Predicate) (v -> v != null)).test("x"));
+    s("consumer", () -> { ((Consumer) (v -> System.out.print("saw " + v + " "))).accept(1); return "done"; });
+    s("unary", () -> ((UnaryOperator) (v -> v)).apply(9));
+    s("binary", () -> ((BinaryOperator) ((p, q) -> "" + p + q)).apply(1, 2));
+    s("bifunction", () -> ((BiFunction) ((p, q) -> "" + p + q)).apply("a", "b"));
+    s("comparator", () -> ((Comparator) ((p, q) -> 0)).compare("a", "b"));
+    // The primitive specializations are the half a hand-copied list forgot.
+    s("intunary", () -> ((IntUnaryOperator) (n -> n + 1)).applyAsInt(4));
+    s("intpred", () -> ((IntPredicate) (n -> n > 2)).test(5));
+    s("intfunction", () -> ((IntFunction) (n -> "n" + n)).apply(7));
+    s("tointfunction", () -> ((ToIntFunction) (v -> 11)).applyAsInt("x"));
+    s("intsupplier", () -> ((IntSupplier) (() -> 8)).getAsInt());
+    s("intbinary", () -> ((IntBinaryOperator) ((p, q) -> p * q)).applyAsInt(3, 4));
+    s("doubleunary", () -> ((DoubleUnaryOperator) (d -> d / 2)).applyAsDouble(5));
+    s("longunary", () -> ((LongUnaryOperator) (n -> n + 1)).applyAsLong(4L));
+    // A raw function through a library call: unchecked all the way, so what it
+    // answers is cast where the library reads it.
+    s("stream-map", () -> Stream.of("a", "bb").map((Function) (v -> ((String) v).length())).collect(Collectors.toList()));
+    s("list-sort", () -> { List<String> l = new ArrayList<>(List.of("bb", "a")); l.sort((Comparator) ((p, q) -> ((String) p).length() - ((String) q).length())); return l; });
+    s("optional-map", () -> Optional.of("x").map((Function) (v -> v + "y")));
+    // …and where what it answers is the WRONG type, a JDK's cast is what says so.
+    s("optional-flatmap-bad", () -> Optional.of("x").flatMap((Function) (v -> "not an optional")));
+    s("optional-flatmap-good", () -> Optional.of("x").flatMap((Function) (v -> Optional.of(v + "y"))));
+    s("matcher-replaceall-bad", () -> Pattern.compile("a").matcher("banana").replaceAll((Function) (r -> 42)));
+    s("matcher-replaceall-good", () -> Pattern.compile("a").matcher("banana").replaceAll((Function) (r -> "Z")));
+    s("matcher-replacefirst-bad", () -> Pattern.compile("a").matcher("banana").replaceFirst((Function) (r -> 42)));
+    s("comparator-bad", () -> { List<String> l = new ArrayList<>(List.of("b", "a")); l.sort((Comparator) ((p, q) -> 0)); return l; });
+  }
+}
+"#
+);
+
+// A primitive functional interface's SAM erases its parameter to `Object` so
+// one synthesized lambda shape implements them all — so an argument was boxed
+// at its OWN type and `op.applyAsDouble(5)` handed the body an Integer. Every
+// widening a call site owes its declared kind, over every shape that declares
+// one.
+differential_test!(
+    a_primitive_functional_call_widens,
+    "PrimitiveFunctionalCall",
+    r#"
+import java.util.function.*;
+public class PrimitiveFunctionalCall {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    DoubleUnaryOperator du = d -> d / 2;
+    LongUnaryOperator lu = n -> n + 1;
+    IntUnaryOperator iu = n -> n + 1;
+    DoublePredicate dp = d -> d > 1;
+    DoubleConsumer dc = d -> System.out.print("[" + d + "]");
+    DoubleFunction<String> df = d -> "d" + d;
+    ToDoubleFunction<String> tdf = v -> 2.5;
+    DoubleBinaryOperator db = (x, y) -> x + y;
+    LongPredicate lp = n -> n > 1;
+    LongConsumer lc = n -> System.out.print("{" + n + "}");
+    LongFunction<String> lf = n -> "l" + n;
+    LongBinaryOperator lb = (x, y) -> x + y;
+    IntToDoubleFunction i2d = n -> n / 2.0;
+    LongToDoubleFunction l2d = n -> n / 2.0;
+    DoubleToIntFunction d2i = d -> (int) d;
+    DoubleToLongFunction d2l = d -> (long) d;
+    ObjDoubleConsumer<String> odc = (v, d) -> System.out.print("<" + v + d + ">");
+    ObjLongConsumer<String> olc = (v, n) -> System.out.print("(" + v + n + ")");
+    char c = 'A';
+    byte by = 3;
+    short sh = 4;
+    float fl = 1.5f;
+    s("du-int", () -> du.applyAsDouble(5));
+    s("du-long", () -> du.applyAsDouble(5L));
+    s("du-float", () -> du.applyAsDouble(fl));
+    s("du-char", () -> du.applyAsDouble(c));
+    s("du-byte", () -> du.applyAsDouble(by));
+    s("lu-int", () -> lu.applyAsLong(4));
+    s("lu-char", () -> lu.applyAsLong(c));
+    s("iu-char", () -> iu.applyAsInt(c));
+    s("iu-byte", () -> iu.applyAsInt(by));
+    s("iu-short", () -> iu.applyAsInt(sh));
+    s("dp-int", () -> dp.test(3));
+    s("dc-int", () -> { dc.accept(3); return "ok"; });
+    s("df-int", () -> df.apply(3));
+    s("db-ints", () -> db.applyAsDouble(1, 2));
+    s("lp-int", () -> lp.test(3));
+    s("lc-int", () -> { lc.accept(3); return "ok"; });
+    s("lf-int", () -> lf.apply(3));
+    s("lb-ints", () -> lb.applyAsLong(2, 3));
+    s("i2d-char", () -> i2d.applyAsDouble(c));
+    s("l2d-int", () -> l2d.applyAsDouble(5));
+    s("d2i-int", () -> d2i.applyAsInt(5));
+    s("d2l-int", () -> d2l.applyAsLong(5));
+    s("odc-int", () -> { odc.accept("x", 1); return "ok"; });
+    s("olc-int", () -> { olc.accept("x", 1); return "ok"; });
+    s("tdf", () -> tdf.applyAsDouble("q"));
+  }
+}
+"#
+);
+
+// Every integer read has a RADIX form, not just `nextInt` — and a radix
+// outside [2, 36] is an IllegalArgumentException thrown before anything is
+// read. It reached Rust's `from_str_radix`, which PANICS: `nextInt(1)` took
+// the engine down and so printed no diagnostic at all. The narrow integers
+// and the big one read in `useRadix`'s radix too, where they were fixed at
+// ten; and `next`/`hasNext` take the compiled `Pattern` spelling, which only
+// `useDelimiter` knew how to read.
+differential_test!(
+    what_a_scanner_reads_in_another_radix,
+    "ScannerRadix",
+    r#"
+import java.util.*;
+import java.util.regex.*;
+import java.math.*;
+public class ScannerRadix {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static Scanner of(String t) { return new Scanner(t); }
+  public static void main(String[] a) {
+    s("radix-default", () -> of("ff").radix());
+    s("useRadix-1", () -> of("ff").useRadix(1).radix());
+    s("useRadix-0", () -> of("ff").useRadix(0).radix());
+    s("useRadix-37", () -> of("ff").useRadix(37).radix());
+    s("useRadix-neg", () -> of("ff").useRadix(-2).radix());
+    s("nextInt-1", () -> of("11").nextInt(1));
+    s("nextInt-0", () -> of("11").nextInt(0));
+    s("nextInt-37", () -> of("11").nextInt(37));
+    s("nextInt-16", () -> of("ff").nextInt(16));
+    s("hasNextInt-1", () -> of("11").hasNextInt(1));
+    s("hasNextInt-16", () -> of("ff").hasNextInt(16));
+    s("nextLong-16", () -> of("ff").nextLong(16));
+    s("hasNextLong-16", () -> of("ff").hasNextLong(16));
+    s("nextByte-16", () -> of("7f").nextByte(16));
+    s("hasNextByte-16", () -> of("7f").hasNextByte(16));
+    s("nextShort-16", () -> of("ff").nextShort(16));
+    s("hasNextShort-16", () -> of("ff").hasNextShort(16));
+    s("nextBigInteger-16", () -> of("ff").nextBigInteger(16));
+    s("hasNextBigInteger-16", () -> of("ff").hasNextBigInteger(16));
+    s("nextBigInteger-1", () -> of("11").nextBigInteger(1));
+    s("useRadix-then-nextInt", () -> of("ff").useRadix(16).nextInt());
+    s("useRadix-then-nextLong", () -> of("ff").useRadix(16).nextLong());
+    s("useRadix-then-nextDouble", () -> of("1.5").useRadix(16).nextDouble());
+    s("next-pattern", () -> of("abc 12").next(java.util.regex.Pattern.compile("[a-z]+")));
+    s("hasNext-pattern", () -> of("abc").hasNext(java.util.regex.Pattern.compile("[a-z]+")));
+    s("hasNextInt-neg", () -> of("11").hasNextInt(-1));
+    s("byte-radix-default", () -> of("7f").useRadix(16).nextByte());
+    s("short-radix-default", () -> of("ff").useRadix(16).nextShort());
+    s("hasByte-radix-default", () -> of("7f").useRadix(16).hasNextByte());
+    s("hasShort-radix-default", () -> of("ff").useRadix(16).hasNextShort());
+    s("bigint-radix-default", () -> of("ff").useRadix(16).nextBigInteger());
+    s("hasBigint-radix-default", () -> of("ff").useRadix(16).hasNextBigInteger());
+    s("byte-overflow-16", () -> of("ff").nextByte(16));
+    s("short-overflow-16", () -> of("ffff").nextShort(16));
+    s("int-overflow-16", () -> of("fffffffff").nextInt(16));
+    s("long-overflow-16", () -> of("ffffffffffffffffff").nextLong(16));
+    s("byte-bad-16", () -> of("zz").nextByte(16));
+    s("hasByte-bad-16", () -> of("zz").hasNextByte(16));
+    s("negative-16", () -> of("-ff").nextInt(16));
+    s("grouped-10", () -> of("1,234").nextInt());
+    s("grouped-16", () -> of("1,234").nextInt(16));
+    s("upper-16", () -> of("FF").nextInt(16));
+    s("bigdec-radix", () -> of("1.5").useRadix(16).nextBigDecimal());
+    s("float-radix", () -> of("1.5").useRadix(16).nextFloat());
+    s("next-pattern", () -> of("abc 12").next(Pattern.compile("[a-z]+")));
+    s("next-pattern-miss", () -> of("12 abc").next(Pattern.compile("[a-z]+")));
+    s("hasNext-pattern", () -> of("abc").hasNext(Pattern.compile("[a-z]+")));
+    s("hasNext-pattern-miss", () -> of("12").hasNext(Pattern.compile("[a-z]+")));
+    s("next-string", () -> of("abc 12").next("[a-z]+"));
+    s("hasNext-string", () -> of("abc").hasNext("[a-z]+"));
+    s("match-after-pattern", () -> { Scanner sc = of("abc"); sc.next(Pattern.compile("[a-z]+")); return sc.match().group(); });
+  }
+}
+"#
+);
+
+// `write(byte[])` and `write(byte[], off, len)` — the forms a program that
+// already encoded its text reaches for, and the range complaint is
+// `System.arraycopy`'s because that is what a JDK's PrintStream calls. The
+// three Java 11 null streams live on the ABSTRACT bases, so a call through
+// any concrete class names ITS class in the method ref.
+differential_test!(
+    what_a_print_stream_writes_as_bytes,
+    "PrintStreamBytes",
+    r#"
+import java.io.*;
+public class PrintStreamBytes {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) throws Exception {
+    byte[] bytes = "hi\n".getBytes();
+    s("write-range", () -> { System.out.write(bytes, 0, 3); System.out.flush(); return "ok"; });
+    s("write-range-part", () -> { System.out.write(bytes, 0, 1); System.out.flush(); return "ok"; });
+    s("write-range-bad", () -> { System.out.write(bytes, 0, 9); return "ok"; });
+    s("write-range-null", () -> { System.out.write(null, 0, 1); return "ok"; });
+    s("null-out", () -> PrintStream.nullOutputStream().getClass().getName());
+    s("null-out-write", () -> { OutputStream o = PrintStream.nullOutputStream(); o.write(65); o.flush(); o.close(); return "ok"; });
+    s("null-out-os", () -> OutputStream.nullOutputStream().getClass().getName());
+    ByteArrayOutputStream sink = new ByteArrayOutputStream();
+    PrintStream ps = new PrintStream(sink);
+    s("sink-range", () -> { ps.write(bytes, 0, 2); ps.flush(); return sink.toString(); });
+  }
+}
+"#
+);
+
+// The RANGE forms of `compare`, `compareUnsigned`, `mismatch` and `equals`:
+// the same questions asked of two slices. When one slice is a prefix of the
+// other the answer is the difference of the SLICE lengths, and `mismatch`
+// answers an index relative to each slice's own start.
+differential_test!(
+    comparing_slices_of_two_arrays,
+    "ArraySlices",
+    r#"
+import java.util.*;
+public class ArraySlices {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    int[] x = {3, 1, 2}, y = {3, 1, 5};
+    s("int-same", () -> Arrays.compare(x, 1, 2, y, 1, 2));
+    s("int-diff", () -> Arrays.compare(x, 0, 3, y, 0, 3));
+    s("int-prefix", () -> Arrays.compare(x, 0, 2, y, 0, 3));
+    s("int-empty", () -> Arrays.compare(x, 0, 0, y, 0, 0));
+    s("int-neg-from", () -> Arrays.compare(x, -2, -2, y, -2, -2));
+    s("int-from-gt-to", () -> Arrays.compare(x, 2, 1, y, 0, 1));
+    s("int-to-past", () -> Arrays.compare(x, 0, 9, y, 0, 1));
+    s("int-b-bad", () -> Arrays.compare(x, 0, 1, y, 0, 9));
+    s("int-null-a", () -> Arrays.compare((int[]) null, 0, 1, y, 0, 1));
+    s("byte", () -> Arrays.compare(new byte[]{1,2}, 1, 1, new byte[]{1,2}, 1, 1));
+    s("byte-diff", () -> Arrays.compare(new byte[]{1,2}, 0, 2, new byte[]{1,3}, 0, 2));
+    s("char", () -> Arrays.compare(new char[]{'a','b'}, 0, 2, new char[]{'a','c'}, 0, 2));
+    s("short", () -> Arrays.compare(new short[]{1,2}, 0, 2, new short[]{1,3}, 0, 2));
+    s("long", () -> Arrays.compare(new long[]{1,2}, 0, 2, new long[]{1,3}, 0, 2));
+    s("boolean", () -> Arrays.compare(new boolean[]{false,true}, 0, 2, new boolean[]{false,false}, 0, 2));
+    s("double-nan", () -> Arrays.compare(new double[]{1.5, Double.NaN}, 0, 2, new double[]{1.5, 2.0}, 0, 2));
+    s("double-zero", () -> Arrays.compare(new double[]{-0.0}, 0, 1, new double[]{0.0}, 0, 1));
+    s("float", () -> Arrays.compare(new float[]{1.5f, 0.5f}, 0, 2, new float[]{1.5f, 2.5f}, 0, 2));
+    s("obj", () -> Arrays.compare(new String[]{"a","b"}, 0, 2, new String[]{"a","c"}, 0, 2));
+    s("obj-null-elem", () -> Arrays.compare(new String[]{"a",null}, 0, 2, new String[]{"a","c"}, 0, 2));
+    s("obj-prefix", () -> Arrays.compare(new String[]{"a"}, 0, 1, new String[]{"a","c"}, 0, 2));
+    s("unsigned-int", () -> Arrays.compareUnsigned(new int[]{-1}, 0, 1, new int[]{1}, 0, 1));
+    s("unsigned-byte", () -> Arrays.compareUnsigned(new byte[]{-1}, 0, 1, new byte[]{1}, 0, 1));
+    s("mismatch-range", () -> Arrays.mismatch(x, 0, 3, y, 0, 3));
+    s("equals-range", () -> Arrays.equals(x, 0, 2, y, 0, 2));
+    s("mis-eq", () -> Arrays.mismatch(x, 0, 2, y, 0, 2));
+    s("mis-diff", () -> Arrays.mismatch(x, 0, 3, y, 0, 3));
+    s("mis-prefix", () -> Arrays.mismatch(x, 0, 2, y, 0, 3));
+    s("mis-offset", () -> Arrays.mismatch(x, 1, 3, y, 1, 3));
+    s("mis-bad", () -> Arrays.mismatch(x, 2, 1, y, 0, 1));
+    s("mis-neg", () -> Arrays.mismatch(x, -1, 1, y, 0, 1));
+    s("eq-true", () -> Arrays.equals(x, 0, 2, y, 0, 2));
+    s("eq-false", () -> Arrays.equals(x, 0, 3, y, 0, 3));
+    s("eq-len", () -> Arrays.equals(x, 0, 2, y, 0, 3));
+    s("eq-bad", () -> Arrays.equals(x, 2, 1, y, 0, 1));
+    s("mis-bool", () -> Arrays.mismatch(new boolean[]{true,false}, 0, 2, new boolean[]{true,true}, 0, 2));
+    s("mis-byte", () -> Arrays.mismatch(new byte[]{1,2}, 0, 2, new byte[]{1,3}, 0, 2));
+    s("mis-float", () -> Arrays.mismatch(new float[]{1f,Float.NaN}, 0, 2, new float[]{1f,Float.NaN}, 0, 2));
+    s("mis-short", () -> Arrays.mismatch(new short[]{1,2}, 0, 2, new short[]{1,3}, 0, 2));
+    s("mis-bool-whole", () -> Arrays.mismatch(new boolean[]{true}, new boolean[]{false}));
+    s("mis-byte-whole", () -> Arrays.mismatch(new byte[]{1}, new byte[]{2}));
+    s("mis-float-whole", () -> Arrays.mismatch(new float[]{Float.NaN}, new float[]{Float.NaN}));
+    s("mis-short-whole", () -> Arrays.mismatch(new short[]{1}, new short[]{2}));
+    s("eq-obj-range", () -> Arrays.equals(new String[]{"a","b"}, 0, 2, new String[]{"a","b"}, 0, 2));
+    s("mis-obj-range", () -> Arrays.mismatch(new String[]{"a",null}, 0, 2, new String[]{"a",null}, 0, 2));
+  }
+}
+"#
+);
+
+// JLS §15.12.4.2's lone-array rule on a LIBRARY static: a single trailing
+// `String[]` IS the varargs array. Every other varargs library call already
+// had it; `Paths.get`/`Path.of` pack their own array and packed this one
+// again, so a path assembled from segments a program already had was
+// "String[] cannot be converted to String".
+differential_test!(
+    a_lone_array_as_varargs_on_a_library_static,
+    "LibraryVarargsArray",
+    r#"
+import java.util.*;
+import java.nio.file.*;
+import java.util.stream.*;
+public class LibraryVarargsArray {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    String[] more = {"a", "b"};
+    Object[] objs = {"x", "y"};
+    Integer[] nums = {1, 2};
+    s("paths-get", () -> Paths.get("root", more).toString());
+    s("path-of", () -> Path.of("root", more).toString());
+    s("list-of", () -> List.of(more));
+    s("set-of", () -> new TreeSet<>(Set.of(more)));
+    s("arrays-aslist", () -> Arrays.asList(more));
+    s("stream-of", () -> Stream.of(more).collect(Collectors.toList()));
+    s("string-format", () -> String.format("%s-%s", (Object[]) objs));
+    s("string-join", () -> String.join("/", more));
+    s("printf", () -> { System.out.printf("%s-%s%n", (Object[]) objs); return "ok"; });
+    s("list-of-nums", () -> List.of(nums));
+    s("empty", () -> List.of(new String[0]));
+  }
+}
+"#
+);

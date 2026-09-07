@@ -15413,12 +15413,11 @@ comparison needs both to exist. And `probeContentType` never looks for the file
 at all — the NAME is what a JDK reads, so a missing `gone.txt` is still
 `text/plain`.
 
-**What is left on that list**, and why: the ranged `Arrays.compare(a, from, to,
-b, from, to)` for four primitive kinds; `Files.list`, which wants a stream of
-PATHS and so a new element type; `Files.createDirectories`/`createLink`/
+**What is left on that list**, and why: `Files.createDirectories`/`createLink`/
 `getFileStore`/`newDirectoryStream`/`readSymbolicLink`, which want types
 caturra does not model; `BigDecimal.divide(BigDecimal, int)`; and
-`String.getBytes(int, int, byte[], int)`, deprecated since 1.1.
+`String.getBytes(int, int, byte[], int)`, deprecated since 1.1. (`Files.list`
+and the ranged `Arrays.compare` came off it — see below.)
 
 ### The harness was dropping the line (2026-09-06)
 
@@ -15520,3 +15519,116 @@ would set (`Unsupported field: DayOfMonth`), not the cast. A `Path` compares
 its text the way `String.compareTo` does — the difference, not the sign. And an
 `EnumSet` asks whether a probe is one of its constants before comparing, where
 a `TreeSet` would throw.
+
+### The cast javac takes unchecked (2026-09-07)
+
+The behaviour sweep's last blind spot was 176 calls it dropped as "javac would
+not take the probe", 80 of them functional. The bank was writing
+`(Function<Object, Object>) v -> v` where the shape a program actually writes is
+the RAW one — and the raw one is where the difference was.
+
+**A raw functional interface as a cast target is an unchecked conversion, and
+javac takes it.** `(Function) v -> v` compiles, with a note, and the call site is
+unchecked from there on. caturra refused it outright: "Function is not a
+functional interface". The lambda pass looked the target up under its
+parameterized spelling only, so the bare name reached nothing.
+
+The fix has a second half. `functional_erased_name` — the list the lambda pass
+maps a written name onto a bundled interface with — was a hand-copy of
+codegen's, and the copy had lost **every primitive specialization**. So even
+once the raw cast resolved, `(IntUnaryOperator) n -> n + 1` did not. It now
+calls `codegen::functional_erased` rather than repeating it. This is the drift
+trap again, and the fourth instance of it this month: a rule written twice is
+wrong at one of them.
+
+**What an unchecked call answers is cast where the library READS it.** Two
+places passed the value on instead, and the failure then came from wherever it
+was next used:
+
+- `Optional.flatMap` whose function does not answer an `Optional`
+- `Matcher.replaceAll`/`replaceFirst` whose function does not answer a `String`
+
+Both are now the JDK's `ClassCastException`, naming the class that arrived. The
+`Matcher` pair had a wrinkle: the replacement came back through the helper that
+UNBOXES, so a function answering `42` arrived as a bare int — indistinguishable
+there from a null, and reported as a `NullPointerException` where a JDK names
+`Integer`.
+
+`Stream.flatMap` is NOT one of these. A JDK's is lazy: the function is not
+called until a terminal pulls, so refusing at the call answers at the wrong
+moment. Answering it eagerly created three divergences where it closed one, and
+it is declared in the sweep rather than guessed at. The laziness is the fix and
+it needs a pipeline operation that can emit many elements per one.
+
+### What a primitive functional call is owed (2026-09-07)
+
+`DoubleUnaryOperator op = d -> d / 2; op.applyAsDouble(5)` is 2.5 on a JDK and
+was a `ClassCastException` here — `Integer cannot be cast to Double`. Over a
+matrix of every primitive functional interface against every argument kind that
+widens to its parameter, **24 of 25 cells were wrong**.
+
+The bundled interfaces erase their SAM parameter to `Object`, so that one
+synthesized lambda shape implements them all. The consequence is that a call
+site had no primitive to widen TO: it boxed the argument at whatever type it
+already had, and the lambda body — which does know its parameter is a `double` —
+could not read the `Integer` that arrived.
+
+A signature's `declared` parameter list is the CHECK's view and never reaches a
+descriptor, which is exactly the room this needs. The bundled primitive
+interfaces now record their real parameter kinds there, read out of
+`functional_lambda_spec` rather than listed a second time, and a call widens to
+the declared kind and boxes AT it. The declared kind is used only for an
+argument that really widens to it: the bundled IMPLEMENTATIONS of these
+interfaces (`__DoubleChain`, the predicate combinators) pass their own `Object`
+parameter straight through, and they stay in the erased world.
+
+### What the sweep could not see (2026-09-07)
+
+Four classes produced no comparable run at all, and each was hiding everything
+in it.
+
+**`java.util.Scanner` crashed the engine.** `nextInt(1)` reached Rust's
+`from_str_radix`, which panics outside [2, 36] — and a panic prints no
+diagnostics, so it reads as a clean compile that produced nothing. A radix
+argument is now checked where `useRadix` already checked one, and answers the
+JDK's `IllegalArgumentException: radix:1`.
+
+Three more Scanner facts came with it. Every integer read has a RADIX form and
+only `nextInt` had it — `nextLong`, `nextByte`, `nextShort` and
+`nextBigInteger` took no argument at all. The narrow integers and the big one
+ignored `useRadix` entirely and parsed base ten, so `useRadix(16)` then
+`nextByte()` on `7f` was a mismatch where a JDK answers 127; and the range
+complaint they throw names the radix they read in, which was hard-coded to
+`Radix:10`. And `next`/`hasNext` take the compiled `Pattern` spelling as well as
+the string — one rule that `useDelimiter` knew and they did not, so
+`sc.next(Pattern.compile("[a-z]+"))` read the pattern as an empty string.
+
+**`java.io.PrintStream` had no byte writes.** `write(byte[])` and
+`write(byte[], off, len)` are what a program that already encoded its text
+reaches for; the range complaint is `System.arraycopy`'s, because that is what a
+JDK's `PrintStream` calls. And `PrintStream.nullOutputStream()` aborted the run:
+the three Java 11 null streams live on the ABSTRACT bases, so the method ref
+names whichever concrete class the program wrote it through, and only the three
+bases were matched.
+
+**`java.nio.file.Paths` refused the lone-array form.** JLS §15.12.4.2: a single
+trailing `String[]` IS the varargs array. Every other varargs library call had
+the rule; `Paths.get`/`Path.of` pack their own array and packed this one again,
+so `Paths.get(root, segments)` was "String[] cannot be converted to String".
+
+**`java.util.Arrays` had no RANGE forms.** `compare`, `compareUnsigned`,
+`mismatch` and `equals` all take a slice of each array in Java 9, and none of
+those overloads existed — 24 calls, which was also enough to exhaust the sweep's
+retry budget and cost the class its whole run. When one slice is a prefix of the
+other the answer is the difference of the SLICE lengths, not the arrays'; and
+`mismatch` answers an index relative to each slice's own start, so the same
+difference reads the same however far in the slices sit. Four whole-array
+`mismatch` kinds were missing too (`boolean`, `byte`, `float`, `short`) — the
+same "present on one sibling and not the next" shape a table has.
+
+And two fixes to the harness itself, which is what let the last two be seen.
+caturra's "no suitable method found for `compare(int[],int,int,int[],int,int)`"
+names a LINE and an OVERLOAD both, and the bisect dropped only the line — one
+round per CALL, where dropping by signature takes three at a time. The retry
+budget went from 30 rounds to 60 for the same reason. A tool that gives up on a
+class hides everything in it.

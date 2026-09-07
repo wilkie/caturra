@@ -11443,6 +11443,18 @@ impl<'run> Interpreter<'run> {
                         "java.lang.NullPointerException",
                     )));
                 };
+                // The function must ANSWER an Optional, and a JDK casts it —
+                // which is what an unchecked call finds out at run time. Handed
+                // back unchecked, `flatMap(v -> v)` answered the element.
+                if !matches!(
+                    self.heap.get(inner),
+                    Some(crate::value::HeapObject::Optional { .. })
+                ) {
+                    return Err(VmError::UncaughtException(class_cast_message(
+                        &heap_binary_name(&self.heap, inner),
+                        "java.util.Optional",
+                    )));
+                }
                 return Ok(Answered::Value(JValue::Ref(Some(inner))));
             }
             // `orElseGet(supplier)`: the value, or the supplier's result.
@@ -11646,10 +11658,30 @@ impl<'run> Interpreter<'run> {
         while call(self, "find", "()Z", &[])? != Some(JValue::Int(0)) {
             // The JDK hands the function the MATCHER itself, positioned at the
             // current match — which is a `MatchResult` and reads as one.
-            let replacement = self.call_apply(function, matcher)?;
-            if !matches!(replacement, JValue::Ref(Some(_))) {
+            // NOT `call_apply`: that unboxes, and an unchecked function
+            // answering `42` would arrive as a bare `Int` — indistinguishable
+            // here from a null, which is the NullPointerException this used to
+            // raise where a JDK raises a ClassCastException naming Integer.
+            let replacement = self
+                .call_functional(
+                    function,
+                    "apply",
+                    "(Ljava/lang/Object;)Ljava/lang/Object;",
+                    matcher,
+                )?
+                .unwrap_or(JValue::NULL);
+            let JValue::Ref(Some(text)) = replacement else {
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.NullPointerException",
+                )));
+            };
+            // The function must answer a STRING, and a JDK casts it — which is
+            // what an unchecked call finds out here. Passed on unchecked, the
+            // failure came from wherever the value was next read as text.
+            if self.heap.string_text(text).is_none() {
+                return Err(VmError::UncaughtException(class_cast_message(
+                    &heap_binary_name(&self.heap, text),
+                    "java.lang.String",
                 )));
             }
             call(
@@ -12403,6 +12435,11 @@ impl<'run> Interpreter<'run> {
             ) => {
                 let function = *function;
                 let elements = self.stream_materialize(receiver)?;
+                // Whether this pipeline carries PRIMITIVES, which decides what
+                // a function that did not answer a stream can be spliced as.
+                let primitive = elements
+                    .iter()
+                    .any(|e| !matches!(e, JValue::Ref(_) | JValue::Int(0)));
                 let mut flat = Vec::new();
                 for element in elements {
                     let produced = self.call_apply(function, element)?;
@@ -12412,7 +12449,26 @@ impl<'run> Interpreter<'run> {
                         }
                         // A `null` sub-stream contributes nothing, as the JDK
                         // documents; anything else is the element itself.
+                        //
+                        // A function that answers something that is NOT a
+                        // stream is a JDK's ClassCastException — but only once
+                        // a TERMINAL pulls, because `flatMap` is lazy there and
+                        // eager here. Refusing it at the call would answer at
+                        // the wrong time, which is the more visible of the two
+                        // differences; the laziness is the fix, and it needs a
+                        // pipeline op that can emit MANY elements per one.
                         JValue::Ref(None) => {}
+                        // ...and a REFERENCE among primitives cannot be one of
+                        // them: spliced in, it failed a bytecode check further
+                        // down the pipeline, which is an engine error where a
+                        // JDK's is a `ClassCastException` (later than this,
+                        // because its `flatMap` is lazy — see the note above).
+                        JValue::Ref(Some(other)) if primitive => {
+                            return Err(VmError::UncaughtException(class_cast_message(
+                                &heap_binary_name(&self.heap, other),
+                                "java.util.stream.Stream",
+                            )));
+                        }
                         other => flat.push(other),
                     }
                 }

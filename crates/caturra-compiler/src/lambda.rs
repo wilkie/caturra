@@ -1065,17 +1065,10 @@ fn receiver_class_name(receiver: &Expr, ctx: &Ctx) -> Option<String> {
 /// The bundled interface a `java.util.function` name aliases, mirroring
 /// codegen's own mapping.
 fn functional_erased_name(simple: &str) -> Option<String> {
-    Some(String::from(match simple {
-        "Comparator" => "__Comparator",
-        "Function" | "UnaryOperator" => "__UnaryOperator",
-        "BiFunction" | "BinaryOperator" => "__BiFunction",
-        "Predicate" => "__Predicate",
-        "Consumer" => "__Consumer",
-        "BiConsumer" => "__BiConsumer",
-        "Supplier" => "__Supplier",
-        "Runnable" => "__Runnable",
-        _ => return None,
-    }))
+    // ONE list, codegen's: this was a hand-copy of it, and the copy was
+    // missing every primitive specialization — so a raw `(IntFunction)` cast
+    // resolved to nothing where a raw `(Function)` resolved fine.
+    crate::codegen::functional_erased(simple).map(String::from)
 }
 
 /// A generic method's parameter types AS WRITTEN, with the plan for pinning
@@ -4080,6 +4073,16 @@ fn sam_target(target: &TypeRef, ctx: &Ctx) -> Option<(String, Sam)> {
     if let Some(sam) = ctx.sams.get(name) {
         return Some((name.to_owned(), sam.clone()));
     }
+    // A RAW library interface — `(Function) v -> v`, which javac takes as an
+    // unchecked conversion. The parameterized spelling reached the bundled
+    // interface through its alias and the bare one did not, so the same cast
+    // was "Function is not a functional interface" without its type arguments.
+    let simple = name.rsplit('.').next().unwrap_or(name);
+    if let Some(aliased) = functional_erased_name(simple)
+        && let Some(sam) = ctx.sams.get(&aliased)
+    {
+        return Some((aliased, sam.clone()));
+    }
     let (_, last) = name.rsplit_once('.')?;
     ctx.sams.get(last).map(|sam| (last.to_owned(), sam.clone()))
 }
@@ -5015,6 +5018,59 @@ fn unparameterized_spec(simple: &str) -> Option<FunctionalSpec> {
         params,
         result,
     })
+}
+
+/// The SAM parameter kinds of a bundled functional interface, asked by the
+/// ERASED `__` name codegen interns rather than by the `java.util.function`
+/// spelling a program writes — and answered only when at least one of them is a
+/// primitive.
+///
+/// The primitive specializations erase their parameter to `Object` so that one
+/// synthesized lambda shape implements them all. But the interface a program
+/// NAMES declares `double`, and a call has to widen to it: `op.applyAsDouble(5)`
+/// hands over 5.0, where boxing the argument at its own type handed over an
+/// `Integer` the lambda body could not read.
+///
+/// Read out of `functional_lambda_spec`, which is the one place these shapes
+/// are written down. A second list of them would be a second list to get wrong.
+pub(crate) fn erased_sam_params(erased: &str, method: &str) -> Option<Vec<TypeRef>> {
+    let object = || TypeRef::Named(String::from("Object"));
+    for name in crate::imports::JAVA_UTIL_FUNCTION {
+        for arity in 0..=2 {
+            let target = if arity == 0 {
+                TypeRef::Named((*name).to_string())
+            } else {
+                TypeRef::Generic {
+                    base: (*name).to_string(),
+                    args: vec![object(); arity],
+                }
+            };
+            let Some(spec) = functional_lambda_spec(&target) else {
+                continue;
+            };
+            if spec.interface != erased || spec.method != method {
+                continue;
+            }
+            if spec.params.iter().any(is_primitive_ref) {
+                return Some(spec.params);
+            }
+        }
+    }
+    None
+}
+
+fn is_primitive_ref(ty: &TypeRef) -> bool {
+    matches!(
+        ty,
+        TypeRef::Int
+            | TypeRef::Long
+            | TypeRef::Double
+            | TypeRef::Float
+            | TypeRef::Short
+            | TypeRef::Byte
+            | TypeRef::Char
+            | TypeRef::Boolean
+    )
 }
 
 #[allow(clippy::too_many_lines)] // one flat table, one line per interface

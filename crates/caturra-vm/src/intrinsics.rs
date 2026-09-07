@@ -4441,6 +4441,30 @@ fn invoke_virtual_dispatch(
                     let unit = u32::from((*byte & 0xFF) as u8);
                     char::from_u32(unit).map(String::from).unwrap_or_default()
                 }
+                // `write(bytes)` and `write(bytes, off, len)` — BYTES, decoded
+                // in the default charset on the way to the console, which is
+                // how a program writes text it already encoded. A JDK's range
+                // complaint here is `System.arraycopy`'s, because that is what
+                // its `PrintStream` calls.
+                ("write", [array, ..]) => {
+                    let bytes = byte_array_values(heap, array)?;
+                    let (from, count) = match args {
+                        [_, JValue::Int(off), JValue::Int(len)] => (*off, *len),
+                        _ => (0, i32::try_from(bytes.len()).unwrap_or(i32::MAX)),
+                    };
+                    let start = usize::try_from(from).unwrap_or(usize::MAX);
+                    let length = usize::try_from(count).unwrap_or(usize::MAX);
+                    let end = start.saturating_add(length);
+                    if end > bytes.len() {
+                        return Err(throw(format!(
+                            "java.lang.ArrayIndexOutOfBoundsException: arraycopy: \
+                             last source index {end} out of bounds for byte[{}]",
+                            bytes.len()
+                        )));
+                    }
+                    let raw: Vec<u8> = bytes[start..end].iter().map(|b| b.cast_unsigned()).collect();
+                    String::from_utf8_lossy(&raw).into_owned()
+                }
                 // `append(cs, start, end)` writes a RANGE, which the print
                 // family has no shape for.
                 ("append", [_, JValue::Int(_), JValue::Int(_)]) => String::from_utf16_lossy(
@@ -7155,18 +7179,7 @@ fn scanner_method(
         "useDelimiter" => {
             // Either spelling: the string a program writes, or the `Pattern`
             // it compiled first. A pattern IS its source here.
-            let pattern = match args.first() {
-                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
-                    Some(HeapObject::Pattern { source, .. }) => {
-                        Some(String::from_utf16_lossy(source))
-                    }
-                    _ => heap.string_text(*reference),
-                },
-                _ => None,
-            };
-            let Some(pattern) = pattern else {
-                return Err(throw("java.lang.NullPointerException"));
-            };
+            let pattern = scanner_pattern_arg(heap, args)?;
             // Reject a malformed pattern HERE, where the JDK's
             // `Pattern.compile` does, rather than at the first read.
             compile_scanner_delimiter(&pattern)?;
@@ -7263,7 +7276,7 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(has))))
         }
         "nextLong" => {
-            let radix = scanner_radix(heap, receiver);
+            let radix = scanner_radix_arg(heap, receiver, args)?;
             let value = scanner_take_msg(heap, console, receiver, |t| {
                 let digits = scanner_ungroup(t).ok_or(None)?;
                 i64::from_str_radix(&digits, radix).map_err(|_| {
@@ -7274,7 +7287,7 @@ fn scanner_method(
             Ok(Some(JValue::Long(value)))
         }
         "hasNextLong" => {
-            let radix = scanner_radix(heap, receiver);
+            let radix = scanner_radix_arg(heap, receiver, args)?;
             let token = scanner_peek_token(heap, console, receiver)?;
             let ok = token
                 .and_then(|t| scanner_ungroup(&t))
@@ -7286,26 +7299,28 @@ fn scanner_method(
         // from the moment the bignum core landed. A token is exactly what each
         // type's own parser takes.
         "nextBigInteger" => {
+            let radix = scanner_radix_arg(heap, receiver, args)?;
             let token = scanner_take_msg(heap, console, receiver, |t| {
                 let digits = scanner_ungroup(t).ok_or(None)?;
-                if crate::bigint::BigInt::parse(&digits, 10).is_some() {
+                if crate::bigint::BigInt::parse(&digits, radix).is_some() {
                     Ok(digits)
                 } else {
-                    Err(scanner_numeric_token(&digits, 10)
+                    Err(scanner_numeric_token(&digits, radix)
                         .then(|| format!("For input string: \"{digits}\"")))
                 }
             })?;
-            let value = crate::bigint::BigInt::parse(&token, 10)
+            let value = crate::bigint::BigInt::parse(&token, radix)
                 .ok_or_else(|| throw("java.util.InputMismatchException"))?;
             Ok(Some(JValue::Ref(Some(
                 heap.alloc(HeapObject::BigInteger(value)),
             ))))
         }
         "hasNextBigInteger" => {
+            let radix = scanner_radix_arg(heap, receiver, args)?;
             let token = scanner_peek_token(heap, console, receiver)?;
             let ok = token
                 .and_then(|t| scanner_ungroup(&t))
-                .is_some_and(|t| crate::bigint::BigInt::parse(&t, 10).is_some());
+                .is_some_and(|t| crate::bigint::BigInt::parse(&t, radix).is_some());
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextBigDecimal" => {
@@ -7347,18 +7362,24 @@ fn scanner_method(
             let ok = token.is_some_and(|t| is_java_float_token(&t));
             Ok(Some(JValue::Int(i32::from(ok))))
         }
+        // The narrow integers read in the scanner's radix like every other
+        // integer read — the argument's, or `useRadix`'s. They parsed base ten
+        // whatever the radix was, so `useRadix(16)` then `nextByte()` on "7f"
+        // was a mismatch where a JDK answers 127; and the range complaint names
+        // the radix it was read in, which was hard-coded to 10.
         "nextShort" | "nextByte" => {
             let (lo, hi) = if method == "nextShort" {
                 (i32::from(i16::MIN), i32::from(i16::MAX))
             } else {
                 (i32::from(i8::MIN), i32::from(i8::MAX))
             };
+            let radix = scanner_radix_arg(heap, receiver, args)?;
             let value = scanner_take_msg(heap, console, receiver, |t| {
                 let digits = scanner_ungroup(t).ok_or(None)?;
-                let parsed = digits.parse::<i64>().map_err(|_| None)?;
+                let parsed = i64::from_str_radix(&digits, radix).map_err(|_| None)?;
                 if parsed < i64::from(lo) || parsed > i64::from(hi) {
                     return Err(Some(format!(
-                        "Value out of range. Value:\"{digits}\" Radix:10"
+                        "Value out of range. Value:\"{digits}\" Radix:{radix}"
                     )));
                 }
                 i32::try_from(parsed).map_err(|_| None)
@@ -7371,10 +7392,12 @@ fn scanner_method(
             } else {
                 (i32::from(i8::MIN), i32::from(i8::MAX))
             };
+            let radix = scanner_radix_arg(heap, receiver, args)?;
             let token = scanner_peek_token(heap, console, receiver)?;
             let ok = token
-                .and_then(|t| t.parse::<i32>().ok())
-                .is_some_and(|v| v >= lo && v <= hi);
+                .and_then(|t| scanner_ungroup(&t))
+                .and_then(|t| i64::from_str_radix(&t, radix).ok())
+                .is_some_and(|v| v >= i64::from(lo) && v <= i64::from(hi));
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextBoolean" => {
@@ -7451,10 +7474,7 @@ fn scanner_method(
             // An explicit radix wins; otherwise the one `useRadix` set, which
             // is ten until a program says otherwise. It reaches the INTEGER
             // reads only — a JDK's `useRadix(16)` leaves `nextDouble` decimal.
-            let radix = match args {
-                [JValue::Int(radix)] => u32::try_from(*radix).unwrap_or(10),
-                _ => scanner_radix(heap, receiver),
-            };
+            let radix = scanner_radix_arg(heap, receiver, args)?;
             let value = scanner_take_msg(heap, console, receiver, |t| {
                 let digits = scanner_ungroup(t).ok_or(None)?;
                 i32::from_str_radix(&digits, radix).map_err(|_| {
@@ -7470,10 +7490,7 @@ fn scanner_method(
             // An explicit radix wins; otherwise the one `useRadix` set, which
             // is ten until a program says otherwise. It reaches the INTEGER
             // reads only — a JDK's `useRadix(16)` leaves `nextDouble` decimal.
-            let radix = match args {
-                [JValue::Int(radix)] => u32::try_from(*radix).unwrap_or(10),
-                _ => scanner_radix(heap, receiver),
-            };
+            let radix = scanner_radix_arg(heap, receiver, args)?;
             let token = scanner_peek_token(heap, console, receiver)?;
             let ok = token
                 .and_then(|t| scanner_ungroup(&t))
@@ -8255,10 +8272,36 @@ fn scanner_delimiter(heap: &Heap, receiver: HeapRef) -> Option<String> {
 
 /// The pattern argument of `hasNext(String)` / `next(String)`.
 fn scanner_pattern_arg(heap: &Heap, args: &[JValue]) -> Result<String, VmError> {
+    // Either spelling: the string a program writes, or the `Pattern` it
+    // compiled first — a pattern IS its source here. `useDelimiter` knew that
+    // and `next`/`hasNext` did not, so `sc.next(Pattern.compile("[a-z]+"))`
+    // read the pattern as an empty string and matched nothing.
     match args.first() {
-        Some(JValue::Ref(Some(reference))) => Ok(heap.string_text(*reference).unwrap_or_default()),
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::Pattern { source, .. }) => Ok(String::from_utf16_lossy(source)),
+            _ => Ok(heap.string_text(*reference).unwrap_or_default()),
+        },
         _ => Err(throw("java.lang.NullPointerException")),
     }
+}
+
+/// The radix a `next*`/`hasNext*` reads in: the argument when one is written,
+/// and otherwise whatever `useRadix` set.
+///
+/// A radix outside [2, 36] is the JDK's `IllegalArgumentException`, thrown
+/// BEFORE anything is read. It was `unwrap_or(10)` on an unsigned conversion,
+/// which let a 1 through to Rust's `from_str_radix` — and that PANICS, so a
+/// `nextInt(1)` took the whole engine down and printed no diagnostic at all.
+fn scanner_radix_arg(heap: &Heap, receiver: HeapRef, args: &[JValue]) -> Result<u32, VmError> {
+    let [JValue::Int(radix)] = args else {
+        return Ok(scanner_radix(heap, receiver));
+    };
+    if !(2..=36).contains(radix) {
+        return Err(throw(format!(
+            "java.lang.IllegalArgumentException: radix:{radix}"
+        )));
+    }
+    Ok(u32::try_from(*radix).unwrap_or(10))
 }
 
 /// Whether a token matches a pattern IN FULL — `String.matches` semantics,
@@ -12781,41 +12824,52 @@ pub fn invoke_static(
         // goes nowhere: a reader already at end of input, and two writers that
         // discard — which is exactly an empty `StringReader` and a
         // `StringWriter`/`ByteArrayOutputStream` nobody reads back.
-        "java/io/Reader" | "java/io/Writer" | "java/io/OutputStream" => match method {
-            "nullReader" => {
-                // ...and the null READER needs the same marking the null
-                // writer got: it is an empty `StringReader` here, and a JDK's
-                // is an anonymous `Reader$1`.
-                let reader = heap.alloc(HeapObject::Reader {
-                    buffer: String::new(),
-                    pos: 0,
-                    stdin: false,
-                    closed: false,
-                    mark: None,
-                });
-                heap.set_view_class(reader, "java/io/Reader$1");
-                Ok(Some(JValue::Ref(Some(reader))))
+        // They live on the ABSTRACT bases and every concrete reader, writer and
+        // stream INHERITS them — so the method ref names whichever class the
+        // program wrote it through (`PrintStream.nullOutputStream()`), and
+        // matching the three bases alone aborted the run on all the rest.
+        name if matches!(
+            name,
+            "java/io/Reader" | "java/io/Writer" | "java/io/OutputStream"
+        ) || (name.starts_with("java/io/")
+            && matches!(method, "nullReader" | "nullWriter" | "nullOutputStream")) =>
+        {
+            match method {
+                "nullReader" => {
+                    // ...and the null READER needs the same marking the null
+                    // writer got: it is an empty `StringReader` here, and a JDK's
+                    // is an anonymous `Reader$1`.
+                    let reader = heap.alloc(HeapObject::Reader {
+                        buffer: String::new(),
+                        pos: 0,
+                        stdin: false,
+                        closed: false,
+                        mark: None,
+                    });
+                    heap.set_view_class(reader, "java/io/Reader$1");
+                    Ok(Some(JValue::Ref(Some(reader))))
+                }
+                // A null writer IS a `StringWriter` here — one nobody reads back
+                // — but it must not PRINT as one: a `StringWriter`'s `toString` is
+                // its buffer, and a JDK's null writer is an ordinary object with a
+                // class and an address. Marking the class is what tells the two
+                // apart, in `getClass()` and in the renderer both.
+                "nullWriter" => {
+                    let writer = heap.alloc(HeapObject::StringWriter(Vec::new()));
+                    heap.set_view_class(writer, "java/io/Writer$1");
+                    Ok(Some(JValue::Ref(Some(writer))))
+                }
+                // A null OUTPUT stream is a `ByteArrayOutputStream` nobody reads
+                // back, and must not PRINT as one — the same marking the null
+                // reader and the null writer already carry.
+                "nullOutputStream" => {
+                    let stream = heap.alloc(HeapObject::ByteStream(Vec::new()));
+                    heap.set_view_class(stream, "java/io/OutputStream$1");
+                    Ok(Some(JValue::Ref(Some(stream))))
+                }
+                _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
             }
-            // A null writer IS a `StringWriter` here — one nobody reads back
-            // — but it must not PRINT as one: a `StringWriter`'s `toString` is
-            // its buffer, and a JDK's null writer is an ordinary object with a
-            // class and an address. Marking the class is what tells the two
-            // apart, in `getClass()` and in the renderer both.
-            "nullWriter" => {
-                let writer = heap.alloc(HeapObject::StringWriter(Vec::new()));
-                heap.set_view_class(writer, "java/io/Writer$1");
-                Ok(Some(JValue::Ref(Some(writer))))
-            }
-            // A null OUTPUT stream is a `ByteArrayOutputStream` nobody reads
-            // back, and must not PRINT as one — the same marking the null
-            // reader and the null writer already carry.
-            "nullOutputStream" => {
-                let stream = heap.alloc(HeapObject::ByteStream(Vec::new()));
-                heap.set_view_class(stream, "java/io/OutputStream$1");
-                Ok(Some(JValue::Ref(Some(stream))))
-            }
-            _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
-        },
+        }
         // `Year.of` and the two beside it, and the same three for a
         // `YearMonth` and a `MonthDay`. `from(temporal)` reads whichever
         // fields the value has.
