@@ -102,6 +102,12 @@ class Arrays {
   public static void parallelSort(byte[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
   public static void parallelSort(String[] a) { sort(a, 0, a.length); }
   public static void parallelSort(String[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
+  // ...and any OTHER reference array, which sorts by each element's own
+  // `compareTo` exactly as `sort(Object[])` does. Only the `String[]` pair was
+  // written, so `Comparable[]` — or any array of a program's own comparable
+  // class — had no parallel form at all.
+  public static void parallelSort(Object[] a) { sort(a, 0, a.length); }
+  public static void parallelSort(Object[] a, int fromIndex, int toIndex) { sort(a, fromIndex, toIndex); }
   // Sort a[fromIndex..toIndex).
   public static void sort(int[] a, int fromIndex, int toIndex) {
     rangeCheck(a.length, fromIndex, toIndex);

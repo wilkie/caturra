@@ -8956,9 +8956,6 @@ counting catches: a divergence that stopped being one.
 
 - `Arrays.fill(new String[1], 5)` — javac erases to `fill(Object[], Object)`
   and throws `ArrayStoreException` at run time. (`strict_fill_checks_the_element_type_of_a_reference_array`)
-- `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
-  and it answers 0. (`strict_frequency_demands_the_lists_element_type`)
-- `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`. (`strict_contains_all_demands_the_lists_element_type`)
 - `AbstractList<Integer> v;` and the rest of the unmodeled library — a scope
   limit, reported by name wherever written rather than as a missing symbol.
   This bullet used to name `LinkedList`, `HashSet`, `TreeMap` and `TreeSet`
@@ -15632,3 +15629,82 @@ names a LINE and an OVERLOAD both, and the bisect dropped only the line — one
 round per CALL, where dropping by signature takes three at a time. The retry
 budget went from 30 rounds to 60 for the same reason. A tool that gives up on a
 class hides everything in it.
+
+### The calls the sweep itself refused (2026-09-07)
+
+The behaviour sweep reports what it dropped, and one column of that report is
+**155 calls javac takes and caturra turned away** — the dangerous direction,
+measured rather than guessed at. This is the `java.util` half of the list.
+
+**Two of them are one rule, and it was already written down.** `BParam::Probe`
+exists because `Map.get`, `Collection.contains` and `indexOf` take `Object` in
+Java, not the collection's own element — refusing that was "one of the few
+places caturra was stricter than javac in a way a student meets by accident".
+The same is true of the PLURAL forms and nobody had said so:
+`containsAll`/`removeAll`/`retainAll` are declared `Collection<?>`, not
+`Collection<? extends E>`. Only `addAll` STORES what it is given, so only
+`addAll` has to agree about the element. `Map.remove(key, value)` likewise takes
+two Objects, like the one-argument form beside it, and
+`Collections.frequency(c, o)` takes one — where `binarySearch`'s key really is
+the element, which is the difference between those two.
+
+Two entries came off the stricter-than-javac list with that (`frequency` and
+`containsAll`), which is what counting pins against bullets is for.
+
+**Widening `Map.remove` uncovered a worse one.** An `EnumMap` is modelled as a
+sorted map, so a probe of the wrong type was COMPARED — and compared equal to
+the least key. `m.get("x")` on an `EnumMap<Day, String>` answered the value
+under `MON`. A JDK checks the key's CLASS before it looks at anything
+(`isValidKey`), which is also why `get(null)` is null there where a `TreeMap`'s
+throws — the rule this now sits beside.
+
+**The ranged `Arrays.parallelPrefix` compiled and did nothing.** The lambda pass
+knew only the two-argument form, so the four-argument one got its operator
+targeted by the general path, emitted a call, and left the array untouched. A
+silent wrong answer is worse than a refusal; its bounds are checked now, the
+way every other ranged `Arrays` method checks them, and a null array or
+operator is the JDK's `NullPointerException` rather than "malformed class".
+
+**The rest were missing overloads**, each of them ordinary Java:
+
+* `orElseThrow(supplier)` on all four `Optional`s — the form that names which
+  exception an absent value deserves. It throws the object the supplier MADE,
+  which carries the class, message, cause and fields a re-made copy would not.
+* `Objects.requireNonNull(value, () -> message)`, whose text is built only once
+  the value has turned out to be null. One name and two second parameters, told
+  apart by what the argument is: a supplier is not a String.
+* `addAll(index, collection)` on every list but `ArrayList`, and
+  `replace(key, old, new)` on the sorted map — a sibling table missing what its
+  twin had, which is a shape this repo has now met a dozen times.
+* `StringTokenizer.nextToken(delim)`, which changes the delimiter set and then
+  reads; the change STICKS, which is the whole point of the overload.
+* `BitSet.valueOf(bytes)` — the same bits eight to a word, little-endian.
+* `Base64.getMimeEncoder(length, separator)`: the length rounds DOWN to a
+  multiple of four, a length at or below zero never wraps, and a separator
+  holding a base-64 character is refused by its code.
+* `Arrays.parallelSort(Object[])` — only the `String[]` pair had been written,
+  so an array of a program's own comparable class had no parallel form.
+* `Stream.reduce(identity, accumulator, combiner)`. Its two functional
+  arguments are not both over the element: the accumulator is `(U, T) -> U` and
+  the combiner `(U, U) -> U`, where `U` is what the IDENTITY is — that
+  difference is the whole reason the three-argument form exists. The answer is
+  `U` too, read on BOTH the emit side and in `type_of` or the two disagree. On
+  one thread the combiner is never called, which is what a JDK does for a
+  sequential stream as well.
+
+`Arrays.stream(array, from, to)` stays refused, with the reason it already
+carried: a stream's origin here is a whole collection or array, with no room
+for a range, and lowering the range to a copy would quietly drop the late
+binding a JDK keeps.
+
+**What is left of that list**, for the next sitting: the `java.lang` end
+(`Character`'s `char[]` code-point family, `toTitleCase(int)`,
+`toChars(int, char[], int)`, the Java 9 `parseInt(CharSequence, int, int, int)`
+family, `CharSequence.compare`), `BigDecimal`'s seven `MathContext` overloads,
+and the `java.time` end (`Duration.dividedBy(Duration)` and
+`plus`/`minus(long, unit)`, `LocalDate.of(int, Month, int)` and its three
+`LocalDateTime` siblings, `datesUntil(date, period)`, `Period`'s `long`
+overloads, `Year`/`YearMonth`/`MonthDay.parse(text, formatter)`,
+`Year`/`YearMonth.with(adjuster)`, and `until(Temporal, unit)` taking any
+temporal). `java.io`'s two (`OutputStream.write(byte[])` and `PrintWriter.printf`
+answering the writer) belong with them.

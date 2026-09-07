@@ -2819,6 +2819,22 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `optional.orElseThrow(() -> new X())`: a zero-parameter supplier
+            // of a THROWABLE, which is the one supplier here whose result is
+            // not the element — a JDK throws what it answers. Gated on the
+            // receiver being an Optional like its siblings, so a user class
+            // with an `orElseThrow` keeps its own targeting.
+            if method == "orElseThrow"
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { params, .. } if params.is_empty())
+                && let Some(r) = receiver.as_deref()
+                && optional_elem_type(r, ctx).is_some()
+            {
+                let object = TypeRef::Named(String::from("Object"));
+                args[0] =
+                    build_erased_lambda(&mut args[0], "__Supplier", "get", &object, &[], None, ctx);
+                return;
+            }
             // `optional.orElseGet(() -> ...)`: a zero-parameter supplier whose
             // result is the Optional's element type.
             if method == "orElseGet"
@@ -2845,6 +2861,27 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // message blamed the LAMBDA for a method caturra had not modelled.
             let supplier_argument = matches!(&args[..], [_, Expr::MethodRef { .. }])
                 || matches!(&args[..], [_, Expr::Lambda { params, .. }] if params.is_empty());
+            // `Objects.requireNonNull(value, () -> "why")`: the SAME shape,
+            // and the supplier answers the message rather than a value.
+            if method == "requireNonNull"
+                && supplier_argument
+                && matches!(receiver.as_deref(), Some(Expr::Name { path, .. })
+                        if path.len() == 1 && path[0] == "Objects")
+            {
+                desugar_expr(&mut args[0], None, ctx);
+                let object = TypeRef::Named(String::from("Object"));
+                if matches!(&args[1], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from("get"),
+                        params: Vec::new(),
+                        ret: object.clone(),
+                    };
+                    args[1] = method_ref_to_lambda(&args[1], &synth, ctx);
+                }
+                args[1] =
+                    build_erased_lambda(&mut args[1], "__Supplier", "get", &object, &[], None, ctx);
+                return;
+            }
             if method == "requireNonNullElseGet"
                 && supplier_argument
                 && matches!(receiver.as_deref(), Some(Expr::Name { path, .. })
@@ -3037,18 +3074,26 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             }
             // `Arrays.parallelPrefix(array, (a, b) -> ...)`: the operator
             // folds two ELEMENTS and answers one.
+            //
+            // The RANGE form puts the operator last, after `from` and `to`,
+            // and had no arm here at all — the lambda was targeted by the
+            // general path, the call compiled, and the array came back
+            // untouched. A silent wrong answer is worse than a refusal.
             if method == "parallelPrefix"
-                && args.len() == 2
+                && matches!(args.len(), 2 | 4)
                 && receiver
                     .as_deref()
                     .is_some_and(|r| names_library_class(r, "Arrays"))
-                && matches!(&args[1], Expr::Lambda { params, .. } if params.len() == 2)
+                && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
                 && let Some(elem) = array_elem_type(&args[0], ctx)
             {
-                desugar_expr(&mut args[0], None, ctx);
+                let last = args.len() - 1;
+                for arg in &mut args[..last] {
+                    desugar_expr(arg, None, ctx);
+                }
                 let object = TypeRef::Named(String::from("Object"));
-                args[1] = build_erased_lambda(
-                    &mut args[1],
+                args[last] = build_erased_lambda(
+                    &mut args[last],
                     "__BiFunction",
                     "apply",
                     &object,
@@ -3283,36 +3328,58 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 // converts one to the equivalent lambda before erasing it —
                 // this arm did not, so the reference had no functional
                 // position and the whole program was refused.
-                if method == "reduce"
-                    && matches!(args.last(), Some(Expr::MethodRef { .. }))
-                    && !args.is_empty()
-                {
-                    let synth = Sam {
-                        method: String::from("apply"),
-                        params: vec![elem.clone(), elem.clone()],
-                        ret: object.clone(),
+                //
+                // The THREE-argument form has two functional arguments, not
+                // one, and their parameter types are not both the element's:
+                // the accumulator is `(U, T) -> U` and the combiner
+                // `(U, U) -> U`, where `U` is what the IDENTITY is. Erasing
+                // only the last left the accumulator with no functional
+                // position, and typing either of them as `(T, T)` refused
+                // `reduce(0, (n, t) -> n + t.length(), Integer::sum)` — the
+                // shape the form exists for.
+                if method == "reduce" && matches!(args.len(), 1..=3) {
+                    let carried = if args.len() == 3 {
+                        literal_element_type(&args[..1], ctx)
+                    } else {
+                        elem.clone()
                     };
-                    let last = args.len() - 1;
-                    args[last] = method_ref_to_lambda(&args[last], &synth, ctx);
-                }
-                if method == "reduce"
-                    && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
-                {
-                    let last = args.len() - 1;
-                    let (leading, tail) = args.split_at_mut(last);
-                    for arg in leading {
-                        desugar_expr(arg, None, ctx);
+                    let folds: &[(usize, [TypeRef; 2])] = match args.len() {
+                        3 => &[
+                            (1, [carried.clone(), elem.clone()]),
+                            (2, [carried.clone(), carried.clone()]),
+                        ],
+                        2 => &[(1, [elem.clone(), elem.clone()])],
+                        _ => &[(0, [elem.clone(), elem.clone()])],
+                    };
+                    let functional = folds.iter().all(|(at, _)| {
+                        matches!(&args[*at], Expr::MethodRef { .. })
+                            || matches!(&args[*at], Expr::Lambda { params, .. } if params.len() == 2)
+                    });
+                    if functional {
+                        if args.len() == 3 {
+                            desugar_expr(&mut args[0], None, ctx);
+                        }
+                        for (at, params) in folds {
+                            if matches!(&args[*at], Expr::MethodRef { .. }) {
+                                let synth = Sam {
+                                    method: String::from("apply"),
+                                    params: params.to_vec(),
+                                    ret: object.clone(),
+                                };
+                                args[*at] = method_ref_to_lambda(&args[*at], &synth, ctx);
+                            }
+                            args[*at] = build_erased_lambda(
+                                &mut args[*at],
+                                "__BiFunction",
+                                "apply",
+                                &object,
+                                params,
+                                None,
+                                ctx,
+                            );
+                        }
+                        return;
                     }
-                    tail[0] = build_erased_lambda(
-                        &mut tail[0],
-                        "__BiFunction",
-                        "apply",
-                        &object,
-                        &[elem.clone(), elem],
-                        None,
-                        ctx,
-                    );
-                    return;
                 }
                 // The argument is either a single-parameter lambda or a method
                 // reference (`map(String::toUpperCase)`). A reference first

@@ -10187,18 +10187,6 @@ public class SortPlainArray {
 "#
 );
 
-stricter_than_javac!(
-    strict_frequency_demands_the_lists_element_type,
-    "StrictFreqWrongType",
-    "import java.util.*;\npublic class StrictFreqWrongType { static int r() { return Collections.frequency(new ArrayList<Integer>(), \"x\"); } }"
-);
-
-stricter_than_javac!(
-    strict_contains_all_demands_the_lists_element_type,
-    "StrictContainsAllOther",
-    "import java.util.*;\npublic class StrictContainsAllOther { static boolean r() { return new ArrayList<Integer>().containsAll(new ArrayList<String>()); } }"
-);
-
 // `Collections.addAll(list, integerArray)` — a wrapper array IS the varargs
 // `T[]` (it is a reference array now), so this is legal Java that WORKS, where
 // caturra used to refuse it as a documented strictness. The strictness fell
@@ -54463,6 +54451,157 @@ public class LibraryVarargsArray {
     s("printf", () -> { System.out.printf("%s-%s%n", (Object[]) objs); return "ok"; });
     s("list-of-nums", () -> List.of(nums));
     s("empty", () -> List.of(new String[0]));
+  }
+}
+"#
+);
+
+// The behaviour sweep's own report of what IT refused: 155 calls javac takes
+// and caturra turned away, which is the dangerous direction. This is the
+// `java.util` half of that list.
+//
+// Two of them are one rule. `containsAll`/`removeAll`/`retainAll` take
+// `Collection<?>` in a JDK, not `Collection<? extends E>` — only `addAll`
+// stores what it is given, so only `addAll` has to agree about the element —
+// and `Map.remove(key, value)` takes two Objects like the one-argument form
+// beside it. The rest were missing overloads (`orElseThrow(supplier)` on all
+// four Optionals, `requireNonNull(value, supplier)`, `addAll(index, …)` on
+// every list but ArrayList, `replace(k, old, new)` on the sorted map,
+// `nextToken(delim)`, `BitSet.valueOf(bytes)`, `getMimeEncoder(len, sep)`,
+// `parallelSort(Object[])`, the three-argument `reduce`) — and one SILENT
+// WRONG ANSWER: the ranged `parallelPrefix` compiled and did nothing.
+//
+// Widening `Map.remove` uncovered another: an `EnumMap` is a sorted map here,
+// so a probe of the wrong type was COMPARED and matched the least key, where a
+// JDK checks the class first and answers absent.
+differential_test!(
+    ordinary_java_util_the_sweep_refused,
+    "RefusedUtil",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+public class RefusedUtil {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  enum Day { MON, TUE, WED }
+  static EnumMap<Day,String> m() { EnumMap<Day,String> m = new EnumMap<>(Day.class); m.put(Day.MON, "v"); return m; }
+  public static void main(String[] a) {
+    s("collections-addAll-array", () -> { List<String> l = new ArrayList<>(); Collections.addAll(l, new String[] {"a", "b"}); return l; });
+    s("collections-addAll-varargs", () -> { List<String> l = new ArrayList<>(); Collections.addAll(l, "a", "b"); return l; });
+    s("collections-addAll-none", () -> { List<String> l = new ArrayList<>(); return Collections.addAll(l); });
+    s("requireNonNull-supplier", () -> Objects.requireNonNull("x", () -> "boom"));
+    s("requireNonNull-supplier-null", () -> Objects.requireNonNull(null, () -> "boom"));
+    s("optional-orElseThrow-supplier", () -> Optional.of("x").orElseThrow(() -> new IllegalStateException("no")));
+    s("optional-orElseThrow-empty", () -> Optional.empty().orElseThrow(() -> new IllegalStateException("no")));
+    s("optional-ifPresentOrElse", () -> { StringBuilder b = new StringBuilder(); Optional.of("x").ifPresentOrElse(v -> b.append("got " + v), () -> b.append("none")); return b.toString(); });
+    s("optional-ifPresentOrElse-empty", () -> { StringBuilder b = new StringBuilder(); Optional.empty().ifPresentOrElse(v -> b.append("got " + v), () -> b.append("none")); return b.toString(); });
+    s("optint-orElseThrow", () -> OptionalInt.of(3).orElseThrow(() -> new IllegalStateException("no")));
+    s("optint-ifPresentOrElse", () -> { StringBuilder b = new StringBuilder(); OptionalInt.of(3).ifPresentOrElse(v -> b.append(v), () -> b.append("none")); return b.toString(); });
+    s("optlong-orElseThrow", () -> OptionalLong.of(3L).orElseThrow(() -> new IllegalStateException("no")));
+    s("optdouble-orElseThrow", () -> OptionalDouble.of(3.5).orElseThrow(() -> new IllegalStateException("no")));
+    s("optdouble-ifPresentOrElse", () -> { StringBuilder b = new StringBuilder(); OptionalDouble.empty().ifPresentOrElse(v -> b.append(v), () -> b.append("none")); return b.toString(); });
+    s("linkedlist-addAll-index", () -> { LinkedList<String> l = new LinkedList<>(List.of("a", "d")); l.addAll(1, List.of("b", "c")); return l; });
+    s("vector-addAll-index", () -> { Vector<String> v = new Vector<>(List.of("a", "d")); v.addAll(1, List.of("b", "c")); return v; });
+    s("stack-addAll-index", () -> { Stack<String> v = new Stack<>(); v.push("a"); v.push("d"); v.addAll(1, List.of("b", "c")); return v; });
+    s("addAll-index-bad", () -> { LinkedList<String> l = new LinkedList<>(List.of("a")); l.addAll(5, List.of("b")); return l; });
+    s("treemap-replace3", () -> { TreeMap<String,String> m = new TreeMap<>(Map.of("k", "v")); boolean ok = m.replace("k", "v", "w"); return ok + " " + m; });
+    s("treemap-replace3-miss", () -> { TreeMap<String,String> m = new TreeMap<>(Map.of("k", "v")); boolean ok = m.replace("k", "z", "w"); return ok + " " + m; });
+    s("enumset-containsAll", () -> EnumSet.of(Day.MON).containsAll(List.of("x")));
+    s("enumset-removeAll", () -> { EnumSet<Day> e = EnumSet.of(Day.MON); boolean ok = e.removeAll(List.of("x")); return ok + " " + e; });
+    s("enumset-retainAll", () -> { EnumSet<Day> e = EnumSet.of(Day.MON); boolean ok = e.retainAll(List.of("x")); return ok + " " + e; });
+    s("enummap-remove2", () -> { EnumMap<Day,String> m = new EnumMap<>(Day.class); m.put(Day.MON, "v"); boolean ok = m.remove("x", "v"); return ok + " " + m; });
+    s("enummap-remove2-hit", () -> { EnumMap<Day,String> m = new EnumMap<>(Day.class); m.put(Day.MON, "v"); boolean ok = m.remove(Day.MON, "v"); return ok + " " + m; });
+    s("tokenizer-nextToken-delim", () -> { StringTokenizer t = new StringTokenizer("a,b;c", ","); String one = t.nextToken(); String two = t.nextToken(";"); return one + "|" + two; });
+    s("bitset-valueOf-bytes", () -> BitSet.valueOf(new byte[] {1, 2}));
+    s("base64-mime-custom", () -> Base64.getMimeEncoder(4, new byte[] {'\n'}).encodeToString("abcdefgh".getBytes()));
+    s("arrays-parallelSort-comparable", () -> { Comparable[] c = {"b", "a"}; Arrays.parallelSort(c); return Arrays.toString(c); });
+    s("arrays-parallelPrefix-range", () -> { String[] x = {"a", "b", "c"}; Arrays.parallelPrefix(x, 0, 3, (p, q) -> p + q); return Arrays.toString(x); });
+    s("stream-reduce3", () -> Stream.of("a", "b").reduce("", (p, q) -> p + q, (p, q) -> p + q));
+    s("pp-obj", () -> { String[] x = {"a", "b", "c"}; Arrays.parallelPrefix(x, (p, q) -> p + q); return Arrays.toString(x); });
+    s("pp-obj-range", () -> { String[] x = {"a", "b", "c", "d"}; Arrays.parallelPrefix(x, 1, 3, (p, q) -> p + q); return Arrays.toString(x); });
+    s("pp-int", () -> { int[] x = {1, 2, 3}; Arrays.parallelPrefix(x, (p, q) -> p + q); return Arrays.toString(x); });
+    s("pp-int-range", () -> { int[] x = {1, 2, 3, 4}; Arrays.parallelPrefix(x, 1, 3, (p, q) -> p + q); return Arrays.toString(x); });
+    s("pp-long", () -> { long[] x = {1, 2, 3}; Arrays.parallelPrefix(x, (p, q) -> p + q); return Arrays.toString(x); });
+    s("pp-double", () -> { double[] x = {1, 2, 3}; Arrays.parallelPrefix(x, (p, q) -> p + q); return Arrays.toString(x); });
+    s("pp-int-bad-range", () -> { int[] x = {1, 2, 3}; Arrays.parallelPrefix(x, 2, 1, (p, q) -> p + q); return Arrays.toString(x); });
+    s("arraylist-addAll-index", () -> { ArrayList<String> l = new ArrayList<>(List.of("a", "d")); l.addAll(1, List.of("b", "c")); return l; });
+    s("list-iface-addAll-index", () -> { List<String> l = new ArrayList<>(List.of("a", "d")); l.addAll(1, List.of("b", "c")); return l; });
+    s("hashmap-replace3", () -> { HashMap<String,String> m = new HashMap<>(Map.of("k", "v")); return m.replace("k", "v", "w") + " " + m; });
+    s("map-iface-replace3", () -> { Map<String,String> m = new HashMap<>(Map.of("k", "v")); return m.replace("k", "v", "w") + " " + m; });
+    s("linkedhashmap-replace3", () -> { LinkedHashMap<String,String> m = new LinkedHashMap<>(Map.of("k", "v")); return m.replace("k", "v", "w") + " " + m; });
+    s("hashtable-replace3", () -> { Hashtable<String,String> m = new Hashtable<>(Map.of("k", "v")); return m.replace("k", "v", "w") + " " + m; });
+    s("enummap-replace3", () -> { EnumMap<java.time.DayOfWeek,String> m = new EnumMap<>(java.time.DayOfWeek.class); m.put(java.time.DayOfWeek.MONDAY, "v"); return m.replace(java.time.DayOfWeek.MONDAY, "v", "w") + " " + m; });
+    s("treeset-containsAll-obj", () -> new TreeSet<>(List.of("a")).containsAll(List.of(1)));
+    s("hashset-removeAll-obj", () -> { Set<String> x = new HashSet<>(List.of("a")); return x.removeAll(List.of(1)) + " " + x; });
+    s("list-removeAll-obj", () -> { List<String> x = new ArrayList<>(List.of("a")); return x.removeAll(List.of(1)) + " " + x; });
+    s("map-remove2-obj", () -> { Map<String,String> m = new HashMap<>(Map.of("k","v")); return m.remove(1, "v") + " " + m; });
+    s("stringtok-nextToken-delim2", () -> { StringTokenizer t = new StringTokenizer("a b;c"); return t.nextToken(";") + "|" + t.nextToken(); });
+    s("stringtok-countTokens-after", () -> { StringTokenizer t = new StringTokenizer("a,b;c", ","); t.nextToken(";"); return t.countTokens(); });
+    s("neg", () -> { int[] y = {1,2,3}; Arrays.parallelPrefix(y, -1, 2, (p,q) -> p+q); return Arrays.toString(y); });
+    s("past", () -> { int[] y = {1,2,3}; Arrays.parallelPrefix(y, 0, 9, (p,q) -> p+q); return Arrays.toString(y); });
+    s("empty", () -> { int[] y = {1,2,3}; Arrays.parallelPrefix(y, 1, 1, (p,q) -> p+q); return Arrays.toString(y); });
+    s("whole", () -> { int[] y = {1,2,3}; Arrays.parallelPrefix(y, 0, 3, (p,q) -> p+q); return Arrays.toString(y); });
+    s("long-range", () -> { long[] y = {1,2,3,4}; Arrays.parallelPrefix(y, 1, 4, (p,q) -> p+q); return Arrays.toString(y); });
+    s("double-range", () -> { double[] y = {1,2,3,4}; Arrays.parallelPrefix(y, 1, 4, (p,q) -> p+q); return Arrays.toString(y); });
+    s("null-op", () -> { int[] y = {1,2,3}; Arrays.parallelPrefix(y, null); return Arrays.toString(y); });
+    s("tok-delim", () -> { StringTokenizer t = new StringTokenizer("a,b;c", ","); return t.nextToken() + "|" + t.nextToken(";"); });
+    s("tok-delim-sticks", () -> { StringTokenizer t = new StringTokenizer("a;b;c", ","); String one = t.nextToken(";"); return one + "|" + t.nextToken() + "|" + t.countTokens(); });
+    s("tok-delim-empty", () -> { StringTokenizer t = new StringTokenizer("abc", ","); return t.nextToken(""); });
+    s("tok-delim-exhausted", () -> { StringTokenizer t = new StringTokenizer("a", ","); t.nextToken(); return t.nextToken(";"); });
+    s("tok-delim-null", () -> { StringTokenizer t = new StringTokenizer("a,b", ","); return t.nextToken(null); });
+    s("bitset-bytes", () -> BitSet.valueOf(new byte[] {1, 2}));
+    s("bitset-bytes-empty", () -> BitSet.valueOf(new byte[0]));
+    s("bitset-bytes-ff", () -> BitSet.valueOf(new byte[] {(byte) 0xff}));
+    s("bitset-bytes-len", () -> BitSet.valueOf(new byte[] {0, 0, 1}).length());
+    s("bitset-bytes-null", () -> BitSet.valueOf((byte[]) null));
+    s("mime-4", () -> Base64.getMimeEncoder(4, new byte[] {'\n'}).encodeToString("abcdefgh".getBytes()));
+    s("mime-5", () -> Base64.getMimeEncoder(5, new byte[] {'\n'}).encodeToString("abcdefgh".getBytes()));
+    s("mime-0", () -> Base64.getMimeEncoder(0, new byte[] {'\n'}).encodeToString("abcdefgh".getBytes()));
+    s("mime-neg", () -> Base64.getMimeEncoder(-4, new byte[] {'\n'}).encodeToString("abcdefgh".getBytes()));
+    s("mime-crlf", () -> Base64.getMimeEncoder(4, new byte[] {'\r', '\n'}).encodeToString("abcdefgh".getBytes()).replace("\r", "R").replace("\n", "N"));
+    s("mime-bad-sep", () -> Base64.getMimeEncoder(4, new byte[] {'A'}));
+    s("mime-null-sep", () -> Base64.getMimeEncoder(4, null));
+    s("mime-default", () -> Base64.getMimeEncoder().encodeToString("abcdefgh".getBytes()));
+    s("reduce3", () -> Stream.of("a", "b", "c").reduce("", (p, q) -> p + q, (p, q) -> p + q));
+    s("reduce3-empty", () -> Stream.<String>of().reduce("z", (p, q) -> p + q, (p, q) -> p + q));
+    s("reduce3-len", () -> Stream.of("aa", "b").reduce(0, (n, t) -> n + t.length(), Integer::sum));
+    s("reduce3-ref", () -> Stream.of("a", "b").reduce("", String::concat, String::concat));
+    s("reduce3-combiner-throws", () -> Stream.of("a", "b").reduce("", (p, q) -> p + q, (p, q) -> { throw new IllegalStateException("combiner ran"); }));
+    s("reduce2", () -> Stream.of("a", "b").reduce("", (p, q) -> p + q));
+    s("reduce1", () -> Stream.of("a", "b").reduce((p, q) -> p + q));
+    s("vec-add-past", () -> { Vector<String> v = new Vector<>(); v.addAll(1, List.of("b")); return v; });
+    s("vec-add-neg", () -> { Vector<String> v = new Vector<>(); v.addAll(-2, List.of("b")); return v; });
+    s("vec-add-ok", () -> { Vector<String> v = new Vector<>(List.of("a")); v.addAll(1, List.of("b")); return v; });
+    s("stack-add-past", () -> { Stack<String> v = new Stack<>(); v.addAll(1, List.of("b")); return v; });
+    s("vec-add1-past", () -> { Vector<String> v = new Vector<>(); v.add(1, "b"); return v; });
+    s("vec-add1-neg", () -> { Vector<String> v = new Vector<>(); v.add(-1, "b"); return v; });
+    s("vec-get-past", () -> new Vector<String>().get(1));
+    s("vec-remove-past", () -> new Vector<String>().remove(1));
+    s("vec-set-past", () -> new Vector<String>().set(1, "x"));
+    s("list-add-past", () -> { List<String> v = new ArrayList<>(); v.addAll(1, List.of("b")); return v; });
+    s("ll-add-past", () -> { LinkedList<String> v = new LinkedList<>(); v.addAll(1, List.of("b")); return v; });
+    s("vec-insertElementAt", () -> { Vector<String> v = new Vector<>(); v.insertElementAt("b", 1); return v; });
+    s("vec-elementAt", () -> new Vector<String>().elementAt(1));
+    s("freq-wrong", () -> Collections.frequency(new ArrayList<Integer>(List.of(1, 1, 2)), "x"));
+    s("freq-right", () -> Collections.frequency(new ArrayList<Integer>(List.of(1, 1, 2)), 1));
+    s("freq-null", () -> Collections.frequency(new ArrayList<String>(Arrays.asList("a", null)), null));
+    s("freq-set", () -> Collections.frequency(new HashSet<String>(List.of("a")), "a"));
+    s("containsAll-wrong", () -> new ArrayList<Integer>(List.of(1)).containsAll(new ArrayList<String>(List.of("x"))));
+    s("bsearch", () -> Collections.binarySearch(new ArrayList<Integer>(List.of(1, 2, 3)), 2));
+    s("remove2-wrongkey", () -> { EnumMap<Day,String> m = m(); return m.remove("x", "v") + " " + m; });
+    s("remove2-wrongvalue", () -> { EnumMap<Day,String> m = m(); return m.remove(Day.MON, "z") + " " + m; });
+    s("remove2-otherenum", () -> { EnumMap<Day,String> m = m(); return m.remove(Day.TUE, "v") + " " + m; });
+    s("remove2-hit", () -> { EnumMap<Day,String> m = m(); return m.remove(Day.MON, "v") + " " + m; });
+    s("remove1-wrongkey", () -> { EnumMap<Day,String> m = m(); return m.remove("x") + " " + m; });
+    s("get-wrongkey", () -> m().get("x"));
+    s("containsKey-wrongkey", () -> m().containsKey("x"));
+    s("hashmap-remove2-wrongkey", () -> { Map<String,String> m = new HashMap<>(Map.of("k","v")); return m.remove("nope", "v") + " " + m; });
+    s("treemap-remove2-wrongkey", () -> { TreeMap<String,String> m = new TreeMap<>(Map.of("k","v")); return m.remove("nope", "v") + " " + m; });
+    s("treemap-remove2-badtype", () -> { TreeMap<String,String> m = new TreeMap<>(Map.of("k","v")); return m.remove(1, "v") + " " + m; });
   }
 }
 "#

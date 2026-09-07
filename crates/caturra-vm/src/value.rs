@@ -986,12 +986,17 @@ pub enum HeapObject {
     /// A `java.util.UUID` — two longs, and nothing else.
     Uuid(i64, i64),
     /// A `java.util.Base64.Encoder` or `.Decoder` — which alphabet, whether it
-    /// pads, and whether it wraps at 76 characters.
+    /// pads, and whether it wraps. A MIME coder wraps every `line` characters
+    /// with `separator` after each, which `getMimeEncoder(length, separator)`
+    /// sets and the no-argument factory leaves at the RFC 2045 default of 76
+    /// and CRLF.
     Base64 {
         url: bool,
         mime: bool,
         padding: bool,
         decoding: bool,
+        line: usize,
+        separator: Vec<u8>,
     },
     /// A `java.util.BitSet` — the bits, as 64 to a word.
     BitSet(Vec<u64>),

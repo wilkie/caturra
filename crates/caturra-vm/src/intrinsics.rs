@@ -4462,7 +4462,10 @@ fn invoke_virtual_dispatch(
                             bytes.len()
                         )));
                     }
-                    let raw: Vec<u8> = bytes[start..end].iter().map(|b| b.cast_unsigned()).collect();
+                    let raw: Vec<u8> = bytes[start..end]
+                        .iter()
+                        .map(|b| b.cast_unsigned())
+                        .collect();
                     String::from_utf8_lossy(&raw).into_owned()
                 }
                 // `append(cs, start, end)` writes a RANGE, which the print
@@ -4744,7 +4747,7 @@ fn invoke_virtual_dispatch(
         (HeapObject::BigInteger(_), _) => big_integer_method(heap, receiver, method, args),
         (HeapObject::BigDecimal(_), _) => big_decimal_method(heap, receiver, method, args),
         (HeapObject::NumberFormat(_), _) => number_format_method(heap, receiver, method, args),
-        (HeapObject::StringTokenizer { .. }, _) => tokenizer_method(heap, receiver, method),
+        (HeapObject::StringTokenizer { .. }, _) => tokenizer_method(heap, receiver, method, args),
         (HeapObject::Uuid(_, _), _) => uuid_method(heap, receiver, method, args),
         (HeapObject::Base64 { .. }, _) => base64_method(heap, receiver, method, args),
         (HeapObject::BitSet(_), _) => {
@@ -12882,21 +12885,54 @@ pub fn invoke_static(
             let url = method.contains("Url");
             let mime = method.contains("Mime");
             let decoding = method.contains("Decoder");
+            // `getMimeEncoder(lineLength, lineSeparator)` — a custom wrap. The
+            // length is rounded DOWN to a multiple of four and a length at or
+            // below zero means no wrapping at all; a separator holding a
+            // base-64 character is refused, naming its code.
+            let (line, separator) = match args {
+                [JValue::Int(length), separator] => {
+                    let bytes = byte_array_values(heap, separator)?;
+                    for byte in &bytes {
+                        let unit = byte.cast_unsigned();
+                        if BASE64_BASIC.contains(&unit) || unit == b'=' {
+                            return Err(throw(format!(
+                                "java.lang.IllegalArgumentException: \
+                                 Illegal base64 line separator character 0x{unit:x}"
+                            )));
+                        }
+                    }
+                    let length = usize::try_from(*length).unwrap_or(0) / 4 * 4;
+                    (length, bytes.iter().map(|b| b.cast_unsigned()).collect())
+                }
+                _ => (76, Vec::from(b"\r\n".as_slice())),
+            };
             Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Base64 {
                 url,
                 mime,
                 padding: true,
                 decoding,
+                line,
+                separator,
             })))))
         }
         // `BitSet.valueOf(longs)` — the bits those words already hold.
         "java/util/BitSet" => match method {
             "valueOf" => {
-                let words = match args.first() {
+                let words: Vec<u64> = match args.first() {
                     Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
                         Some(HeapObject::LongArray(values)) => {
                             values.iter().map(|value| value.cast_unsigned()).collect()
                         }
+                        // BYTES are the same bits, eight to a word and
+                        // little-endian — `{1, 2}` sets bit 0 and bit 9.
+                        Some(HeapObject::ByteArray(values)) => values
+                            .chunks(8)
+                            .map(|chunk| {
+                                chunk.iter().enumerate().fold(0u64, |word, (at, byte)| {
+                                    word | (u64::from(byte.cast_unsigned()) << (at * 8))
+                                })
+                            })
+                            .collect(),
                         _ => return Err(throw("java.lang.ClassCastException: not a long[]")),
                     },
                     _ => return Err(throw("java.lang.NullPointerException")),
@@ -16850,7 +16886,25 @@ fn tokenizer_method(
     heap: &mut Heap,
     receiver: HeapRef,
     method: &str,
+    args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
+    // `nextToken(delim)` CHANGES the delimiter set first and then reads — and
+    // the change sticks, so every later `nextToken()` and `countTokens()` uses
+    // it. Done before the state is read, so the walk below sees the new set.
+    if method == "nextToken"
+        && let [delimiter] = args
+    {
+        let JValue::Ref(Some(reference)) = *delimiter else {
+            return Err(throw("java.lang.NullPointerException"));
+        };
+        let Some(units) = heap.string_units(reference) else {
+            return Err(throw("java.lang.NullPointerException"));
+        };
+        let units = units.to_vec();
+        if let Some(HeapObject::StringTokenizer { delimiters, .. }) = heap.get_mut(receiver) {
+            *delimiters = units;
+        }
+    }
     let (text, delimiters, pos, keep) = match heap.get(receiver) {
         Some(HeapObject::StringTokenizer {
             text,
@@ -17475,13 +17529,15 @@ fn base64_method(
     method: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
-    let (url, mime, padding, decoding) = match heap.get(receiver) {
+    let (url, mime, padding, decoding, line, separator) = match heap.get(receiver) {
         Some(HeapObject::Base64 {
             url,
             mime,
             padding,
             decoding,
-        }) => (*url, *mime, *padding, *decoding),
+            line,
+            separator,
+        }) => (*url, *mime, *padding, *decoding, *line, separator.clone()),
         _ => unreachable!("receiver kind checked by caller"),
     };
     match method {
@@ -17491,12 +17547,14 @@ fn base64_method(
                 mime,
                 padding: false,
                 decoding,
+                line,
+                separator,
             });
             Ok(Some(JValue::Ref(Some(made))))
         }
         "encode" | "encodeToString" => {
             let bytes = byte_array_values(heap, &args[0])?;
-            let text = base64_encode(&bytes, url, mime, padding);
+            let text = base64_encode(&bytes, url, mime, padding, line, &separator);
             let answer = if method == "encodeToString" {
                 heap.alloc_string(&text)
             } else {
@@ -17530,7 +17588,14 @@ fn base64_method(
 }
 
 /// Three bytes become four characters; a short tail pads (or does not).
-fn base64_encode(bytes: &[i8], url: bool, mime: bool, padding: bool) -> String {
+fn base64_encode(
+    bytes: &[i8],
+    url: bool,
+    mime: bool,
+    padding: bool,
+    line: usize,
+    separator: &[u8],
+) -> String {
     let alphabet = if url { BASE64_URL } else { BASE64_BASIC };
     let mut out = String::new();
     let mut since_break = 0;
@@ -17552,10 +17617,13 @@ fn base64_encode(bytes: &[i8], url: bool, mime: bool, padding: bool) -> String {
                 out.push('=');
             }
         }
-        // A MIME encoder breaks the line every 76 characters.
+        // A MIME encoder breaks the line every `line` characters — 76 unless
+        // the program said otherwise — and a length of zero never wraps.
         since_break += 4;
-        if mime && since_break >= 76 && bytes.len() > (out.len() / 4) * 3 {
-            out.push_str("\r\n");
+        if mime && line > 0 && since_break >= line && bytes.len() > (out.len() / 4) * 3 {
+            for byte in separator {
+                out.push(char::from(*byte));
+            }
             since_break = 0;
         }
     }
@@ -18433,6 +18501,10 @@ pub(crate) fn vector_index_error(
         ("insertElementAt", [_, JValue::Int(index)]) | ("add", [JValue::Int(index), _]) => {
             (*index, true)
         }
+        // `addAll(index, c)` checks the bound itself and throws the plain
+        // index constructor for BOTH ends — where `add(index, e)` beside it
+        // says "1 > 0" and lets a negative one reach the array.
+        ("addAll", [JValue::Int(index), _]) => (*index, true),
         _ => return None,
     };
     let limit = i32::try_from(size).unwrap_or(i32::MAX);
@@ -18449,7 +18521,9 @@ pub(crate) fn vector_index_error(
     // the array by then, so it reports the capacity it would have had.
     if index < 0 {
         return match method {
-            "removeElementAt" => throw(format!("Array index out of range: {index}")),
+            "removeElementAt" | "addAll" => {
+                throw(format!("Array index out of range: {index}"))
+            }
             "insertElementAt" | "add" => {
                 // The insertion GREW the array before it reached the copy that
                 // failed, and the new length is what the message reports — and

@@ -4838,6 +4838,15 @@ fn numeric_view(ty: JType) -> JType {
 }
 
 /// The `ElemType` a primitive `JType` boxes into (`int` -> Integer).
+/// A type as it arrives through an `Object`-erased parameter: a primitive
+/// boxes, everything else is itself. The three-argument `reduce`'s identity
+/// goes in as an `Object` and comes back as one, so `reduce(0, …)` answers an
+/// `Integer` — reading the argument's own `int` would type the call as a
+/// primitive the call site never receives.
+fn boxed_type(ty: JType) -> JType {
+    boxable_primitive(ty).map_or(ty, JType::Boxed)
+}
+
 fn boxable_primitive(ty: JType) -> Option<ElemType> {
     Some(match ty {
         JType::Int => ElemType::Int,
@@ -11153,8 +11162,15 @@ enum BParam {
     /// The receiver's own list type (`addAll(otherList)`).
     SelfList,
     /// Any collection whose element type is assignable to the receiver's
-    /// (`set.addAll(aList)`, `set.retainAll(anotherSet)`).
+    /// (`set.addAll(aList)`).
     SelfCollection,
+    /// ANY collection at all, whatever it holds — what `containsAll`,
+    /// `removeAll` and `retainAll` really take. Their JDK signatures are
+    /// `Collection<?>`, not `Collection<? extends E>`: only `addAll` STORES
+    /// what it is given, and only `addAll` has to agree about the element. The
+    /// bulk queries are `Probe` in the plural, and refusing them was the same
+    /// over-strictness that `Probe` itself was written for.
+    ProbeCollection,
     /// A collection of the receiver's ENTRIES — `entries.addAll(m.entrySet())`
     /// on a `Set<Map.Entry<K, V>>`. `SelfCollection` reads the receiver's FIRST
     /// type argument as the element, which for an entry set is the KEY, so it
@@ -13245,19 +13261,19 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "containsAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "removeAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -13288,6 +13304,14 @@ const LIST_METHODS: &[BuiltinMethod] = &[
 /// the five LIFO operations. `push`/`pop`/`peek` act on the top (the end);
 /// `empty` mirrors `isEmpty`; `search` is a 1-based distance from the top.
 const STACK_METHODS: &[BuiltinMethod] = &[
+    // `addAll(index, collection)` — an insert in the middle, which every
+    // `List` has and only `ArrayList`'s table carried.
+    bm(
+        "addAll",
+        &[BParam::Int, BParam::SelfList],
+        BRet::Boolean,
+        "(ILjava/util/Collection;)Z",
+    ),
     // `subList(from, to)` is a live VIEW of the range: reads and writes go
     // through to this list, and a structural change made AROUND the view
     // invalidates it, which is `List.subList`'s own contract.
@@ -13524,19 +13548,19 @@ const STACK_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "containsAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "removeAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -13565,19 +13589,19 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
     // the shared element vector already.
     bm(
         "containsAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "removeAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -13717,19 +13741,19 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
     // the shared element vector already.
     bm(
         "containsAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "removeAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -13877,17 +13901,25 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    // `addAll(index, collection)` — an insert in the middle, which every
+    // `List` has and only `ArrayList`'s table carried.
+    bm(
+        "addAll",
+        &[BParam::Int, BParam::SelfList],
+        BRet::Boolean,
+        "(ILjava/util/Collection;)Z",
+    ),
     // A `LinkedList` is a `List`, so it takes the List defaults too: the bulk
     // removals, and `sort`/`replaceAll`, which were on `ArrayList` alone.
     bm(
         "removeAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -14054,7 +14086,7 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "containsAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -14259,6 +14291,17 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
         &[BParam::BiFunction],
         BRet::Optional,
         "(Ljava/util/function/BinaryOperator;)Ljava/util/Optional;",
+    ),
+    // `reduce(identity, accumulator, combiner)` — the three-argument form a
+    // parallel fold needs, where the accumulator and the combiner may differ.
+    // On one thread the combiner is never called, which is what a JDK does for
+    // a sequential stream too; it is evaluated and then not used, so a
+    // combiner that throws does not.
+    bm(
+        "reduce",
+        &[BParam::Object, BParam::BiFunction, BParam::BiFunction],
+        BRet::Elem,
+        "(Ljava/lang/Object;Ljava/util/function/BiFunction;Ljava/util/function/BinaryOperator;)Ljava/lang/Object;",
     ),
     bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     // `stream.toArray(String[]::new)`. A stream has NO `toArray(T[])` overload
@@ -14774,6 +14817,13 @@ const OPTIONAL_METHODS: &[BuiltinMethod] = &[
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("get", &[], BRet::Elem, "()Ljava/lang/Object;"),
     bm("orElseThrow", &[], BRet::Elem, "()Ljava/lang/Object;"),
+    // ...and the form that names the exception an absent value deserves.
+    bm(
+        "orElseThrow",
+        &[BParam::Supplier],
+        BRet::Elem,
+        "(Ljava/util/function/Supplier;)Ljava/lang/Object;",
+    ),
     // `BParam::Elem`, not `Key`: an Optional stores its value UNBOXED (like a
     // list element), and `orElse` returns `BRet::Elem` — the unboxed element.
     // A boxed fallback (`Key`) made the two arms of `orElse` disagree: a
@@ -14884,6 +14934,12 @@ const OPTIONALINT_METHODS: &[BuiltinMethod] = &[
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("getAsInt", &[], BRet::Int, "()I"),
     bm("orElseThrow", &[], BRet::Int, "()I"),
+    bm(
+        "orElseThrow",
+        &[BParam::Supplier],
+        BRet::Int,
+        "(Ljava/util/function/Supplier;)I",
+    ),
     bm("orElse", &[BParam::Int], BRet::Int, "(I)I"),
     bm(
         "ifPresent",
@@ -14921,6 +14977,12 @@ const OPTIONALLONG_METHODS: &[BuiltinMethod] = &[
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("getAsLong", &[], BRet::Long, "()J"),
     bm("orElseThrow", &[], BRet::Long, "()J"),
+    bm(
+        "orElseThrow",
+        &[BParam::Supplier],
+        BRet::Long,
+        "(Ljava/util/function/Supplier;)J",
+    ),
     bm("orElse", &[BParam::Long], BRet::Long, "(J)J"),
     bm(
         "ifPresent",
@@ -14958,6 +15020,12 @@ const OPTIONALDOUBLE_METHODS: &[BuiltinMethod] = &[
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("getAsDouble", &[], BRet::Double, "()D"),
     bm("orElseThrow", &[], BRet::Double, "()D"),
+    bm(
+        "orElseThrow",
+        &[BParam::Supplier],
+        BRet::Double,
+        "(Ljava/util/function/Supplier;)D",
+    ),
     bm("orElse", &[BParam::Double], BRet::Double, "(D)D"),
     bm(
         "ifPresent",
@@ -17435,6 +17503,13 @@ const BASE64_STATIC_METHODS: &[BuiltinMethod] = &[
         BRet::Base64Encoder,
         "()Ljava/util/Base64$Encoder;",
     ),
+    // ...and the form that says where to wrap and with what.
+    bm(
+        "getMimeEncoder",
+        &[BParam::Int, BParam::ByteArray],
+        BRet::Base64Encoder,
+        "(I[B)Ljava/util/Base64$Encoder;",
+    ),
     bm(
         "getDecoder",
         &[],
@@ -17538,13 +17613,24 @@ const BITSET_METHODS: &[BuiltinMethod] = &[
     bm("hashCode", &[], BRet::Int, "()I"),
 ];
 
-/// `BitSet.valueOf(longs)`.
-const BITSET_STATIC_METHODS: &[BuiltinMethod] = &[bm(
-    "valueOf",
-    &[BParam::LongArray],
-    BRet::BitSet,
-    "([J)Ljava/util/BitSet;",
-)];
+/// `BitSet.valueOf(longs)` and its byte-reading twin.
+const BITSET_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "valueOf",
+        &[BParam::LongArray],
+        BRet::BitSet,
+        "([J)Ljava/util/BitSet;",
+    ),
+    // ...and from BYTES, which is the same bits read eight at a time: only the
+    // word form was written, so `BitSet.valueOf(bytes)` was "byte[] cannot be
+    // converted to long[]" about a factory that exists.
+    bm(
+        "valueOf",
+        &[BParam::ByteArray],
+        BRet::BitSet,
+        "([B)Ljava/util/BitSet;",
+    ),
+];
 
 /// `java.util.Enumeration<E>` — two questions, and the cursor `Iterator`
 /// replaced. A `Vector` and a `Hashtable` still hand one out.
@@ -17562,6 +17648,14 @@ const TOKENIZER_METHODS: &[BuiltinMethod] = &[
     bm("hasMoreTokens", &[], BRet::Boolean, "()Z"),
     bm("hasMoreElements", &[], BRet::Boolean, "()Z"),
     bm("nextToken", &[], BRet::Str, "()Ljava/lang/String;"),
+    // `nextToken(delim)` changes the delimiter set and then reads — and the
+    // change STICKS, which is the whole point of the overload.
+    bm(
+        "nextToken",
+        &[BParam::Str],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
     bm("nextElement", &[], BRet::Object, "()Ljava/lang/Object;"),
     bm("countTokens", &[], BRet::Int, "()I"),
     // A `StringTokenizer` IS an `Enumeration`, so it has the same bridge — and
@@ -20798,9 +20892,11 @@ const MAP_METHODS: &[BuiltinMethod] = &[
         BRet::Val,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
     ),
+    // `remove(key, value)` takes two OBJECTS in a JDK, like the one-argument
+    // form above it: it only compares, so neither has to be the map's own type.
     bm(
         "remove",
-        &[BParam::Key, BParam::Val],
+        &[BParam::Probe, BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;Ljava/lang/Object;)Z",
     ),
@@ -20842,6 +20938,14 @@ const MAP_METHODS: &[BuiltinMethod] = &[
 /// an empty map; the `floorKey`/`ceilingKey`/`lowerKey`/`higherKey` return the
 /// boxed key so an absent result is `null`. Keys iterate in sorted order.
 const TREEMAP_METHODS: &[BuiltinMethod] = &[
+    // `replace(key, old, new)` — the compare-and-set form, which `MAP_METHODS`
+    // had and the sorted table did not.
+    bm(
+        "replace",
+        &[BParam::Key, BParam::Val, BParam::Val],
+        BRet::Boolean,
+        "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `clone()` — a SHALLOW copy, which is exactly what the copy
     // constructors already build. It was refused as "clone is not supported
@@ -20938,9 +21042,11 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
         BRet::Val,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
     ),
+    // `remove(key, value)` takes two OBJECTS in a JDK, like the one-argument
+    // form above it: it only compares, so neither has to be the map's own type.
     bm(
         "remove",
-        &[BParam::Key, BParam::Val],
+        &[BParam::Probe, BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;Ljava/lang/Object;)Z",
     ),
@@ -21210,19 +21316,19 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "removeAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "containsAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -21319,19 +21425,19 @@ const SET_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "removeAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "containsAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -21432,19 +21538,19 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "containsAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "removeAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfCollection],
+        &[BParam::ProbeCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -23320,6 +23426,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         },
         BParam::SelfList => args.first.map_or(JType::Error, JType::library_list),
         BParam::SelfCollection => args.first.map_or(JType::Error, JType::Collection),
+        BParam::ProbeCollection => JType::Collection(ElemType::Object(table.object_id)),
         BParam::SelfEntries => match (args.first, args.second) {
             (Some(key), Some(value)) => JType::Collection(ElemType::Nested {
                 inner: table.intern_nested(JType::MapEntry { key, value }),
@@ -23430,6 +23537,7 @@ fn descriptor_functional_face(descriptor: &str, at: usize) -> Option<String> {
 }
 
 /// Whether an argument type satisfies a builtin parameter (widening).
+#[allow(clippy::too_many_lines)] // one arm per parameter kind
 fn bparam_matches(
     param: BParam,
     arg: JType,
@@ -23549,6 +23657,18 @@ fn bparam_matches(
             }
             _ => false,
         },
+        // Whatever it holds — the element is not read, only compared.
+        BParam::ProbeCollection => matches!(
+            arg,
+            JType::Null
+                | JType::EntrySet { .. }
+                | JType::List { .. }
+                | JType::Set { .. }
+                | JType::TreeSet(..)
+                | JType::Collection(_)
+                | JType::Stack(_)
+                | JType::LinkedList { .. }
+        ),
         BParam::SelfCollection => match (arg, args.first) {
             (JType::Null, _) => true,
             // An `entrySet()` handed to a collection OF ENTRIES:
@@ -32713,6 +32833,30 @@ impl BodyGen<'_> {
             self.code.drop_stack(2);
             return Some(Some(result_ty));
         }
+        // `stream.reduce(identity, accumulator, combiner)`: the answer is the
+        // IDENTITY's type, not the stream's element — that difference is the
+        // whole reason the three-argument form exists (`reduce(0, (n, t) -> n +
+        // t.length(), Integer::sum)` counts characters in a stream of strings).
+        // Read on BOTH sides, here and in `type_of`, or the two disagree.
+        if let JType::Stream(_) = receiver_ty
+            && method == "reduce"
+            && args.len() == 3
+        {
+            let result_ty = self.type_of(&args[0]);
+            let boxed = boxed_type(result_ty);
+            for arg in args {
+                self.expr(arg);
+            }
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/util/stream/Stream",
+                "reduce",
+                "(Ljava/lang/Object;Ljava/util/function/BiFunction;Ljava/util/function/BinaryOperator;)Ljava/lang/Object;",
+            );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(4);
+            return Some(Some(boxed));
+        }
         // A receiver kind with no table of its own still has `Object`'s
         // methods: `Collectors.toList().toString()` is ordinary Java, and the
         // `expect` here PANICKED the compiler on it — the caller checks that
@@ -37059,7 +37203,22 @@ impl BodyGen<'_> {
                 format!("(Ljava/util/ArrayList;){element_descriptor}"),
                 Some(element_ty),
             ),
-            "frequency" | "binarySearch" => {
+            // `frequency(collection, o)` takes an OBJECT — it only compares,
+            // so the argument need not be the collection's element type and a
+            // foreign one simply answers 0. `binarySearch`'s key IS the element
+            // (its bound is `Comparable<? super T>`), which is the difference
+            // between the two.
+            "frequency" => {
+                let object_ty = JType::Object(self.table.object_id);
+                let actual = self.expr(&args[1]);
+                self.convert_for_assignment(actual, object_ty, args[1].span());
+                width += 1;
+                (
+                    String::from("(Ljava/util/ArrayList;Ljava/lang/Object;)I"),
+                    Some(JType::Int),
+                )
+            }
+            "binarySearch" => {
                 let actual = self.expr(&args[1]);
                 self.convert_for_assignment(actual, element_ty, args[1].span());
                 width += element_ty.width();
@@ -37331,13 +37490,30 @@ impl BodyGen<'_> {
                 );
                 Some(Some(self.narrow_object_return(arg_ty)))
             }
+            // `requireNonNull(value, message)` and its Java 8 twin
+            // `requireNonNull(value, () -> message)`, which builds the text
+            // only when the value really is null. One name, two second
+            // parameters — told apart by what the argument IS, since a
+            // supplier is not a String.
             ("requireNonNull", [a, message]) => {
                 let arg_ty = self.type_of(a);
                 self.emit_object_arg(a);
-                self.emit_string_arg(message);
+                let lazy = self.type_of(message) != JType::Str;
+                if lazy {
+                    let supplier_ty = self.expr(message);
+                    if supplier_ty == JType::Error {
+                        return Some(None);
+                    }
+                } else {
+                    self.emit_string_arg(message);
+                }
                 self.invoke_objects(
                     "requireNonNull",
-                    "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;",
+                    if lazy {
+                        "(Ljava/lang/Object;Ljava/util/function/Supplier;)Ljava/lang/Object;"
+                    } else {
+                        "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;"
+                    },
                     2,
                     1,
                 );
@@ -38176,9 +38352,15 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
-        let [array_arg, operator_arg] = args else {
-            self.no_suitable_library_method("Arrays", "parallelPrefix", args, span);
-            return None;
+        let (array_arg, range, operator_arg) = match args {
+            [array, operator] => (array, None, operator),
+            // ...and the RANGE form, which folds a SLICE and leaves the rest
+            // of the array alone.
+            [array, from, to, operator] => (array, Some((from, to)), operator),
+            _ => {
+                self.no_suitable_library_method("Arrays", "parallelPrefix", args, span);
+                return None;
+            }
         };
         let array_ty = self.expr(array_arg);
         let supported = match array_ty {
@@ -38194,14 +38376,23 @@ impl BodyGen<'_> {
             self.code.discard();
             return None;
         }
+        let bounds = if let Some((from, to)) = range {
+            for bound in [from, to] {
+                let ty = self.expr(bound);
+                self.numeric_conversion(ty, JType::Int);
+            }
+            "II"
+        } else {
+            ""
+        };
         self.expr(operator_arg);
         let descriptor = format!(
-            "({}Ljava/util/function/BinaryOperator;)V",
+            "({}{bounds}Ljava/util/function/BinaryOperator;)V",
             array_ty.descriptor(self.table)
         );
         let method_ref = intern_method_ref(self.pool, "Arrays", "parallelPrefix", &descriptor);
         self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
-        self.code.drop_stack(2);
+        self.code.drop_stack(u16::try_from(args.len()).unwrap_or(2));
         Some(None)
     }
 
@@ -39254,6 +39445,11 @@ impl BodyGen<'_> {
                         // operand types" for something that printed fine.
                         JType::Stream(elem) if method == "collect" && args.len() == 1 => {
                             return self.collector_result_type(&args[0], elem);
+                        }
+                        // ...and the three-argument `reduce`, whose answer is
+                        // the IDENTITY's type rather than the element's.
+                        JType::Stream(_) if method == "reduce" && args.len() == 3 => {
+                            return boxed_type(self.type_of(&args[0]));
                         }
                         // A method on a PARAMETERIZED receiver (`box.get()` on a
                         // `Box<String>`): resolve against the class, then put the

@@ -679,6 +679,20 @@ impl<'run> Interpreter<'run> {
     /// then every `Suppressed:` block and the `Caused by:` chain, with the
     /// frames each enclosed trace shares with its enclosing one elided as
     /// "... N more" — `Throwable.printEnclosedStackTrace`, faithfully.
+    /// Raise a throwable a native method was HANDED rather than one it named:
+    /// `Optional.orElseThrow(supplier)` throws whatever the supplier made, and
+    /// that object carries the class, message, cause and fields a re-made copy
+    /// would not. The trace is filled here because this is where it came to
+    /// exist, exactly as `athrow` does it.
+    fn throw_supplied(&mut self, thrown: HeapRef) -> VmError {
+        self.last_thrown = Some(thrown);
+        if !self.exception_traces.contains_key(&thrown) {
+            let lines = self.stack_frame_lines();
+            self.exception_traces.insert(thrown, lines);
+        }
+        VmError::UncaughtException(self.render_throwable(thrown))
+    }
+
     fn render_throwable(&mut self, reference: HeapRef) -> String {
         use std::fmt::Write as _;
         let mut out = self.throwable_header(reference);
@@ -6009,9 +6023,22 @@ impl<'run> Interpreter<'run> {
             }
             ("requireNonNull", [o, message]) => {
                 if *o == JValue::NULL {
+                    // Either second parameter: the message itself, or a
+                    // SUPPLIER of it, which a JDK asks only once the value has
+                    // turned out to be null. A supplier is not a string, which
+                    // is the whole test.
                     let text = match message {
                         JValue::Ref(Some(reference)) => {
-                            self.heap.string_text(*reference).unwrap_or_default()
+                            if let Some(text) = self.heap.string_text(*reference) {
+                                text
+                            } else {
+                                match self.call_apply_supplier(*reference)? {
+                                    JValue::Ref(Some(text)) => {
+                                        self.heap.string_text(text).unwrap_or_default()
+                                    }
+                                    _ => String::from("null"),
+                                }
+                            }
                         }
                         _ => String::from("null"),
                     };
@@ -6149,13 +6176,47 @@ impl<'run> Interpreter<'run> {
         // is simply left to right, which is the answer a JDK's parallel
         // decomposition is required to agree with (the operator must be
         // associative).
-        if let ("parallelPrefix", [JValue::Ref(Some(array)), JValue::Ref(Some(operator))]) =
-            (method_name, args)
-        {
+        //
+        // The RANGE form folds a SLICE and leaves the rest alone, and checks
+        // its bounds the way every other ranged `Arrays` method does.
+        let ranged = match (method_name, args) {
+            ("parallelPrefix", [JValue::Ref(array), JValue::Ref(operator)]) => {
+                Some((*array, 0, None, *operator))
+            }
+            (
+                "parallelPrefix",
+                [
+                    JValue::Ref(array),
+                    JValue::Int(from),
+                    JValue::Int(to),
+                    JValue::Ref(operator),
+                ],
+            ) => Some((*array, *from, Some(*to), *operator)),
+            _ => None,
+        };
+        if let Some((array, from, to, operator)) = ranged {
+            // A null array or a null operator is a JDK's NullPointerException,
+            // thrown from the call. Letting them through looked for a bundled
+            // `Arrays.parallelPrefix` that does not exist and aborted the run
+            // with "malformed class" — an engine error for ordinary Java.
             use crate::value::HeapObject;
-            let (array, operator) = (*array, *operator);
+            let (Some(array), Some(operator)) = (array, operator) else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
             let mut values = self.array_elements(array).unwrap_or_default();
-            for index in 1..values.len() {
+            let length = i32::try_from(values.len()).unwrap_or(i32::MAX);
+            let to = match to {
+                Some(to) => {
+                    arrays_range_check(length, from, to)?;
+                    to
+                }
+                None => length,
+            };
+            let start = usize::try_from(from).unwrap_or(0);
+            let end = usize::try_from(to).unwrap_or(0).min(values.len());
+            for index in start.saturating_add(1)..end {
                 values[index] = self.call_apply_two(operator, values[index - 1], values[index])?;
             }
             for (index, value) in values.into_iter().enumerate() {
@@ -8067,8 +8128,27 @@ impl<'run> Interpreter<'run> {
         // PROBE answers absent instead of comparing (which is what a JDK's
         // EnumMap does, and why `get(null)` is null there where a TreeMap's
         // throws). Only the probe: `put(null, v)` still throws.
-        if key == JValue::NULL && self.is_enum_collection(map) {
-            return Ok(None);
+        //
+        // The same rule covers a probe of the WRONG TYPE. A JDK's `EnumMap`
+        // checks the key's class before it looks at all (`isValidKey`), so
+        // `m.get("x")` on an `EnumMap<Day, String>` is null; caturra models one
+        // as a sorted map, and comparing a String against an enum constant
+        // found the FIRST entry — `get`, `containsKey` and both `remove`s all
+        // answered as though any probe were the least key.
+        if self.is_enum_collection(map) {
+            if key == JValue::NULL {
+                return Ok(None);
+            }
+            let stored = self.map_entries(map).first().map(|(stored, _)| *stored);
+            let class_of = |value: JValue| match value {
+                JValue::Ref(Some(reference)) => Some(heap_binary_name(&self.heap, reference)),
+                _ => None,
+            };
+            if let Some(stored) = stored
+                && class_of(key) != class_of(stored)
+            {
+                return Ok(None);
+            }
         }
         // A TreeMap locates a key by comparison, not hashing — and so does a
         // VIEW of one, whose `map_entries` are the slice the bounds resolve
@@ -11457,6 +11537,23 @@ impl<'run> Interpreter<'run> {
                 }
                 return Ok(Answered::Value(JValue::Ref(Some(inner))));
             }
+            // `orElseThrow(supplier)` (Java 8 on `Optional`, Java 10 on the
+            // three primitive ones): the value, or THROW what the supplier
+            // makes — the way a program says which exception an absent value
+            // deserves. The no-argument form beside it is `NoSuchElementException`.
+            ("orElseThrow", [JValue::Ref(Some(supplier))]) => {
+                let supplier = *supplier;
+                let Some(present) = value else {
+                    let made = self.call_apply_supplier(supplier)?;
+                    let JValue::Ref(Some(thrown)) = made else {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.NullPointerException",
+                        )));
+                    };
+                    return Err(self.throw_supplied(thrown));
+                };
+                present
+            }
             // `orElseGet(supplier)`: the value, or the supplier's result.
             ("orElseGet", [JValue::Ref(Some(supplier))]) => match value {
                 Some(present) => present,
@@ -12476,7 +12573,15 @@ impl<'run> Interpreter<'run> {
             }
             // `reduce(identity, accumulator)` folds left to a value;
             // `reduce(accumulator)` answers an `Optional` (empty on no input).
-            ("reduce", [identity, JValue::Ref(Some(accumulator))]) => {
+            (
+                "reduce",
+                [
+                    identity,
+                    JValue::Ref(Some(accumulator)),
+                    JValue::Ref(Some(_)),
+                ]
+                | [identity, JValue::Ref(Some(accumulator))],
+            ) => {
                 let (identity, accumulator) = (*identity, *accumulator);
                 let elements = self.stream_materialize(receiver)?;
                 let mut total = identity;
@@ -22780,6 +22885,29 @@ fn cursor_class_name_of(
         },
         _ => "java/util/Iterator",
     }
+}
+
+/// `java.util.Arrays.rangeCheck` — the SAME order of checks the bundled
+/// `Arrays` makes, so a bad range throws before anything is read and names the
+/// index a JDK names. The bundled copy is Java and this one is Rust because
+/// the ranged `parallelPrefix` runs here (it calls user code per element).
+fn arrays_range_check(length: i32, from: i32, to: i32) -> Result<(), VmError> {
+    if from > to {
+        return Err(VmError::UncaughtException(format!(
+            "java.lang.IllegalArgumentException: fromIndex({from}) > toIndex({to})"
+        )));
+    }
+    if from < 0 {
+        return Err(VmError::UncaughtException(format!(
+            "java.lang.ArrayIndexOutOfBoundsException: Array index out of range: {from}"
+        )));
+    }
+    if to > length {
+        return Err(VmError::UncaughtException(format!(
+            "java.lang.ArrayIndexOutOfBoundsException: Array index out of range: {to}"
+        )));
+    }
+    Ok(())
 }
 
 /// The binary name of what a heap REFERENCE holds — the same class
