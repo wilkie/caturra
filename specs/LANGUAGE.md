@@ -4829,12 +4829,11 @@ on the emitted type, and passing the same call to a method of one's own was
 "cannot determine the type of an argument". The fourth `type_of`-versus-emit
 divergence of the round, and the reason that invariant is now checked.
 
-Still refused: `Arrays.stream(a, from, to)`. A stream's origin is a whole
-collection or array with no room for a range, and lowering the range to a copy
-would quietly drop the late binding just established. The refusal now gives
-that reason and names the spelling that works
-(`Arrays.stream(Arrays.copyOfRange(a, from, to))`) instead of reporting "no
-suitable method", which reads as though the program were wrong.
+Still refused at the time: `Arrays.stream(a, from, to)`. A stream's origin was
+a whole collection or array with no room for a range, and lowering the range to
+a copy would have dropped the late binding just established. The refusal gave
+that reason and named the spelling that works. It is modelled now — see "the
+three calls the list kept naming".
 
 ### Optional's null contract (2026-08-14)
 
@@ -9094,8 +9093,6 @@ counting catches: a divergence that stopped being one.
   but the refusal has to say so: written in full it gave the honest reason,
   written simply it read as a typo — "unknown type 'Math'", about a class
   every program has used. (`stricter_namespace_class_as_a_variable_type`)
-- `Arrays.stream(array, from, to)` — the RANGE overload; the whole-array form
-  is modelled. (`stricter_arrays_stream_takes_no_range`)
 - A factory that ADOPTS its context (`Collections.emptyList()`,
   `Optional.empty()`, `List.of()`) used as an argument where the OVERLOADS
   disagree about it: `two(Collections.emptyList())`, against
@@ -15418,9 +15415,9 @@ at all — the NAME is what a JDK reads, so a missing `gone.txt` is still
 
 **What is left on that list**, and why: `Files.createDirectories`/`createLink`/
 `getFileStore`/`newDirectoryStream`/`readSymbolicLink`, which want types
-caturra does not model; `BigDecimal.divide(BigDecimal, int)`; and
-`String.getBytes(int, int, byte[], int)`, deprecated since 1.1. (`Files.list`
-and the ranged `Arrays.compare` came off it — see below.)
+caturra does not model. (`Files.list` and the ranged `Arrays.compare` came off
+it — and `BigDecimal.divide(BigDecimal, int)` and `String.getBytes(int, int,
+byte[], int)` came off later, with the ranged `Arrays.stream`; see below.)
 
 ### The harness was dropping the line (2026-09-06)
 
@@ -15698,10 +15695,12 @@ operator is the JDK's `NullPointerException` rather than "malformed class".
   one thread the combiner is never called, which is what a JDK does for a
   sequential stream as well.
 
-`Arrays.stream(array, from, to)` stays refused, with the reason it already
-carried: a stream's origin here is a whole collection or array, with no room
-for a range, and lowering the range to a copy would quietly drop the late
-binding a JDK keeps.
+`Arrays.stream(array, from, to)` stayed refused for two sittings, with the
+reason it carried: a stream's origin here was a whole collection or array with
+no room for a range, and lowering the range to a copy would have dropped the
+late binding a JDK keeps. It is modelled now — the origin carries the WINDOW,
+and the elements are still re-read through it, so writing to the array before
+the terminal runs is visible exactly as a JDK makes it.
 
 **What is left of that list**, for the next sitting: the `java.lang` end
 (`Character`'s `char[]` code-point family, `toTitleCase(int)`,
@@ -15906,6 +15905,32 @@ has no negative and says so in those same words. Along the way:
 the nanosecond DIFFERENCE, which a program that prints the number sees;
 `dividedBy(0)` is "Cannot divide by zero" and not "/ by zero"; and
 `plus(Duration)` / `minus(Duration)` were not implemented at all.
+
+**The three calls the deferred list kept naming.** Each was ordinary Java that
+caturra turned away, and each had been on the list for two sittings.
+
+- **`Arrays.stream(a, from, to)`** streams a WINDOW of the array, and its
+  bounds are checked in one order and no other: origin past fence first
+  (`origin(4) > fence(2)`), then a negative origin, then a fence past the end
+  (`Array index out of range: N`). The reason it stayed refused was real — a
+  stream is LATE-BINDING, and lowering the range to a copy would have answered
+  from a snapshot (9 where a JDK gives 105). So the range travels WITH the
+  stream's origin, and the elements are still re-read through it.
+- **`BigDecimal.divide(divisor, ROUND_HALF_UP)`**, the deprecated int form of
+  the rounding mode. It keeps the DIVIDEND's scale, so `1.50 / 0.7` is 2.14 and
+  `1.5 / 0.7` is 2.1; an ordinal outside 0..7 is `Invalid rounding mode`; and
+  `/ by zero` is checked BEFORE `ROUND_UNNECESSARY`'s "Rounding necessary".
+  Everything it needed was already there — the scale rule from the
+  `RoundingMode` overload, the ordinal check from the three-argument one — so
+  it was a missing table entry and nothing else.
+- **`String.getBytes(srcBegin, srcEnd, dst, dstBegin)`**, deprecated since 1.1,
+  which copies the LOW BYTE of each character and drops the rest (`hé😀` comes
+  out `[104, -23, 61, …]`). Its two range complaints are worded differently and
+  measured against different lengths: `begin/end/length` for the string,
+  checked first, then `offset/count/length` for the destination ARRAY.
+
+What is left of that list is the four `Files` methods whose types caturra does
+not model, and `spliterator`.
 
 **A wrapper's MIN_VALUE has the wrapper's type.** `Byte.MIN_VALUE` is declared
 `byte` in a JDK and `Short.MAX_VALUE` `short`, not `int`, and the difference

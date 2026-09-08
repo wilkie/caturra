@@ -6173,6 +6173,56 @@ fn string_method(
             let reference = heap.alloc(HeapObject::ByteArray(bytes));
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // `getBytes(srcBegin, srcEnd, dst, dstBegin)` — the deprecated form,
+        // which takes the LOW BYTE of each character and drops the rest, so a
+        // string outside Latin-1 comes out mangled on purpose. The SOURCE
+        // range is checked first and words itself `begin/end/length` against
+        // the string; the DESTINATION second, `offset/count/length` against
+        // the array.
+        (
+            "getBytes",
+            [
+                JValue::Int(begin),
+                JValue::Int(end),
+                JValue::Ref(target),
+                JValue::Int(at),
+            ],
+        ) => {
+            let length = i32::try_from(units.len()).unwrap_or(i32::MAX);
+            if *begin < 0 || end < begin || *end > length {
+                return Err(throw(format!(
+                    "java.lang.StringIndexOutOfBoundsException: begin {begin}, end {end}, \
+                     length {length}"
+                )));
+            }
+            let Some(target) = *target else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let copied = end - begin;
+            let destination = match heap.get(target) {
+                Some(HeapObject::ByteArray(values)) => {
+                    i32::try_from(values.len()).unwrap_or(i32::MAX)
+                }
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            if *at < 0 || at.saturating_add(copied) > destination {
+                return Err(throw(format!(
+                    "java.lang.StringIndexOutOfBoundsException: offset {at}, count {copied}, \
+                     length {destination}"
+                )));
+            }
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let taken: Vec<i8> = units[*begin as usize..*end as usize]
+                .iter()
+                .map(|unit| (*unit as u8).cast_signed())
+                .collect();
+            if let Some(HeapObject::ByteArray(values)) = heap.get_mut(target) {
+                #[allow(clippy::cast_sign_loss)]
+                let start = *at as usize;
+                values[start..start + taken.len()].copy_from_slice(&taken);
+            }
+            Ok(None)
+        }
         (
             "getChars",
             [

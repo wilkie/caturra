@@ -33681,23 +33681,6 @@ public class WitnessWidening {
 "#
 );
 
-// `Arrays.stream(array, from, to)` — the RANGE overload, which caturra does not
-// model; the whole-array form does.
-stricter_than_javac!(
-    stricter_arrays_stream_takes_no_range,
-    "ArraysStreamRange",
-    r"
-import java.util.*;
-
-public class ArraysStreamRange {
-    public static void main(String[] args) {
-        int[] values = {1, 2, 3};
-        System.out.println(Arrays.stream(values, 0, 2).sum());
-    }
-}
-"
-);
-
 // The SECOND permissiveness. `Collections.emptyList()` types as a `null` that
 // adopts its context, and a CAST is a context — so caturra reads
 // `(List<String>) Collections.emptyList()` as an identity cast, where javac
@@ -55579,6 +55562,111 @@ public class Consts {
     s("box-short", () -> { Short v = Short.MAX_VALUE; return v; });
     s("concat", () -> "" + Byte.MIN_VALUE + Short.MAX_VALUE + Character.MAX_VALUE);
     s("arith", () -> Byte.MIN_VALUE + Byte.MAX_VALUE);
+  }
+}
+"#
+);
+
+// The three refusals `specs/LANGUAGE.md` had been naming as deferred, each
+// ordinary Java:
+//
+// `Arrays.stream(a, from, to)` streams a WINDOW, and its bounds are checked in
+// one order and no other — origin past fence first ("origin(4) > fence(2)"),
+// then a negative origin, then a fence past the end ("Array index out of
+// range: N"). `BigDecimal.divide(divisor, ROUND_HALF_UP)` is the deprecated
+// int form, which keeps the DIVIDEND's scale ("1.50" / "0.7" is 2.14, not
+// 2.1) and says "Invalid rounding mode" for an ordinal outside 0..7 — while
+// "/ by zero" is checked before ROUND_UNNECESSARY's "Rounding necessary".
+// `String.getBytes(srcBegin, srcEnd, dst, dstBegin)` copies the LOW BYTE of
+// each character and drops the rest; its two range complaints word themselves
+// differently and against different lengths — `begin/end/length` for the
+// string, `offset/count/length` for the destination array.
+differential_test!(
+    the_three_calls_the_list_kept_naming,
+    "Def2",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+import java.math.*;
+public class Def2 {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    int[] ints = {5, 3, 9, 1, 7};
+    String[] objs = {"e", "c", "a", "b"};
+    // getBytes(srcBegin, srcEnd, dst, dstBegin) — every way it can be wrong
+    s("gb-ok", () -> { byte[] d = new byte[6]; "hello".getBytes(1, 4, d, 2); return Arrays.toString(d); });
+    s("gb-src-neg", () -> { byte[] d = new byte[9]; "hello".getBytes(-1, 4, d, 0); return "ok"; });
+    s("gb-src-past", () -> { byte[] d = new byte[9]; "hello".getBytes(0, 9, d, 0); return "ok"; });
+    s("gb-src-order", () -> { byte[] d = new byte[9]; "hello".getBytes(4, 2, d, 0); return "ok"; });
+    s("gb-dst-neg", () -> { byte[] d = new byte[9]; "hello".getBytes(0, 3, d, -1); return "ok"; });
+    s("gb-dst-small", () -> { byte[] d = new byte[2]; "hello".getBytes(0, 5, d, 0); return "ok"; });
+    s("gb-dst-off", () -> { byte[] d = new byte[5]; "hello".getBytes(0, 5, d, 1); return "ok"; });
+    s("gb-null", () -> { "hello".getBytes(0, 3, null, 0); return "ok"; });
+    s("gb-empty", () -> { byte[] d = new byte[2]; "hello".getBytes(2, 2, d, 0); return Arrays.toString(d); });
+    s("gb-high", () -> { byte[] d = new byte[4]; "hé😀".getBytes(0, 4, d, 0); return Arrays.toString(d); });
+    // divide(divisor, int roundingMode) — all eight modes and the failures
+    s("bd-0", () -> new BigDecimal("10").divide(new BigDecimal("3"), BigDecimal.ROUND_UP));
+    s("bd-1", () -> new BigDecimal("10").divide(new BigDecimal("3"), BigDecimal.ROUND_DOWN));
+    s("bd-2", () -> new BigDecimal("-10").divide(new BigDecimal("3"), BigDecimal.ROUND_CEILING));
+    s("bd-3", () -> new BigDecimal("-10").divide(new BigDecimal("3"), BigDecimal.ROUND_FLOOR));
+    s("bd-4", () -> new BigDecimal("2.5").divide(BigDecimal.ONE, BigDecimal.ROUND_HALF_UP));
+    s("bd-5", () -> new BigDecimal("2.5").divide(BigDecimal.ONE, BigDecimal.ROUND_HALF_DOWN));
+    s("bd-6", () -> new BigDecimal("2.5").divide(BigDecimal.ONE, BigDecimal.ROUND_HALF_EVEN));
+    s("bd-7", () -> new BigDecimal("10").divide(new BigDecimal("3"), BigDecimal.ROUND_UNNECESSARY));
+    s("bd-7ok", () -> new BigDecimal("10").divide(new BigDecimal("2"), BigDecimal.ROUND_UNNECESSARY));
+    s("bd-neg", () -> new BigDecimal("10").divide(new BigDecimal("3"), -1));
+    s("bd-8", () -> new BigDecimal("10").divide(new BigDecimal("3"), 8));
+    s("bd-scale", () -> new BigDecimal("1.50").divide(new BigDecimal("0.7"), BigDecimal.ROUND_FLOOR));
+    s("bd-zero", () -> new BigDecimal("10").divide(BigDecimal.ZERO, BigDecimal.ROUND_HALF_UP));
+    s("bd-zero-unn", () -> BigDecimal.ZERO.divide(BigDecimal.ZERO, BigDecimal.ROUND_UNNECESSARY));
+    // Arrays.stream ranged — the streams and the complaints
+    s("as-int", () -> Arrays.stream(ints, 1, 4).sum());
+    s("as-int-max", () -> Arrays.stream(ints, 1, 4).max().getAsInt());
+    s("as-obj", () -> Arrays.stream(objs, 1, 3).sorted().collect(Collectors.toList()));
+    s("as-empty", () -> Arrays.stream(ints, 2, 2).sum());
+    s("as-full", () -> Arrays.stream(ints, 0, ints.length).boxed().collect(Collectors.toList()));
+    s("as-lo", () -> Arrays.stream(ints, -1, 3).sum());
+    s("as-hi", () -> Arrays.stream(ints, 1, 6).sum());
+    s("as-order", () -> Arrays.stream(ints, 4, 2).sum());
+    s("as-obj-lo", () -> Arrays.stream(objs, -1, 2).count());
+    s("as-null", () -> Arrays.stream((int[]) null, 0, 1).sum());
+    // Which check runs FIRST: origin>fence, then origin<0, then fence>length.
+    s("as-both-neg", () -> Arrays.stream(ints, -1, -2).sum());
+    s("as-both-past", () -> Arrays.stream(ints, 7, 9).sum());
+    s("as-lo-neg-hi-ok", () -> Arrays.stream(ints, -3, 2).sum());
+  }
+}
+"#
+);
+
+// A ranged stream is LATE-BINDING over the array, exactly as a whole-array one
+// is: writing to the array before the terminal runs is visible. That is why
+// the range travels with the stream's origin rather than being copied out —
+// answering from a snapshot would have given 9 where a JDK gives 105.
+differential_test!(
+    a_ranged_stream_reads_the_array_late,
+    "Late",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class Late {
+  public static void main(String[] a) {
+    int[] x = {1, 2, 3, 4, 5};
+    IntStream s = Arrays.stream(x, 1, 4);
+    x[2] = 99;
+    System.out.println("ranged-late = " + s.sum());
+    int[] y = {1, 2, 3};
+    IntStream t = Arrays.stream(y);
+    y[0] = 50;
+    System.out.println("whole-late = " + t.sum());
+    String[] o = {"a", "b", "c"};
+    Stream<String> u = Arrays.stream(o, 0, 2);
+    o[1] = "Z";
+    System.out.println("obj-late = " + u.collect(Collectors.joining()));
   }
 }
 "#

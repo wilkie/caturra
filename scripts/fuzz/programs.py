@@ -393,6 +393,9 @@ class Gen:
                 f"Arrays.toString({a})",
                 f"Arrays.stream({a}).sum()",
                 f"Arrays.stream({a}).max().orElse(-1)",
+                # The RANGE overload, over bounds the array always has.
+                f"Arrays.stream({a}, 0, {a}.length).sum()",
+                f"Arrays.stream({a}, {a}.length / 2, {a}.length).count()",
             ])
             self.lines.append(f"        System.out.println({what});")
             if r.random() < 0.4:

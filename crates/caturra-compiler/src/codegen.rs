@@ -11989,6 +11989,17 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         BRet::ByteArray,
         "(Ljava/lang/String;)[B",
     ),
+    // The deprecated four-argument form, which copies the LOW BYTE of each
+    // character into a destination the caller supplies — the byte sibling of
+    // `getChars` beside it, and the one shape of `getBytes` that answers
+    // nothing.
+    BuiltinMethod {
+        name: "getBytes",
+        params: &[BParam::Int, BParam::Int, BParam::ByteArray, BParam::Int],
+        ret: BRet::Void,
+        descriptor: "(II[BI)V",
+        needs: TableFace::Sorted,
+    },
     BuiltinMethod {
         name: "getChars",
         params: &[BParam::Int, BParam::Int, BParam::CharArray, BParam::Int],
@@ -16834,6 +16845,15 @@ const BIG_DECIMAL_METHODS: &[BuiltinMethod] = &[
         &[BParam::BigDecimal, BParam::MathContext],
         BRet::BigDecimal,
         "(Ljava/math/BigDecimal;Ljava/math/MathContext;)Ljava/math/BigDecimal;",
+    ),
+    // `divide(divisor, ROUND_HALF_UP)` — the deprecated int form of the
+    // rounding mode, which keeps the DIVIDEND's scale exactly as the
+    // `RoundingMode` overload beside it does.
+    bm(
+        "divide",
+        &[BParam::BigDecimal, BParam::Int],
+        BRet::BigDecimal,
+        "(Ljava/math/BigDecimal;I)Ljava/math/BigDecimal;",
     ),
     bm(
         "divide",
@@ -38394,6 +38414,35 @@ impl BodyGen<'_> {
                 None => JType::Stream(elem),
             }));
         }
+        // `Arrays.stream(a, from, to)` streams a WINDOW of the array, and
+        // like every stream source it is late-binding over the array itself:
+        // writing to it before the terminal runs is visible, so the range
+        // travels with the origin rather than being copied out here.
+        if method == "stream"
+            && let [array, from, to] = args
+            && let JType::Array { elem, dims: 1 } = self.type_of(array)
+        {
+            self.expr(array);
+            for bound in [from, to] {
+                let ty = self.expr(bound);
+                self.numeric_conversion(ty, JType::Int);
+            }
+            let descriptor = format!(
+                "({}II)Ljava/util/stream/Stream;",
+                JType::Array { elem, dims: 1 }.descriptor(self.table)
+            );
+            // A caturra-internal name: no JDK class declares `__ofRange`, and
+            // the two bounds are checked where the stream is MADE.
+            let method_ref = intern_method_ref(self.pool, internal, "__ofRange", &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(3);
+            return Some(Some(match elem {
+                ElemType::Double => JType::DoubleStream,
+                ElemType::Long => JType::LongStream,
+                _ if !elem.base_type().is_reference() => JType::IntStream,
+                _ => JType::Stream(elem),
+            }));
+        }
         // `of` / `Arrays.stream`: a lone array argument IS the source;
         // otherwise the arguments pack into one, exactly as varargs do.
         // A lone REFERENCE array IS the varargs array (`Stream.of(words)` is a
@@ -38437,14 +38486,7 @@ impl BodyGen<'_> {
             // or array, with no room for a range, and lowering the range to a
             // copy would quietly drop that late binding — so this is refused
             // rather than answered from a snapshot.
-            let reason = if args.len() == 3 {
-                "Arrays.stream(array, from, to) exists in Java, but caturra streams a whole \
-                 array — use Arrays.stream(Arrays.copyOfRange(array, from, to))"
-            } else {
-                self.no_suitable_library_method(class, method, args, span);
-                return None;
-            };
-            self.error(span, String::from(reason));
+            self.no_suitable_library_method(class, method, args, span);
             return None;
         } else {
             // `IntStream.of(...)` packs a genuine `int[]`: its pipeline stores

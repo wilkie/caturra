@@ -30,6 +30,25 @@ use crate::vm::VmError;
 
 /// State for one `run`: the loaded classes, heap, interned strings,
 /// intrinsic singletons, and the instruction/call-depth budgets.
+/// Where a stream's elements come from when a terminal re-reads them, and how
+/// much of that source to take.
+///
+/// A stream is LATE-BINDING: writing to the collection or array behind it
+/// before the terminal runs is visible, so the elements are re-read rather
+/// than snapshotted. `length` is what the source had when the stream was made,
+/// which is what lets a terminal fail fast when the source is modified
+/// underneath it.
+#[derive(Clone, Copy)]
+struct StreamOrigin {
+    source: HeapRef,
+    length: usize,
+    /// `Arrays.stream(a, from, to)`'s window. A JDK fixes the two bounds when
+    /// the spliterator is made and reads the elements through them lazily, so
+    /// the range travels WITH the origin — copying the slice out up front
+    /// would answer from a snapshot and lose the late binding.
+    window: Option<(usize, usize)>,
+}
+
 pub(crate) struct Interpreter<'run> {
     pub classes: &'run HashMap<String, ClassFile>,
     pub console: &'run mut dyn ConsoleIo,
@@ -232,7 +251,7 @@ pub(crate) struct Interpreter<'run> {
     /// The collection a stream was opened over, with its length at that moment
     /// — what makes a terminal FAIL FAST when the source is modified while it
     /// runs, as a JDK's spliterator does.
-    stream_origins: HashMap<HeapRef, (HeapRef, usize)>,
+    stream_origins: HashMap<HeapRef, StreamOrigin>,
 }
 
 /// Where the active frame is, for stack traces and snapshots.
@@ -1211,9 +1230,9 @@ impl<'run> Interpreter<'run> {
                 }
             }
             let before = marked.iter().filter(|seen| **seen).count();
-            for (stream, (origin, _)) in &self.stream_origins {
+            for (stream, origin) in &self.stream_origins {
                 if marked.get(*stream as usize).copied().unwrap_or(false) {
-                    mark_ref(&mut marked, &mut work, *origin);
+                    mark_ref(&mut marked, &mut work, origin.source);
                 }
             }
             for ((map, _), view) in &self.map_views {
@@ -1261,7 +1280,7 @@ impl<'run> Interpreter<'run> {
         self.stream_close_handlers
             .retain(|stream, handlers| alive(stream) && handlers.iter().all(&alive));
         self.stream_origins
-            .retain(|stream, (origin, _)| alive(stream) && alive(origin));
+            .retain(|stream, origin| alive(stream) && alive(&origin.source));
     }
 
     /// The dispatch loop is one long match by design; splitting it per
@@ -10844,7 +10863,14 @@ impl<'run> Interpreter<'run> {
                 source: crate::value::StreamSource::Fixed(elements),
                 ops: Vec::new(),
             });
-            self.stream_origins.insert(stream, (receiver, length));
+            self.stream_origins.insert(
+                stream,
+                StreamOrigin {
+                    source: receiver,
+                    length,
+                    window: None,
+                },
+            );
             if method == "parallelStream" {
                 self.parallel_streams.insert(stream);
             }
@@ -10921,11 +10947,18 @@ impl<'run> Interpreter<'run> {
             Some(crate::value::HeapObject::Stream { source, ops }) => (source.clone(), ops.clone()),
             _ => return (crate::value::StreamSource::Fixed(Vec::new()), Vec::new()),
         };
-        match self.stream_origins.get(&stream).map(|(origin, _)| *origin) {
-            Some(origin) => (
-                crate::value::StreamSource::Fixed(self.materialized_elements(origin)),
-                ops,
-            ),
+        match self.stream_origins.get(&stream).copied() {
+            Some(origin) => {
+                let mut elements = self.materialized_elements(origin.source);
+                // `Arrays.stream(a, from, to)` fixes its window when the
+                // stream is made and re-reads the ELEMENTS through it, so the
+                // slice is taken here rather than being copied out up front.
+                if let Some((from, to)) = origin.window {
+                    let to = to.min(elements.len());
+                    elements = elements[from.min(to)..to].to_vec();
+                }
+                (crate::value::StreamSource::Fixed(elements), ops)
+            }
             None => (source, ops),
         }
     }
@@ -11013,7 +11046,7 @@ impl<'run> Interpreter<'run> {
 
     fn stream_drive_from(
         &mut self,
-        origin: Option<(HeapRef, usize)>,
+        origin: Option<StreamOrigin>,
         source: &crate::value::StreamSource,
         ops: &[crate::value::StreamOp],
         sink: &mut StreamSink,
@@ -11044,7 +11077,7 @@ impl<'run> Interpreter<'run> {
     /// barrier held back.
     fn stream_run_source(
         &mut self,
-        origin: Option<(HeapRef, usize)>,
+        origin: Option<StreamOrigin>,
         source: &crate::value::StreamSource,
         ops: &[crate::value::StreamOp],
         states: &mut Vec<StreamOpState>,
@@ -11149,8 +11182,13 @@ impl<'run> Interpreter<'run> {
     /// Throw `ConcurrentModificationException` if the collection a stream was
     /// opened over has changed length since. `None` for a stream with no
     /// collection behind it (a range, `Stream.of`, a `sorted` barrier).
-    fn check_stream_source(&self, origin: Option<(HeapRef, usize)>) -> Result<(), VmError> {
-        let Some((collection, length)) = origin else {
+    fn check_stream_source(&self, origin: Option<StreamOrigin>) -> Result<(), VmError> {
+        let Some(StreamOrigin {
+            source: collection,
+            length,
+            ..
+        }) = origin
+        else {
             return Ok(());
         };
         // An ARRAY source has no comodification: its length is fixed, so
@@ -14591,6 +14629,60 @@ impl<'run> Interpreter<'run> {
                     self.array_elements(*array)
                         .ok_or_else(|| VmError::UnknownIntrinsic(String::from("Stream.of")))?,
                 ),
+                // `Arrays.stream(a, from, to)`. A JDK checks the two bounds
+                // when the spliterator is made, in this order and no other:
+                // origin past fence first, then a negative origin, then a
+                // fence past the end — so `stream(a, 4, 2)` says
+                // "origin(4) > fence(2)" and not "Array index out of range".
+                // A null array is a plain NullPointerException with no message,
+                // thrown before either bound is looked at.
+                ("__ofRange", [JValue::Ref(None), _, _]) => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                }
+                ("__ofRange", [JValue::Ref(Some(array)), JValue::Int(from), JValue::Int(to)]) => {
+                    let elements = self
+                        .array_elements(*array)
+                        .ok_or_else(|| VmError::UnknownIntrinsic(String::from("Arrays.stream")))?;
+                    let length = i32::try_from(elements.len()).unwrap_or(i32::MAX);
+                    if from > to {
+                        return Err(VmError::UncaughtException(format!(
+                            "java.lang.ArrayIndexOutOfBoundsException: origin({from}) > fence({to})"
+                        )));
+                    }
+                    let bad = if *from < 0 {
+                        Some(*from)
+                    } else if *to > length {
+                        Some(*to)
+                    } else {
+                        None
+                    };
+                    if let Some(index) = bad {
+                        return Err(VmError::UncaughtException(format!(
+                            "java.lang.ArrayIndexOutOfBoundsException: \
+                             Array index out of range: {index}"
+                        )));
+                    }
+                    #[allow(clippy::cast_sign_loss)]
+                    let window = (*from as usize, *to as usize);
+                    let stream = self.heap.alloc(crate::value::HeapObject::Stream {
+                        source: crate::value::StreamSource::Fixed(
+                            elements[window.0..window.1].to_vec(),
+                        ),
+                        ops: Vec::new(),
+                    });
+                    self.stream_origins.insert(
+                        stream,
+                        StreamOrigin {
+                            source: *array,
+                            length: elements.len(),
+                            window: Some(window),
+                        },
+                    );
+                    frame.stack.push(JValue::Ref(Some(stream)));
+                    return Ok(None);
+                }
                 // `Stream.concat` PULLS both pipelines to completion first —
                 // caturra's lazy model has no way to chain two sources.
                 ("concat", [JValue::Ref(Some(first)), JValue::Ref(Some(second))]) => {
@@ -14614,7 +14706,14 @@ impl<'run> Interpreter<'run> {
                 // which nothing else can reach, so late binding is invisible
                 // there rather than wrong.
                 if let ("of", [JValue::Ref(Some(array))]) = (method_name, args) {
-                    self.stream_origins.insert(stream, (*array, length));
+                    self.stream_origins.insert(
+                        stream,
+                        StreamOrigin {
+                            source: *array,
+                            length,
+                            window: None,
+                        },
+                    );
                 }
                 frame.stack.push(JValue::Ref(Some(stream)));
                 return Ok(None);
