@@ -8079,10 +8079,7 @@ fn reader_method(
         return Err(throw("java.io.IOException: Stream closed"));
     }
     match method {
-        // The charset a byte-reading reader decodes with. caturra decodes
-        // UTF-8 everywhere, and a JDK answers the HISTORICAL name for it
-        // ("UTF8"), not the canonical one.
-        "getEncoding" => Ok(Some(JValue::Ref(Some(heap.alloc_string("UTF8"))))),
+        "getEncoding" => Ok(Some(stream_encoding(heap, closed))),
         "readLine" => {
             let line = if closed {
                 None
@@ -11638,6 +11635,18 @@ fn path_method(
     }
 }
 
+/// The charset name a reader or a writer answers. caturra encodes and decodes
+/// UTF-8 everywhere, and a JDK answers the HISTORICAL name for it ("UTF8"),
+/// not the canonical one — and `null` once the stream is closed, because the
+/// encoder it was asking is gone.
+fn stream_encoding(heap: &mut Heap, closed: bool) -> JValue {
+    JValue::Ref(if closed {
+        None
+    } else {
+        Some(heap.alloc_string("UTF8"))
+    })
+}
+
 fn writer_method(
     heap: &mut Heap,
     vfs: &mut VirtualFileSystem,
@@ -11650,6 +11659,12 @@ fn writer_method(
         Some(HeapObject::Writer { path, text, closed }) => (path.clone(), *text, *closed),
         _ => unreachable!("receiver kind checked by caller"),
     };
+    // A `FileWriter` is an `OutputStreamWriter`, and names the charset it
+    // encodes with. A `PrintWriter` has no such method — the compiler refuses
+    // it there — so this arm is only ever reached on the one that does.
+    if method == "getEncoding" {
+        return Ok(Some(stream_encoding(heap, closed)));
+    }
     // A JDK's `PrintWriter` never throws: a write after `close()` is dropped
     // and the error flag goes up, which is the only way `checkError()` becomes
     // true for a writer over memory.

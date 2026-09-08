@@ -55431,3 +55431,93 @@ public class DurOver {
 }
 "#
 );
+
+// A `FileWriter` and a `PrintWriter` shared one compiler type, so a FileWriter
+// wore PrintWriter's whole PRINT family: `println`, `print`, `printf`,
+// `format` and `checkError` all compiled here and are "cannot find symbol" on
+// a JDK — the dangerous direction, and the one a student meets, because
+// `fw.println(line)` is what anyone writes first. The same collapse named the
+// wrong type in the complaint ("variable v of type PrintWriter" for a variable
+// declared `FileWriter`).
+//
+// The readers had it the other way round: `getEncoding` sat on the table all
+// four share, so a `StringReader` — which reads characters that were never
+// bytes — answered a charset, and so did a bare `Reader`. It belongs to the
+// two that DECODE, and it was missing from the `FileWriter` that encodes.
+differential_reject!(
+    reject_a_file_writer_printing,
+    "RejFWP",
+    "import java.io.*;\npublic class RejFWP { public static void main(String[] a) throws Exception { FileWriter w = new FileWriter(\"f.txt\"); w.println(\"x\"); } }"
+);
+differential_reject!(
+    reject_a_file_writer_print,
+    "RejFWQ",
+    "import java.io.*;\npublic class RejFWQ { public static void main(String[] a) throws Exception { FileWriter w = new FileWriter(\"f.txt\"); w.print(\"x\"); } }"
+);
+differential_reject!(
+    reject_a_file_writer_printf,
+    "RejFWR",
+    "import java.io.*;\npublic class RejFWR { public static void main(String[] a) throws Exception { FileWriter w = new FileWriter(\"f.txt\"); w.printf(\"%d\", 1); } }"
+);
+differential_reject!(
+    reject_a_file_writer_format,
+    "RejFWS",
+    "import java.io.*;\npublic class RejFWS { public static void main(String[] a) throws Exception { FileWriter w = new FileWriter(\"f.txt\"); w.format(\"%d\", 1); } }"
+);
+differential_reject!(
+    reject_a_file_writer_check_error,
+    "RejFWT",
+    "import java.io.*;\npublic class RejFWT { public static void main(String[] a) throws Exception { FileWriter w = new FileWriter(\"f.txt\"); w.checkError(); } }"
+);
+differential_reject!(
+    reject_a_string_reader_encoding,
+    "RejSRE",
+    "import java.io.*;\npublic class RejSRE { public static void main(String[] a) throws Exception { StringReader r = new StringReader(\"a\"); r.getEncoding(); } }"
+);
+differential_reject!(
+    reject_a_reader_face_encoding,
+    "RejRFE",
+    "import java.io.*;\npublic class RejRFE { public static void main(String[] a) throws Exception { Reader r = new StringReader(\"a\"); r.getEncoding(); } }"
+);
+differential_reject!(
+    reject_a_print_writer_encoding,
+    "RejPWE",
+    "import java.io.*;\npublic class RejPWE { public static void main(String[] a) throws Exception { PrintWriter w = new PrintWriter(new StringWriter()); w.getEncoding(); } }"
+);
+
+// And what the two that DO have it answer: the HISTORICAL charset name, not
+// the canonical one, and `null` once the stream is closed — the encoder it was
+// asking is gone. caturra answered "UTF8" whatever state the stream was in.
+differential_test!(
+    what_a_stream_says_it_encodes_with,
+    "Enc3",
+    r#"
+import java.io.*;
+public class Enc3 {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] x) throws Exception {
+    FileWriter fw = new FileWriter("f.txt");
+    s("fw-open", () -> fw.getEncoding());
+    s("fw-write", () -> { fw.write("hi"); fw.flush(); return fw.getEncoding(); });
+    s("fw-append", () -> { fw.append('c').append("d"); fw.flush(); return "ok"; });
+    s("fw-class", () -> fw.getClass().getName());
+    s("fw-closed", () -> { fw.close(); return fw.getEncoding(); });
+    FileReader fr = new FileReader("f.txt");
+    s("fr-open", () -> fr.getEncoding());
+    s("fr-read", () -> (char) fr.read());
+    s("fr-closed", () -> { fr.close(); return fr.getEncoding(); });
+    InputStreamReader ir = new InputStreamReader(System.in);
+    s("ir-open", () -> ir.getEncoding());
+    s("ir-closed", () -> { ir.close(); return ir.getEncoding(); });
+    Writer w = new FileWriter("g.txt");
+    s("as-face", () -> { w.write("z"); w.close(); return "ok"; });
+    FileWriter ap = new FileWriter("f.txt", true);
+    s("append-mode", () -> { ap.write("!"); ap.close(); return new java.util.Scanner(new File("f.txt")).nextLine(); });
+  }
+}
+"#
+);

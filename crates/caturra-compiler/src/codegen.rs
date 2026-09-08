@@ -3767,7 +3767,8 @@ impl MethodTable {
                     "StringBuilder" => Some(JType::StringBuilder),
                     "CharSequence" => Some(JType::CharSequence),
                     "File" => Some(JType::File),
-                    "PrintWriter" | "FileWriter" => Some(JType::Writer),
+                    "PrintWriter" => Some(JType::Writer(WriterKind::Print)),
+                    "FileWriter" => Some(JType::Writer(WriterKind::File)),
                     // `java.io.Writer` is the FACE both writers wear — the
                     // abstract class a variable is declared as, which is
                     // ordinary Java and was "unknown type 'Writer'".
@@ -7758,7 +7759,7 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (
-                JType::Writer | JType::StringWriter | JType::BufferedWriter | JType::WriterFace,
+                JType::Writer(_) | JType::StringWriter | JType::BufferedWriter | JType::WriterFace,
                 JType::WriterFace,
             )
         )
@@ -8453,6 +8454,36 @@ enum CollFace {
     Concrete,
 }
 
+/// Which writer a [`JType::Writer`] is. A `PrintWriter` and a `FileWriter`
+/// share one storage (a path, or a `StringWriter` to write through to) and one
+/// set of writes, and differ in exactly two ways a program can see: the class
+/// `getClass()` names, and whether the PRINT family is there at all. Those five
+/// — `print`, `println`, `printf`, `format`, `checkError` — are a
+/// `PrintWriter`'s alone, and offering them on both compiled
+/// `new FileWriter(path).println(text)`, which javac calls "cannot find
+/// symbol". A `FileWriter` has one method of its own in exchange:
+/// `getEncoding`, from the `OutputStreamWriter` it really is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriterKind {
+    Print,
+    File,
+}
+
+impl WriterKind {
+    /// The class a writer of this kind reports, and the one a `new` makes.
+    fn internal(self) -> &'static str {
+        match self {
+            WriterKind::Print => "java/io/PrintWriter",
+            WriterKind::File => "java/io/FileWriter",
+        }
+    }
+
+    /// The name a program writes, and a diagnostic prints.
+    fn simple(self) -> &'static str {
+        self.internal().rsplit('/').next().unwrap_or("Writer")
+    }
+}
+
 /// Which reader a [`JType::Reader`] is. The four share one storage (a buffer
 /// and a cursor) and one set of reads, and differ in exactly two ways a program
 /// can see: the class `getClass()` names, and whether `readLine`/`lines` are
@@ -8591,9 +8622,10 @@ enum JType {
     Exception(u8),
     /// `java.io.File` (intrinsic, backed by the virtual filesystem).
     File,
-    /// `java.io.PrintWriter` (intrinsic, writes into the virtual
-    /// filesystem).
-    Writer,
+    /// `java.io.PrintWriter` or `java.io.FileWriter` (intrinsic, writes into
+    /// the virtual filesystem). Which one is [`WriterKind`], and the
+    /// difference is a method surface, not just a name.
+    Writer(WriterKind),
     /// `java.io.PrintStream` — the type of `System.out`, and of a stream a
     /// program builds over a buffer of its own.
     PrintStream,
@@ -9234,7 +9266,7 @@ impl JType {
                 .unwrap_or("Throwable")
                 .to_owned(),
             JType::File => String::from("File"),
-            JType::Writer => String::from("PrintWriter"),
+            JType::Writer(kind) => String::from(kind.simple()),
             JType::PrintStream => String::from("PrintStream"),
             JType::LocalDate => String::from("LocalDate"),
             JType::LocalTime => String::from("LocalTime"),
@@ -9311,7 +9343,7 @@ impl JType {
                 | JType::CharSequence
                 | JType::Scanner
                 | JType::File
-                | JType::Writer
+                | JType::Writer(_)
                 | JType::PrintStream
                 | JType::ByteStream
                 | JType::LocalDate
@@ -9487,7 +9519,7 @@ impl JType {
             JType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             JType::Exception(id) => format!("L{};", exception_internal(id)),
             JType::File => String::from("Ljava/io/File;"),
-            JType::Writer => String::from("Ljava/io/PrintWriter;"),
+            JType::Writer(kind) => format!("L{};", kind.internal()),
             JType::PrintStream => String::from("Ljava/io/PrintStream;"),
             JType::LocalDate => String::from("Ljava/time/LocalDate;"),
             JType::LocalTime => String::from("Ljava/time/LocalTime;"),
@@ -11515,6 +11547,7 @@ enum BRet {
 }
 
 /// One intrinsic method signature the compiler knows about.
+#[derive(Clone, Copy)]
 struct BuiltinMethod {
     name: &'static str,
     params: &'static [BParam],
@@ -12923,10 +12956,27 @@ const NULL_STREAM_METHODS: &[BuiltinMethod] = &[
     ),
 ];
 
+/// The charset a byte-reading reader decodes with, which is a
+/// `FileReader`'s and an `InputStreamReader`'s alone: a `StringReader` reads
+/// characters that were never bytes, and the abstract `Reader` face does not
+/// declare it. A JDK answers the HISTORICAL name ("UTF8"), not the canonical
+/// one ("UTF-8"), and `null` once the reader is closed. On the shared table it
+/// compiled `new StringReader(text).getEncoding()`, which javac refuses.
+const DECODING_READER_METHODS: &[BuiltinMethod] = &{
+    // Built FROM the shared table rather than beside it: a second copy of
+    // every reader's methods is a copy to forget to update, which is how
+    // `getEncoding` came to be on all four in the first place.
+    let mut all =
+        [bm("getEncoding", &[], BRet::Str, "()Ljava/lang/String;"); READER_METHODS.len() + 1];
+    let mut at = 0;
+    while at < READER_METHODS.len() {
+        all[at + 1] = READER_METHODS[at];
+        at += 1;
+    }
+    all
+};
+
 const READER_METHODS: &[BuiltinMethod] = &[
-    // The charset a byte-reading reader decodes with. A JDK answers the
-    // HISTORICAL name ("UTF8"), not the canonical one ("UTF-8").
-    bm("getEncoding", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("read", &[], BRet::Int, "()I"),
     // `read(buffer)` and its range form fill a char array and answer how many
     // they read, which is how a program reads in blocks rather than by line.
@@ -19181,6 +19231,61 @@ const BYTE_STREAM_METHODS: &[BuiltinMethod] = &[
     bm("flush", &[], BRet::Void, "()V"),
 ];
 
+/// A `java.io.FileWriter`: the `Writer` half a `PrintWriter` also has, and no
+/// PRINT family. Every `append` answers `java.io.Writer`, not the receiver —
+/// a `FileWriter` inherits them and does not narrow the return, which is what
+/// its descriptors say and what `signatures.py` checks.
+const FILE_WRITER_METHODS: &[BuiltinMethod] = &[
+    bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
+    bm("write", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("write", &[BParam::CharArray], BRet::Void, "([C)V"),
+    bm(
+        "write",
+        &[BParam::CharArray, BParam::Int, BParam::Int],
+        BRet::Void,
+        "([CII)V",
+    ),
+    bm(
+        "write",
+        &[BParam::Str, BParam::Int, BParam::Int],
+        BRet::Void,
+        "(Ljava/lang/String;II)V",
+    ),
+    bm(
+        "append",
+        &[BParam::CharSeq],
+        BRet::WriterFace,
+        "(Ljava/lang/CharSequence;)Ljava/io/Writer;",
+    ),
+    bm(
+        "append",
+        &[BParam::CharSeq, BParam::Int, BParam::Int],
+        BRet::WriterFace,
+        "(Ljava/lang/CharSequence;II)Ljava/io/Writer;",
+    ),
+    bm(
+        "append",
+        &[BParam::Char],
+        BRet::WriterFace,
+        "(C)Ljava/io/Writer;",
+    ),
+    // The charset it encodes with, from the `OutputStreamWriter` a
+    // `FileWriter` is. A JDK answers the HISTORICAL name ("UTF8"), not the
+    // canonical one, and `null` once the writer is closed.
+    bm("getEncoding", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("flush", &[], BRet::Void, "()V"),
+    bm("close", &[], BRet::Void, "()V"),
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+];
+
 const WRITER_METHODS: &[BuiltinMethod] = &[
     // The `Writer` half of a `PrintWriter`/`FileWriter`: the same `write` and
     // `append` shapes every other writer here offers, which this table was
@@ -22245,7 +22350,7 @@ fn is_single_class_library_type(ty: JType) -> bool {
         ty,
         JType::Scanner
             | JType::File
-            | JType::Writer
+            | JType::Writer(_)
             | JType::PrintStream
             | JType::ByteStream
             | JType::LocalDate
@@ -22340,7 +22445,13 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
             ))
         }
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
-        JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
+        JType::Writer(kind) => Some((
+            kind.internal(),
+            match kind {
+                WriterKind::Print => WRITER_METHODS,
+                WriterKind::File => FILE_WRITER_METHODS,
+            },
+        )),
         JType::PrintStream => Some(("java/io/PrintStream", PRINT_STREAM_METHODS)),
         JType::LocalDate => Some(("java/time/LocalDate", LOCAL_DATE_METHODS)),
         JType::LocalTime => Some(("java/time/LocalTime", LOCAL_TIME_METHODS)),
@@ -22362,10 +22473,11 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::ByteStream => Some(("java/io/ByteArrayOutputStream", BYTE_STREAM_METHODS)),
         JType::Reader(face) => Some((
             face.internal(),
-            if face == ReaderFace::Buffered {
-                BUFFERED_READER_METHODS
-            } else {
-                READER_METHODS
+            match face {
+                ReaderFace::Buffered => BUFFERED_READER_METHODS,
+                // The two that decode BYTES, and so have a charset to name.
+                ReaderFace::File | ReaderFace::InputStream => DECODING_READER_METHODS,
+                ReaderFace::Abstract | ReaderFace::Stringy => READER_METHODS,
             },
         )),
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
@@ -23922,7 +24034,7 @@ fn bparam_matches(
         BParam::ByteStream => matches!(arg, JType::ByteStream | JType::Null),
         BParam::WriterFace => matches!(
             arg,
-            JType::WriterFace | JType::Writer | JType::StringWriter | JType::Null
+            JType::WriterFace | JType::Writer(_) | JType::StringWriter | JType::Null
         ),
         // A collection whose elements are assignable to the receiver's — a
         // `List`, `Set` or `Collection` of a widening element type. `null`
@@ -24269,7 +24381,7 @@ fn refine_builtin_return(
 fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
     match ret {
         BRet::Void => None,
-        BRet::Writer => Some(JType::Writer),
+        BRet::Writer => Some(JType::Writer(WriterKind::Print)),
         BRet::PrintStream => Some(JType::PrintStream),
         BRet::LocalDate => Some(JType::LocalDate),
         BRet::LocalTime => Some(JType::LocalTime),
@@ -29309,7 +29421,8 @@ impl BodyGen<'_> {
             "Writer" => JType::WriterFace,
             "BufferedWriter" => JType::BufferedWriter,
             "File" => JType::File,
-            "PrintWriter" => JType::Writer,
+            "PrintWriter" => JType::Writer(WriterKind::Print),
+            "FileWriter" => JType::Writer(WriterKind::File),
             "PrintStream" => JType::PrintStream,
             "ByteArrayOutputStream" => JType::ByteStream,
             "BufferedReader" | "FileReader" | "InputStreamReader" | "StringReader" => {
@@ -30983,7 +31096,7 @@ impl BodyGen<'_> {
         }
         if !matches!(
             target_ty,
-            JType::Writer | JType::StringWriter | JType::BufferedWriter | JType::WriterFace
+            JType::Writer(_) | JType::StringWriter | JType::BufferedWriter | JType::WriterFace
         ) {
             self.error(
                 span,
@@ -31054,7 +31167,11 @@ impl BodyGen<'_> {
                 let init_ref = intern_method_ref(self.pool, class, "<init>", descriptor);
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(if appends { 3 } else { 2 });
-                return JType::Writer;
+                return JType::Writer(if class == "java/io/FileWriter" {
+                    WriterKind::File
+                } else {
+                    WriterKind::Print
+                });
             }
         }
         self.error(
@@ -32545,7 +32662,7 @@ impl BodyGen<'_> {
             | JType::StringBuilder
             | JType::Scanner
             | JType::File
-            | JType::Writer
+            | JType::Writer(_)
             | JType::PrintStream
             | JType::ByteStream
             | JType::LocalDate
@@ -33043,13 +33160,18 @@ impl BodyGen<'_> {
             self.code.drop_stack(1 + width);
             return Some(ret_ty);
         }
-        if receiver_ty == JType::Writer && matches!(method, "printf" | "format") {
+        if receiver_ty == JType::Writer(WriterKind::Print) && matches!(method, "printf" | "format")
+        {
             let (tags, width) = self.emit_format_varargs(args, span)?;
             // BOTH answer the writer, as both do on a `PrintStream`: a JDK's
             // `PrintWriter.printf` is declared `PrintWriter printf(...)`, and
             // typing it void made `pw.printf(...)` in any expression position
             // "'void' type not allowed here".
-            let (ret_desc, ret_width, ret_ty) = ("Ljava/io/PrintWriter;", 1, Some(JType::Writer));
+            let (ret_desc, ret_width, ret_ty) = (
+                "Ljava/io/PrintWriter;",
+                1,
+                Some(JType::Writer(WriterKind::Print)),
+            );
             let descriptor = format!("(Ljava/lang/String;{tags}){ret_desc}");
             let method_ref =
                 intern_method_ref(self.pool, "java/io/PrintWriter", method, &descriptor);
@@ -34924,7 +35046,7 @@ impl BodyGen<'_> {
             // The three that have no text of their OWN still have `Object`'s,
             // which is a class name and an address — and which they now
             // answer, so appending one calls its `toString` like any other.
-            JType::Writer => String::from("java/io/PrintWriter"),
+            JType::Writer(kind) => String::from(kind.internal()),
             JType::Reader(_) => String::from("java/io/BufferedReader"),
             JType::PrintStream => String::from("java/io/PrintStream"),
             JType::DecimalFormat => String::from("java/text/DecimalFormat"),
@@ -39065,7 +39187,7 @@ impl BodyGen<'_> {
             | JType::DayOfWeek
             | JType::Month
             | JType::Path => Some(String::from("(Ljava/lang/String;)V")),
-            JType::Scanner | JType::Writer | JType::Reader(_) | JType::PrintStream => {
+            JType::Scanner | JType::Writer(_) | JType::Reader(_) | JType::PrintStream => {
                 self.error(
                     span,
                     format!("printing a {} is not supported", ty.describe(self.table)),
@@ -39480,10 +39602,10 @@ impl BodyGen<'_> {
                 // Mirrored here or `out.format(...).println()` types as nothing.
                 if let Some(source) = receiver.as_deref()
                     && matches!(method.as_str(), "format" | "printf")
-                    && self.type_of(source) == JType::Writer
+                    && self.type_of(source) == JType::Writer(WriterKind::Print)
                 {
                     return if method == "format" {
-                        JType::Writer
+                        JType::Writer(WriterKind::Print)
                     } else {
                         JType::Error
                     };
@@ -44343,7 +44465,7 @@ impl BodyGen<'_> {
             // A reader, a writer and a print stream were refused here beside
             // the Scanner and no longer are: each answers `Object`'s default
             // now, which is exactly what a JDK prints.
-            | JType::Writer
+            | JType::Writer(_)
             | JType::Reader(_)
             | JType::PrintStream
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
@@ -44737,7 +44859,7 @@ impl BodyGen<'_> {
             | JType::Array { .. }
             | JType::Scanner
             | JType::File
-            | JType::Writer
+            | JType::Writer(_)
             | JType::PrintStream
             | JType::ByteStream
             | JType::LocalDate
@@ -44796,7 +44918,7 @@ impl BodyGen<'_> {
             | JType::Array { .. }
             | JType::Scanner
             | JType::File
-            | JType::Writer
+            | JType::Writer(_)
             | JType::PrintStream
             | JType::ByteStream
             | JType::LocalDate
@@ -45090,7 +45212,7 @@ impl BodyGen<'_> {
             // ...and the writers wearing their abstract face. The two gates
             // AGAIN — the eighth type to need both arms.
             (
-                JType::Writer | JType::StringWriter | JType::BufferedWriter | JType::WriterFace,
+                JType::Writer(_) | JType::StringWriter | JType::BufferedWriter | JType::WriterFace,
                 JType::WriterFace,
             ) => {}
             // ...and the readers wearing theirs. The ninth.

@@ -61,13 +61,30 @@ def known_reason(label):
 
 
 def tables():
-    """Every (JDK class, table constant) the compiler pairs up."""
+    """Every (JDK class, table constant) the compiler pairs up.
+
+    Two shapes. Most arms name the class beside the table as a literal. A FACED
+    one — a reader, a writer — names neither: it asks the face for both, and
+    those tables were invisible here, so the four readers' descriptors had
+    never been read at all and the writers' dropped out the moment they were
+    split. A face is `Enum::Variant => TABLE` inside the arm, and
+    `Enum::Variant => "java/io/X"` inside the enum's own `internal()`; joining
+    the two on the variant pairs them up.
+    """
     source = open(CODEGEN).read()
     found = {}
     for internal, const in re.findall(
         r'=>\s*Some\(\(\s*"([\w/$]+)"\s*,\s*(\w+_METHODS)\s*\)\)', source
     ):
         found.setdefault(const, internal.replace("/", "."))
+    # variant -> class, from every `internal()` in the file.
+    classes = dict(re.findall(r'(\w+::\w+)\s*=>\s*"([\w/$]+)"', source))
+    for variants, const in re.findall(
+        r'((?:\w+::\w+\s*\|\s*)*\w+::\w+)\s*=>\s*(\w+_METHODS)\s*,', source
+    ):
+        for variant in re.findall(r'\w+::\w+', variants):
+            if variant in classes:
+                found.setdefault(const, classes[variant].replace("/", "."))
     return found
 
 

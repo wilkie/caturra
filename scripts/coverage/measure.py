@@ -97,8 +97,14 @@ def complaint(class_name, receiver, name, methods):
 
     A missing name should EXPLAIN itself — "Collections.checkedList exists in
     Java, but ..." — rather than read as a typo. `--why` prints these so the
-    refusals can be read as a list, and fails when one of them is still a bare
-    "cannot find symbol".
+    refusals can be read as a list, and fails when one of them does not.
+
+    The probe declares `throws Exception`, as `receiver_compiles` does: without
+    it a call that throws a CHECKED exception is reported as "unreported
+    exception IOException" FIRST, and that line was read as the refusal — so
+    four of `Files`' honest refusals were recorded as a javac complaint about
+    the probe, and one name that really did say "cannot find symbol" passed the
+    gate behind the same mask.
     """
     arity = min(a for n, _, a in methods if n == name)
     is_static = next(s for n, s, a in methods if n == name and a == arity)
@@ -108,7 +114,8 @@ def complaint(class_name, receiver, name, methods):
     target = class_name if is_static else receiver
     call = f"{target}.{name}({', '.join(['null'] * arity)});"
     source = (
-        "public class Probe {\n    public static void main(String[] args) {\n        "
+        "public class Probe {\n"
+        "    public static void main(String[] args) throws Exception {\n        "
         + call
         + "\n    }\n}\n"
     )
@@ -119,10 +126,22 @@ def complaint(class_name, receiver, name, methods):
         out = subprocess.run(
             [ENGINE, path], capture_output=True, text=True, cwd=REPO, timeout=300
         ).stdout
-    for line in out.splitlines():
-        if line.startswith("Error@"):
-            return line.split(": ", 1)[1]
-    return "(no error)"
+    said = [l.split(": ", 1)[1] for l in out.splitlines() if l.startswith("Error@")]
+    # A REFUSAL first, whichever line it is on: a call can draw more than one
+    # complaint, and the refusal is the one this is asking about.
+    return next((m for m in said if is_refusal(m)), said[0] if said else "(no error)")
+
+
+def is_refusal(message):
+    """Whether a diagnostic is caturra saying WHY, rather than saying nothing.
+
+    "cannot find symbol" is the shape this gate exists to catch, but it is not
+    the only way a name can go unexplained — any complaint about something
+    ELSE (the probe's checked exceptions, its null arguments) leaves the
+    question unanswered just as completely. So this asks for the honest shape
+    rather than excluding one bad one.
+    """
+    return "exists in Java, but" in message or "not supported by caturra" in message
 
 
 def receiver_compiles(receiver):
@@ -213,8 +232,8 @@ def main():
         if why:
             for name in missing:
                 said = complaint(class_name, receiver, name, methods)
-                if "cannot find symbol" in said:
-                    unexplained.append(f"{class_name}.{name}")
+                if not is_refusal(said):
+                    unexplained.append(f"{class_name}.{name}: {said}")
                 print(f"{class_name}.{name}: {said}")
         answered[class_name] = known
         total_known += len(known)
@@ -237,7 +256,7 @@ def main():
             print(f"  {line}")
 
     if why and unexplained:
-        print(f"\n{len(unexplained)} missing names say only \"cannot find symbol\":")
+        print(f"\n{len(unexplained)} missing names do not explain themselves:")
         for name in unexplained:
             print(f"  {name}")
         sys.exit(1)

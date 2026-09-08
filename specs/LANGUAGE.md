@@ -15907,6 +15907,41 @@ the nanosecond DIFFERENCE, which a program that prints the number sees;
 `dividedBy(0)` is "Cannot divide by zero" and not "/ by zero"; and
 `plus(Duration)` / `minus(Duration)` were not implemented at all.
 
+**A `FileWriter` is not a `PrintWriter`, and the difference is five methods.**
+They shared one compiler type, so a `FileWriter` wore `PrintWriter`'s whole
+print family: `println`, `print`, `printf`, `format` and `checkError` compiled
+here and are "cannot find symbol" on a JDK. That is the dangerous direction and
+the one a student meets first, because `fw.println(line)` is what anyone
+writes. The same collapse named the wrong type in the complaint — "variable v
+of type PrintWriter" for a variable declared `FileWriter` — which is how it was
+noticed.
+
+The readers had it the other way round. `getEncoding` sat on the table all four
+share, so a `StringReader` (which reads characters that were never bytes) and a
+bare `Reader` both answered a charset; it belongs to the two that DECODE, and
+it was missing from the `FileWriter` that encodes. What it answers is the
+HISTORICAL charset name ("UTF8"), not the canonical one, and `null` once the
+stream is closed — the encoder it was asking is gone.
+
+**And the measurement was not measuring.** `measure.py --why` builds a
+one-call probe to ask each missing name why, and read the FIRST diagnostic as
+the answer. Its `main` declared no `throws`, so a call that throws a checked
+exception drew "unreported exception IOException" first — and four of `Files`'
+honest refusals were recorded as a complaint about the probe. The gate only
+rejected the literal words "cannot find symbol", so one name that really did
+say them passed behind the same mask, and the script exited 0 on a false
+report. It asks for the honest SHAPE now ("X exists in Java, but ...") rather
+than excluding one bad wording, which is what turned `FileWriter.getEncoding`
+up.
+
+`signatures.py` had the same shape of hole. It pairs a class with its method
+table by reading the class name written BESIDE the table, and a FACED arm
+writes neither — it asks the face for both. So the four readers' descriptors
+had never been read at all, and the writers' dropped out of the check the
+moment they were split. It joins the face's own `internal()` map to the arm's
+selection now: 1671 descriptors over 81 classes became 1726 over 88, still 0
+disagreeing.
+
 **And what a message SHOWS.** A JDK cannot encode an unpaired surrogate, so
 every complaint that quotes one shows a plain `?`; Rust cannot hold one either
 and substitutes U+FFFD. Making `string_text` substitute `?` fixed eight
