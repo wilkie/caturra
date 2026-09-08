@@ -72,6 +72,13 @@ fn date_time_exception(message: &str) -> VmError {
     VmError::UncaughtException(format!("java.time.DateTimeException: {message}"))
 }
 
+/// A shift `java.time` refuses, as the exception a program catches. The
+/// wording — which class, which field, which range — belongs to `time.rs`,
+/// where the shift itself is; this is only the crossing.
+fn overflowed(overflow: &crate::time::Overflow) -> VmError {
+    VmError::UncaughtException(overflow.message())
+}
+
 /// A `java.time` value's `hashCode`, as the JDK computes it — two equal
 /// values must hash alike wherever the program looks, and a `LocalDateTime`
 /// is its two halves `XOR`ed, so this has to be one function.
@@ -632,9 +639,10 @@ fn date_builder(
                 month: 1,
                 day: 1,
             };
-            Ok(Some(JValue::Ref(Some(heap.intern_temporal(
-                Temporal::Date(start.plus_days(wanted - 1)),
-            )))))
+            let moved = start.plus_days(wanted - 1).map_err(|e| overflowed(&e))?;
+            Ok(Some(JValue::Ref(Some(
+                heap.intern_temporal(Temporal::Date(moved)),
+            ))))
         }
         "atTime" => {
             // `atTime(time)` takes the time WHOLE, where the rest name its
@@ -825,23 +833,31 @@ fn date_time_method(
                     "java/time/LocalDateTime.{method}"
                 )));
             };
-            let amount = if plus { amount } else { -amount };
             // A time unit carries into the date; a date unit moves the date
             // and leaves the time alone.
             if let Some(nanos) = nanos_per_unit(unit) {
-                return made(heap, when.plus_nanos(amount.saturating_mul(nanos)));
+                let moved = crate::time::shifted(when, amount, plus, |when, amount| {
+                    when.plus_units(amount, nanos)
+                })
+                .map_err(|e| overflowed(&e))?;
+                return made(heap, moved);
             }
-            let moved = match unit {
-                "Days" => when.date.plus_days(amount),
-                "Weeks" => when.date.plus_days(amount.saturating_mul(7)),
-                "Months" => when.date.plus_months(amount),
-                "Years" => when.date.plus_years(amount),
+            let step: fn(
+                crate::time::Date,
+                i64,
+            ) -> Result<crate::time::Date, crate::time::Overflow> = match unit {
+                "Days" => crate::time::Date::plus_days,
+                "Weeks" => |date, amount| date.plus_days(crate::time::scaled(amount, 7)?),
+                "Months" => crate::time::Date::plus_months,
+                "Years" => crate::time::Date::plus_years,
                 _ => {
                     return Err(VmError::UnknownIntrinsic(format!(
                         "java/time/LocalDateTime.{method}"
                     )));
                 }
             };
+            let moved =
+                crate::time::shifted(when.date, amount, plus, step).map_err(|e| overflowed(&e))?;
             made(
                 heap,
                 crate::time::DateTime {
@@ -1036,24 +1052,34 @@ fn parse_with_formatter(
 
 /// What a `Duration` answers about itself: the whole of it in one unit, the
 /// PART of it in one unit, and whether it is nothing or less than nothing.
-fn duration_reader(amount: crate::time::Duration, method: &str) -> Option<JValue> {
-    let total = amount.total_nanos();
+fn duration_reader(amount: crate::time::Duration, method: &str) -> Option<Result<JValue, VmError>> {
     let part = |unit: char| {
-        Some(JValue::Int(
-            i32::try_from(amount.part(unit)).unwrap_or(i32::MAX),
-        ))
+        #[allow(clippy::cast_possible_truncation)]
+        Some(Ok(JValue::Int(amount.part(unit) as i32)))
+    };
+    // The whole of it in a unit BIGGER than a second is a division and always
+    // has an answer; in a smaller one it is a multiplication, and the two
+    // smallest units are the two that can leave the `long` range.
+    let total = |per: i64| {
+        Some(
+            amount
+                .total_in(per)
+                .map(JValue::Long)
+                .map_err(|e| overflowed(&e)),
+        )
     };
     match method {
         // Every `toX` TRUNCATES toward zero, as `java.time`'s do.
-        "toDays" => Some(JValue::Long(total / crate::time::NANOS_PER_DAY)),
-        "toHours" => Some(JValue::Long(total / crate::time::NANOS_PER_HOUR)),
-        "toMinutes" => Some(JValue::Long(total / crate::time::NANOS_PER_MINUTE)),
-        "getSeconds" | "toSeconds" => Some(JValue::Long(amount.seconds)),
-        "toMillis" => Some(JValue::Long(total / 1_000_000)),
-        "toNanos" => Some(JValue::Long(total)),
-        "getNano" => Some(JValue::Int(amount.nanos)),
-        "isZero" => Some(JValue::Int(i32::from(amount.is_zero()))),
-        "isNegative" => Some(JValue::Int(i32::from(amount.is_negative()))),
+        "toDays" => Some(Ok(JValue::Long(amount.seconds / 86_400))),
+        "toHours" => Some(Ok(JValue::Long(amount.seconds / 3_600))),
+        "toMinutes" => Some(Ok(JValue::Long(amount.seconds / 60))),
+        "getSeconds" | "toSeconds" => Some(Ok(JValue::Long(amount.seconds))),
+        "toMillis" => total(1_000_000),
+        "toNanos" => total(1),
+        "getNano" => Some(Ok(JValue::Int(amount.nanos))),
+        "isZero" => Some(Ok(JValue::Int(i32::from(amount.is_zero())))),
+        "isNegative" => Some(Ok(JValue::Int(i32::from(amount.is_negative())))),
+        "toDaysPart" => Some(Ok(JValue::Long(amount.part('D')))),
         "toHoursPart" => part('H'),
         "toMinutesPart" => part('M'),
         "toSecondsPart" => part('S'),
@@ -1076,7 +1102,6 @@ fn duration_rebuilt(
             heap.intern_temporal(Temporal::Duration(amount)),
         ))))
     };
-    let total = amount.total_nanos();
     match method {
         // `dividedBy(other)` (Java 9) answers HOW MANY of the other fit in
         // this one — a long, not a Duration, which is the whole difference
@@ -1088,11 +1113,11 @@ fn duration_rebuilt(
             let Some(HeapObject::Temporal(Temporal::Duration(other))) = heap.get(*reference) else {
                 return Err(throw("java.lang.ClassCastException: not a Duration"));
             };
-            let divisor = other.total_nanos();
-            if divisor == 0 {
-                return Err(throw("java.lang.ArithmeticException: Division by zero"));
-            }
-            Ok(Some(JValue::Long(total / divisor)))
+            let other = *other;
+            amount
+                .divided_by_duration(other)
+                .map(|count| Some(JValue::Long(count)))
+                .map_err(|e| overflowed(&e))
         }
         // `plus(amount, unit)` / `minus(amount, unit)` — a length in any unit
         // a duration can measure exactly. A unit with an ESTIMATED length
@@ -1116,9 +1141,11 @@ fn duration_rebuilt(
                      Unit must not have an estimated duration",
                 )));
             };
-            let sign = if method == "minus" { -1 } else { 1 };
-            let moved = total.saturating_add(count.saturating_mul(nanos) * sign);
-            made(heap, crate::time::Duration::of_nanos(moved))
+            let moved = crate::time::shifted(amount, count, method == "plus", |amount, count| {
+                amount.plus_units(count, nanos)
+            })
+            .map_err(|e| overflowed(&e))?;
+            made(heap, moved)
         }
         "multipliedBy" | "dividedBy" => {
             let by = match args.first() {
@@ -1126,15 +1153,13 @@ fn duration_rebuilt(
                 Some(JValue::Long(value)) => *value,
                 _ => 1,
             };
-            if method == "dividedBy" && by == 0 {
-                return Err(throw("java.lang.ArithmeticException: / by zero"));
-            }
             let moved = if method == "multipliedBy" {
-                total.saturating_mul(by)
+                amount.multiplied_by(by)
             } else {
-                total / by
-            };
-            made(heap, crate::time::Duration::of_nanos(moved))
+                amount.divided_by(by)
+            }
+            .map_err(|e| overflowed(&e))?;
+            made(heap, moved)
         }
         "withSeconds" => {
             let seconds = match args.first() {
@@ -1197,19 +1222,31 @@ fn duration_method(
         },
         _ => None,
     };
-    let total = amount.total_nanos();
+    if let Some(answer) = duration_reader(amount, method) {
+        return answer.map(Some);
+    }
     match method {
-        _ if duration_reader(amount, method).is_some() => Ok(duration_reader(amount, method)),
+        // Not a normalized -1/0/1: a JDK compares the SECONDS that way and
+        // then answers the nanosecond DIFFERENCE, which a program that prints
+        // the number can see.
         "compareTo" => match other {
-            Some(against) => Ok(Some(JValue::Int(match total.cmp(&against.total_nanos()) {
-                std::cmp::Ordering::Less => -1,
-                std::cmp::Ordering::Equal => 0,
-                std::cmp::Ordering::Greater => 1,
-            }))),
+            Some(against) => Ok(Some(JValue::Int(
+                match amount.seconds.cmp(&against.seconds) {
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Greater => 1,
+                    std::cmp::Ordering::Equal => amount.nanos - against.nanos,
+                },
+            ))),
             None => Err(throw("java.lang.ClassCastException: not a Duration")),
         },
-        "negated" => made(heap, crate::time::Duration::of_nanos(-total)),
-        "toDaysPart" => Ok(Some(JValue::Long(total / crate::time::NANOS_PER_DAY))),
+        // `negated` is `multipliedBy(-1)` in a JDK, which is why the smallest
+        // duration there is has no negative and says so in those words. `abs`
+        // is that same negation, and only when there is one to do.
+        "negated" | "abs" if method == "negated" || amount.is_negative() => {
+            let moved = amount.multiplied_by(-1).map_err(|e| overflowed(&e))?;
+            made(heap, moved)
+        }
+        "abs" => made(heap, amount),
         // `truncatedTo` on a Duration is truncation TOWARDS ZERO, not the
         // floor a time of day gets.
         "truncatedTo" => {
@@ -1224,7 +1261,21 @@ fn duration_method(
                      to be used for truncation",
                 )));
             };
-            made(heap, crate::time::Duration::of_nanos(total - total % step))
+            if crate::time::NANOS_PER_DAY % step != 0 {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.time.temporal.UnsupportedTemporalTypeException: \
+                     Unit must divide into a standard day without remainder",
+                )));
+            }
+            // Truncation is a shift by the REMAINDER within a DAY, which is
+            // how a JDK writes it — and the only way it works on a duration
+            // whose nanoseconds do not fit in a `long`.
+            let within =
+                (amount.seconds % 86_400) * crate::time::NANOS_PER_SECOND + i64::from(amount.nanos);
+            let moved = amount
+                .plus(0, within / step * step - within)
+                .map_err(|e| overflowed(&e))?;
+            made(heap, moved)
         }
         // A `Duration` holds exactly two units, and answers only those.
         "get" => {
@@ -1248,34 +1299,40 @@ fn duration_method(
             let list = heap.alloc(HeapObject::ArrayList(units));
             Ok(Some(JValue::Ref(Some(list))))
         }
-        "toHoursPart" => Ok(Some(JValue::Int(
-            i32::try_from(amount.part('H')).unwrap_or(i32::MAX),
-        ))),
-        "toMinutesPart" => Ok(Some(JValue::Int(
-            i32::try_from(amount.part('M')).unwrap_or(i32::MAX),
-        ))),
-        "toSecondsPart" => Ok(Some(JValue::Int(
-            i32::try_from(amount.part('S')).unwrap_or(i32::MAX),
-        ))),
-        "toMillisPart" => Ok(Some(JValue::Int(
-            i32::try_from(amount.part('m')).unwrap_or(i32::MAX),
-        ))),
-        "toNanosPart" => Ok(Some(JValue::Int(
-            i32::try_from(amount.part('n')).unwrap_or(i32::MAX),
-        ))),
         "multipliedBy" | "dividedBy" | "withSeconds" | "withNanos" => {
             duration_rebuilt(amount, heap, method, args)
         }
         // `plus(amount, unit)` / `minus(amount, unit)` — the two-argument
         // forms, which the one-argument `plus(duration)` below does not cover.
         "plus" | "minus" if args.len() == 2 => duration_rebuilt(amount, heap, method, args),
+        // `plus(duration)` / `minus(duration)` — a whole amount at once. The
+        // subtraction is written on the SECONDS, so `Long.MIN_VALUE` seconds
+        // takes the two-step form here as everywhere else.
+        "plus" | "minus" if args.len() == 1 => {
+            let Some(step) = other else {
+                return match args.first() {
+                    Some(JValue::Ref(None)) => Err(throw("java.lang.NullPointerException")),
+                    _ => Err(throw("java.lang.ClassCastException: not a Duration")),
+                };
+            };
+            let nanos = i64::from(step.nanos);
+            let moved = if method == "plus" {
+                amount.plus(step.seconds, nanos)
+            } else {
+                match step.seconds.checked_neg() {
+                    Some(back) => amount.plus(back, -nanos),
+                    None => amount.plus(i64::MAX, -nanos).and_then(|a| a.plus(1, 0)),
+                }
+            }
+            .map_err(|e| overflowed(&e))?;
+            made(heap, moved)
+        }
         _ => {
             let Some((unit, count, plus)) = shift_by(method, args) else {
                 return Err(VmError::UnknownIntrinsic(format!(
                     "java/time/Duration.{method}"
                 )));
             };
-            let count = if plus { count } else { -count };
             let nanos = match unit {
                 "Days" => crate::time::NANOS_PER_DAY,
                 "Hours" => crate::time::NANOS_PER_HOUR,
@@ -1289,10 +1346,11 @@ fn duration_method(
                     )));
                 }
             };
-            made(
-                heap,
-                crate::time::Duration::of_nanos(total + count.saturating_mul(nanos)),
-            )
+            let moved = crate::time::shifted(amount, count, plus, |amount, count| {
+                amount.plus_units(count, nanos)
+            })
+            .map_err(|e| overflowed(&e))?;
+            made(heap, moved)
         }
     }
 }
@@ -1553,12 +1611,9 @@ fn field_method(
                 Some(JValue::Int(v)) => i64::from(*v),
                 _ => 0,
             };
-            let range = crate::time::field_range(field);
-            if !range.contains(value) {
-                return Err(date_time_exception(&format!(
-                    "Invalid value for {} (valid values {}): {value}",
-                    info.text,
-                    range.text()
+            if !crate::time::field_range(field).contains(value) {
+                return Err(date_time_exception(&crate::time::out_of_range(
+                    field, value,
                 )));
             }
             if method == "checkValidIntValue" {
@@ -1735,12 +1790,9 @@ fn with_field(
     // receiver is asked whether it has the field at all — so
     // `LocalDate.with(HOUR_OF_AMPM, 30)` complains about the 30 rather than
     // about a date having no hour.
-    let range = crate::time::field_range(field);
-    if !range.contains(wanted) {
-        return Err(date_time_exception(&format!(
-            "Invalid value for {} (valid values {}): {wanted}",
-            crate::time::field_info(field).text,
-            range.text()
+    if !crate::time::field_range(field).contains(wanted) {
+        return Err(date_time_exception(&crate::time::out_of_range(
+            field, wanted,
         )));
     }
     if !supports_field(value, field) {
@@ -1823,9 +1875,7 @@ fn date_with_field(
     current: i64,
 ) -> Result<crate::time::Date, VmError> {
     let days = |count: i64| {
-        Ok(crate::time::Date::from_epoch_day(
-            date.to_epoch_day() + count,
-        ))
+        crate::time::Date::of_epoch_day(date.to_epoch_day() + count).map_err(|e| overflowed(&e))
     };
     let year = |value: i64| {
         let year = i32::try_from(value).unwrap_or(0);
@@ -1846,7 +1896,7 @@ fn date_with_field(
             i32::try_from(wanted).unwrap_or(1),
         )
         .map_err(|message| date_time_exception(&message)),
-        20 => Ok(crate::time::Date::from_epoch_day(wanted)),
+        20 => crate::time::Date::of_epoch_day(wanted).map_err(|e| overflowed(&e)),
         23 => {
             let month = u8::try_from(wanted).unwrap_or(1);
             crate::time::Date::of(
@@ -2174,6 +2224,32 @@ fn adjust_with(
     }
 }
 
+/// `minus(n, unit)` as a JDK writes it: `plus(-n, unit)`, except at
+/// `Long.MIN_VALUE`, which has no negative — there it is `plus(MAX, unit)` and
+/// then one more, and the FIRST of those two shifts can fail on its own.
+fn shift_signed(
+    value: Temporal,
+    amount: i64,
+    plus: bool,
+    unit: u8,
+    heap: &mut Heap,
+) -> Result<Option<JValue>, VmError> {
+    if plus {
+        return shift_by_unit(value, amount, unit, heap);
+    }
+    let Some(back) = amount.checked_neg() else {
+        let once = shift_by_unit(value, i64::MAX, unit, heap)?;
+        let Some(JValue::Ref(Some(reference))) = once else {
+            return Ok(once);
+        };
+        let Some(HeapObject::Temporal(moved)) = heap.get(reference) else {
+            return Err(throw("java.lang.ClassCastException: not a temporal"));
+        };
+        return shift_by_unit(*moved, 1, unit, heap);
+    };
+    shift_by_unit(value, back, unit, heap)
+}
+
 /// `plus(amount)` — a whole `Period` or `Duration` at once.
 fn shift_by_amount(
     value: Temporal,
@@ -2181,7 +2257,6 @@ fn shift_by_amount(
     negate: bool,
     heap: &mut Heap,
 ) -> Result<Option<JValue>, VmError> {
-    let sign = if negate { -1 } else { 1 };
     match amount {
         // A period is years, then months, then days — in that order, because
         // each may land on a shorter month than the last.
@@ -2207,7 +2282,7 @@ fn shift_by_amount(
                     continue;
                 }
                 let Some(JValue::Ref(Some(reference))) =
-                    shift_by_unit(moved, count * sign, unit, heap)?
+                    shift_signed(moved, count, !negate, unit, heap)?
                 else {
                     return Err(throw("java.lang.ClassCastException: not a temporal"));
                 };
@@ -2220,14 +2295,14 @@ fn shift_by_amount(
         }
         Temporal::Duration(duration) => {
             let Some(JValue::Ref(Some(reference))) =
-                shift_by_unit(value, duration.seconds * sign, 3, heap)?
+                shift_signed(value, duration.seconds, !negate, 3, heap)?
             else {
                 return Err(throw("java.lang.ClassCastException: not a temporal"));
             };
             let Some(HeapObject::Temporal(moved)) = heap.get(reference) else {
                 return Err(throw("java.lang.ClassCastException: not a temporal"));
             };
-            shift_by_unit(*moved, i64::from(duration.nanos) * sign, 0, heap)
+            shift_signed(*moved, i64::from(duration.nanos), !negate, 0, heap)
         }
         _ => Err(throw("java.lang.ClassCastException: not an amount")),
     }
@@ -2306,37 +2381,49 @@ fn shift_by_unit(
         let Some(time) = time else {
             return Err(throw("java.lang.ClassCastException: not a time"));
         };
-        let total = i128::from(time.nano_of_day) + i128::from(amount) * i128::from(nanos);
-        let day_nanos = i128::from(crate::time::NANOS_PER_DAY);
-        let carried = total.div_euclid(day_nanos);
-        let moved = crate::time::Time {
-            nano_of_day: i64::try_from(total.rem_euclid(day_nanos)).unwrap_or(0),
-        };
         match date {
-            None => Temporal::Time(moved),
-            Some(date) => Temporal::DateTime(crate::time::DateTime {
-                date: date.plus_days(i64::try_from(carried).unwrap_or(0)),
-                time: moved,
-            }),
+            None => {
+                let total = i128::from(time.nano_of_day) + i128::from(amount) * i128::from(nanos);
+                let day_nanos = i128::from(crate::time::NANOS_PER_DAY);
+                Temporal::Time(crate::time::Time {
+                    nano_of_day: i64::try_from(total.rem_euclid(day_nanos)).unwrap_or(0),
+                })
+            }
+            Some(date) => Temporal::DateTime(
+                crate::time::DateTime { date, time }
+                    .plus_units(amount, nanos)
+                    .map_err(|e| overflowed(&e))?,
+            ),
         }
     } else {
         let Some(date) = date else {
             return Err(throw("java.lang.ClassCastException: not a date"));
         };
+        let weeks =
+            |date: crate::time::Date, amount: i64| date.plus_days(crate::time::scaled(amount, 7)?);
+        let years = |date: crate::time::Date, amount: i64, per: i64| {
+            date.plus_years(crate::time::scaled(amount, per)?)
+        };
+        // A unit BIGGER than a year is a scale a JDK applies exactly, before
+        // it moves anything — which is why a decade away overflows the `long`
+        // where the same count of months lands on the year range instead.
         let moved = match unit {
             7 => date.plus_days(amount),
-            8 => date.plus_days(amount.saturating_mul(7)),
+            8 => weeks(date, amount),
             9 => date.plus_months(amount),
             10 => date.plus_years(amount),
-            11 => date.plus_years(amount.saturating_mul(10)),
-            12 => date.plus_years(amount.saturating_mul(100)),
-            13 => date.plus_years(amount.saturating_mul(1000)),
+            11 => years(date, amount, 10),
+            12 => years(date, amount, 100),
+            13 => years(date, amount, 1_000),
             // An ERA away is the SAME date in the other era, which is what
             // setting the era field does.
             _ => {
                 let era = i64::from(u8::from(date.year >= 1));
-                return with_field(Temporal::Date(date), 27, era.saturating_add(amount), heap).map(
-                    |answer| match (answer, time) {
+                let Some(wanted) = era.checked_add(amount) else {
+                    return Err(overflowed(&crate::time::Overflow::Long));
+                };
+                return with_field(Temporal::Date(date), 27, wanted, heap).map(|answer| {
+                    match (answer, time) {
                         (Some(JValue::Ref(Some(made))), Some(time)) => {
                             let Some(HeapObject::Temporal(Temporal::Date(date))) = heap.get(made)
                             else {
@@ -2348,10 +2435,11 @@ fn shift_by_unit(
                             )))
                         }
                         (other, _) => other,
-                    },
-                );
+                    }
+                });
             }
         };
+        let moved = moved.map_err(|e| overflowed(&e))?;
         match time {
             None => Temporal::Date(moved),
             Some(time) => Temporal::DateTime(crate::time::DateTime { date: moved, time }),
@@ -2663,7 +2751,8 @@ fn temporal_method(
             dates.push(JValue::Ref(Some(heap.intern_temporal(Temporal::Date(at)))));
             at = at
                 .plus_months(i64::from(step.years) * 12 + i64::from(step.months))
-                .plus_days(i64::from(step.days));
+                .and_then(|at| at.plus_days(i64::from(step.days)))
+                .map_err(|e| overflowed(&e))?;
         }
         let stream = heap.alloc(HeapObject::Stream {
             source: crate::value::StreamSource::Fixed(dates),
@@ -2722,8 +2811,7 @@ fn temporal_method(
             Some(JValue::Int(n)) => i64::from(*n),
             _ => 0,
         };
-        let amount = if method == "minus" { -amount } else { amount };
-        return shift_by_unit(value, amount, unit, heap);
+        return shift_signed(value, amount, method == "plus", unit, heap);
     }
     // `until(end, unit)` is `unit.between(this, end)` — and the receiver has
     // to be handed over as a value, since `between` reads BOTH ends from its
@@ -2874,23 +2962,27 @@ fn temporal_method(
     match (value, method) {
         (Temporal::Date(date), _) if method.starts_with("plus") || method.starts_with("minus") => {
             let plus = method.starts_with("plus");
-            let amount = if plus { number() } else { -number() };
             let unit = if plus {
                 method.trim_start_matches("plus")
             } else {
                 method.trim_start_matches("minus")
             };
-            let moved = match unit {
-                "Days" => date.plus_days(amount),
-                "Weeks" => date.plus_days(amount.saturating_mul(7)),
-                "Months" => date.plus_months(amount),
-                "Years" => date.plus_years(amount),
+            let step: fn(
+                crate::time::Date,
+                i64,
+            ) -> Result<crate::time::Date, crate::time::Overflow> = match unit {
+                "Days" => crate::time::Date::plus_days,
+                "Weeks" => |date, amount| date.plus_days(crate::time::scaled(amount, 7)?),
+                "Months" => crate::time::Date::plus_months,
+                "Years" => crate::time::Date::plus_years,
                 _ => {
                     return Err(VmError::UnknownIntrinsic(format!(
                         "java/time/LocalDate.{method}"
                     )));
                 }
             };
+            let moved =
+                crate::time::shifted(date, number(), plus, step).map_err(|e| overflowed(&e))?;
             Ok(Some(JValue::Ref(Some(
                 heap.intern_temporal(Temporal::Date(moved)),
             ))))
@@ -12239,9 +12331,10 @@ pub fn invoke_static(
                         "Invalid value for DayOfYear (valid values 1 - 365/366): {day}"
                     )));
                 }
-                Ok(Some(JValue::Ref(Some(heap.intern_temporal(
-                    Temporal::Date(start.plus_days(day - 1)),
-                )))))
+                let made = start.plus_days(day - 1).map_err(|e| overflowed(&e))?;
+                Ok(Some(JValue::Ref(Some(
+                    heap.intern_temporal(Temporal::Date(made)),
+                ))))
             }
             "ofEpochDay" => {
                 let day = match args.first() {
@@ -12249,7 +12342,7 @@ pub fn invoke_static(
                     Some(JValue::Int(day)) => i64::from(*day),
                     _ => 0,
                 };
-                let date = crate::time::Date::from_epoch_day(day);
+                let date = crate::time::Date::of_epoch_day(day).map_err(|e| overflowed(&e))?;
                 Ok(Some(JValue::Ref(Some(
                     heap.intern_temporal(Temporal::Date(date)),
                 ))))
@@ -12469,28 +12562,27 @@ pub fn invoke_static(
                     heap.intern_temporal(Temporal::Duration(amount)),
                 ))))
             };
+            // Every factory but the two smallest counts SECONDS, so a count
+            // that will not scale into them is refused before any duration
+            // exists — `Duration.ofDays(Long.MAX_VALUE)` is `long overflow`,
+            // where `ofNanos(Long.MAX_VALUE)` is a duration.
+            let of_seconds = |heap: &mut Heap, per: i64| {
+                let seconds = crate::time::scaled(count, per).map_err(|e| overflowed(&e))?;
+                made(heap, crate::time::Duration { seconds, nanos: 0 })
+            };
             match method {
-                "ofDays" => made(
-                    heap,
-                    crate::time::Duration::of_nanos(
-                        count.saturating_mul(crate::time::NANOS_PER_DAY),
-                    ),
-                ),
-                "ofHours" => made(
-                    heap,
-                    crate::time::Duration::of_nanos(
-                        count.saturating_mul(crate::time::NANOS_PER_HOUR),
-                    ),
-                ),
-                "ofMinutes" => made(
-                    heap,
-                    crate::time::Duration::of_nanos(
-                        count.saturating_mul(crate::time::NANOS_PER_MINUTE),
-                    ),
-                ),
+                "ofDays" => of_seconds(heap, 86_400),
+                "ofHours" => of_seconds(heap, 3_600),
+                "ofMinutes" => of_seconds(heap, 60),
+                // Milliseconds and nanoseconds are SMALLER than a second, so
+                // they divide down into one and cannot overflow at all.
                 "ofMillis" => made(
                     heap,
-                    crate::time::Duration::of_nanos(count.saturating_mul(1_000_000)),
+                    crate::time::Duration {
+                        seconds: count.div_euclid(1_000),
+                        #[allow(clippy::cast_possible_truncation)]
+                        nanos: (count.rem_euclid(1_000) * 1_000_000) as i32,
+                    },
                 ),
                 "ofNanos" => made(heap, crate::time::Duration::of_nanos(count)),
                 // `ofSeconds(seconds)` and `ofSeconds(seconds, nanoAdjust)`.
@@ -12500,12 +12592,9 @@ pub fn invoke_static(
                         Some(JValue::Int(value)) => i64::from(*value),
                         _ => 0,
                     };
-                    made(
-                        heap,
-                        crate::time::Duration::of_nanos(
-                            count.saturating_mul(crate::time::NANOS_PER_SECOND) + adjust,
-                        ),
-                    )
+                    let amount = crate::time::Duration::of_seconds(count, adjust)
+                        .map_err(|e| overflowed(&e))?;
+                    made(heap, amount)
                 }
                 // `__of` is the compiler's way of asking for `ZERO`.
                 "__of" => made(heap, crate::time::Duration::of_nanos(0)),
@@ -12524,10 +12613,10 @@ pub fn invoke_static(
                              Unit must not have an estimated duration",
                         )));
                     };
-                    made(
-                        heap,
-                        crate::time::Duration::of_nanos(count.saturating_mul(nanos)),
-                    )
+                    let amount = crate::time::Duration::of_nanos(0)
+                        .plus_units(count, nanos)
+                        .map_err(|e| overflowed(&e))?;
+                    made(heap, amount)
                 }
                 "parse" => {
                     let text = match args.first() {
@@ -12553,14 +12642,25 @@ pub fn invoke_static(
                     // A DATE has no seconds, so a JDK refuses to measure one
                     // in them — `Duration.between(date, date)` is
                     // "Unsupported unit: Seconds", not a whole number of days.
+                    // In SECONDS and nanoseconds, not nanoseconds alone: the
+                    // whole calendar in nanoseconds is more than a `long`
+                    // holds, and the span between its two ends is a duration a
+                    // JDK answers.
                     let instant = |value: Temporal| match value {
-                        Temporal::Time(time) => Some(time.nano_of_day),
-                        Temporal::DateTime(when) => Some(
-                            when.date
-                                .to_epoch_day()
-                                .saturating_mul(crate::time::NANOS_PER_DAY)
-                                + when.time.nano_of_day,
-                        ),
+                        Temporal::Time(time) => Some((
+                            time.nano_of_day.div_euclid(crate::time::NANOS_PER_SECOND),
+                            time.nano_of_day.rem_euclid(crate::time::NANOS_PER_SECOND),
+                        )),
+                        Temporal::DateTime(when) => Some((
+                            when.date.to_epoch_day() * 86_400
+                                + when
+                                    .time
+                                    .nano_of_day
+                                    .div_euclid(crate::time::NANOS_PER_SECOND),
+                            when.time
+                                .nano_of_day
+                                .rem_euclid(crate::time::NANOS_PER_SECOND),
+                        )),
                         _ => None,
                     };
                     let (Some(start), Some(end)) = (read(0), read(1)) else {
@@ -12575,7 +12675,9 @@ pub fn invoke_static(
                     let (Some(from), Some(to)) = (instant(start), instant(end)) else {
                         return Err(throw("java.lang.ClassCastException: not a temporal"));
                     };
-                    made(heap, crate::time::Duration::of_nanos(to - from))
+                    let amount = crate::time::Duration::of_seconds(to.0 - from.0, to.1 - from.1)
+                        .map_err(|e| overflowed(&e))?;
+                    made(heap, amount)
                 }
                 _ => Err(VmError::UnknownIntrinsic(format!(
                     "java/time/Duration.{method}"
@@ -18906,7 +19008,7 @@ fn partial_date_method(
                 month: 1,
                 day: 1,
             };
-            date = date.plus_days(day - 1);
+            date = date.plus_days(day - 1).map_err(|e| overflowed(&e))?;
             made(heap, Temporal::Date(date))
         }
         (Temporal::Year(year), "atMonth") => {
@@ -19092,8 +19194,9 @@ fn shifted_years(year: i64, method: &str, amount: i64) -> Result<i32, VmError> {
 /// A year has to fit the range a JDK allows.
 fn shifted_year(year: i64) -> Result<i32, VmError> {
     if !(-999_999_999..=999_999_999).contains(&year) {
-        return Err(date_time_exception(&format!(
-            "Invalid value for Year (valid values -999999999 - 999999999): {year}"
+        return Err(date_time_exception(&crate::time::out_of_range(
+            crate::time::YEAR,
+            year,
         )));
     }
     Ok(i32::try_from(year).unwrap_or(0))

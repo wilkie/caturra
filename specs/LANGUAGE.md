@@ -15875,11 +15875,37 @@ not fit. A JDK writes both the other way round
 (`plusHours(-(hoursToSubtract % 24))`), and a `Month` and a `DayOfWeek` rotate
 by the same rule.
 
-A DATE has no such answer, and a JDK refuses rather than clamping: `long
-overflow` from `Math.addExact`, or the EpochDay/Year range. caturra's date and
-duration arithmetic still saturates there, which is declared in the sweep with
-its reason — making the whole of `time.rs` fallible is its own sitting, and it
-is the next one this list names.
+**A DATE has no such answer, and a JDK refuses rather than clamping.** It
+refuses in three different sentences, and which one a shift meets is not a
+detail: `Math.addExact` on the epoch day is `long overflow` before a date
+exists at all; a day outside the calendar is `Invalid value for EpochDay (valid
+values -365243219162 - 365241780471)`; and `plusMonths`/`plusYears` let the
+count WRAP and check only the year it reduces to, so `Long.MAX_VALUE` months
+and `Long.MIN_VALUE` months name the same year. Which of the three the same
+call meets depends on which side of the epoch the date is on — the year 2024
+overflows the long where the year -500 lands on the day range. A unit bigger
+than a year (`DECADES`, `CENTURIES`, `MILLENNIA`, `ERAS`) is a scale applied
+EXACTLY first, so it always fails on the long. `time.rs` answers a `Result` now
+and every one of its callers reports it; the ranges a complaint quotes are the
+`ChronoField` table's own, so a check and its wording cannot drift apart.
+
+**And a `Duration` is SECONDS and a nanosecond part, not a count of
+nanoseconds.** The whole difference is visible at the ends:
+`Duration.ofMillis(Long.MAX_VALUE)` is a duration a JDK holds and
+`ofDays(Long.MAX_VALUE)` is `long overflow`, and neither is representable as
+one `long` of nanoseconds — which is what caturra held, so everything big
+saturated to the same `PT2562047H47M16.854775807S` and `toNanos` answered where
+a JDK refuses. Each factory scales into the unit a JDK scales into (seconds for
+a day, an hour, a minute; a division for millis and nanos, which cannot
+overflow at all). `multipliedBy` is arithmetic no `long` can do: a JDK works in
+`BigDecimal` and quotes the whole product IN NANOSECONDS when it will not fit
+(`Exceeds capacity of Duration: 66408278665354385810400000000000`), and
+`negated()` is `multipliedBy(-1)`, which is why the smallest duration there is
+has no negative and says so in those same words. Along the way:
+`Duration.compareTo` is not a normalized -1/0/1 — with the seconds equal it is
+the nanosecond DIFFERENCE, which a program that prints the number sees;
+`dividedBy(0)` is "Cannot divide by zero" and not "/ by zero"; and
+`plus(Duration)` / `minus(Duration)` were not implemented at all.
 
 **And what a message SHOWS.** A JDK cannot encode an unpaired surrogate, so
 every complaint that quotes one shows a plain `?`; Rust cannot hold one either

@@ -251,20 +251,6 @@ KNOWN = [
         "a comparator caturra synthesized is not one of a JDK's named classes",
     ),
     (
-        # The bank's `long` list is ["1L", "-2L", MAX, MIN]; #2 and #3 are the
-        # two extremes, so this declares those and leaves the ordinary values
-        # compared as before.
-        r"^java\.time\.(LocalDate|LocalDateTime|Duration)"
-        r"\.(plus|minus|of|multipliedBy)\w*\(long[,)][^#]*#[23]\b",
-        "caturra's date and duration arithmetic — and the factories that take "
-        "a raw count — SATURATE where a JDK refuses: `long overflow` from "
-        "`Math.addExact`, or the EpochDay/Year range, "
-        "so a shift by `Long.MAX_VALUE` answers a clamped value here and an "
-        "exception there. Making the whole of `time.rs` fallible is its own "
-        "sitting; `LocalTime` and the two enums are done, because a time of "
-        "day reduces modulo a day and has an answer for every long",
-    ),
-    (
         r"^java\.nio\.file\.Path\w*\.\w+\(java\.lang\.String[,)][^#]*#[45]\b",
         "a JDK validates the TEXT of a path — a NUL is refused outright and a "
         "lone surrogate cannot be encoded in the platform charset — where "

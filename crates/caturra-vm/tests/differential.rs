@@ -55257,3 +55257,177 @@ public class Reflected {
 }
 "#
 );
+
+// A DATE has no answer for every long, and a JDK does not invent one: it
+// refuses, in three different sentences. `Math.addExact` on the epoch day is
+// `long overflow` before a date exists at all; a day outside the calendar is
+// `Invalid value for EpochDay`; and `plusMonths`/`plusYears` let the count
+// WRAP and check the year they reduce to, so `Long.MAX_VALUE` months and
+// `Long.MIN_VALUE` months name the same year. Which of the three a shift meets
+// depends on which side of the epoch the date is on, so the same call answers
+// differently for the year 2024 and the year -500.
+//
+// A `minusX(Long.MIN_VALUE)` is not `plusX` of anything: there is no negative,
+// so a JDK writes it as `plusX(MAX)` and then one more — two shifts, and the
+// first fails by itself.
+//
+// caturra clamped all of it, so every one of these was a date.
+differential_test!(
+    the_dates_no_calendar_reaches,
+    "TimeOver",
+    r#"
+import java.time.*;
+import java.time.temporal.*;
+public class TimeOver {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    LocalDate d = LocalDate.of(2024, 3, 14);
+    LocalDate old = LocalDate.of(-500, 3, 14);
+    LocalDateTime t = LocalDateTime.of(2024, 3, 14, 10, 15);
+    long MAX = Long.MAX_VALUE, MIN = Long.MIN_VALUE;
+    s("d-plusDays-max", () -> d.plusDays(MAX));
+    s("d-plusDays-min", () -> d.plusDays(MIN));
+    s("d-minusDays-max", () -> d.minusDays(MAX));
+    s("d-minusDays-min", () -> d.minusDays(MIN));
+    s("old-plusDays-max", () -> old.plusDays(MAX));
+    s("old-minusDays-min", () -> old.minusDays(MIN));
+    s("d-plusWeeks-max", () -> d.plusWeeks(MAX));
+    s("d-minusWeeks-min", () -> d.minusWeeks(MIN));
+    s("d-plusMonths-max", () -> d.plusMonths(MAX));
+    s("d-plusMonths-min", () -> d.plusMonths(MIN));
+    s("d-minusMonths-min", () -> d.minusMonths(MIN));
+    s("d-plusYears-max", () -> d.plusYears(MAX));
+    s("d-plusYears-min", () -> d.plusYears(MIN));
+    s("d-minusYears-min", () -> d.minusYears(MIN));
+    s("d-plus-days", () -> d.plus(MAX, ChronoUnit.DAYS));
+    s("d-minus-days", () -> d.minus(MIN, ChronoUnit.DAYS));
+    s("d-plus-weeks", () -> d.plus(MAX, ChronoUnit.WEEKS));
+    s("d-plus-months", () -> d.plus(MAX, ChronoUnit.MONTHS));
+    s("d-plus-decades", () -> d.plus(MAX, ChronoUnit.DECADES));
+    s("d-plus-centuries", () -> d.plus(MAX, ChronoUnit.CENTURIES));
+    s("d-plus-millennia", () -> d.plus(MAX, ChronoUnit.MILLENNIA));
+    s("d-plus-eras", () -> d.plus(MAX, ChronoUnit.ERAS));
+    s("d-ofEpochDay-max", () -> LocalDate.ofEpochDay(MAX));
+    s("d-ofEpochDay-min", () -> LocalDate.ofEpochDay(MIN));
+    s("d-ofEpochDay-last", () -> LocalDate.ofEpochDay(365241780471L));
+    s("d-ofEpochDay-past", () -> LocalDate.ofEpochDay(365241780472L));
+    s("d-ofEpochDay-first", () -> LocalDate.ofEpochDay(-365243219162L));
+    s("d-ofEpochDay-before", () -> LocalDate.ofEpochDay(-365243219163L));
+    s("d-with-epochday", () -> d.with(ChronoField.EPOCH_DAY, MAX));
+    s("d-with-prolepticmonth", () -> d.with(ChronoField.PROLEPTIC_MONTH, MAX));
+    s("d-with-year", () -> d.with(ChronoField.YEAR, MAX));
+    s("d-plusDays-2", () -> d.plusDays(2));
+    s("t-plusDays-max", () -> t.plusDays(MAX));
+    s("t-minusDays-min", () -> t.minusDays(MIN));
+    s("t-plusWeeks-min", () -> t.plusWeeks(MIN));
+    s("t-plusYears-max", () -> t.plusYears(MAX));
+    s("t-plusSeconds-max", () -> t.plusSeconds(MAX));
+    s("t-plusSeconds-min", () -> t.plusSeconds(MIN));
+    s("t-plusHours-max", () -> t.plusHours(MAX));
+    s("t-plusNanos-max", () -> t.plusNanos(MAX));
+    s("t-minusNanos-min", () -> t.minusNanos(MIN));
+    s("t-plus-days", () -> t.plus(MAX, ChronoUnit.DAYS));
+    s("t-with-epochday", () -> t.with(ChronoField.EPOCH_DAY, MAX));
+    s("t-plusHours-2", () -> t.plusHours(2));
+    s("ym-plusMonths", () -> YearMonth.of(2024, 3).plusMonths(MAX));
+    s("ym-plusYears", () -> YearMonth.of(2024, 3).plusYears(MAX));
+    s("y-plusYears", () -> Year.of(2024).plusYears(MAX));
+    s("d-until", () -> LocalDate.ofEpochDay(-365243219162L).until(LocalDate.ofEpochDay(365241780471L)));
+  }
+}
+"#
+);
+
+// A `Duration` is SECONDS and a nanosecond part, and the difference from a
+// count of nanoseconds is the whole of this: `ofMillis(Long.MAX_VALUE)` is a
+// duration a JDK holds and `ofDays(Long.MAX_VALUE)` is `long overflow`, and
+// neither is representable as one long of nanoseconds. Holding the total in a
+// long instead saturated at both ends — `PT2562047H47M16.854775807S` for
+// everything big — and made `toNanos` answer where a JDK refuses.
+//
+// `multipliedBy` is arithmetic a `long` cannot do at all: a JDK works in
+// `BigDecimal` and names the whole product IN NANOSECONDS when it will not
+// fit. `negated()` is `multipliedBy(-1)`, which is why the smallest duration
+// there is has no negative and says so with that same sentence.
+differential_test!(
+    the_durations_no_long_holds,
+    "DurOver",
+    r#"
+import java.time.*;
+import java.time.temporal.*;
+public class DurOver {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    Duration u = Duration.ofHours(2);
+    long MAX = Long.MAX_VALUE, MIN = Long.MIN_VALUE;
+    s("ofDays-max", () -> Duration.ofDays(MAX));
+    s("ofHours-max", () -> Duration.ofHours(MAX));
+    s("ofMinutes-max", () -> Duration.ofMinutes(MAX));
+    s("ofMillis-max", () -> Duration.ofMillis(MAX));
+    s("ofMillis-min", () -> Duration.ofMillis(MIN));
+    s("ofNanos-max", () -> Duration.ofNanos(MAX));
+    s("ofSeconds-both", () -> Duration.ofSeconds(MAX, MAX));
+    s("ofSeconds-maxnano", () -> Duration.ofSeconds(MAX, 1000000000L));
+    s("ofSeconds-adjust", () -> Duration.ofSeconds(1, -1500000000L));
+    s("of-days", () -> Duration.of(MAX, ChronoUnit.DAYS));
+    s("plusSeconds-max", () -> u.plusSeconds(MAX));
+    s("plusSeconds-min", () -> u.plusSeconds(MIN));
+    s("minusSeconds-min", () -> u.minusSeconds(MIN));
+    s("plusMinutes-max", () -> u.plusMinutes(MAX));
+    s("plusDays-max", () -> u.plusDays(MAX));
+    s("plusMillis-max", () -> u.plusMillis(MAX));
+    s("plusNanos-max", () -> u.plusNanos(MAX));
+    s("plus-unit-days", () -> u.plus(MAX, ChronoUnit.DAYS));
+    s("plus-unit-hours", () -> u.plus(MAX, ChronoUnit.HOURS));
+    s("plus-unit-micros", () -> u.plus(MAX, ChronoUnit.MICROS));
+    s("plus-duration", () -> Duration.ofSeconds(MAX).plus(Duration.ofSeconds(1)));
+    s("minus-duration", () -> Duration.ofSeconds(MIN).minus(Duration.ofSeconds(1)));
+    s("plus-duration-ok", () -> u.plus(Duration.ofNanos(600000000)));
+    s("minus-duration-ok", () -> u.minus(Duration.ofNanos(600000000)));
+    s("multipliedBy-max", () -> u.multipliedBy(MAX));
+    s("multipliedBy-min", () -> u.multipliedBy(MIN));
+    s("multipliedBy-0", () -> Duration.ofSeconds(MAX).multipliedBy(0));
+    s("multipliedBy-1", () -> Duration.ofSeconds(MAX).multipliedBy(1));
+    s("multipliedBy-neg", () -> Duration.ofSeconds(MAX).multipliedBy(-1));
+    s("multipliedBy-2", () -> u.multipliedBy(2));
+    s("negated-min", () -> Duration.ofSeconds(MIN).negated());
+    s("abs-min", () -> Duration.ofSeconds(MIN).abs());
+    s("dividedBy-big", () -> Duration.ofSeconds(MAX).dividedBy(3));
+    s("dividedBy-neg", () -> Duration.ofSeconds(MIN).dividedBy(-1));
+    s("dividedBy-zero", () -> u.dividedBy(0));
+    s("dividedBy-dur", () -> Duration.ofSeconds(MAX).dividedBy(Duration.ofNanos(1)));
+    s("dividedBy-dur-zero", () -> u.dividedBy(Duration.ZERO));
+    s("toMillis-big", () -> Duration.ofSeconds(MAX).toMillis());
+    s("toNanos-big", () -> Duration.ofSeconds(MAX).toNanos());
+    s("toDays-big", () -> Duration.ofSeconds(MAX).toDays());
+    s("toHours-big", () -> Duration.ofSeconds(MAX).toHours());
+    s("toMinutes-big", () -> Duration.ofSeconds(MAX).toMinutes());
+    s("toString-big", () -> Duration.ofSeconds(MAX, 999999999L).toString());
+    s("parts-big", () -> { Duration b = Duration.ofSeconds(MAX, 123456789L);
+      return b.toDaysPart()+","+b.toHoursPart()+","+b.toMinutesPart()+","+b.toSecondsPart()+","+b.toMillisPart()+","+b.toNanosPart(); });
+    s("parts-neg", () -> { Duration b = Duration.ofSeconds(-3725, 500000000L);
+      return b.toDaysPart()+","+b.toHoursPart()+","+b.toMinutesPart()+","+b.toSecondsPart()+","+b.toMillisPart()+","+b.toNanosPart(); });
+    s("neg-toMillis", () -> Duration.ofSeconds(-1, 500000000).toMillis());
+    s("truncatedTo-big", () -> Duration.ofSeconds(MAX).truncatedTo(ChronoUnit.HOURS));
+    s("truncatedTo-neg", () -> Duration.ofSeconds(-5, 500).truncatedTo(ChronoUnit.SECONDS));
+    s("compare-big", () -> Duration.ofSeconds(MAX).compareTo(Duration.ofSeconds(MAX, 1)));
+    // Not a normalized -1/0/1: with the seconds equal it is the nanosecond
+    // DIFFERENCE, and a program that prints the number sees it.
+    s("compare-nanos", () -> Duration.ofSeconds(1, 5).compareTo(Duration.ofSeconds(1, 2)));
+    s("compare-nanos-back", () -> Duration.ofSeconds(1, 2).compareTo(Duration.ofSeconds(1, 5)));
+    s("compare-nanos-wide", () -> Duration.ofSeconds(1, 999999999).compareTo(Duration.ofSeconds(1, 0)));
+    s("compare-seconds", () -> Duration.ofSeconds(9).compareTo(Duration.ofSeconds(2)));
+    s("between-big", () -> Duration.between(LocalDateTime.of(-999999999,1,1,0,0), LocalDateTime.of(999999999,12,31,23,59)));
+    s("parse-big", () -> Duration.parse("PT2562047788015215H30M7.999999999S"));
+  }
+}
+"#
+);

@@ -21,6 +21,98 @@ pub struct Date {
     pub day: u8,
 }
 
+/// What a shift in `java.time` can end in when the answer is not a date (or a
+/// duration) at all. A JDK has three complaints here and they are not
+/// interchangeable: an addition that leaves the `long` range is an
+/// `ArithmeticException` before any date exists, a result outside the calendar
+/// is a `DateTimeException` naming the FIELD and its range, and a `Duration`
+/// too big to hold quotes the whole count in nanoseconds. Clamping instead
+/// answered a date for a shift a JDK refuses outright.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Overflow {
+    /// `Math.addExact`/`Math.multiplyExact`, before a date is built at all.
+    Long,
+    /// A day number outside `LocalDate`'s own range.
+    EpochDay(i64),
+    /// A year outside it. `plusMonths` and `plusYears` land here rather than
+    /// on `Long`, because a JDK checks the year they reduce to and lets the
+    /// count itself wrap on the way.
+    Year(i64),
+    /// An `ArithmeticException` with words of its own — what `Duration` says
+    /// when a product will not fit in one.
+    Arithmetic(String),
+}
+
+impl Overflow {
+    /// The exception a JDK raises, class and message together.
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::Long => String::from("java.lang.ArithmeticException: long overflow"),
+            Self::EpochDay(value) => {
+                format!(
+                    "java.time.DateTimeException: {}",
+                    out_of_range(EPOCH_DAY, *value)
+                )
+            }
+            Self::Year(value) => {
+                format!(
+                    "java.time.DateTimeException: {}",
+                    out_of_range(YEAR, *value)
+                )
+            }
+            Self::Arithmetic(text) => format!("java.lang.ArithmeticException: {text}"),
+        }
+    }
+}
+
+/// `minusX(n)` as a JDK writes it: `plusX(-n)`, except at `Long.MIN_VALUE`,
+/// which has no negative — there it is `plusX(MAX)` and then one more. The two
+/// are not one shift, and the difference shows: the first half can fail by
+/// itself, and on an ordinary date it does.
+///
+/// # Errors
+/// Whatever the shift itself fails with, the FIRST half first.
+pub fn shifted<T: Copy>(
+    value: T,
+    amount: i64,
+    plus: bool,
+    step: impl Fn(T, i64) -> Result<T, Overflow>,
+) -> Result<T, Overflow> {
+    if plus {
+        return step(value, amount);
+    }
+    match amount.checked_neg() {
+        Some(back) => step(value, back),
+        None => step(step(value, i64::MAX)?, 1),
+    }
+}
+
+/// `Math.multiplyExact` — a scale a shift applies before it moves anything.
+///
+/// # Errors
+/// A product outside the `long` range.
+pub fn scaled(amount: i64, per: i64) -> Result<i64, Overflow> {
+    amount.checked_mul(per).ok_or(Overflow::Long)
+}
+
+/// What a `DateTimeException` says about a value a field will not take, built
+/// from the field's OWN range — the same table `range()` answers from, so the
+/// numbers a complaint quotes and the numbers a value is checked against
+/// cannot drift apart.
+#[must_use]
+pub fn out_of_range(field: u8, value: i64) -> String {
+    format!(
+        "Invalid value for {} (valid values {}): {value}",
+        field_info(field).text,
+        field_range(field).text()
+    )
+}
+
+/// The two fields a date shift is judged against, as `ChronoField` numbers.
+pub const EPOCH_DAY: u8 = 20;
+pub const YEAR: u8 = 26;
+
 /// The year range `LocalDate` accepts (JLS-independent; `java.time`'s own).
 const MIN_YEAR: i32 = -999_999_999;
 const MAX_YEAR: i32 = 999_999_999;
@@ -95,9 +187,7 @@ impl Date {
     /// each way it can be wrong. `Err` is the `DateTimeException`'s text.
     pub fn of(year: i32, month: i32, day: i32) -> Result<Self, String> {
         if !(MIN_YEAR..=MAX_YEAR).contains(&year) {
-            return Err(format!(
-                "Invalid value for Year (valid values -999999999 - 999999999): {year}"
-            ));
+            return Err(out_of_range(YEAR, i64::from(year)));
         }
         if !(1..=12).contains(&month) {
             return Err(format!(
@@ -185,33 +275,78 @@ impl Date {
         }
     }
 
-    #[must_use]
-    pub fn plus_days(self, days: i64) -> Self {
-        Self::from_epoch_day(self.to_epoch_day().saturating_add(days))
+    /// `plusDays`, which a JDK computes with `Math.addExact` and then hands
+    /// to `ofEpochDay` — two failures, worded differently, and which one a
+    /// date meets depends on which side of the epoch it is on.
+    ///
+    /// # Errors
+    /// A sum outside the `long` range, or a day outside the calendar.
+    pub fn plus_days(self, days: i64) -> Result<Self, Overflow> {
+        let moved = self
+            .to_epoch_day()
+            .checked_add(days)
+            .ok_or(Overflow::Long)?;
+        Self::of_epoch_day(moved)
+    }
+
+    /// `LocalDate.ofEpochDay` — the range-checked half of the shift above, and
+    /// the factory a program can call itself.
+    ///
+    /// # Errors
+    /// A day outside the calendar.
+    pub fn of_epoch_day(epoch_day: i64) -> Result<Self, Overflow> {
+        if !field_range(EPOCH_DAY).contains(epoch_day) {
+            return Err(Overflow::EpochDay(epoch_day));
+        }
+        Ok(Self::from_epoch_day(epoch_day))
     }
 
     /// `plusMonths`, with `java.time`'s clamping: the day is kept if the new
     /// month has it and pulled back to that month's last day if not, so
     /// `2024-01-31 plus one month` is `2024-02-29`.
-    #[must_use]
-    pub fn plus_months(self, months: i64) -> Self {
-        let total = i64::from(self.year) * 12 + i64::from(self.month - 1) + months;
+    ///
+    /// # Errors
+    /// A year outside the calendar. The month count itself WRAPS on the way,
+    /// as a JDK's does — it is a plain `+`, not an exact one — and only the
+    /// year it divides down to is checked, which is why `plusMonths` at
+    /// `Long.MAX_VALUE` and at `Long.MIN_VALUE` name the SAME year.
+    pub fn plus_months(self, months: i64) -> Result<Self, Overflow> {
+        let total = (i64::from(self.year) * 12)
+            .wrapping_add(i64::from(self.month - 1))
+            .wrapping_add(months);
         let year = total.div_euclid(12);
         #[allow(clippy::cast_possible_truncation)]
         let month = (total.rem_euclid(12) + 1) as u8;
-        let year = year.clamp(i64::from(MIN_YEAR), i64::from(MAX_YEAR));
+        if !(i64::from(MIN_YEAR)..=i64::from(MAX_YEAR)).contains(&year) {
+            return Err(Overflow::Year(year));
+        }
         #[allow(clippy::cast_possible_truncation)]
         let year = year as i32;
-        Self {
+        Ok(Self {
             year,
             month,
             day: self.day.min(length_of_month(year, month)),
-        }
+        })
     }
 
-    #[must_use]
-    pub fn plus_years(self, years: i64) -> Self {
-        self.plus_months(years.saturating_mul(12))
+    /// `plusYears` is not twelve `plusMonths`: a JDK checks `year + n` itself,
+    /// wrapped, so the year its complaint names is the wrapped SUM and not the
+    /// month count divided back down.
+    ///
+    /// # Errors
+    /// A year outside the calendar.
+    pub fn plus_years(self, years: i64) -> Result<Self, Overflow> {
+        let year = i64::from(self.year).wrapping_add(years);
+        if !(i64::from(MIN_YEAR)..=i64::from(MAX_YEAR)).contains(&year) {
+            return Err(Overflow::Year(year));
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let year = year as i32;
+        Ok(Self {
+            year,
+            month: self.month,
+            day: self.day.min(length_of_month(year, self.month)),
+        })
     }
 
     /// 1 = Monday, matching `DayOfWeek.getValue()`.
@@ -331,15 +466,22 @@ mod tests {
         assert_eq!(d.to_epoch_day(), 19737);
         assert_eq!(d.day_of_week(), 1); // MONDAY
         assert_eq!(d.day_of_year(), 15);
-        assert_eq!(d.plus_days(30).to_string(), "2024-02-14");
-        assert_eq!(d.plus_months(1).to_string(), "2024-02-15");
-        assert_eq!(d.plus_years(1).to_string(), "2025-01-15");
-        assert_eq!(d.plus_days(-21).to_string(), "2023-12-25");
+        assert_eq!(d.plus_days(30).expect("in range").to_string(), "2024-02-14");
+        assert_eq!(
+            d.plus_months(1).expect("in range").to_string(),
+            "2024-02-15"
+        );
+        assert_eq!(d.plus_years(1).expect("in range").to_string(), "2025-01-15");
+        assert_eq!(
+            d.plus_days(-21).expect("in range").to_string(),
+            "2023-12-25"
+        );
         // The clamping rule, both ways round.
         assert_eq!(
             Date::of(2024, 1, 31)
                 .expect("valid")
                 .plus_months(1)
+                .expect("in range")
                 .to_string(),
             "2024-02-29"
         );
@@ -347,6 +489,7 @@ mod tests {
             Date::of(2024, 2, 29)
                 .expect("valid")
                 .plus_years(1)
+                .expect("in range")
                 .to_string(),
             "2025-02-28"
         );
@@ -354,6 +497,7 @@ mod tests {
             Date::of(2023, 3, 31)
                 .expect("valid")
                 .plus_months(-1)
+                .expect("in range")
                 .to_string(),
             "2023-02-28"
         );
@@ -361,6 +505,7 @@ mod tests {
             Date::of(2024, 12, 31)
                 .expect("valid")
                 .plus_days(1)
+                .expect("in range")
                 .to_string(),
             "2025-01-01"
         );
@@ -405,6 +550,59 @@ mod tests {
         assert_eq!(
             parse_date("2024-01-15").expect("valid").to_string(),
             "2024-01-15"
+        );
+    }
+
+    /// The three ways a shift stops being a date, each read off a real JDK 11.
+    /// The point of them here is the SPLIT: which complaint a call meets is
+    /// not a property of the call, it is a property of where the date sits.
+    #[test]
+    fn refuses_what_a_jdk_refuses() {
+        use super::Overflow;
+        let d = Date::of(2024, 3, 14).expect("valid");
+        let old = Date::of(-500, 3, 14).expect("valid");
+        // Past the epoch the sum leaves the `long` first; before it, the sum
+        // fits and the DAY is what is out of range.
+        assert_eq!(d.plus_days(i64::MAX), Err(Overflow::Long));
+        assert_eq!(
+            old.plus_days(i64::MAX),
+            Err(Overflow::EpochDay(9_223_372_036_853_873_730))
+        );
+        assert_eq!(
+            d.plus_days(i64::MIN),
+            Err(Overflow::EpochDay(-9_223_372_036_854_756_012))
+        );
+        // The month count wraps, so both ends name the same year.
+        assert_eq!(
+            d.plus_months(i64::MAX),
+            Err(Overflow::Year(-768_614_336_404_562_627))
+        );
+        assert_eq!(
+            d.plus_months(i64::MIN),
+            Err(Overflow::Year(-768_614_336_404_562_627))
+        );
+        // `plusYears` checks the YEAR itself, not the months it would be.
+        assert_eq!(
+            d.plus_years(i64::MAX),
+            Err(Overflow::Year(-9_223_372_036_854_773_785))
+        );
+        assert_eq!(
+            Date::of_epoch_day(365_241_780_471).map(|d| d.to_string()),
+            Ok(String::from("+999999999-12-31"))
+        );
+        assert_eq!(
+            Date::of_epoch_day(365_241_780_472),
+            Err(Overflow::EpochDay(365_241_780_472))
+        );
+        assert_eq!(
+            Overflow::EpochDay(1).message(),
+            "java.time.DateTimeException: Invalid value for EpochDay \
+             (valid values -365243219162 - 365241780471): 1"
+        );
+        assert_eq!(
+            Overflow::Year(1).message(),
+            "java.time.DateTimeException: Invalid value for Year \
+             (valid values -999999999 - 999999999): 1"
         );
     }
 
@@ -595,12 +793,29 @@ pub struct DateTime {
 impl DateTime {
     /// Add nanoseconds, carrying whole days into the DATE — which is the only
     /// thing a `LocalDateTime` does that its two halves do not.
-    #[must_use]
-    pub fn plus_nanos(self, nanos: i64) -> Self {
-        Self {
-            date: self.date.plus_days(self.time.overflow_days(nanos)),
-            time: self.time.plus_nanos(nanos),
-        }
+    /// # Errors
+    /// A date outside the calendar once the whole days have carried.
+    pub fn plus_nanos(self, nanos: i64) -> Result<Self, Overflow> {
+        self.plus_units(nanos, 1)
+    }
+
+    /// Add `amount` of a unit `nanos` long. The count is held in 128 bits on
+    /// the way, because a JDK divides it down to DAYS before it multiplies
+    /// anything: `plusHours(Long.MAX_VALUE)` is more nanoseconds than a `long`
+    /// can hold, and a JDK still has an answer for it — a date out of range,
+    /// not an arithmetic overflow.
+    ///
+    /// # Errors
+    /// A date outside the calendar.
+    pub fn plus_units(self, amount: i64, nanos: i64) -> Result<Self, Overflow> {
+        let per_day = i128::from(NANOS_PER_DAY);
+        let total = i128::from(self.time.nano_of_day) + i128::from(amount) * i128::from(nanos);
+        let days = i64::try_from(total.div_euclid(per_day)).map_err(|_| Overflow::Long)?;
+        let nano_of_day = i64::try_from(total.rem_euclid(per_day)).unwrap_or(0);
+        Ok(Self {
+            date: self.date.plus_days(days)?,
+            time: Time { nano_of_day },
+        })
     }
 }
 
@@ -639,6 +854,8 @@ pub struct Duration {
 }
 
 impl Duration {
+    /// `Duration.ofNanos` — a count of nanoseconds, split the way a JDK keeps
+    /// it, with the nanosecond part never negative.
     #[must_use]
     pub fn of_nanos(total: i64) -> Self {
         let seconds = total.div_euclid(NANOS_PER_SECOND);
@@ -647,11 +864,142 @@ impl Duration {
         Self { seconds, nanos }
     }
 
+    /// `Duration.ofSeconds(seconds, nanoAdjustment)` — the adjustment carries
+    /// whole seconds, and it is that carry, not the split, that can overflow.
+    ///
+    /// # Errors
+    /// A second count outside the `long` range.
+    pub fn of_seconds(seconds: i64, nano_adjust: i64) -> Result<Self, Overflow> {
+        let seconds = seconds
+            .checked_add(nano_adjust.div_euclid(NANOS_PER_SECOND))
+            .ok_or(Overflow::Long)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let nanos = nano_adjust.rem_euclid(NANOS_PER_SECOND) as i32;
+        Ok(Self { seconds, nanos })
+    }
+
+    /// The whole of it in nanoseconds, exactly — a `BigInteger` in a JDK, and
+    /// the number its "exceeds capacity" complaint quotes.
     #[must_use]
-    pub fn total_nanos(self) -> i64 {
-        self.seconds
-            .saturating_mul(NANOS_PER_SECOND)
-            .saturating_add(i64::from(self.nanos))
+    pub fn nanos_exact(self) -> crate::bigint::BigInt {
+        crate::bigint::BigInt::from_i64(self.seconds)
+            .multiply(&crate::bigint::BigInt::from_i64(NANOS_PER_SECOND))
+            .add(&crate::bigint::BigInt::from_i64(i64::from(self.nanos)))
+    }
+
+    /// Rebuild from an exact nanosecond count, refusing what will not fit —
+    /// `create(BigDecimal)` in a JDK, and the only place the "Exceeds
+    /// capacity" wording comes from.
+    fn of_nanos_exact(total: &crate::bigint::BigInt) -> Result<Self, Overflow> {
+        let per = crate::bigint::BigInt::from_i64(NANOS_PER_SECOND);
+        let Some((seconds, nanos)) = total.divide_and_remainder(&per) else {
+            return Err(Overflow::Long);
+        };
+        let Some(seconds) = seconds.to_i64_exact() else {
+            return Err(Overflow::Arithmetic(format!(
+                "Exceeds capacity of Duration: {}",
+                total.to_text(10)
+            )));
+        };
+        // The remainder carries the DIVIDEND's sign, so it is normalized the
+        // way `ofSeconds` normalizes any adjustment.
+        Self::of_seconds(seconds, nanos.to_i64())
+    }
+
+    /// `plus(secondsToAdd, nanosToAdd)` — the one addition every `plusX` and
+    /// `minusX` on a `Duration` is written in terms of.
+    ///
+    /// # Errors
+    /// A second count outside the `long` range.
+    pub fn plus(self, seconds: i64, nanos: i64) -> Result<Self, Overflow> {
+        let moved = self.seconds.checked_add(seconds).ok_or(Overflow::Long)?;
+        let moved = moved
+            .checked_add(nanos / NANOS_PER_SECOND)
+            .ok_or(Overflow::Long)?;
+        Self::of_seconds(moved, i64::from(self.nanos) + nanos % NANOS_PER_SECOND)
+    }
+
+    /// Add `amount` of a unit that is `nanos` long. Units of a second and up
+    /// scale into SECONDS, which is why `plusHours(Long.MAX_VALUE)` fails on
+    /// the multiplication and `plusNanos(Long.MAX_VALUE)` has an answer.
+    ///
+    /// # Errors
+    /// A count outside the `long` range.
+    pub fn plus_units(self, amount: i64, nanos: i64) -> Result<Self, Overflow> {
+        if nanos >= NANOS_PER_SECOND {
+            return self.plus(scaled(amount, nanos / NANOS_PER_SECOND)?, 0);
+        }
+        // Below a second the count is split first, so the seconds it carries
+        // are exact and only the leftover is nanoseconds.
+        let per = NANOS_PER_SECOND / nanos;
+        self.plus(amount / per, (amount % per) * nanos)
+    }
+
+    /// `multipliedBy` — a JDK does this in `BigDecimal` and refuses a product
+    /// that will not fit, naming the whole count in nanoseconds.
+    ///
+    /// # Errors
+    /// A product too big for a `Duration`.
+    pub fn multiplied_by(self, by: i64) -> Result<Self, Overflow> {
+        if by == 1 {
+            return Ok(self);
+        }
+        let total = self
+            .nanos_exact()
+            .multiply(&crate::bigint::BigInt::from_i64(by));
+        Self::of_nanos_exact(&total)
+    }
+
+    /// `dividedBy(long)` — truncating toward zero, as `RoundingMode.DOWN` on
+    /// the nanosecond scale does.
+    ///
+    /// # Errors
+    /// A quotient too big for a `Duration` — which `-1` reaches from the
+    /// smallest one there is.
+    pub fn divided_by(self, by: i64) -> Result<Self, Overflow> {
+        let Some((quotient, _)) = self
+            .nanos_exact()
+            .divide_and_remainder(&crate::bigint::BigInt::from_i64(by))
+        else {
+            return Err(Overflow::Arithmetic(String::from("Cannot divide by zero")));
+        };
+        Self::of_nanos_exact(&quotient)
+    }
+
+    /// `dividedBy(Duration)` — how many of the other fit in this one.
+    ///
+    /// # Errors
+    /// A count that is not a `long`, which a JDK reports as bare "Overflow".
+    pub fn divided_by_duration(self, other: Self) -> Result<i64, Overflow> {
+        let Some((quotient, _)) = self
+            .nanos_exact()
+            .divide_and_remainder(&other.nanos_exact())
+        else {
+            return Err(Overflow::Arithmetic(String::from("Division by zero")));
+        };
+        quotient
+            .to_i64_exact()
+            .ok_or_else(|| Overflow::Arithmetic(String::from("Overflow")))
+    }
+
+    /// The whole of it in one unit — `toNanos` and `toMillis` are the two that
+    /// can fail, because they are the two a `long` may not hold.
+    ///
+    /// # Errors
+    /// A count outside the `long` range.
+    pub fn total_in(self, nanos_per_unit: i64) -> Result<i64, Overflow> {
+        // The pieces are moved so they share a sign before they are combined,
+        // which is what makes the truncation go toward zero.
+        let (seconds, nanos) = if self.seconds < 0 {
+            (self.seconds + 1, i64::from(self.nanos) - NANOS_PER_SECOND)
+        } else {
+            (self.seconds, i64::from(self.nanos))
+        };
+        let per = NANOS_PER_SECOND / nanos_per_unit;
+        let whole = seconds.checked_mul(per).ok_or(Overflow::Long)?;
+        whole
+            .checked_add(nanos / nanos_per_unit)
+            .ok_or(Overflow::Long)
     }
 
     #[must_use]
@@ -666,18 +1014,19 @@ impl Duration {
 
     /// The PART of each unit, as `java.time`'s `toXPart` reads them: the
     /// hours of a duration that also has minutes in it, not the whole of it
-    /// in hours.
+    /// in hours. Every one of them is read off the SECONDS, so none can
+    /// overflow the way `toNanos` can.
     #[must_use]
     pub fn part(self, unit: char) -> i64 {
-        let total = self.total_nanos();
         match unit {
             // The PART within a day — `toHours` is the whole span, and
             // `toHoursPart` is what is left after the days are taken out.
-            'H' => total / NANOS_PER_HOUR % 24,
-            'M' => total / NANOS_PER_MINUTE % 60,
-            'S' => total / NANOS_PER_SECOND % 60,
-            'm' => total / 1_000_000 % 1_000,
-            _ => total % NANOS_PER_SECOND,
+            'H' => self.seconds / 3_600 % 24,
+            'M' => self.seconds / 60 % 60,
+            'S' => self.seconds % 60,
+            'D' => self.seconds / 86_400,
+            'm' => i64::from(self.nanos) / 1_000_000,
+            _ => i64::from(self.nanos),
         }
     }
 }
@@ -760,7 +1109,9 @@ impl Period {
         let mut days = i32::from(end.day) - i32::from(start.day);
         if total_months > 0 && days < 0 {
             total_months -= 1;
-            let moved = start.plus_months(total_months);
+            // Between two REAL dates, so the shift lands inside the
+            // calendar by construction and the error cannot happen.
+            let moved = start.plus_months(total_months).unwrap_or(start);
             #[allow(clippy::cast_possible_truncation)]
             let difference = (end.to_epoch_day() - moved.to_epoch_day()) as i32;
             days = difference;
