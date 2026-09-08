@@ -4828,6 +4828,8 @@ fn constant_type(constant: BuiltinConstant) -> JType {
         BuiltinConstant::Long(_) => JType::Long,
         BuiltinConstant::Float(_) => JType::Float,
         BuiltinConstant::Int(_) => JType::Int,
+        BuiltinConstant::Byte(_) => JType::Byte,
+        BuiltinConstant::Short(_) => JType::Short,
     }
 }
 
@@ -23494,6 +23496,13 @@ pub(crate) enum BuiltinConstant {
     Bool(bool),
     Long(i64),
     Float(f32),
+    /// `Byte.MIN_VALUE`/`MAX_VALUE`, which a JDK declares `byte` and not
+    /// `int` — the type is observable, and typing them `int` made
+    /// `Byte.compare(Byte.MIN_VALUE, Byte.MAX_VALUE)` "possible lossy
+    /// conversion from int to byte".
+    Byte(i8),
+    /// `Short.MIN_VALUE`/`MAX_VALUE`, for the same reason.
+    Short(i16),
 }
 
 /// Intrinsic static constants (`Integer.MAX_VALUE`, `Math.PI`, ...).
@@ -23511,12 +23520,13 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
     match (class, field) {
         ("Integer", "MAX_VALUE") => Some(Int(i32::MAX)),
         ("Integer", "MIN_VALUE") => Some(Int(i32::MIN)),
-        ("Short", "MAX_VALUE") => Some(Int(i32::from(i16::MAX))),
-        ("Short", "MIN_VALUE") => Some(Int(i32::from(i16::MIN))),
+        // A JDK declares these `short` and `byte`, not `int`.
+        ("Short", "MAX_VALUE") => Some(BuiltinConstant::Short(i16::MAX)),
+        ("Short", "MIN_VALUE") => Some(BuiltinConstant::Short(i16::MIN)),
         ("Short", "SIZE") => Some(Int(16)),
         ("Short", "BYTES") => Some(Int(2)),
-        ("Byte", "MAX_VALUE") => Some(Int(i32::from(i8::MAX))),
-        ("Byte", "MIN_VALUE") => Some(Int(i32::from(i8::MIN))),
+        ("Byte", "MAX_VALUE") => Some(BuiltinConstant::Byte(i8::MAX)),
+        ("Byte", "MIN_VALUE") => Some(BuiltinConstant::Byte(i8::MIN)),
         ("Byte", "SIZE") => Some(Int(8)),
         ("Byte", "BYTES") => Some(Int(1)),
         ("Integer" | "Float", "SIZE") => Some(Int(32)),
@@ -28840,6 +28850,16 @@ impl BodyGen<'_> {
                 let index = self.pool.intern(Constant::Float(value));
                 self.code.push_ldc(index);
                 JType::Float
+            }
+            // A `byte` and a `short` are ints on the stack, as everywhere
+            // else; it is the TYPE that has to be narrow.
+            BuiltinConstant::Byte(value) => {
+                self.push_int(i32::from(value));
+                JType::Byte
+            }
+            BuiltinConstant::Short(value) => {
+                self.push_int(i32::from(value));
+                JType::Short
             }
         }
     }
@@ -39383,12 +39403,7 @@ impl BodyGen<'_> {
                         || (path[1] == "TYPE" && wrapper_primitive_name(&path[0]).is_some())) =>
             {
                 match builtin_static_constant(&path[0], &path[1]) {
-                    Some(BuiltinConstant::Double(_)) => JType::Double,
-                    Some(BuiltinConstant::Char(_)) => JType::Char,
-                    Some(BuiltinConstant::Bool(_)) => JType::Boxed(ElemType::Boolean),
-                    Some(BuiltinConstant::Long(_)) => JType::Long,
-                    Some(BuiltinConstant::Float(_)) => JType::Float,
-                    Some(BuiltinConstant::Int(_)) => JType::Int,
+                    Some(constant) => constant_type(constant),
                     // `Integer.TYPE` is `int.class` — a Class, not a number.
                     None => JType::Class,
                 }

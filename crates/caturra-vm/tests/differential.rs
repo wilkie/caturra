@@ -55521,3 +55521,65 @@ public class Enc3 {
 }
 "#
 );
+
+// `Byte.MIN_VALUE` is declared `byte` in a JDK and `Short.MAX_VALUE` `short`,
+// not `int`, and the difference is observable twice over: the class each boxes
+// to, and every narrowing context — `Byte.compare(Byte.MIN_VALUE, ...)`,
+// `Arrays.fill(bytes, Byte.MAX_VALUE)`, `byte[] a = { Byte.MIN_VALUE }`. Typed
+// `int` here, all of those were "possible lossy conversion from int to byte":
+// ordinary Java, refused. (`SIZE`, `BYTES` and the code-point limits really
+// ARE ints; the surrogate bounds really are chars.)
+//
+// Found by reading the behaviour sweep's own list of calls it could not build:
+// the cells that use these constants were recorded as "no argument in the
+// bank" rather than as the refusals they were.
+differential_test!(
+    what_type_a_wrapper_constant_has,
+    "Consts",
+    r#"
+public class Consts {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  static String cls(Object o) { return o.getClass().getName(); }
+  public static void main(String[] a) {
+    s("Byte.MIN", () -> cls(Byte.MIN_VALUE));
+    s("Byte.MAX", () -> cls(Byte.MAX_VALUE));
+    s("Short.MIN", () -> cls(Short.MIN_VALUE));
+    s("Short.MAX", () -> cls(Short.MAX_VALUE));
+    s("Integer.MIN", () -> cls(Integer.MIN_VALUE));
+    s("Long.MAX", () -> cls(Long.MAX_VALUE));
+    s("Character.MIN", () -> cls(Character.MIN_VALUE));
+    s("Character.MAX", () -> cls(Character.MAX_VALUE));
+    s("Float.MIN", () -> cls(Float.MIN_VALUE));
+    s("Double.MIN", () -> cls(Double.MIN_VALUE));
+    s("Byte.SIZE", () -> cls(Byte.SIZE));
+    s("Byte.BYTES", () -> cls(Byte.BYTES));
+    s("Character.MIN_HIGH", () -> cls(Character.MIN_HIGH_SURROGATE));
+    s("Character.MAX_LOW", () -> cls(Character.MAX_LOW_SURROGATE));
+    s("Character.MIN_SUPP", () -> cls(Character.MIN_SUPPLEMENTARY_CODE_POINT));
+    s("Character.MIN_RADIX", () -> cls(Character.MIN_RADIX));
+    s("assign-byte", () -> { byte v = Byte.MIN_VALUE; return v; });
+    s("assign-short", () -> { short v = Short.MAX_VALUE; return v; });
+    s("assign-char", () -> { char v = Character.MAX_VALUE; return (int) v; });
+    s("Byte.compare", () -> Byte.compare(Byte.MIN_VALUE, Byte.MAX_VALUE));
+    s("Short.compare", () -> Short.compare(Short.MIN_VALUE, Short.MAX_VALUE));
+    s("Byte.valueOf", () -> Byte.valueOf(Byte.MIN_VALUE));
+    s("Short.valueOf", () -> Short.valueOf(Short.MAX_VALUE));
+    s("Byte.toUnsignedInt", () -> Byte.toUnsignedInt(Byte.MIN_VALUE));
+    s("Short.reverseBytes", () -> Short.reverseBytes(Short.MIN_VALUE));
+    s("fill-byte", () -> { byte[] c = new byte[2]; java.util.Arrays.fill(c, Byte.MAX_VALUE); return java.util.Arrays.toString(c); });
+    s("fill-short", () -> { short[] c = new short[2]; java.util.Arrays.fill(c, Short.MIN_VALUE); return java.util.Arrays.toString(c); });
+    s("bsearch-byte", () -> java.util.Arrays.binarySearch(new byte[] {1, 2}, Byte.MIN_VALUE));
+    s("array-byte", () -> { byte[] c = { Byte.MIN_VALUE, Byte.MAX_VALUE }; return java.util.Arrays.toString(c); });
+    s("ternary-byte", () -> { byte v = true ? Byte.MIN_VALUE : Byte.MAX_VALUE; return v; });
+    s("box-byte", () -> { Byte v = Byte.MIN_VALUE; return v; });
+    s("box-short", () -> { Short v = Short.MAX_VALUE; return v; });
+    s("concat", () -> "" + Byte.MIN_VALUE + Short.MAX_VALUE + Character.MAX_VALUE);
+    s("arith", () -> Byte.MIN_VALUE + Byte.MAX_VALUE);
+  }
+}
+"#
+);

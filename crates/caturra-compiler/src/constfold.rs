@@ -275,6 +275,13 @@ pub(crate) fn library_constant(path: &[String]) -> Option<ConstValue> {
         crate::codegen::BuiltinConstantValue::Double(v) => ConstValue::Double(v),
         crate::codegen::BuiltinConstantValue::Bool(v) => ConstValue::Bool(v),
         crate::codegen::BuiltinConstantValue::Char(v) => ConstValue::Char(v),
+        // A `byte` and a `short` PROMOTE to int in any arithmetic (JLS
+        // 5.6.1), so the narrow type does not survive a fold and there is
+        // nothing here for it to be: `Byte.MIN_VALUE + Byte.MAX_VALUE` is the
+        // int -1. The type matters where the constant is USED, which is
+        // `constant_type`'s job, not this one's.
+        crate::codegen::BuiltinConstantValue::Byte(v) => ConstValue::Int(i32::from(v)),
+        crate::codegen::BuiltinConstantValue::Short(v) => ConstValue::Int(i32::from(v)),
     })
 }
 

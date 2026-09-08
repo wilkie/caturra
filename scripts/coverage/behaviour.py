@@ -548,6 +548,9 @@ def main():
     api = signatures(classes)
 
     diverged, refused, unbuildable, known, exercised = [], [], [], [], 0
+    # How many calls each DECLARATION accounts for. A declaration is a claim
+    # that something still diverges, and nothing was checking the claim.
+    matched = [0] * len(KNOWN)
     for class_name in classes:
         receiver = RECEIVER_OVERRIDES.get(class_name, receivers.get(class_name))
         if receiver in (None, "STATIC", "SKIP") and receiver != "STATIC":
@@ -669,9 +672,13 @@ def main():
                 continue
             if want == got:
                 continue
-            declared = next((why for pattern, why in KNOWN if re.search(pattern, want)), None)
-            if declared:
-                known.append(f"{want.split(' ')[0]}: {declared}")
+            declared = next(
+                (at for at, (pattern, _) in enumerate(KNOWN) if re.search(pattern, want)),
+                None,
+            )
+            if declared is not None:
+                matched[declared] += 1
+                known.append(f"{want.split(' ')[0]}: {KNOWN[declared][1]}")
                 continue
             diverged.append(f"  JDK: {want}\n  cat: {got}")
 
@@ -679,16 +686,37 @@ def main():
         f"{exercised} calls exercised over {len(classes)} classes, "
         f"{len(diverged)} diverging ({len(known)} declared)"
     )
+    # Two things this sweep knows about itself and never said out loud.
+    #
+    # A DECLARATION is a claim that something still diverges, and nothing was
+    # checking the claim: one whose divergence has been fixed goes on making it
+    # forever, and one written too broadly hides the next divergence
+    # underneath. The count is the claim, measured. It does not GATE — a
+    # declaration can be honestly dead on a given run (the immutable Set's
+    # iteration salt is drawn per JVM, so that cell diverges only sometimes) —
+    # but a zero is a question to answer rather than a number to skip past.
+    #
+    # And an overload with no argument in the bank is a call that was never
+    # made. 394 of them is not a footnote: reading that list is what turned up
+    # `Byte.MIN_VALUE` being typed `int`.
+    whole = not [a for a in sys.argv[1:] if not a.startswith("--")]
+    print("\ndeclarations, by the calls each accounts for:")
+    for at, (pattern, why) in enumerate(KNOWN):
+        print(f"  {matched[at]:4}  {pattern}")
+        if not matched[at] and whole:
+            print(f"        ^ accounts for nothing here — still true? {why}")
     for line in diverged:
         print(line)
     if refused:
         print(f"\n{len(refused)} probes did not run:")
         for line in refused:
             print(f"  {line}")
-    if verbose and unbuildable:
-        print(f"\n{len(unbuildable)} overloads have no argument in the bank:")
-        for line in sorted(set(unbuildable)):
-            print(f"  {line}")
+    if unbuildable:
+        print(f"\n{len(unbuildable)} overloads have no argument in the bank "
+              "(never compared; --verbose lists them)")
+        if verbose:
+            for line in sorted(set(unbuildable)):
+                print(f"  {line}")
     sys.exit(1 if diverged else 0)
 
 

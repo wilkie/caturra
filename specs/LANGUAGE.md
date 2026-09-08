@@ -15907,6 +15907,34 @@ the nanosecond DIFFERENCE, which a program that prints the number sees;
 `dividedBy(0)` is "Cannot divide by zero" and not "/ by zero"; and
 `plus(Duration)` / `minus(Duration)` were not implemented at all.
 
+**A wrapper's MIN_VALUE has the wrapper's type.** `Byte.MIN_VALUE` is declared
+`byte` in a JDK and `Short.MAX_VALUE` `short`, not `int`, and the difference
+shows twice: in the class each boxes to, and in every narrowing context —
+`Byte.compare(Byte.MIN_VALUE, Byte.MAX_VALUE)`, `Arrays.fill(bytes,
+Byte.MAX_VALUE)`, `byte[] a = { Byte.MIN_VALUE }`. Typed `int` here, all of
+those were "possible lossy conversion from int to byte": ordinary Java,
+refused. (`SIZE`, `BYTES` and the code-point limits really are ints; the
+surrogate bounds really are chars, and those were already right.) The narrow
+type does not survive constant FOLDING — a `byte` promotes to int in any
+arithmetic — so it lives where the constant is used, not in the folded value.
+
+**How it was found: by reading what the sweep skipped.** `behaviour.py` reports
+the overloads it could not build an argument for, and the list had never been
+read: 394 of them, against 7122 calls compared. 40 were calls a JDK compiles
+and caturra refuses, recorded as "no argument in the bank" rather than as the
+refusals they were — and the wrapper constants were most of that. The count is
+printed on every run now rather than only under `--verbose`.
+
+The same sweep's DECLARATIONS were unmeasured in the same way. A declaration is
+a claim that something still diverges, and nothing checked the claim: one whose
+divergence has been fixed goes on making it forever, and one written too
+broadly hides the next divergence underneath it. Each now reports the calls it
+accounts for. Three account for none, for three different reasons, which is why
+the census reports rather than gates: `Collections.nCopies` is still true and
+the sweep's own probe does not reach the shape that shows it; `Stream.flatMap`
+covers a call the bank cannot build at all; and the immutable `Set`/`Map` order
+is drawn from a SALT per JVM run, so that cell diverges only on some runs.
+
 **A `FileWriter` is not a `PrintWriter`, and the difference is five methods.**
 They shared one compiler type, so a `FileWriter` wore `PrintWriter`'s whole
 print family: `println`, `print`, `printf`, `format` and `checkError` compiled
