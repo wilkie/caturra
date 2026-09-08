@@ -183,6 +183,23 @@ BANK = {
     "java.util.function.IntBinaryOperator": [
         "(java.util.function.IntBinaryOperator) ((x, y) -> x + y)"
     ],
+    # The two siblings of the operator above, which were missing while it was
+    # here — eight overloads on the primitive streams were never compared.
+    "java.util.function.LongBinaryOperator": [
+        "(java.util.function.LongBinaryOperator) ((x, y) -> x + y)"
+    ],
+    "java.util.function.DoubleBinaryOperator": [
+        "(java.util.function.DoubleBinaryOperator) ((x, y) -> x + y)"
+    ],
+    "java.util.function.BiPredicate": [
+        "(java.util.function.BiPredicate) ((x, y) -> true)"
+    ],
+    # A `StringBuffer` is a `StringBuilder` under another name, and the two
+    # are NOT interchangeable to javac — which is the point of having one here.
+    "java.lang.StringBuffer": ['new java.lang.StringBuffer("ab")'],
+    # The only byte sink caturra models, and the stream `System.out` is.
+    "java.io.OutputStream": ["new java.io.ByteArrayOutputStream()"],
+    "java.io.PrintStream": ["System.out"],
     "java.util.function.ToIntFunction": [
         "(java.util.function.ToIntFunction) (v -> 1)"
     ],

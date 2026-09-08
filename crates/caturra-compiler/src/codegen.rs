@@ -3764,7 +3764,8 @@ impl MethodTable {
                 }
                 match simple {
                     "Scanner" => Some(JType::Scanner),
-                    "StringBuilder" => Some(JType::StringBuilder),
+                    "StringBuilder" => Some(JType::StringBuilder(BuilderKind::Builder)),
+                    "StringBuffer" => Some(JType::StringBuilder(BuilderKind::Buffer)),
                     "CharSequence" => Some(JType::CharSequence),
                     "File" => Some(JType::File),
                     "PrintWriter" => Some(JType::Writer(WriterKind::Print)),
@@ -4120,7 +4121,7 @@ impl MethodTable {
                     JType::Char => ElemType::Char,
                     JType::Str => ElemType::Str,
                     // `StringBuilder[]` — an array of ordinary references.
-                    JType::StringBuilder => ElemType::Builder,
+                    JType::StringBuilder(_) => ElemType::Builder,
                     JType::Object(id) => ElemType::Object(id),
                     // `Throwable[]`/`Exception[]` — a throwable element, so
                     // `getSuppressed()` assigns and its elements reach
@@ -4741,6 +4742,7 @@ fn raw_library_internal(name: &str) -> Option<&'static str> {
         "Collection" => "java/util/Collection",
         "Optional" => "java/util/Optional",
         "StringBuilder" => "java/lang/StringBuilder",
+        "StringBuffer" => "java/lang/StringBuffer",
         "CharSequence" => "java/lang/CharSequence",
         _ => return None,
     })
@@ -5502,7 +5504,10 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 // A builder is an ordinary heap object, so a collection or an
                 // array can hold one: `List<StringBuilder>` used to be refused
                 // with the false message "unknown type 'List'".
-                "StringBuilder" => Some(ElemType::Builder),
+                // The two builders erase to ONE element type: what they hold
+                // is the same, and the class each reports is recorded on the
+                // object rather than read off the element.
+                "StringBuilder" | "StringBuffer" => Some(ElemType::Builder),
                 "Object" => Some(ElemType::Object(table.object_id)),
                 // A LIBRARY throwable as an element (`List<RuntimeException>`)
                 // — the same element kind `getSuppressed()`'s array uses.
@@ -5808,7 +5813,7 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
         )
     {
         return !matches!(arg, ElemType::Nested { inner: other, .. }
-            if !matches!(table.nested_type(other), JType::CharSequence | JType::Str | JType::StringBuilder));
+            if !matches!(table.nested_type(other), JType::CharSequence | JType::Str | JType::StringBuilder(_)));
     }
     // A RAW element and a PARAMETERIZED one of the same class erase alike, and
     // the conversion between them is the unchecked one javac warns about
@@ -6060,7 +6065,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Boolean => Some(ElemType::Boolean),
         JType::Char => Some(ElemType::Char),
         JType::Str => Some(ElemType::Str),
-        JType::StringBuilder => Some(ElemType::Builder),
+        JType::StringBuilder(_) => Some(ElemType::Builder),
         JType::Object(id) => Some(ElemType::Object(id)),
         JType::Class => Some(ElemType::Class),
         JType::StackFrame => Some(ElemType::StackFrame),
@@ -6105,6 +6110,16 @@ fn prim_stream_descriptor(
             "java/util/OptionalLong",
             "java/util/LongSummaryStatistics",
         ),
+        // A `StringBuffer`'s methods are its own: every chaining one answers a
+        // `StringBuffer` and `compareTo` takes one, so the shared table's
+        // descriptors are rewritten for it. The class name appears nowhere
+        // else in them, so a plain replace is safe here where it was not for
+        // the `I` above.
+        JType::StringBuilder(BuilderKind::Buffer) => {
+            return std::borrow::Cow::Owned(
+                descriptor.replace("Ljava/lang/StringBuilder;", "Ljava/lang/StringBuffer;"),
+            );
+        }
         _ => return std::borrow::Cow::Borrowed(descriptor),
     };
     // The `I`s to rewrite are the int PARAMETERS and returns — not the ones
@@ -8064,7 +8079,7 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // `String` and `StringBuilder` both implement `CharSequence`
         // (JLS §4.10.2), the read-only text face a method takes when it wants
         // either.
-        || matches!((from, to), (JType::Str | JType::StringBuilder, JType::CharSequence))
+        || matches!((from, to), (JType::Str | JType::StringBuilder(_), JType::CharSequence))
         // A `Comparable`- or `Number`-bounded type parameter erases to that
         // interface/class; every primitive wrapper and `String` implements
         // `Comparable`, the numeric wrappers are also `Number`s, and a
@@ -8394,7 +8409,7 @@ impl ElemType {
     fn base_type(self) -> JType {
         match self {
             ElemType::TypeVar(index) => JType::TypeVar(index),
-            ElemType::Builder => JType::StringBuilder,
+            ElemType::Builder => JType::StringBuilder(BuilderKind::Builder),
             ElemType::Int => JType::Int,
             ElemType::Double => JType::Double,
             ElemType::Long => JType::Long,
@@ -8454,6 +8469,39 @@ enum CollFace {
     Iface,
     /// `ArrayList` / `HashSet` / `HashMap` — the class a `new` makes.
     Concrete,
+}
+
+/// Which of the two builders a [`JType::StringBuilder`] is. A `StringBuffer`
+/// is a `StringBuilder` with a lock on every method, and on one thread there is
+/// no lock to take — a JDK's own answers are identical for the two, cell for
+/// cell, including `capacity()` and the wording of every range complaint. The
+/// only difference a program here can see is the class each NAMES, which is
+/// why they share one storage and one table and differ in a name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum BuilderKind {
+    /// The default, so a receiver that is not a builder at all carries the
+    /// harmless one — nothing reads it there.
+    #[default]
+    Builder,
+    Buffer,
+}
+
+impl BuilderKind {
+    /// The class a builder of this kind reports, and the one a `new` makes.
+    fn internal(self) -> &'static str {
+        match self {
+            BuilderKind::Builder => "java/lang/StringBuilder",
+            BuilderKind::Buffer => "java/lang/StringBuffer",
+        }
+    }
+
+    /// The name a program writes, and a diagnostic prints.
+    fn simple(self) -> &'static str {
+        self.internal()
+            .rsplit('/')
+            .next()
+            .unwrap_or("StringBuilder")
+    }
 }
 
 /// Which writer a [`JType::Writer`] is. A `PrintWriter` and a `FileWriter`
@@ -8604,8 +8652,9 @@ enum JType {
     Byte,
     /// `java.util.Scanner` (intrinsic).
     Scanner,
-    /// `java.lang.StringBuilder` (intrinsic).
-    StringBuilder,
+    /// `java.lang.StringBuilder` or `java.lang.StringBuffer` (intrinsic).
+    /// Which one is [`BuilderKind`], and it is only a name.
+    StringBuilder(BuilderKind),
     /// `java.lang.Class` (reflection intrinsic; from `obj.getClass()`).
     Class,
     /// `java.lang.reflect.Field` (reflection intrinsic).
@@ -9254,7 +9303,7 @@ impl JType {
             JType::Short => String::from("short"),
             JType::Byte => String::from("byte"),
             JType::Scanner => String::from("Scanner"),
-            JType::StringBuilder => String::from("StringBuilder"),
+            JType::StringBuilder(kind) => String::from(kind.simple()),
             JType::CharSequence => String::from("CharSequence"),
             JType::Class => String::from("Class"),
             JType::Field => String::from("Field"),
@@ -9423,7 +9472,7 @@ impl JType {
                 | JType::Method
                 | JType::StackFrame
                 | JType::Type
-                | JType::StringBuilder
+                | JType::StringBuilder(_)
                 | JType::Constructor
                 // A cursor is an object like any other: it assigns to an
                 // `Object`, and `o instanceof Iterator` asks about one.
@@ -9512,7 +9561,7 @@ impl JType {
             JType::Short => String::from("S"),
             JType::Byte => String::from("B"),
             JType::Scanner => String::from("Ljava/util/Scanner;"),
-            JType::StringBuilder => String::from("Ljava/lang/StringBuilder;"),
+            JType::StringBuilder(kind) => format!("L{};", kind.internal()),
             JType::Class => String::from("Ljava/lang/Class;"),
             JType::Field => String::from("Ljava/lang/reflect/Field;"),
             JType::Method => String::from("Ljava/lang/reflect/Method;"),
@@ -10299,6 +10348,7 @@ fn builtin_supertype_reason(name: &str) -> Option<String> {
         "PriorityQueue",
         "Stack",
         "StringBuilder",
+        "StringBuffer",
         "Scanner",
     ];
     BUILTIN_COLLECTIONS.contains(&name).then(|| {
@@ -10969,6 +11019,8 @@ fn method_descriptor(
                     out.push_str("Ljava/lang/String;");
                 } else if simple == "StringBuilder" && !table.has_class(simple) {
                     out.push_str("Ljava/lang/StringBuilder;");
+                } else if simple == "StringBuffer" && !table.has_class(simple) {
+                    out.push_str("Ljava/lang/StringBuffer;");
                 } else if simple == "CharSequence" && !table.has_class(simple) {
                     out.push_str("Ljava/lang/CharSequence;");
                 } else if simple == "Scanner" && !table.has_class(simple) {
@@ -11273,6 +11325,8 @@ enum BParam {
     Comparator,
     /// `java.lang.StringBuilder` (`StringBuilder.compareTo(StringBuilder)`).
     Builder,
+    /// Either builder — what a JDK spells as two overloads.
+    AnyBuilder,
     /// A map's key type, boxed when primitive (`map.get(k)`).
     Key,
     /// A map's value type, boxed when primitive (`map.put(k, v)`).
@@ -11497,6 +11551,8 @@ enum BRet {
     ThrowableArray,
     /// `java.lang.StringBuilder` (`StringBuilder.append`, for chaining).
     Builder,
+    /// A `java.lang.StringBuffer` — what `StringWriter.getBuffer()` answers.
+    Buffer,
     /// `java.lang.Object` (`Constructor.newInstance`).
     Object,
     /// A map's value type, boxed when primitive (`map.get(k)` returns
@@ -12687,7 +12743,7 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::LinkedList { .. } => "LinkedList",
         JType::Collection(_) => "Collection",
         JType::MapEntry { .. } => "Map.Entry",
-        JType::StringBuilder => "StringBuilder",
+        JType::StringBuilder(kind) => kind.simple(),
         JType::Class => "Class",
         JType::Exception(_) => "Throwable",
         JType::Optional(_) => "Optional",
@@ -18091,12 +18147,7 @@ const BUFFERED_WRITER_METHODS: &[BuiltinMethod] = &[
 
 const STRING_WRITER_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
-    bm(
-        "getBuffer",
-        &[],
-        BRet::Builder,
-        "()Ljava/lang/StringBuffer;",
-    ),
+    bm("getBuffer", &[], BRet::Buffer, "()Ljava/lang/StringBuffer;"),
     bm("write", &[BParam::Str], BRet::Void, "(Ljava/lang/String;)V"),
     // `write(int)`, not `write(char)`: a JDK takes an int and writes its low
     // sixteen bits, so `w.write(65)` writes an `A`. Typed as a char, that call
@@ -22424,7 +22475,7 @@ fn is_single_class_library_type(ty: JType) -> bool {
 fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match ty {
         JType::Str => Some(("java/lang/String", STRING_METHODS)),
-        JType::StringBuilder => Some(("java/lang/StringBuilder", STRINGBUILDER_METHODS)),
+        JType::StringBuilder(kind) => Some((kind.internal(), STRINGBUILDER_METHODS)),
         JType::Class => Some(("java/lang/Class", CLASS_METHODS)),
         JType::Field => Some(("java/lang/reflect/Field", FIELD_METHODS)),
         JType::Method => Some(("java/lang/reflect/Method", METHOD_METHODS)),
@@ -22805,18 +22856,17 @@ const MATCHER_METHODS: &[BuiltinMethod] = &[
     ),
     // What the last attempt learned.
     bm("requireEnd", &[], BRet::Boolean, "()Z"),
-    // The append/tail rewriting loop. A JDK also takes a `StringBuffer`;
-    // caturra models the one builder, and the Java 9 `StringBuilder`
-    // overloads are the ones it accepts.
+    // The append/tail rewriting loop. A JDK declares an overload for each
+    // builder, so either is accepted here.
     bm(
         "appendReplacement",
-        &[BParam::Builder, BParam::Str],
+        &[BParam::AnyBuilder, BParam::Str],
         BRet::Matcher,
         "(Ljava/lang/StringBuilder;Ljava/lang/String;)Ljava/util/regex/Matcher;",
     ),
     bm(
         "appendTail",
-        &[BParam::Builder],
+        &[BParam::AnyBuilder],
         BRet::Builder,
         "(Ljava/lang/StringBuilder;)Ljava/lang/StringBuilder;",
     ),
@@ -23629,6 +23679,13 @@ struct TypeArgs {
     first: Option<ElemType>,
     /// A map's value type.
     second: Option<ElemType>,
+    /// Which BUILDER the receiver is, for the one method whose parameter is
+    /// the receiver's own class: `compareTo` is `Comparable<StringBuilder>` on
+    /// one and `Comparable<StringBuffer>` on the other, so
+    /// `builder.compareTo(buffer)` is an error in a JDK — while
+    /// `Matcher.appendTail` really does take either, and says so with
+    /// `BParam::AnyBuilder`.
+    builder: BuilderKind,
 }
 
 impl TypeArgs {
@@ -23638,6 +23695,10 @@ impl TypeArgs {
         // that resolves a member already threads these through — a separate
         // parameter would have had to be added at each of them, and the one
         // that was forgotten would silently offer the whole table.
+        let builder = match receiver {
+            JType::StringBuilder(kind) => kind,
+            _ => BuilderKind::Builder,
+        };
         let role = match receiver {
             JType::TreeSet(_, role) | JType::TreeMap { role, .. } => role,
             // The two legacy collections are faces of tables they share.
@@ -23736,7 +23797,11 @@ impl TypeArgs {
             },
             _ => Self::default(),
         };
-        Self { role, ..args }
+        Self {
+            role,
+            builder,
+            ..args
+        }
     }
 }
 
@@ -23853,7 +23918,9 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::DayOfWeek => JType::DayOfWeek,
         BParam::Month => JType::Month,
         BParam::Str => JType::Str,
-        BParam::CharSeq => JType::CharSequence,
+        // `AnyBuilder` is here because a JDK declares an overload for each
+        // builder; either reaches this the same way any `CharSequence` does.
+        BParam::CharSeq | BParam::AnyBuilder => JType::CharSequence,
         BParam::CharArray => JType::Array {
             elem: ElemType::Char,
             dims: 1,
@@ -23920,7 +23987,8 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         | BParam::UnaryOperator
         | BParam::Supplier
         | BParam::Comparator => JType::Object(ClassId(0)),
-        BParam::Builder => JType::StringBuilder,
+        // The receiver's OWN kind: `compareTo` compares like with like.
+        BParam::Builder => JType::StringBuilder(args.builder),
         // `between` takes any two temporals, and a probe (`indexOf`) takes
         // anything at all: both are `Object` here, and the VM checks what it
         // was actually handed.
@@ -24690,7 +24758,11 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             elem: ElemType::Throwable(0),
             dims: 1,
         }),
-        BRet::Builder => Some(JType::StringBuilder),
+        // Every chaining method answers the RECEIVER, and its class is the
+        // receiver's: `StringBuffer x = buffer.append("y")` is ordinary Java,
+        // and typing the answer `StringBuilder` refused all eight of them.
+        BRet::Builder => Some(JType::StringBuilder(args.builder)),
+        BRet::Buffer => Some(JType::StringBuilder(BuilderKind::Buffer)),
         BRet::Object => Some(JType::Object(table.object_id)),
     }
 }
@@ -29444,7 +29516,8 @@ impl BodyGen<'_> {
             // `new String(cs).intern()` typed as nothing (the type_of/emit
             // divergence). All the `new String` forms produce a String.
             "String" => JType::Str,
-            "StringBuilder" => JType::StringBuilder,
+            "StringBuilder" => JType::StringBuilder(BuilderKind::Builder),
+            "StringBuffer" => JType::StringBuilder(BuilderKind::Buffer),
             "Scanner" => JType::Scanner,
             "BigInteger" => JType::BigInteger,
             "BigDecimal" => JType::BigDecimal,
@@ -29855,7 +29928,9 @@ impl BodyGen<'_> {
         if self.table.class_id(class_name).is_none() {
             match class_name {
                 "Object" if args.is_empty() => return self.new_bare_object(),
-                "StringBuilder" => return self.new_string_builder(args, span),
+                "StringBuilder" | "StringBuffer" => {
+                    return self.new_string_builder(class_name, args, span);
+                }
                 "String" => return self.new_string(args, span),
                 "Scanner" => return self.new_scanner(args, span),
                 "BufferedReader" | "FileReader" | "InputStreamReader" | "StringReader" => {
@@ -30364,7 +30439,7 @@ impl BodyGen<'_> {
                     // `new String(sb)` — the JDK's `String(CharSequence)`. The
                     // builder's text is read here, so the copy is a plain
                     // String from then on.
-                    JType::StringBuilder | JType::CharSequence => {
+                    JType::StringBuilder(_) | JType::CharSequence => {
                         self.coerce_to_string_for_output(ty);
                         "(Ljava/lang/String;)V"
                     }
@@ -30516,8 +30591,13 @@ impl BodyGen<'_> {
     /// `new StringBuilder()`, `new StringBuilder(String)` or
     /// `new StringBuilder(int)` (an initial-capacity hint caturra ignores —
     /// it does not model capacity, and nothing observes it).
-    fn new_string_builder(&mut self, args: &[Expr], span: SourceSpan) -> JType {
-        let class_index = intern_class(self.pool, "java/lang/StringBuilder");
+    fn new_string_builder(&mut self, written: &str, args: &[Expr], span: SourceSpan) -> JType {
+        let kind = if written == "StringBuffer" {
+            BuilderKind::Buffer
+        } else {
+            BuilderKind::Builder
+        };
+        let class_index = intern_class(self.pool, kind.internal());
         self.code.push_op_u16(op::NEW, class_index, 1);
         self.code.push_op(op::DUP, 1);
         let descriptor = match args {
@@ -30526,27 +30606,30 @@ impl BodyGen<'_> {
                 // `new StringBuilder(otherBuilder)` / `(CharSequence)` — both
                 // seed from the contents; emitted with the String descriptor,
                 // which the VM's seed arm accepts for any of them.
-                JType::Str | JType::StringBuilder | JType::CharSequence | JType::Error => {
+                JType::Str | JType::StringBuilder(_) | JType::CharSequence | JType::Error => {
                     "(Ljava/lang/String;)V"
                 }
                 ty if widens(ty, JType::Int, self.table) => "(I)V",
                 _ => {
                     self.error(
                         span,
-                        "new StringBuilder(...) takes a String, a StringBuilder, or an int",
+                        format!("new {written}(...) takes a String, a {written}, or an int"),
                     );
                     "(Ljava/lang/String;)V"
                 }
             },
             _ => {
-                self.error(span, "new StringBuilder(...) takes at most one argument");
+                self.error(
+                    span,
+                    format!("new {written}(...) takes at most one argument"),
+                );
                 "()V"
             }
         };
-        let init = intern_method_ref(self.pool, "java/lang/StringBuilder", "<init>", descriptor);
+        let init = intern_method_ref(self.pool, kind.internal(), "<init>", descriptor);
         self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
         self.code.drop_stack(u16::from(!args.is_empty()));
-        JType::StringBuilder
+        JType::StringBuilder(kind)
     }
 
     /// `new Object()` — an identity-only object (NEW + the no-op `<init>`).
@@ -32699,7 +32782,7 @@ impl BodyGen<'_> {
             JType::StackFrame
             | JType::Str
             | JType::CharSequence
-            | JType::StringBuilder
+            | JType::StringBuilder(_)
             | JType::Scanner
             | JType::File
             | JType::Writer(_)
@@ -33769,7 +33852,7 @@ impl BodyGen<'_> {
                     | JType::EntrySet { .. }
                     | JType::MapEntry { .. }
                     | JType::File
-                    | JType::StringBuilder
+                    | JType::StringBuilder(_)
                     | JType::Exception(_)
             ) {
                 tags.push_str("Ljava/lang/Object;");
@@ -33884,7 +33967,7 @@ impl BodyGen<'_> {
     /// text. A `null` rides through untouched — the JDK throws at run time.
     fn coerce_char_sequence(&mut self, ty: JType) -> JType {
         match ty {
-            JType::StringBuilder | JType::CharSequence => self.coerce_to_string_for_output(ty),
+            JType::StringBuilder(_) | JType::CharSequence => self.coerce_to_string_for_output(ty),
             other => other,
         }
     }
@@ -33900,7 +33983,7 @@ impl BodyGen<'_> {
         let delim_ty = self.expr(delimiter);
         if !matches!(
             delim_ty,
-            JType::Str | JType::StringBuilder | JType::CharSequence | JType::Null | JType::Error
+            JType::Str | JType::StringBuilder(_) | JType::CharSequence | JType::Null | JType::Error
         ) {
             self.error(
                 delimiter.span(),
@@ -34702,7 +34785,7 @@ impl BodyGen<'_> {
             && matches!(
                 self.type_of(arg),
                 JType::Object(_)
-                    | JType::StringBuilder
+                    | JType::StringBuilder(_)
                     | JType::List { .. }
                     | JType::Set { .. }
                     | JType::Map { .. }
@@ -35095,7 +35178,7 @@ impl BodyGen<'_> {
             JType::Pattern => String::from("java/util/regex/Pattern"),
             JType::Matcher => String::from("java/util/regex/Matcher"),
             JType::MatchResult => String::from("java/util/regex/MatchResult"),
-            JType::StringBuilder => String::from("java/lang/StringBuilder"),
+            JType::StringBuilder(kind) => String::from(kind.internal()),
             // A byte stream's `toString()` is the TEXT written into it, which
             // is the whole point of capturing with one.
             JType::ByteStream => String::from("java/io/ByteArrayOutputStream"),
@@ -39163,7 +39246,7 @@ impl BodyGen<'_> {
             | JType::Vector(_)
             | JType::Hashtable { .. }
             | JType::Enumeration(_)
-            | JType::StringBuilder
+            | JType::StringBuilder(_)
             | JType::CharSequence
             | JType::TypeVar(_)
             | JType::Boxed(_)
@@ -42701,7 +42784,7 @@ impl BodyGen<'_> {
     /// type here — so it answers for the wider of the two, the interface.
     fn cast_face(&self, ty: JType) -> CastFace {
         match ty {
-            JType::Str | JType::Boxed(_) | JType::StringBuilder => CastFace::Final,
+            JType::Str | JType::Boxed(_) | JType::StringBuilder(_) => CastFace::Final,
             JType::Object(id) | JType::Generic { class: id, .. } => {
                 self.table.info_by_id(id).map_or(CastFace::Class, |info| {
                     if info.is_interface {
@@ -42812,7 +42895,7 @@ impl BodyGen<'_> {
         if target == JType::CharSequence && source.is_reference() {
             if !matches!(
                 source,
-                JType::Str | JType::StringBuilder | JType::CharSequence | JType::Null
+                JType::Str | JType::StringBuilder(_) | JType::CharSequence | JType::Null
             ) {
                 let class_index = intern_class(self.pool, "java/lang/CharSequence");
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
@@ -42822,12 +42905,18 @@ impl BodyGen<'_> {
         // Cast to StringBuilder — commonly `(StringBuilder) null` (to pick a
         // CharSequence overload) or an erased Object back down. A runtime
         // checkcast, no-op on null.
-        if target == JType::StringBuilder && source.is_reference() {
-            if source != JType::StringBuilder && source != JType::Null {
-                let class_index = intern_class(self.pool, "java/lang/StringBuilder");
+        if let JType::StringBuilder(kind) = target
+            && source.is_reference()
+        {
+            // The check names the class WRITTEN: casting to `StringBuffer`
+            // must not pass a `StringBuilder` through, and the two are
+            // unrelated classes in a JDK (siblings under a package-private
+            // parent), so neither widens to the other.
+            if source != target && source != JType::Null {
+                let class_index = intern_class(self.pool, kind.internal());
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
             }
-            return JType::StringBuilder;
+            return target;
         }
         // Casting a reference (commonly an erased `Object`) down to a library
         // COLLECTION: `(List<E>) o`, `(Map<K, V>) o`, `(TreeSet<E>) o`.
@@ -43534,8 +43623,12 @@ impl BodyGen<'_> {
         }
         // A `String` and a `StringBuilder` join at the interface they share,
         // which is not a face either of them wears: `CharSequence`.
-        let text_like =
-            |ty: JType| matches!(ty, JType::Str | JType::StringBuilder | JType::CharSequence);
+        let text_like = |ty: JType| {
+            matches!(
+                ty,
+                JType::Str | JType::StringBuilder(_) | JType::CharSequence
+            )
+        };
         if text_like(then_ty) && text_like(els_ty) {
             return JType::CharSequence;
         }
@@ -44433,7 +44526,7 @@ impl BodyGen<'_> {
             // for the rest — the String overload aborted the run on the latter.
             JType::Null
             | JType::Generic { .. }
-            | JType::StringBuilder
+            | JType::StringBuilder(_)
             | JType::CharSequence
             | JType::TypeVar(_)
             | JType::Boxed(_)
@@ -45315,7 +45408,7 @@ impl BodyGen<'_> {
             // code (a widening reference conversion) — the same two-gate split
             // as every other widening (`widens` allows it; this matrix must
             // agree or the assignment is rejected anyway).
-            (JType::Str | JType::StringBuilder, JType::CharSequence) => {}
+            (JType::Str | JType::StringBuilder(_), JType::CharSequence) => {}
             // A parameterized type and its raw class erase alike, so the
             // assignment needs no code — `Bag<String> b = rawBag` and back is
             // an unchecked assignment, which javac warns about and allows.

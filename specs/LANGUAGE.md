@@ -15906,6 +15906,33 @@ the nanosecond DIFFERENCE, which a program that prints the number sees;
 `dividedBy(0)` is "Cannot divide by zero" and not "/ by zero"; and
 `plus(Duration)` / `minus(Duration)` were not implemented at all.
 
+**`StringBuffer` was refused for a reason that had expired.** The refusal said
+aliasing it to `StringBuilder` would make `getClass()` lie about which one a
+program built — true when it was written, and not true once the READERS needed
+a view-class side map that records the name on the object. A JDK's answers for
+the two are identical cell for cell (capacity, the identity `equals`, the
+wording of every range complaint), because a lock is not observable on one
+thread. So they share one storage and one table and differ in a name, the third
+time that shape has been used here after `ReaderFace` and `WriterKind`.
+
+They are not interchangeable, and that half has to be refused: `compareTo` is
+`Comparable<StringBuilder>` on one and `Comparable<StringBuffer>` on the other,
+and neither assigns to the other. The parameter therefore has to follow the
+RECEIVER, which is what `TypeArgs` already does for a sorted collection's face
+— so the builder kind rides there. `Matcher.appendTail`/`appendReplacement`
+really do take either (a JDK declares an overload apiece) and say so with their
+own parameter kind.
+
+The one place a RETURN told the two apart was already wrong:
+`StringWriter.getBuffer()` answers a `StringBuffer`, and caturra said
+`java.lang.StringBuilder`.
+
+**And six more argument types for the sweep.** The bank had `IntBinaryOperator`
+and not its two siblings, no `BiPredicate`, no `OutputStream`, no
+`PrintStream` — types caturra models, whose overloads were therefore never
+compared. With `StringBuffer` beside them the sweep went 7202 calls to 7240 and
+its never-built list 314 to 297.
+
 **The three calls the deferred list kept naming.** Each was ordinary Java that
 caturra turned away, and each had been on the list for two sittings.
 

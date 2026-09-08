@@ -55671,3 +55671,130 @@ public class Late {
 }
 "#
 );
+
+// `StringBuffer` was refused by name, on the reasoning that aliasing it to
+// `StringBuilder` would make `getClass()` lie about which one a program built.
+// That was true when it was written and is not now: the view-class side map
+// the READERS needed records the name on the object. A JDK's answers for the
+// two are identical cell for cell — capacity, the identity `equals`, the
+// wording of every range complaint — because a lock is not observable on one
+// thread. So they share a storage and a table and differ in a name.
+//
+// The one place a RETURN told them apart was already wrong:
+// `StringWriter.getBuffer()` answers a `StringBuffer` in a JDK, and caturra
+// said `java.lang.StringBuilder`.
+differential_test!(
+    what_a_string_buffer_is,
+    "Buf",
+    r#"
+public class Buf {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    s("class", () -> new StringBuffer("ab").getClass().getName());
+    s("super", () -> new StringBuffer().getClass().getSuperclass().getName());
+    s("ifaces", () -> java.util.Arrays.toString(new StringBuffer().getClass().getInterfaces()));
+    s("new-empty", () -> new StringBuffer().length());
+    s("new-cap", () -> new StringBuffer(50).capacity());
+    s("new-str-cap", () -> new StringBuffer("abc").capacity());
+    s("default-cap", () -> new StringBuffer().capacity());
+    s("append", () -> new StringBuffer("a").append("b").append(1).append(2.5).append('c').append(true).toString());
+    s("insert", () -> new StringBuffer("ac").insert(1, "b").toString());
+    s("delete", () -> new StringBuffer("abcd").delete(1, 3).toString());
+    s("deleteCharAt", () -> new StringBuffer("abc").deleteCharAt(1).toString());
+    s("replace", () -> new StringBuffer("abcd").replace(1, 3, "XY").toString());
+    s("reverse", () -> new StringBuffer("abc").reverse().toString());
+    s("indexOf", () -> new StringBuffer("abcabc").indexOf("bc", 2));
+    s("lastIndexOf", () -> new StringBuffer("abcabc").lastIndexOf("bc"));
+    s("charAt", () -> new StringBuffer("abc").charAt(1));
+    s("setCharAt", () -> { StringBuffer b = new StringBuffer("abc"); b.setCharAt(1, 'X'); return b.toString(); });
+    s("setLength", () -> { StringBuffer b = new StringBuffer("abc"); b.setLength(5); return b.length() + ":" + (int) b.charAt(4); });
+    s("substring", () -> new StringBuffer("abcd").substring(1, 3));
+    s("subSequence", () -> new StringBuffer("abcd").subSequence(1, 3).toString());
+    s("chars", () -> new StringBuffer("abc").chars().sum());
+    s("compareTo", () -> new StringBuffer("abc").compareTo(new StringBuffer("abd")));
+    s("equals-same", () -> new StringBuffer("a").equals(new StringBuffer("a")));
+    s("ensureCapacity", () -> { StringBuffer b = new StringBuffer("a"); b.ensureCapacity(100); return b.capacity(); });
+    s("trimToSize", () -> { StringBuffer b = new StringBuffer(100); b.append("ab"); b.trimToSize(); return b.capacity(); });
+    s("codePointAt", () -> new StringBuffer("ab").codePointAt(0));
+    s("bad-charAt", () -> new StringBuffer("abc").charAt(9));
+    s("bad-delete", () -> new StringBuffer("abc").delete(-1, 2).toString());
+    s("bad-insert", () -> new StringBuffer("abc").insert(9, "x").toString());
+    s("as-charseq", () -> { CharSequence c = new StringBuffer("hi"); return c.length(); });
+    s("concat", () -> "x" + new StringBuffer("y"));
+    s("append-null", () -> new StringBuffer("a").append((Object) null).toString());
+    s("append-buf", () -> new StringBuffer("a").append(new StringBuffer("b")).toString());
+    s("builder-vs", () -> new StringBuilder("ab").getClass().getName());
+  }
+}
+"#
+);
+
+differential_test!(
+    what_a_string_writer_hands_back,
+    "GetBuf",
+    r#"
+import java.io.*;
+public class GetBuf {
+  public static void main(String[] a) throws Exception {
+    StringWriter w = new StringWriter();
+    w.write("hi");
+    System.out.println("class = " + w.getBuffer().getClass().getName());
+    System.out.println("text = " + w.getBuffer());
+    System.out.println("len = " + w.getBuffer().length());
+  }
+}
+"#
+);
+
+// ...and they are NOT interchangeable, which is the half that has to be
+// refused: `compareTo` is `Comparable<StringBuilder>` on one and
+// `Comparable<StringBuffer>` on the other, and neither assigns to the other.
+// (`Matcher.appendTail` really does take either — a JDK declares an overload
+// apiece — and `append` reaches both through `CharSequence`.)
+differential_reject!(
+    reject_a_buffer_where_a_builder_goes,
+    "RejBWB",
+    "public class RejBWB { public static void main(String[] a) { StringBuilder x = new StringBuffer(\"a\"); } }"
+);
+differential_reject!(
+    reject_a_builder_where_a_buffer_goes,
+    "RejBFB",
+    "public class RejBFB { public static void main(String[] a) { StringBuffer x = new StringBuilder(\"a\"); } }"
+);
+differential_reject!(
+    reject_comparing_a_builder_to_a_buffer,
+    "RejCBB",
+    "public class RejCBB { public static void main(String[] a) { new StringBuilder(\"a\").compareTo(new StringBuffer(\"a\")); } }"
+);
+
+// Every chaining method answers the RECEIVER, and its class is the receiver's:
+// `StringBuffer x = buffer.append("y")` is ordinary Java, and typing the answer
+// `StringBuilder` refused all eight of them. The emitted DESCRIPTOR follows the
+// receiver too, the way a primitive stream's does.
+differential_test!(
+    what_a_buffer_chain_answers,
+    "BufChain",
+    r#"
+public class BufChain {
+  public static void main(String[] a) {
+    StringBuffer bf = new StringBuffer("a");
+    StringBuffer w = bf.append("y");
+    StringBuffer x = bf.insert(0, "z");
+    StringBuffer y = bf.reverse();
+    StringBuffer z = bf.delete(0, 1);
+    StringBuffer p = bf.deleteCharAt(0);
+    StringBuffer q = bf.replace(0, 1, "Q");
+    StringBuffer r = bf.appendCodePoint(65);
+    StringBuffer t = bf.append("y").reverse();
+    System.out.println(w.toString() + "|" + t.getClass().getName() + "|" + bf.compareTo(bf));
+    StringBuilder sb = new StringBuilder("a");
+    StringBuilder u = sb.append("y").reverse();
+    System.out.println(u + "|" + u.getClass().getName() + "|" + sb.compareTo(sb));
+  }
+}
+"#
+);

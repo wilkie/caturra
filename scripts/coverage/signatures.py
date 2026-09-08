@@ -50,6 +50,12 @@ KNOWN = [
         r"\.__",
         "a caturra-internal helper, which no JDK class declares",
     ),
+    (
+        r"^java\.lang\.StringBuffer\.",
+        "one table serves both builders, so its descriptors are spelled in the "
+        "`StringBuilder` flavour and the receiver's kind rewrites them where "
+        "the call is emitted — the same arrangement the primitive streams have",
+    ),
 ]
 
 
@@ -84,8 +90,27 @@ def tables():
     ):
         for variant in re.findall(r'\w+::\w+', variants):
             if variant in classes:
-                found.setdefault(const, classes[variant].replace("/", "."))
-    return found
+                found.setdefault(const, set()).add(classes[variant].replace("/", "."))
+    # ...and the arm that hands ONE table to every face of a type, naming the
+    # class through the face and never as a literal:
+    # `JType::StringBuilder(kind) => Some((kind.internal(), TABLE))`. A shared
+    # table has to be right for EVERY class that wears it, so all of them are
+    # checked. Which faces those are is read from the JType variant's own field
+    # type (`StringBuilder(BuilderKind),`) rather than named here, so a second
+    # one of these needs no edit.
+    faces = dict(re.findall(r"^\s+(\w+)\((\w+(?:Kind|Face))\),$", source, re.M))
+    for variant, const in re.findall(
+        r'JType::(\w+)\(\w+\)\s*=>\s*Some\(\(\s*\w+\.internal\(\),\s*(\w+_METHODS)',
+        source,
+    ):
+        face = faces.get(variant)
+        for name, internal in classes.items():
+            if face and name.startswith(f"{face}::"):
+                found.setdefault(const, set()).add(internal.replace("/", "."))
+    return {
+        const: (value if isinstance(value, set) else {value})
+        for const, value in found.items()
+    }
 
 
 def entries(const):
@@ -186,14 +211,16 @@ def main():
     options = parser.parse_args()
 
     paired = tables()
-    classes = sorted({c for c in paired.values() if c.startswith("java")})
+    classes = sorted({c for names in paired.values() for c in names if c.startswith("java")})
     if options.only:
         classes = [c for c in classes if c in options.only]
     with tempfile.TemporaryDirectory(prefix="signatures-") as work:
         jdk = jdk_signatures(classes, work)
 
     checked, wrong, declared = 0, [], []
-    for const, cls in sorted(paired.items()):
+    for const, cls in sorted(
+        (const, cls) for const, names in paired.items() for cls in names
+    ):
         if cls not in jdk:
             continue
         for name, descriptor in entries(const):

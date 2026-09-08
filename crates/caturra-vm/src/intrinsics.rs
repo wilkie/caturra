@@ -3089,7 +3089,11 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             fields: Vec::new(),
         }),
         "java/lang/String" => Some(HeapObject::JavaString(Vec::new())),
-        "java/lang/StringBuilder" => Some(HeapObject::StringBuilder(Vec::new())),
+        // One storage for both builders; which class it NAMES is recorded on
+        // the object when it is constructed.
+        "java/lang/StringBuilder" | "java/lang/StringBuffer" => {
+            Some(HeapObject::StringBuilder(Vec::new()))
+        }
         "java/util/Scanner" => Some(HeapObject::Scanner {
             buffer: String::new(),
             pos: 0,
@@ -18101,10 +18105,14 @@ fn string_writer_method(
                 Some(HeapObject::StringWriter(units)) => units.clone(),
                 _ => unreachable!("receiver kind checked by caller"),
             };
-            // `getBuffer` answers a `StringBuffer` in a JDK; caturra has one
-            // builder kind, and what a program does with it is read the text.
+            // `getBuffer` answers a `StringBuffer`, which is the same storage
+            // a `StringBuilder` uses under a different name — so the name is
+            // recorded on the object. It read `java.lang.StringBuilder` before
+            // there was a second builder to be.
             let object = if method == "getBuffer" {
-                heap.alloc(HeapObject::StringBuilder(units))
+                let made = heap.alloc(HeapObject::StringBuilder(units));
+                heap.set_view_class(made, "java/lang/StringBuffer");
+                made
             } else {
                 heap.alloc_string_units(&units)
             };

@@ -299,6 +299,10 @@ const JAVA_LANG: &[&str] = &[
     "Character",
     "Number",
     "StringBuilder",
+    // Its synchronized twin. On one thread there is no lock to take, so the
+    // two share a storage and a table here; the class each NAMES is recorded
+    // on the object, which is what kept them apart.
+    "StringBuffer",
     // Modelled as types and reachable unqualified, but absent from this list,
     // so their class literals reported a bare `CharSequence`/`Iterable`.
     "CharSequence",
@@ -754,11 +758,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     (
         "java.lang",
         &[
-            // The synchronized twin of `StringBuilder`. Aliasing the two would
-            // make `getClass()` lie about which one a program built, and
-            // synchronization is the only other difference — so it is refused
-            // by name, which at least says what it is.
-            "StringBuffer",
             "StrictMath",
             "Thread",
             "ThreadLocal",

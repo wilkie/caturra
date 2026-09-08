@@ -3327,6 +3327,13 @@ impl<'run> Interpreter<'run> {
                 },
             );
         }
+        // Which BUILDER a builder is. The two share one storage and one set of
+        // methods — on a single thread a `StringBuffer`'s locks are not
+        // observable — so the class a program sees is recorded rather than
+        // inferred, exactly as a reader's is.
+        if target_class == "java/lang/StringBuffer" {
+            self.heap.set_view_class(receiver, "java/lang/StringBuffer");
+        }
         if matches!(target_class, "java/util/Vector" | "java/util/Hashtable") {
             let name = if target_class == "java/util/Vector" {
                 "java/util/Vector"
@@ -21734,6 +21741,7 @@ fn library_superclass(internal: &str) -> Option<&'static str> {
         ("java/util/AbstractMap", "java/lang/Object"),
         // Package-private in the JDK, and `getSuperclass` names it anyway.
         ("java/lang/StringBuilder", "java/lang/AbstractStringBuilder"),
+        ("java/lang/StringBuffer", "java/lang/AbstractStringBuilder"),
         ("java/lang/AbstractStringBuilder", "java/lang/Object"),
     ];
     if internal == "java/lang/Object"
@@ -22189,7 +22197,7 @@ fn library_direct_interfaces(internal: &str) -> &'static [&'static str] {
         "java/io/Serializable",
     ];
     match internal {
-        "java/lang/String" | "java/lang/StringBuilder" => TEXT,
+        "java/lang/String" | "java/lang/StringBuilder" | "java/lang/StringBuffer" => TEXT,
         "java/lang/Integer" | "java/lang/Double" | "java/lang/Long" | "java/lang/Short"
         | "java/lang/Byte" | "java/lang/Float" => COMPARABLE,
         "java/lang/Boolean" | "java/lang/Character" | "java/io/File" => SERIALIZABLE_COMPARABLE,
@@ -22450,7 +22458,9 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         ],
         "java/io/StringWriter" | "java/io/BufferedWriter" | "java/io/PrintWriter"
         | "java/io/FileWriter" => WRITER,
-        "java/lang/StringBuilder" => &["java/lang/CharSequence", "java/lang/Comparable"],
+        "java/lang/StringBuilder" | "java/lang/StringBuffer" => {
+            &["java/lang/CharSequence", "java/lang/Comparable"]
+        }
         // Every array is `Cloneable` (and `Serializable`), whatever it holds.
         _ if class.starts_with('[') => &["java/lang/Cloneable"],
         // A `File`, and the `java.time` values that are ORDERED. `Period` and
@@ -23259,6 +23269,7 @@ fn is_final_library_class(internal: &str) -> bool {
             | "java/lang/Character"
             | "java/lang/Boolean"
             | "java/lang/StringBuilder"
+            | "java/lang/StringBuffer"
     )
 }
 
