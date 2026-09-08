@@ -6632,32 +6632,46 @@ const LIBRARY_ENUMS: &[(&str, JType)] = &[
     ("RoundingMode", JType::RoundingMode),
 ];
 
-/// Whether a locale ARGUMENT names one caturra can answer. `Locale` is not a
-/// value here either: the constant is read where it is written, and every
-/// English one gives the same text.
-fn english_locale(arg: &Expr) -> bool {
+/// The locale an argument NAMES, if it names one at all: the constant's own
+/// name, or `getDefault` for the host's.
+///
+/// `Locale` is not a value here — the constant is read where it is WRITTEN —
+/// so this is the one place that says which locale a call was handed, and
+/// every call that takes one asks it. It used to be two places that disagreed:
+/// one accepted `Locale.getDefault()` and the other did not, so
+/// `Month.getDisplayName(style, Locale.getDefault())` compiled and
+/// `String.format(Locale.getDefault(), …)` was "cannot find symbol: 'Locale'".
+fn locale_named(arg: &Expr) -> Option<&str> {
     match arg {
-        Expr::Name { path, .. } if path.len() >= 2 => {
-            path[path.len() - 2] == "Locale"
-                && matches!(
-                    path[path.len() - 1].as_str(),
-                    "US" | "ENGLISH" | "UK" | "CANADA" | "ROOT"
-                )
+        Expr::Name { path, .. } if path.len() >= 2 && path[path.len() - 2] == "Locale" => {
+            Some(path[path.len() - 1].as_str())
         }
-        // `Locale.getDefault()` — caturra's own locale, which is en-US.
         Expr::Call {
             receiver: Some(owner),
             method,
             args,
             ..
-        } => {
-            method == "getDefault"
-                && args.is_empty()
-                && matches!(owner.as_ref(), Expr::Name { path, .. }
-                    if path.last().is_some_and(|name| name == "Locale"))
+        } if method == "getDefault"
+            && args.is_empty()
+            && matches!(owner.as_ref(), Expr::Name { path, .. }
+                if path.last().is_some_and(|name| name == "Locale")) =>
+        {
+            Some("getDefault")
         }
-        _ => false,
+        _ => None,
     }
+}
+
+/// The locales caturra answers for. It formats, cases and parses in the US
+/// locale, and each of these asks for the same text — so the argument is not
+/// needed rather than ignored. Anything else is refused by name, because
+/// silently answering in the wrong locale is a wrong answer
+/// (`Locale.GERMANY` swaps the decimal separator for the grouping character).
+const LOCALES_AS_US: &[&str] = &["US", "ENGLISH", "UK", "CANADA", "ROOT", "getDefault"];
+
+/// Whether a locale ARGUMENT names one caturra can answer.
+fn english_locale(arg: &Expr) -> bool {
+    locale_named(arg).is_some_and(|name| LOCALES_AS_US.contains(&name))
 }
 
 /// `java.time.format.FormatStyle`, by its own ordinal.
@@ -12239,17 +12253,14 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // modelled — so the answer would be a type the program cannot then use.
     ("File", "toURI", "caturra does not model java.net.URI"),
     ("File", "toURL", "caturra does not model java.net.URL"),
-    // `locale()`/`useLocale()` answer a `java.util.Locale` VALUE, and caturra
-    // models `Locale` only as a constant read where it is written — so there
-    // is nothing to hand back. The default is host state besides.
+    // `locale()` answers a `java.util.Locale` VALUE, and caturra models
+    // `Locale` only as a constant read where it is written — so there is
+    // nothing to hand back. The default is host state besides. (`useLocale`
+    // TAKES one, which is a locale caturra can check and drop: it parses in
+    // the US locale, and the locales it answers for ask for that.)
     (
         "Scanner",
         "locale",
-        NO_LOCALE_VALUE,
-    ),
-    (
-        "Scanner",
-        "useLocale",
         NO_LOCALE_VALUE,
     ),
     // The `TemporalAccessor`/`TemporalAdjuster` plumbing, on every value that
@@ -33267,6 +33278,35 @@ impl BodyGen<'_> {
         {
             return result;
         }
+        // `"abc".toUpperCase(Locale.US)` — the locale a case mapping is asked
+        // for. caturra maps in the US locale, and every locale it answers for
+        // asks for the same letters, so the argument is checked and dropped
+        // rather than ignored. (Turkish is the one that would differ, and it
+        // is refused by name like every other.)
+        if receiver_ty == JType::Str
+            && matches!(method, "toUpperCase" | "toLowerCase")
+            && let [only] = args
+            && let Some(named) = locale_named(only)
+        {
+            self.locale_answerable(named, LOCALES_AS_US, only.span());
+            return self.builtin_instance_call(receiver_ty, method, &[], span);
+        }
+        // `scanner.useLocale(Locale.US)` — which locale to PARSE numbers in.
+        // caturra parses in the US locale, so for the ones it answers for this
+        // is the scanner itself, unchanged. (`locale()`, which hands one BACK,
+        // still needs a value of the type and stays refused.)
+        if receiver_ty == JType::Scanner
+            && method == "useLocale"
+            && let [only] = args
+        {
+            match locale_named(only) {
+                Some(named) => {
+                    self.locale_answerable(named, LOCALES_AS_US, only.span());
+                }
+                None => self.locale_not_written_out("Scanner.useLocale", only.span()),
+            }
+            return Some(Some(JType::Scanner));
+        }
         // The same on a `PrintStream` value, which answers ITSELF from
         // `format` (a `PrintWriter` answers a writer).
         if receiver_ty == JType::PrintStream && matches!(method, "printf" | "format") {
@@ -33750,28 +33790,45 @@ impl BodyGen<'_> {
         let [first, rest @ ..] = args else {
             return args;
         };
-        let Expr::Name { path, span } = first else {
-            return args;
-        };
-        let [.., class, constant] = path.as_slice() else {
-            return args;
-        };
-        if class != "Locale" || self.table.has_class("Locale") {
+        if self.table.has_class("Locale") {
             return args;
         }
-        if !matches!(
-            constant.as_str(),
-            "US" | "ROOT" | "ENGLISH" | "UK" | "CANADA"
-        ) {
-            self.error(
-                *span,
-                format!(
-                    "java.util.Locale.{constant} is not supported by caturra \
-                     (formatting always uses the US/root locale)"
-                ),
-            );
-        }
+        let Some(named) = locale_named(first) else {
+            return args;
+        };
+        self.locale_answerable(named, LOCALES_AS_US, first.span());
         rest
+    }
+
+    /// A locale argument that is not a CONSTANT: `Locale` is not a value
+    /// here, so there is nothing to read. Said in full, because "cannot find
+    /// symbol" about `useLocale` reads as though the method did not exist.
+    fn locale_not_written_out(&mut self, what: &str, span: SourceSpan) {
+        self.error(
+            span,
+            format!(
+                "{what} exists in Java, but caturra models java.util.Locale only as a constant \
+                 read where it is WRITTEN — write it out, as Locale.US"
+            ),
+        );
+    }
+
+    /// Complain about a locale caturra cannot answer for, by name. Answering
+    /// in the wrong locale would be a wrong answer, not a smaller one.
+    fn locale_answerable(&mut self, named: &str, allowed: &[&str], span: SourceSpan) -> bool {
+        if allowed.contains(&named) {
+            return true;
+        }
+        let what = if named == "getDefault" {
+            String::from("Locale.getDefault()")
+        } else {
+            format!("java.util.Locale.{named}")
+        };
+        self.error(
+            span,
+            format!("{what} is not supported by caturra (it works in the US/root locale)"),
+        );
+        false
     }
 
     #[allow(clippy::too_many_lines)] // one arm per formattable type
@@ -34751,6 +34808,55 @@ impl BodyGen<'_> {
         }
     }
 
+    /// `NumberFormat.getInstance(Locale.US)` and the three beside it — the
+    /// factories that take a locale.
+    ///
+    /// The separators are the same for every locale caturra answers for, so
+    /// the argument is checked and dropped. A CURRENCY is the exception, and
+    /// not because of formatting: the symbol is data a JDK carries per locale
+    /// (`$` for the US, `£` for the UK, the placeholder `¤` where no country
+    /// is named, and `¤ ` with a space for the root) and caturra carries none
+    /// of it — so that one is refused whichever locale it is handed, rather
+    /// than answered with the wrong symbol.
+    #[allow(clippy::option_option)] // call-dispatch return shape
+    fn number_format_in_locale(
+        &mut self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<Option<JType>>> {
+        if class != "NumberFormat"
+            || !matches!(
+                method,
+                "getInstance"
+                    | "getNumberInstance"
+                    | "getIntegerInstance"
+                    | "getPercentInstance"
+                    | "getCurrencyInstance"
+            )
+        {
+            return None;
+        }
+        let [only] = args else {
+            return None;
+        };
+        let named = locale_named(only)?;
+        if method == "getCurrencyInstance" {
+            self.error(
+                only.span(),
+                String::from(
+                    "NumberFormat.getCurrencyInstance(locale) exists in Java, but caturra \
+                     carries no per-locale currency symbol — the no-argument form uses the \
+                     host's",
+                ),
+            );
+            return Some(Some(Some(JType::NumberFormat)));
+        }
+        self.locale_answerable(named, LOCALES_AS_US, only.span());
+        Some(self.builtin_static_call(class, method, &[], span))
+    }
+
     /// Emit an intrinsic static call (`Math.abs(...)`, ...).
     #[allow(clippy::option_option)]
     fn builtin_static_call(
@@ -34760,6 +34866,9 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        if let Some(answer) = self.number_format_in_locale(class, method, args, span) {
+            return answer;
+        }
         // `String.format` is variadic — the one call shape the fixed
         // signature tables cannot express.
         if class == "String" && method == "format" {

@@ -55798,3 +55798,39 @@ public class BufChain {
 }
 "#
 );
+
+// Which locale a call was handed was decided in two places that disagreed —
+// one accepted `Locale.getDefault()` and the other did not — so the same
+// expression compiled in `getDisplayName` and was "cannot find symbol:
+// 'Locale'" in `String.format`. One rule now, asked by every call that takes a
+// locale, which turned four more into answers: the two case mappings,
+// `NumberFormat`'s factories, and `Scanner.useLocale`.
+//
+// caturra formats, cases and parses in the US locale, and every locale it
+// accepts asks for the same text — so the argument is checked and DROPPED
+// rather than ignored.
+differential_test!(
+    the_locales_a_call_can_be_handed,
+    "Loc",
+    r#"
+import java.util.*;
+import java.text.*;
+public class Loc {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    s("format-us", () -> String.format(Locale.US, "%.2f|%,d|%s", 1.5, 1234567, "x"));
+    s("printf-us", () -> { System.out.printf(Locale.US, "%.2f%n", 2.5); return "ok"; });
+    s("nf-getInstance", () -> NumberFormat.getInstance(Locale.US).format(1234.5));
+    s("nf-percent", () -> NumberFormat.getPercentInstance(Locale.US).format(0.25));
+    s("nf-integer", () -> NumberFormat.getIntegerInstance(Locale.US).format(1234.7));
+    s("scanner-useLocale", () -> new Scanner("1.5").useLocale(Locale.US).nextDouble());
+    s("toUpperCase", () -> "abc".toUpperCase(Locale.US));
+    s("toLowerCase", () -> "ABC".toLowerCase(Locale.US));
+  }
+}
+"#
+);

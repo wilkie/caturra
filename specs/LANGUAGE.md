@@ -8989,9 +8989,10 @@ counting catches: a divergence that stopped being one.
   (`strict_a_file_has_no_free_space`)
 - `aFile.toURI()` / `toURL()` — the answer would be a `java.net.URI`, a type
   the program could then do nothing with. (`strict_a_file_has_no_uri`)
-- `scanner.locale()` / `useLocale(l)` — a `java.util.Locale` VALUE, and caturra
+- `scanner.locale()` — it hands a `java.util.Locale` VALUE back, and caturra
   models `Locale` only as a constant read where it is written. The default is
-  host state besides. (`strict_a_scanner_has_no_locale`)
+  host state besides. (`useLocale(l)` TAKES one, and works for every locale
+  caturra answers for.) (`strict_a_scanner_has_no_locale`)
 - `aDate.query(q)` and `adjustInto(t)` — the `TemporalAccessor`/
   `TemporalAdjuster` plumbing every `java.time` value declares, over interfaces
   caturra does not model. A program never writes one itself; they are how the
@@ -15905,6 +15906,34 @@ has no negative and says so in those same words. Along the way:
 the nanosecond DIFFERENCE, which a program that prints the number sees;
 `dividedBy(0)` is "Cannot divide by zero" and not "/ by zero"; and
 `plus(Duration)` / `minus(Duration)` were not implemented at all.
+
+**Which locale a call was handed was decided in two places, and they
+disagreed.** `Locale` is not a value here — the constant is read where it is
+WRITTEN — and the list of locales caturra can answer for was spelled out twice:
+once in `english_locale`, which accepted `Locale.getDefault()`, and once inline
+in the format path, which did not. So
+`Month.getDisplayName(style, Locale.getDefault())` compiled and
+`String.format(Locale.getDefault(), …)` was "cannot find symbol: 'Locale'"
+about the same expression. One function answers it now, and every call that
+takes a locale asks that one.
+
+Applying it where it was missing turned four more calls from refusals into
+answers: `"abc".toUpperCase(Locale.US)` and `toLowerCase`,
+`NumberFormat.getInstance`/`getNumberInstance`/`getIntegerInstance`/
+`getPercentInstance(locale)`, and `scanner.useLocale(locale)`. caturra formats,
+cases and parses in the US locale and every locale it accepts — `US`,
+`ENGLISH`, `UK`, `CANADA`, `ROOT`, `getDefault()` — asks for the same text, so
+the argument is checked and dropped rather than ignored. `Locale.GERMANY` and
+`Locale.FRANCE` are refused BY NAME, because answering in the wrong locale is a
+wrong answer and not a smaller one.
+
+`getCurrencyInstance(locale)` is the exception, and not because of formatting:
+the symbol is data a JDK carries per locale (`$` for the US, `£` for the UK,
+the placeholder `¤` where no country is named, and `¤ ` with a space for the
+root) and caturra carries none of it. Measuring it is what caught the
+assumption — the no-argument form answers `¤` here, so "drop the argument and
+use the default" would have said `¤12.50` where a JDK says `$12.50`. It is
+refused whichever locale it is handed.
 
 **`StringBuffer` was refused for a reason that had expired.** The refusal said
 aliasing it to `StringBuilder` would make `getClass()` lie about which one a
