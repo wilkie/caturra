@@ -51855,13 +51855,15 @@ stricter_than_javac!(
     "import java.util.*;\npublic class StrictScannerLocale { static void r() { new Scanner(\"a\").locale(); } }"
 );
 
-// The `TemporalAccessor` plumbing every `java.time` value declares: a
-// `TemporalQuery` is an interface caturra does not model, so there is nothing
-// to pass — and a program never writes one itself.
+// The seven standard questions are answered; a query a PROGRAM WRITES is not.
+// caturra models the `TemporalQueries` factories rather than the interface, so
+// there is no lambda to build — and it says that, where the generic complaint
+// ("a lambda is only allowed where a functional-interface type is expected")
+// would be a false statement about `TemporalQuery`.
 stricter_than_javac!(
-    strict_a_date_has_no_query,
-    "StrictDateQuery",
-    "import java.time.*;\npublic class StrictDateQuery { static void r() { LocalDate.of(2024, 1, 1).query(null); } }"
+    strict_a_query_of_your_own,
+    "StrictOwnQuery",
+    "import java.time.*;\nimport java.time.temporal.*;\npublic class StrictOwnQuery { static void r() { LocalDate.of(2024, 1, 1).query(v -> v.get(ChronoField.YEAR)); } }"
 );
 
 // ...and everything that carries an INSTANT or a ZONE, which needs the
@@ -56054,6 +56056,124 @@ public class CF2 {
     s("adj-unsupported", () -> ChronoField.HOUR_OF_DAY.adjustInto(d, 5));
     s("adj-null", () -> ChronoField.YEAR.adjustInto(null, 1));
     s("adj-type", () -> ChronoField.YEAR.adjustInto(d, 1999).getClass().getName());
+  }
+}
+"#
+);
+
+// The seven standard questions a `java.time` value answers about itself, and
+// which values answer which — RECORDED from a JDK, because no rule here would
+// have guessed it: a `Month` names the ISO calendar and a `DayOfWeek` does
+// not, and a `MonthDay` has no precision at all.
+differential_test!(
+    the_seven_questions_a_value_answers,
+    "Q",
+    r#"
+import java.time.*;
+import java.time.chrono.*;
+import java.time.temporal.*;
+public class Q {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    LocalDate d = LocalDate.of(2024, 3, 14);
+    LocalTime t = LocalTime.of(10, 15, 30);
+    LocalDateTime dt = LocalDateTime.of(2024, 3, 14, 10, 15, 30);
+    // The standard queries, on each of the three.
+    s("d-precision", () -> d.query(TemporalQueries.precision()));
+    s("d-localDate", () -> d.query(TemporalQueries.localDate()));
+    s("d-localTime", () -> d.query(TemporalQueries.localTime()));
+    s("d-chronology", () -> d.query(TemporalQueries.chronology()));
+    s("d-zone", () -> d.query(TemporalQueries.zone()));
+    s("d-zoneId", () -> d.query(TemporalQueries.zoneId()));
+    s("d-offset", () -> d.query(TemporalQueries.offset()));
+    s("t-precision", () -> t.query(TemporalQueries.precision()));
+    s("t-localDate", () -> t.query(TemporalQueries.localDate()));
+    s("t-localTime", () -> t.query(TemporalQueries.localTime()));
+    s("t-chronology", () -> t.query(TemporalQueries.chronology()));
+    s("t-zone", () -> t.query(TemporalQueries.zone()));
+    s("t-zoneId", () -> t.query(TemporalQueries.zoneId()));
+    s("t-offset", () -> t.query(TemporalQueries.offset()));
+    s("dt-precision", () -> dt.query(TemporalQueries.precision()));
+    s("dt-localDate", () -> dt.query(TemporalQueries.localDate()));
+    s("dt-localTime", () -> dt.query(TemporalQueries.localTime()));
+    s("dt-chronology", () -> dt.query(TemporalQueries.chronology()));
+    s("dt-zone", () -> dt.query(TemporalQueries.zone()));
+    s("dt-zoneId", () -> dt.query(TemporalQueries.zoneId()));
+    s("dt-offset", () -> dt.query(TemporalQueries.offset()));
+    s("month-precision", () -> Month.MARCH.query(TemporalQueries.precision()));
+    s("dow-precision", () -> DayOfWeek.MONDAY.query(TemporalQueries.precision()));
+    s("year-precision", () -> Year.of(2024).query(TemporalQueries.precision()));
+    s("ym-precision", () -> YearMonth.of(2024,3).query(TemporalQueries.precision()));
+    s("md-localDate", () -> MonthDay.of(3,14).query(TemporalQueries.localDate()));
+    // ...and a query a PROGRAM writes.
+    // Duration/Period.from(TemporalAmount)
+  }
+}
+"#
+);
+
+// ...and the calendar those questions name. `IsoChronology.INSTANCE` is a
+// singleton a program compares with `==`, its `toString` and `getId` are both
+// `ISO`, and its CALENDAR TYPE is the lower-case CLDR name.
+differential_test!(
+    the_only_calendar_there_is,
+    "Chr",
+    r#"
+import java.time.*;
+import java.time.chrono.*;
+import java.time.temporal.*;
+public class Chr {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    LocalDate d = LocalDate.of(2024, 3, 14);
+    s("getChronology", () -> d.getChronology());
+    s("toString", () -> IsoChronology.INSTANCE.toString());
+    s("getId", () -> IsoChronology.INSTANCE.getId());
+    s("getCalendarType", () -> IsoChronology.INSTANCE.getCalendarType());
+    s("class", () -> IsoChronology.INSTANCE.getClass().getName());
+    s("same", () -> d.getChronology() == IsoChronology.INSTANCE);
+    s("isLeap", () -> IsoChronology.INSTANCE.isLeapYear(2024));
+    s("eq", () -> d.getChronology().equals(IsoChronology.INSTANCE));
+    s("ymd-precision", () -> YearMonth.of(2024,3).query(TemporalQueries.precision()) + "");
+    s("md-precision", () -> MonthDay.of(3,14).query(TemporalQueries.precision()) + "");
+    s("md-chronology", () -> MonthDay.of(3,14).query(TemporalQueries.chronology()) + "");
+    s("year-chronology", () -> Year.of(2024).query(TemporalQueries.chronology()) + "");
+    s("month-chronology", () -> Month.MARCH.query(TemporalQueries.chronology()) + "");
+    s("dow-chronology", () -> DayOfWeek.MONDAY.query(TemporalQueries.chronology()) + "");
+    s("era-precision", () -> IsoEra.CE.query(TemporalQueries.precision()) + "");
+    s("era-chronology", () -> IsoEra.CE.query(TemporalQueries.chronology()) + "");
+  }
+}
+"#
+);
+
+// `Duration.from` / `Period.from` — an amount as this kind, or a refusal
+// naming the unit that does not fit. The two complaints are different
+// sentences and different exception classes.
+differential_test!(
+    an_amount_as_the_other_kind,
+    "Frm",
+    r#"
+import java.time.*;
+public class Frm {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    s("dur-from-dur", () -> Duration.from(Duration.ofHours(2)));
+    s("dur-from-period", () -> Duration.from(Period.ofDays(1)));
+    s("per-from-period", () -> Period.from(Period.of(1,2,3)));
+    s("per-from-dur", () -> Period.from(Duration.ofHours(2)));
   }
 }
 "#

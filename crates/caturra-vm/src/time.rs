@@ -1288,6 +1288,54 @@ pub fn unit_nanos(unit: u8) -> Option<i64> {
     })
 }
 
+/// The smallest unit a value HAS, which is what `TemporalQueries.precision()`
+/// answers. `None` where a JDK answers null — a `MonthDay` has no precision,
+/// because a month and a day are not a unit.
+#[must_use]
+pub fn query_precision(value: crate::value::Temporal) -> Option<u8> {
+    use crate::value::Temporal;
+    Some(match value {
+        // NANOS, DAYS, MONTHS, YEARS, ERAS — the unit ordinals.
+        Temporal::Time(_) | Temporal::DateTime(_) => 0,
+        Temporal::Date(_) | Temporal::DayOfWeek(_) => 7,
+        Temporal::Month(_) | Temporal::YearMonth(_, _) => 9,
+        Temporal::Year(_) => 10,
+        Temporal::Era(_) => 14,
+        _ => return None,
+    })
+}
+
+/// Whether a value names a CALENDAR, which is what
+/// `TemporalQueries.chronology()` asks. Recorded from a JDK, not derived: a
+/// `Month` answers ISO and a `DayOfWeek` answers null, and nothing about
+/// either says why.
+#[must_use]
+pub fn query_has_chronology(value: crate::value::Temporal) -> bool {
+    use crate::value::Temporal;
+    matches!(
+        value,
+        Temporal::Date(_)
+            | Temporal::DateTime(_)
+            | Temporal::Month(_)
+            | Temporal::MonthDay(_, _)
+            | Temporal::Year(_)
+            | Temporal::YearMonth(_, _)
+    )
+}
+
+/// The seven `TemporalQueries` factories, in the order caturra indexes them.
+/// A JDK's own text for each is its lambda's class name, which no two runs
+/// agree on; these are the FACTORY names, which is what a program wrote.
+pub const QUERY_NAMES: [&str; 7] = [
+    "precision",
+    "localDate",
+    "localTime",
+    "chronology",
+    "zone",
+    "zoneId",
+    "offset",
+];
+
 /// `Duration.parse` — the ISO-8601 form `PnDTnHnMnS`, where every part is
 /// optional, each may be signed, and the seconds may have a fraction.
 ///

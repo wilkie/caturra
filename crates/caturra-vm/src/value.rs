@@ -394,6 +394,14 @@ pub enum Temporal {
     Range(crate::time::ValueRange),
     /// A `java.time.temporal.TemporalAdjusters` rule.
     Adjuster(crate::time::Adjuster),
+    /// A `java.time.temporal.TemporalQuery` — one of the seven
+    /// `TemporalQueries` factories, by its own index. A query is a QUESTION,
+    /// so it carries nothing but which one it is.
+    Query(u8),
+    /// `java.time.chrono.IsoChronology.INSTANCE`. caturra models the ISO
+    /// calendar and only that, so the value is the calendar itself and there
+    /// is nothing to distinguish two of them.
+    Chronology,
     /// `java.time.chrono.IsoEra` — 0 is BCE and 1 is CE.
     Era(u8),
     /// `java.time.format.TextStyle`, by its own ordinal. It is an ENUM like
@@ -440,6 +448,11 @@ impl Temporal {
             Temporal::DayOfWeek(_) => "java/time/DayOfWeek",
             Temporal::Month(_) => "java/time/Month",
             Temporal::Field(_) => "java/time/temporal/ChronoField",
+            // A JDK's queries are lambdas inside `TemporalQueries`, so no two
+            // of them share a class and none is a name a program can write.
+            // The enclosing class is the honest thing to report.
+            Temporal::Query(_) => "java/time/temporal/TemporalQueries",
+            Temporal::Chronology => "java/time/chrono/IsoChronology",
             Temporal::Range(_) => "java/time/temporal/ValueRange",
             // Every adjuster is a lambda inside the JDK, so its class is a
             // synthetic one; a program never prints it usefully.
@@ -478,6 +491,9 @@ impl Temporal {
             Temporal::DayOfWeek(day) => crate::time::day_name(day).to_owned(),
             Temporal::Month(month) => crate::time::month_name(month).to_owned(),
             Temporal::Field(field) => crate::time::field_info(field).text.to_owned(),
+            Temporal::Query(which) => crate::time::QUERY_NAMES[usize::from(which)].to_owned(),
+            // `IsoChronology.toString()` is its ID, which is `ISO`.
+            Temporal::Chronology => String::from("ISO"),
             Temporal::Range(range) => range.text(),
             // An adjuster is a LAMBDA in a JDK, and its text is that lambda's
             // class and an address — different on every run, so unmatchable
@@ -1722,6 +1738,11 @@ impl Heap {
             Temporal::Month(month) => (1u8, month),
             Temporal::Field(field) => (3u8, field),
             Temporal::Era(era) => (4u8, era),
+            // Both are SINGLETONS in a JDK: `TemporalQueries.localDate()`
+            // answers the same object every call, and `IsoChronology.INSTANCE`
+            // is one object a program compares with `==`.
+            Temporal::Query(which) => (5u8, which),
+            Temporal::Chronology => (6u8, 0),
             Temporal::TextStyle(style) => (6u8, style),
             Temporal::FormatStyle(style) => (7u8, style),
         };

@@ -8993,10 +8993,10 @@ counting catches: a divergence that stopped being one.
   models `Locale` only as a constant read where it is written. The default is
   host state besides. (`useLocale(l)` TAKES one, and works for every locale
   caturra answers for.) (`strict_a_scanner_has_no_locale`)
-- `aDate.query(q)` and `adjustInto(t)` — the `TemporalAccessor`/
-  `TemporalAdjuster` plumbing every `java.time` value declares, over interfaces
-  caturra does not model. A program never writes one itself; they are how the
-  JDK's own types talk to each other. (`strict_a_date_has_no_query`)
+- `aDate.query(v -> …)` — a query a PROGRAM writes. The seven
+  `TemporalQueries` factories are answered, and so is `adjustInto`; it is the
+  INTERFACE that is not modelled, so there is no lambda to build.
+  (`strict_a_query_of_your_own`)
 - `aDateTime.atZone(z)`, `atOffset(o)`, `toInstant()`, `toEpochSecond(o)`,
   `ofInstant(...)` and `getChronology()` — everything carrying an INSTANT, a
   ZONE or a calendar choice, which needs the timezone database caturra does not
@@ -15906,6 +15906,31 @@ has no negative and says so in those same words. Along the way:
 the nanosecond DIFFERENCE, which a program that prints the number sees;
 `dividedBy(0)` is "Cannot divide by zero" and not "/ by zero"; and
 `plus(Duration)` / `minus(Duration)` were not implemented at all.
+
+**And the seven questions a value answers about itself.** `value.query(q)` was
+refused on eleven classes; the standard `TemporalQueries` — precision,
+localDate, localTime, chronology, zone, zoneId, offset — are answered now, and
+WHICH value answers WHICH is recorded from a JDK rather than derived, because
+no rule here would have guessed it: a `Month` names the ISO calendar and a
+`DayOfWeek` does not, a `MonthDay` has no precision at all, and an `IsoEra`'s
+is Eras. Each query is a SINGLETON, as a JDK's are, so two compare equal with
+`==`.
+
+That needed the calendar those questions name, so `IsoChronology.INSTANCE` is a
+value: `toString` and `getId` are both `ISO`, `getCalendarType` is the
+lower-case CLDR name, and it is one object. Which also answered
+`getChronology()` on a date, a date-time and a period — three refusals that
+cited the missing type. `Duration.from` and `Period.from` went the same way: an
+amount as this kind, or a refusal naming the unit that does not fit, in two
+different sentences and two different exception classes.
+
+Still refused, and now narrowly: a query a PROGRAM writes. caturra models the
+factories and not the interface, so there is no lambda to build — and it says
+so, where the generic complaint ("a lambda is only allowed where a
+functional-interface type is expected") is a false statement about
+`TemporalQuery`. `ChronoField.query` came off the refusal list for a different
+reason: a JDK's `TemporalField` declares no `query` at all, so caturra had been
+claiming a method exists in Java that does not.
 
 **`java.time`'s operations are written BOTH ways round, and caturra had only
 the near end.** `x.adjustInto(t)` is `t.with(x)`; `unit.addTo(t, n)` is

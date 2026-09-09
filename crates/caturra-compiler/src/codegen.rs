@@ -6457,6 +6457,7 @@ fn library_value_type(simple: &str) -> Option<JType> {
         "MonthDay" => JType::MonthDay,
         "TemporalAdjuster" => JType::TemporalAdjuster,
         "IsoEra" => JType::IsoEra,
+        "IsoChronology" => JType::Chronology,
         "TextStyle" => JType::TextStyle,
         "FormatStyle" => JType::FormatStyle,
         "DateTimeFormatter" => JType::DateFormat,
@@ -6612,6 +6613,8 @@ fn library_comparable(ty: JType) -> Option<bool> {
         | JType::ChronoUnit
         | JType::ChronoField
         | JType::IsoEra
+        | JType::TemporalQuery
+        | JType::Chronology
         | JType::TextStyle
         | JType::FormatStyle => true,
         _ => return None,
@@ -6750,6 +6753,7 @@ fn time_constant(path: &[String], table: &MethodTable) -> Option<(JType, i32)> {
         "ChronoUnit" => JType::ChronoUnit,
         "ChronoField" => JType::ChronoField,
         "IsoEra" => JType::IsoEra,
+        "IsoChronology" => JType::Chronology,
         "TextStyle" => JType::TextStyle,
         "FormatStyle" => JType::FormatStyle,
         "RoundingMode" => JType::RoundingMode,
@@ -6777,6 +6781,8 @@ fn time_constant_names(class: &str) -> Option<&'static [&'static str]> {
         // and are asked for the same way.
         "LocalTime" => &["MIDNIGHT", "NOON", "MAX", "MIN"],
         "Duration" | "Period" => &["ZERO"],
+        // The calendar itself, which a JDK spells as a static field.
+        "IsoChronology" => &["INSTANCE"],
         // The two formatting styles, in the enum's own order — which is also
         // `ordinal()`, and the number `getDisplayName` reads.
         "TextStyle" => &[
@@ -8715,6 +8721,11 @@ enum JType {
     ChronoField,
     /// `java.time.temporal.ValueRange` — what a field can hold.
     ValueRange,
+    /// A `java.time.temporal.TemporalQuery` — one of the seven standard
+    /// questions a value can be asked about itself.
+    TemporalQuery,
+    /// `java.time.chrono.IsoChronology` — the calendar, and the only one.
+    Chronology,
     /// A `java.time.temporal.TemporalAdjuster` — a rule `with` applies.
     TemporalAdjuster,
     /// `java.time.chrono.IsoEra`, which `LocalDate.getEra` answers.
@@ -9340,6 +9351,8 @@ impl JType {
             JType::ChronoUnit => String::from("ChronoUnit"),
             JType::ChronoField => String::from("ChronoField"),
             JType::TemporalAdjuster => String::from("TemporalAdjuster"),
+            JType::TemporalQuery => String::from("TemporalQuery"),
+            JType::Chronology => String::from("IsoChronology"),
             JType::IsoEra => String::from("IsoEra"),
             JType::TextStyle => String::from("TextStyle"),
             JType::FormatStyle => String::from("FormatStyle"),
@@ -9420,6 +9433,8 @@ impl JType {
                 | JType::ChronoField
                 | JType::TemporalAdjuster
                 | JType::IsoEra
+                | JType::TemporalQuery
+                | JType::Chronology
                 | JType::TextStyle
                 | JType::FormatStyle
                 | JType::Year
@@ -9532,6 +9547,7 @@ impl JType {
     }
 
     /// The JVM field descriptor for this type.
+    #[allow(clippy::too_many_lines)] // one arm per type
     fn descriptor(self, table: &MethodTable) -> String {
         match self {
             // Erasure: a parameterized type is its raw class; a type
@@ -9593,6 +9609,8 @@ impl JType {
             JType::ChronoUnit => String::from("Ljava/time/temporal/ChronoUnit;"),
             JType::ChronoField => String::from("Ljava/time/temporal/ChronoField;"),
             JType::TemporalAdjuster => String::from("Ljava/time/temporal/TemporalAdjuster;"),
+            JType::TemporalQuery => String::from("Ljava/time/temporal/TemporalQuery;"),
+            JType::Chronology => String::from("Ljava/time/chrono/IsoChronology;"),
             JType::IsoEra => String::from("Ljava/time/chrono/IsoEra;"),
             JType::TextStyle => String::from("Ljava/time/format/TextStyle;"),
             JType::FormatStyle => String::from("Ljava/time/format/FormatStyle;"),
@@ -11339,6 +11357,8 @@ enum BParam {
     Comparator,
     /// `java.lang.StringBuilder` (`StringBuilder.compareTo(StringBuilder)`).
     Builder,
+    /// One of the seven standard `TemporalQueries`.
+    TemporalQuery,
     /// Either builder — what a JDK spells as two overloads.
     AnyBuilder,
     /// A map's key type, boxed when primitive (`map.get(k)`).
@@ -11419,6 +11439,8 @@ enum BRet {
     ValueRange,
     /// A `TemporalAdjuster`, which is what the factories answer.
     TemporalAdjuster,
+    TemporalQuery,
+    Chronology,
     /// A `java.time.chrono.IsoEra`, and an array of them.
     Era,
     EraArray,
@@ -12268,15 +12290,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // caturra does not model, so there is nothing to pass or answer — and a
     // program never writes these itself; they are how the JDK's own types talk
     // to each other.
-    ("LocalDate", "query", TEMPORAL_QUERY),
-    ("LocalTime", "query", TEMPORAL_QUERY),
-    (
-        "LocalDateTime",
-        "query",
-        TEMPORAL_QUERY,
-    ),
-    ("DayOfWeek", "query", TEMPORAL_QUERY),
-    ("Month", "query", TEMPORAL_QUERY),
     // Everything that carries an INSTANT or a ZONE. caturra models the
     // arithmetic slice of `java.time`, and answering a zone honestly needs a
     // timezone database it does not vendor (see specs/SCOPE.md).
@@ -12293,13 +12306,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("LocalDateTime", "atZone", "caturra does not model java.time.ZoneId"),
     // The CHRONOLOGY every date carries. caturra models the ISO calendar and
     // no other, so the handle would answer for a choice that was never made.
-    ("LocalDate", "getChronology", ISO_ONLY),
-    (
-        "LocalDateTime",
-        "getChronology",
-        ISO_ONLY,
-    ),
-    ("Period", "getChronology", ISO_ONLY),
     // The `java.nio.file.Files` methods that want a type caturra does not
     // model. Each is real Java, so it says so by name rather than reading as a
     // missing symbol.
@@ -12453,8 +12459,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("ByteArrayOutputStream", "nullOutputStream", NULL_STREAM),
     // ---- java.time: the interface plumbing (`TemporalAmount`,
     // `TemporalAccessor`) that a program never writes by hand.
-    ("Duration", "from", NO_TEMPORAL_AMOUNT),
-    ("Period", "from", NO_TEMPORAL_AMOUNT),
     // ---- java.lang.StackTraceElement: the three pieces Java 9 added for the
     // module system, which caturra does not have.
     ("StackTraceElement", "getModuleName", NO_MODULES),
@@ -12470,11 +12474,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("IntSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
     ("LongSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
     ("DoubleSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
-    ("Year", "query", TEMPORAL_QUERY),
-    ("YearMonth", "query", TEMPORAL_QUERY),
-    ("MonthDay", "query", TEMPORAL_QUERY),
-    ("IsoEra", "query", TEMPORAL_QUERY),
-    ("ChronoField", "query", TEMPORAL_QUERY),
     ("ChronoField", "resolve", "caturra does not model field RESOLUTION, which is a parsing step"),
     (
         "TemporalAdjusters",
@@ -12684,8 +12683,6 @@ const NO_ENCLOSING_METHOD: &str =
 const CHECKED_VIEWS: &str = "caturra does not model a dynamically type-checked view - the compiler's own check is the one that runs here";
 const STREAM_BUILDER: &str = "caturra does not model java.util.stream.Stream.Builder - collect the elements and call stream()";
 const NULL_STREAM: &str = "caturra models no plain java.io.OutputStream value to answer with";
-const NO_TEMPORAL_AMOUNT: &str =
-    "caturra does not model java.time.temporal.TemporalAmount as a type";
 const FORMATTER_PARSES_ELSEWHERE: &str = "caturra's DateTimeFormatter formats - to read text back, write LocalDate.parse(text, formatter) (or LocalTime/LocalDateTime)";
 const TEMPORAL_QUERY: &str = "caturra does not model java.time.temporal.TemporalQuery";
 const NO_LOCALE_VALUE: &str =
@@ -12740,6 +12737,8 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::Path => "Path",
         JType::DecimalFormat => "DecimalFormat",
         JType::TemporalAdjuster => "TemporalAdjuster",
+        JType::TemporalQuery => "TemporalQuery",
+        JType::Chronology => "IsoChronology",
         JType::NumberFormat => "NumberFormat",
         JType::Collector(_) => "Collector",
         JType::DoubleStream => "DoubleStream",
@@ -15310,6 +15309,22 @@ const FILE_METHODS: &[BuiltinMethod] = &[
 /// no clock, no locale, no timezone database, and so exactly comparable with
 /// a JDK.
 const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
+    // The calendar a value counts in, which here is always the ISO one.
+    bm(
+        "getChronology",
+        &[],
+        BRet::Chronology,
+        "()Ljava/time/chrono/IsoChronology;",
+    ),
+    // `value.query(q)` — one of the seven standard questions. It answers
+    // whatever the question is about (a unit, a date, a time, the calendar) or
+    // null, so its static type is the opaque one.
+    bm(
+        "query",
+        &[BParam::TemporalQuery],
+        BRet::Object,
+        "(Ljava/time/temporal/TemporalQuery;)Ljava/lang/Object;",
+    ),
     // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
     // `java.time` talks to itself. It answers a bare `Temporal`, a type
     // caturra does not model: the value handed back really is the target's own
@@ -15589,6 +15604,15 @@ const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
 /// `getValue()` and `ordinal()` — and `==`, which works because the constants
 /// are interned.
 const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
+    // `value.query(q)` — one of the seven standard questions. It answers
+    // whatever the question is about (a unit, a date, a time, the calendar) or
+    // null, so its static type is the opaque one.
+    bm(
+        "query",
+        &[BParam::TemporalQuery],
+        BRet::Object,
+        "(Ljava/time/temporal/TemporalQuery;)Ljava/lang/Object;",
+    ),
     // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
     // `java.time` talks to itself. It answers a bare `Temporal`, a type
     // caturra does not model: the value handed back really is the target's own
@@ -15660,6 +15684,15 @@ const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
 ];
 
 const MONTH_METHODS: &[BuiltinMethod] = &[
+    // `value.query(q)` — one of the seven standard questions. It answers
+    // whatever the question is about (a unit, a date, a time, the calendar) or
+    // null, so its static type is the opaque one.
+    bm(
+        "query",
+        &[BParam::TemporalQuery],
+        BRet::Object,
+        "(Ljava/time/temporal/TemporalQuery;)Ljava/lang/Object;",
+    ),
     // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
     // `java.time` talks to itself. It answers a bare `Temporal`, a type
     // caturra does not model: the value handed back really is the target's own
@@ -15738,6 +15771,15 @@ const MONTH_METHODS: &[BuiltinMethod] = &[
 /// `java.time.LocalTime` — a time of day. It WRAPS at midnight rather than
 /// carrying: `23:00` plus two hours is `01:00`.
 const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
+    // `value.query(q)` — one of the seven standard questions. It answers
+    // whatever the question is about (a unit, a date, a time, the calendar) or
+    // null, so its static type is the opaque one.
+    bm(
+        "query",
+        &[BParam::TemporalQuery],
+        BRet::Object,
+        "(Ljava/time/temporal/TemporalQuery;)Ljava/lang/Object;",
+    ),
     // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
     // `java.time` talks to itself. It answers a bare `Temporal`, a type
     // caturra does not model: the value handed back really is the target's own
@@ -15956,6 +15998,22 @@ const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
 /// `java.time.LocalDateTime` — the two halves, and the arithmetic that
 /// carries whole days from the time into the date.
 const LOCAL_DATE_TIME_METHODS: &[BuiltinMethod] = &[
+    // The calendar a value counts in, which here is always the ISO one.
+    bm(
+        "getChronology",
+        &[],
+        BRet::Chronology,
+        "()Ljava/time/chrono/IsoChronology;",
+    ),
+    // `value.query(q)` — one of the seven standard questions. It answers
+    // whatever the question is about (a unit, a date, a time, the calendar) or
+    // null, so its static type is the opaque one.
+    bm(
+        "query",
+        &[BParam::TemporalQuery],
+        BRet::Object,
+        "(Ljava/time/temporal/TemporalQuery;)Ljava/lang/Object;",
+    ),
     // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
     // `java.time` talks to itself. It answers a bare `Temporal`, a type
     // caturra does not model: the value handed back really is the target's own
@@ -16463,6 +16521,13 @@ const DURATION_METHODS: &[BuiltinMethod] = &[
 /// `java.time.Period` — years, months and days as WRITTEN. `P1M` is one
 /// month, not thirty days, and never becomes them.
 const PERIOD_METHODS: &[BuiltinMethod] = &[
+    // The calendar a value counts in, which here is always the ISO one.
+    bm(
+        "getChronology",
+        &[],
+        BRet::Chronology,
+        "()Ljava/time/chrono/IsoChronology;",
+    ),
     // `amount.addTo(t)` / `subtractFrom(t)` — `t.plus(amount)` and
     // `t.minus(amount)` from the amount's end.
     bm(
@@ -17274,6 +17339,15 @@ const MATH_CONTEXT_METHODS: &[BuiltinMethod] = &[
 /// `java.time.Year` — a year on its own, which is what a program keeps when
 /// the month and day would be a lie.
 const YEAR_METHODS: &[BuiltinMethod] = &[
+    // `value.query(q)` — one of the seven standard questions. It answers
+    // whatever the question is about (a unit, a date, a time, the calendar) or
+    // null, so its static type is the opaque one.
+    bm(
+        "query",
+        &[BParam::TemporalQuery],
+        BRet::Object,
+        "(Ljava/time/temporal/TemporalQuery;)Ljava/lang/Object;",
+    ),
     // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
     // `java.time` talks to itself. It answers a bare `Temporal`, a type
     // caturra does not model: the value handed back really is the target's own
@@ -17481,6 +17555,15 @@ const YEAR_STATIC_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.YearMonth` — the unit a statement covers.
 const YEAR_MONTH_METHODS: &[BuiltinMethod] = &[
+    // `value.query(q)` — one of the seven standard questions. It answers
+    // whatever the question is about (a unit, a date, a time, the calendar) or
+    // null, so its static type is the opaque one.
+    bm(
+        "query",
+        &[BParam::TemporalQuery],
+        BRet::Object,
+        "(Ljava/time/temporal/TemporalQuery;)Ljava/lang/Object;",
+    ),
     // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
     // `java.time` talks to itself. It answers a bare `Temporal`, a type
     // caturra does not model: the value handed back really is the target's own
@@ -17707,6 +17790,15 @@ const YEAR_MONTH_STATIC_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.MonthDay` — a day of a year that has no year: a birthday.
 const MONTH_DAY_METHODS: &[BuiltinMethod] = &[
+    // `value.query(q)` — one of the seven standard questions. It answers
+    // whatever the question is about (a unit, a date, a time, the calendar) or
+    // null, so its static type is the opaque one.
+    bm(
+        "query",
+        &[BParam::TemporalQuery],
+        BRet::Object,
+        "(Ljava/time/temporal/TemporalQuery;)Ljava/lang/Object;",
+    ),
     // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
     // `java.time` talks to itself. It answers a bare `Temporal`, a type
     // caturra does not model: the value handed back really is the target's own
@@ -18624,6 +18716,78 @@ const VALUE_RANGE_METHODS: &[BuiltinMethod] = &[
 /// A `TemporalAdjuster` is otherwise only ever HANDED to `with`, so this is
 /// the whole of its own surface: the same adjustment written from the
 /// adjuster's end.
+/// The seven standard questions a value can be asked about itself. Each is a
+/// SINGLETON in a JDK — `TemporalQueries.localDate()` answers the same object
+/// every call — which is why a program may compare two with `==`.
+const TEMPORAL_QUERIES_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "precision",
+        &[],
+        BRet::TemporalQuery,
+        "()Ljava/time/temporal/TemporalQuery;",
+    ),
+    bm(
+        "localDate",
+        &[],
+        BRet::TemporalQuery,
+        "()Ljava/time/temporal/TemporalQuery;",
+    ),
+    bm(
+        "localTime",
+        &[],
+        BRet::TemporalQuery,
+        "()Ljava/time/temporal/TemporalQuery;",
+    ),
+    bm(
+        "chronology",
+        &[],
+        BRet::TemporalQuery,
+        "()Ljava/time/temporal/TemporalQuery;",
+    ),
+    bm(
+        "zone",
+        &[],
+        BRet::TemporalQuery,
+        "()Ljava/time/temporal/TemporalQuery;",
+    ),
+    bm(
+        "zoneId",
+        &[],
+        BRet::TemporalQuery,
+        "()Ljava/time/temporal/TemporalQuery;",
+    ),
+    bm(
+        "offset",
+        &[],
+        BRet::TemporalQuery,
+        "()Ljava/time/temporal/TemporalQuery;",
+    ),
+];
+
+/// `java.time.chrono.IsoChronology` — the calendar every value here reports,
+/// and the only one caturra models.
+const CHRONOLOGY_STATIC_METHODS: &[BuiltinMethod] = &[bm(
+    "__instance",
+    &[],
+    BRet::Chronology,
+    "()Ljava/time/chrono/IsoChronology;",
+)];
+
+const CHRONOLOGY_METHODS: &[BuiltinMethod] = &[
+    bm("getId", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getCalendarType", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("isLeapYear", &[BParam::Long], BRet::Boolean, "(J)Z"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+];
+
 const TEMPORAL_ADJUSTER_METHODS: &[BuiltinMethod] = &[bm(
     "adjustInto",
     &[BParam::Temporal],
@@ -18714,6 +18878,15 @@ const TEMPORAL_ADJUSTERS_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.chrono.IsoEra` — an enum with two constants.
 const ISO_ERA_METHODS: &[BuiltinMethod] = &[
+    // `value.query(q)` — one of the seven standard questions. It answers
+    // whatever the question is about (a unit, a date, a time, the calendar) or
+    // null, so its static type is the opaque one.
+    bm(
+        "query",
+        &[BParam::TemporalQuery],
+        BRet::Object,
+        "(Ljava/time/temporal/TemporalQuery;)Ljava/lang/Object;",
+    ),
     // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
     // `java.time` talks to itself. It answers a bare `Temporal`, a type
     // caturra does not model: the value handed back really is the target's own
@@ -18918,6 +19091,16 @@ const CHRONO_FIELD_STATIC_METHODS: &[BuiltinMethod] = &[
 ];
 
 const DURATION_STATIC_METHODS: &[BuiltinMethod] = &[
+    // `from(amount)` — the same amount as this kind, or a refusal naming the
+    // unit that does not fit. A `Period` has no fixed length, so a `Duration`
+    // cannot be made of one; a `Duration` counts seconds, which a `Period`
+    // does not carry.
+    bm(
+        "from",
+        &[BParam::Temporal],
+        BRet::Duration,
+        "(Ljava/time/temporal/TemporalAmount;)Ljava/time/Duration;",
+    ),
     bm(
         "parse",
         &[BParam::CharSeq],
@@ -18981,6 +19164,16 @@ const DURATION_STATIC_METHODS: &[BuiltinMethod] = &[
 ];
 
 const PERIOD_STATIC_METHODS: &[BuiltinMethod] = &[
+    // `from(amount)` — the same amount as this kind, or a refusal naming the
+    // unit that does not fit. A `Period` has no fixed length, so a `Duration`
+    // cannot be made of one; a `Duration` counts seconds, which a `Period`
+    // does not carry.
+    bm(
+        "from",
+        &[BParam::Temporal],
+        BRet::Period,
+        "(Ljava/time/temporal/TemporalAmount;)Ljava/time/Period;",
+    ),
     bm(
         "parse",
         &[BParam::CharSeq],
@@ -22550,6 +22743,8 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::TemporalQuery
+            | JType::Chronology
             | JType::TextStyle
             | JType::FormatStyle
             | JType::Year
@@ -22651,6 +22846,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
             "java/time/temporal/TemporalAdjuster",
             TEMPORAL_ADJUSTER_METHODS,
         )),
+        JType::Chronology => Some(("java/time/chrono/IsoChronology", CHRONOLOGY_METHODS)),
         JType::IsoEra => Some(("java/time/chrono/IsoEra", ISO_ERA_METHODS)),
         JType::TextStyle => Some(("java/time/format/TextStyle", TEXT_STYLE_METHODS)),
         JType::FormatStyle => Some(("java/time/format/FormatStyle", STYLE_METHODS)),
@@ -23582,6 +23778,11 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
             "java/time/temporal/TemporalAdjusters",
             TEMPORAL_ADJUSTERS_METHODS,
         )),
+        "TemporalQueries" => Some((
+            "java/time/temporal/TemporalQueries",
+            TEMPORAL_QUERIES_METHODS,
+        )),
+        "IsoChronology" => Some(("java/time/chrono/IsoChronology", CHRONOLOGY_STATIC_METHODS)),
         "IsoEra" => Some(("java/time/chrono/IsoEra", ISO_ERA_STATIC_METHODS)),
         "TextStyle" => Some(("java/time/format/TextStyle", TEXT_STYLE_STATIC_METHODS)),
         "FormatStyle" => Some(("java/time/format/FormatStyle", FORMAT_STYLE_STATIC_METHODS)),
@@ -24108,6 +24309,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         | BParam::Comparator => JType::Object(ClassId(0)),
         // The receiver's OWN kind: `compareTo` compares like with like.
         BParam::Builder => JType::StringBuilder(args.builder),
+        BParam::TemporalQuery => JType::TemporalQuery,
         // `between` takes any two temporals, and a probe (`indexOf`) takes
         // anything at all: both are `Object` here, and the VM checks what it
         // was actually handed.
@@ -24626,6 +24828,8 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::ChronoUnit => Some(JType::ChronoUnit),
         BRet::ChronoField => Some(JType::ChronoField),
         BRet::TemporalAdjuster => Some(JType::TemporalAdjuster),
+        BRet::TemporalQuery => Some(JType::TemporalQuery),
+        BRet::Chronology => Some(JType::Chronology),
         BRet::Era => Some(JType::IsoEra),
         BRet::EraArray => Some(JType::Array {
             elem: ElemType::IsoEra,
@@ -32915,6 +33119,8 @@ impl BodyGen<'_> {
             | JType::ChronoUnit
             | JType::ChronoField
             | JType::TemporalAdjuster
+            | JType::TemporalQuery
+            | JType::Chronology
             | JType::IsoEra
             | JType::TextStyle
             | JType::FormatStyle
@@ -33399,6 +33605,24 @@ impl BodyGen<'_> {
         {
             self.locale_answerable(named, LOCALES_AS_US, only.span());
             return self.builtin_instance_call(receiver_ty, method, &[], span);
+        }
+        // `value.query(v -> ...)` — a query a PROGRAM writes. caturra models
+        // the seven `TemporalQueries` factories and not the interface itself,
+        // so this is refused by name: the generic complaint says a lambda is
+        // "only allowed where a functional-interface type is expected", which
+        // is a false statement about `TemporalQuery`.
+        if method == "query"
+            && let [only] = args
+            && matches!(only, Expr::Lambda { .. } | Expr::MethodRef { .. })
+        {
+            self.error(
+                only.span(),
+                String::from(
+                    "a TemporalQuery written as a lambda exists in Java, but caturra models \
+                     the seven TemporalQueries factories and not a query of your own",
+                ),
+            );
+            return Some(Some(JType::Error));
         }
         // `ChronoField.YEAR.getDisplayName(Locale.US)`. Unlike the two above,
         // a JDK declares NO no-argument form here, so the locale cannot simply
@@ -34126,6 +34350,8 @@ impl BodyGen<'_> {
                 | JType::BufferedWriter
                 | JType::WriterFace
                 | JType::IsoEra
+                | JType::TemporalQuery
+                | JType::Chronology
                 | JType::TextStyle
                 | JType::FormatStyle => {
                     tags.push_str("Ljava/lang/Object;");
@@ -35440,6 +35666,8 @@ impl BodyGen<'_> {
             JType::ChronoUnit => String::from("java/time/temporal/ChronoUnit"),
             JType::ChronoField => String::from("java/time/temporal/ChronoField"),
             JType::TemporalAdjuster => String::from("java/time/temporal/TemporalAdjuster"),
+            JType::TemporalQuery => String::from("java/time/temporal/TemporalQuery"),
+            JType::Chronology => String::from("java/time/chrono/IsoChronology"),
             JType::IsoEra => String::from("java/time/chrono/IsoEra"),
             JType::TextStyle => String::from("java/time/format/TextStyle"),
             JType::FormatStyle => String::from("java/time/format/FormatStyle"),
@@ -39572,6 +39800,8 @@ impl BodyGen<'_> {
             | JType::ChronoUnit
             | JType::ChronoField
             | JType::TemporalAdjuster
+            | JType::TemporalQuery
+            | JType::Chronology
             | JType::IsoEra
             | JType::TextStyle
             | JType::FormatStyle
@@ -42391,6 +42621,7 @@ impl BodyGen<'_> {
                 JType::ChronoField => "java/time/temporal/ChronoField",
                 JType::TemporalAdjuster => "java/time/temporal/TemporalAdjuster",
                 JType::IsoEra => "java/time/chrono/IsoEra",
+                JType::Chronology => "java/time/chrono/IsoChronology",
                 JType::TextStyle => "java/time/format/TextStyle",
                 JType::FormatStyle => "java/time/format/FormatStyle",
                 JType::RoundingMode => "java/math/RoundingMode",
@@ -44853,6 +45084,8 @@ impl BodyGen<'_> {
             | JType::ChronoUnit
             | JType::ChronoField
             | JType::TemporalAdjuster
+            | JType::TemporalQuery
+            | JType::Chronology
             | JType::IsoEra
             | JType::TextStyle
             | JType::FormatStyle
@@ -45272,6 +45505,8 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::TemporalQuery
+            | JType::Chronology
             | JType::TextStyle
             | JType::FormatStyle
             | JType::Year
@@ -45331,6 +45566,8 @@ impl BodyGen<'_> {
             | JType::ChronoField
             | JType::TemporalAdjuster
             | JType::IsoEra
+            | JType::TemporalQuery
+            | JType::Chronology
             | JType::TextStyle
             | JType::FormatStyle
             | JType::ValueRange

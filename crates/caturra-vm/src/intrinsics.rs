@@ -79,11 +79,45 @@ fn overflowed(overflow: &crate::time::Overflow) -> VmError {
     VmError::UncaughtException(overflow.message())
 }
 
+/// `IsoChronology.INSTANCE` — the ISO calendar, which is the only one caturra
+/// models and the only one `java.time`'s own values report.
+fn chronology_method(
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let text = |heap: &mut Heap, what: &str| Ok(Some(JValue::Ref(Some(heap.alloc_string(what)))));
+    match method {
+        // `toString` and `getId` are both the ID; the CALENDAR TYPE is the
+        // CLDR name, which is lower case and different.
+        "toString" | "getId" => text(heap, "ISO"),
+        "getCalendarType" => text(heap, "iso8601"),
+        "isLeapYear" => {
+            let year = match args.first() {
+                Some(JValue::Long(year)) => *year,
+                Some(JValue::Int(year)) => i64::from(*year),
+                _ => 0,
+            };
+            Ok(Some(JValue::Int(i32::from(
+                crate::time::is_leap_year_long(year),
+            ))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "java/time/chrono/IsoChronology.{method}"
+        ))),
+    }
+}
+
 /// A `java.time` value's `hashCode`, as the JDK computes it — two equal
 /// values must hash alike wherever the program looks, and a `LocalDateTime`
 /// is its two halves `XOR`ed, so this has to be one function.
 fn temporal_hash(value: Temporal) -> i32 {
     match value {
+        // A QUERY and the ISO calendar are singletons: each is one object, so
+        // its identity hash is as good as any and equal values are the same
+        // value.
+        Temporal::Query(which) => i32::from(which),
+        Temporal::Chronology => 0x49_53_4f,
         Temporal::Date(date) => {
             let year = date.year;
             #[allow(clippy::cast_possible_wrap)]
@@ -2947,6 +2981,48 @@ fn temporal_method(
     {
         return field_surface(value, field, heap, method, args);
     }
+    // Every value here counts in the ISO calendar, and says so.
+    if method == "getChronology" {
+        return Ok(Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::Chronology),
+        ))));
+    }
+    // The ISO calendar answers about itself and nothing else.
+    if value == Temporal::Chronology {
+        return chronology_method(heap, method, args);
+    }
+    // `value.query(q)` — one of the seven standard questions. Which values
+    // answer which is RECORDED from a JDK and not derived: a `Month` has a
+    // chronology and a `DayOfWeek` has none, which no rule here would have
+    // guessed.
+    if method == "query"
+        && let Some(JValue::Ref(Some(reference))) = args.first()
+        && let Some(HeapObject::Temporal(Temporal::Query(which))) = heap.get(*reference)
+    {
+        let which = *which;
+        let date = match value {
+            Temporal::Date(date) => Some(date),
+            Temporal::DateTime(when) => Some(when.date),
+            _ => None,
+        };
+        let time = match value {
+            Temporal::Time(time) => Some(time),
+            Temporal::DateTime(when) => Some(when.time),
+            _ => None,
+        };
+        let made = match which {
+            // The smallest unit the value HAS.
+            0 => crate::time::query_precision(value).map(Temporal::Unit),
+            1 => date.map(Temporal::Date),
+            2 => time.map(Temporal::Time),
+            3 => crate::time::query_has_chronology(value).then_some(Temporal::Chronology),
+            // Nothing here carries a zone or an offset.
+            _ => None,
+        };
+        return Ok(Some(JValue::Ref(
+            made.map(|made| heap.intern_temporal(made)),
+        )));
+    }
     // An enum answers the shared methods above; the rest are its own.
     match value {
         Temporal::DayOfWeek(_) | Temporal::Month(_) => {
@@ -2962,6 +3038,14 @@ fn temporal_method(
         Temporal::Unit(unit) => return unit_method(unit, heap, method, args),
         Temporal::Field(field) => return field_method(field, heap, method, args),
         Temporal::Range(range) => return range_method(range, method, args),
+        // A QUERY is a question, and the only thing asked OF one is the
+        // `Object` surface every value answers above.
+        Temporal::Query(_) | Temporal::Chronology => {
+            return Err(VmError::UnknownIntrinsic(format!(
+                "{}.{method}",
+                value.class_name()
+            )));
+        }
         // The two format styles answer only what an enum answers, and their
         // `name`/`toString`/`equals`/`hashCode` are handled above with the
         // rest — an enum's default `toString` IS its constant.
@@ -12739,6 +12823,21 @@ pub fn invoke_static(
                 }
                 // `__of` is the compiler's way of asking for `ZERO`.
                 "__of" => made(heap, crate::time::Duration::of_nanos(0)),
+                // `Duration.from(amount)` — a duration as it stands, and a
+                // refusal for an amount whose units have no fixed length.
+                "from" => match args.first() {
+                    Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                        Some(HeapObject::Temporal(Temporal::Duration(amount))) => {
+                            let amount = *amount;
+                            made(heap, amount)
+                        }
+                        _ => Err(VmError::UncaughtException(String::from(
+                            "java.time.temporal.UnsupportedTemporalTypeException: \
+                             Unit must not have an estimated duration",
+                        ))),
+                    },
+                    _ => Err(throw("java.lang.NullPointerException")),
+                },
                 // `of(amount, unit)` — only a unit with a fixed length, since
                 // a `Duration` is a number of seconds and not a calendar.
                 "of" => {
@@ -12844,6 +12943,21 @@ pub fn invoke_static(
                         days: field(2),
                     },
                 ),
+                // `Period.from(amount)` — a period as it stands. A `Duration`
+                // counts SECONDS, which a period does not carry, and a JDK
+                // names the unit it could not take.
+                "from" => match args.first() {
+                    Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                        Some(HeapObject::Temporal(Temporal::Period(period))) => {
+                            let period = *period;
+                            made(heap, period)
+                        }
+                        _ => Err(date_time_exception(
+                            "Unit must be Years, Months or Days, but was Seconds",
+                        )),
+                    },
+                    _ => Err(throw("java.lang.NullPointerException")),
+                },
                 "parse" => {
                     let text = match args.first() {
                         Some(JValue::Ref(Some(reference))) => heap.string_text(*reference),
@@ -12958,6 +13072,26 @@ pub fn invoke_static(
             let made = Temporal::Adjuster(crate::time::Adjuster { kind, day, ordinal });
             Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
         }
+        // The seven standard questions. Each is a SINGLETON in a JDK —
+        // `TemporalQueries.localDate()` answers the same object every call —
+        // which interning gives for free.
+        "java/time/temporal/TemporalQueries" => {
+            let Some(which) = crate::time::QUERY_NAMES
+                .iter()
+                .position(|name| *name == method)
+            else {
+                return Err(VmError::UnknownIntrinsic(format!(
+                    "java/time/temporal/TemporalQueries.{method}"
+                )));
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            let made = Temporal::Query(which as u8);
+            Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
+        }
+        // The ISO calendar, which is the only one there is here.
+        "java/time/chrono/IsoChronology" => Ok(Some(JValue::Ref(Some(
+            heap.intern_temporal(Temporal::Chronology),
+        )))),
         // `TextStyle` and `FormatStyle` — the two an enum always answers, and
         // the constants themselves, which the compiler asks for by ordinal.
         "java/time/format/TextStyle" | "java/time/format/FormatStyle" => {

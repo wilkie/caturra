@@ -164,7 +164,7 @@ const JAVA_TIME: &[&str] = &[
 ];
 
 /// `java.time.chrono` — the era a date belongs to.
-const JAVA_TIME_CHRONO: &[&str] = &["IsoEra"];
+const JAVA_TIME_CHRONO: &[&str] = &["IsoEra", "IsoChronology"];
 
 /// `java.time.temporal` — the unit a program names to ask `between`.
 const JAVA_TIME_TEMPORAL: &[&str] = &[
@@ -172,6 +172,8 @@ const JAVA_TIME_TEMPORAL: &[&str] = &[
     "ChronoField",
     "ValueRange",
     "TemporalAdjusters",
+    "TemporalQueries",
+    "TemporalQuery",
     "TemporalAdjuster",
     "UnsupportedTemporalTypeException",
 ];
@@ -730,8 +732,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "TemporalAccessor",
             "TemporalAmount",
             "TemporalField",
-            "TemporalQueries",
-            "TemporalQuery",
             "TemporalUnit",
             "WeekFields",
         ],
@@ -1089,7 +1089,10 @@ const REQUIRES_IMPORT: &[&str] = &[
     "ChronoField",
     "ValueRange",
     "TemporalAdjusters",
+    "TemporalQueries",
+    "TemporalQuery",
     "IsoEra",
+    "IsoChronology",
     "DateTimeFormatter",
     "DayOfWeek",
     "Month",

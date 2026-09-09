@@ -6942,6 +6942,12 @@ fn stage6_compile_errors_match_javac_wording() {
             "import java.util.stream.*; class M { static void f() { Collectors c = null; } }",
             "java.util.stream.Collectors cannot name a variable in caturra",
         ),
+        // The seven standard queries work written out, so this is a namespace
+        // and not an unsupported class — the same distinction `Math` draws.
+        (
+            "import java.time.temporal.*; class M { static void f() { TemporalQueries q = null; } }",
+            "java.time.temporal.TemporalQueries cannot name a variable in caturra",
+        ),
         // Every object HAS `toString`, so "cannot find symbol" was a false
         // statement about a Scanner. What caturra does not model is its TEXT:
         // the JDK's is a dump of the delimiters, position and locale
@@ -11689,7 +11695,6 @@ fn real_java_classes_caturra_lacks_name_themselves() {
         ("java.time", "ZonedDateTime"),
         ("java.time", "ZoneId"),
         ("java.time.format", "DateTimeFormatterBuilder"),
-        ("java.time.temporal", "TemporalQueries"),
         ("java.nio.charset", "CharsetDecoder"),
     ] {
         let text =
