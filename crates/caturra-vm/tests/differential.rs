@@ -55871,3 +55871,190 @@ public class Loc3 {
 }
 "#
 );
+
+// `java.time`'s operations are written BOTH ways round, and caturra had only
+// the near end: `x.adjustInto(t)` is `t.with(x)`, `unit.addTo(t, n)` is
+// `t.plus(n, unit)`, `amount.addTo(t)` is `t.plus(amount)`. Fifteen refusals
+// across twelve classes, all one idea — and each routes to the function the
+// near end already uses, so there is one implementation and one wording for
+// every complaint.
+//
+// Implementing the far end found TEN defects in the NEAR one. A JDK's rule is
+// uniform: a value SETS exactly the fields it carries, and the target refuses
+// a field it has not got. caturra rebuilt instead, so a partial date was "not
+// an adjuster" (`date.with(Year.of(1999))` is ordinary Java) and — worse —
+// `date.with(aTime)` answered a LocalDateTime where a JDK says "Unsupported
+// field: NanoOfDay". Widening the TYPE is a wrong answer, not a bigger one.
+differential_test!(
+    what_a_value_sets_into_another,
+    "With",
+    r#"
+import java.time.*;
+import java.time.chrono.*;
+import java.time.temporal.*;
+public class With {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    LocalDate d = LocalDate.of(2024, 3, 14);
+    LocalTime t = LocalTime.of(10, 15, 30);
+    LocalDateTime dt = LocalDateTime.of(2000, 1, 2, 5, 6, 7);
+    s("d-with-year", () -> d.with(Year.of(1999)));
+    s("d-with-ym", () -> d.with(YearMonth.of(1999, 5)));
+    s("d-with-md", () -> d.with(MonthDay.of(12, 25)));
+    s("d-with-era", () -> d.with(IsoEra.BCE));
+    s("d-with-dt", () -> d.with(dt));
+    s("d-with-time", () -> d.with(t));
+    s("t-with-date", () -> t.with(d));
+    s("t-with-dt", () -> t.with(dt));
+    s("dt-with-year", () -> dt.with(Year.of(1999)));
+    s("dt-with-md", () -> dt.with(MonthDay.of(12, 25)));
+    s("dt-with-date", () -> dt.with(d));
+    s("dt-with-time", () -> dt.with(t));
+    s("d-with-month", () -> d.with(Month.DECEMBER));
+    s("d-with-dow", () -> d.with(DayOfWeek.FRIDAY));
+  }
+}
+"#
+);
+
+differential_test!(
+    the_same_operations_from_the_other_end,
+    "Both",
+    r#"
+import java.time.*;
+import java.time.chrono.*;
+import java.time.temporal.*;
+public class Both {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    LocalDate d = LocalDate.of(2024, 3, 14);
+    LocalTime t = LocalTime.of(10, 15, 30);
+    LocalDateTime dt = LocalDateTime.of(2000, 1, 2, 5, 6, 7);
+    // ChronoUnit.addTo — `temporal.plus(n, unit)` from the unit's end.
+    s("u-days", () -> ChronoUnit.DAYS.addTo(d, 3));
+    s("u-months", () -> ChronoUnit.MONTHS.addTo(d, 2));
+    s("u-years", () -> ChronoUnit.YEARS.addTo(d, -1));
+    s("u-weeks", () -> ChronoUnit.WEEKS.addTo(d, 1));
+    s("u-hours", () -> ChronoUnit.HOURS.addTo(t, 5));
+    s("u-minutes", () -> ChronoUnit.MINUTES.addTo(dt, 90));
+    s("u-bad", () -> ChronoUnit.HOURS.addTo(d, 1));
+    s("u-type", () -> ChronoUnit.DAYS.addTo(d, 1).getClass().getName());
+    // TemporalAdjuster.adjustInto — `temporal.with(adjuster)`.
+    s("a-last", () -> TemporalAdjusters.lastDayOfMonth().adjustInto(d));
+    s("a-first", () -> TemporalAdjusters.firstDayOfMonth().adjustInto(d));
+    s("a-next", () -> TemporalAdjusters.next(DayOfWeek.MONDAY).adjustInto(d));
+    s("a-type", () -> TemporalAdjusters.lastDayOfMonth().adjustInto(d).getClass().getName());
+    // A VALUE adjusting another — `temporal.with(value)`.
+    s("v-dow", () -> DayOfWeek.FRIDAY.adjustInto(d));
+    s("v-month", () -> Month.DECEMBER.adjustInto(d));
+    s("v-year", () -> Year.of(1999).adjustInto(d));
+    s("v-ym", () -> YearMonth.of(1999, 5).adjustInto(d));
+    s("v-md", () -> MonthDay.of(12, 25).adjustInto(d));
+    s("v-era", () -> IsoEra.BCE.adjustInto(d));
+    s("v-date", () -> d.adjustInto(dt));
+    s("v-time", () -> t.adjustInto(dt));
+    s("v-dt", () -> dt.adjustInto(d));
+    s("v-date-type", () -> d.adjustInto(dt).getClass().getName());
+    // An AMOUNT adding itself — `temporal.plus(amount)` / `minus(amount)`.
+    s("p-addTo", () -> Period.of(1, 2, 3).addTo(d));
+    s("p-subFrom", () -> Period.of(1, 2, 3).subtractFrom(d));
+    s("p-bad", () -> Period.ofDays(1).addTo(t));
+    s("dur-addTo", () -> Duration.ofHours(5).addTo(t));
+    s("dur-subFrom", () -> Duration.ofHours(5).subtractFrom(t));
+    s("dur-bad", () -> Duration.ofHours(5).addTo(d));
+  }
+}
+"#
+);
+
+// Every `ChronoField` constant, and everything it answers about itself: the
+// base and range units, its own range, whether it is date- or time-based, and
+// what each of a date, a time and a date-time says when asked for it.
+differential_test!(
+    what_every_chrono_field_knows,
+    "CF",
+    r#"
+import java.time.*;
+import java.time.temporal.*;
+import java.util.*;
+public class CF {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    for (ChronoField f : ChronoField.values()) {
+      System.out.println(f.name() + " | " + f + " | " + f.ordinal()
+        + " | base=" + f.getBaseUnit() + " | range=" + f.getRangeUnit()
+        + " | r=" + f.range()
+        + " | date=" + f.isDateBased() + " time=" + f.isTimeBased());
+    }
+    LocalDate d = LocalDate.of(2024, 3, 14);
+    LocalTime t = LocalTime.of(10, 15, 30, 123456789);
+    LocalDateTime dt = LocalDateTime.of(2024, 3, 14, 10, 15, 30);
+    for (ChronoField f : ChronoField.values()) {
+      s("supD-" + f.name(), () -> f.isSupportedBy(d));
+      s("supT-" + f.name(), () -> f.isSupportedBy(t));
+      s("getD-" + f.name(), () -> f.getFrom(d));
+      s("getT-" + f.name(), () -> f.getFrom(t));
+      s("getDT-" + f.name(), () -> f.getFrom(dt));
+      s("rrD-" + f.name(), () -> f.rangeRefinedBy(d));
+      s("rrT-" + f.name(), () -> f.rangeRefinedBy(t));
+    }
+  }
+}
+"#
+);
+
+// ...and the two a JDK words in its own way: `getDisplayName` is the
+// `toString` spelling for most fields and a plain English word for eight of
+// them (`AM/PM`, `day of the week`), with no rule behind which; `adjustInto`
+// is `with(field, value)` from the field's end, down to its range complaint
+// and its "Unsupported field".
+differential_test!(
+    what_a_chrono_field_shows_and_sets,
+    "CF2",
+    r#"
+import java.time.*;
+import java.time.temporal.*;
+import java.util.*;
+public class CF2 {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    for (ChronoField f : ChronoField.values()) {
+      System.out.println("dn-" + f.name() + " = " + f.getDisplayName(Locale.US));
+    }
+    LocalDate d = LocalDate.of(2024, 3, 14);
+    LocalTime t = LocalTime.of(10, 15, 30);
+    LocalDateTime dt = LocalDateTime.of(2024, 3, 14, 10, 15, 30);
+    s("adj-DAY_OF_MONTH", () -> ChronoField.DAY_OF_MONTH.adjustInto(d, 20));
+    s("adj-MONTH_OF_YEAR", () -> ChronoField.MONTH_OF_YEAR.adjustInto(d, 12));
+    s("adj-YEAR", () -> ChronoField.YEAR.adjustInto(d, 1999));
+    s("adj-DAY_OF_YEAR", () -> ChronoField.DAY_OF_YEAR.adjustInto(d, 60));
+    s("adj-EPOCH_DAY", () -> ChronoField.EPOCH_DAY.adjustInto(d, 0));
+    s("adj-HOUR_OF_DAY", () -> ChronoField.HOUR_OF_DAY.adjustInto(t, 23));
+    s("adj-MINUTE_OF_HOUR", () -> ChronoField.MINUTE_OF_HOUR.adjustInto(t, 59));
+    s("adj-NANO_OF_SECOND", () -> ChronoField.NANO_OF_SECOND.adjustInto(t, 500));
+    s("adj-dt-HOUR", () -> ChronoField.HOUR_OF_DAY.adjustInto(dt, 5));
+    s("adj-dt-YEAR", () -> ChronoField.YEAR.adjustInto(dt, 2000));
+    s("adj-bad-range", () -> ChronoField.DAY_OF_MONTH.adjustInto(d, 40));
+    s("adj-unsupported", () -> ChronoField.HOUR_OF_DAY.adjustInto(d, 5));
+    s("adj-null", () -> ChronoField.YEAR.adjustInto(null, 1));
+    s("adj-type", () -> ChronoField.YEAR.adjustInto(d, 1999).getClass().getName());
+  }
+}
+"#
+);

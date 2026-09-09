@@ -12277,37 +12277,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ),
     ("DayOfWeek", "query", TEMPORAL_QUERY),
     ("Month", "query", TEMPORAL_QUERY),
-    (
-        "LocalDate",
-        "adjustInto",
-        BARE_TEMPORAL,
-    ),
-    (
-        "LocalTime",
-        "adjustInto",
-        BARE_TEMPORAL,
-    ),
-    (
-        "LocalDateTime",
-        "adjustInto",
-        BARE_TEMPORAL,
-    ),
-    (
-        "DayOfWeek",
-        "adjustInto",
-        BARE_TEMPORAL,
-    ),
-    (
-        "Month",
-        "adjustInto",
-        BARE_TEMPORAL,
-    ),
-    ("Period", "addTo", BARE_TEMPORAL),
-    (
-        "Period",
-        "subtractFrom",
-        BARE_TEMPORAL,
-    ),
     // Everything that carries an INSTANT or a ZONE. caturra models the
     // arithmetic slice of `java.time`, and answering a zone honestly needs a
     // timezone database it does not vendor (see specs/SCOPE.md).
@@ -12484,11 +12453,8 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("ByteArrayOutputStream", "nullOutputStream", NULL_STREAM),
     // ---- java.time: the interface plumbing (`TemporalAmount`,
     // `TemporalAccessor`) that a program never writes by hand.
-    ("Duration", "addTo", BARE_TEMPORAL),
-    ("Duration", "subtractFrom", BARE_TEMPORAL),
     ("Duration", "from", NO_TEMPORAL_AMOUNT),
     ("Period", "from", NO_TEMPORAL_AMOUNT),
-    ("ChronoUnit", "addTo", BARE_TEMPORAL),
     // ---- java.lang.StackTraceElement: the three pieces Java 9 added for the
     // module system, which caturra does not have.
     ("StackTraceElement", "getModuleName", NO_MODULES),
@@ -12505,17 +12471,11 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("LongSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
     ("DoubleSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
     ("Year", "query", TEMPORAL_QUERY),
-    ("Year", "adjustInto", BARE_TEMPORAL),
     ("YearMonth", "query", TEMPORAL_QUERY),
-    ("YearMonth", "adjustInto", BARE_TEMPORAL),
     ("MonthDay", "query", TEMPORAL_QUERY),
-    ("MonthDay", "adjustInto", BARE_TEMPORAL),
     ("IsoEra", "query", TEMPORAL_QUERY),
-    ("IsoEra", "adjustInto", BARE_TEMPORAL),
     ("ChronoField", "query", TEMPORAL_QUERY),
-    ("ChronoField", "adjustInto", BARE_TEMPORAL),
     ("ChronoField", "resolve", "caturra does not model field RESOLUTION, which is a parsing step"),
-    ("TemporalAdjuster", "adjustInto", BARE_TEMPORAL),
     (
         "TemporalAdjusters",
         "ofDateAdjuster",
@@ -12542,7 +12502,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Collector", "of", COLLECTOR_IS_OPAQUE),
     ("DoubleStream", "builder", STREAM_BUILDER),
     ("LongStream", "builder", STREAM_BUILDER),
-    ("TemporalAdjuster", "adjustInto", BARE_TEMPORAL),
     // ---- java.nio.file.Path: a path walks by INDEX here (`getNameCount()`
     // and `getName(i)`), which is the accessor caturra's for-each is built on;
     // a cursor over one would need a second kind of indexed loop.
@@ -12725,7 +12684,6 @@ const NO_ENCLOSING_METHOD: &str =
 const CHECKED_VIEWS: &str = "caturra does not model a dynamically type-checked view - the compiler's own check is the one that runs here";
 const STREAM_BUILDER: &str = "caturra does not model java.util.stream.Stream.Builder - collect the elements and call stream()";
 const NULL_STREAM: &str = "caturra models no plain java.io.OutputStream value to answer with";
-const BARE_TEMPORAL: &str = "caturra does not model java.time.temporal.Temporal as a type";
 const NO_TEMPORAL_AMOUNT: &str =
     "caturra does not model java.time.temporal.TemporalAmount as a type";
 const FORMATTER_PARSES_ELSEWHERE: &str = "caturra's DateTimeFormatter formats - to read text back, write LocalDate.parse(text, formatter) (or LocalTime/LocalDateTime)";
@@ -15352,6 +15310,16 @@ const FILE_METHODS: &[BuiltinMethod] = &[
 /// no clock, no locale, no timezone database, and so exactly comparable with
 /// a JDK.
 const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
+    // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
+    // `java.time` talks to itself. It answers a bare `Temporal`, a type
+    // caturra does not model: the value handed back really is the target's own
+    // class, and what a program does with it is print it or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     bm("getEra", &[], BRet::Era, "()Ljava/time/chrono/IsoEra;"),
     bm(
         "datesUntil",
@@ -15621,6 +15589,16 @@ const LOCAL_DATE_METHODS: &[BuiltinMethod] = &[
 /// `getValue()` and `ordinal()` — and `==`, which works because the constants
 /// are interned.
 const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
+    // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
+    // `java.time` talks to itself. It answers a bare `Temporal`, a type
+    // caturra does not model: the value handed back really is the target's own
+    // class, and what a program does with it is print it or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     // The `TemporalAccessor` surface: one field, asked for by name.
     bm(
         "isSupported",
@@ -15682,6 +15660,16 @@ const DAY_OF_WEEK_METHODS: &[BuiltinMethod] = &[
 ];
 
 const MONTH_METHODS: &[BuiltinMethod] = &[
+    // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
+    // `java.time` talks to itself. It answers a bare `Temporal`, a type
+    // caturra does not model: the value handed back really is the target's own
+    // class, and what a program does with it is print it or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     bm(
         "firstMonthOfQuarter",
         &[],
@@ -15750,6 +15738,16 @@ const MONTH_METHODS: &[BuiltinMethod] = &[
 /// `java.time.LocalTime` — a time of day. It WRAPS at midnight rather than
 /// carrying: `23:00` plus two hours is `01:00`.
 const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
+    // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
+    // `java.time` talks to itself. It answers a bare `Temporal`, a type
+    // caturra does not model: the value handed back really is the target's own
+    // class, and what a program does with it is print it or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     bm("toNanoOfDay", &[], BRet::Long, "()J"),
     bm(
         "with",
@@ -15958,6 +15956,16 @@ const LOCAL_TIME_METHODS: &[BuiltinMethod] = &[
 /// `java.time.LocalDateTime` — the two halves, and the arithmetic that
 /// carries whole days from the time into the date.
 const LOCAL_DATE_TIME_METHODS: &[BuiltinMethod] = &[
+    // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
+    // `java.time` talks to itself. It answers a bare `Temporal`, a type
+    // caturra does not model: the value handed back really is the target's own
+    // class, and what a program does with it is print it or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     bm(
         "withDayOfYear",
         &[BParam::Int],
@@ -16261,6 +16269,20 @@ const LOCAL_DATE_TIME_METHODS: &[BuiltinMethod] = &[
 /// `java.time.Duration` — an amount of time. It is NOT a `Period`: two hours
 /// is two hours whatever the calendar says.
 const DURATION_METHODS: &[BuiltinMethod] = &[
+    // `amount.addTo(t)` / `subtractFrom(t)` — `t.plus(amount)` and
+    // `t.minus(amount)` from the amount's end.
+    bm(
+        "addTo",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
+    bm(
+        "subtractFrom",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     bm("toDaysPart", &[], BRet::Long, "()J"),
     bm(
         "truncatedTo",
@@ -16441,6 +16463,20 @@ const DURATION_METHODS: &[BuiltinMethod] = &[
 /// `java.time.Period` — years, months and days as WRITTEN. `P1M` is one
 /// month, not thirty days, and never becomes them.
 const PERIOD_METHODS: &[BuiltinMethod] = &[
+    // `amount.addTo(t)` / `subtractFrom(t)` — `t.plus(amount)` and
+    // `t.minus(amount)` from the amount's end.
+    bm(
+        "addTo",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
+    bm(
+        "subtractFrom",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     bm(
         "plus",
         &[BParam::Temporal],
@@ -16543,6 +16579,13 @@ const PERIOD_METHODS: &[BuiltinMethod] = &[
 /// `java.time.temporal.ChronoUnit` — a program names one to ask `between`,
 /// which is the whole of what it is for here.
 const CHRONO_UNIT_METHODS: &[BuiltinMethod] = &[
+    // `unit.addTo(t, n)` is `t.plus(n, unit)` from the unit's end.
+    bm(
+        "addTo",
+        &[BParam::Temporal, BParam::Long],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;J)Ljava/time/temporal/Temporal;",
+    ),
     bm("getDuration", &[], BRet::Duration, "()Ljava/time/Duration;"),
     bm("isDateBased", &[], BRet::Boolean, "()Z"),
     bm("isTimeBased", &[], BRet::Boolean, "()Z"),
@@ -16583,6 +16626,17 @@ const CHRONO_UNIT_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.temporal.ChronoField` — the field itself, asked what it is.
 const CHRONO_FIELD_METHODS: &[BuiltinMethod] = &[
+    // `field.adjustInto(temporal, value)` — `temporal.with(field, value)`
+    // written from the FIELD's end, which is how the library talks to itself.
+    // It answers a bare `Temporal`, a type caturra does not model: the value
+    // it hands back really is a `LocalDate` (`getClass()` says so), and what a
+    // program does with it is print it, ask its class, or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal, BParam::Long],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;J)Ljava/time/temporal/Temporal;",
+    ),
     bm(
         "range",
         &[],
@@ -17220,6 +17274,16 @@ const MATH_CONTEXT_METHODS: &[BuiltinMethod] = &[
 /// `java.time.Year` — a year on its own, which is what a program keeps when
 /// the month and day would be a lie.
 const YEAR_METHODS: &[BuiltinMethod] = &[
+    // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
+    // `java.time` talks to itself. It answers a bare `Temporal`, a type
+    // caturra does not model: the value handed back really is the target's own
+    // class, and what a program does with it is print it or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     bm("getValue", &[], BRet::Int, "()I"),
     bm("isLeap", &[], BRet::Boolean, "()Z"),
     bm("length", &[], BRet::Int, "()I"),
@@ -17417,6 +17481,16 @@ const YEAR_STATIC_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.YearMonth` — the unit a statement covers.
 const YEAR_MONTH_METHODS: &[BuiltinMethod] = &[
+    // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
+    // `java.time` talks to itself. It answers a bare `Temporal`, a type
+    // caturra does not model: the value handed back really is the target's own
+    // class, and what a program does with it is print it or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     bm("getYear", &[], BRet::Int, "()I"),
     bm("getMonthValue", &[], BRet::Int, "()I"),
     bm("getMonth", &[], BRet::Month, "()Ljava/time/Month;"),
@@ -17633,6 +17707,16 @@ const YEAR_MONTH_STATIC_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.MonthDay` — a day of a year that has no year: a birthday.
 const MONTH_DAY_METHODS: &[BuiltinMethod] = &[
+    // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
+    // `java.time` talks to itself. It answers a bare `Temporal`, a type
+    // caturra does not model: the value handed back really is the target's own
+    // class, and what a program does with it is print it or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     // A `MonthDay` is a `TemporalAccessor` and NOT a `Temporal`: a JDK gives
     // it no `plus`, no `minus`, no `until` and no two-argument `with`, because
     // a month-day cannot be moved without a year to move it in. These two are
@@ -18537,6 +18621,16 @@ const VALUE_RANGE_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.temporal.TemporalAdjusters` — every factory is a RULE for
 /// moving a date, which `with` then applies.
+/// A `TemporalAdjuster` is otherwise only ever HANDED to `with`, so this is
+/// the whole of its own surface: the same adjustment written from the
+/// adjuster's end.
+const TEMPORAL_ADJUSTER_METHODS: &[BuiltinMethod] = &[bm(
+    "adjustInto",
+    &[BParam::Temporal],
+    BRet::Object,
+    "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+)];
+
 const TEMPORAL_ADJUSTERS_METHODS: &[BuiltinMethod] = &[
     bm(
         "firstDayOfMonth",
@@ -18620,6 +18714,16 @@ const TEMPORAL_ADJUSTERS_METHODS: &[BuiltinMethod] = &[
 
 /// `java.time.chrono.IsoEra` — an enum with two constants.
 const ISO_ERA_METHODS: &[BuiltinMethod] = &[
+    // `x.adjustInto(t)` is `t.with(x)` written from the other end — how
+    // `java.time` talks to itself. It answers a bare `Temporal`, a type
+    // caturra does not model: the value handed back really is the target's own
+    // class, and what a program does with it is print it or cast it down.
+    bm(
+        "adjustInto",
+        &[BParam::Temporal],
+        BRet::Object,
+        "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;",
+    ),
     // An era carries the one FIELD it is, so it answers the reader surface
     // every other `java.time` value does.
     bm(
@@ -22543,6 +22647,10 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Period => Some(("java/time/Period", PERIOD_METHODS)),
         JType::ChronoUnit => Some(("java/time/temporal/ChronoUnit", CHRONO_UNIT_METHODS)),
         JType::ChronoField => Some(("java/time/temporal/ChronoField", CHRONO_FIELD_METHODS)),
+        JType::TemporalAdjuster => Some((
+            "java/time/temporal/TemporalAdjuster",
+            TEMPORAL_ADJUSTER_METHODS,
+        )),
         JType::IsoEra => Some(("java/time/chrono/IsoEra", ISO_ERA_METHODS)),
         JType::TextStyle => Some(("java/time/format/TextStyle", TEXT_STYLE_METHODS)),
         JType::FormatStyle => Some(("java/time/format/FormatStyle", STYLE_METHODS)),
@@ -33291,6 +33399,27 @@ impl BodyGen<'_> {
         {
             self.locale_answerable(named, LOCALES_AS_US, only.span());
             return self.builtin_instance_call(receiver_ty, method, &[], span);
+        }
+        // `ChronoField.YEAR.getDisplayName(Locale.US)`. Unlike the two above,
+        // a JDK declares NO no-argument form here, so the locale cannot simply
+        // be dropped: it is checked and then emitted as `null`, which is what
+        // the table's opaque parameter takes and what the VM ignores.
+        if receiver_ty == JType::ChronoField
+            && method == "getDisplayName"
+            && let [only] = args
+            && let Some(named) = locale_named(only)
+        {
+            self.locale_answerable(named, LOCALES_AS_US, only.span());
+            let nothing = Expr::Literal {
+                value: Literal::Null,
+                span: only.span(),
+            };
+            return self.builtin_instance_call(
+                receiver_ty,
+                method,
+                std::slice::from_ref(&nothing),
+                span,
+            );
         }
         // `scanner.useLocale(Locale.US)` — which locale to PARSE numbers in.
         // caturra parses in the US locale, so for the ones it answers for this

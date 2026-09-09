@@ -1582,8 +1582,24 @@ fn field_method(
         "isTimeBased" => JValue::Int(i32::from(crate::time::field_is_time_based(field))),
         "getBaseUnit" => JValue::Ref(Some(heap.intern_temporal(Temporal::Unit(info.base_unit)))),
         "getRangeUnit" => JValue::Ref(Some(heap.intern_temporal(Temporal::Unit(info.range_unit)))),
+        // The name a JDK SHOWS for a field, which is its `toString` spelling
+        // for most of them and a plain English word for the eight a program
+        // is likely to print. Recorded from a JDK: there is no rule behind
+        // which eight, and `AM/PM` and `day of the week` are not spellings
+        // anything else here would produce.
         "getDisplayName" => {
-            let reference = heap.alloc_string(info.text);
+            let shown = match info.constant {
+                "SECOND_OF_MINUTE" => "second",
+                "MINUTE_OF_HOUR" => "minute",
+                "HOUR_OF_DAY" => "hour",
+                "AMPM_OF_DAY" => "AM/PM",
+                "DAY_OF_WEEK" => "day of the week",
+                "MONTH_OF_YEAR" => "month",
+                "YEAR" => "year",
+                "ERA" => "era",
+                _ => info.text,
+            };
+            let reference = heap.alloc_string(shown);
             JValue::Ref(Some(reference))
         }
         // `isSupportedBy(temporal)` and `getFrom(temporal)` ask the value,
@@ -2153,75 +2169,89 @@ fn unit_facts(
 
 /// `with(x)` where `x` is a value rather than a field: an adjuster, a month,
 /// a day of week, or the date or time half of a stamp.
+/// The `ChronoField` ordinals `adjust_with` writes, named rather than spelled
+/// as numbers at each use.
+const FIELD_NANO_OF_DAY: u8 = 1;
+const FIELD_DAY_OF_WEEK: u8 = 15;
+const FIELD_DAY_OF_MONTH: u8 = 18;
+const FIELD_EPOCH_DAY: u8 = 20;
+const FIELD_MONTH_OF_YEAR: u8 = 23;
+const FIELD_PROLEPTIC_MONTH: u8 = 24;
+const FIELD_YEAR: u8 = 26;
+const FIELD_ERA: u8 = 27;
+
 fn adjust_with(
     value: Temporal,
     adjuster: Temporal,
     heap: &mut Heap,
 ) -> Result<Option<JValue>, VmError> {
-    // A PARTIAL date adjusts by FIELD, not by rebuilding a date: a `Year` has
-    // no month or day to put back, so `year.with(Year.of(2030))` sets the year
-    // and `yearMonth.with(firstDayOfMonth())` is "Unsupported field:
-    // DayOfMonth" — the field every one of those rules writes.
-    if matches!(value, Temporal::Year(_) | Temporal::YearMonth(_, _)) {
-        return match adjuster {
-            Temporal::Year(year) => with_field(value, 26, i64::from(year), heap),
-            Temporal::Month(month) => with_field(value, 23, i64::from(month), heap),
-            Temporal::YearMonth(year, month) => {
-                let Some(JValue::Ref(Some(reference))) =
-                    with_field(value, 26, i64::from(year), heap)?
-                else {
-                    return Err(throw("java.lang.ClassCastException: not a temporal"));
-                };
-                let Some(HeapObject::Temporal(moved)) = heap.get(reference) else {
-                    return Err(throw("java.lang.ClassCastException: not a temporal"));
-                };
-                with_field(*moved, 23, i64::from(month), heap)
-            }
-            _ => Err(VmError::UncaughtException(String::from(
-                "java.time.temporal.UnsupportedTemporalTypeException: \
-                 Unsupported field: DayOfMonth",
-            ))),
-        };
-    }
-    let (date, time) = match value {
-        Temporal::Date(date) => (Some(date), None),
-        Temporal::Time(time) => (None, Some(time)),
-        Temporal::DateTime(when) => (Some(when.date), Some(when.time)),
-        _ => return Err(throw("java.lang.ClassCastException: not a temporal")),
-    };
-    let rebuild = |heap: &mut Heap, date: Option<crate::time::Date>, time| {
-        let made = match (date, time) {
-            (Some(date), Some(time)) => Temporal::DateTime(crate::time::DateTime { date, time }),
-            (Some(date), None) => Temporal::Date(date),
-            (None, Some(time)) => Temporal::Time(time),
-            (None, None) => return Err(throw("java.lang.ClassCastException: not a temporal")),
-        };
-        Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
-    };
-    match adjuster {
-        Temporal::Adjuster(rule) => {
-            // An adjuster sets a DATE field, and a value that has no date
-            // refuses the FIELD rather than the cast: a JDK's
-            // `LocalTime.with(firstDayOfMonth())` is "Unsupported field:
-            // DayOfMonth", which is the field every one of these writes.
-            let Some(date) = date else {
+    // An ADJUSTER is a RULE over a date — "the last day of this month" — and
+    // not a set of fields. A value with no date in it refuses the field every
+    // one of those rules writes, which is what a JDK says for
+    // `LocalTime.with(firstDayOfMonth())`.
+    if let Temporal::Adjuster(rule) = adjuster {
+        let (date, time) = match value {
+            Temporal::Date(date) => (date, None),
+            Temporal::DateTime(when) => (when.date, Some(when.time)),
+            _ => {
                 return Err(VmError::UncaughtException(String::from(
                     "java.time.temporal.UnsupportedTemporalTypeException: \
                      Unsupported field: DayOfMonth",
                 )));
-            };
-            rebuild(heap, Some(rule.apply(date)), time)
-        }
-        // A month or a day of week SETS its own field.
-        Temporal::Month(month) => with_field(value, 23, i64::from(month), heap),
-        Temporal::DayOfWeek(day) => with_field(value, 15, i64::from(day), heap),
-        Temporal::Date(replacement) => rebuild(heap, Some(replacement), time),
-        Temporal::Time(replacement) => rebuild(heap, date, Some(replacement)),
-        Temporal::DateTime(replacement) => {
-            rebuild(heap, Some(replacement.date), Some(replacement.time))
-        }
-        _ => Err(throw("java.lang.ClassCastException: not an adjuster")),
+            }
+        };
+        let made = match time {
+            Some(time) => Temporal::DateTime(crate::time::DateTime {
+                date: rule.apply(date),
+                time,
+            }),
+            None => Temporal::Date(rule.apply(date)),
+        };
+        return Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))));
     }
+    // Everything else SETS the fields it carries, in a JDK's own order, and
+    // the target refuses a field it has not got rather than growing one. That
+    // is the whole rule, and writing it as fields rather than as a rebuild is
+    // what makes `LocalDate.with(aTime)` "Unsupported field: NanoOfDay"
+    // instead of a LocalDateTime — a wrong answer that changed the TYPE.
+    let fields: &[(u8, i64)] = &match adjuster {
+        Temporal::Year(year) => vec![(FIELD_YEAR, i64::from(year))],
+        Temporal::Month(month) => vec![(FIELD_MONTH_OF_YEAR, i64::from(month))],
+        Temporal::DayOfWeek(day) => vec![(FIELD_DAY_OF_WEEK, i64::from(day))],
+        Temporal::Era(era) => vec![(FIELD_ERA, i64::from(era))],
+        // A year-month is ONE field: the proleptic month carries both, so the
+        // two never disagree half way through.
+        Temporal::YearMonth(year, month) => vec![(
+            FIELD_PROLEPTIC_MONTH,
+            i64::from(year) * 12 + i64::from(month) - 1,
+        )],
+        Temporal::MonthDay(month, day) => vec![
+            (FIELD_MONTH_OF_YEAR, i64::from(month)),
+            (FIELD_DAY_OF_MONTH, i64::from(day)),
+        ],
+        Temporal::Date(date) => vec![(FIELD_EPOCH_DAY, date.to_epoch_day())],
+        Temporal::Time(time) => vec![(FIELD_NANO_OF_DAY, time.nano_of_day)],
+        // The DATE first, as a JDK writes it — so a `LocalDate` target gets
+        // through the day and fails on the nanoseconds, naming that field.
+        Temporal::DateTime(when) => vec![
+            (FIELD_EPOCH_DAY, when.date.to_epoch_day()),
+            (FIELD_NANO_OF_DAY, when.time.nano_of_day),
+        ],
+        _ => return Err(throw("java.lang.ClassCastException: not an adjuster")),
+    };
+    let mut moved = value;
+    let mut answer = None;
+    for (field, wanted) in fields {
+        let Some(JValue::Ref(Some(reference))) = with_field(moved, *field, *wanted, heap)? else {
+            return Err(throw("java.lang.ClassCastException: not a temporal"));
+        };
+        let Some(HeapObject::Temporal(next)) = heap.get(reference) else {
+            return Err(throw("java.lang.ClassCastException: not a temporal"));
+        };
+        moved = *next;
+        answer = Some(JValue::Ref(Some(reference)));
+    }
+    Ok(answer)
 }
 
 /// `minus(n, unit)` as a JDK writes it: `plus(-n, unit)`, except at
@@ -2772,6 +2802,48 @@ fn temporal_method(
         && let Some(HeapObject::Temporal(adjuster)) = heap.get(*reference)
     {
         return adjust_with(value, *adjuster, heap);
+    }
+    // The SAME operations written from the other end, which is how `java.time`
+    // talks to itself: `x.adjustInto(t)` is `t.with(x)`, `unit.addTo(t, n)` is
+    // `t.plus(n, unit)`, and `amount.addTo(t)` / `subtractFrom(t)` are
+    // `t.plus(amount)` / `t.minus(amount)`. Each routes to the function the
+    // near end already uses, so there is one implementation and one wording
+    // for every refusal — a second copy would be a second answer to drift.
+    if matches!(method, "adjustInto" | "addTo" | "subtractFrom")
+        && matches!(args.first(), Some(JValue::Ref(None)))
+    {
+        return Err(throw("java.lang.NullPointerException"));
+    }
+    if matches!(method, "adjustInto" | "addTo" | "subtractFrom")
+        && let Some(JValue::Ref(Some(reference))) = args.first()
+        && let Some(HeapObject::Temporal(target)) = heap.get(*reference)
+    {
+        let target = *target;
+        return match (method, value) {
+            // A unit carries a COUNT beside the target.
+            ("addTo", Temporal::Unit(unit)) => {
+                let amount = match args.get(1) {
+                    Some(JValue::Long(n)) => *n,
+                    Some(JValue::Int(n)) => i64::from(*n),
+                    _ => 0,
+                };
+                shift_by_unit(target, amount, unit, heap)
+            }
+            (_, Temporal::Period(_) | Temporal::Duration(_)) => {
+                shift_by_amount(target, value, method == "subtractFrom", heap)
+            }
+            // A FIELD carries a value beside the target, as a unit carries a
+            // count: `field.adjustInto(t, n)` is `t.with(field, n)`.
+            ("adjustInto", Temporal::Field(field)) => {
+                let wanted = match args.get(1) {
+                    Some(JValue::Long(n)) => *n,
+                    Some(JValue::Int(n)) => i64::from(*n),
+                    _ => 0,
+                };
+                with_field(target, field, wanted, heap)
+            }
+            _ => adjust_with(target, value, heap),
+        };
     }
     // `plus(amount)` and `minus(amount)` where the amount is a `Period` or a
     // `Duration` — a whole amount rather than a number and a unit.

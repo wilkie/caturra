@@ -15907,6 +15907,36 @@ the nanosecond DIFFERENCE, which a program that prints the number sees;
 `dividedBy(0)` is "Cannot divide by zero" and not "/ by zero"; and
 `plus(Duration)` / `minus(Duration)` were not implemented at all.
 
+**`java.time`'s operations are written BOTH ways round, and caturra had only
+the near end.** `x.adjustInto(t)` is `t.with(x)`; `unit.addTo(t, n)` is
+`t.plus(n, unit)`; `amount.addTo(t)` and `subtractFrom(t)` are `t.plus(amount)`
+and `t.minus(amount)`. Fifteen refusals across twelve classes were that one
+idea, and each routes to the function the near end already uses — so there is
+one implementation and one wording for every complaint rather than a second
+copy to drift. `ChronoField.resolve` stays refused: it is a parsing step over a
+`Map` and a `ResolverStyle`.
+
+`ChronoField`'s own surface was measured first and was already exact — 240
+cells over every constant: the base and range units, its range, whether it is
+date- or time-based, and what a date, a time and a date-time each answer when
+asked for it. The two that were not: `getDisplayName(Locale)`, which is the
+`toString` spelling for most fields and a plain English word for eight of them
+(`second`, `minute`, `hour`, `AM/PM`, `day of the week`, `month`, `year`,
+`era`) with no rule behind which — recorded, not derived; and `adjustInto`.
+Its locale is checked and then emitted as NULL, because unlike the other
+locale-taking calls a JDK declares no no-argument form here.
+
+**Implementing the far end found ten defects in the near one.** A JDK's rule is
+uniform: a value SETS exactly the fields it carries, and the target refuses a
+field it has not got. caturra rebuilt the value instead, so a partial date was
+"not an adjuster" — `date.with(Year.of(1999))`, `with(YearMonth)`,
+`with(MonthDay)`, `with(IsoEra)` are all ordinary Java — and, worse,
+`date.with(aTime)` answered a `LocalDateTime` where a JDK says "Unsupported
+field: NanoOfDay". Widening the TYPE is a wrong answer, not a bigger one. The
+adjustment is a FIELD LIST now, in a JDK's own order, so `date.with(aDateTime)`
+gets through the day and fails on the nanoseconds — naming that field, as a JDK
+does.
+
 **Which locale a call was handed was decided in two places, and they
 disagreed.** `Locale` is not a value here — the constant is read where it is
 WRITTEN — and the list of locales caturra can answer for was spelled out twice:
