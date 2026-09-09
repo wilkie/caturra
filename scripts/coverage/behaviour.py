@@ -127,10 +127,11 @@ BANK = {
     "java.util.function.Predicate": ["(java.util.function.Predicate) (v -> true)"],
     "java.lang.Enum": ["java.time.Month.MARCH"],
     "java.util.function.Consumer": ["(java.util.function.Consumer) (v -> {})"],
-    # NOT `java.util.Locale`: caturra models it as a namespace with no VALUE
-    # of the type, and says so — an honest refusal, but one that kills the
-    # probe it appears in, and six classes with it. The overloads that take one
-    # are reported as unbuildable, which is what they are.
+    # `Locale` is not a value in caturra — the constant is read where it is
+    # WRITTEN — so the bank hands the constant itself. That is exactly the
+    # shape every call taking a locale accepts, and it is what a program
+    # writes; a variable of the type is still refused, with its own reason.
+    "java.util.Locale": ["java.util.Locale.US"],
     # ...but this one keeps its type argument: a RAW `IntFunction` handed to
     # `flatMap` builds a lambda whose parameter is a reference, and a primitive
     # pipeline then feeds it an int.
