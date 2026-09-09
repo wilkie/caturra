@@ -15927,6 +15927,19 @@ the argument is checked and dropped rather than ignored. `Locale.GERMANY` and
 `Locale.FRANCE` are refused BY NAME, because answering in the wrong locale is a
 wrong answer and not a smaller one.
 
+Reading the sweep's skipped list again — once `Locale.US` was in its argument
+bank — showed the same rule being asked at some sites and not others, which is
+the defect one layer down. `DecimalFormat` INHERITS the four factories and the
+hook keyed on the class NAME, so `DecimalFormat.getInstance(Locale.US)` was
+refused where `NumberFormat.getInstance(Locale.US)` worked;
+`DateTimeFormatter.ofPattern` takes its locale LAST rather than first; and a
+`Charset` names itself in one. `ChronoField.getDisplayName(Locale)` is left
+out on purpose: its table declares the locale as a REQUIRED parameter, so
+dropping it is the wrong shape there. It needs the locale expression to have a
+type — and the `type_of` pre-pass that picks an overload REPORTS the missing
+one rather than answering, which is why a locale argument fails before any
+call-site hook can see it. That is the next sitting this names.
+
 `getCurrencyInstance(locale)` is the exception, and not because of formatting:
 the symbol is data a JDK carries per locale (`$` for the US, `£` for the UK,
 the placeholder `¤` where no country is named, and `¤ ` with a space for the

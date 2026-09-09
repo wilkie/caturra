@@ -55834,3 +55834,40 @@ public class Loc {
 }
 "#
 );
+
+// ...and the sites the rule was not yet asked at. `DecimalFormat` INHERITS
+// NumberFormat's four factories, `DateTimeFormatter.ofPattern` takes its
+// locale LAST, and a `Charset` names itself in one. Each answers what caturra
+// answers with no locale at all, so the argument is checked and dropped —
+// except `getCurrencyInstance`, on either class, where the symbol is per-locale
+// data caturra does not carry.
+differential_test!(
+    the_rest_of_the_locale_sites,
+    "Loc3",
+    r#"
+import java.util.*;
+import java.text.*;
+import java.time.*;
+import java.time.format.*;
+import java.time.temporal.*;
+import java.nio.charset.*;
+public class Loc3 {
+  interface Body { Object get() throws Throwable; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": [" + e.getMessage() + "]"); }
+  }
+  public static void main(String[] a) {
+    s("df-getInstance", () -> DecimalFormat.getInstance(Locale.US).format(1234.5));
+    s("df-getNumber", () -> DecimalFormat.getNumberInstance(Locale.US).format(1234.5));
+    s("df-getInteger", () -> DecimalFormat.getIntegerInstance(Locale.US).format(1234.7));
+    s("df-getPercent", () -> DecimalFormat.getPercentInstance(Locale.US).format(0.25));
+    s("dtf-ofPattern", () -> DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.US).format(LocalDate.of(2024, 3, 14)));
+    s("dtf-ofPattern-name", () -> DateTimeFormatter.ofPattern("MMMM", Locale.US).format(LocalDate.of(2024, 3, 14)));
+    s("cs-displayName", () -> StandardCharsets.UTF_8.displayName(Locale.US));
+    s("cs-displayName0", () -> StandardCharsets.UTF_8.displayName());
+    s("cu-getDisplayName", () -> ChronoUnit.DAYS.toString());
+  }
+}
+"#
+);

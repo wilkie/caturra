@@ -33283,9 +33283,10 @@ impl BodyGen<'_> {
         // asks for the same letters, so the argument is checked and dropped
         // rather than ignored. (Turkish is the one that would differ, and it
         // is refused by name like every other.)
-        if receiver_ty == JType::Str
-            && matches!(method, "toUpperCase" | "toLowerCase")
-            && let [only] = args
+        if matches!(
+            (receiver_ty, method),
+            (JType::Str, "toUpperCase" | "toLowerCase") | (JType::Charset, "displayName")
+        ) && let [only] = args
             && let Some(named) = locale_named(only)
         {
             self.locale_answerable(named, LOCALES_AS_US, only.span());
@@ -34826,7 +34827,7 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<Option<JType>>> {
-        if class != "NumberFormat"
+        if !matches!(class, "NumberFormat" | "DecimalFormat")
             || !matches!(
                 method,
                 "getInstance"
@@ -34845,10 +34846,9 @@ impl BodyGen<'_> {
         if method == "getCurrencyInstance" {
             self.error(
                 only.span(),
-                String::from(
-                    "NumberFormat.getCurrencyInstance(locale) exists in Java, but caturra \
-                     carries no per-locale currency symbol — the no-argument form uses the \
-                     host's",
+                format!(
+                    "{class}.getCurrencyInstance(locale) exists in Java, but caturra carries \
+                     no per-locale currency symbol — the no-argument form uses the host's"
                 ),
             );
             return Some(Some(Some(JType::NumberFormat)));
@@ -34858,6 +34858,7 @@ impl BodyGen<'_> {
     }
 
     /// Emit an intrinsic static call (`Math.abs(...)`, ...).
+    #[allow(clippy::too_many_lines)] // one arm per variadic call shape
     #[allow(clippy::option_option)]
     fn builtin_static_call(
         &mut self,
@@ -34868,6 +34869,18 @@ impl BodyGen<'_> {
     ) -> Option<Option<JType>> {
         if let Some(answer) = self.number_format_in_locale(class, method, args, span) {
             return answer;
+        }
+        // `DateTimeFormatter.ofPattern(pattern, Locale.US)` — the locale comes
+        // LAST here, and names the language the pattern's own text is drawn
+        // in. caturra ships the en-US names, which every locale it answers for
+        // asks for.
+        if class == "DateTimeFormatter"
+            && method == "ofPattern"
+            && let [pattern, locale] = args
+            && let Some(named) = locale_named(locale)
+        {
+            self.locale_answerable(named, LOCALES_AS_US, locale.span());
+            return self.builtin_static_call(class, method, std::slice::from_ref(pattern), span);
         }
         // `String.format` is variadic — the one call shape the fixed
         // signature tables cannot express.
