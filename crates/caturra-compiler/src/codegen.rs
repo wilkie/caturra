@@ -6623,6 +6623,14 @@ fn library_comparable(ty: JType) -> Option<bool> {
     })
 }
 
+/// Which enum an `EnumSet` factory names: one of the program's own, or a
+/// library one (which has no class in the table but has its own `values()`).
+#[derive(Debug, Clone, Copy)]
+enum EnumSetKind {
+    User(ClassId),
+    Library(JType),
+}
+
 /// The library types that ARE enums. Three passes ask this — an `EnumSet`'s
 /// universe, a `switch`'s arms, and the lambda pass typing `X.values()` — so
 /// it is one list, not three.
@@ -33577,6 +33585,19 @@ impl BodyGen<'_> {
                 Some(JType::library_list(self.joined_literal_elem(args)))
             }
             ("Set", "of") => Some(JType::library_set(self.joined_literal_elem(args))),
+            // Every `EnumSet` factory answers a set of the enum it names —
+            // asked of the same rule the emitter uses, so the two cannot
+            // drift apart.
+            ("EnumSet", "noneOf" | "allOf" | "of" | "range" | "complementOf" | "copyOf") => {
+                let elem = match self.enum_set_kind(method, args)? {
+                    EnumSetKind::User(id) => ElemType::Object(id),
+                    EnumSetKind::Library(ty) => elem_type_of(ty)?,
+                };
+                Some(JType::Set {
+                    elem,
+                    face: CollFace::Concrete,
+                })
+            }
             // `copyOf(c)` takes its element from the SOURCE, not from reading
             // the argument as an element of the result.
             ("Map", "copyOf") => Some(
@@ -35112,6 +35133,110 @@ impl BodyGen<'_> {
         true
     }
 
+    /// `Enum.valueOf(Kind.class, name)` — the only static `java.lang.Enum`
+    /// has, which is the enum's own `valueOf(name)` with the enum named by a
+    /// class literal instead of by the call.
+    ///
+    /// Java reaches an inherited static through ANY subclass name, and the
+    /// enum comes from the LITERAL rather than from the name it was written
+    /// after: `DayOfWeek.valueOf(Month.class, "MARCH")` is a `Month`. So this
+    /// is asked for every enum name as well as for `Enum` itself, and asked
+    /// in one place so the two cannot answer differently.
+    #[allow(clippy::option_option)] // the call-dispatch return shape
+    fn emit_enum_value_of(&mut self, method: &str, args: &[Expr]) -> Option<Option<JType>> {
+        if method != "valueOf" {
+            return None;
+        }
+        let [Expr::Field { object, name, .. }, wanted] = args else {
+            return None;
+        };
+        if name != "class" {
+            return None;
+        }
+        let Expr::Name { path, .. } = object.as_ref() else {
+            return None;
+        };
+        let named = path.last().map_or("", String::as_str);
+        let user = self
+            .table
+            .class_id(named)
+            .filter(|id| self.table.info_by_id(*id).is_some_and(|info| info.is_enum));
+        let (internal, answer) = match (user, library_enum_type(named)) {
+            (Some(id), _) => (self.table.class_name(id).to_owned(), JType::Object(id)),
+            // A LIBRARY enum has no class in the table, but it has a
+            // `valueOf` of its own — the same call with the same failure.
+            (None, Some(ty)) => (library_enum_class(ty).to_owned(), ty),
+            (None, None) => return None,
+        };
+        let got = self.expr(wanted);
+        self.convert_for_assignment(got, JType::Str, wanted.span());
+        let method_ref = intern_method_ref(
+            self.pool,
+            &internal,
+            "valueOf",
+            &format!("(Ljava/lang/String;)L{internal};"),
+        );
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(1);
+        Some(Some(answer))
+    }
+
+    /// Which enum an `EnumSet` factory is about: named by a class literal
+    /// (`noneOf(Day.class)`), or read off the constants or the collection
+    /// passed.
+    ///
+    /// Its own function because the EMIT path and `type_of` both need the
+    /// answer, and a rule written twice is wrong at one of them: `type_of`
+    /// had no answer at all, so `EnumSet.copyOf(EnumSet.allOf(Day.class))`
+    /// was "caturra could not read an enum type" while the same call through
+    /// a variable compiled.
+    fn enum_set_kind(&mut self, method: &str, args: &[Expr]) -> Option<EnumSetKind> {
+        let named = |arg: Option<&Expr>| match arg {
+            // `Day.class` — a field access on a type name, which is how a
+            // class literal is written.
+            Some(Expr::Field { object, name, .. }) if name == "class" => match object.as_ref() {
+                Expr::Name { path, .. } => path.last().cloned(),
+                _ => None,
+            },
+            _ => None,
+        };
+        let by_literal = matches!(method, "noneOf" | "allOf") && args.len() == 1;
+        let enum_id = if by_literal {
+            named(args.first()).and_then(|name| self.table.class_id(&name))
+        } else {
+            match args.first().map(|first| self.type_of(first)) {
+                Some(JType::Object(id)) => Some(id),
+                Some(
+                    JType::Set { elem, .. } | JType::List { elem, .. } | JType::Collection(elem),
+                ) => match elem {
+                    ElemType::Object(id) => Some(id),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
+        if let Some(enum_id) =
+            enum_id.filter(|id| self.table.info_by_id(*id).is_some_and(|info| info.is_enum))
+        {
+            return Some(EnumSetKind::User(enum_id));
+        }
+        // A `java.time` enum is an enum too, and `EnumSet.of(DayOfWeek.SATURDAY,
+        // DayOfWeek.SUNDAY)` is the textbook line. It has no class in the
+        // table, but it HAS a `values()` of its own — and the universe is all
+        // this call ever wanted.
+        let library = if by_literal {
+            named(args.first()).and_then(|name| library_enum_type(&name))
+        } else {
+            match args.first().map(|first| self.type_of(first)) {
+                Some(
+                    JType::Set { elem, .. } | JType::List { elem, .. } | JType::Collection(elem),
+                ) => Some(elem.base_type()).filter(|ty| library_enum_constants(*ty).is_some()),
+                ty => ty.filter(|ty| library_enum_constants(*ty).is_some()),
+            }
+        };
+        library.map(EnumSetKind::Library)
+    }
+
     /// `EnumSet.of/noneOf/allOf/range/complementOf/copyOf`. Every one of them
     /// is the enum's UNIVERSE (its `values()`, emitted here) plus whatever the
     /// call selects from it, so the VM builds the set by ordinal without ever
@@ -35124,62 +35249,15 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
-        // Which enum: named by a class literal (`noneOf(Day.class)`), or the
-        // element type of the arguments.
-        let enum_id = match (method, args) {
-            // `Day.class` — a field access on a type name, which is how a
-            // class literal is written.
-            ("noneOf" | "allOf", [Expr::Field { object, name, .. }]) if name == "class" => {
-                match object.as_ref() {
-                    Expr::Name { path, .. } => {
-                        self.table.class_id(path.last().map_or("", String::as_str))
-                    }
-                    _ => None,
-                }
-            }
-            (_, [first, ..]) => match self.type_of(first) {
-                JType::Object(id) => Some(id),
-                JType::Set { elem, .. } | JType::List { elem, .. } | JType::Collection(elem) => {
-                    match elem {
-                        ElemType::Object(id) => Some(id),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            },
-            _ => None,
+        let Some(kind) = self.enum_set_kind(method, args) else {
+            self.error(
+                span,
+                format!("EnumSet.{method}(...) needs an enum type — caturra could not read one"),
+            );
+            return None;
         };
-        let enum_id =
-            enum_id.filter(|id| self.table.info_by_id(*id).is_some_and(|info| info.is_enum));
-        // A `java.time` enum is an enum too, and `EnumSet.of(DayOfWeek.SATURDAY,
-        // DayOfWeek.SUNDAY)` is the textbook line. It has no class in the
-        // table, but it HAS a `values()` of its own — and the universe is all
-        // this call ever wanted.
-        let library = if enum_id.is_some() {
-            None
-        } else {
-            match (method, args) {
-                ("noneOf" | "allOf", [Expr::Field { object, name, .. }]) if name == "class" => {
-                    match object.as_ref() {
-                        Expr::Name { path, .. } => {
-                            library_enum_type(path.last().map_or("", String::as_str))
-                        }
-                        _ => None,
-                    }
-                }
-                (_, [first, ..]) => match self.type_of(first) {
-                    JType::Set { elem, .. }
-                    | JType::List { elem, .. }
-                    | JType::Collection(elem) => {
-                        Some(elem.base_type()).filter(|ty| library_enum_constants(*ty).is_some())
-                    }
-                    ty => Some(ty).filter(|ty| library_enum_constants(*ty).is_some()),
-                },
-                _ => None,
-            }
-        };
-        let elem = match (enum_id, library) {
-            (Some(enum_id), _) => {
+        let elem = match kind {
+            EnumSetKind::User(enum_id) => {
                 let enum_name = self.table.class_name(enum_id).to_owned();
                 // The universe: `Day.values()`, an array of every constant in
                 // order.
@@ -35192,21 +35270,12 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::INVOKESTATIC, values, 1);
                 ElemType::Object(enum_id)
             }
-            (None, Some(ty)) => {
+            EnumSetKind::Library(ty) => {
                 let class = library_enum_class(ty);
                 let values =
                     intern_method_ref(self.pool, class, "values", &format!("()[L{class};"));
                 self.code.push_op_u16(op::INVOKESTATIC, values, 1);
                 elem_type_of(ty)?
-            }
-            (None, None) => {
-                self.error(
-                    span,
-                    format!(
-                        "EnumSet.{method}(...) needs an enum type — caturra could not read one"
-                    ),
-                );
-                return None;
             }
         };
         let set = JType::Set {
@@ -37115,6 +37184,20 @@ impl BodyGen<'_> {
         if stream_source {
             return self.emit_stream_source(class, method, args, span);
         }
+        // `Kind.valueOf(Kind.class, name)` — `Enum`'s two-argument static,
+        // reached through an enum's own name. Java finds an inherited static
+        // that way, and `Enum` is not the only name it answers to.
+        if method == "valueOf"
+            && args.len() == 2
+            && (library_enum_type(class).is_some()
+                || self
+                    .table
+                    .class_id(class)
+                    .is_some_and(|id| self.table.info_by_id(id).is_some_and(|i| i.is_enum)))
+            && let Some(answer) = self.emit_enum_value_of(method, args)
+        {
+            return Some(answer);
+        }
         // `OptionalInt.of(x)` and its two siblings. The TYPES existed — a
         // primitive stream's terminal answers one — but the names resolved
         // nowhere as a call target, so the only way to have one was to take it
@@ -37186,47 +37269,8 @@ impl BodyGen<'_> {
                 .info(class)
                 .is_some_and(|info| info.is_bundled && info.is_interface)
         {
-            if method == "valueOf"
-                && let [Expr::Field { object, name, .. }, wanted] = args
-                && name == "class"
-                && let Expr::Name { path, .. } = object.as_ref()
-                && let Some(id) = self.table.class_id(path.last().map_or("", String::as_str))
-                && self.table.info_by_id(id).is_some_and(|info| info.is_enum)
-            {
-                let enum_name = self.table.class_name(id).to_owned();
-                let got = self.expr(wanted);
-                self.convert_for_assignment(got, JType::Str, wanted.span());
-                let method_ref = intern_method_ref(
-                    self.pool,
-                    &enum_name,
-                    "valueOf",
-                    &format!("(Ljava/lang/String;)L{enum_name};"),
-                );
-                self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
-                self.code.drop_stack(1);
-                return Some(Some(JType::Object(id)));
-            }
-            // ...and a LIBRARY enum named the same way. It has no class in the
-            // table, but it has a `valueOf` of its own, which is the same call
-            // with the same failure.
-            if method == "valueOf"
-                && let [Expr::Field { object, name, .. }, wanted] = args
-                && name == "class"
-                && let Expr::Name { path, .. } = object.as_ref()
-                && let Some(ty) = library_enum_type(path.last().map_or("", String::as_str))
-            {
-                let internal = library_enum_class(ty);
-                let got = self.expr(wanted);
-                self.convert_for_assignment(got, JType::Str, wanted.span());
-                let method_ref = intern_method_ref(
-                    self.pool,
-                    internal,
-                    "valueOf",
-                    &format!("(Ljava/lang/String;)L{internal};"),
-                );
-                self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
-                self.code.drop_stack(1);
-                return Some(Some(ty));
+            if let Some(answer) = self.emit_enum_value_of(method, args) {
+                return Some(answer);
             }
             self.no_suitable_library_method("Enum", method, args, span);
             return Some(None);

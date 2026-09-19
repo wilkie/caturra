@@ -341,6 +341,270 @@ KNOWN = [
 ]
 
 
+# The calls the BANK cannot build, written out.
+#
+# A bank is keyed by ONE parameter's erased type, and a generic signature
+# constrains several at once: `Arrays.binarySearch(T[], T, Comparator<? super
+# T>)` erases to `(Object[], Object, Comparator)`, and an `Object[]` beside a
+# raw comparator is a program javac refuses. 136 probes were thrown away that
+# way — a question the instrument could not ask, which reads exactly like one
+# it asked and liked the answer to.
+#
+# Keyed by the signature the skipped list PRINTS, so that list is the worklist.
+# `*` stands for any class, for a member every receiver has. `{r}` is the
+# receiver expression (already parenthesised) and `{c}` the class name. A body
+# that starts with `{` is a block and says what to return; anything else is an
+# expression. An ARRAY has to be printed rather than returned — its own text is
+# an identity hash, which no two engines agree on.
+WRITTEN = {
+    # Every collection's `toArray(IntFunction)`, and a stream's. `Object[]::new`
+    # is the generator that fits any element type.
+    "*.toArray(java.util.function.IntFunction)": [
+        "java.util.Arrays.toString({r}.toArray(Object[]::new))",
+    ],
+    # An enum's two inherited generic members: `compareTo` is by ORDINAL, and
+    # `valueOf` takes a class literal that must BE an enum class.
+    "java.lang.Enum.compareTo(java.lang.Enum)": [
+        "{r}.compareTo(java.time.DayOfWeek.FRIDAY)",
+        "{r}.compareTo(java.time.DayOfWeek.MONDAY)",
+    ],
+    "java.time.DayOfWeek.compareTo(java.lang.Enum)": [
+        "{r}.compareTo(java.time.DayOfWeek.FRIDAY)",
+    ],
+    "java.time.Month.compareTo(java.lang.Enum)": [
+        "{r}.compareTo(java.time.Month.DECEMBER)",
+    ],
+    "java.math.RoundingMode.compareTo(java.lang.Enum)": [
+        "{r}.compareTo(java.math.RoundingMode.FLOOR)",
+    ],
+    "java.time.chrono.IsoEra.compareTo(java.lang.Enum)": [
+        "{r}.compareTo(java.time.chrono.IsoEra.BCE)",
+    ],
+    "java.time.format.FormatStyle.compareTo(java.lang.Enum)": [
+        "{r}.compareTo(java.time.format.FormatStyle.FULL)",
+    ],
+    "java.time.format.TextStyle.compareTo(java.lang.Enum)": [
+        "{r}.compareTo(java.time.format.TextStyle.SHORT)",
+    ],
+    "java.time.temporal.ChronoField.compareTo(java.lang.Enum)": [
+        "{r}.compareTo(java.time.temporal.ChronoField.YEAR)",
+    ],
+    "java.time.temporal.ChronoUnit.compareTo(java.lang.Enum)": [
+        "{r}.compareTo(java.time.temporal.ChronoUnit.HOURS)",
+    ],
+    # `Enum.valueOf(Class, String)` is inherited by every enum, and reachable
+    # through the subclass name as well as through `Enum` itself.
+    "java.lang.Enum.valueOf(java.lang.Class,java.lang.String)": [
+        'java.lang.Enum.valueOf(java.time.DayOfWeek.class, "FRIDAY")',
+        'java.lang.Enum.valueOf(java.time.DayOfWeek.class, "NOSUCHDAY")',
+    ],
+    "java.time.DayOfWeek.valueOf(java.lang.Class,java.lang.String)": [
+        'java.time.DayOfWeek.valueOf(java.time.DayOfWeek.class, "FRIDAY")',
+    ],
+    "java.time.Month.valueOf(java.lang.Class,java.lang.String)": [
+        'java.time.Month.valueOf(java.time.Month.class, "MARCH")',
+    ],
+    "java.math.RoundingMode.valueOf(java.lang.Class,java.lang.String)": [
+        'java.math.RoundingMode.valueOf(java.math.RoundingMode.class, "FLOOR")',
+    ],
+    "java.time.chrono.IsoEra.valueOf(java.lang.Class,java.lang.String)": [
+        'java.time.chrono.IsoEra.valueOf(java.time.chrono.IsoEra.class, "BCE")',
+    ],
+    "java.time.format.FormatStyle.valueOf(java.lang.Class,java.lang.String)": [
+        'java.time.format.FormatStyle.valueOf(java.time.format.FormatStyle.class, "FULL")',
+    ],
+    "java.time.format.TextStyle.valueOf(java.lang.Class,java.lang.String)": [
+        'java.time.format.TextStyle.valueOf(java.time.format.TextStyle.class, "SHORT")',
+    ],
+    "java.time.temporal.ChronoField.valueOf(java.lang.Class,java.lang.String)": [
+        'java.time.temporal.ChronoField.valueOf(java.time.temporal.ChronoField.class, "YEAR")',
+    ],
+    "java.time.temporal.ChronoUnit.valueOf(java.lang.Class,java.lang.String)": [
+        'java.time.temporal.ChronoUnit.valueOf(java.time.temporal.ChronoUnit.class, "HOURS")',
+    ],
+    # `Arrays`' generic half: every overload that takes a `Comparator` over the
+    # array's own element, or the class of the array to make.
+    "java.util.Arrays.binarySearch([Ljava.lang.Object;,java.lang.Object,java.util.Comparator)": [
+        'java.util.Arrays.binarySearch(new String[] {"a", "b", "d"}, "b",'
+        " java.util.Comparator.naturalOrder())",
+        'java.util.Arrays.binarySearch(new String[] {"a", "b", "d"}, "c",'
+        " java.util.Comparator.naturalOrder())",
+        'java.util.Arrays.binarySearch(new String[] {"d", "b", "a"}, "b",'
+        " java.util.Comparator.reverseOrder())",
+        'java.util.Arrays.binarySearch(new String[] {"a", "b", "d"}, "b", null)',
+    ],
+    "java.util.Arrays.binarySearch([Ljava.lang.Object;,int,int,java.lang.Object,java.util.Comparator)": [
+        'java.util.Arrays.binarySearch(new String[] {"a", "b", "d"}, 0, 2, "b",'
+        " java.util.Comparator.naturalOrder())",
+        'java.util.Arrays.binarySearch(new String[] {"a", "b", "d"}, 1, 3, "a",'
+        " java.util.Comparator.naturalOrder())",
+        'java.util.Arrays.binarySearch(new String[] {"a", "b", "d"}, 2, 1, "a",'
+        " java.util.Comparator.naturalOrder())",
+    ],
+    "java.util.Arrays.compare([Ljava.lang.Object;,[Ljava.lang.Object;,java.util.Comparator)": [
+        'java.util.Arrays.compare(new String[] {"a", "b"}, new String[] {"a", "c"},'
+        " java.util.Comparator.naturalOrder())",
+        'java.util.Arrays.compare(new String[] {"a"}, new String[] {"a", "c"},'
+        " java.util.Comparator.naturalOrder())",
+        'java.util.Arrays.compare(new String[] {"a", "b"}, new String[] {"a", "b"},'
+        " java.util.Comparator.reverseOrder())",
+    ],
+    "java.util.Arrays.compare([Ljava.lang.Object;,int,int,[Ljava.lang.Object;,int,int,java.util.Comparator)": [
+        'java.util.Arrays.compare(new String[] {"a", "b", "c"}, 0, 2,'
+        ' new String[] {"a", "b", "d"}, 0, 2, java.util.Comparator.naturalOrder())',
+        'java.util.Arrays.compare(new String[] {"a", "b", "c"}, 1, 3,'
+        ' new String[] {"a", "b", "d"}, 0, 3, java.util.Comparator.naturalOrder())',
+    ],
+    "java.util.Arrays.mismatch([Ljava.lang.Object;,[Ljava.lang.Object;,java.util.Comparator)": [
+        'java.util.Arrays.mismatch(new String[] {"a", "b"}, new String[] {"a", "c"},'
+        " java.util.Comparator.naturalOrder())",
+        'java.util.Arrays.mismatch(new String[] {"a"}, new String[] {"a"},'
+        " java.util.Comparator.naturalOrder())",
+    ],
+    "java.util.Arrays.mismatch([Ljava.lang.Object;,int,int,[Ljava.lang.Object;,int,int,java.util.Comparator)": [
+        'java.util.Arrays.mismatch(new String[] {"a", "b", "c"}, 0, 3,'
+        ' new String[] {"a", "b", "d"}, 0, 3, java.util.Comparator.naturalOrder())',
+    ],
+    "java.util.Arrays.copyOf([Ljava.lang.Object;,int,java.lang.Class)": [
+        'java.util.Arrays.toString(java.util.Arrays.copyOf(new String[] {"a", "b"}, 4,'
+        " String[].class))",
+        'java.util.Arrays.toString(java.util.Arrays.copyOf(new String[] {"a", "b"}, 1,'
+        " Object[].class))",
+    ],
+    "java.util.Arrays.copyOfRange([Ljava.lang.Object;,int,int,java.lang.Class)": [
+        'java.util.Arrays.toString(java.util.Arrays.copyOfRange(new String[] {"a", "b", "c"},'
+        " 1, 4, String[].class))",
+    ],
+    # The four sorts are `void`, so the ARRAY is what to show.
+    "java.util.Arrays.sort([Ljava.lang.Object;,java.util.Comparator)": [
+        '{ String[] a = {"c", "a", "b"};'
+        " java.util.Arrays.sort(a, java.util.Comparator.naturalOrder());"
+        " return java.util.Arrays.toString(a); }",
+        '{ String[] a = {"c", "a", "b"}; java.util.Arrays.sort(a, null);'
+        " return java.util.Arrays.toString(a); }",
+    ],
+    "java.util.Arrays.sort([Ljava.lang.Object;,int,int,java.util.Comparator)": [
+        '{ String[] a = {"c", "a", "b"};'
+        " java.util.Arrays.sort(a, 0, 2, java.util.Comparator.reverseOrder());"
+        " return java.util.Arrays.toString(a); }",
+        '{ String[] a = {"c", "a", "b"};'
+        " java.util.Arrays.sort(a, 2, 1, java.util.Comparator.naturalOrder());"
+        " return java.util.Arrays.toString(a); }",
+    ],
+    "java.util.Arrays.parallelSort([Ljava.lang.Object;,java.util.Comparator)": [
+        '{ String[] a = {"c", "a", "b"};'
+        " java.util.Arrays.parallelSort(a, java.util.Comparator.naturalOrder());"
+        " return java.util.Arrays.toString(a); }",
+    ],
+    "java.util.Arrays.parallelSort([Ljava.lang.Object;,int,int,java.util.Comparator)": [
+        '{ String[] a = {"c", "a", "b"};'
+        " java.util.Arrays.parallelSort(a, 0, 2, java.util.Comparator.naturalOrder());"
+        " return java.util.Arrays.toString(a); }",
+    ],
+    # An `EnumMap` is keyed by an enum, which the bank's `Object` is not. Each
+    # one shows the map AFTER it, since the answer is half the story.
+    "java.util.EnumMap.put(java.lang.Enum,java.lang.Object)": [
+        "{ java.util.EnumMap<java.time.DayOfWeek, String> m = {r};"
+        ' return m.put(java.time.DayOfWeek.MONDAY, "x") + " " + m; }',
+    ],
+    "java.util.EnumMap.putIfAbsent(java.lang.Object,java.lang.Object)": [
+        "{ java.util.EnumMap<java.time.DayOfWeek, String> m = {r};"
+        ' m.put(java.time.DayOfWeek.MONDAY, "x");'
+        ' return m.putIfAbsent(java.time.DayOfWeek.MONDAY, "y")'
+        ' + " " + m.putIfAbsent(java.time.DayOfWeek.TUESDAY, "z") + " " + m; }',
+    ],
+    "java.util.EnumMap.putAll(java.util.Map)": [
+        "{ java.util.EnumMap<java.time.DayOfWeek, String> m = {r};"
+        ' m.putAll(java.util.Map.of(java.time.DayOfWeek.TUESDAY, "t")); return m; }',
+    ],
+    "java.util.EnumMap.replace(java.lang.Object,java.lang.Object)": [
+        "{ java.util.EnumMap<java.time.DayOfWeek, String> m = {r};"
+        ' m.put(java.time.DayOfWeek.MONDAY, "x");'
+        ' return m.replace(java.time.DayOfWeek.MONDAY, "y")'
+        ' + " " + m.replace(java.time.DayOfWeek.FRIDAY, "z") + " " + m; }',
+    ],
+    "java.util.EnumMap.replace(java.lang.Object,java.lang.Object,java.lang.Object)": [
+        "{ java.util.EnumMap<java.time.DayOfWeek, String> m = {r};"
+        ' m.put(java.time.DayOfWeek.MONDAY, "x");'
+        ' return m.replace(java.time.DayOfWeek.MONDAY, "x", "y")'
+        ' + " " + m.replace(java.time.DayOfWeek.MONDAY, "x", "z") + " " + m; }',
+    ],
+    "java.util.EnumMap.compute(java.lang.Object,java.util.function.BiFunction)": [
+        "{ java.util.EnumMap<java.time.DayOfWeek, String> m = {r};"
+        ' m.put(java.time.DayOfWeek.MONDAY, "x");'
+        ' return m.compute(java.time.DayOfWeek.MONDAY, (k, v) -> v + "!")'
+        ' + " " + m.compute(java.time.DayOfWeek.TUESDAY, (k, v) -> null) + " " + m; }',
+    ],
+    "java.util.EnumMap.computeIfAbsent(java.lang.Object,java.util.function.Function)": [
+        "{ java.util.EnumMap<java.time.DayOfWeek, String> m = {r};"
+        " return m.computeIfAbsent(java.time.DayOfWeek.MONDAY, k -> k.toString())"
+        ' + " " + m; }',
+    ],
+    "java.util.EnumMap.computeIfPresent(java.lang.Object,java.util.function.BiFunction)": [
+        "{ java.util.EnumMap<java.time.DayOfWeek, String> m = {r};"
+        ' m.put(java.time.DayOfWeek.MONDAY, "x");'
+        ' return m.computeIfPresent(java.time.DayOfWeek.MONDAY, (k, v) -> v + "?")'
+        ' + " " + m.computeIfPresent(java.time.DayOfWeek.FRIDAY, (k, v) -> "no") + " " + m; }',
+    ],
+    "java.util.EnumMap.merge(java.lang.Object,java.lang.Object,java.util.function.BiFunction)": [
+        "{ java.util.EnumMap<java.time.DayOfWeek, String> m = {r};"
+        ' m.put(java.time.DayOfWeek.MONDAY, "x");'
+        ' return m.merge(java.time.DayOfWeek.MONDAY, "y", (a, b) -> a + b)'
+        ' + " " + m.merge(java.time.DayOfWeek.TUESDAY, "z", (a, b) -> a + b) + " " + m; }',
+    ],
+    # An `EnumSet` holds one enum type, and its factories take that class.
+    "java.util.EnumSet.add(java.lang.Object)": [
+        "{ java.util.EnumSet<java.time.DayOfWeek> s ="
+        " java.util.EnumSet.noneOf(java.time.DayOfWeek.class);"
+        " return s.add(java.time.DayOfWeek.FRIDAY)"
+        ' + " " + s.add(java.time.DayOfWeek.FRIDAY) + " " + s; }',
+    ],
+    "java.util.EnumSet.addAll(java.util.Collection)": [
+        "{ java.util.EnumSet<java.time.DayOfWeek> s ="
+        " java.util.EnumSet.noneOf(java.time.DayOfWeek.class);"
+        " return s.addAll(java.util.List.of(java.time.DayOfWeek.FRIDAY,"
+        ' java.time.DayOfWeek.MONDAY)) + " " + s; }',
+    ],
+    "java.util.EnumSet.allOf(java.lang.Class)": [
+        "java.util.EnumSet.allOf(java.time.DayOfWeek.class)",
+        "java.util.EnumSet.allOf(java.math.RoundingMode.class)",
+    ],
+    "java.util.EnumSet.noneOf(java.lang.Class)": [
+        "java.util.EnumSet.noneOf(java.time.DayOfWeek.class)",
+    ],
+    "java.util.EnumSet.of(java.lang.Enum,[Ljava.lang.Enum;)": [
+        "java.util.EnumSet.of(java.time.DayOfWeek.MONDAY)",
+        "java.util.EnumSet.of(java.time.DayOfWeek.FRIDAY, java.time.DayOfWeek.MONDAY)",
+        "java.util.EnumSet.of(java.time.DayOfWeek.MONDAY, java.time.DayOfWeek.MONDAY)",
+    ],
+    "java.util.EnumSet.complementOf(java.util.EnumSet)": [
+        "java.util.EnumSet.complementOf(java.util.EnumSet.of(java.time.DayOfWeek.MONDAY))",
+        "java.util.EnumSet.complementOf(java.util.EnumSet.allOf(java.time.DayOfWeek.class))",
+    ],
+    "java.util.EnumSet.copyOf(java.util.EnumSet)": [
+        "java.util.EnumSet.copyOf(java.util.EnumSet.of(java.time.DayOfWeek.MONDAY))",
+    ],
+    "java.util.EnumSet.range(java.lang.Enum,java.lang.Enum)": [
+        "java.util.EnumSet.range(java.time.DayOfWeek.TUESDAY, java.time.DayOfWeek.FRIDAY)",
+        "java.util.EnumSet.range(java.time.DayOfWeek.FRIDAY, java.time.DayOfWeek.TUESDAY)",
+    ],
+    "java.util.EnumSet.copyOf(java.util.Collection)": [
+        "java.util.EnumSet.copyOf(java.util.List.of(java.time.DayOfWeek.FRIDAY,"
+        " java.time.DayOfWeek.MONDAY))",
+        "java.util.EnumSet.copyOf(java.util.EnumSet.allOf(java.time.DayOfWeek.class))",
+    ],
+    # A primitive stream's `flatMap` answers a stream of the same primitive.
+    "java.util.stream.IntStream.flatMap(java.util.function.IntFunction)": [
+        "{r}.flatMap(v -> java.util.stream.IntStream.of(v, v + 1)).sum()",
+    ],
+    # The one `Files` call whose argument is a set of permissions.
+    "java.nio.file.Files.setPosixFilePermissions(java.nio.file.Path,java.util.Set)": [
+        "java.nio.file.Files.setPosixFilePermissions(java.nio.file.Paths.get(\"a\"),"
+        " java.util.Set.of(java.nio.file.attribute.PosixFilePermission.OWNER_READ))",
+    ],
+}
+
+
 # Answers that cannot agree between two runs, let alone two engines: a clock, a
 # random draw, an identity hash, a live host fact. Their PRESENCE is what
 # `measure.py` checks; their value is nobody's to pin.
@@ -384,9 +648,20 @@ def calls_for(class_name, receiver, overloads, answered):
     for name, is_static, returns, params in overloads:
         if name not in answered or name in NON_DETERMINISTIC:
             continue
+        signature = f"{name}({','.join(params)})"
+        # A call the bank cannot type, written out. Tried before the bank, so
+        # a signature that HAS a written form is never built two ways.
+        written = WRITTEN.get(f"{class_name}.{signature}") or WRITTEN.get(f"*.{signature}")
+        if written:
+            for at, form in enumerate(written):
+                body = form.replace("{r}", f"({receiver})").replace("{c}", class_name)
+                if returns == "void" and not body.lstrip().startswith("{"):
+                    body = f'{{ {body}; return "ok"; }}'
+                calls.append((f"{signature}#W{at}", body))
+            continue
         banks = [BANK.get(p) for p in params]
         if any(bank is None for bank in banks):
-            unbuildable.append(f"{class_name}.{name}({','.join(params)})")
+            unbuildable.append(f"{class_name}.{signature}")
             continue
         # One call per bank entry of the FIRST parameter, so an awkward value
         # gets exercised without the cross-product exploding.
@@ -396,7 +671,7 @@ def calls_for(class_name, receiver, overloads, answered):
             # A CLASS name cannot be parenthesised; a receiver EXPRESSION has
             # to be, or `"ab".length()` and `1 + 2 . foo()` parse differently.
             target = class_name if is_static else f"({receiver})"
-            label = f"{name}({','.join(params)})#{at}"
+            label = f"{signature}#{at}"
             call = f"{target}.{name}({arguments})"
             # A `void` method has nothing to print, so it is run for its
             # EFFECT and its exception — the lambda answers a fixed word.

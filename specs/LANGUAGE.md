@@ -15659,6 +15659,53 @@ moment. Answering it eagerly created three divergences where it closed one, and
 it is declared in the sweep rather than guessed at. The laziness is the fix and
 it needs a pipeline operation that can emit many elements per one.
 
+### The probes javac would not take, again (2026-09-19)
+
+The functional half of that blind spot was closed; the GENERIC half was not.
+136 probes were still being thrown away as "javac would not take the probe",
+which reads in a report exactly like a question that was asked and answered.
+
+The cause is the shape of an argument bank. A bank is keyed by ONE parameter's
+erased type, and a generic signature constrains several at once:
+`Arrays.binarySearch(T[], T, Comparator<? super T>)` erases to `(Object[],
+Object, Comparator)`, and an `Object[]` beside a raw comparator is a program
+javac refuses. So the sweep could not build a single call to any of them.
+
+`behaviour.py` now carries a `WRITTEN` table beside the bank: the calls a bank
+cannot type, written out and keyed by the signature the skipped list PRINTS —
+so that list is the worklist. `*` stands for any receiver (every collection's
+`toArray(IntFunction)` is one rule), `{r}` is the receiver and `{c}` the class.
+An array is printed rather than returned, since its own text is an identity
+hash. 63 written calls take the javac-rejected count from 136 to **zero**, and
+the sweep from 7,341 comparisons to 7,400.
+
+**What it found immediately.** Two rules, both of them the shape this project
+keeps finding:
+
+- **`Enum.valueOf(Kind.class, name)` is an INHERITED static**, and Java reaches
+  an inherited static through any subclass name. caturra answered it only
+  under the name `Enum`, so `DayOfWeek.valueOf(DayOfWeek.class, "FRIDAY")` was
+  "method valueOf in class DayOfWeek cannot be applied to given types". The
+  enum also comes from the class LITERAL and not from the name it follows:
+  `DayOfWeek.valueOf(Month.class, "MARCH")` is a `Month`, which is what makes
+  one rule for every enum name the right shape rather than eight copies.
+- **An `EnumSet` factory had no type in `type_of`.** The emitter read the enum
+  off a class literal, off the constants, or off the collection copied — and
+  `type_of` did not, so `EnumSet.copyOf(EnumSet.allOf(Day.class))` was
+  "caturra could not read an enum type" while the same call through a variable
+  compiled, and `EnumSet.allOf(Day.class).toArray(Object[]::new)` had no type
+  at all where it was printed. The rule is now `enum_set_kind`, asked by both
+  paths — the emit/typing mirror for the nth time.
+
+Pinned as `an_enum_set_and_an_inherited_value_of`.
+
+**What it left.** The written calls also named nine `java.util.Arrays`
+overloads caturra refuses outright — the generic half of that class
+(`binarySearch` with a range and a comparator, `compare`, `mismatch`,
+`parallelSort`, and `copyOf`/`copyOfRange` with an array class). They are in
+the skipped list under "caturra would not take the probe", which is where the
+next unit comes from.
+
 ### What a primitive functional call is owed (2026-09-07)
 
 `DoubleUnaryOperator op = d -> d / 2; op.applyAsDouble(5)` is 2.5 on a JDK and

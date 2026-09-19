@@ -50285,6 +50285,59 @@ public class TP {
 );
 
 differential_test!(
+    an_enum_set_and_an_inherited_value_of,
+    "EI",
+    r#"
+import java.math.RoundingMode;
+import java.time.DayOfWeek;
+import java.time.Month;
+import java.util.Arrays;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Set;
+public class EI {
+  enum Kind { RED, GREEN, BLUE }
+  interface Body { Object get() throws Exception; }
+  static void show(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    // `Enum.valueOf(Kind.class, name)` is an INHERITED static, so it is
+    // reached through any enum's name as well as through `Enum` — and the
+    // enum comes from the class LITERAL, not from the name it follows.
+    show("through Enum", () -> Enum.valueOf(DayOfWeek.class, "FRIDAY"));
+    show("through itself", () -> DayOfWeek.valueOf(DayOfWeek.class, "FRIDAY"));
+    show("through another", () -> DayOfWeek.valueOf(Month.class, "MARCH"));
+    show("a user enum", () -> Kind.valueOf(Kind.class, "GREEN"));
+    show("a user enum through a library one", () -> DayOfWeek.valueOf(Kind.class, "BLUE"));
+    show("rounding", () -> RoundingMode.valueOf(RoundingMode.class, "FLOOR"));
+    show("style", () -> java.time.format.TextStyle.valueOf(java.time.format.TextStyle.class, "SHORT"));
+    show("field", () -> java.time.temporal.ChronoField.valueOf(java.time.temporal.ChronoField.class, "YEAR"));
+    show("no such name", () -> Enum.valueOf(DayOfWeek.class, "NOSUCHDAY"));
+    show("assigned", () -> { Month m = DayOfWeek.valueOf(Month.class, "MAY"); return m.plus(1); });
+    // An `EnumSet` factory answers a set of the enum it names, and that
+    // answer has to have a TYPE where it is written — not only through a
+    // variable.
+    show("copyOf allOf", () -> EnumSet.copyOf(EnumSet.allOf(DayOfWeek.class)));
+    show("complementOf allOf", () -> EnumSet.complementOf(EnumSet.allOf(Kind.class)));
+    show("complementOf of", () -> EnumSet.complementOf(EnumSet.of(DayOfWeek.MONDAY)));
+    show("copyOf a list", () -> EnumSet.copyOf(List.of(Kind.BLUE, Kind.RED)));
+    show("toArray", () -> Arrays.toString(EnumSet.allOf(Kind.class).toArray(Object[]::new)));
+    show("size", () -> EnumSet.allOf(DayOfWeek.class).size() + " " + EnumSet.noneOf(Kind.class).size());
+    show("printed", () -> EnumSet.range(DayOfWeek.TUESDAY, DayOfWeek.FRIDAY).toString());
+    show("nested", () -> EnumSet.copyOf(EnumSet.copyOf(EnumSet.of(Kind.RED, Kind.BLUE))));
+    show("as a Set", () -> { Set<Kind> s = EnumSet.allOf(Kind.class); return s.contains(Kind.RED) + " " + s; });
+    show("streamed", () -> EnumSet.allOf(Kind.class).stream().map(Enum::name).collect(java.util.stream.Collectors.toList()));
+    show("iterated", () -> { StringBuilder out = new StringBuilder();
+      for (Kind k : EnumSet.complementOf(EnumSet.of(Kind.GREEN))) { out.append(k).append(' '); }
+      return out.toString(); });
+  }
+}
+"#
+);
+
+differential_test!(
     where_a_number_parse_stops,
     "PS",
     r##"
