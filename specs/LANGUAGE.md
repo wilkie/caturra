@@ -13983,6 +13983,56 @@ twelve-pattern by thirty-five-value tie grid, run once over doubles and once
 over the same values as exact decimals, which round the plain half-even way.
 Seven unit tests sit in the core.
 
+**Where a parse stops.** Formatting was measured against a JDK; reading a
+number back was not, and the two are not the same shape. A JDK's `parse` is a
+CURSOR — the prefix the pattern promised, then digits, then the SUFFIX it
+promised — where caturra's was a prefix scan that read what digits it could
+and stopped. Eight rules follow from that difference, each one a JDK's answer
+to a program caturra got wrong:
+
+- **The suffix is not optional.** `#0.00;(#)` reading `(12.50rest` is not
+  -12.5 with the tail ignored: the negative form ends in `)`, so the read
+  fails — at index 6, where the `)` should have been. A percent pattern
+  reading `50x` fails the same way, at index 2.
+- **An exponent is part of the number, and its sign is a prefix.** `1E-3` is
+  a thousandth; `1E+3` is the number 1 with `E+3` left unread, because the
+  exponent is read by the same rules as a number and the only prefix it has
+  is the minus sign; `1e3` is 1, because the mark is `E`.
+- **`∞` and `NaN` are values a number format reads.** `∞` stands where the
+  digits would, affixes and all, so `-∞` is the negative prefix and the
+  symbol — and `NaN` is read BEFORE the affixes, which is why `-NaN` is not a
+  number though `-∞` is.
+- **A grouping separator counts only once a digit follows it.** `12,` reads
+  12 and gives the comma back; `1,2,3` is 123; `1,.5` is 1.5; and a separator
+  after the decimal point ends the read.
+- **A digit is any Unicode decimal digit,** because a JDK reads one with
+  `Character.digit`: `٥` and `５` are both 5.
+- **Negative zero is a `Double`.** A `long` cannot carry the sign, so `-0`
+  parses as `-0.0` — unless the format reads integers only, where there was
+  never a fraction for the sign to belong to.
+- **The multiplier divides last, and a quotient that came out whole is a
+  `long` after all.** `200%` is a `Long` 2 where `50%` is a `Double` 0.5 —
+  and reading integers only takes the `long` either way, so half a percent is
+  0. A NEGATIVE multiplier flips the sign, an infinity's included; a ZERO one
+  answers in `double` arithmetic rather than throwing, so zero over zero is
+  NaN and anything else an infinity.
+- **A negative subpattern that repeats the positive one is thrown away.** It
+  supplies nothing but the affixes, so when they are the same affixes there
+  is nothing left in it: a JDK derives `-` + the positive prefix instead.
+  `#;#` is `#`, and `#u;#u` reads `5u` as positive five rather than failing
+  to tell the two forms apart.
+
+The same rules run the other way. The sign of a formatted number is taken
+AFTER the multiplier, which is the only way a negative one can be seen at all
+(`setMultiplier(-2)` writes 10 as `-20`), and a product of zero has no sign —
+`setMultiplier(0)` writes every value as `0`, never `-0`. And formatting
+`Long.MIN_VALUE` had lost its sign entirely, because the magnitude was taken
+with `abs()`, of the one `long` whose absolute value is itself.
+
+Pinned as `where_a_number_parse_stops`. The sweep behind it is 4,320 parses
+(20 patterns × 72 texts × the two parsing flags) and 1,955 formats (17
+patterns × five multipliers × 23 values), all identical to a JDK's.
+
 **One deliberate divergence.** `new DecimalFormat("").toPattern()` asks a JDK
 for an array of 2^31 digits and dies with an `OutOfMemoryError`; caturra
 answers `#,##0.###`, the pattern the empty one leaves in place. Reproducing a

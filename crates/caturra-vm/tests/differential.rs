@@ -50146,6 +50146,90 @@ public class DQ {
 );
 
 differential_test!(
+    where_a_number_parse_stops,
+    "PS",
+    r##"
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
+import java.math.BigDecimal;
+public class PS {
+  interface Body { Object get() throws Exception; }
+  static void show(String l, Body b) {
+    try {
+      Object v = b.get();
+      String kind = v == null ? "" : " (" + v.getClass().getSimpleName() + ")";
+      String scale = v instanceof BigDecimal ? " scale=" + ((BigDecimal) v).scale() : "";
+      System.out.println(l + " = " + v + kind + scale);
+    }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    // A parse is a CURSOR: the prefix the pattern promised, then digits, then
+    // the SUFFIX it promised. The suffix is not optional.
+    String[] patterns = {"#,##0.00", "#", "#.##", "#%", "#‰", "#0.00;(#)",
+                         "$#,##0.00;($#,##0.00)", "0.###E0", "#,##0;#,##0-", "+#;-#", "#u;#u",
+                         "#;#", "0;#", "¤#0.00"};
+    String[] texts = {"0", "7", "-7", "+7", "007", "12.75", ".75", "75.", "1,234", "1,2,3", ",5",
+                      "12,", "1E3", "1E-3", "1E+3", "1e3", "1E", "1.5E2", "1E400", "1E-400",
+                      "∞", "-∞", "NaN", "-NaN", "abc", "", " 7", "50%", "(12.50)",
+                      "(12.50", "12.50)", "$12.50", "-$12.50", "9223372036854775807",
+                      "-9223372036854775808", "9223372036854775808", "-0", "-0.0", "1.2,3", "1,.5",
+                      "5-", "5u", "٥", "５", "1,234.56xyz"};
+    for (String p : patterns) {
+      for (String t : texts) {
+        final String pp = p; final String tt = t;
+        show("[" + pp + "] <" + tt + ">", () -> new DecimalFormat(pp).parse(tt));
+        show("[" + pp + "]I <" + tt + ">", () -> {
+          DecimalFormat f = new DecimalFormat(pp); f.setParseIntegerOnly(true); return f.parse(tt); });
+        show("[" + pp + "]B <" + tt + ">", () -> {
+          DecimalFormat f = new DecimalFormat(pp); f.setParseBigDecimal(true); return f.parse(tt); });
+      }
+    }
+    // The multiplier divides what was read — and a NEGATIVE one flips the
+    // sign, a ZERO one answers in double arithmetic rather than throwing.
+    int[] multipliers = {1, 2, -2, 0, 100};
+    String[] values = {"10", "-10", "5", "0", "-0", "∞", "-∞", "NaN", "99999999999999999999"};
+    for (int m : multipliers) {
+      for (String t : values) {
+        final int mm = m; final String tt = t;
+        show("x" + mm + " <" + tt + ">", () -> {
+          DecimalFormat f = new DecimalFormat("#.##"); f.setMultiplier(mm); return f.parse(tt); });
+        show("x" + mm + "I <" + tt + ">", () -> {
+          DecimalFormat f = new DecimalFormat("#.##"); f.setMultiplier(mm);
+          f.setParseIntegerOnly(true); return f.parse(tt); });
+        show("x" + mm + "B <" + tt + ">", () -> {
+          DecimalFormat f = new DecimalFormat("#.##"); f.setMultiplier(mm);
+          f.setParseBigDecimal(true); return f.parse(tt); });
+        show("x" + mm + " fmt <" + tt + ">", () -> {
+          DecimalFormat f = new DecimalFormat("#.##"); f.setMultiplier(mm); return f.format(10); });
+      }
+    }
+    // The sign a product wears, at the two edges a `long` has.
+    show("min", () -> new DecimalFormat("#,##0.00").format(Long.MIN_VALUE));
+    show("min x2", () -> { DecimalFormat f = new DecimalFormat("#"); f.setMultiplier(2); return f.format(Long.MIN_VALUE); });
+    show("min int", () -> new DecimalFormat("#").format(Integer.MIN_VALUE));
+    show("zero product", () -> { DecimalFormat f = new DecimalFormat("#.00"); f.setMultiplier(0); return f.format(-7L) + " " + f.format(-7) + " " + f.format(-7.0); });
+    show("infinity product", () -> { DecimalFormat f = new DecimalFormat("#.##"); f.setMultiplier(-2); return f.format(Double.POSITIVE_INFINITY) + " " + f.format(Double.NaN); });
+    // `parseObject` is the same read under the name `Format` gave it.
+    show("parseObject", () -> new DecimalFormat("#0.00;(#)").parseObject("(12.50)rest"));
+    show("parseObject bad", () -> new DecimalFormat("#").parseObject("abc"));
+    show("NumberFormat", () -> NumberFormat.getInstance().parse("1,234.5x") + " " + NumberFormat.getPercentInstance().parse("50%"));
+    // A negative subpattern that says what the positive one already said is
+    // thrown away and the minus sign derived instead — a question about the
+    // PATTERN, asked here because it is what tells the two forms apart.
+    for (String p : new String[] {"#;#", "#u;#u", "0;#", "#;#0", "a#b;a#b", "$#;$#", "#;(#)", "#;-#"}) {
+      final String pp = p;
+      show("[" + pp + "] halves", () -> {
+        DecimalFormat f = new DecimalFormat(pp);
+        return f.toPattern() + " [" + f.getPositivePrefix() + "|" + f.getNegativePrefix() + "]["
+            + f.getPositiveSuffix() + "|" + f.getNegativeSuffix() + "] " + f.format(5) + "/" + f.format(-5); });
+    }
+  }
+}
+"##
+);
+
+differential_test!(
     every_decimal_format_pattern,
     "DF",
     r##"

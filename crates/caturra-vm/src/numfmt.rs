@@ -127,9 +127,23 @@ impl NumberPattern {
         }
         let halves = split_subpatterns(pattern)?;
         let mut parsed = Self::from_subpattern(halves[0])?;
-        // An EMPTY negative half is simply the derived one.
-        if let Some(negative) = halves.get(1).filter(|half| !half.is_empty()) {
-            let other = Self::from_subpattern(negative)?;
+        // An EMPTY negative half is simply the derived one — and so is one
+        // that SAYS what the positive half already said. A negative
+        // subpattern supplies nothing but the affixes, so when they are the
+        // same affixes there is nothing left in it, and a JDK throws it away
+        // and derives the minus sign instead: `#;#` is `#`, and `#u;#u`
+        // reads `5u` as positive five rather than failing to tell the two
+        // forms apart.
+        let derived = halves
+            .get(1)
+            .filter(|half| !half.is_empty())
+            .map(|negative| Self::from_subpattern(negative))
+            .transpose()?
+            .filter(|other| {
+                other.positive_prefix != parsed.positive_prefix
+                    || other.positive_suffix != parsed.positive_suffix
+            });
+        if let Some(other) = derived {
             parsed.negative_prefix = other.positive_prefix;
             parsed.negative_suffix = other.positive_suffix;
             parsed.negative_prefix_quoted = other.positive_prefix_quoted;
@@ -138,7 +152,7 @@ impl NumberPattern {
             parsed.negative_suffix_code = other.positive_suffix_code;
         } else {
             parsed.negative_prefix = format!("-{}", parsed.positive_prefix);
-            parsed.negative_suffix = parsed.positive_suffix.clone();
+            parsed.negative_suffix.clone_from(&parsed.positive_suffix);
             parsed.negative_prefix_quoted = parsed.positive_prefix_quoted;
             parsed.negative_suffix_quoted = parsed.positive_suffix_quoted;
             parsed.negative_prefix_code = parsed.positive_prefix_code;
@@ -402,7 +416,12 @@ impl NumberPattern {
         } else {
             value.multiply(&BigDec::from_i64(self.multiplier))
         };
-        self.format_scaled(&scaled, negative, exact)
+        // The sign is taken AFTER the multiplier, which is the only way a
+        // NEGATIVE one can be seen at all: `setMultiplier(-2)` writes 10
+        // as -20, not as 20. A product of ZERO has no sign — which is what
+        // `setMultiplier(0)` makes of every value.
+        let negative = scaled.signum() != 0 && negative != (self.multiplier < 0);
+        self.format_scaled(&scaled.abs(), negative, exact)
     }
 
     /// The same, for a value the caller has ALREADY multiplied — which a
@@ -539,56 +558,196 @@ impl NumberPattern {
         out
     }
 
-    /// `parse(text)` — the leading number, as a JDK reads it. `None` when
-    /// nothing there is a number at all.
     /// What a percent or per-mille pattern multiplies by.
     #[must_use]
     pub fn multiplier(&self) -> i64 {
         self.multiplier
     }
 
-    #[must_use]
-    pub fn parse_number(&self, text: &str) -> Option<BigDec> {
-        let mut rest = text;
-        let mut negative = false;
-        if !self.negative_prefix.is_empty() && rest.starts_with(&self.negative_prefix) {
-            negative = true;
-            rest = &rest[self.negative_prefix.len()..];
-        } else if !self.positive_prefix.is_empty() && rest.starts_with(&self.positive_prefix) {
-            rest = &rest[self.positive_prefix.len()..];
-        }
-        let mut digits = String::new();
-        let mut seen_point = false;
-        for ch in rest.chars() {
-            if ch.is_ascii_digit() {
-                digits.push(ch);
-            } else if ch == '.' && !seen_point {
-                seen_point = true;
-                digits.push('.');
-            } else if ch == ',' {
-                // A grouping separator inside the number is simply skipped.
-            } else {
-                break;
+    /// Read a number at `start`, the way a JDK's `DecimalFormat.subparse`
+    /// does: the prefix the pattern promised, then digits, then the matching
+    /// suffix.
+    ///
+    /// # Errors
+    /// The index the read failed at — a JDK's `errorIndex`, and the only
+    /// thing it reports about a failure.
+    #[must_use = "the reading says where the cursor stopped"]
+    pub fn read(&self, text: &[char], start: usize) -> Result<Reading, usize> {
+        // A prefix is chosen by LENGTH: the default pattern's positive prefix
+        // is empty, so it matches everywhere, and `-7` is negative only
+        // because `-` is the longer match of the two.
+        let mut positive = affix_at(text, start, &self.positive_prefix);
+        let mut negative = affix_at(text, start, &self.negative_prefix);
+        if let (Some(plus), Some(minus)) = (positive, negative) {
+            if plus > minus {
+                negative = None;
+            } else if plus < minus {
+                positive = None;
             }
         }
-        let digits = digits.trim_end_matches('.');
-        if digits.is_empty() {
+        let mut at = start + positive.or(negative).ok_or(start)?;
+
+        // `∞` stands where the digits would, affixes and all: `-∞` is the
+        // negative prefix and then the symbol.
+        let infinite = affix_at(text, at, INFINITY).is_some();
+        let mut digits = String::new();
+        let mut fraction = 0usize;
+        let mut exponent = 0i32;
+        if infinite {
+            at += INFINITY.chars().count();
+        } else {
+            let mut saw_digit = false;
+            let mut saw_decimal = false;
+            // A grouping separator counts only once a digit follows it, so a
+            // read that ends on one gives the separator back: `12,` is 12,
+            // and the comma is still unread.
+            let mut backup = None;
+            while let Some(&character) = text.get(at) {
+                // A digit is any Unicode decimal digit, not only `0`-`9`: a
+                // JDK reads one with `Character.digit`, so Arabic-Indic `٥`
+                // and fullwidth `５` are both the number 5.
+                if let Some(value) = crate::intrinsics::nd_digit_value(character) {
+                    digits.push(char::from(b'0' + u8::try_from(value).unwrap_or(0)));
+                    fraction += usize::from(saw_decimal);
+                    saw_digit = true;
+                    backup = None;
+                } else if character == DECIMAL {
+                    if self.parse_integer_only || saw_decimal {
+                        break;
+                    }
+                    saw_decimal = true;
+                } else if character == GROUPING && self.grouping_used {
+                    if saw_decimal {
+                        break;
+                    }
+                    backup = Some(at);
+                } else if character == EXPONENT {
+                    // The exponent is a number in its own right, read by the
+                    // same rules with no affix but a minus — which is why
+                    // `1E-3` is a thousandth and `1E+3` is the number 1 with
+                    // `E+3` left unread.
+                    if let Some((value, end)) = read_exponent(text, at + 1) {
+                        exponent = value;
+                        at = end;
+                    }
+                    break;
+                } else {
+                    break;
+                }
+                at += 1;
+            }
+            if let Some(back) = backup {
+                at = back;
+            }
+            if !saw_digit {
+                return Err(start);
+            }
+        }
+
+        // The suffix the chosen prefix promised. Neither matching (or both,
+        // for a pattern whose two forms end alike) is a failure HERE, at the
+        // end of the digits — which is why `(12.50rest` fails at the `r`
+        // rather than reading -12.5 and leaving the tail.
+        let positive = positive.and(affix_at(text, at, &self.positive_suffix));
+        let negative = negative.and(affix_at(text, at, &self.negative_suffix));
+        let chosen = match (positive, negative) {
+            (Some(plus), Some(minus)) if plus > minus => Some((false, plus)),
+            (Some(plus), Some(minus)) if plus < minus => Some((true, minus)),
+            (Some(_), Some(_)) | (None, None) => None,
+            (Some(plus), None) => Some((false, plus)),
+            (None, Some(minus)) => Some((true, minus)),
+        };
+        let (negative, taken) = chosen.ok_or(at)?;
+        at += taken;
+        // A read that consumed nothing at all is a failure too: a
+        // `ParsePosition` already past the end of the text matches every
+        // empty affix and reads no digits.
+        if at == start {
+            return Err(at);
+        }
+        let magnitude = digits_to_decimal(&digits, fraction, exponent);
+        Ok(Reading {
+            magnitude,
+            negative,
+            infinite,
+            end: at,
+        })
+    }
+}
+
+/// What reading a number off some text found.
+///
+/// The magnitude is UNSIGNED and the sign is its own field: `-0` is a
+/// `Double` in Java precisely because the sign outlives the zero, and a
+/// magnitude cannot carry one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reading {
+    pub magnitude: BigDec,
+    pub negative: bool,
+    /// The text said `∞` where the digits would have been.
+    pub infinite: bool,
+    /// The index just past what was read, in CHARS.
+    pub end: usize,
+}
+
+/// The decimal separator, the grouping separator, the exponent mark and the
+/// two words — caturra's locale is the one with no country (see the locale
+/// rule in specs/LANGUAGE.md), whose symbols are these.
+const DECIMAL: char = '.';
+const GROUPING: char = ',';
+const EXPONENT: char = 'E';
+pub const INFINITY: &str = "\u{221e}";
+pub const NAN: &str = "NaN";
+
+/// How many chars of `text` at `at` are `affix`, or `None` when it is not
+/// there. An empty affix matches anywhere, which is what the default
+/// pattern's positive prefix does.
+pub(crate) fn affix_at(text: &[char], at: usize, affix: &str) -> Option<usize> {
+    let mut length = 0;
+    for character in affix.chars() {
+        if text.get(at + length) != Some(&character) {
             return None;
         }
-        let value = BigDec::parse(digits).ok()?;
-        let value = if self.multiplier == 1 {
-            value
-        } else {
-            value
-                .divide_to_scale(
-                    &BigDec::from_i64(self.multiplier),
-                    value.scale() + 3,
-                    Rounding::HalfEven,
-                )
-                .unwrap_or(value)
-        };
-        Some(if negative { value.negated() } else { value })
+        length += 1;
     }
+    Some(length)
+}
+
+/// The exponent after the mark: an optional minus and then digits. A `+` is
+/// not one — the exponent is read with the same prefix rules as a number, and
+/// the only prefix it has is the minus sign.
+fn read_exponent(text: &[char], start: usize) -> Option<(i32, usize)> {
+    let mut at = start;
+    let negative = text.get(at) == Some(&'-');
+    at += usize::from(negative);
+    let mut digits = String::new();
+    while let Some(character) = text.get(at).filter(|character| character.is_ascii_digit()) {
+        digits.push(*character);
+        at += 1;
+    }
+    // An exponent too big to be a `long` is not an exponent: a JDK reads it
+    // with the same fits-into-a-long test every parse ends in, and abandons
+    // the whole thing when it fails.
+    let value: i64 = digits.parse().ok()?;
+    let value = i32::try_from(if negative { -value } else { value }).ok()?;
+    Some((value, at))
+}
+
+/// The digits, the decimal point that fell among them, and the exponent that
+/// moved it, as one decimal.
+fn digits_to_decimal(digits: &str, fraction: usize, exponent: i32) -> BigDec {
+    let split = digits.len() - fraction;
+    let (whole, rest) = digits.split_at(split);
+    let whole = if whole.is_empty() { "0" } else { whole };
+    let text = if rest.is_empty() {
+        whole.to_owned()
+    } else {
+        format!("{whole}.{rest}")
+    };
+    let value = BigDec::parse(&text).unwrap_or_else(|_| BigDec::zero());
+    // The exponent SCALES rather than multiplies: `1.5E2` read as a
+    // `BigDecimal` is `1.5E+2`, scale -1, not `150`.
+    value.scale_by_power_of_ten(exponent).unwrap_or(value)
 }
 
 /// Round to `places` decimals. When the value came from a `double`, a TIE is
@@ -907,16 +1066,26 @@ mod tests {
 
     #[test]
     fn reading_a_number_back() {
+        let read = |pattern: &NumberPattern, text: &str| {
+            let chars: Vec<char> = text.chars().collect();
+            pattern.read(&chars, 0)
+        };
         let money = NumberPattern::parse("#,##0.00").expect("parses");
-        assert_eq!(
-            money.parse_number("1,234.56").expect("a number").to_text(),
-            "1234.56"
-        );
-        assert_eq!(money.parse_number("abc"), None);
-        assert_eq!(
-            money.parse_number("12abc").expect("a number").to_text(),
-            "12"
-        );
+        let number = read(&money, "1,234.56").expect("a number");
+        assert_eq!(number.magnitude.to_text(), "1234.56");
+        assert_eq!(number.end, 8);
+        assert_eq!(read(&money, "abc").expect_err("no number"), 0);
+        // The cursor stops at the first character the pattern has no use
+        // for, and says where: that index is a `ParsePosition`'s whole job.
+        let trailing = read(&money, "12abc").expect("a number");
+        assert_eq!(trailing.magnitude.to_text(), "12");
+        assert_eq!(trailing.end, 2);
+        // A pattern whose negative form ends in `)` INSISTS on the `)`.
+        let bracketed = NumberPattern::parse("#0.00;(#)").expect("parses");
+        assert_eq!(read(&bracketed, "(12.50").expect_err("no number"), 6);
+        let complete = read(&bracketed, "(12.50)").expect("a number");
+        assert!(complete.negative);
+        assert_eq!(complete.end, 7);
         // A locale with no country has the generic currency sign, which is
         // what a JDK with `LANG=en` answers with too.
         let currency = NumberPattern::parse(&format!("{CURRENCY_SIGN}#,##0.00")).expect("parses");

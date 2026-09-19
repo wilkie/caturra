@@ -15728,7 +15728,7 @@ fn ascii_digits(text: &str) -> String {
 /// Java's Unicode decimal-digit value (category `Nd`): 0..=9, or `None`.
 /// Rust's `char::to_digit` is ASCII-only, so Arabic-Indic '٠', fullwidth '０',
 /// Devanagari '५' etc. all need this table.
-fn nd_digit_value(c: char) -> Option<u32> {
+pub(crate) fn nd_digit_value(c: char) -> Option<u32> {
     let cp = u32::from(c);
     // `then`, not `then_some`: the latter evaluates its argument eagerly, so
     // `cp - s` underflowed for every start above `cp` — a debug-build panic on
@@ -17768,6 +17768,233 @@ fn big_decimal_method(
     }
 }
 
+/// A number read off `characters` at `start`, the way a JDK's
+/// `DecimalFormat.parse(String, ParsePosition)` answers one: the value, and
+/// the index the cursor stopped at. `Err` carries the index the read FAILED
+/// at, which is the only thing a JDK reports about a failure.
+///
+/// Every shape of the call comes through here — `parse(String)` differs only
+/// in throwing when the cursor never moved — so what a digit string becomes
+/// is decided in one place.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::float_cmp
+)] // the `(long)` and `(double)` casts a JDK's own parse makes
+fn read_number(
+    heap: &mut Heap,
+    pattern: &crate::numfmt::NumberPattern,
+    characters: &[char],
+    start: usize,
+) -> Result<(JValue, usize), usize> {
+    use crate::decimal::BigDec;
+    use crate::numfmt::{NAN, affix_at};
+    let boxed = |heap: &mut Heap, value: JValue| {
+        let class = match value {
+            JValue::Long(_) => "java/lang/Long",
+            _ => "java/lang/Double",
+        };
+        JValue::Ref(Some(heap.box_wrapper(class, value)))
+    };
+    // `NaN` is read BEFORE the affixes — which is why `-NaN` is not a number
+    // though `-∞` is: the word has to stand where the whole value would.
+    if affix_at(characters, start, NAN).is_some() {
+        let end = start + NAN.chars().count();
+        return Ok((boxed(heap, JValue::Double(f64::NAN)), end));
+    }
+    let reading = pattern.read(characters, start)?;
+    let multiplier = pattern.multiplier();
+    // A negative multiplier flips the sign, ∞ included; a zero one divides
+    // by nothing, and a JDK says so in `double` arithmetic rather than
+    // throwing: zero over zero is NaN and anything else is an infinity.
+    let signed = |value: f64| {
+        if reading.negative == (multiplier < 0) {
+            value
+        } else {
+            -value
+        }
+    };
+    if reading.infinite {
+        return Ok((
+            boxed(heap, JValue::Double(signed(f64::INFINITY))),
+            reading.end,
+        ));
+    }
+    if multiplier == 0 {
+        let value = if reading.magnitude.signum() == 0 {
+            f64::NAN
+        } else {
+            signed(f64::INFINITY)
+        };
+        return Ok((boxed(heap, JValue::Double(value)), reading.end));
+    }
+    let magnitude = if reading.negative {
+        reading.magnitude.negated()
+    } else {
+        reading.magnitude.clone()
+    };
+    if pattern.parse_big_decimal {
+        // A JDK divides EXACTLY, and falls back to the format's own rounding
+        // at the dividend's scale when that cannot end: a third of 1 is 0,
+        // not 0.333.
+        let divisor = BigDec::from_i64(multiplier);
+        let value = match magnitude.divide(&divisor) {
+            Ok(exact) => exact,
+            Err(_) => magnitude
+                .divide_to_scale(&divisor, magnitude.scale(), pattern.rounding)
+                .unwrap_or(magnitude),
+        };
+        let reference = heap.alloc(HeapObject::BigDecimal(value));
+        return Ok((JValue::Ref(Some(reference)), reading.end));
+    }
+    // The shape a JDK's own parse has, in its own order: the digits become a
+    // `long` when they fit and a `double` when they do not, the multiplier
+    // divides, and then — only when it did divide — a quotient that came out
+    // whole is a `long` after all. NEGATIVE ZERO never fits: the sign is the
+    // only thing it has and a `long` cannot hold it. Reading integers only is
+    // the exception, and takes the `long` even when the quotient was not
+    // whole, so half a percent is 0.
+    let fits = magnitude
+        .to_i64_exact()
+        .ok()
+        .filter(|_| !(reading.negative && magnitude.signum() == 0) || pattern.parse_integer_only);
+    let mut whole = fits.unwrap_or_default();
+    // The sign rides on the `double` rather than on the magnitude, because a
+    // decimal has no negative zero to carry it.
+    let mut number = {
+        let size = reading.magnitude.to_f64();
+        if reading.negative { -size } else { size }
+    };
+    let mut as_double = fits.is_none();
+    if multiplier != 1 {
+        let divisor = multiplier as f64;
+        if as_double {
+            number /= divisor;
+        } else if whole % multiplier == 0 {
+            whole /= multiplier;
+        } else {
+            number = whole as f64 / divisor;
+            as_double = true;
+        }
+        if as_double {
+            whole = number as i64;
+            as_double = (number != whole as f64 || (number == 0.0 && number.is_sign_negative()))
+                && !pattern.parse_integer_only;
+        }
+    }
+    let value = if as_double {
+        JValue::Double(number)
+    } else {
+        JValue::Long(whole)
+    };
+    Ok((boxed(heap, value), reading.end))
+}
+
+/// `format(value)` — the number, as the pattern writes it.
+///
+/// Its own function because every argument shape a JDK accepts has to reach
+/// the same pattern: a `double` (and the exact value it really held, which is
+/// what breaks a tie), a `long`, an `int`, a `BigDecimal`, a `BigInteger` and
+/// a boxed one of any of them.
+fn format_number(
+    heap: &mut Heap,
+    pattern: &crate::numfmt::NumberPattern,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    use crate::decimal::BigDec;
+    // The value, and — when it came from a `double` — the exact one it
+    // really held, which is what breaks a tie.
+    // A `double` is multiplied by the percent factor in DOUBLE
+    // arithmetic, as a JDK does — the product's own rounding shows.
+    #[allow(clippy::cast_precision_loss)] // 1, 100 or 1000
+    let factor = pattern.multiplier() as f64;
+    // `i64::MIN.abs()` is `i64::MIN`, so the magnitude of the
+    // smallest `long` has to be taken UNSIGNED — taking it as a
+    // `long` wrote `Long.MIN_VALUE` without its sign.
+    let magnitude = |number: i64| {
+        BigDec::parse(&number.unsigned_abs().to_string()).unwrap_or_else(|_| BigDec::zero())
+    };
+    let from_double = |number: f64| {
+        let scaled = number * factor;
+        (
+            BigDec::parse(&crate::floatdec::java_double_to_string(scaled.abs()))
+                .unwrap_or_else(|_| BigDec::zero()),
+            Some(BigDec::from_f64_exactly(scaled.abs())),
+            scaled.is_sign_negative(),
+        )
+    };
+    // NaN and the infinities never reach the pattern. A JDK writes
+    // the NaN symbol ALONE — no prefix, no suffix, not even the `%` of
+    // a percent format — and an infinity with the affixes but nothing
+    // else, so a "#0.00" prints one character. Falling through to the
+    // decimal path made every one of them "0".
+    let special = match args.first() {
+        Some(JValue::Double(number)) => Some(*number),
+        Some(JValue::Float(number)) => Some(f64::from(*number)),
+        _ => None,
+    }
+    // The factor applies to these too, in the same `double`
+    // arithmetic: a negative multiplier turns `∞` into `-∞`, and a
+    // zero one turns it into NaN.
+    .map(|number| number * factor)
+    .filter(|number| number.is_nan() || number.is_infinite());
+    if let Some(number) = special {
+        use crate::numfmt::{Affix, INFINITY, NAN};
+        let text = if number.is_nan() {
+            String::from(NAN)
+        } else if number.is_sign_negative() {
+            format!(
+                "{}{INFINITY}{}",
+                pattern.affix(Affix::NegativePrefix),
+                pattern.affix(Affix::NegativeSuffix)
+            )
+        } else {
+            format!(
+                "{}{INFINITY}{}",
+                pattern.affix(Affix::PositivePrefix),
+                pattern.affix(Affix::PositiveSuffix)
+            )
+        };
+        return Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))));
+    }
+    let (value, exact, negative) = match args.first() {
+        Some(JValue::Double(number)) => from_double(*number),
+        Some(JValue::Float(number)) => from_double(f64::from(*number)),
+        Some(JValue::Long(number)) => (magnitude(*number), None, *number < 0),
+        Some(JValue::Int(number)) => (magnitude(i64::from(*number)), None, *number < 0),
+        Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+            Some(HeapObject::BigDecimal(value)) => (value.abs(), None, value.signum() < 0),
+            Some(HeapObject::BigInteger(value)) => {
+                (BigDec::new(value.abs(), 0), None, value.signum() < 0)
+            }
+            Some(HeapObject::Boxed { value, .. }) => match value {
+                JValue::Double(number) => from_double(*number),
+                JValue::Long(number) => (magnitude(*number), None, *number < 0),
+                JValue::Int(number) => (magnitude(i64::from(*number)), None, *number < 0),
+                _ => {
+                    return Err(throw(
+                        "java.lang.IllegalArgumentException: Cannot format given Object as a Number",
+                    ));
+                }
+            },
+            _ => {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: Cannot format given Object as a Number",
+                ));
+            }
+        },
+        _ => return Err(throw("java.lang.NullPointerException")),
+    };
+    // A double arrives already multiplied; everything else is exact
+    // and takes the factor in decimal.
+    let text = if exact.is_some() {
+        pattern.format_scaled(&value, negative, exact.as_ref())
+    } else {
+        pattern.format(&value, negative, None)
+    };
+    Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+}
+
 /// `java.text.DecimalFormat` — apply a pattern to a number, or read one back.
 #[allow(clippy::too_many_lines)]
 fn number_format_method(
@@ -17776,7 +18003,6 @@ fn number_format_method(
     method: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
-    use crate::decimal::BigDec;
     let pattern = match heap.get(receiver) {
         Some(HeapObject::NumberFormat(pattern)) => pattern.clone(),
         _ => unreachable!("receiver kind checked by caller"),
@@ -17794,111 +18020,21 @@ fn number_format_method(
         Ok(None)
     };
     match method {
-        "format" => {
-            // The value, and — when it came from a `double` — the exact one it
-            // really held, which is what breaks a tie.
-            // A `double` is multiplied by the percent factor in DOUBLE
-            // arithmetic, as a JDK does — the product's own rounding shows.
-            #[allow(clippy::cast_precision_loss)] // 1, 100 or 1000
-            let factor = pattern.multiplier() as f64;
-            let from_double = |number: f64| {
-                let scaled = number * factor;
-                (
-                    BigDec::parse(&crate::floatdec::java_double_to_string(scaled.abs()))
-                        .unwrap_or_else(|_| BigDec::zero()),
-                    Some(BigDec::from_f64_exactly(scaled.abs())),
-                    scaled.is_sign_negative(),
-                )
-            };
-            // NaN and the infinities never reach the pattern. A JDK writes
-            // the NaN symbol ALONE — no prefix, no suffix, not even the `%` of
-            // a percent format — and an infinity with the affixes but nothing
-            // else, so a "#0.00" prints one character. Falling through to the
-            // decimal path made every one of them "0".
-            let special = match args.first() {
-                Some(JValue::Double(number)) => Some(*number),
-                Some(JValue::Float(number)) => Some(f64::from(*number)),
-                _ => None,
-            }
-            .filter(|number| number.is_nan() || number.is_infinite());
-            if let Some(number) = special {
-                use crate::numfmt::Affix;
-                let text = if number.is_nan() {
-                    String::from("NaN")
-                } else if number.is_sign_negative() {
-                    format!(
-                        "{}\u{221e}{}",
-                        pattern.affix(Affix::NegativePrefix),
-                        pattern.affix(Affix::NegativeSuffix)
-                    )
-                } else {
-                    format!(
-                        "{}\u{221e}{}",
-                        pattern.affix(Affix::PositivePrefix),
-                        pattern.affix(Affix::PositiveSuffix)
-                    )
-                };
-                return Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))));
-            }
-            let (value, exact, negative) = match args.first() {
-                Some(JValue::Double(number)) => from_double(*number),
-                Some(JValue::Float(number)) => from_double(f64::from(*number)),
-                Some(JValue::Long(number)) => (BigDec::from_i64(number.abs()), None, *number < 0),
-                Some(JValue::Int(number)) => {
-                    (BigDec::from_i64(i64::from(number.abs())), None, *number < 0)
-                }
-                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
-                    Some(HeapObject::BigDecimal(value)) => (value.abs(), None, value.signum() < 0),
-                    Some(HeapObject::BigInteger(value)) => {
-                        (BigDec::new(value.abs(), 0), None, value.signum() < 0)
-                    }
-                    Some(HeapObject::Boxed { value, .. }) => match value {
-                        JValue::Double(number) => from_double(*number),
-                        JValue::Long(number) => (BigDec::from_i64(number.abs()), None, *number < 0),
-                        JValue::Int(number) => {
-                            (BigDec::from_i64(i64::from(number.abs())), None, *number < 0)
-                        }
-                        _ => {
-                            return Err(throw(
-                                "java.lang.IllegalArgumentException: Cannot format given Object as a Number",
-                            ));
-                        }
-                    },
-                    _ => {
-                        return Err(throw(
-                            "java.lang.IllegalArgumentException: Cannot format given Object as a Number",
-                        ));
-                    }
-                },
-                _ => return Err(throw("java.lang.NullPointerException")),
-            };
-            // A double arrives already multiplied; everything else is exact
-            // and takes the factor in decimal.
-            let text = if exact.is_some() {
-                pattern.format_scaled(&value, negative, exact.as_ref())
-            } else {
-                pattern.format(&value, negative, None)
-            };
-            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
-        }
+        "format" => format_number(heap, &pattern, args),
         // `parseObject` IS `parse` — the two differ only in the type a JDK
         // declares, which is why they share an arm rather than one calling
         // the other.
         "parse" | "parseObject" => {
             let text = arg_string(heap, &args[0])?;
-            // `setParseIntegerOnly(true)` stops the read AT the separator, so
-            // "12.75" is 12 — not 13, and not a failure.
-            let read = if pattern.parse_integer_only {
-                text.split_once('.')
-                    .map_or(text.clone(), |(whole, _)| whole.to_owned())
-            } else {
-                text.clone()
-            };
-            let Some(value) = pattern.parse_number(&read) else {
-                // Two methods, two complaints: `parse` names the text it could
-                // not read, and `parseObject` — which a JDK inherits from
-                // `Format` — names only itself.
-                return Err(throw(if method == "parseObject" {
+            let characters: Vec<char> = text.chars().collect();
+            match read_number(heap, &pattern, &characters, 0) {
+                Ok((value, _)) => Ok(Some(value)),
+                // A JDK's `parse(String)` fails when the cursor did not
+                // move, and only then — where it stopped otherwise is the
+                // caller's business. Two methods, two complaints: `parse`
+                // names the text it could not read, and `parseObject` —
+                // which a JDK inherits from `Format` — names only itself.
+                Err(_) => Err(throw(if method == "parseObject" {
                     String::from("java.text.ParseException: Format.parseObject(String) failed")
                 } else {
                     // The DISPLAY form: a JDK shows `?` for an unpaired
@@ -17910,21 +18046,8 @@ fn number_format_method(
                         _ => text.clone(),
                     };
                     format!("java.text.ParseException: Unparseable number: \"{shown}\"")
-                }));
-            };
-            // A whole number comes back as a `Long`, anything else as a
-            // `Double` — which is what a program's `intValue()` then reads.
-            // `setParseBigDecimal(true)` overrides both, and is how a program
-            // reads money back without going through a `double`.
-            if pattern.parse_big_decimal {
-                let reference = heap.alloc(HeapObject::BigDecimal(value));
-                return Ok(Some(JValue::Ref(Some(reference))));
+                })),
             }
-            let boxed = match value.to_i64_exact() {
-                Ok(whole) => heap.box_wrapper("java/lang/Long", JValue::Long(whole)),
-                Err(_) => heap.box_wrapper("java/lang/Double", JValue::Double(value.to_f64())),
-            };
-            Ok(Some(JValue::Ref(Some(boxed))))
         }
         "toPattern" | "toLocalizedPattern" => {
             let text = pattern.to_pattern();
