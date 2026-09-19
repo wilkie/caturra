@@ -22708,6 +22708,8 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         Some(HeapObject::BigDecimal(_)) => String::from("java/math/BigDecimal"),
         Some(HeapObject::RoundingMode(_)) => String::from("java/math/RoundingMode"),
         Some(HeapObject::MathContext { .. }) => String::from("java/math/MathContext"),
+        Some(HeapObject::ParsePosition { .. }) => String::from("java/text/ParsePosition"),
+        Some(HeapObject::FieldPosition { .. }) => String::from("java/text/FieldPosition"),
         // A `NumberFormat` factory answers a `DecimalFormat` in a JDK too, so
         // there is only ever the one class here.
         Some(HeapObject::NumberFormat(_)) => String::from("java/text/DecimalFormat"),

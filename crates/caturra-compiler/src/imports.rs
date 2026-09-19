@@ -196,7 +196,13 @@ const JAVA_TIME_FORMAT: &[&str] = &[
 const JAVA_MATH: &[&str] = &["BigInteger", "BigDecimal", "RoundingMode", "MathContext"];
 
 /// `java.text` — a number rendered for a person to read, by pattern.
-const JAVA_TEXT: &[&str] = &["DecimalFormat", "NumberFormat", "ParseException"];
+const JAVA_TEXT: &[&str] = &[
+    "DecimalFormat",
+    "NumberFormat",
+    "ParseException",
+    "ParsePosition",
+    "FieldPosition",
+];
 
 /// `java.nio.charset` — the charsets a program names when it turns text into
 /// bytes and back. `Charset` is the type; `StandardCharsets` holds the
@@ -684,11 +690,9 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "CollationKey",
             "Collator",
             "DecimalFormatSymbols",
-            "FieldPosition",
             "Format",
             "MessageFormat",
             "Normalizer",
-            "ParsePosition",
             "RuleBasedCollator",
             "StringCharacterIterator",
         ],
@@ -1225,6 +1229,28 @@ pub(crate) fn unusable_library_type_reason(simple: &str) -> Option<String> {
                  (written out, as {simple}.…), but no value of the type is modelled"
             )
         })
+}
+
+/// Nested types of classes caturra DOES model, and does not model itself.
+///
+/// A program that names one has to be told about the NESTED name: the
+/// enclosing class works, so the "cannot name a variable" message about it
+/// would be about the wrong thing — and "cannot find symbol" would claim a
+/// real class does not exist.
+const UNSUPPORTED_NESTED: &[(&str, &str, &str)] = &[
+    // The attribute a `FieldPosition` can carry instead of a number, and what
+    // `formatToCharacterIterator` reports with. caturra models the two
+    // numbered fields (`INTEGER_FIELD`, `FRACTION_FIELD`) and no attribute.
+    ("NumberFormat", "Field", "java.text.NumberFormat.Field"),
+    ("DecimalFormat", "Field", "java.text.NumberFormat.Field"),
+];
+
+/// The honest reason a nested type of a modelled class cannot be named.
+pub(crate) fn unsupported_nested_reason(outer: &str, nested: &str) -> Option<String> {
+    UNSUPPORTED_NESTED
+        .iter()
+        .find(|(enclosing, name, _)| *enclosing == outer && *name == nested)
+        .map(|(_, _, dotted)| not_supported(dotted))
 }
 
 /// The honest reason a real Java 11 class caturra does not model cannot

@@ -411,17 +411,78 @@ impl NumberPattern {
     /// held, when it came from a `double` — it is what breaks a tie.
     #[must_use]
     pub fn format(&self, value: &BigDec, negative: bool, exact: Option<&BigDec>) -> String {
-        let scaled = if self.multiplier == 1 {
+        let scaled = self.scaled(value);
+        let negative = self.sign_worn(value, negative);
+        self.format_scaled(&scaled.abs(), negative, exact)
+    }
+
+    /// The value the pattern actually writes: the multiplier applied, in
+    /// exact decimal.
+    #[must_use]
+    pub fn scaled(&self, value: &BigDec) -> BigDec {
+        if self.multiplier == 1 {
             value.clone()
         } else {
             value.multiply(&BigDec::from_i64(self.multiplier))
+        }
+    }
+
+    /// Which affixes the value will wear.
+    ///
+    /// The sign is taken AFTER the multiplier, which is the only way a
+    /// NEGATIVE one can be seen at all: `setMultiplier(-2)` writes 10 as -20,
+    /// not as 20. A product of ZERO has no sign — which is what
+    /// `setMultiplier(0)` makes of every value. Asked as its own question
+    /// because a `FieldPosition` needs the same answer, to know which affix
+    /// the digits start after.
+    #[must_use]
+    pub fn sign_worn(&self, value: &BigDec, negative: bool) -> bool {
+        self.scaled(value).signum() != 0 && negative != (self.multiplier < 0)
+    }
+
+    /// Where the two fields a `FieldPosition` can ask about sit in `text`,
+    /// which this pattern has just written: the INTEGER digits and the
+    /// FRACTION digits, as char offsets into it.
+    ///
+    /// Both are read back off the rendered text rather than tracked while
+    /// writing it, because what a JDK reports is exactly what it wrote: the
+    /// integer field spans the grouping separators and stops at the sign or
+    /// affix, and the fraction stops at the exponent mark. A special value
+    /// (`NaN`, `∞`) has an integer field over the whole symbol and no
+    /// fraction at all.
+    #[must_use]
+    pub fn field_spans(&self, text: &str, negative: bool) -> (Range, Option<Range>) {
+        let (start, end) = self.body_span(text, negative);
+        let body: Vec<char> = text.chars().collect();
+        let body = &body[start..end];
+        let at = |which: Option<usize>| which.map_or(body.len(), |found| found);
+        let point = body.iter().position(|character| *character == DECIMAL);
+        let mark = body.iter().position(|character| *character == EXPONENT);
+        let integer = (start, start + at(point.or(mark)));
+        // No decimal point at all still MARKS the fraction — as the empty
+        // span where the point would have gone, which is what a JDK writes.
+        let fraction = point.map_or((integer.1, integer.1), |point| {
+            (start + point + 1, start + at(mark))
+        });
+        (integer, Some(fraction))
+    }
+
+    /// Where the digits of `text` sit, once the affixes this pattern wrote
+    /// are taken off. The caller says which affixes by saying which sign the
+    /// value wore ([`Self::sign_worn`]).
+    #[must_use]
+    pub fn body_span(&self, text: &str, negative: bool) -> Range {
+        let (prefix, suffix) = if negative {
+            (&self.negative_prefix, &self.negative_suffix)
+        } else {
+            (&self.positive_prefix, &self.positive_suffix)
         };
-        // The sign is taken AFTER the multiplier, which is the only way a
-        // NEGATIVE one can be seen at all: `setMultiplier(-2)` writes 10
-        // as -20, not as 20. A product of ZERO has no sign — which is what
-        // `setMultiplier(0)` makes of every value.
-        let negative = scaled.signum() != 0 && negative != (self.multiplier < 0);
-        self.format_scaled(&scaled.abs(), negative, exact)
+        let start = prefix.chars().count();
+        let length = text.chars().count();
+        (
+            start,
+            length.saturating_sub(suffix.chars().count()).max(start),
+        )
     }
 
     /// The same, for a value the caller has ALREADY multiplied — which a
@@ -689,6 +750,9 @@ pub struct Reading {
     /// The index just past what was read, in CHARS.
     pub end: usize,
 }
+
+/// A span of the text a pattern wrote, as char offsets.
+pub type Range = (usize, usize);
 
 /// The decimal separator, the grouping separator, the exponent mark and the
 /// two words — caturra's locale is the one with no country (see the locale

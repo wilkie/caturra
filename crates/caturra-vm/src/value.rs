@@ -1038,6 +1038,17 @@ pub enum HeapObject {
     /// program may then change on it. `NumberFormat` is the same object under
     /// a narrower name, which is what a JDK's factories answer with too.
     NumberFormat(Box<crate::numfmt::NumberPattern>),
+    /// A `java.text.ParsePosition` — where a read should START, and, when one
+    /// failed, where it did. Both are a JDK's own: a failed read leaves the
+    /// index where it was and names the error, so the two fields are the
+    /// whole answer a program gets back.
+    ParsePosition { index: i32, error: i32 },
+    /// A `java.text.FieldPosition` — which field of a formatted number the
+    /// caller asked about (`NumberFormat.INTEGER_FIELD` is 0 and
+    /// `FRACTION_FIELD` 1), and the span the format wrote it at. A field the
+    /// format never wrote leaves the span alone, which is why it is state and
+    /// not an answer.
+    FieldPosition { field: i32, begin: i32, end: i32 },
     /// A `java.nio.charset.Charset` — `StandardCharsets.UTF_8` and the names
     /// beside it. It carries its canonical NAME and nothing else, which is all
     /// `getBytes`, `new String(bytes, …)` and its own `toString` need.
@@ -1423,6 +1434,8 @@ impl HeapObject {
             | HeapObject::RoundingMode(_)
             | HeapObject::MathContext { .. }
             | HeapObject::NumberFormat(_)
+            | HeapObject::ParsePosition { .. }
+            | HeapObject::FieldPosition { .. }
             | HeapObject::StringTokenizer { .. }
             | HeapObject::Uuid(_, _)
             | HeapObject::Base64 { .. }

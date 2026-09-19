@@ -873,8 +873,15 @@ fn library_kind_throws(
             &["java/io/IOException"]
         }
         // Reading a number back is the one `java.text` method that declares a
-        // checked exception, and a program has to catch it.
-        (Some("NumberFormat"), "parse") => &["java/text/ParseException"],
+        // checked exception, and a program has to catch it — but only the
+        // form that has no other way to report a failure. `parse(text,
+        // position)` writes the error into the POSITION and answers null, so
+        // it declares nothing.
+        // `parseObject(text)` declares it too, inherited from `Format`, so
+        // the one-argument form of either name is the pair.
+        (Some("NumberFormat"), "parse" | "parseObject") if args.len() < 2 => {
+            &["java/text/ParseException"]
+        }
         (
             Some("Class"),
             "getMethod" | "getDeclaredMethod" | "getConstructor" | "getDeclaredConstructor",

@@ -198,6 +198,20 @@ BANK = {
     # A `StringBuffer` is a `StringBuilder` under another name, and the two
     # are NOT interchangeable to javac — which is the point of having one here.
     "java.lang.StringBuffer": ['new java.lang.StringBuffer("ab")'],
+    # The two things a `java.text.Format` answers through an ARGUMENT. Both
+    # are written into, so each probe needs its own — and the awkward ones are
+    # a cursor past the end of the text and a field no format has.
+    "java.text.ParsePosition": [
+        "new java.text.ParsePosition(0)",
+        "new java.text.ParsePosition(2)",
+        "new java.text.ParsePosition(99)",
+        "new java.text.ParsePosition(-1)",
+    ],
+    "java.text.FieldPosition": [
+        "new java.text.FieldPosition(java.text.NumberFormat.INTEGER_FIELD)",
+        "new java.text.FieldPosition(java.text.NumberFormat.FRACTION_FIELD)",
+        "new java.text.FieldPosition(99)",
+    ],
     # The only byte sink caturra models, and the stream `System.out` is.
     "java.io.OutputStream": ["new java.io.ByteArrayOutputStream()"],
     "java.io.PrintStream": ["System.out"],

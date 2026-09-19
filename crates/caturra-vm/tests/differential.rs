@@ -50145,6 +50145,145 @@ public class DQ {
 "##
 );
 
+// `NumberFormat.Field` is the attribute a `FieldPosition` can carry instead
+// of a number, and caturra models no `Format.Field` at all. The name is real,
+// so the refusal says which name: the enclosing class works, and "NumberFormat
+// cannot name a variable" would be about the wrong thing.
+stricter_than_javac!(
+    strict_a_format_field_attribute,
+    "FA",
+    r"
+import java.text.FieldPosition;
+import java.text.NumberFormat;
+public class FA {
+  public static void main(String[] a) {
+    System.out.println(new FieldPosition(NumberFormat.Field.FRACTION));
+  }
+}
+"
+);
+
+differential_test!(
+    the_two_positions_a_format_hands_back,
+    "TP",
+    r##"
+import java.text.DecimalFormat;
+import java.text.FieldPosition;
+import java.text.NumberFormat;
+import java.text.ParsePosition;
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Function;
+public class TP {
+  interface Body { Object get() throws Exception; }
+  static void show(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] a) {
+    String[] patterns = {"#,##0.00", "#", "#.##", "#%", "0.###E0", "$#,##0.00;($#,##0.00)",
+                         "#0.00;(#)", "'x'#'y'", "¤#0.00"};
+    double[] values = {0, -0.0, 5, -5, 1234.5678, -1234.5678, 0.25, 1e20,
+                       Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY};
+    // Writing INTO a buffer, and where the field the caller asked about went.
+    // The indexes are into the whole buffer, so what was already there counts.
+    for (String p : patterns) {
+      for (double v : values) {
+        for (int field : new int[] {0, 1, 2, -1}) {
+          final String pp = p; final double vv = v; final int ff = field;
+          show("[" + pp + "] " + vv + " f" + ff, () -> {
+            DecimalFormat f = new DecimalFormat(pp);
+            StringBuffer sb = new StringBuffer("<");
+            FieldPosition at = new FieldPosition(ff);
+            StringBuffer out = f.format(vv, sb, at);
+            return "[" + out + "] " + at.getBeginIndex() + ".." + at.getEndIndex()
+                + " same=" + (out == sb) + " " + at; });
+        }
+        final String pp = p; final long vv = (long) v;
+        show("[" + pp + "] long " + vv, () -> {
+          DecimalFormat f = new DecimalFormat(pp);
+          StringBuffer sb = new StringBuffer();
+          FieldPosition at = new FieldPosition(NumberFormat.INTEGER_FIELD);
+          f.format(vv, sb, at);
+          return "[" + sb + "] " + at.getBeginIndex() + ".." + at.getEndIndex(); });
+        show("[" + pp + "] bd " + vv, () -> {
+          DecimalFormat f = new DecimalFormat(pp);
+          StringBuffer sb = new StringBuffer();
+          FieldPosition at = new FieldPosition(NumberFormat.FRACTION_FIELD);
+          f.format(new BigDecimal(String.valueOf(vv)), sb, at);
+          return "[" + sb + "] " + at.getBeginIndex() + ".." + at.getEndIndex(); });
+      }
+    }
+    // Reading FROM a cursor, and where the read stopped — or failed.
+    String[] texts = {"0", "42", "-42", "1,234.56", ".5", "12,", "1E3", "∞", "NaN",
+                      "abc", "", "(12.50)", "(12.50", "$12.50", "50%", "x42y", "42x", "-0"};
+    for (String p : patterns) {
+      for (String t : texts) {
+        for (int at : new int[] {0, 1, 3, 99, -1}) {
+          final String pp = p; final String tt = t; final int start = at;
+          show("[" + pp + "] <" + tt + ">@" + start, () -> {
+            DecimalFormat f = new DecimalFormat(pp);
+            ParsePosition cursor = new ParsePosition(start);
+            Object v = f.parse(tt, cursor);
+            return v + (v == null ? "" : " (" + v.getClass().getSimpleName() + ")") + " " + cursor; });
+          show("[" + pp + "] obj <" + tt + ">@" + start, () -> {
+            DecimalFormat f = new DecimalFormat(pp);
+            ParsePosition cursor = new ParsePosition(start);
+            return f.parseObject(tt, cursor) + " " + cursor; });
+        }
+      }
+    }
+    // The two fields a number format has, and the two positions as ordinary
+    // objects: equal by their numbers, hashed by them, and never each other.
+    show("fields", () -> NumberFormat.INTEGER_FIELD + " " + NumberFormat.FRACTION_FIELD
+        + " " + DecimalFormat.INTEGER_FIELD + " " + DecimalFormat.FRACTION_FIELD);
+    show("equality", () -> {
+      ParsePosition x = new ParsePosition(3);
+      ParsePosition y = new ParsePosition(3);
+      FieldPosition u = new FieldPosition(1);
+      FieldPosition v = new FieldPosition(1);
+      y.setErrorIndex(2);
+      return x.equals(new ParsePosition(3)) + " " + x.equals(y) + " " + u.equals(v)
+          + " " + x.equals(u) + " " + u.equals("x") + " " + x.equals(null)
+          + " " + (x.hashCode() == new ParsePosition(3).hashCode())
+          + " " + (u.hashCode() == v.hashCode()) + " " + u.getFieldAttribute(); });
+    show("setters", () -> {
+      ParsePosition x = new ParsePosition(0);
+      FieldPosition u = new FieldPosition(7);
+      x.setIndex(9); x.setErrorIndex(4); u.setBeginIndex(2); u.setEndIndex(6);
+      return x + " " + u + " " + x.hashCode() + " " + u.hashCode() + " " + x.getIndex()
+          + " " + x.getErrorIndex() + " " + u.getField() + " " + u.getBeginIndex()
+          + " " + u.getEndIndex(); });
+    // In every position a library type is written in.
+    show("collections", () -> {
+      List<ParsePosition> list = new ArrayList<>();
+      list.add(new ParsePosition(7));
+      Set<ParsePosition> set = new HashSet<>();
+      set.add(new ParsePosition(5)); set.add(new ParsePosition(5));
+      ParsePosition[] array = { new ParsePosition(0), new ParsePosition(1) };
+      return list + " " + list.contains(new ParsePosition(7)) + " " + set.size()
+          + " " + array.length + " " + array[1] + " " + array.getClass().getName(); });
+    show("as an object", () -> {
+      Object o = new ParsePosition(3);
+      Function<Integer, ParsePosition> make = ParsePosition::new;
+      return (o instanceof ParsePosition) + " " + (o instanceof FieldPosition)
+          + " " + o.getClass().getName() + " " + ((ParsePosition) o).getIndex()
+          + " " + make.apply(8) + " " + String.valueOf(new FieldPosition(3)); });
+    // The constructor caturra does not model, and the attribute behind it.
+    show("reused", () -> {
+      DecimalFormat f = new DecimalFormat("#,##0.00");
+      FieldPosition at = new FieldPosition(NumberFormat.FRACTION_FIELD);
+      f.format(1.25, new StringBuffer(), at);
+      new DecimalFormat("#").format(9.0, new StringBuffer(), at);
+      return at.getBeginIndex() + ".." + at.getEndIndex(); });
+  }
+}
+"##
+);
+
 differential_test!(
     where_a_number_parse_stops,
     "PS",

@@ -6438,6 +6438,8 @@ fn library_value_type(simple: &str) -> Option<JType> {
         "MathContext" => JType::MathContext,
         "DecimalFormat" => JType::DecimalFormat,
         "NumberFormat" => JType::NumberFormat,
+        "ParsePosition" => JType::ParsePosition,
+        "FieldPosition" => JType::FieldPosition,
         "StringTokenizer" => JType::StringTokenizer,
         "UUID" => JType::Uuid,
         "BitSet" => JType::BitSet,
@@ -8777,6 +8779,13 @@ enum JType {
     /// `java.math.MathContext` — how many significant digits to keep, and how
     /// to round what falls off.
     MathContext,
+    /// `java.text.ParsePosition` — where a read should start, and where one
+    /// failed. What a `Format` hands back through an argument rather than a
+    /// return.
+    ParsePosition,
+    /// `java.text.FieldPosition` — which field of a formatted number the
+    /// caller asked about, and the span it was written at.
+    FieldPosition,
     /// `java.util.StringTokenizer` — the pre-`split` way to walk words, and an
     /// `Enumeration` while it does.
     StringTokenizer,
@@ -9371,6 +9380,8 @@ impl JType {
             JType::BigDecimal => String::from("BigDecimal"),
             JType::RoundingMode => String::from("RoundingMode"),
             JType::MathContext => String::from("MathContext"),
+            JType::ParsePosition => String::from("ParsePosition"),
+            JType::FieldPosition => String::from("FieldPosition"),
             JType::StringTokenizer => String::from("StringTokenizer"),
             JType::Uuid => String::from("UUID"),
             JType::Base64Encoder => String::from("Base64.Encoder"),
@@ -9453,6 +9464,8 @@ impl JType {
                 | JType::MathContext
                 | JType::DecimalFormat
                 | JType::NumberFormat
+                | JType::ParsePosition
+                | JType::FieldPosition
                 | JType::StringTokenizer
                 | JType::Uuid
                 | JType::Base64Encoder
@@ -9629,6 +9642,8 @@ impl JType {
             JType::BigDecimal => String::from("Ljava/math/BigDecimal;"),
             JType::RoundingMode => String::from("Ljava/math/RoundingMode;"),
             JType::MathContext => String::from("Ljava/math/MathContext;"),
+            JType::ParsePosition => String::from("Ljava/text/ParsePosition;"),
+            JType::FieldPosition => String::from("Ljava/text/FieldPosition;"),
             JType::StringTokenizer => String::from("Ljava/util/StringTokenizer;"),
             JType::Uuid => String::from("Ljava/util/UUID;"),
             JType::Base64Encoder => String::from("Ljava/util/Base64$Encoder;"),
@@ -11361,6 +11376,15 @@ enum BParam {
     TemporalQuery,
     /// Either builder — what a JDK spells as two overloads.
     AnyBuilder,
+    /// A `java.lang.StringBuffer` and only that one — what a `Format` writes
+    /// into. caturra models both builders as one object, so the two have to
+    /// be told apart HERE or a `StringBuilder` would be accepted where javac
+    /// names the buffer.
+    Buffer,
+    /// A `java.text.ParsePosition` — where a read starts and where it failed.
+    ParsePosition,
+    /// A `java.text.FieldPosition` — which field to report the span of.
+    FieldPosition,
     /// A map's key type, boxed when primitive (`map.get(k)`).
     Key,
     /// A map's value type, boxed when primitive (`map.put(k, v)`).
@@ -18124,6 +18148,48 @@ const ENUMERATION_METHODS: &[BuiltinMethod] = &[
     bm("asIterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
 ];
 
+/// `java.text.ParsePosition` — where a read should start, and where one
+/// failed. Two numbers, and `Object`'s three questions over exactly them.
+const PARSE_POSITION_METHODS: &[BuiltinMethod] = &[
+    bm("getIndex", &[], BRet::Int, "()I"),
+    bm("setIndex", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("getErrorIndex", &[], BRet::Int, "()I"),
+    bm("setErrorIndex", &[BParam::Int], BRet::Void, "(I)V"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.text.FieldPosition` — which field was asked about, and the span the
+/// format wrote it at. `getFieldAttribute` answers null: caturra models no
+/// `Format.Field`, which is what carries one.
+const FIELD_POSITION_METHODS: &[BuiltinMethod] = &[
+    bm("getField", &[], BRet::Int, "()I"),
+    bm("getBeginIndex", &[], BRet::Int, "()I"),
+    bm("setBeginIndex", &[BParam::Int], BRet::Void, "(I)V"),
+    bm("getEndIndex", &[], BRet::Int, "()I"),
+    bm("setEndIndex", &[BParam::Int], BRet::Void, "(I)V"),
+    bm(
+        "getFieldAttribute",
+        &[],
+        BRet::Object,
+        "()Ljava/text/Format$Field;",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
 /// `java.util.StringTokenizer` — four questions, and it answers the two an
 /// `Enumeration` asks as well as its own.
 const TOKENIZER_METHODS: &[BuiltinMethod] = &[
@@ -18397,6 +18463,39 @@ const NUMBER_FORMAT_METHODS: &[BuiltinMethod] = &[
         BRet::Object,
         "(Ljava/lang/String;)Ljava/lang/Object;",
     ),
+    // The `Format` protocol: write INTO a buffer and report where the field
+    // the caller asked about landed, or read FROM a cursor and write back
+    // where the read stopped. Both answer through the argument.
+    bm(
+        "format",
+        &[BParam::Double, BParam::Buffer, BParam::FieldPosition],
+        BRet::Buffer,
+        "(DLjava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;",
+    ),
+    bm(
+        "format",
+        &[BParam::Long, BParam::Buffer, BParam::FieldPosition],
+        BRet::Buffer,
+        "(JLjava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;",
+    ),
+    bm(
+        "format",
+        &[BParam::Object, BParam::Buffer, BParam::FieldPosition],
+        BRet::Buffer,
+        "(Ljava/lang/Object;Ljava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;",
+    ),
+    bm(
+        "parse",
+        &[BParam::Str, BParam::ParsePosition],
+        BRet::Number,
+        "(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/lang/Number;",
+    ),
+    bm(
+        "parseObject",
+        &[BParam::Str, BParam::ParsePosition],
+        BRet::Object,
+        "(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/lang/Object;",
+    ),
     // `clone()` is a real copy — the whole reason a program clones a format
     // is to change one without changing the other.
     bm("clone", &[], BRet::Object, "()Ljava/lang/Object;"),
@@ -18493,6 +18592,39 @@ const DECIMAL_FORMAT_METHODS: &[BuiltinMethod] = &[
         &[BParam::Str],
         BRet::Object,
         "(Ljava/lang/String;)Ljava/lang/Object;",
+    ),
+    // The `Format` protocol: write INTO a buffer and report where the field
+    // the caller asked about landed, or read FROM a cursor and write back
+    // where the read stopped. Both answer through the argument.
+    bm(
+        "format",
+        &[BParam::Double, BParam::Buffer, BParam::FieldPosition],
+        BRet::Buffer,
+        "(DLjava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;",
+    ),
+    bm(
+        "format",
+        &[BParam::Long, BParam::Buffer, BParam::FieldPosition],
+        BRet::Buffer,
+        "(JLjava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;",
+    ),
+    bm(
+        "format",
+        &[BParam::Object, BParam::Buffer, BParam::FieldPosition],
+        BRet::Buffer,
+        "(Ljava/lang/Object;Ljava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;",
+    ),
+    bm(
+        "parse",
+        &[BParam::Str, BParam::ParsePosition],
+        BRet::Number,
+        "(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/lang/Number;",
+    ),
+    bm(
+        "parseObject",
+        &[BParam::Str, BParam::ParsePosition],
+        BRet::Object,
+        "(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/lang/Object;",
     ),
     // `clone()` is a real copy — the whole reason a program clones a format
     // is to change one without changing the other.
@@ -22763,6 +22895,8 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::ParsePosition
+            | JType::FieldPosition
             | JType::StringTokenizer
             | JType::Uuid
             | JType::Base64Encoder
@@ -22873,6 +23007,8 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::BigDecimal => Some(("java/math/BigDecimal", BIG_DECIMAL_METHODS)),
         JType::RoundingMode => Some(("java/math/RoundingMode", ROUNDING_MODE_METHODS)),
         JType::MathContext => Some(("java/math/MathContext", MATH_CONTEXT_METHODS)),
+        JType::ParsePosition => Some(("java/text/ParsePosition", PARSE_POSITION_METHODS)),
+        JType::FieldPosition => Some(("java/text/FieldPosition", FIELD_POSITION_METHODS)),
         JType::StringTokenizer => Some(("java/util/StringTokenizer", TOKENIZER_METHODS)),
         JType::Uuid => Some(("java/util/UUID", UUID_METHODS)),
         JType::Base64Encoder => Some(("java/util/Base64$Encoder", BASE64_ENCODER_METHODS)),
@@ -23908,6 +24044,10 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
         return builtin_static_constant(reserved, field);
     }
     match (class, field) {
+        // The two fields a `FieldPosition` over a number can name. A JDK
+        // declares them on `NumberFormat`, so `DecimalFormat` inherits them.
+        ("NumberFormat" | "DecimalFormat", "INTEGER_FIELD") => Some(Int(0)),
+        ("NumberFormat" | "DecimalFormat", "FRACTION_FIELD") => Some(Int(1)),
         ("Integer", "MAX_VALUE") => Some(Int(i32::MAX)),
         ("Integer", "MIN_VALUE") => Some(Int(i32::MIN)),
         // A JDK declares these `short` and `byte`, not `int`.
@@ -24212,6 +24352,7 @@ fn detail_exception_ctor(
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per parameter kind
 fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
     match param {
         // `Throwable` itself, whose id is 0 (see `exception_id`).
@@ -24241,6 +24382,9 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         // `AnyBuilder` is here because a JDK declares an overload for each
         // builder; either reaches this the same way any `CharSequence` does.
         BParam::CharSeq | BParam::AnyBuilder => JType::CharSequence,
+        BParam::Buffer => JType::StringBuilder(BuilderKind::Buffer),
+        BParam::ParsePosition => JType::ParsePosition,
+        BParam::FieldPosition => JType::FieldPosition,
         BParam::CharArray => JType::Array {
             elem: ElemType::Char,
             dims: 1,
@@ -29846,6 +29990,8 @@ impl BodyGen<'_> {
             "BigDecimal" => JType::BigDecimal,
             "MathContext" => JType::MathContext,
             "DecimalFormat" => JType::DecimalFormat,
+            "ParsePosition" => JType::ParsePosition,
+            "FieldPosition" => JType::FieldPosition,
             "StringTokenizer" => JType::StringTokenizer,
             "UUID" => JType::Uuid,
             "BitSet" => JType::BitSet,
@@ -30292,6 +30438,9 @@ impl BodyGen<'_> {
                 "BigDecimal" => return self.new_big_decimal(args, span),
                 "MathContext" => return self.new_math_context(args, span),
                 "DecimalFormat" => return self.new_decimal_format(args, span),
+                "ParsePosition" | "FieldPosition" => {
+                    return self.new_text_position(class_name, args, span);
+                }
                 "StringTokenizer" => return self.new_tokenizer(args, span),
                 "UUID" => return self.new_uuid(args, span),
                 "BitSet" => return self.new_bit_set(args, span),
@@ -31204,7 +31353,59 @@ impl BodyGen<'_> {
         JType::BigDecimal
     }
 
-    /// `new MathContext(digits)` / `new MathContext(digits, roundingMode)`.
+    /// `new ParsePosition(index)` / `new FieldPosition(field)` — one `int`
+    /// each, and a JDK checks neither: a position past the end of the text is
+    /// a read that finds nothing, not a complaint.
+    ///
+    /// `new FieldPosition(Format.Field)` is the other constructor, and
+    /// caturra models no `Format.Field` to pass it.
+    fn new_text_position(&mut self, name: &str, args: &[Expr], span: SourceSpan) -> JType {
+        let internal = format!("java/text/{name}");
+        let class = intern_class(self.pool, &internal);
+        self.code.push_op_u16(op::NEW, class, 1);
+        self.code.push_op(op::DUP, 1);
+        let ok = match args {
+            [index] => {
+                let ty = self.expr(index);
+                if ty == JType::Error {
+                    self.error_bail(span, "position index");
+                    return JType::Error;
+                }
+                // An `Integer` is an int here, which is what a constructor
+                // REFERENCE hands over: `Function<Integer, ParsePosition> f =
+                // ParsePosition::new` boxes its argument.
+                let takes = matches!(ty, JType::Int | JType::Short | JType::Byte | JType::Char)
+                    || matches!(ty, JType::Boxed(elem)
+                        if matches!(elem.base_type(), JType::Int | JType::Short | JType::Byte | JType::Char));
+                if takes {
+                    self.numeric_conversion(ty, JType::Int);
+                }
+                takes
+            }
+            _ => false,
+        };
+        if !ok {
+            self.error(
+                span,
+                format!(
+                    "new {name} takes one int, the {}",
+                    match name {
+                        "ParsePosition" => "index to read from",
+                        _ => "field to report",
+                    }
+                ),
+            );
+            return JType::Error;
+        }
+        let init = intern_method_ref(self.pool, &internal, "<init>", "(I)V");
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        if name == "ParsePosition" {
+            JType::ParsePosition
+        } else {
+            JType::FieldPosition
+        }
+    }
+
     /// `new StringTokenizer(text)`, with optional delimiters and a flag that
     /// hands the delimiters out as tokens too.
     fn new_tokenizer(&mut self, args: &[Expr], span: SourceSpan) -> JType {
@@ -31425,6 +31626,7 @@ impl BodyGen<'_> {
         JType::DecimalFormat
     }
 
+    /// `new MathContext(digits)` / `new MathContext(digits, roundingMode)`.
     fn new_math_context(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let class = intern_class(self.pool, "java/math/MathContext");
         self.code.push_op_u16(op::NEW, class, 1);
@@ -33140,6 +33342,8 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::ParsePosition
+            | JType::FieldPosition
             | JType::StringTokenizer
             | JType::Uuid
             | JType::Base64Encoder
@@ -34341,6 +34545,8 @@ impl BodyGen<'_> {
                 | JType::MathContext
                 | JType::DecimalFormat
                 | JType::NumberFormat
+                | JType::ParsePosition
+                | JType::FieldPosition
                 | JType::StringTokenizer
                 | JType::Uuid
                 | JType::Base64Encoder
@@ -35651,6 +35857,8 @@ impl BodyGen<'_> {
             JType::PrintStream => String::from("java/io/PrintStream"),
             JType::DecimalFormat => String::from("java/text/DecimalFormat"),
             JType::NumberFormat => String::from("java/text/NumberFormat"),
+            JType::ParsePosition => String::from("java/text/ParsePosition"),
+            JType::FieldPosition => String::from("java/text/FieldPosition"),
             JType::Charset => String::from("java/nio/charset/Charset"),
             JType::Pattern => String::from("java/util/regex/Pattern"),
             JType::Matcher => String::from("java/util/regex/Matcher"),
@@ -39763,6 +39971,8 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::ParsePosition
+            | JType::FieldPosition
             | JType::StringTokenizer
             | JType::Uuid
             | JType::Base64Encoder
@@ -42773,7 +42983,10 @@ impl BodyGen<'_> {
             // the symbol is real, and what is missing is a value of the type.
             // The variable position already said so; a value position said
             // the name did not exist.
-            let reason = crate::imports::unusable_library_type_reason(&path[0])
+            let reason = path
+                .get(1)
+                .and_then(|nested| crate::imports::unsupported_nested_reason(&path[0], nested))
+                .or_else(|| crate::imports::unusable_library_type_reason(&path[0]))
                 .unwrap_or_else(|| format!("cannot find symbol: '{}'", path.join(".")));
             self.error(span, reason);
             return JType::Error;
@@ -45064,6 +45277,8 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::ParsePosition
+            | JType::FieldPosition
             | JType::StringTokenizer
             | JType::Uuid
             | JType::Base64Encoder
@@ -45529,6 +45744,8 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::ParsePosition
+            | JType::FieldPosition
             | JType::StringTokenizer
             | JType::Uuid
             | JType::Base64Encoder
@@ -45587,6 +45804,8 @@ impl BodyGen<'_> {
             | JType::MathContext
             | JType::DecimalFormat
             | JType::NumberFormat
+            | JType::ParsePosition
+            | JType::FieldPosition
             | JType::StringTokenizer
             | JType::Uuid
             | JType::Base64Encoder

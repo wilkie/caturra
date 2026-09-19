@@ -3361,6 +3361,17 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             precision: 0,
             mode: 4,
         }),
+        // Both positions carry a JDK's own defaults: a read has found no
+        // error yet, and a field the format has not written has no span.
+        "java/text/ParsePosition" => Some(HeapObject::ParsePosition {
+            index: 0,
+            error: -1,
+        }),
+        "java/text/FieldPosition" => Some(HeapObject::FieldPosition {
+            field: 0,
+            begin: 0,
+            end: 0,
+        }),
         "java/io/File" => Some(HeapObject::File(String::new())),
         "java/io/ByteArrayOutputStream" => Some(HeapObject::ByteStream(Vec::new())),
         // Where it writes is decided by the constructor; standard out until
@@ -3903,6 +3914,33 @@ pub fn invoke_special(
         };
         if let Some(slot) = heap.get_mut(receiver) {
             *slot = HeapObject::BigDecimal(value);
+        }
+        return Ok(());
+    }
+    // `new ParsePosition(index)` and `new FieldPosition(field)` — one number
+    // each, and a JDK checks neither: a position past the end of the text is
+    // a read that finds nothing, not a complaint.
+    if class == "java/text/ParsePosition" && method == "<init>" {
+        let index = match args.first() {
+            Some(JValue::Int(index)) => *index,
+            _ => 0,
+        };
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::ParsePosition { index, error: -1 };
+        }
+        return Ok(());
+    }
+    if class == "java/text/FieldPosition" && method == "<init>" {
+        let field = match args.first() {
+            Some(JValue::Int(field)) => *field,
+            _ => 0,
+        };
+        if let Some(slot) = heap.get_mut(receiver) {
+            *slot = HeapObject::FieldPosition {
+                field,
+                begin: 0,
+                end: 0,
+            };
         }
         return Ok(());
     }
@@ -5249,6 +5287,9 @@ fn invoke_virtual_dispatch(
         }
         (HeapObject::RoundingMode(_), _) => rounding_mode_method(heap, receiver, method, args),
         (HeapObject::MathContext { .. }, _) => math_context_method(heap, receiver, method, args),
+        (HeapObject::ParsePosition { .. } | HeapObject::FieldPosition { .. }, _) => {
+            text_position_method(heap, receiver, method, args)
+        }
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method, args),
         (HeapObject::Path(_), _) => path_method(heap, receiver, method, args),
         // A `Charset` is its NAME: `toString`, `name` and `displayName` all
@@ -9294,6 +9335,31 @@ pub(crate) fn native_equals(heap: &Heap, a: JValue, b: JValue) -> bool {
                     // what makes `dates.contains(LocalDate.of(...))` answer
                     // the way a JDK's does.
                     (Some(HeapObject::Temporal(vx)), Some(HeapObject::Temporal(vy))) => vx == vy,
+                    // Both text positions compare by their numbers, and a
+                    // JDK's `equals` refuses the other class: a
+                    // `ParsePosition` is never a `FieldPosition`.
+                    (
+                        Some(HeapObject::ParsePosition {
+                            index: ix,
+                            error: ex,
+                        }),
+                        Some(HeapObject::ParsePosition {
+                            index: iy,
+                            error: ey,
+                        }),
+                    ) => ix == iy && ex == ey,
+                    (
+                        Some(HeapObject::FieldPosition {
+                            field: fx,
+                            begin: bx,
+                            end: nx,
+                        }),
+                        Some(HeapObject::FieldPosition {
+                            field: fy,
+                            begin: by,
+                            end: ny,
+                        }),
+                    ) => fx == fy && bx == by && nx == ny,
                     _ => false,
                 }
         }
@@ -9343,6 +9409,12 @@ pub(crate) fn native_hash(heap: &Heap, value: JValue) -> i32 {
                 u32::try_from(((hash >> 32) ^ hash) & 0xffff_ffff)
                     .unwrap_or(0)
                     .cast_signed()
+            }
+            // The fields packed into one word, which is what a JDK's own
+            // hash is — and what a `HashSet` of positions needs to agree on.
+            Some(HeapObject::ParsePosition { index, error }) => (error << 16) | index,
+            Some(HeapObject::FieldPosition { field, begin, end }) => {
+                (field << 24) | (begin << 16) | end
             }
             Some(HeapObject::MathContext { precision, mode }) => precision
                 .wrapping_add(identity_hash(reference).wrapping_mul(59))
@@ -16935,6 +17007,9 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::Matcher { .. }) => {
                 matcher_text(heap, reference).unwrap_or_else(|| format!("object@{reference:x}"))
             }
+            Some(state @ (HeapObject::ParsePosition { .. } | HeapObject::FieldPosition { .. })) => {
+                text_position_text(state).unwrap_or_default()
+            }
             Some(HeapObject::MatchResult { .. }) => format!(
                 "java.util.regex.Matcher$ImmutableMatchResult@{:x}",
                 identity_hash(reference)
@@ -17358,6 +17433,108 @@ fn rounding_mode_method(
             Ok(Some(JValue::Int(i32::from(ordinal) - theirs)))
         }
         _ => Err(VmError::UnknownIntrinsic(format!("RoundingMode.{method}"))),
+    }
+}
+
+/// The text a `ParsePosition` or `FieldPosition` shows — its class and its
+/// fields, as a JDK writes them. Asked from two places (`toString`, and the
+/// display a collection or a `println` renders an element with), so it is
+/// written once.
+fn text_position_text(state: &HeapObject) -> Option<String> {
+    match state {
+        HeapObject::ParsePosition { index, error } => Some(format!(
+            "java.text.ParsePosition[index={index},errorIndex={error}]"
+        )),
+        HeapObject::FieldPosition { field, begin, end } => Some(format!(
+            "java.text.FieldPosition[field={field},attribute=null,\
+             beginIndex={begin},endIndex={end}]"
+        )),
+        _ => None,
+    }
+}
+
+/// `java.text.ParsePosition` and `java.text.FieldPosition` — the two things a
+/// `java.text.Format` hands back through an argument rather than a return.
+///
+/// One function for both because they are the same kind of object: a couple
+/// of `int`s a format writes into, with `equals`/`hashCode`/`toString` over
+/// exactly those. A JDK's hashes pack the fields into one word, which a
+/// program can see, so they are reproduced rather than approximated.
+fn text_position_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let value = match args.first() {
+        Some(JValue::Int(value)) => *value,
+        _ => 0,
+    };
+    let other = match args.first() {
+        Some(JValue::Ref(Some(reference))) => heap.get(*reference).cloned(),
+        _ => None,
+    };
+    let Some(state) = heap.get(receiver).cloned() else {
+        unreachable!("receiver kind checked by caller")
+    };
+    match (&state, method) {
+        (HeapObject::ParsePosition { index, .. }, "getIndex") => Ok(Some(JValue::Int(*index))),
+        (HeapObject::ParsePosition { error, .. }, "getErrorIndex") => Ok(Some(JValue::Int(*error))),
+        (HeapObject::ParsePosition { .. }, "setIndex" | "setErrorIndex") => {
+            if let Some(HeapObject::ParsePosition { index, error }) = heap.get_mut(receiver) {
+                *(if method == "setIndex" { index } else { error }) = value;
+            }
+            Ok(None)
+        }
+        // A position compares by both numbers: a read that failed and one
+        // that has not started are not the same position.
+        (HeapObject::ParsePosition { index, error }, "equals") => {
+            let same = matches!(other, Some(HeapObject::ParsePosition { index: i, error: e })
+                if i == *index && e == *error);
+            Ok(Some(JValue::Int(i32::from(same))))
+        }
+        // `(errorIndex << 16) | index` — a JDK's own.
+        (HeapObject::ParsePosition { index, error }, "hashCode") => {
+            Ok(Some(JValue::Int((error << 16) | index)))
+        }
+        (_, "toString") => {
+            let text = text_position_text(&state).unwrap_or_default();
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        (HeapObject::FieldPosition { field, .. }, "getField") => Ok(Some(JValue::Int(*field))),
+        (HeapObject::FieldPosition { begin, .. }, "getBeginIndex") => Ok(Some(JValue::Int(*begin))),
+        (HeapObject::FieldPosition { end, .. }, "getEndIndex") => Ok(Some(JValue::Int(*end))),
+        (HeapObject::FieldPosition { .. }, "setBeginIndex" | "setEndIndex") => {
+            if let Some(HeapObject::FieldPosition { begin, end, .. }) = heap.get_mut(receiver) {
+                *(if method == "setBeginIndex" {
+                    begin
+                } else {
+                    end
+                }) = value;
+            }
+            Ok(None)
+        }
+        // A position built from a `Format.Field` carries that attribute
+        // instead of a number. caturra models no `Format.Field`, so the only
+        // position a program can build here has none — which is what a JDK
+        // answers for the `int` constructor too.
+        (HeapObject::FieldPosition { .. }, "getFieldAttribute") => Ok(Some(JValue::Ref(None))),
+        (HeapObject::FieldPosition { field, begin, end }, "equals") => {
+            let same = matches!(other, Some(HeapObject::FieldPosition { field: f, begin: b, end: e })
+                if f == *field && b == *begin && e == *end);
+            Ok(Some(JValue::Int(i32::from(same))))
+        }
+        (HeapObject::FieldPosition { field, begin, end }, "hashCode") => {
+            Ok(Some(JValue::Int((field << 24) | (begin << 16) | end)))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "{}.{method}",
+            if matches!(state, HeapObject::ParsePosition { .. }) {
+                "ParsePosition"
+            } else {
+                "FieldPosition"
+            }
+        ))),
     }
 }
 
@@ -17896,11 +18073,24 @@ fn read_number(
 /// the same pattern: a `double` (and the exact value it really held, which is
 /// what breaks a tie), a `long`, an `int`, a `BigDecimal`, a `BigInteger` and
 /// a boxed one of any of them.
+/// What writing a number produced: the text, which affixes it wears, and
+/// whether it is a SPECIAL value — `NaN` and the infinities are symbols
+/// rather than digits, and a field position over one has no fraction.
+struct Rendered {
+    text: String,
+    negative: bool,
+    special: bool,
+    /// Whether the text WEARS the pattern's affixes. An infinity does and
+    /// `NaN` does not — a JDK writes the NaN symbol alone, not even with the
+    /// `%` of a percent format.
+    affixed: bool,
+}
+
 fn format_number(
-    heap: &mut Heap,
+    heap: &Heap,
     pattern: &crate::numfmt::NumberPattern,
     args: &[JValue],
-) -> Result<Option<JValue>, VmError> {
+) -> Result<Rendered, VmError> {
     use crate::decimal::BigDec;
     // The value, and — when it came from a `double` — the exact one it
     // really held, which is what breaks a tie.
@@ -17955,7 +18145,12 @@ fn format_number(
                 pattern.affix(Affix::PositiveSuffix)
             )
         };
-        return Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))));
+        return Ok(Rendered {
+            affixed: !number.is_nan(),
+            text,
+            negative: number.is_sign_negative(),
+            special: true,
+        });
     }
     let (value, exact, negative) = match args.first() {
         Some(JValue::Double(number)) => from_double(*number),
@@ -17992,7 +18187,20 @@ fn format_number(
     } else {
         pattern.format(&value, negative, None)
     };
-    Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+    // Which affixes the text WEARS is not always the sign the caller passed:
+    // for a decimal the multiplier may have turned it round. A `double`
+    // arrives already multiplied, so its sign is already the final one.
+    let negative = if exact.is_some() {
+        negative
+    } else {
+        pattern.sign_worn(&value, negative)
+    };
+    Ok(Rendered {
+        text,
+        negative,
+        special: false,
+        affixed: true,
+    })
 }
 
 /// `java.text.DecimalFormat` — apply a pattern to a number, or read one back.
@@ -18020,13 +18228,100 @@ fn number_format_method(
         Ok(None)
     };
     match method {
-        "format" => format_number(heap, &pattern, args),
+        "format" => {
+            let rendered = format_number(heap, &pattern, args)?;
+            // `format(value)` answers a `String`; `format(value, buffer,
+            // position)` APPENDS to the buffer, answers the same buffer, and
+            // writes the span of the field the caller asked about.
+            let Some(JValue::Ref(target)) = args.get(1) else {
+                return Ok(Some(JValue::Ref(Some(heap.alloc_string(&rendered.text)))));
+            };
+            let Some(target) = target else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let already = match heap.get(*target) {
+                Some(HeapObject::StringBuilder(text)) => text.len(),
+                _ => return Err(throw("java.lang.ClassCastException: not a StringBuffer")),
+            };
+            let units: Vec<u16> = rendered.text.encode_utf16().collect();
+            append_units(heap, *target, &units)?;
+            let Some(JValue::Ref(position)) = args.get(2) else {
+                return Ok(Some(JValue::Ref(Some(*target))));
+            };
+            let Some(position) = position else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            // The indexes are into the WHOLE buffer, so what was already
+            // there counts. A special value (`NaN`, `∞`) has an integer
+            // field over the symbol and no fraction at all.
+            // A special value has an integer field over the whole SYMBOL and
+            // no fraction at all — there is no decimal point to have written
+            // one at.
+            let (integer, fraction) = if rendered.special {
+                let body = if rendered.affixed {
+                    pattern.body_span(&rendered.text, rendered.negative)
+                } else {
+                    (0, rendered.text.chars().count())
+                };
+                (body, None)
+            } else {
+                pattern.field_spans(&rendered.text, rendered.negative)
+            };
+            if let Some(HeapObject::FieldPosition { field, begin, end }) = heap.get_mut(*position) {
+                let span = match *field {
+                    0 => Some(integer),
+                    1 => fraction,
+                    // A field a number format does not have is left alone,
+                    // which is how a JDK says "not written here".
+                    _ => None,
+                };
+                if let Some((from, to)) = span {
+                    *begin = i32::try_from(already + from).unwrap_or(0);
+                    *end = i32::try_from(already + to).unwrap_or(0);
+                }
+            }
+            Ok(Some(JValue::Ref(Some(*target))))
+        }
         // `parseObject` IS `parse` — the two differ only in the type a JDK
         // declares, which is why they share an arm rather than one calling
         // the other.
         "parse" | "parseObject" => {
             let text = arg_string(heap, &args[0])?;
             let characters: Vec<char> = text.chars().collect();
+            // `parse(text, position)` reads FROM the position and writes back
+            // where it stopped — or, when the read failed, where it failed.
+            // Neither is an exception: a cursor that did not move IS the
+            // answer, which is what the one-argument form then complains
+            // about.
+            if let Some(JValue::Ref(cursor)) = args.get(1) {
+                let Some(cursor) = cursor else {
+                    return Err(throw("java.lang.NullPointerException"));
+                };
+                let start = match heap.get(*cursor) {
+                    Some(HeapObject::ParsePosition { index, .. }) => *index,
+                    _ => return Err(throw("java.lang.ClassCastException: not a ParsePosition")),
+                };
+                // A NEGATIVE index matches no affix at all — a JDK asks
+                // `regionMatches`, which refuses one — so the read fails
+                // where it stood rather than anywhere in the text.
+                let Ok(from) = usize::try_from(start) else {
+                    if let Some(HeapObject::ParsePosition { error, .. }) = heap.get_mut(*cursor) {
+                        *error = start;
+                    }
+                    return Ok(Some(JValue::Ref(None)));
+                };
+                let read = read_number(heap, &pattern, &characters, from);
+                if let Some(HeapObject::ParsePosition { index, error }) = heap.get_mut(*cursor) {
+                    match &read {
+                        Ok((_, at)) => *index = i32::try_from(*at).unwrap_or(*index),
+                        Err(at) => *error = i32::try_from(*at).unwrap_or(start),
+                    }
+                }
+                return Ok(Some(match read {
+                    Ok((value, _)) => value,
+                    Err(_) => JValue::Ref(None),
+                }));
+            }
             match read_number(heap, &pattern, &characters, 0) {
                 Ok((value, _)) => Ok(Some(value)),
                 // A JDK's `parse(String)` fails when the cursor did not

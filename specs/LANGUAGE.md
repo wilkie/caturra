@@ -8993,6 +8993,10 @@ counting catches: a divergence that stopped being one.
   models `Locale` only as a constant read where it is written. The default is
   host state besides. (`useLocale(l)` TAKES one, and works for every locale
   caturra answers for.) (`strict_a_scanner_has_no_locale`)
+- `new FieldPosition(NumberFormat.Field.FRACTION)` — the ATTRIBUTE a field
+  position can carry instead of a number. caturra models no `Format.Field`, so
+  the nested name says so itself rather than the enclosing class saying it
+  cannot name a variable. (`strict_a_format_field_attribute`)
 - `aDate.query(v -> …)` — a query a PROGRAM writes. The seven
   `TemporalQueries` factories are answered, and so is `adjustInto`; it is the
   INTERFACE that is not modelled, so there is no lambda to build.
@@ -14032,6 +14036,50 @@ with `abs()`, of the one `long` whose absolute value is itself.
 Pinned as `where_a_number_parse_stops`. The sweep behind it is 4,320 parses
 (20 patterns × 72 texts × the two parsing flags) and 1,955 formats (17
 patterns × five multipliers × 23 values), all identical to a JDK's.
+
+**The two positions a format hands back.** `java.text.ParsePosition` and
+`java.text.FieldPosition` are how a `java.text.Format` answers through an
+ARGUMENT rather than a return, and they were the last two names in the
+behaviour sweep's skipped list that were not a deliberate exclusion: ten
+overloads across `NumberFormat` and `DecimalFormat` had never been called,
+because there was nothing to call them with.
+
+Each is a couple of `int`s. What they are for is the rest:
+
+- **`format(value, buffer, position)` appends to the buffer and answers THAT
+  buffer** — the identity is observable — and writes the span of the field the
+  caller named. The indexes are into the whole buffer, so what was already in
+  it counts.
+- **`NumberFormat.INTEGER_FIELD` is 0 and `FRACTION_FIELD` is 1.** The integer
+  span covers the grouping separators and starts after the sign or affix; the
+  fraction stops at the exponent mark. A pattern with no fraction still MARKS
+  one, as the empty span where the point would have gone. A field the format
+  does not have is left alone — which is how a JDK says "not written here" —
+  and a special value (`NaN`, `∞`) has an integer field over the symbol and no
+  fraction at all.
+- **`parse(text, position)` reads FROM the position and writes back where it
+  stopped**, or, when the read failed, where it failed — leaving the index
+  where it was. Neither is an exception: a cursor that did not move IS the
+  answer, and the one-argument `parse` is exactly that test. A NEGATIVE index
+  matches no affix (a JDK asks `regionMatches`, which refuses one), so the
+  read fails where it stood.
+- Both compare and hash by their numbers, and a JDK's hashes pack the fields
+  into one word — `(errorIndex << 16) | index`, and `(field << 24) |
+  (beginIndex << 16) | endIndex`. A `HashSet` of positions sees the
+  difference, so they are reproduced rather than approximated.
+
+`parseObject(text)` declares `ParseException` exactly as `parse(text)` does,
+and the two-argument forms declare nothing, because the position is where they
+report. That was a second gap: caturra let `parseObject(text)` go uncaught.
+
+**One refusal.** The other `FieldPosition` constructor takes a `Format.Field`,
+the ATTRIBUTE a position can carry instead of a number, and caturra models no
+`Format.Field` at all — so `NumberFormat.Field` now says so under its own
+name, rather than the enclosing class saying it cannot name a variable.
+
+Pinned as `the_two_positions_a_format_hands_back`, behind a sweep of 2,343
+cells (nine patterns × eleven values × four fields, and nine patterns ×
+eighteen texts × five start positions) that is identical to a JDK's.
 
 **One deliberate divergence.** `new DecimalFormat("").toPattern()` asks a JDK
 for an array of 2^31 digits and dies with an `OutOfMemoryError`; caturra
