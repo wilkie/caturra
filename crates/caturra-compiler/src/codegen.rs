@@ -35181,6 +35181,55 @@ impl BodyGen<'_> {
         Some(Some(answer))
     }
 
+    /// Whether a dotted path is a field-access CHAIN — `node.next.value`,
+    /// `top.value`, `arr.length` — rather than a qualified type name.
+    ///
+    /// It is one when the head names a value: a local, an implicit field of
+    /// this class, or a field of the class a LAMBDA came from. That last one
+    /// was missing, and only here: hoisting a lambda's body loses the bare
+    /// name, the single-name path looks up the enclosing chain to find it
+    /// again, and this path did not — so `field.length` inside a lambda was
+    /// "cannot find symbol" where the same field read alone resolved.
+    ///
+    /// Asked by `name()` and by `type_of`, because a rule written twice is
+    /// wrong at one of them: with the emit path fixed alone, `a.length`
+    /// compiled and `a.length + b.length` was "bad operand types".
+    fn heads_a_field_chain(&mut self, path: &[String]) -> bool {
+        path.len() >= 2
+            && (self.lookup(&path[0]).is_some()
+                || self.table.field(self.current_class, &path[0]).is_some()
+                || self.enclosing_static_field(&path[0]).is_some()
+                || self.enclosing_instance_field(&path[0]).is_some())
+    }
+
+    /// The array type a class literal names — `String[].class` is a
+    /// `String[]`. `None` for anything else, including a `Class` a program
+    /// computed, which names no type at compile time.
+    fn array_class_literal(&mut self, expr: &Expr) -> Option<JType> {
+        let Expr::Field { object, name, .. } = expr else {
+            return None;
+        };
+        if name != "class" {
+            return None;
+        }
+        let Expr::Name { path, .. } = object.as_ref() else {
+            return None;
+        };
+        let written = path.last()?;
+        let dims = u8::try_from(written.matches("[]").count()).ok()?;
+        if dims == 0 {
+            return None;
+        }
+        let element = written.trim_end_matches("[]");
+        let named = self
+            .table
+            .resolve_type(&TypeRef::Named(element.to_owned()))?;
+        Some(JType::Array {
+            elem: elem_type_of(named)?,
+            dims,
+        })
+    }
+
     /// Which enum an `EnumSet` factory is about: named by a class literal
     /// (`noneOf(Day.class)`), or read off the constants or the collection
     /// passed.
@@ -37366,7 +37415,7 @@ impl BodyGen<'_> {
         // where the bundled `sort(Comparable[])` refused it at compile time.
         // The VM's natural-ordering sort is exactly that behaviour.
         if class == "Arrays"
-            && method == "sort"
+            && matches!(method, "sort" | "parallelSort")
             && let [only] = args
             && let JType::Array { elem, dims } = self.type_of(only)
             && dims == 1
@@ -37384,7 +37433,15 @@ impl BodyGen<'_> {
             self.code.drop_stack(2);
             return Some(None);
         }
-        if class == "Arrays" && method == "sort" && matches!(args.len(), 2 | 4) {
+        // `parallelSort` is `sort` here: caturra runs on one thread, so the
+        // only difference a JDK's parallel form has is how it divides the
+        // work, and dividing it one way gives the same array back. The
+        // bundled PRIMITIVE overloads already say so; the comparator forms
+        // reached nothing at all.
+        if class == "Arrays"
+            && matches!(method, "sort" | "parallelSort")
+            && matches!(args.len(), 2 | 4)
+        {
             let source_ty = self.type_of(&args[0]);
             let comparator_ty = self.type_of(args.last().expect("non-empty"));
             if let JType::Array { elem, dims } = source_ty
@@ -37411,6 +37468,40 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
                 self.code.drop_stack(if ranged { 4 } else { 2 });
                 return Some(None);
+            }
+        }
+        // `Arrays.compare(a, b, cmp)` and `Arrays.mismatch(a, b, cmp)`, with
+        // or without a range on each side. Like `sort`, the comparator form
+        // cannot be bundled — the bundled `Arrays` would have to name
+        // `__Comparator`, which is injected only when the program mentions a
+        // comparator — so the VM answers these too.
+        if class == "Arrays"
+            && matches!(method, "compare" | "mismatch")
+            && matches!(args.len(), 3 | 7)
+        {
+            let ranged = args.len() == 7;
+            let second = if ranged { 3 } else { 1 };
+            let comparator_ty = self.type_of(args.last().expect("non-empty"));
+            if is_reference_array(self.type_of(&args[0]))
+                && is_reference_array(self.type_of(&args[second]))
+                && (comparator_ty == JType::Null || self.is_comparator_type(comparator_ty))
+            {
+                for (at, arg) in args.iter().enumerate().take(args.len() - 1) {
+                    let actual = self.expr(arg);
+                    if at != 0 && at != second {
+                        self.numeric_conversion(actual, JType::Int);
+                    }
+                }
+                self.expr(args.last().expect("non-empty"));
+                let descriptor = if ranged {
+                    "([Ljava/lang/Object;II[Ljava/lang/Object;IILjava/util/Comparator;)I"
+                } else {
+                    "([Ljava/lang/Object;[Ljava/lang/Object;Ljava/util/Comparator;)I"
+                };
+                let method_ref = intern_method_ref(self.pool, "Arrays", method, descriptor);
+                self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+                self.code.drop_stack(u16::try_from(args.len()).unwrap_or(0));
+                return Some(Some(JType::Int));
             }
         }
         // `Arrays.copyOf/copyOfRange/fill/binarySearch` are one VM method each
@@ -39707,12 +39798,20 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) -> Option<Option<JType>> {
         let ranged = args.len() == 4;
+        // `copyOf(a, n, String[].class)` names the class the copy is made AT,
+        // which is what makes the answer a `String[]` and not an `Object[]`.
+        let at_class = match method {
+            "copyOf" if args.len() == 3 => args.last(),
+            "copyOfRange" if args.len() == 4 => args.last(),
+            _ => None,
+        }
+        .filter(|last| self.type_of(last) == JType::Class);
         let arity_ok = match method {
-            "copyOf" => args.len() == 2,
-            "copyOfRange" => args.len() == 3,
+            "copyOf" => args.len() == 2 || at_class.is_some(),
+            "copyOfRange" => args.len() == 3 || at_class.is_some(),
             // `binarySearch(a, key, comparator)` — the array is sorted by that
-            // comparator, so the search takes it too.
-            "binarySearch" => args.len() == 2 || ranged || args.len() == 3,
+            // comparator, so the search takes it too, with or without a range.
+            "binarySearch" => matches!(args.len(), 2..=5),
             "fill" => args.len() == 2 || ranged,
             _ => false,
         };
@@ -39767,33 +39866,56 @@ impl BodyGen<'_> {
         };
 
         let (descriptor, ret) = match method {
-            "copyOf" => {
-                emit_index(self, &args[1]);
-                args_width += 1;
+            "copyOf" | "copyOfRange" => {
+                let bounds = if method == "copyOf" { 1..2 } else { 1..3 };
+                let indices = if method == "copyOf" { "I" } else { "II" };
+                for at in bounds {
+                    emit_index(self, &args[at]);
+                    args_width += 1;
+                }
+                // The class the copy is made at, when one was given: the
+                // answer is an array of ITS element, which is the whole
+                // reason a program writes the third argument.
+                let (class, answer) = match at_class {
+                    Some(class) => {
+                        let named = self.array_class_literal(class).unwrap_or(source_ty);
+                        self.expr(class);
+                        args_width += 1;
+                        ("Ljava/lang/Class;", named)
+                    }
+                    None => ("", source_ty),
+                };
+                let answer_descriptor = answer.descriptor(self.table);
                 (
-                    format!("({source_descriptor}I){source_descriptor}"),
-                    Some(source_ty),
+                    format!("({source_descriptor}{indices}{class}){answer_descriptor}"),
+                    Some(answer),
                 )
             }
-            "copyOfRange" => {
-                emit_index(self, &args[1]);
-                emit_index(self, &args[2]);
-                args_width += 2;
-                (
-                    format!("({source_descriptor}II){source_descriptor}"),
-                    Some(source_ty),
-                )
-            }
+            // `binarySearch(a, key, cmp)` and `binarySearch(a, from, to, key,
+            // cmp)` — the same search, with the range the second one names.
             "binarySearch"
-                if args.len() == 3
-                    && matches!(self.type_of(&args[2]), JType::Object(_) | JType::Null)
+                if matches!(args.len(), 3 | 5)
+                    && matches!(
+                        self.type_of(args.last().expect("arity checked")),
+                        JType::Object(_) | JType::Null
+                    )
                     && elem.base_type().is_reference() =>
             {
-                emit_value(self, &args[1]);
-                self.expr(&args[2]);
+                let indices = if args.len() == 5 {
+                    emit_index(self, &args[1]);
+                    emit_index(self, &args[2]);
+                    args_width += 2;
+                    "II"
+                } else {
+                    ""
+                };
+                emit_value(self, &args[args.len() - 2]);
+                self.expr(args.last().expect("arity checked"));
                 args_width += element_ty.width() + 1;
                 (
-                    format!("({source_descriptor}{element_descriptor}Ljava/util/Comparator;)I"),
+                    format!(
+                        "({source_descriptor}{indices}{element_descriptor}Ljava/util/Comparator;)I"
+                    ),
                     Some(JType::Int),
                 )
             }
@@ -40151,11 +40273,7 @@ impl BodyGen<'_> {
                     span: *span,
                 })
             }
-            Expr::Name { path, span }
-                if path.len() >= 2
-                    && (self.lookup(&path[0]).is_some()
-                        || self.table.field(self.current_class, &path[0]).is_some()) =>
-            {
+            Expr::Name { path, span } if self.heads_a_field_chain(path) => {
                 let (prefix, last) = path.split_at(path.len() - 1);
                 let object = Expr::Name {
                     path: prefix.to_vec(),
@@ -42821,10 +42939,7 @@ impl BodyGen<'_> {
         // field of `this` — is a field-access chain (`node.next.value`,
         // `top.value`, `arr.length`). Resolve all but the last segment
         // to an object, then read the final field.
-        if path.len() >= 2
-            && (self.lookup(&path[0]).is_some()
-                || self.table.field(self.current_class, &path[0]).is_some())
-        {
+        if self.heads_a_field_chain(path) {
             let (prefix, last) = path.split_at(path.len() - 1);
             let object = Expr::Name {
                 path: prefix.to_vec(),

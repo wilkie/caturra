@@ -6100,6 +6100,21 @@ impl<'run> Interpreter<'run> {
         if class_name != "Arrays" {
             return Ok(false);
         }
+        // `Arrays.compare(a, b, cmp)` / `Arrays.mismatch(...)`, with or
+        // without a range on each side. The comparator is NOT optional here,
+        // unlike `sort`'s and `binarySearch`'s: a JDK asks
+        // `Objects.requireNonNull` for it first of all, ahead of even the
+        // range checks.
+        if matches!(method_name, "compare" | "mismatch")
+            && matches!(
+                args,
+                [_, _, JValue::Ref(_)] | [_, _, _, _, _, _, JValue::Ref(_)]
+            )
+            && let Some(answer) = self.arrays_compare_or_mismatch(method_name, args)?
+        {
+            frame.stack.push(JValue::Int(answer));
+            return Ok(true);
+        }
         // `asList` builds a list from the varargs array the compiler packed,
         // keeping the elements as a list stores them: unboxed.
         // `Arrays.sort(array, comparator)`: a stable sort of a REFERENCE array
@@ -6385,6 +6400,7 @@ impl<'run> Interpreter<'run> {
     /// `Arrays.copyOf`/`copyOfRange`/`fill`/`binarySearch`. Returns `None`
     /// when `method` is none of those, `Some(None)` for the void `fill`.
     #[allow(clippy::option_option)] // "not mine" vs "no value"
+    #[allow(clippy::too_many_lines)] // one arm per Arrays array method
     fn arrays_array_intrinsic(
         &mut self,
         method: &str,
@@ -6437,6 +6453,57 @@ impl<'run> Interpreter<'run> {
                 let new_length = usize::try_from(to - from).unwrap_or(0);
                 Some(self.array_copy_of_range(source, start, new_length)?)
             }
+            // `copyOf(a, n, String[].class)` — the same copy, made AT the
+            // class the caller named, which is what makes the answer a
+            // `String[]` and not an `Object[]`.
+            ("copyOf", [_, JValue::Int(new_length), JValue::Ref(Some(class))]) => {
+                let source = source(args)?;
+                let class = *class;
+                let Ok(new_length) = usize::try_from(*new_length) else {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.NegativeArraySizeException: {new_length}"
+                    )));
+                };
+                let copy = self.array_copy_of_range(source, 0, new_length)?;
+                let moved = new_length.min(self.array_length(source).unwrap_or(0));
+                Some(self.array_copy_at_class(copy, source, class, moved)?)
+            }
+            (
+                "copyOfRange",
+                [
+                    _,
+                    JValue::Int(from),
+                    JValue::Int(to),
+                    JValue::Ref(Some(class)),
+                ],
+            ) => {
+                let source = source(args)?;
+                let class = *class;
+                let length = self.array_length(source).unwrap_or(0);
+                if from > to {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IllegalArgumentException: {from} > {to}"
+                    )));
+                }
+                let Ok(start) = usize::try_from(*from) else {
+                    return Err(self.arraycopy_source_error(source, *from));
+                };
+                if start > length {
+                    let copy_length = i64::try_from(length).unwrap_or(i64::MAX) - i64::from(*from);
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.ArrayIndexOutOfBoundsException: \
+                         arraycopy: length {copy_length} is negative"
+                    )));
+                }
+                let new_length = usize::try_from(to - from).unwrap_or(0);
+                let copy = self.array_copy_of_range(source, start, new_length)?;
+                Some(self.array_copy_at_class(
+                    copy,
+                    source,
+                    class,
+                    new_length.min(length.saturating_sub(start)),
+                )?)
+            }
             ("fill", [_, value]) => {
                 let target = source(args)?;
                 let length = self.array_length(target).unwrap_or(0);
@@ -6470,6 +6537,28 @@ impl<'run> Interpreter<'run> {
                     *comparator,
                 )?))
             }
+            // The same search over a RANGE, by the comparator the array was
+            // sorted with.
+            (
+                "binarySearch",
+                [
+                    _,
+                    JValue::Int(from),
+                    JValue::Int(to),
+                    key,
+                    JValue::Ref(comparator),
+                ],
+            ) => {
+                let target = source(args)?;
+                let (from, to) = self.array_range(target, *from, *to)?;
+                Some(JValue::Int(self.array_binary_search(
+                    target,
+                    from,
+                    to,
+                    *key,
+                    *comparator,
+                )?))
+            }
             ("binarySearch", [_, JValue::Int(from), JValue::Int(to), key]) => {
                 let target = source(args)?;
                 let (from, to) = self.array_range(target, *from, *to)?;
@@ -6480,6 +6569,98 @@ impl<'run> Interpreter<'run> {
             _ => return Ok(None),
         };
         Ok(Some(result))
+    }
+
+    /// Retype a copy to the array class `copyOf(a, n, String[].class)` names,
+    /// raising the `ArrayStoreException` a JDK's `arraycopy` raises.
+    ///
+    /// There are TWO of those messages and both are observable. When the two
+    /// component types are UNRELATED, nothing could fit and the complaint is
+    /// about the arrays: "can not copy java.lang.String[] into
+    /// java.lang.Integer[]". When the source's component is a SUPERTYPE of the
+    /// destination's — an `Object[]` copied into a `String[]` — each element
+    /// might fit, so they are checked one at a time and the complaint names
+    /// the destination's component. A copy of NOTHING raises neither: a
+    /// zero-length `arraycopy` looks at nothing, which is why growing an
+    /// empty array into any class at all is fine.
+    fn array_copy_at_class(
+        &mut self,
+        copy: JValue,
+        source: HeapRef,
+        class: HeapRef,
+        copied: usize,
+    ) -> Result<JValue, VmError> {
+        use crate::value::HeapObject as Object;
+        let Some(Object::Class { name }) = self.heap.get(class) else {
+            return Ok(copy);
+        };
+        let descriptor = name.replace('.', "/");
+        let Some(want) = descriptor.strip_prefix('[').map(str::to_owned) else {
+            return Ok(copy);
+        };
+        let (JValue::Ref(Some(target)), Some(Object::RefArray(from, _))) =
+            (copy, self.heap.get(source))
+        else {
+            return Ok(copy);
+        };
+        let have = from.strip_prefix('[').unwrap_or(from).to_owned();
+        if copied > 0 && !self.component_fits(&have, &want) {
+            if !self.component_fits(&want, &have) {
+                return Err(VmError::UncaughtException(format!(
+                    "java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy \
+                     {}[] into {}[]",
+                    display_descriptor(&have),
+                    display_descriptor(&want)
+                )));
+            }
+            let items = self.array_elements(target).unwrap_or_default();
+            for value in items.into_iter().take(copied) {
+                let JValue::Ref(Some(element)) = value else {
+                    continue;
+                };
+                let actual = self.object_class_name(element);
+                let actual = if actual.starts_with('[') {
+                    actual
+                } else {
+                    format!("L{actual};")
+                };
+                if !self.component_fits(&actual, &want) {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.ArrayStoreException: arraycopy: element type mismatch: can \
+                         not cast one of the elements of {}[] to the type of the destination \
+                         array, {}",
+                        display_descriptor(&have),
+                        display_descriptor(&want)
+                    )));
+                }
+            }
+        }
+        if let Some(Object::RefArray(kind, _)) = self.heap.get_mut(target) {
+            *kind = descriptor;
+        }
+        Ok(copy)
+    }
+
+    /// Whether a value of component type `have` can be stored in an array of
+    /// component type `want`, both as JVM descriptors. Everything fits an
+    /// `Object`, and an array fits an array of anything ITS element fits —
+    /// which is Java's array covariance, and the reason a `String[][]` copies
+    /// into an `Object[][]`.
+    fn component_fits(&self, have: &str, want: &str) -> bool {
+        if have == want || want == "Ljava/lang/Object;" {
+            return true;
+        }
+        if let (Some(inner), Some(outer)) = (have.strip_prefix('['), want.strip_prefix('[')) {
+            return self.component_fits(inner, outer);
+        }
+        let named = |descriptor: &str| {
+            descriptor
+                .strip_prefix('L')
+                .and_then(|rest| rest.strip_suffix(';'))
+                .unwrap_or(descriptor)
+                .to_owned()
+        };
+        self.is_runtime_subtype(&named(have), &named(want))
     }
 
     /// Java's `rangeCheck`, shared by the ranged `fill` and `binarySearch`.
@@ -6624,6 +6805,95 @@ impl<'run> Interpreter<'run> {
             }
         }
         Ok(-(i32::try_from(low).unwrap_or(i32::MAX) + 1))
+    }
+
+    /// `Arrays.compare` / `Arrays.mismatch` over two REFERENCE arrays with a
+    /// comparator, ranged or whole.
+    ///
+    /// One function for both because they are one walk with two endings: the
+    /// first pair the comparator does not call equal is the answer, as a
+    /// SIGN for `compare` and as an INDEX for `mismatch`, and a run that
+    /// reaches the end answers from the two lengths.
+    ///
+    /// The walk skips a pair that is the same REFERENCE, which a JDK does
+    /// too — and it is observable, because a comparator counts its calls:
+    /// two arrays of equal but distinct strings ask it three times where two
+    /// arrays of interned ones ask it none.
+    fn arrays_compare_or_mismatch(
+        &mut self,
+        method: &str,
+        args: &[JValue],
+    ) -> Result<Option<i32>, VmError> {
+        let null = || VmError::UncaughtException(String::from("java.lang.NullPointerException"));
+        let comparator = match args.last() {
+            // A JDK's `requireNonNull` — and it is asked BEFORE the ranges,
+            // so a bad range with a null comparator is still the NPE.
+            Some(JValue::Ref(Some(reference))) => *reference,
+            _ => return Err(null()),
+        };
+        let ranged = args.len() == 7;
+        let (first, second) = if ranged { (0, 3) } else { (0, 1) };
+        let array = |at: usize| match args.get(at) {
+            Some(JValue::Ref(reference)) => Ok(*reference),
+            _ => Err(null()),
+        };
+        let (left, right) = (array(first)?, array(second)?);
+        let bounds =
+            |vm: &Self, side: Option<HeapRef>, at: usize| -> Result<(usize, usize), VmError> {
+                let Some(side) = side else { return Err(null()) };
+                if ranged {
+                    let (JValue::Int(from), JValue::Int(to)) = (args[at + 1], args[at + 2]) else {
+                        return Err(null());
+                    };
+                    vm.array_range(side, from, to)
+                } else {
+                    Ok((0, vm.array_length(side).unwrap_or(0)))
+                }
+            };
+        // Two arrays that ARE the same array agree everywhere — but only
+        // `compare` says so before looking at the ranges.
+        if !ranged && left == right {
+            return Ok(Some(if method == "compare" { 0 } else { -1 }));
+        }
+        // ...and a null array is an answer for `compare` and an NPE for
+        // `mismatch`, which never learned the shortcut.
+        if !ranged && method == "compare" && (left.is_none() || right.is_none()) {
+            return Ok(Some(if left.is_none() { -1 } else { 1 }));
+        }
+        let (left_from, left_to) = bounds(self, left, first)?;
+        let (right_from, right_to) = bounds(self, right, second)?;
+        let (left_length, right_length) = (left_to - left_from, right_to - right_from);
+        let element =
+            |vm: &Self, side: Option<HeapRef>, at: usize| match side.map(|s| vm.heap.get(s)) {
+                Some(Some(crate::value::HeapObject::RefArray(_, values))) => {
+                    values.get(at).copied().unwrap_or(JValue::NULL)
+                }
+                _ => JValue::NULL,
+            };
+        for step in 0..left_length.min(right_length) {
+            let one = element(self, left, left_from + step);
+            let other = element(self, right, right_from + step);
+            if one == other {
+                continue;
+            }
+            let ordering = self.compare_with(one, other, Some(comparator))?;
+            if ordering != 0 {
+                return Ok(Some(if method == "compare" {
+                    ordering
+                } else {
+                    i32::try_from(step).unwrap_or(i32::MAX)
+                }));
+            }
+        }
+        let shorter = i32::try_from(left_length.min(right_length)).unwrap_or(i32::MAX);
+        Ok(Some(if method == "compare" {
+            i32::try_from(left_length).unwrap_or(i32::MAX)
+                - i32::try_from(right_length).unwrap_or(i32::MAX)
+        } else if left_length == right_length {
+            -1
+        } else {
+            shorter
+        }))
     }
 
     /// Compare `target[at]` with `key`, as the element type's natural order
@@ -20078,6 +20348,19 @@ fn is_view_mutator(method: &str) -> bool {
 /// `new ArrayIndexOutOfBoundsException(index)` — the constructor
 /// `Arrays.rangeCheck` and `copyOfRange` use, whose message names the index
 /// alone ("Array index out of range: 9"), not the array's length.
+/// A JVM component descriptor as a program reads it: `[Ljava/lang/String;`
+/// is `java.lang.String[]`.
+fn display_descriptor(descriptor: &str) -> String {
+    match descriptor.strip_prefix('[') {
+        Some(inner) => format!("{}[]", display_descriptor(inner)),
+        None => descriptor
+            .strip_prefix('L')
+            .and_then(|rest| rest.strip_suffix(';'))
+            .unwrap_or(descriptor)
+            .replace('/', "."),
+    }
+}
+
 fn array_index_error(index: i32) -> VmError {
     VmError::UncaughtException(format!(
         "java.lang.ArrayIndexOutOfBoundsException: Array index out of range: {index}"
@@ -23202,7 +23485,16 @@ fn value_class_fits(
         return false;
     }
     if classes.contains_key(element) {
-        return runtime_subtype(classes, value_class, element);
+        // A SYNTHESIZED functional interface (`__Comparator` and its kind) is
+        // one a LIBRARY object can implement with no class file to say so, so
+        // the walk can only answer no: `Comparator<String>[] c = new
+        // Comparator[2]; c[0] = Comparator.naturalOrder();` threw where a JDK
+        // stores. It belongs to the conservative rules below. A class the
+        // PROGRAM declared is different — nothing in the library extends one,
+        // so the walk's answer is exact and a bad store still throws.
+        if !element.starts_with("__") || classes.contains_key(value_class) {
+            return runtime_subtype(classes, value_class, element);
+        }
     }
     if is_final_library_class(element) {
         return false;

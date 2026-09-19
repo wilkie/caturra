@@ -50285,6 +50285,174 @@ public class TP {
 );
 
 differential_test!(
+    a_field_read_from_inside_a_lambda,
+    "FL",
+    r#"
+import java.util.Comparator;
+import java.util.List;
+import java.util.function.Supplier;
+public class FL {
+  static String[] statics = {"a", "b"};
+  static int[][] grid = {{1, 2, 3}, {4}};
+  String[] mine = {"x", "y", "z"};
+  static void show(Supplier<Object> s) { System.out.println(s.get()); }
+  void run() {
+    // An INSTANCE field's length, through the captured enclosing instance.
+    show(() -> mine.length);
+    show(() -> mine[0] + mine.length);
+  }
+  public static void main(String[] a) {
+    String[] local = {"p", "q", "r", "s"};
+    // Hoisting a lambda's body loses the bare name; Java still resolves it.
+    show(() -> statics.length);
+    show(() -> FL.statics.length);
+    show(() -> local.length);
+    show(() -> grid.length + "/" + grid[0].length);
+    show(() -> statics[0]);
+    new FL().run();
+    Runnable r = () -> System.out.println(statics.length + grid[1].length);
+    r.run();
+    // An array of an INTERFACE holding library objects that implement it —
+    // the store check could not walk their supertypes and threw.
+    @SuppressWarnings("unchecked")
+    Comparator<String>[] comparators = new Comparator[] {
+      Comparator.naturalOrder(), Comparator.reverseOrder(), (x, y) -> 0
+    };
+    System.out.println(comparators.length + " " + comparators[0].compare("a", "b")
+      + comparators[1].compare("a", "b") + comparators[2].compare("a", "b"));
+    Object[] widened = new Comparator[1];
+    widened[0] = Comparator.naturalOrder();
+    System.out.println(widened[0] != null);
+    @SuppressWarnings("unchecked")
+    List<String>[] lists = new List[1];
+    lists[0] = new java.util.ArrayList<String>();
+    lists[0].add("in");
+    System.out.println(lists[0]);
+    CharSequence[] text = new CharSequence[2];
+    text[0] = "a";
+    text[1] = new StringBuilder("b");
+    System.out.println(text[0] + "" + text[1]);
+    Number[] numbers = new Number[2];
+    numbers[0] = 1;
+    numbers[1] = 2.5;
+    System.out.println(numbers[0] + " " + numbers[1]);
+    // ...and the stores that must STILL throw.
+    Object[] strings = new String[1];
+    try { strings[0] = 1; } catch (ArrayStoreException e) { System.out.println("1 " + e.getMessage()); }
+    Object[] wrappers = new Integer[1];
+    try { wrappers[0] = "x"; } catch (ArrayStoreException e) { System.out.println("2 " + e.getMessage()); }
+  }
+}
+"#
+);
+
+differential_test!(
+    the_comparator_arrays_takes,
+    "AC",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+public class AC {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  static List<String> log = new ArrayList<String>();
+  static Comparator<String> spy = (x, y) -> { log.add(x + "?" + y); return x.compareTo(y); };
+  static String drain() { String t = log.toString(); log.clear(); return t; }
+  static String[][] arrays = {
+    {}, {"a"}, {"a", "b"}, {"a", "b", "d"}, {"d", "b", "a"}, {"a", "a", "a"}, {null}, {"a", null, "z"}
+  };
+  static int[][] ranges = { {0, 0}, {0, 1}, {1, 2}, {0, 3}, {2, 1}, {-1, 1}, {0, 9} };
+  @SuppressWarnings("unchecked")
+  static Comparator<String>[] comparators = new Comparator[] {
+    Comparator.naturalOrder(), Comparator.reverseOrder(),
+    Comparator.nullsFirst(Comparator.naturalOrder()), Comparator.comparing(String::length), null
+  };
+  public static void main(String[] a) {
+    // Storing a library object into an array of the INTERFACE it implements
+    // — which the line above does, and which threw here.
+    s("an interface array", () -> comparators[0].compare("a", "b") + " " + comparators.length);
+    for (int i = 0; i < arrays.length; i++) {
+      for (int j = 0; j < arrays.length; j++) {
+        for (int c = 0; c < comparators.length; c++) {
+          final String[] x = arrays[i], y = arrays[j];
+          final Comparator<String> cmp = comparators[c];
+          String label = i + "/" + j + "/" + c;
+          s("compare " + label, () -> Arrays.compare(x, y, cmp));
+          s("mismatch " + label, () -> Arrays.mismatch(x, y, cmp));
+        }
+      }
+    }
+    for (int i = 0; i < arrays.length; i++) {
+      for (int r = 0; r < ranges.length; r++) {
+        for (int c = 0; c < comparators.length; c++) {
+          final String[] x = arrays[i];
+          final int from = ranges[r][0], to = ranges[r][1];
+          final Comparator<String> cmp = comparators[c];
+          String label = i + "/" + r + "/" + c;
+          s("binarySearch " + label, () -> Arrays.binarySearch(x, from, to, "b", cmp));
+          s("parallelSort " + label, () -> { String[] copy = x.clone();
+            Arrays.parallelSort(copy, from, to, cmp); return Arrays.toString(copy); });
+          s("compare ranged " + label,
+            () -> Arrays.compare(x, from, to, x, 0, Math.min(1, x.length), cmp));
+          s("mismatch ranged " + label,
+            () -> Arrays.mismatch(x, from, to, x, 0, Math.min(1, x.length), cmp));
+          s("copyOfRange " + label, () -> Arrays.toString(
+            Arrays.copyOfRange(x, Math.max(from, 0), Math.max(to, 0), String[].class)));
+        }
+      }
+      final String[] x = arrays[i];
+      s("parallelSort whole " + i, () -> { String[] copy = x.clone();
+        Arrays.parallelSort(copy, Comparator.nullsFirst(Comparator.naturalOrder()));
+        return Arrays.toString(copy); });
+      s("copyOf " + i, () -> Arrays.toString(Arrays.copyOf(x, 4, Object[].class))
+        + " " + Arrays.copyOf(x, 1, Object[].class).getClass().getName());
+    }
+    // What the comparator is ASKED, and in which order. A pair that is the
+    // same REFERENCE is skipped, so two arrays of equal but distinct strings
+    // ask three times where two arrays of interned ones ask none.
+    String[] sorted = {"a", "b", "d"};
+    String[] distinct = { new String("a"), new String("b"), new String("d") };
+    s("search calls", () -> Arrays.binarySearch(sorted, 0, 3, "b", spy) + " " + drain());
+    s("search misses", () -> Arrays.binarySearch(sorted, 1, 3, "c", spy) + " " + drain());
+    s("compare calls", () -> Arrays.compare(sorted, distinct, spy) + " " + drain());
+    s("mismatch calls", () -> Arrays.mismatch(sorted, distinct, spy) + " " + drain());
+    s("interned", () -> Arrays.compare(sorted, sorted.clone(), spy) + " " + drain());
+    s("same array", () -> Arrays.compare(sorted, sorted, spy) + " " + drain());
+    // A null comparator is natural order for a SORT and a SEARCH, and an NPE
+    // for `compare`/`mismatch` — asked before even the ranges.
+    s("null sorts", () -> { String[] copy = {"c", "a"}; Arrays.parallelSort(copy, null);
+      return Arrays.toString(copy) + " " + Arrays.binarySearch(sorted, "b", null); });
+    s("null compares", () -> Arrays.compare(sorted, sorted, null));
+    s("null before range", () -> Arrays.compare(sorted, 2, 1, sorted, 0, 1, null));
+    s("null arrays", () -> Arrays.compare((String[]) null, sorted, spy)
+      + " " + Arrays.compare(sorted, (String[]) null, spy)
+      + " " + Arrays.compare((String[]) null, (String[]) null, spy));
+    s("null mismatch", () -> Arrays.mismatch((String[]) null, sorted, spy));
+    // The class a copy is made AT: the answer's own class, and the two
+    // `ArrayStoreException`s a JDK's arraycopy raises.
+    s("made at", () -> Arrays.copyOf(sorted, 2, Object[].class).getClass().getName()
+      + " " + Arrays.copyOf(sorted, 2, String[].class).getClass().getName());
+    s("unrelated", () -> Arrays.toString(Arrays.copyOf(new String[] {"a"}, 1, Integer[].class)));
+    s("unrelated but empty", () -> Arrays.toString(Arrays.copyOf(new String[0], 2, Integer[].class)));
+    s("element by element", () -> Arrays.toString(
+      Arrays.copyOf(new Object[] {"a", Integer.valueOf(1)}, 2, String[].class)));
+    s("narrowed and used", () -> {
+      String[] narrowed = Arrays.copyOf(new Object[] {"ab"}, 1, String[].class);
+      return narrowed[0].length(); });
+    s("rows", () -> Arrays.deepToString(
+      Arrays.copyOf(new String[][] {{"a"}}, 1, Object[][].class)));
+    s("negative", () -> Arrays.toString(Arrays.copyOf(sorted, -1, String[].class)));
+  }
+}
+"#
+);
+
+differential_test!(
     an_enum_set_and_an_inherited_value_of,
     "EI",
     r#"

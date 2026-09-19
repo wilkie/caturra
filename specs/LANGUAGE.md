@@ -15706,6 +15706,66 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The comparator Arrays takes (2026-09-19)
+
+The written probes left a list: nine `java.util.Arrays` overloads caturra
+refused outright, every one of them the COMPARATOR form of something it
+already had, plus the two copies made at an array class. `mismatch(a, b)`
+worked and `mismatch(a, b, cmp)` was "no suitable method found"; `sort(a, cmp)`
+worked and `parallelSort(a, cmp)` reached nothing at all.
+
+- **`parallelSort` is `sort` here.** caturra runs on one thread, so the only
+  difference a JDK's parallel form has is how it divides the work, and
+  dividing it one way gives the same array back. The bundled PRIMITIVE
+  overloads already said so; the comparator forms went nowhere.
+- **`binarySearch(a, from, to, key, cmp)`** is the search it already had with
+  the range it already checked.
+- **`compare` and `mismatch` with a comparator** are one walk with two
+  endings: the first pair the comparator does not call equal is the answer, as
+  a SIGN for `compare` and as an INDEX for `mismatch`, and a run that reaches
+  the end answers from the two lengths. Three details are a JDK's and not the
+  javadoc's. The walk SKIPS a pair that is the same reference, which a
+  comparator can count: two arrays of equal but distinct strings ask it three
+  times where two arrays of interned ones ask it none. A null comparator is
+  natural order for `sort` and `binarySearch` but an NPE here — asked before
+  even the range checks. And `compare` answers -1/1/0 for a null array where
+  `mismatch` throws, because only `compare` has that shortcut.
+- **`copyOf(a, n, String[].class)`** makes the copy AT that class, which is
+  what makes the answer a `String[]` and not an `Object[]` — observable
+  through `getClass().getName()`, and through storing into it afterwards.
+  There are TWO `ArrayStoreException`s and both are a JDK's `arraycopy`: when
+  the component types are UNRELATED nothing could fit and the complaint names
+  the arrays ("can not copy java.lang.String[] into java.lang.Integer[]");
+  when the source's component is a SUPERTYPE of the destination's, each
+  element might fit, so they are checked one at a time and the complaint names
+  the destination's component. A copy of nothing raises neither — growing an
+  empty array into any class at all is fine.
+
+**Two findings came from the sweep rather than the list.** Writing a
+cross-product over comparators needs an array of them, and that is where they
+turned up:
+
+- **An array of an INTERFACE could not hold a library object.**
+  `Comparator<String>[] c = new Comparator[2]; c[0] = Comparator.naturalOrder();`
+  threw `ArrayStoreException`. The store check walks the value's
+  extends/implements graph when both classes are loaded — and caturra
+  SYNTHESIZES an interface like `Comparator` into the class table when a
+  program mentions one, so the element was loaded, the library value was not,
+  and a walk that can only say no said no. The rule needs both classes loaded
+  to be exact; with one missing it belongs to the conservative half, which
+  stays silent rather than throwing on valid code.
+- **A field's `.length` inside a lambda was "cannot find symbol".** A dotted
+  path is a field-access chain when its head names a value, and the test for
+  that knew a local and a field of the current class. Hoisting a lambda's body
+  loses the bare name — the single-name path looks up the enclosing chain to
+  find it again, and this one did not. Fixing the EMIT path alone made
+  `a.length` compile and `a.length + b.length` "bad operand types", so the
+  test is now one function both paths ask: the emit/typing mirror, which this
+  session has now met three times.
+
+Pinned as `the_comparator_arrays_takes` (2,056 cells over eight arrays, five
+comparators and seven ranges) and `a_field_read_from_inside_a_lambda`.
+
 ### What a primitive functional call is owed (2026-09-07)
 
 `DoubleUnaryOperator op = d -> d / 2; op.applyAsDouble(5)` is 2.5 on a JDK and
