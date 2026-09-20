@@ -2201,6 +2201,14 @@ impl<'run> Interpreter<'run> {
                                     // `Arrays.asList`, a sub-list, a map view —
                                     // answered false to `instanceof List` and
                                     // threw on the cast that followed.
+                                    // A library object whose kind, not its
+                                    // printed class, is what says which
+                                    // interface it wears.
+                                    Some(object)
+                                        if kind_face(object) == Some(qualified_face(&target)) =>
+                                    {
+                                        true
+                                    }
                                     _ => {
                                         let actual = self.object_class_name(reference);
                                         actual == target
@@ -8641,6 +8649,9 @@ impl<'run> Interpreter<'run> {
                         "java/util/ImmutableCollections$MapN"
                     },
                 );
+                // Its entries are the immutable holder, not a `HashMap$Node`.
+                self.heap
+                    .set_entry_class(backing, "java/util/KeyValueHolder");
                 view
             }
         })
@@ -8966,6 +8977,7 @@ impl<'run> Interpreter<'run> {
             }) => {
                 let (map, key, read_only) = (*map, *key, *read_only);
                 return self.map_entry_intrinsic(
+                    receiver,
                     map,
                     key,
                     read_only,
@@ -11196,6 +11208,30 @@ impl<'run> Interpreter<'run> {
                     return Ok(Answered::Value(JValue::Int(
                         self.compare_by_spec(*a, *b, receiver)?,
                     )));
+                }
+                // A JDK's natural-order comparator is a one-constant ENUM, so
+                // it wears `Comparable` and answers the one comparison an
+                // enum of one constant can: itself, which is zero. It is the
+                // whole of what that face promises, and claiming the face
+                // without keeping it would be the worse half of the two.
+                ("compareTo", [other])
+                    if matches!(
+                        self.heap.get(receiver),
+                        Some(HeapObject::Comparator(ComparatorSpec::Natural))
+                    ) =>
+                {
+                    let same = matches!(other, JValue::Ref(Some(reference))
+                    if matches!(
+                        self.heap.get(*reference),
+                        Some(HeapObject::Comparator(ComparatorSpec::Natural))
+                    ));
+                    if !same {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.ClassCastException: \
+                             java.util.Comparators$NaturalOrderComparator",
+                        )));
+                    }
+                    return Ok(Answered::Value(JValue::Int(0)));
                 }
                 _ => {}
             }
@@ -13674,12 +13710,12 @@ impl<'run> Interpreter<'run> {
         self.map_entries(map)
             .into_iter()
             .map(|(key, _)| {
-                let entry = self.heap.alloc(HeapObject::MapEntry {
+                JValue::Ref(Some(self.alloc_map_entry(
+                    Some(reference),
                     map,
                     key,
                     read_only,
-                });
-                JValue::Ref(Some(entry))
+                )))
             })
             .collect()
     }
@@ -13845,6 +13881,28 @@ impl<'run> Interpreter<'run> {
     /// `m.values() == m.values()` is true there, and `values()`'s `equals` is
     /// `AbstractCollection`'s identity — so allocating a fresh view per call
     /// made `m.values().equals(m.values())` wrongly false.
+    /// One `Map.Entry` over `map`, named for the map it came from: an
+    /// immutable one's entries are `KeyValueHolder`s, everything else's are
+    /// the map's own inner node. Every entry a map hands out comes through
+    /// here, so the two cannot drift apart.
+    fn alloc_map_entry(
+        &mut self,
+        view: Option<HeapRef>,
+        map: HeapRef,
+        key: JValue,
+        read_only: bool,
+    ) -> HeapRef {
+        let entry = self.heap.alloc(crate::value::HeapObject::MapEntry {
+            map,
+            key,
+            read_only,
+        });
+        if let Some(class) = self.heap.entry_class_of(view, map) {
+            self.heap.set_view_class(entry, class);
+        }
+        entry
+    }
+
     fn map_view_of(
         &mut self,
         owner: HeapRef,
@@ -13860,6 +13918,19 @@ impl<'run> Interpreter<'run> {
             kind,
             read_only,
         });
+        // A read-only view over a map the program can still reach by another
+        // name is a `Collections` wrapper, and its entries are that wrapper's
+        // own — which the BACKING map cannot say, since its own entries are
+        // ordinary nodes. An immutable map marks its backing instead.
+        if read_only
+            && kind == MapViewKind::Entries
+            && self.heap.entry_class_of(None, map).is_none()
+        {
+            self.heap.set_entry_class(
+                view,
+                "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet$UnmodifiableEntry",
+            );
+        }
         // `Collections.EmptyMap.keySet()` IS `emptySet()`, so the generic
         // cursor carries across to the view.
         if self.checked_cursor_views.contains(&owner) {
@@ -14016,11 +14087,7 @@ impl<'run> Interpreter<'run> {
                     // `for (Map.Entry e : unmodifiable.entrySet())` loop could
                     // `setValue` straight through into the backing map.
                     MapViewKind::Entries => {
-                        JValue::Ref(Some(self.heap.alloc(HeapObject::MapEntry {
-                            map,
-                            key,
-                            read_only,
-                        })))
+                        JValue::Ref(Some(self.alloc_map_entry(Some(view), map, key, read_only)))
                     }
                 }
             }
@@ -14195,8 +14262,10 @@ impl<'run> Interpreter<'run> {
 
     /// One `Map.Entry` from an `entrySet()`. Java's entry is a view onto its
     /// map, so `getValue` sees a later `put` and `setValue` writes through.
+    #[allow(clippy::too_many_arguments)] // the entry, its map, and the call
     fn map_entry_intrinsic(
         &mut self,
+        entry: HeapRef,
         map: HeapRef,
         key: JValue,
         read_only: bool,
@@ -14212,9 +14281,15 @@ impl<'run> Interpreter<'run> {
             // supposedly read-only map was enough to rewrite the owner's
             // values, with no error.
             ("setValue", _) if read_only => {
-                return Err(VmError::UncaughtException(String::from(
-                    "java.lang.UnsupportedOperationException",
-                )));
+                // Two read-only entries, two complaints, and a program sees
+                // both: the IMMUTABLE collections' holder says what it is,
+                // and `Collections.unmodifiableMap`'s wrapper says nothing.
+                let holder = self.heap.view_class_of(entry) == Some("java/util/KeyValueHolder");
+                return Err(VmError::UncaughtException(String::from(if holder {
+                    "java.lang.UnsupportedOperationException: not supported"
+                } else {
+                    "java.lang.UnsupportedOperationException"
+                })));
             }
             // A `Hashtable`'s entry refuses a null value the way the table
             // itself does — `setValue` is the one way back into the map that
@@ -14721,11 +14796,21 @@ impl<'run> Interpreter<'run> {
         // standalone `Map.Entry`, backed by a hidden one-mapping map so the
         // entry-view methods all work on it. Answered here, not in the
         // heap-only intrinsics, because hashing the key may run user code.
-        if class_name == "java/lang/System" && method_name == "__simpleEntry" {
+        if class_name == "java/lang/System" && matches!(method_name, "__simpleEntry" | "__mapEntry")
+        {
+            let holder = method_name == "__mapEntry";
             let (key, value) = match args {
                 [key, value] => (*key, *value),
                 _ => (JValue::NULL, JValue::NULL),
             };
+            // `Map.entry(k, v)` takes neither a null key nor a null value —
+            // it is one of the immutable collections, and they all refuse
+            // one. `AbstractMap.SimpleEntry` takes both.
+            if holder && (key == JValue::NULL || value == JValue::NULL) {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
             let map = self.heap.alloc(crate::value::HeapObject::HashMap(
                 crate::map::JavaHashMap::new(),
             ));
@@ -14733,13 +14818,21 @@ impl<'run> Interpreter<'run> {
             let entry = self.heap.alloc(crate::value::HeapObject::MapEntry {
                 map,
                 key,
-                // `AbstractMap.SimpleEntry` is a mutable standalone entry.
-                read_only: false,
+                // `AbstractMap.SimpleEntry` is a mutable standalone entry;
+                // `Map.entry` answers the same immutable holder an immutable
+                // map's `entrySet` does.
+                read_only: holder,
             });
             // It is NOT one of a map's own entries, so it does not answer that
             // map's inner `Node` class even though one backs it here.
-            self.heap
-                .set_view_class(entry, "java/util/AbstractMap$SimpleEntry");
+            self.heap.set_view_class(
+                entry,
+                if holder {
+                    "java/util/KeyValueHolder"
+                } else {
+                    "java/util/AbstractMap$SimpleEntry"
+                },
+            );
             frame.stack.push(JValue::Ref(Some(entry)));
             return Ok(None);
         }
@@ -22442,6 +22535,28 @@ fn primitive_wrapper(value: JValue) -> Option<&'static str> {
 /// one carries. The table below is written in JDK internal names, so a bare
 /// one is qualified on the way in — an `ArrayList` said it was not
 /// `Cloneable`, which the JDK's is.
+/// The interface a library object wears that its CLASS NAME cannot say.
+///
+/// A comparator built from a lambda is named `java.lang.Object` here — a JDK
+/// names one after its address, which no two runs agree on — and the factory
+/// ones are named for a JDK's own internal classes, which the faces table
+/// would have to list one by one and would still miss the next. What they ARE
+/// is their KIND: every comparator object is a `java.util.Comparator`,
+/// whatever it prints, and `instanceof`, a cast and an array store all ask
+/// the same question.
+pub(crate) fn kind_face(object: &crate::value::HeapObject) -> Option<&'static str> {
+    use crate::value::HeapObject as H;
+    Some(match object {
+        H::Comparator(_) => "java/util/Comparator",
+        // `Pattern.asPredicate()` and `asMatchPredicate()` answer a real
+        // `Predicate<String>`, which a program may keep as one.
+        H::RegexPredicate { .. } => "java/util/function/Predicate",
+        H::Collector(_) => "java/util/stream/Collector",
+        H::Stream { .. } => "java/util/stream/Stream",
+        _ => return None,
+    })
+}
+
 fn qualified_face(target: &str) -> &str {
     match target {
         "Comparable" => "java/lang/Comparable",
@@ -22453,14 +22568,71 @@ fn qualified_face(target: &str) -> &str {
         "CharSequence" => "java/lang/CharSequence",
         "Number" => "java/lang/Number",
         "Enum" => "java/lang/Enum",
-        // The two the compiler ALIASES: a source `Comparator` is caturra's
-        // bundled `__Comparator`, and a `Runnable` its `__Runnable`. The
-        // alias is an implementation detail that reached a student through
-        // `getInterfaces()`, which printed `interface __Runnable`.
-        "Runnable" | "__Runnable" => "java/lang/Runnable",
-        "Comparator" | "__Comparator" => "java/util/Comparator",
-        other => other,
+        "Runnable" => "java/lang/Runnable",
+        "Comparator" => "java/util/Comparator",
+        // The interfaces the compiler ALIASES to a bundled one. The alias is
+        // an implementation detail that reached a student through
+        // `getInterfaces()` (which printed `interface __Runnable`), through a
+        // cast's message, and through what an array of one calls itself.
+        other => erased_interface_name(other).unwrap_or(other),
     }
+}
+
+/// The real Java name of a bundled functional interface, by the flattened one
+/// the compiler erases it to.
+///
+/// Two of them are shared by two spellings — a `Function` and a
+/// `UnaryOperator` erase alike, as do a `BiFunction` and a `BinaryOperator` —
+/// so the name that comes back is the commoner of the pair. Nothing here can
+/// tell them apart: the erasure is what the class file holds.
+pub(crate) fn erased_interface_name(internal: &str) -> Option<&'static str> {
+    let simple = internal.strip_prefix("__")?;
+    Some(match simple {
+        "Comparator" => "java/util/Comparator",
+        "Runnable" => "java/lang/Runnable",
+        "UnaryOperator" => "java/util/function/Function",
+        "BiFunction" => "java/util/function/BiFunction",
+        "Predicate" => "java/util/function/Predicate",
+        "Consumer" => "java/util/function/Consumer",
+        "BiConsumer" => "java/util/function/BiConsumer",
+        "Supplier" => "java/util/function/Supplier",
+        "BiPredicate" => "java/util/function/BiPredicate",
+        "BooleanSupplier" => "java/util/function/BooleanSupplier",
+        "IntFunction" => "java/util/function/IntFunction",
+        "IntPredicate" => "java/util/function/IntPredicate",
+        "IntSupplier" => "java/util/function/IntSupplier",
+        "IntConsumer" => "java/util/function/IntConsumer",
+        "IntUnaryOperator" => "java/util/function/IntUnaryOperator",
+        "IntBinaryOperator" => "java/util/function/IntBinaryOperator",
+        "IntToDoubleFunction" => "java/util/function/IntToDoubleFunction",
+        "IntToLongFunction" => "java/util/function/IntToLongFunction",
+        "ToIntFunction" => "java/util/function/ToIntFunction",
+        "ToIntBiFunction" => "java/util/function/ToIntBiFunction",
+        "DoubleFunction" => "java/util/function/DoubleFunction",
+        "DoublePredicate" => "java/util/function/DoublePredicate",
+        "DoubleSupplier" => "java/util/function/DoubleSupplier",
+        "DoubleConsumer" => "java/util/function/DoubleConsumer",
+        "DoubleUnaryOperator" => "java/util/function/DoubleUnaryOperator",
+        "DoubleBinaryOperator" => "java/util/function/DoubleBinaryOperator",
+        "DoubleToIntFunction" => "java/util/function/DoubleToIntFunction",
+        "DoubleToLongFunction" => "java/util/function/DoubleToLongFunction",
+        "ToDoubleFunction" => "java/util/function/ToDoubleFunction",
+        "ToDoubleBiFunction" => "java/util/function/ToDoubleBiFunction",
+        "LongFunction" => "java/util/function/LongFunction",
+        "LongPredicate" => "java/util/function/LongPredicate",
+        "LongSupplier" => "java/util/function/LongSupplier",
+        "LongConsumer" => "java/util/function/LongConsumer",
+        "LongUnaryOperator" => "java/util/function/LongUnaryOperator",
+        "LongBinaryOperator" => "java/util/function/LongBinaryOperator",
+        "LongToDoubleFunction" => "java/util/function/LongToDoubleFunction",
+        "LongToIntFunction" => "java/util/function/LongToIntFunction",
+        "ToLongFunction" => "java/util/function/ToLongFunction",
+        "ToLongBiFunction" => "java/util/function/ToLongBiFunction",
+        "ObjIntConsumer" => "java/util/function/ObjIntConsumer",
+        "ObjLongConsumer" => "java/util/function/ObjLongConsumer",
+        "ObjDoubleConsumer" => "java/util/function/ObjDoubleConsumer",
+        _ => return None,
+    })
 }
 
 /// The interfaces a LIBRARY class DECLARES — what `getInterfaces()` answers,
@@ -22608,6 +22780,16 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         "java/io/Flushable",
         "java/lang/AutoCloseable",
     ];
+    // A JDK's natural-order comparator is an ENUM — a one-constant one — so
+    // it answers `Comparable` and `Enum` as every enum does, and a program
+    // can ask. The reverse-order one is an ordinary class and answers
+    // neither; the difference is visible and belongs here rather than in a
+    // guess either way.
+    const NATURAL_ORDER: &[&str] = &[
+        "java/util/Comparator",
+        "java/lang/Comparable",
+        "java/lang/Enum",
+    ];
     const LIST: &[&str] = &["java/util/List", "java/util/Collection"];
     // An `ArrayList` indexes in constant time, so it wears `RandomAccess` —
     // which is the whole reason the marker exists, and what a `LinkedList`
@@ -22643,6 +22825,7 @@ fn library_faces(class: &str) -> &'static [&'static str] {
     match class {
         // A `Stack` IS a `Vector`, which is where its `List` face comes from
         // — and so a `Stack` answers to `Vector` as well.
+        "java/util/Comparators$NaturalOrderComparator" => NATURAL_ORDER,
         "java/util/ArrayList" | "java/util/Vector" => CLONEABLE_LIST,
         "java/util/Stack" => &[
             "java/util/Vector",
@@ -22733,6 +22916,8 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         | "java/util/LinkedHashMap$Entry"
         | "java/util/TreeMap$Entry"
         | "java/util/AbstractMap$SimpleEntry"
+        // What `Map.entry(k, v)` and an immutable map's `entrySet` answer.
+        | "java/util/KeyValueHolder"
         | "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet$UnmodifiableEntry" => ENTRY,
         // A `StringBuilder` became `Comparable` in Java 11 — the release
         // caturra targets, so it is `Comparable` here.
@@ -23449,6 +23634,16 @@ pub(crate) fn value_fits_element(
     let Some(element_class) = element_class_of(element) else {
         return true;
     };
+    // What a library object wears is its KIND's to say before its name's: a
+    // comparator built from a lambda has no class name worth the question (a
+    // JDK names one after its address), and the namer this check uses is
+    // coarser than `getClass()` besides — it said `java.lang.Object` for
+    // every comparator, so storing one in a `Comparator[]` threw.
+    if let Some(object) = heap.get(value_ref)
+        && kind_face(object) == Some(qualified_face(&element_class))
+    {
+        return true;
+    }
     let value_class = object_class_of(heap, value_ref);
     value_class_fits(classes, &element_class, &value_class)
 }
@@ -23485,16 +23680,17 @@ fn value_class_fits(
         return false;
     }
     if classes.contains_key(element) {
-        // A SYNTHESIZED functional interface (`__Comparator` and its kind) is
-        // one a LIBRARY object can implement with no class file to say so, so
-        // the walk can only answer no: `Comparator<String>[] c = new
+        // A SYNTHESIZED interface (`__Comparator` and its kind) is one a
+        // LIBRARY object can implement with no class file to say so, so the
+        // walk could only answer no: `Comparator<String>[] c = new
         // Comparator[2]; c[0] = Comparator.naturalOrder();` threw where a JDK
-        // stores. It belongs to the conservative rules below. A class the
-        // PROGRAM declared is different — nothing in the library extends one,
-        // so the walk's answer is exact and a bad store still throws.
-        if !element.starts_with("__") || classes.contains_key(value_class) {
-            return runtime_subtype(classes, value_class, element);
+        // stores. What such an object wears is the FACES table's to say, and
+        // asking it keeps the check exact in both directions — a `String` is
+        // still not a `Comparator`, and still throws.
+        if element.starts_with("__") && !classes.contains_key(value_class) {
+            return class_is_assignable(value_class, qualified_face(element));
         }
+        return runtime_subtype(classes, value_class, element);
     }
     if is_final_library_class(element) {
         return false;
@@ -23631,6 +23827,12 @@ fn class_cast_error(classes: &HashMap<String, ClassFile>, actual: &str, target: 
     let qualify = |name: &str| {
         if matches!(name, "Number" | "Comparable") && !classes.contains_key(name) {
             return format!("java.lang.{name}");
+        }
+        // ...and the two the compiler ALIASES (`__Comparator`, `__Runnable`)
+        // are an implementation detail that has no business in a message a
+        // student reads. The faces table already knows what they are called.
+        if name.starts_with("__") && !classes.contains_key(name) {
+            return qualified_face(name).replace('/', ".");
         }
         name.replace('/', ".")
     };

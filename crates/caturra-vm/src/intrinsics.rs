@@ -9957,6 +9957,11 @@ fn iterator_method(
                     key,
                     read_only: writes == IteratorWrites::None,
                 });
+                // A read-only entry names itself — which of the two it is
+                // the VIEW knows, or the map behind it.
+                if let Some(class) = heap.entry_class_of(Some(source), map) {
+                    heap.set_view_class(entry, class);
+                }
                 if let Some(HeapObject::Iterator { index, last, .. }) = heap.get_mut(receiver) {
                     *last = Some(*index);
                     *index += 1;

@@ -15706,6 +15706,68 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### What a library value answers to (2026-09-19)
+
+`Comparator.naturalOrder() instanceof Comparator` was **false**, and casting
+one back out of an `Object` threw — naming `__Comparator`, an alias no
+program wrote. The question turned up while building a fixture for the
+`Arrays` sweep, which needed an array of comparators; it is a larger fact than
+that fixture.
+
+**What a library object wears is its KIND's to say, not its class name's.** A
+comparator built from a lambda is named `java.lang.Object` here (a JDK names
+one after its address, which no two runs agree on) and the factory ones are
+named for a JDK's own internal classes, which a faces table would have to list
+one by one and would still miss the next. So `instanceof`, a cast and an array
+store now ask the object: every `Comparator` object is a
+`java.util.Comparator`, a `Pattern.asPredicate()` is a
+`java.util.function.Predicate`, a collector is a `Collector` and a stream is a
+`Stream`. The array-store check asked a COARSER namer than `getClass()` does
+besides — it answered `java.lang.Object` for every comparator — which is why
+`Comparator<String>[] c = {Comparator.naturalOrder()}` threw.
+
+**The alias is an implementation detail and no longer leaks.** `__Comparator`,
+`__Runnable` and the forty functional interfaces beside them have a real Java
+name, and a cast's message now uses it. Two of those names are shared by two
+spellings — a `Function` and a `UnaryOperator` erase alike, as do a
+`BiFunction` and a `BinaryOperator` — so the name that comes back is the
+commoner of the pair; nothing can tell them apart, because the erasure is what
+the class file holds.
+
+**A value's type is a type a program may ask about.** `x instanceof Stream`,
+`instanceof Collector` and `instanceof Map.Entry` were refusals, the first two
+with a message about naming a variable, which nobody was doing. A `Stream`
+needs a type argument to name a variable and takes none in an `instanceof`
+(JLS §15.20.2 wants a reifiable type), so the raw spelling is the only
+spelling a program can write and it has to resolve there.
+
+**And a JDK has TWO read-only map entries.** `Map.entry(k, v)` and an
+immutable map's entries are `java.util.KeyValueHolder`s: they take no null,
+they cannot be written to, and their `setValue` says "not supported". A
+`Collections.unmodifiableMap`'s are that wrapper's own inner class, and its
+`setValue` says nothing at all. caturra had one entry for both, mutable where
+`Map.entry` should not be — so `Map.entry("k", "v").setValue("x")` quietly
+rewrote an immutable pair. Which entry a map hands out is recorded on the
+HEAP, against the view for a wrapper (whose backing map hands out its own
+entries too) and against the map for an immutable one (whose backing nothing
+else can reach).
+
+One JDK detail is reproduced because it is observable: the natural-order
+comparator is a one-constant ENUM, so it answers `instanceof Comparable` and
+`instanceof Enum` — and `compareTo` with itself, which is the whole of what
+that face promises. The reverse-order one is an ordinary class and answers
+neither.
+
+Pinned as `what_a_library_value_answers_to`.
+
+**What this left.** The CLASS an array names is still caturra's alias
+(`[L__Comparator;` where a JDK says `[Ljava.util.Comparator;`, and
+`[Ljava.util.ArrayList;` for a `List[]`), and the immutable collections'
+iterators are named for the wrong owner (`ArrayList$Itr` where a JDK says
+`ImmutableCollections$ListItr`). Both are the same question — what a
+factory's product calls itself — and both are measured, in the probes behind
+this section.
+
 ### The comparator Arrays takes (2026-09-19)
 
 The written probes left a list: nine `java.util.Arrays` overloads caturra

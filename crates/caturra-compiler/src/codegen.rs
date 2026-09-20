@@ -5204,6 +5204,20 @@ fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
     }
 }
 
+/// The library interfaces a program can only write RAW, and can still ask
+/// about: a `Stream` needs a type argument to name a variable and takes none
+/// in an `instanceof`, which is the one place the bare name has to resolve.
+fn raw_instanceof_target(name: &str) -> Option<&'static str> {
+    Some(match name.rsplit('.').next().unwrap_or(name) {
+        "Stream" => "java/util/stream/Stream",
+        "IntStream" => "java/util/stream/IntStream",
+        "LongStream" => "java/util/stream/LongStream",
+        "DoubleStream" => "java/util/stream/DoubleStream",
+        "Collector" => "java/util/stream/Collector",
+        _ => return None,
+    })
+}
+
 fn unresolved_type_message(ty: &TypeRef, table: &MethodTable, in_class: &str) -> String {
     let location = format!("class {}", source_type_name(in_class));
     let location = Some(location.as_str());
@@ -30377,7 +30391,7 @@ impl BodyGen<'_> {
             "AbstractMap.SimpleEntry" | "java.util.AbstractMap.SimpleEntry"
         ) && !self.table.has_class("AbstractMap")
         {
-            return self.new_simple_entry(type_args, args, span);
+            return self.new_simple_entry(type_args, args, span, false);
         }
         // `new java.util.Scanner(...)`: resolve the qualified name (and
         // reject unknown ones with javac's wording).
@@ -32131,11 +32145,15 @@ impl BodyGen<'_> {
     /// `Map.Entry`, modelled as an entry view over a hidden one-mapping map
     /// (so `getKey`/`getValue`/`setValue`/`toString` all flow through the
     /// existing entry machinery).
+    /// `new AbstractMap.SimpleEntry<>(k, v)` and `Map.entry(k, v)`, which are
+    /// one object with two promises: the first is mutable and takes a null,
+    /// the second is one of the IMMUTABLE collections and takes neither.
     fn new_simple_entry(
         &mut self,
         type_args: &[TypeRef],
         args: &[Expr],
         span: SourceSpan,
+        immutable: bool,
     ) -> JType {
         let declared = match type_args {
             [] => None,
@@ -32177,7 +32195,11 @@ impl BodyGen<'_> {
         let method_ref = intern_method_ref(
             self.pool,
             "java/lang/System",
-            "__simpleEntry",
+            if immutable {
+                "__mapEntry"
+            } else {
+                "__simpleEntry"
+            },
             "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
         );
         self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
@@ -37397,7 +37419,7 @@ impl BodyGen<'_> {
                 self.error(span, "Map.entry takes a key and a value");
                 return None;
             }
-            return Some(Some(self.new_simple_entry(&[], args, span)));
+            return Some(Some(self.new_simple_entry(&[], args, span, true)));
         }
         // `Arrays.deepToString/deepEquals/deepHashCode` recurse into element
         // arrays, which needs each element array's kind at run time. The VM
@@ -41887,6 +41909,33 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
             return JType::Boolean;
         }
+        // `x instanceof Stream` — a RAW library interface. A value of one
+        // exists, so the question is ordinary; the TYPE needs an argument to
+        // resolve, and instanceof takes only a reifiable type (JLS §15.20.2),
+        // so the raw spelling is the only spelling a program can write and it
+        // has to answer here. Without this the target resolved nowhere and
+        // the complaint was about naming a variable, which nobody was doing.
+        if let TypeRef::Named(name) = ty
+            && let Some(internal) = raw_instanceof_target(name)
+            && !self
+                .table
+                .has_class(name.rsplit('.').next().unwrap_or(name))
+        {
+            if !value_ty.is_reference() && value_ty != JType::Error {
+                self.error(
+                    span,
+                    format!(
+                        "unexpected type: {} cannot be tested with instanceof",
+                        value_ty.describe(self.table)
+                    ),
+                );
+                return JType::Error;
+            }
+            let class_index = intern_class(self.pool, internal);
+            self.code.push_op_u16(op::INSTANCEOF, class_index, 1);
+            self.code.drop_stack(1);
+            return JType::Boolean;
+        }
         let Some(target) = self.table.resolve_type(ty) else {
             // A type nobody declared. javac reports the ordinary lookup
             // failure — the same one a variable of that type gets, down to the
@@ -41937,6 +41986,14 @@ impl BodyGen<'_> {
             // "class" of an array is its descriptor; the VM answers array-type
             // checks by comparing those.
             JType::Array { .. } => target.descriptor(self.table),
+            // A `Collector` and a `Stream` are types a VALUE has, so they are
+            // types a program may ASK about — the two that had no answer here
+            // while every other library type did.
+            JType::Collector(_) => String::from("java/util/stream/Collector"),
+            JType::Stream(_) => String::from("java/util/stream/Stream"),
+            // `o instanceof Map.Entry` — the type a map's entrySet yields,
+            // and one a program keeps in a variable, so one it may ask about.
+            JType::MapEntry { .. } => String::from("java/util/Map$Entry"),
             other => {
                 self.error(
                     span,

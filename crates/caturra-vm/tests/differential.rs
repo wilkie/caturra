@@ -50285,6 +50285,104 @@ public class TP {
 );
 
 differential_test!(
+    what_a_library_value_answers_to,
+    "LV",
+    r#"
+import java.util.AbstractMap;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Predicate;
+import java.util.regex.Pattern;
+import java.util.stream.Collector;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+public class LV {
+  interface Body { Object get() throws Exception; }
+  static void s(String l, Body b) {
+    try { System.out.println(l + " = " + b.get()); }
+    catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  @SuppressWarnings("unchecked")
+  public static void main(String[] a) {
+    // A comparator the LIBRARY built wears `Comparator`, whatever class it
+    // prints — the factory ones are named for a JDK's internals and a
+    // lambda-built one for an address, so the KIND is what answers.
+    s("natural", () -> Comparator.naturalOrder() instanceof Comparator);
+    s("reverse", () -> Comparator.reverseOrder() instanceof Comparator);
+    s("comparing", () -> Comparator.comparing(String::length) instanceof Comparator);
+    s("reversed", () -> Comparator.<String>naturalOrder().reversed() instanceof Comparator);
+    s("thenComparing", () -> Comparator.<String>naturalOrder().thenComparing(String::length) instanceof Comparator);
+    s("nullsFirst", () -> Comparator.nullsFirst(Comparator.<String>naturalOrder()) instanceof Comparator);
+    s("nullsLast", () -> Comparator.nullsLast(Comparator.<String>naturalOrder()) instanceof Comparator);
+    s("case insensitive", () -> String.CASE_INSENSITIVE_ORDER instanceof Comparator);
+    s("lambda", () -> { Comparator<String> c = (x, y) -> 0; return c instanceof Comparator; });
+    s("cast back", () -> { Object o = Comparator.<String>naturalOrder();
+      return ((Comparator<String>) o).compare("a", "b"); });
+    s("kept as Object", () -> { List<Object> all = new ArrayList<>();
+      all.add(Comparator.naturalOrder()); all.add((Comparator<String>) (x, y) -> 0);
+      return ((Comparator<String>) all.get(0)).compare("b", "a") + " " + all.size(); });
+    s("in an interface array", () -> { Comparator<String>[] all = new Comparator[] {
+        Comparator.naturalOrder(), Comparator.reverseOrder(), (x, y) -> 0 };
+      return all.length + " " + all[0].compare("a", "b") + all[1].compare("a", "b"); });
+    s("a bad store still throws", () -> { Object[] o = new Comparator[1];
+      try { o[0] = "x"; return "stored"; } catch (ArrayStoreException e) { return e.getMessage(); } });
+    // The natural-order comparator is a one-constant ENUM in a JDK, so it
+    // wears `Comparable` and `Enum` too — and the reverse-order one, an
+    // ordinary class, wears neither.
+    s("natural is an enum", () -> "" + (Comparator.naturalOrder() instanceof Comparable)
+      + " " + (Comparator.naturalOrder() instanceof Enum)
+      + " " + (Comparator.reverseOrder() instanceof Comparable)
+      + " " + (Comparator.reverseOrder() instanceof Enum));
+    s("compared with itself", () -> ((Comparable<Object>) (Object) Comparator.naturalOrder())
+      .compareTo(Comparator.naturalOrder()));
+    // The other library values that wear an interface, and the RAW spellings
+    // an instanceof is the only place for.
+    s("predicate", () -> Pattern.compile("a").asPredicate() instanceof Predicate);
+    s("collector", () -> Collectors.toList() instanceof Collector);
+    s("stream", () -> Stream.of(1) instanceof Stream);
+    s("not a stream", () -> { Object o = "text"; return o instanceof Stream; });
+    s("entry", () -> "" + (Map.entry("k", "v") instanceof Map.Entry)
+      + " " + (new AbstractMap.SimpleEntry<>("k", "v") instanceof Map.Entry));
+    s("the ordinary ones", () -> { Object o = new ArrayList<String>();
+      return "" + (o instanceof List) + (o instanceof Set) + (o instanceof Optional)
+        + (o instanceof Iterable) + (o instanceof Comparator); });
+    // `Map.entry` is one of the IMMUTABLE collections: it takes no null and
+    // its entry cannot be written to. `AbstractMap.SimpleEntry` is neither.
+    s("entry is immutable", () -> { Map.Entry<String, String> e = Map.entry("k", "v");
+      e.setValue("x"); return e; });
+    s("simple entry is not", () -> { Map.Entry<String, String> e = new AbstractMap.SimpleEntry<>("k", "v");
+      e.setValue("x"); return e; });
+    s("entry takes no null", () -> Map.entry("k", null));
+    s("entry takes no null key", () -> Map.entry(null, "v"));
+    s("simple entry takes one", () -> new AbstractMap.SimpleEntry<>("k", null));
+    // ...and the two read-only entries a JDK has, which say different things.
+    s("an immutable map's entry", () -> {
+      Map.Entry<String, String> e = Map.of("k", "v").entrySet().iterator().next();
+      e.setValue("x"); return e; });
+    s("a wrapper's entry", () -> { Map<String, String> m = new HashMap<>(); m.put("k", "v");
+      Map.Entry<String, String> e = Collections.unmodifiableMap(m).entrySet().iterator().next();
+      e.setValue("x"); return e; });
+    s("their classes", () -> Map.entry("k", "v").getClass().getName()
+      + " " + Map.of("k", "v").entrySet().iterator().next().getClass().getName()
+      + " " + new AbstractMap.SimpleEntry<>("k", "v").getClass().getName());
+    s("a wrapper's class", () -> { Map<String, String> m = new HashMap<>(); m.put("k", "v");
+      return Collections.unmodifiableMap(m).entrySet().iterator().next().getClass().getName()
+        + " " + m.entrySet().iterator().next().getClass().getName(); });
+    s("equal either way", () -> "" + Map.entry("k", "v").equals(new AbstractMap.SimpleEntry<>("k", "v"))
+      + " " + (Map.entry("k", "v").hashCode() == new AbstractMap.SimpleEntry<>("k", "v").hashCode())
+      + " " + Map.entry("k", "v"));
+  }
+}
+"#
+);
+
+differential_test!(
     a_field_read_from_inside_a_lambda,
     "FL",
     r#"

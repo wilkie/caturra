@@ -1620,6 +1620,13 @@ pub struct Heap {
     /// message was answering the generic name while `getClass()` answered the
     /// real one.
     view_class: std::collections::HashMap<HeapRef, &'static str>,
+    /// What class the entries of a map or of a map VIEW answer to, where it
+    /// is not the map's own inner node: an immutable map's are
+    /// `KeyValueHolder`s and a `Collections.unmodifiableMap`'s are that
+    /// wrapper's own entry. A JDK has both and a program sees the difference
+    /// in their class and in what their `setValue` says. It lives on the HEAP
+    /// because entries are handed out from two modules.
+    entry_class: std::collections::HashMap<HeapRef, &'static str>,
     /// What `new Vector<>(n)` asked for. A JDK's `capacity()` is that figure
     /// doubled as often as the contents needed, and nothing else can observe
     /// it — so the initial number is all there is to remember.
@@ -1672,6 +1679,7 @@ impl Default for Heap {
             wrapper_cache: std::collections::HashMap::new(),
             enum_pool: std::collections::HashMap::new(),
             view_class: std::collections::HashMap::new(),
+            entry_class: std::collections::HashMap::new(),
             vector_capacity: std::collections::HashMap::new(),
             format_text: std::collections::HashMap::new(),
             builder_capacity: std::collections::HashMap::new(),
@@ -1785,6 +1793,22 @@ impl Heap {
         self.view_class.insert(reference, class);
     }
 
+    /// Record what class the entries of this map (or of this map VIEW) name.
+    pub fn set_entry_class(&mut self, reference: HeapRef, class: &'static str) {
+        self.entry_class.insert(reference, class);
+    }
+
+    /// That class, asked of the VIEW an entry came through and then of the
+    /// map behind it — the view knows for a `Collections` wrapper, whose
+    /// backing map hands out its own entries too, and the map knows for an
+    /// immutable one, whose backing nothing else can reach.
+    #[must_use]
+    pub fn entry_class_of(&self, view: Option<HeapRef>, map: HeapRef) -> Option<&'static str> {
+        view.and_then(|view| self.entry_class.get(&view))
+            .or_else(|| self.entry_class.get(&map))
+            .copied()
+    }
+
     /// Record what a `Vector`'s constructor asked for: the capacity, and the
     /// growth STEP beside it — a positive increment adds that many slots where
     /// the default doubles, and `capacity()` is where the difference shows.
@@ -1808,6 +1832,7 @@ impl Heap {
     /// Drop the views whose objects the collector swept.
     pub fn retain_views(&mut self, alive: impl Fn(HeapRef) -> bool) {
         self.view_class.retain(|reference, _| alive(*reference));
+        self.entry_class.retain(|reference, _| alive(*reference));
         self.vector_capacity
             .retain(|reference, _| alive(*reference));
     }
