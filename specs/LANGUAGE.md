@@ -15706,6 +15706,63 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The class a view and a cursor name (2026-09-22)
+
+A JDK has a separate class for every cursor and every map view, and a program
+reads them. caturra had the ordinary collections' right — `ArrayList$Itr`,
+`HashMap$KeyIterator`, `TreeMap$Entry` — and named everything else after the
+collection UNDERNEATH: `List.of(1).iterator()` was an `ArrayList$Itr` where a
+JDK says `ImmutableCollections$ListItr`, and `Map.of("a", 1).keySet()` was a
+`HashMap$KeySet` where a JDK says `AbstractMap$1`. Twenty-five names, measured
+one probe at a time against a real JDK.
+
+The cause is the same in both halves, and it is a question of WHERE the fact
+is still in hand:
+
+- **A cursor is named for the collection that made it**, and a wrapper or an
+  immutable collection hands its cursor the BACKING collection — which is an
+  ordinary `ArrayList` and can only say so. What such a collection does know
+  is its own name, which caturra already answers exactly; every cursor here
+  is that answer read one step further (`cursor_for_owner`), and the two
+  cursor sites that build one AT a wrapper now name it from the wrapper.
+- **A map view holds the backing map too.** The map that made the view is in
+  hand exactly once, where the view is built, so that is where the view's
+  name is recorded (`map_view_class_for`). The cursor then follows from the
+  view's own name, with no third rule.
+
+Four JDK facts worth writing down, because a guess gets each wrong: a
+singleton map answers ONE class for all three of its views (the values view
+included, which is a `Set` there and nowhere else), and an empty map likewise;
+an immutable map's entry set is named by SIZE, as an immutable set is
+(`Set12` for one pair, `MapN$1` beyond); `Collections.nCopies` is its own
+`CopiesList` and inherits `AbstractList`'s cursor rather than defining one;
+and a sub-list's cursor is the sub-list's own inner class, which follows the
+sub-list's own name.
+
+**And the compiler's erasure stopped leaking into `getClass()`.** A bundled
+functional interface is flattened to a `__` name, so an array of comparators
+called itself `[L__Comparator;` — in `getName`, in `getSimpleName`, in
+`getComponentType`, and in a cast's message. The `__` prefix is reserved, so
+mapping it back is exact (`erased_interface_name`, already the rule for
+`getInterfaces`); `Function` and `UnaryOperator` share one erasure, so the
+commoner name comes back. A nested component is also spelled the way source
+spells it now: `Impl[]` and `Outer.Impl[]`, not `Outer$Impl[]`.
+
+One regression the pin caught before the commit: giving an immutable map's
+entry-set view its own name changed which branch `read_only_cursor` took, and
+the entry's read-only test was `writes == None` — one of four read-only kinds
+— so `Map.of("k", "v").entrySet().iterator().next().setValue("x")` began to
+mutate. The test is what the cursor CAN do, not which refusal it wears.
+
+Pinned as `the_class_a_view_and_a_cursor_name`.
+
+**What is left.** An array of a library INTERFACE still names the concrete
+class the compiler erases it to — `[Ljava.util.ArrayList;` for a `List[]`,
+`[LComparable;` for a `Comparable[]` — because that name is the element's
+DESCRIPTOR, which forty-five call sites share with method signatures. It is
+one change, not a naming one, and it belongs with whatever else needs the
+element descriptor to carry its face.
+
 ### What a library value answers to (2026-09-19)
 
 `Comparator.naturalOrder() instanceof Comparator` was **false**, and casting

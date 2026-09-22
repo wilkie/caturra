@@ -50285,6 +50285,118 @@ public class TP {
 );
 
 differential_test!(
+    the_class_a_view_and_a_cursor_name,
+    "VC",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
+public class VC {
+  static class Impl {}
+  static void n(String label, Object o) {
+    System.out.println(label + " = " + o.getClass().getName());
+  }
+  public static void main(String[] a) {
+    List<Integer> list = new ArrayList<>(List.of(1, 2, 3));
+    Map<String, Integer> map = new HashMap<>();
+    map.put("a", 1);
+    // A cursor is named for the collection that MADE it, and a wrapper or an
+    // immutable collection keeps only its backing — which is an ordinary
+    // list, and named every one of these after itself.
+    n("ArrayList", list.iterator());
+    n("ArrayList list", list.listIterator());
+    n("LinkedList", new LinkedList<>(list).iterator());
+    n("TreeSet", new TreeSet<>(list).iterator());
+    n("Arrays.asList", Arrays.asList(1, 2).iterator());
+    n("subList", list.subList(0, 2).iterator());
+    n("linked subList", new LinkedList<>(list).subList(0, 2).iterator());
+    n("List.of", List.of(1).iterator());
+    n("List.of many", List.of(1, 2, 3).iterator());
+    n("List.of list", List.of(1).listIterator());
+    n("Set.of", Set.of(1).iterator());
+    n("Set.of many", Set.of(1, 2, 3).iterator());
+    n("emptyList", Collections.emptyList().iterator());
+    n("emptySet", Collections.<Integer>emptySet().iterator());
+    n("singletonList", Collections.singletonList(1).iterator());
+    n("singleton", Collections.singleton(1).iterator());
+    n("unmodifiableList", Collections.unmodifiableList(list).iterator());
+    n("unmodifiableSet", Collections.unmodifiableSet(new java.util.HashSet<>(list)).iterator());
+    n("unmodifiableCollection", Collections.unmodifiableCollection(list).iterator());
+    n("nCopies", Collections.nCopies(2, 1).iterator());
+    n("nCopies itself", Collections.nCopies(2, 1));
+    // ...and a map VIEW is named for the map that made it, which a view holds
+    // no reference to: it keeps the BACKING map, an ordinary `HashMap`.
+    n("keySet", map.keySet());
+    n("values", map.values());
+    n("entrySet", map.entrySet());
+    n("tree entrySet", new TreeMap<>(map).entrySet());
+    n("linked keySet", new LinkedHashMap<>(map).keySet());
+    n("of keys", Map.of("a", 1).keySet());
+    n("of values", Map.of("a", 1).values());
+    n("of entries", Map.of("a", 1).entrySet());
+    n("of many entries", Map.of("a", 1, "b", 2, "c", 3).entrySet());
+    n("of keys it", Map.of("a", 1).keySet().iterator());
+    n("of values it", Map.of("a", 1).values().iterator());
+    n("of entries it", Map.of("a", 1).entrySet().iterator());
+    n("of many entries it", Map.of("a", 1, "b", 2, "c", 3).entrySet().iterator());
+    n("unmod keys", Collections.unmodifiableMap(map).keySet());
+    n("unmod values", Collections.unmodifiableMap(map).values());
+    n("unmod entries", Collections.unmodifiableMap(map).entrySet());
+    n("unmod keys it", Collections.unmodifiableMap(map).keySet().iterator());
+    n("unmod entries it", Collections.unmodifiableMap(map).entrySet().iterator());
+    n("singletonMap keys", Collections.singletonMap("a", 1).keySet());
+    n("singletonMap values", Collections.singletonMap("a", 1).values());
+    n("singletonMap entries", Collections.singletonMap("a", 1).entrySet());
+    n("singletonMap keys it", Collections.singletonMap("a", 1).keySet().iterator());
+    n("emptyMap keys", Collections.emptyMap().keySet());
+    n("emptyMap values", Collections.emptyMap().values());
+    n("emptyMap entries", Collections.emptyMap().entrySet());
+    n("emptyMap keys it", Collections.emptyMap().keySet().iterator());
+    // An immutable map's entry may not be written to, whatever its cursor's
+    // own refusal looks like.
+    try {
+      Map.of("k", "v").entrySet().iterator().next().setValue("x");
+      System.out.println("mutated");
+    } catch (UnsupportedOperationException e) {
+      System.out.println("refused " + e.getMessage());
+    }
+    // The class an ARRAY names: the compiler's erasure of a functional
+    // interface is an implementation detail, and a NESTED component is
+    // spelled the way source spells it.
+    n("comparators", new Comparator[0]);
+    n("runnables", new Runnable[0]);
+    n("suppliers", new java.util.function.Supplier[0]);
+    n("predicates", new java.util.function.Predicate[0]);
+    n("nested", new Impl[0]);
+    System.out.println(new Comparator[0].getClass().getComponentType().getName());
+    System.out.println(new Impl[0].getClass().getSimpleName()
+      + " " + new Impl[0].getClass().getCanonicalName()
+      + " " + new Impl[0].getClass().getTypeName()
+      + " " + new Impl[0][0].getClass().getSimpleName());
+    System.out.println(new Comparator[0].getClass().getSimpleName()
+      + " " + new Comparator[0].getClass().getTypeName());
+    Object o = new Comparator[1];
+    try {
+      String[] bad = (String[]) o;
+      System.out.println(bad.length);
+    } catch (ClassCastException e) {
+      System.out.println(e.getMessage());
+    }
+  }
+}
+"#
+);
+
+differential_test!(
     what_a_library_value_answers_to,
     "LV",
     r#"

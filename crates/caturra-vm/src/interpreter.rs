@@ -4812,6 +4812,9 @@ impl<'run> Interpreter<'run> {
                 // A `CopiesList` is an `AbstractList`, so it inherits the
                 // generic cursor rather than defining a refusing one.
                 self.checked_cursor_views.insert(list);
+                // ...and it is its own class, not the general wrapper's.
+                self.heap
+                    .set_view_class(list, "java/util/Collections$CopiesList");
                 frame.stack.push(JValue::Ref(Some(list)));
                 return Ok(true);
             }
@@ -7504,6 +7507,15 @@ impl<'run> Interpreter<'run> {
     }
 
     /// The list a reference ultimately names, unwrapping unmodifiable views.
+    /// Name a cursor for the collection that made it, when that collection
+    /// knows its own name — a wrapper or an immutable one, whose backing is
+    /// an ordinary list the cursor would otherwise be named after.
+    fn name_cursor_for(&mut self, cursor: HeapRef, owner: HeapRef) {
+        if let Some(named) = cursor_for_owner(&object_class_name_of(&self.heap, owner)) {
+            self.heap.set_view_class(cursor, named);
+        }
+    }
+
     fn backing_list(&self, reference: HeapRef) -> HeapRef {
         let mut current = reference;
         // Views of views are possible; the chain is short and acyclic.
@@ -8910,6 +8922,9 @@ impl<'run> Interpreter<'run> {
                         list: false,
                         descending: false,
                     });
+                    // Named for the WRAPPER, as a JDK names it: the backing
+                    // set knows nothing of this one.
+                    self.name_cursor_for(iterator, receiver);
                     return Ok(Answered::Value(JValue::Ref(Some(iterator))));
                 }
                 return self.map_intrinsic(inner, method_name, descriptor, args);
@@ -13918,6 +13933,12 @@ impl<'run> Interpreter<'run> {
             kind,
             read_only,
         });
+        // ...and the VIEW is named for the map that made it, which is the
+        // only place that map is in hand: a view holds the BACKING map, and
+        // would otherwise answer `HashMap$KeySet` for every one of them.
+        if let Some(named) = map_view_class_for(&object_class_name_of(&self.heap, owner), kind) {
+            self.heap.set_view_class(view, named);
+        }
         // A read-only view over a map the program can still reach by another
         // name is a `Collections` wrapper, and its entries are that wrapper's
         // own — which the BACKING map cannot say, since its own entries are
@@ -16497,6 +16518,7 @@ impl<'run> Interpreter<'run> {
             // view and would let `remove`/`set`/`add` corrupt the caller's data.
             if matches!(method_name, "iterator" | "listIterator") {
                 let writes = self.read_only_cursor(receiver);
+                let owner = receiver;
                 let source = self.backing_list(receiver);
                 let expected_len = iterated_len_of(&self.heap, source);
                 let index = match args.first() {
@@ -16520,6 +16542,11 @@ impl<'run> Interpreter<'run> {
                     list: method_name != "iterator",
                     descending: false,
                 });
+                // The cursor is named for the collection that MADE it, which
+                // is this wrapper — the source is the backing list, and a
+                // JDK's `Collections$UnmodifiableCollection$1` is nothing the
+                // backing could say.
+                self.name_cursor_for(iterator, owner);
                 frame.stack.push(JValue::Ref(Some(iterator)));
                 self.vec_pool.push(args);
                 return Ok(None);
@@ -18729,7 +18756,9 @@ impl<'run> Interpreter<'run> {
                     // an anonymous or local one has not.
                     "getCanonicalName" => {
                         if name.starts_with('[') {
-                            let text = descriptor_type_name(&name);
+                            // ...and a nested COMPONENT is spelled the source
+                            // way here as well: `Outer.Impl[]`.
+                            let text = descriptor_type_name(&name).replace('$', ".");
                             return Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))));
                         }
                         if is_synthesized_anonymous(&name) || is_hoisted_local(&name) {
@@ -18923,8 +18952,10 @@ impl<'run> Interpreter<'run> {
                         if name.starts_with('[') {
                             let full = descriptor_type_name(&name);
                             let simple = match full.split_once("[]") {
+                                // A NESTED component is simple too: a JDK's
+                                // `Impl[]`, not the binary `Outer$Impl[]`.
                                 Some((base, rest)) => {
-                                    format!("{}[]{rest}", simple_class_name(base))
+                                    format!("{}[]{rest}", nested_simple_name(base))
                                 }
                                 None => full.clone(),
                             };
@@ -21672,12 +21703,23 @@ fn class_binary_name(name: &str) -> String {
         .strip_prefix('L')
         .and_then(|rest| rest.strip_suffix(';'))
     {
-        return format!("L{};", canonical_class_name(inner).replace('/', "."));
+        return format!("L{};", shown_class_name(inner));
     }
     if name.len() == 1 && "IJDFSBCZ".contains(name) {
         return name.to_owned();
     }
-    canonical_class_name(name).replace('/', ".")
+    shown_class_name(name)
+}
+
+/// A class name as a program READS it. The compiler erases every bundled
+/// functional interface to a flattened `__` name, which is an implementation
+/// detail with no business in a `getClass()`: an array of comparators called
+/// itself `[L__Comparator;`. The prefix is reserved, so no program's own
+/// class can be caught by this.
+fn shown_class_name(internal: &str) -> String {
+    erased_interface_name(internal)
+        .unwrap_or_else(|| canonical_class_name(internal))
+        .replace('/', ".")
 }
 
 /// The name the heap keys a descriptor's CLASS by: `Ljava/lang/String;` →
@@ -23363,15 +23405,111 @@ enum ArgFit {
     NullToPrimitive,
 }
 
+/// The class a map VIEW answers to, when the map that made it knows its own
+/// name — an immutable map or a `Collections` wrapper.
+///
+/// A view holds the BACKING map, which is an ordinary `HashMap` and would
+/// name every view after that: `HashMap$KeySet` where a JDK says
+/// `AbstractMap$1`. The map that made the view is in hand where the view is
+/// built, and that is the only place it is.
+fn map_view_class_for(owner: &str, kind: MapViewKind) -> Option<&'static str> {
+    use crate::value::MapViewKind as K;
+    Some(match (owner, kind) {
+        // The immutable maps share `AbstractMap`'s two anonymous views for
+        // keys and values; their entry set is their OWN class, and which one
+        // follows the map's size, as it does for an immutable set.
+        (
+            "java/util/ImmutableCollections$Map1" | "java/util/ImmutableCollections$MapN",
+            K::Keys,
+        ) => "java/util/AbstractMap$1",
+        (
+            "java/util/ImmutableCollections$Map1" | "java/util/ImmutableCollections$MapN",
+            K::Values,
+        ) => "java/util/AbstractMap$2",
+        ("java/util/ImmutableCollections$Map1", K::Entries) => {
+            "java/util/ImmutableCollections$Set12"
+        }
+        ("java/util/ImmutableCollections$MapN", K::Entries) => {
+            "java/util/ImmutableCollections$MapN$1"
+        }
+        ("java/util/Collections$UnmodifiableMap", K::Keys) => {
+            "java/util/Collections$UnmodifiableSet"
+        }
+        ("java/util/Collections$UnmodifiableMap", K::Values) => {
+            "java/util/Collections$UnmodifiableCollection"
+        }
+        ("java/util/Collections$UnmodifiableMap", K::Entries) => {
+            "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet"
+        }
+        // A singleton map answers ONE class for all three views, and an empty
+        // map likewise — the values view included, which is a set there and
+        // nowhere else.
+        ("java/util/Collections$SingletonMap", _) => "java/util/Collections$SingletonSet",
+        ("java/util/Collections$EmptyMap", _) => "java/util/Collections$EmptySet",
+        _ => return None,
+    })
+}
+
+/// The cursor class a collection that KNOWS ITS OWN NAME hands out.
+///
+/// A wrapper or an immutable collection keeps only its backing collection, so
+/// the kind test below sees a plain `ArrayList` and named the cursor after
+/// that — `ArrayList$Itr` where a JDK says `ImmutableCollections$ListItr`.
+/// What it does know is what IT is called, which caturra already answers
+/// exactly; every cursor here is that answer read one step further.
+fn cursor_for_owner(owner: &str) -> Option<&'static str> {
+    Some(match owner {
+        // `List.of` has ONE cursor class for `iterator` and `listIterator`.
+        "java/util/ImmutableCollections$List12" | "java/util/ImmutableCollections$ListN" => {
+            "java/util/ImmutableCollections$ListItr"
+        }
+        // The two immutable sets name theirs differently: the packed one has
+        // an anonymous class, the general one a named inner.
+        "java/util/ImmutableCollections$Set12" => "java/util/ImmutableCollections$Set12$1",
+        "java/util/ImmutableCollections$SetN" => "java/util/ImmutableCollections$SetN$SetNIterator",
+        // An immutable map's entry set, whose cursor is its own inner class.
+        "java/util/ImmutableCollections$MapN$1" => {
+            "java/util/ImmutableCollections$MapN$MapNIterator"
+        }
+        // The `Collections` factories, which share one cursor per shape.
+        "java/util/Collections$EmptyList"
+        | "java/util/Collections$EmptySet"
+        | "java/util/Collections$EmptyMap" => "java/util/Collections$EmptyIterator",
+        "java/util/Collections$SingletonList"
+        | "java/util/Collections$SingletonSet"
+        | "java/util/Collections$SingletonMap" => "java/util/Collections$1",
+        "java/util/Collections$UnmodifiableCollection"
+        | "java/util/Collections$UnmodifiableList"
+        | "java/util/Collections$UnmodifiableRandomAccessList"
+        | "java/util/Collections$UnmodifiableSet"
+        | "java/util/Collections$UnmodifiableSortedSet"
+        | "java/util/Collections$UnmodifiableNavigableSet" => {
+            "java/util/Collections$UnmodifiableCollection$1"
+        }
+        "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet" => {
+            "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet$1"
+        }
+        // A copies list is an `AbstractList`, so it inherits that cursor.
+        "java/util/Collections$CopiesList" => "java/util/AbstractList$Itr",
+        // A sub-list's cursor is the sub-list's own inner class, and which
+        // one follows the sub-list's own name.
+        "java/util/ArrayList$SubList" => "java/util/ArrayList$SubList$1",
+        "java/util/AbstractList$SubList" | "java/util/AbstractList$RandomAccessSubList" => {
+            "java/util/AbstractList$SubList$1"
+        }
+        // An immutable map's key and value views are `AbstractMap`'s two
+        // anonymous classes, and their cursors are anonymous inside those.
+        "java/util/AbstractMap$1" => "java/util/AbstractMap$1$1",
+        "java/util/AbstractMap$2" => "java/util/AbstractMap$2$1",
+        _ => return None,
+    })
+}
+
 /// The class a cursor reports from `getClass()`.
 ///
 /// A JDK has a separate iterator class per collection, and the names are
 /// observable — every one below was recorded from `OpenJDK` 11 rather than
-/// guessed. Known gap: a cursor built AT a read-only wrapper
-/// (`unmodifiableList`, `singletonList`, `emptyList`, `nCopies`) keeps only the
-/// backing collection, so which wrapper made it — and thus which of the four
-/// `Collections`/`AbstractList` cursor classes it is — cannot be told apart
-/// here; those still answer with the backing collection's cursor.
+/// guessed.
 fn cursor_class_name_of(
     heap: &Heap,
     source: HeapRef,
@@ -23380,6 +23518,10 @@ fn cursor_class_name_of(
     descending: bool,
 ) -> &'static str {
     use crate::value::{HeapObject as H, IteratorWrites as W, MapViewKind as K};
+    // A collection that knows its own name says what its cursor is called.
+    if let Some(named) = cursor_for_owner(&object_class_name_of(heap, source)) {
+        return named;
+    }
     match writes {
         // `Arrays.asList(a)`: JDK 9 gave it its own cursor with no `remove`,
         // while its `listIterator()` is still `AbstractList`'s.
@@ -23569,13 +23711,12 @@ pub(crate) fn descriptor_type_name(descriptor: &str) -> String {
         "B" => String::from("byte"),
         "C" => String::from("char"),
         "Z" => String::from("boolean"),
-        other => canonical_class_name(
+        other => shown_class_name(
             other
                 .strip_prefix('L')
                 .and_then(|rest| rest.strip_suffix(';'))
                 .unwrap_or(other),
-        )
-        .replace('/', "."),
+        ),
     };
     format!("{name}{}", "[]".repeat(dims))
 }
@@ -23828,13 +23969,11 @@ fn class_cast_error(classes: &HashMap<String, ClassFile>, actual: &str, target: 
         if matches!(name, "Number" | "Comparable") && !classes.contains_key(name) {
             return format!("java.lang.{name}");
         }
-        // ...and the two the compiler ALIASES (`__Comparator`, `__Runnable`)
-        // are an implementation detail that has no business in a message a
-        // student reads. The faces table already knows what they are called.
-        if name.starts_with("__") && !classes.contains_key(name) {
-            return qualified_face(name).replace('/', ".");
-        }
-        name.replace('/', ".")
+        // ...and a name the compiler ALIASES (`__Comparator` and its kind)
+        // is an implementation detail with no business in a message a
+        // student reads — inside an ARRAY descriptor as much as alone, which
+        // is where `[L__Comparator;` was still reaching one.
+        class_binary_name(name)
     };
     let (actual, target) = (qualify(actual), qualify(target));
     VmError::UncaughtException(class_cast_message(&actual, &target))

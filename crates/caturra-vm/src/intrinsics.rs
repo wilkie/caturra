@@ -9955,7 +9955,13 @@ fn iterator_method(
                 let entry = heap.alloc(HeapObject::MapEntry {
                     map,
                     key,
-                    read_only: writes == IteratorWrites::None,
+                    // A cursor that may not write back hands out entries that
+                    // may not either. The test is what the cursor CAN do, not
+                    // which of the four read-only kinds it is: an immutable
+                    // map's entry-set cursor is an `ArrayCursor` (its
+                    // `remove` throws with a message), and reading that as
+                    // "writable" let `setValue` through on a `Map.of`.
+                    read_only: writes != IteratorWrites::All,
                 });
                 // A read-only entry names itself — which of the two it is
                 // the VIEW knows, or the map behind it.
