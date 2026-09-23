@@ -15706,6 +15706,47 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### What a file option changes (2026-09-23)
+
+The `java.nio.file.Files` cluster of the never-compared list, and the worst
+thing this session found. `Files.writeString(p, "b",
+StandardOpenOption.APPEND)` **truncated the file** — the option was silently
+ignored, and a silent wrong answer on ordinary Java is worse than a refusal.
+Worse still, a `StandardOpenOption` constant typed as a VALUE came out `null`,
+so the call it was an argument to compiled to malformed bytecode and the
+program died with "operand stack underflow", which is an engine abort rather
+than an answer.
+
+A file option is read where it is WRITTEN, the same reading `Locale.US` gets
+and for the same reason: caturra models no value of these types. The written
+constants fold to a mask the VM honours, and the rules are a JDK's, measured
+one by one rather than assumed:
+
+- APPEND appends, and on a MISSING file is a `NoSuchFileException` — APPEND
+  alone does not create.
+- CREATE alone does NOT truncate: it writes from position 0 and leaves any
+  tail longer than the new text in place, so "b" over "aaa" is "baa".
+- TRUNCATE_EXISTING is the default a bare write already means.
+- CREATE_NEW over an existing file is a `FileAlreadyExistsException`.
+- READ is an `IllegalArgumentException: READ not allowed`.
+- An option caturra cannot answer for (`SYNC`, `DELETE_ON_CLOSE`) is refused
+  BY NAME, and one written as anything but a constant is refused too.
+
+**`Files.copy` and `Files.move` did not exist** — the two operations a program
+reaches for after reading and writing one. Both refuse an existing target
+unless `REPLACE_EXISTING` says otherwise, name the SOURCE when it is missing
+and the TARGET when it is in the way, answer the target path, and treat a copy
+onto ITSELF as the JDK's no-op (it checks `isSameFile` before anything else).
+
+Two smaller things fell out of the same probe: `Files.write(p, List.of(…))`
+was a `NullPointerException`, because the reader took a mutable list's vector
+and an immutable one has none; and the parameter is an `Iterable`, so a
+`TreeSet` of lines is one, where it had been "TreeSet<String> cannot be
+converted to List<String>".
+
+Pinned as `what_a_file_option_changes` and `a_file_write_without_options`.
+
+
 ### The methods no argument could reach (2026-09-23)
 
 Three more from the behaviour sweep's never-compared list, and they are there

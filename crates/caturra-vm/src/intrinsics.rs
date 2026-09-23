@@ -14055,6 +14055,73 @@ fn path_arg(heap: &Heap, value: &JValue) -> Result<String, VmError> {
     }
 }
 
+/// The bits the compiler folds a written file option into. Kept beside the
+/// filesystem that honours them, and spelled the same way on both sides.
+const OPTION_CREATE: u32 = 1;
+const OPTION_TRUNCATE_EXISTING: u32 = 1 << 1;
+const OPTION_APPEND: u32 = 1 << 2;
+const OPTION_CREATE_NEW: u32 = 1 << 3;
+const OPTION_READ: u32 = 1 << 4;
+pub(crate) const OPTION_REPLACE_EXISTING: u32 = 1 << 5;
+
+/// The mask a `Files` call's trailing argument carries; zero when the call
+/// named no options, which is the default every write already means.
+fn option_mask(value: Option<&JValue>) -> u32 {
+    match value {
+        Some(JValue::Int(bits)) => bits.cast_unsigned(),
+        _ => 0,
+    }
+}
+
+/// A write, under the options it was given. With none, a JDK's is
+/// `CREATE | TRUNCATE_EXISTING | WRITE`; each option named changes exactly
+/// one thing about that, and the combinations are the JDK's own — measured,
+/// not guessed. `CREATE` alone does NOT truncate, so a short write over a
+/// long file leaves the tail behind.
+fn write_with_options(
+    vfs: &mut VirtualFileSystem,
+    path: &str,
+    bytes: &[u8],
+    mask: u32,
+) -> Result<(), VmError> {
+    if mask & OPTION_READ != 0 {
+        return Err(throw(
+            "java.lang.IllegalArgumentException: READ not allowed",
+        ));
+    }
+    let exists = vfs.exists(path);
+    if mask & OPTION_CREATE_NEW != 0 && exists {
+        return Err(throw(format!(
+            "java.nio.file.FileAlreadyExistsException: {path}"
+        )));
+    }
+    // APPEND and CREATE both open an EXISTING file without truncating it —
+    // APPEND at the end, CREATE at the start — and neither creates one, which
+    // is why a missing file is a NoSuchFileException rather than a new file.
+    let opens_existing = mask & (OPTION_APPEND | OPTION_CREATE) != 0
+        && mask & (OPTION_TRUNCATE_EXISTING | OPTION_CREATE_NEW) == 0;
+    let mut content = if opens_existing {
+        if !exists && mask & OPTION_CREATE == 0 {
+            return Err(throw(format!("java.nio.file.NoSuchFileException: {path}")));
+        }
+        vfs.read_file(path).map(<[u8]>::to_vec).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if mask & OPTION_APPEND == 0 && !content.is_empty() {
+        // `CREATE` writes from the START of what is already there, leaving
+        // any tail longer than the new text in place.
+        let tail = content.split_off(bytes.len().min(content.len()));
+        content.clear();
+        content.extend_from_slice(bytes);
+        content.extend_from_slice(&tail);
+    } else {
+        content.extend_from_slice(bytes);
+    }
+    vfs.write_file(path, content)
+        .map_err(|e| throw(format!("java.io.IOException: {e}")))
+}
+
 /// `java.nio.file.Files` static methods, over the virtual filesystem.
 // One arm per question `Files` answers; the list is the point.
 #[allow(clippy::too_many_lines)]
@@ -14226,13 +14293,19 @@ fn files_static(
         }
         "writeString" => {
             let text = arg_string(heap, &args[1])?;
-            vfs.write_file(&path, text.into_bytes())
-                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            write_with_options(vfs, &path, &text.into_bytes(), option_mask(args.get(2)))?;
             Ok(Some(args[0]))
         }
         "write" => {
+            // `write(path, Iterable)` takes ANY collection of lines, and an
+            // IMMUTABLE one is the ordinary way to write them inline:
+            // reading only a mutable list's vector made
+            // `Files.write(p, List.of("a"))` a NullPointerException.
             let lines = match args.get(1) {
-                Some(JValue::Ref(Some(reference))) => heap.list_values(*reference).cloned(),
+                Some(JValue::Ref(Some(reference))) => heap
+                    .list_values(heap.unwrapped(*reference))
+                    .cloned()
+                    .or_else(|| set_like_elements(heap, *reference)),
                 _ => None,
             }
             .ok_or_else(|| throw("java.lang.NullPointerException"))?;
@@ -14243,9 +14316,34 @@ fn files_static(
                 }
                 text.push('\n');
             }
-            vfs.write_file(&path, text.into_bytes())
-                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            write_with_options(vfs, &path, &text.into_bytes(), option_mask(args.get(2)))?;
             Ok(Some(args[0]))
+        }
+        // `copy(source, target)` / `move(source, target)` — the target must
+        // not already exist unless REPLACE_EXISTING says so, and a missing
+        // SOURCE is a `NoSuchFileException` naming the source, where an
+        // existing target names the target.
+        "copy" | "move" => {
+            let target = path_arg(heap, args.get(1).unwrap_or(&JValue::NULL))?;
+            let mask = option_mask(args.get(2));
+            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            // Copying or moving a file onto ITSELF is a JDK no-op that
+            // answers the target — it checks `isSameFile` before anything
+            // else, so the "already exists" complaint never reaches it.
+            if target == path {
+                return Ok(args.get(1).copied());
+            }
+            if vfs.exists(&target) && mask & OPTION_REPLACE_EXISTING == 0 {
+                return Err(throw(format!(
+                    "java.nio.file.FileAlreadyExistsException: {target}"
+                )));
+            }
+            vfs.write_file(&target, content)
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            if method == "move" {
+                let _ = vfs.remove(&path);
+            }
+            Ok(args.get(1).copied())
         }
         "exists" => Ok(Some(JValue::Int(i32::from(vfs.exists(&path))))),
         // A DIRECTORY is not a regular file, which sharing the `exists` answer

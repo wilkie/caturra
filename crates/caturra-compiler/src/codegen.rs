@@ -6727,6 +6727,47 @@ fn locale_named(arg: &Expr) -> Option<&str> {
     }
 }
 
+/// A `StandardOpenOption` / `StandardCopyOption` constant, by the name it is
+/// WRITTEN with — the same reading `Locale.US` gets, and for the same reason:
+/// caturra models no value of either type, so a constant is the only form it
+/// can answer for. Typed as a value, one came out `null` and the call it was
+/// an argument to compiled to malformed bytecode — "operand stack underflow",
+/// which is an engine abort rather than an answer.
+fn file_option_named(arg: &Expr) -> Option<&str> {
+    match arg {
+        Expr::Name { path, .. }
+            if path.len() >= 2
+                && matches!(
+                    path[path.len() - 2].as_str(),
+                    "StandardOpenOption" | "StandardCopyOption" | "LinkOption"
+                ) =>
+        {
+            Some(path[path.len() - 1].as_str())
+        }
+        _ => None,
+    }
+}
+
+/// The bit each file option sets in the mask the VM reads. Every name a JDK
+/// declares is here: one caturra cannot honour is refused by NAME rather than
+/// silently ignored, which is the difference between a smaller answer and a
+/// wrong one.
+fn file_option_bit(named: &str) -> Option<u32> {
+    Some(match named {
+        "CREATE" => 1,
+        "TRUNCATE_EXISTING" => 1 << 1,
+        "APPEND" => 1 << 2,
+        "CREATE_NEW" => 1 << 3,
+        "READ" => 1 << 4,
+        "REPLACE_EXISTING" => 1 << 5,
+        // The options that ask for nothing this filesystem can differ about:
+        // `WRITE` is what every one of these calls already does, and there
+        // are no links to follow and no attributes to copy.
+        "WRITE" | "NOFOLLOW_LINKS" | "COPY_ATTRIBUTES" | "ATOMIC_MOVE" => 0,
+        _ => return None,
+    })
+}
+
 /// The locales caturra answers for. It formats, cases and parses in the US
 /// locale, and each of these asks for the same text — so the argument is not
 /// needed rather than ignored. Anything else is refused by name, because
@@ -34952,6 +34993,19 @@ impl BodyGen<'_> {
                 },
             )),
 
+            // `copy`/`move` take a source and a TARGET, and answer the
+            // target. Neither existed, so both were "no suitable method
+            // found" for the two file operations a program reaches for after
+            // reading and writing one.
+            ("Files", "copy" | "move") => Some((
+                "java/nio/file/Files",
+                &[
+                    (JType::Path, "Ljava/nio/file/Path;"),
+                    (JType::Path, "Ljava/nio/file/Path;"),
+                ],
+                "Ljava/nio/file/Path;",
+                Some(JType::Path),
+            )),
             ("Files", "isSameFile") => Some((
                 "java/nio/file/Files",
                 &[
@@ -35035,6 +35089,44 @@ impl BodyGen<'_> {
         if trailing_charset {
             args = &args[..args.len() - 1];
         }
+        // The VARARGS tail of open and copy options. Each has to be written
+        // out, as a `Locale` is: caturra models no value of these types, and
+        // one typed as a value came out `null` and made the whole call
+        // malformed bytecode. They fold to a mask the VM reads, so a write
+        // that says `APPEND` appends rather than silently truncating — which
+        // it did, and a silent wrong answer is the worst kind.
+        let takes_options = class == "Files"
+            && matches!(
+                method,
+                "writeString" | "write" | "copy" | "move" | "newBufferedWriter"
+            );
+        let mut option_mask: u32 = 0;
+        if takes_options && args.len() > params.len() {
+            for option in &args[params.len()..] {
+                let Some(named) = file_option_named(option) else {
+                    self.error(
+                        option.span(),
+                        String::from(
+                            "caturra reads a file option where it is WRITTEN — write it out, \
+                             as StandardOpenOption.APPEND",
+                        ),
+                    );
+                    return None;
+                };
+                let Some(bit) = file_option_bit(named) else {
+                    self.error(
+                        option.span(),
+                        format!(
+                            "Files.{method} exists in Java with {named}, but caturra's \
+                             filesystem cannot answer for that option"
+                        ),
+                    );
+                    return None;
+                };
+                option_mask |= bit;
+            }
+            args = &args[..params.len()];
+        }
         if args.len() != params.len() {
             self.no_suitable_library_method(class, method, args, span);
             return None;
@@ -35046,11 +35138,25 @@ impl BodyGen<'_> {
                 self.error_bail(arg.span(), "argument");
                 return None;
             }
-            // A String is accepted for a CharSequence parameter, and Files.write
-            // takes any list of strings.
+            // A String is accepted for a CharSequence parameter, and
+            // `Files.write` declares an ITERABLE, so any collection of lines
+            // is one: a `TreeSet` of them was "TreeSet<String> cannot be
+            // converted to List<String>" for a call a JDK takes.
             let ok = got == *want
                 || (*want == JType::Str && got == JType::Str)
-                || matches!((want, got), (JType::List { .. }, JType::List { .. }));
+                || matches!(
+                    (want, got),
+                    (
+                        JType::List { .. },
+                        JType::List { .. }
+                            | JType::Set { .. }
+                            | JType::TreeSet(..)
+                            | JType::Collection(_)
+                            | JType::LinkedList { .. }
+                            | JType::Stack(_)
+                            | JType::Vector(_)
+                    )
+                );
             if !ok {
                 self.error(
                     arg.span(),
@@ -35071,6 +35177,13 @@ impl BodyGen<'_> {
             self.expr(charset);
             self.code.push_op(op::POP, 0);
             self.code.drop_stack(1);
+        }
+        // The mask rides as a trailing `int`, always — the VM's arity stays
+        // fixed, and "no options" is the mask every default write already
+        // means.
+        if takes_options {
+            self.push_int(i32::try_from(option_mask).unwrap_or(0));
+            arg_descriptor.push('I');
         }
         let descriptor = format!("({arg_descriptor}){ret_desc}");
         let method_ref = intern_method_ref(self.pool, internal, method, &descriptor);

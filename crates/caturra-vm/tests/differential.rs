@@ -58255,3 +58255,127 @@ public class Small {
 }
 "#
 );
+
+// The options a file write takes, and the two operations caturra had not got.
+// `StandardOpenOption.APPEND` was SILENTLY IGNORED — a write that said append
+// truncated instead — and a `StandardOpenOption` constant typed as a value
+// came out `null`, so the call it was an argument to compiled to malformed
+// bytecode and the program died with "operand stack underflow". Every rule
+// here is a JDK's, measured: APPEND on a missing file is a
+// NoSuchFileException, CREATE alone does NOT truncate (a short write over a
+// long file leaves the tail), CREATE_NEW over an existing file throws, READ
+// is an IllegalArgumentException, and `copy`/`move` refuse an existing target
+// unless REPLACE_EXISTING says otherwise.
+differential_test!(
+    what_a_file_option_changes,
+    "Opt",
+    r#"
+import java.nio.file.*;
+import java.util.*;
+public class Opt {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static Path fresh(String name, String text) throws Exception {
+        Path p = Path.of(name);
+        Files.deleteIfExists(p);
+        if (text != null) { Files.writeString(p, text); }
+        return p;
+    }
+    public static void main(String[] args) throws Exception {
+        r("append", () -> { Path p = fresh("o1.txt", "a");
+            Files.writeString(p, "b", StandardOpenOption.APPEND); return Files.readString(p); });
+        r("append-missing", () -> { Path p = fresh("o2.txt", null);
+            Files.writeString(p, "b", StandardOpenOption.APPEND); return Files.readString(p); });
+        r("truncate", () -> { Path p = fresh("o3.txt", "aaa");
+            Files.writeString(p, "b", StandardOpenOption.TRUNCATE_EXISTING); return Files.readString(p); });
+        r("create-new", () -> { Path p = fresh("o4.txt", "a");
+            Files.writeString(p, "b", StandardOpenOption.CREATE_NEW); return Files.readString(p); });
+        r("create-new-ok", () -> { Path p = fresh("o5.txt", null);
+            Files.writeString(p, "b", StandardOpenOption.CREATE_NEW); return Files.readString(p); });
+        r("create", () -> { Path p = fresh("o6.txt", "aaa");
+            Files.writeString(p, "b", StandardOpenOption.CREATE); return Files.readString(p); });
+        r("read-as-write", () -> { Path p = fresh("o7.txt", "a");
+            Files.writeString(p, "b", StandardOpenOption.READ); return Files.readString(p); });
+        r("write-lines-append", () -> { Path p = fresh("o8.txt", "x\n");
+            Files.write(p, List.of("y"), StandardOpenOption.APPEND); return Files.readAllLines(p); });
+        r("write-lines", () -> { Path p = fresh("o9.txt", null);
+            Files.write(p, List.of("a", "b")); return Files.readAllLines(p); });
+        r("copy", () -> { Path a = fresh("c1.txt", "hi"); Path b = Path.of("c2.txt"); Files.deleteIfExists(b);
+            Files.copy(a, b); return Files.readString(b); });
+        r("copy-exists", () -> { Path a = fresh("c3.txt", "hi"); Path b = fresh("c4.txt", "there");
+            Files.copy(a, b); return Files.readString(b); });
+        r("copy-replace", () -> { Path a = fresh("c5.txt", "hi"); Path b = fresh("c6.txt", "there");
+            Files.copy(a, b, StandardCopyOption.REPLACE_EXISTING); return Files.readString(b); });
+        r("copy-missing", () -> { Path a = Path.of("nope.txt"); Files.deleteIfExists(a);
+            return Files.copy(a, Path.of("c7.txt")); });
+        r("move", () -> { Path a = fresh("m1.txt", "hi"); Path b = Path.of("m2.txt"); Files.deleteIfExists(b);
+            Files.move(a, b); return Files.exists(a) + " " + Files.readString(b); });
+        r("move-exists", () -> { Path a = fresh("m3.txt", "hi"); Path b = fresh("m4.txt", "there");
+            Files.move(a, b); return Files.readString(b); });
+        r("move-replace", () -> { Path a = fresh("m5.txt", "hi"); Path b = fresh("m6.txt", "there");
+            Files.move(a, b, StandardCopyOption.REPLACE_EXISTING); return Files.exists(a) + " " + Files.readString(b); });
+        r("copy-answers", () -> { Path a = fresh("c8.txt", "hi"); Path b = Path.of("c9.txt"); Files.deleteIfExists(b);
+            return Files.copy(a, b).toString(); });
+    }
+}
+"#
+);
+
+// ...and the negative direction: the plain forms answer exactly as before,
+// `Files.write` takes any ITERABLE of lines (a `TreeSet` was "cannot be
+// converted to List<String>"), an immutable list no longer throws
+// NullPointerException, a copy onto ITSELF is the JDK's no-op, and the
+// options compose.
+differential_test!(
+    a_file_write_without_options,
+    "Neg2",
+    r#"
+import java.nio.file.*;
+import java.util.*;
+public class Neg2 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static Path fresh(String name, String text) throws Exception {
+        Path p = Path.of(name);
+        Files.deleteIfExists(p);
+        if (text != null) { Files.writeString(p, text); }
+        return p;
+    }
+    public static void main(String[] args) throws Exception {
+        // The plain forms still behave exactly as before.
+        r("write-read", () -> { Path p = fresh("n1.txt", null); Files.writeString(p, "hi"); return Files.readString(p); });
+        r("overwrite", () -> { Path p = fresh("n2.txt", "aaaa"); Files.writeString(p, "b"); return Files.readString(p); });
+        r("write-lines", () -> { Path p = fresh("n3.txt", null); Files.write(p, List.of("a", "b")); return Files.readAllLines(p); });
+        r("write-lines-set", () -> { Path p = fresh("n4.txt", null); Files.write(p, new TreeSet<>(List.of("b", "a"))); return Files.readAllLines(p); });
+        r("write-lines-arraylist", () -> { Path p = fresh("n5.txt", null); Files.write(p, new ArrayList<>(List.of("a"))); return Files.readAllLines(p); });
+        r("answers-path", () -> { Path p = fresh("n6.txt", null); return Files.writeString(p, "x").toString(); });
+        r("missing-read", () -> { Path p = fresh("n7.txt", null); return Files.readString(p); });
+        r("lines-stream", () -> { Path p = fresh("n8.txt", null); Files.write(p, List.of("a", "bb"));
+            return Files.lines(p).map(String::length).collect(java.util.stream.Collectors.toList()); });
+        // ...and the option forms, including a combination.
+        r("append-then-read", () -> { Path p = fresh("n9.txt", "a");
+            Files.writeString(p, "b", StandardOpenOption.APPEND);
+            Files.writeString(p, "c", StandardOpenOption.APPEND);
+            return Files.readString(p); });
+        r("create-append", () -> { Path p = fresh("na.txt", null);
+            Files.writeString(p, "x", StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            return Files.readString(p); });
+        r("write-truncate", () -> { Path p = fresh("nb.txt", "aaaa");
+            Files.write(p, List.of("b"), StandardOpenOption.TRUNCATE_EXISTING); return Files.readString(p); });
+        r("copy-then-move", () -> { Path a = fresh("nc.txt", "hi"); Path b = Path.of("nd.txt"); Files.deleteIfExists(b);
+            Path c = Path.of("ne.txt"); Files.deleteIfExists(c);
+            Files.copy(a, b); Files.move(b, c);
+            return Files.exists(a) + " " + Files.exists(b) + " " + Files.readString(c); });
+        r("copy-self", () -> { Path a = fresh("nf.txt", "hi"); return Files.copy(a, a); });
+        r("size-after-append", () -> { Path p = fresh("ng.txt", "ab");
+            Files.writeString(p, "cd", StandardOpenOption.APPEND); return Files.size(p); });
+    }
+}
+"#
+);
