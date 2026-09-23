@@ -23009,6 +23009,21 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         _ if class.starts_with("sun/nio/cs/") => {
             &["java/nio/charset/Charset", "java/lang/Comparable"]
         }
+        // The pipeline object a stream IS. caturra models ONE stream object
+        // for all four families — the class name it answers already says so —
+        // so it wears all four faces. A program that stores a stream and
+        // takes it back out (a `List<IntStream>`, a lambda over one) casts to
+        // the face it WROTE, and answering false made ordinary code throw
+        // ClassCastException where a JDK runs it. The cost is the other
+        // direction: `(Stream<String>) anIntStream` succeeds here and throws
+        // in a JDK, which only a program already casting wrongly can see.
+        "java/util/stream/ReferencePipeline$Head" => &[
+            "java/util/stream/Stream",
+            "java/util/stream/IntStream",
+            "java/util/stream/LongStream",
+            "java/util/stream/DoubleStream",
+            "java/util/stream/BaseStream",
+        ],
         _ => &[],
     }
 }

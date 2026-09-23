@@ -15706,6 +15706,52 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A library value a program holds (2026-09-22)
+
+The stream-of-streams the last unit left open, asked as its general question:
+twenty library types — the four stream faces, `Optional`, `Scanner`,
+`Random`, `StringBuilder`, `LocalDate`, `BigInteger`, `Pattern`, `File`,
+`Path`, `Charset`, `UUID`, `BitSet`, `Comparator`, `Iterator`, `Map.Entry`,
+`Duration` — each STORED in a collection and taken back out, four ways. Eight
+of eighty cells were wrong, all in the same two places.
+
+**Taking a value back out is a CAST**, and the list of cast targets that could
+take one was written by hand: eleven collection kinds, and nothing else. So
+`(IntStream) o` — which is what every lambda over a `List<IntStream>` compiles
+to — was "incompatible types: Object cannot be converted to IntStream" for a
+program a JDK runs. The list was never the question; the question is whether
+caturra can NAME the target, which the internal-name table answers, so the
+arm asks that instead. Everything the table does not name — a user class, a
+type variable — still falls through to the arms below it, and a WRAPPER target
+is excluded because a cast to one is an unboxing conversion with its own arm.
+The four stream faces went into the name table beside the collections that
+were already there.
+
+**A stream then had to admit what it is.** caturra models ONE stream object
+for all four families — its `getClass()` already says so, answering
+`ReferencePipeline$Head` for an int pipeline — and it wore no interface at
+all, so the checkcast threw. It wears all four now.
+
+> **Divergence.** `(Stream<String>) anIntStream` succeeds here and throws
+> `ClassCastException` in a JDK, and `anIntStream instanceof Stream` is true
+> here and false there. One object cannot answer for four families, and the
+> alternative was to keep refusing a cast that ordinary code performs. Only a
+> program already casting between stream families can see it; the four
+> families' own methods are unaffected, since each is dispatched by what the
+> stream holds.
+
+Still open, and the same root as the last unit's: the four remaining cells are
+`List.of(x)` where `x` is a library call the lambda pass cannot type —
+`Map.entry("a", 1)`, `Comparator.naturalOrder()`, `list.iterator()`,
+`StandardCharsets.UTF_8`. Each has a type on the emit side and none in the
+reader the element question asks. Asking the call-shaped reader as well was
+tried and changed nothing measured, so the gap is the library-call return
+table itself, which wants its own unit.
+
+Pinned as `a_library_value_a_program_holds` and
+`the_cast_still_decides_at_run_time`.
+
+
 ### A library value written inline (2026-09-22)
 
 The open item the last unit recorded, measured on its own. A library value

@@ -57860,3 +57860,204 @@ public class L6 {
 }
 "#
 );
+
+// Twenty library types, each STORED and taken back out — as a `List`
+// element, as a map value, through a lambda over that list, and written
+// inline. Storing one always worked; taking it back out is a CAST, and the
+// list of targets that could take one was written by hand, so the four
+// stream faces were not on it: `(IntStream) o` — which is what every lambda
+// over a `List<IntStream>` compiles to — was "incompatible types" for a
+// program a JDK runs.
+differential_test!(
+    a_library_value_a_program_holds,
+    "Held",
+    r#"
+public class Held {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName()); }
+    }
+    public static void main(String[] a) {
+        r("IntStream-list", () -> { java.util.List<java.util.stream.IntStream> l = new java.util.ArrayList<>(); l.add(java.util.stream.IntStream.of(1, 2));
+            java.util.stream.IntStream x = l.get(0); return x.sum(); });
+        r("IntStream-map", () -> { java.util.Map<String,java.util.stream.IntStream> m = new java.util.HashMap<>(); m.put("k", java.util.stream.IntStream.of(1, 2));
+            java.util.stream.IntStream x = m.get("k"); return x.sum(); });
+        r("IntStream-lambda", () -> { java.util.List<java.util.stream.IntStream> l = new java.util.ArrayList<>(); l.add(java.util.stream.IntStream.of(1, 2));
+            return l.stream().map(x -> x.sum()).count(); });
+        r("IntStream-inline", () -> java.util.List.of(java.util.stream.IntStream.of(1, 2)).stream().map(x -> x.sum()).count());
+        r("LongStream-list", () -> { java.util.List<java.util.stream.LongStream> l = new java.util.ArrayList<>(); l.add(java.util.stream.LongStream.of(1L));
+            java.util.stream.LongStream x = l.get(0); return x.sum(); });
+        r("LongStream-map", () -> { java.util.Map<String,java.util.stream.LongStream> m = new java.util.HashMap<>(); m.put("k", java.util.stream.LongStream.of(1L));
+            java.util.stream.LongStream x = m.get("k"); return x.sum(); });
+        r("LongStream-lambda", () -> { java.util.List<java.util.stream.LongStream> l = new java.util.ArrayList<>(); l.add(java.util.stream.LongStream.of(1L));
+            return l.stream().map(x -> x.sum()).count(); });
+        r("LongStream-inline", () -> java.util.List.of(java.util.stream.LongStream.of(1L)).stream().map(x -> x.sum()).count());
+        r("DoubleStream-list", () -> { java.util.List<java.util.stream.DoubleStream> l = new java.util.ArrayList<>(); l.add(java.util.stream.DoubleStream.of(1.0));
+            java.util.stream.DoubleStream x = l.get(0); return x.sum(); });
+        r("DoubleStream-map", () -> { java.util.Map<String,java.util.stream.DoubleStream> m = new java.util.HashMap<>(); m.put("k", java.util.stream.DoubleStream.of(1.0));
+            java.util.stream.DoubleStream x = m.get("k"); return x.sum(); });
+        r("DoubleStream-lambda", () -> { java.util.List<java.util.stream.DoubleStream> l = new java.util.ArrayList<>(); l.add(java.util.stream.DoubleStream.of(1.0));
+            return l.stream().map(x -> x.sum()).count(); });
+        r("DoubleStream-inline", () -> java.util.List.of(java.util.stream.DoubleStream.of(1.0)).stream().map(x -> x.sum()).count());
+        r("Stream-list", () -> { java.util.List<java.util.stream.Stream<String>> l = new java.util.ArrayList<>(); l.add(java.util.stream.Stream.of("a"));
+            java.util.stream.Stream<String> x = l.get(0); return x.count(); });
+        r("Stream-map", () -> { java.util.Map<String,java.util.stream.Stream<String>> m = new java.util.HashMap<>(); m.put("k", java.util.stream.Stream.of("a"));
+            java.util.stream.Stream<String> x = m.get("k"); return x.count(); });
+        r("Stream-lambda", () -> { java.util.List<java.util.stream.Stream<String>> l = new java.util.ArrayList<>(); l.add(java.util.stream.Stream.of("a"));
+            return l.stream().map(x -> x.count()).count(); });
+        r("Stream-inline", () -> java.util.List.of(java.util.stream.Stream.of("a")).stream().map(x -> x.count()).count());
+        r("Optional-list", () -> { java.util.List<java.util.Optional<String>> l = new java.util.ArrayList<>(); l.add(java.util.Optional.of("a"));
+            java.util.Optional<String> x = l.get(0); return x.get(); });
+        r("Optional-map", () -> { java.util.Map<String,java.util.Optional<String>> m = new java.util.HashMap<>(); m.put("k", java.util.Optional.of("a"));
+            java.util.Optional<String> x = m.get("k"); return x.get(); });
+        r("Optional-lambda", () -> { java.util.List<java.util.Optional<String>> l = new java.util.ArrayList<>(); l.add(java.util.Optional.of("a"));
+            return l.stream().map(x -> x.get()).count(); });
+        r("Optional-inline", () -> java.util.List.of(java.util.Optional.of("a")).stream().map(x -> x.get()).count());
+        r("Scanner-list", () -> { java.util.List<java.util.Scanner> l = new java.util.ArrayList<>(); l.add(new java.util.Scanner("a"));
+            java.util.Scanner x = l.get(0); return x.next(); });
+        r("Scanner-map", () -> { java.util.Map<String,java.util.Scanner> m = new java.util.HashMap<>(); m.put("k", new java.util.Scanner("a"));
+            java.util.Scanner x = m.get("k"); return x.next(); });
+        r("Scanner-lambda", () -> { java.util.List<java.util.Scanner> l = new java.util.ArrayList<>(); l.add(new java.util.Scanner("a"));
+            return l.stream().map(x -> x.next()).count(); });
+        r("Scanner-inline", () -> java.util.List.of(new java.util.Scanner("a")).stream().map(x -> x.next()).count());
+        r("Random-list", () -> { java.util.List<java.util.Random> l = new java.util.ArrayList<>(); l.add(new java.util.Random(1));
+            java.util.Random x = l.get(0); return x.nextInt(5); });
+        r("Random-map", () -> { java.util.Map<String,java.util.Random> m = new java.util.HashMap<>(); m.put("k", new java.util.Random(1));
+            java.util.Random x = m.get("k"); return x.nextInt(5); });
+        r("Random-lambda", () -> { java.util.List<java.util.Random> l = new java.util.ArrayList<>(); l.add(new java.util.Random(1));
+            return l.stream().map(x -> x.nextInt(5)).count(); });
+        r("Random-inline", () -> java.util.List.of(new java.util.Random(1)).stream().map(x -> x.nextInt(5)).count());
+        r("StringBuilder-list", () -> { java.util.List<StringBuilder> l = new java.util.ArrayList<>(); l.add(new StringBuilder("a"));
+            StringBuilder x = l.get(0); return x.length(); });
+        r("StringBuilder-map", () -> { java.util.Map<String,StringBuilder> m = new java.util.HashMap<>(); m.put("k", new StringBuilder("a"));
+            StringBuilder x = m.get("k"); return x.length(); });
+        r("StringBuilder-lambda", () -> { java.util.List<StringBuilder> l = new java.util.ArrayList<>(); l.add(new StringBuilder("a"));
+            return l.stream().map(x -> x.length()).count(); });
+        r("StringBuilder-inline", () -> java.util.List.of(new StringBuilder("a")).stream().map(x -> x.length()).count());
+        r("LocalDate-list", () -> { java.util.List<java.time.LocalDate> l = new java.util.ArrayList<>(); l.add(java.time.LocalDate.of(2024, 3, 14));
+            java.time.LocalDate x = l.get(0); return x.getYear(); });
+        r("LocalDate-map", () -> { java.util.Map<String,java.time.LocalDate> m = new java.util.HashMap<>(); m.put("k", java.time.LocalDate.of(2024, 3, 14));
+            java.time.LocalDate x = m.get("k"); return x.getYear(); });
+        r("LocalDate-lambda", () -> { java.util.List<java.time.LocalDate> l = new java.util.ArrayList<>(); l.add(java.time.LocalDate.of(2024, 3, 14));
+            return l.stream().map(x -> x.getYear()).count(); });
+        r("LocalDate-inline", () -> java.util.List.of(java.time.LocalDate.of(2024, 3, 14)).stream().map(x -> x.getYear()).count());
+        r("BigInteger-list", () -> { java.util.List<java.math.BigInteger> l = new java.util.ArrayList<>(); l.add(java.math.BigInteger.valueOf(7));
+            java.math.BigInteger x = l.get(0); return x.intValue(); });
+        r("BigInteger-map", () -> { java.util.Map<String,java.math.BigInteger> m = new java.util.HashMap<>(); m.put("k", java.math.BigInteger.valueOf(7));
+            java.math.BigInteger x = m.get("k"); return x.intValue(); });
+        r("BigInteger-lambda", () -> { java.util.List<java.math.BigInteger> l = new java.util.ArrayList<>(); l.add(java.math.BigInteger.valueOf(7));
+            return l.stream().map(x -> x.intValue()).count(); });
+        r("BigInteger-inline", () -> java.util.List.of(java.math.BigInteger.valueOf(7)).stream().map(x -> x.intValue()).count());
+        r("Pattern-list", () -> { java.util.List<java.util.regex.Pattern> l = new java.util.ArrayList<>(); l.add(java.util.regex.Pattern.compile("a"));
+            java.util.regex.Pattern x = l.get(0); return x.pattern(); });
+        r("Pattern-map", () -> { java.util.Map<String,java.util.regex.Pattern> m = new java.util.HashMap<>(); m.put("k", java.util.regex.Pattern.compile("a"));
+            java.util.regex.Pattern x = m.get("k"); return x.pattern(); });
+        r("Pattern-lambda", () -> { java.util.List<java.util.regex.Pattern> l = new java.util.ArrayList<>(); l.add(java.util.regex.Pattern.compile("a"));
+            return l.stream().map(x -> x.pattern()).count(); });
+        r("Pattern-inline", () -> java.util.List.of(java.util.regex.Pattern.compile("a")).stream().map(x -> x.pattern()).count());
+        r("File-list", () -> { java.util.List<java.io.File> l = new java.util.ArrayList<>(); l.add(new java.io.File("a"));
+            java.io.File x = l.get(0); return x.getName(); });
+        r("File-map", () -> { java.util.Map<String,java.io.File> m = new java.util.HashMap<>(); m.put("k", new java.io.File("a"));
+            java.io.File x = m.get("k"); return x.getName(); });
+        r("File-lambda", () -> { java.util.List<java.io.File> l = new java.util.ArrayList<>(); l.add(new java.io.File("a"));
+            return l.stream().map(x -> x.getName()).count(); });
+        r("File-inline", () -> java.util.List.of(new java.io.File("a")).stream().map(x -> x.getName()).count());
+        r("Path-list", () -> { java.util.List<java.nio.file.Path> l = new java.util.ArrayList<>(); l.add(java.nio.file.Path.of("a"));
+            java.nio.file.Path x = l.get(0); return x.toString(); });
+        r("Path-map", () -> { java.util.Map<String,java.nio.file.Path> m = new java.util.HashMap<>(); m.put("k", java.nio.file.Path.of("a"));
+            java.nio.file.Path x = m.get("k"); return x.toString(); });
+        r("Path-lambda", () -> { java.util.List<java.nio.file.Path> l = new java.util.ArrayList<>(); l.add(java.nio.file.Path.of("a"));
+            return l.stream().map(x -> x.toString()).count(); });
+        r("Path-inline", () -> java.util.List.of(java.nio.file.Path.of("a")).stream().map(x -> x.toString()).count());
+        r("Charset-list", () -> { java.util.List<java.nio.charset.Charset> l = new java.util.ArrayList<>(); l.add(java.nio.charset.StandardCharsets.UTF_8);
+            java.nio.charset.Charset x = l.get(0); return x.name(); });
+        r("Charset-map", () -> { java.util.Map<String,java.nio.charset.Charset> m = new java.util.HashMap<>(); m.put("k", java.nio.charset.StandardCharsets.UTF_8);
+            java.nio.charset.Charset x = m.get("k"); return x.name(); });
+        r("Charset-lambda", () -> { java.util.List<java.nio.charset.Charset> l = new java.util.ArrayList<>(); l.add(java.nio.charset.StandardCharsets.UTF_8);
+            return l.stream().map(x -> x.name()).count(); });
+        r("UUID-list", () -> { java.util.List<java.util.UUID> l = new java.util.ArrayList<>(); l.add(java.util.UUID.nameUUIDFromBytes(new byte[]{1}));
+            java.util.UUID x = l.get(0); return x.version(); });
+        r("UUID-map", () -> { java.util.Map<String,java.util.UUID> m = new java.util.HashMap<>(); m.put("k", java.util.UUID.nameUUIDFromBytes(new byte[]{1}));
+            java.util.UUID x = m.get("k"); return x.version(); });
+        r("UUID-lambda", () -> { java.util.List<java.util.UUID> l = new java.util.ArrayList<>(); l.add(java.util.UUID.nameUUIDFromBytes(new byte[]{1}));
+            return l.stream().map(x -> x.version()).count(); });
+        r("UUID-inline", () -> java.util.List.of(java.util.UUID.nameUUIDFromBytes(new byte[]{1})).stream().map(x -> x.version()).count());
+        r("BitSet-list", () -> { java.util.List<java.util.BitSet> l = new java.util.ArrayList<>(); l.add(new java.util.BitSet(8));
+            java.util.BitSet x = l.get(0); return x.size(); });
+        r("BitSet-map", () -> { java.util.Map<String,java.util.BitSet> m = new java.util.HashMap<>(); m.put("k", new java.util.BitSet(8));
+            java.util.BitSet x = m.get("k"); return x.size(); });
+        r("BitSet-lambda", () -> { java.util.List<java.util.BitSet> l = new java.util.ArrayList<>(); l.add(new java.util.BitSet(8));
+            return l.stream().map(x -> x.size()).count(); });
+        r("BitSet-inline", () -> java.util.List.of(new java.util.BitSet(8)).stream().map(x -> x.size()).count());
+        r("Comparator-list", () -> { java.util.List<java.util.Comparator<String>> l = new java.util.ArrayList<>(); l.add(java.util.Comparator.<String>naturalOrder());
+            java.util.Comparator<String> x = l.get(0); return x.compare("a", "b"); });
+        r("Comparator-map", () -> { java.util.Map<String,java.util.Comparator<String>> m = new java.util.HashMap<>(); m.put("k", java.util.Comparator.<String>naturalOrder());
+            java.util.Comparator<String> x = m.get("k"); return x.compare("a", "b"); });
+        r("Comparator-lambda", () -> { java.util.List<java.util.Comparator<String>> l = new java.util.ArrayList<>(); l.add(java.util.Comparator.<String>naturalOrder());
+            return l.stream().map(x -> x.compare("a", "b")).count(); });
+        r("Iterator-list", () -> { java.util.List<java.util.Iterator<String>> l = new java.util.ArrayList<>(); l.add(java.util.List.of("a").iterator());
+            java.util.Iterator<String> x = l.get(0); return x.next(); });
+        r("Iterator-map", () -> { java.util.Map<String,java.util.Iterator<String>> m = new java.util.HashMap<>(); m.put("k", java.util.List.of("a").iterator());
+            java.util.Iterator<String> x = m.get("k"); return x.next(); });
+        r("Iterator-lambda", () -> { java.util.List<java.util.Iterator<String>> l = new java.util.ArrayList<>(); l.add(java.util.List.of("a").iterator());
+            return l.stream().map(x -> x.next()).count(); });
+        r("Entry-list", () -> { java.util.List<java.util.Map.Entry<String,Integer>> l = new java.util.ArrayList<>(); l.add(java.util.Map.entry("a", 1));
+            java.util.Map.Entry<String,Integer> x = l.get(0); return x.getKey(); });
+        r("Entry-map", () -> { java.util.Map<String,java.util.Map.Entry<String,Integer>> m = new java.util.HashMap<>(); m.put("k", java.util.Map.entry("a", 1));
+            java.util.Map.Entry<String,Integer> x = m.get("k"); return x.getKey(); });
+        r("Entry-lambda", () -> { java.util.List<java.util.Map.Entry<String,Integer>> l = new java.util.ArrayList<>(); l.add(java.util.Map.entry("a", 1));
+            return l.stream().map(x -> x.getKey()).count(); });
+        r("Duration-list", () -> { java.util.List<java.time.Duration> l = new java.util.ArrayList<>(); l.add(java.time.Duration.ofHours(2));
+            java.time.Duration x = l.get(0); return x.toHours(); });
+        r("Duration-map", () -> { java.util.Map<String,java.time.Duration> m = new java.util.HashMap<>(); m.put("k", java.time.Duration.ofHours(2));
+            java.time.Duration x = m.get("k"); return x.toHours(); });
+        r("Duration-lambda", () -> { java.util.List<java.time.Duration> l = new java.util.ArrayList<>(); l.add(java.time.Duration.ofHours(2));
+            return l.stream().map(x -> x.toHours()).count(); });
+        r("Duration-inline", () -> java.util.List.of(java.time.Duration.ofHours(2)).stream().map(x -> x.toHours()).count());
+    }
+}
+"#
+);
+
+// ...and the negative direction, which is the whole risk of widening a cast
+// rule: a value that is not of that family still throws
+// ClassCastException, a user class and a library one still cannot be cast to
+// each other's types, `null` still passes, and the casts that were legal
+// before still are.
+differential_test!(
+    the_cast_still_decides_at_run_time,
+    "Neg",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class Neg {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName()); }
+    }
+    static class Pet { String name = "x"; }
+    public static void main(String[] a) {
+        // A cast that must still THROW: the value is not of that family at all.
+        r("string-as-list", () -> { Object o = "x"; return (List<String>) o; });
+        r("list-as-map", () -> { Object o = new ArrayList<String>(); return (Map<String,String>) o; });
+        r("list-as-stream", () -> { Object o = new ArrayList<String>(); return ((IntStream) o).sum(); });
+        r("stream-as-list", () -> { Object o = IntStream.of(1); return (List<String>) o; });
+        r("int-as-string", () -> { Object o = Integer.valueOf(1); return (String) o; });
+        r("user-as-list", () -> { Object o = new Pet(); return (List<String>) o; });
+        r("list-as-user", () -> { Object o = new ArrayList<String>(); return ((Pet) o).name; });
+        // ...and one that must still succeed.
+        r("list-as-list", () -> { Object o = new ArrayList<String>(); return ((List<String>) o).size(); });
+        r("list-as-coll", () -> { Object o = new ArrayList<String>(); return ((Collection<String>) o).size(); });
+        r("stream-round", () -> { Object o = IntStream.of(1, 2); return ((IntStream) o).sum(); });
+        r("str-as-cs", () -> { Object o = "abc"; return ((CharSequence) o).length(); });
+        r("box-as-num", () -> { Object o = Integer.valueOf(1); return ((Number) o).intValue(); });
+        r("null-cast", () -> { Object o = null; return (IntStream) o; });
+        // the checkcast still guards what goes back INTO a typed collection
+        r("holds-type", () -> { List<IntStream> l = new ArrayList<>(); l.add(IntStream.of(1, 2));
+            return l.get(0).sum() + l.size(); });
+    }
+}
+"#
+);

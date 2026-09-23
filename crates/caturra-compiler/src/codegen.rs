@@ -4744,6 +4744,13 @@ fn raw_library_internal(name: &str) -> Option<&'static str> {
         "StringBuilder" => "java/lang/StringBuilder",
         "StringBuffer" => "java/lang/StringBuffer",
         "CharSequence" => "java/lang/CharSequence",
+        // The four stream faces. A stream is a value a program stores and
+        // takes back out — a `List<IntStream>`, a lambda parameter — and
+        // every one of those is a cast that needs the name.
+        "Stream" => "java/util/stream/Stream",
+        "IntStream" => "java/util/stream/IntStream",
+        "LongStream" => "java/util/stream/LongStream",
+        "DoubleStream" => "java/util/stream/DoubleStream",
         _ => return None,
     })
 }
@@ -43917,21 +43924,19 @@ impl BodyGen<'_> {
         // Only `List` had an arm at all, so every other collection target was
         // "cannot cast Object to HashMap<…>" — the ordinary store-in-an-Object
         // and cast-back, refused.
+        //
+        // The kinds were listed by hand here, and the list is not the
+        // question: it is whether caturra can NAME the target, which
+        // `raw_library_internal` answers. Everything it does not name — a
+        // user class, a type variable — still falls through to the arms
+        // below, and a WRAPPER target is excluded because a cast to one is an
+        // unboxing conversion with its own arm further down. Written as a
+        // list, it had no room for `IntStream` and its three siblings, so
+        // `(IntStream) o` — which is what every lambda over a
+        // `List<IntStream>` compiles to — was "incompatible types".
         if source.is_reference()
-            && matches!(
-                target,
-                JType::List { .. }
-                    | JType::Map { .. }
-                    | JType::TreeMap { .. }
-                    | JType::Set { .. }
-                    | JType::TreeSet(_, _)
-                    | JType::LinkedList { .. }
-                    | JType::Collection(_)
-                    | JType::Stack(_)
-                    | JType::Vector(_)
-                    | JType::Hashtable { .. }
-                    | JType::Optional(_)
-            )
+            && target.is_reference()
+            && !matches!(target, JType::Boxed(_))
             && let Some(written) = cast_target_name(ty)
             && let Some(internal) = raw_library_internal(written)
         {
