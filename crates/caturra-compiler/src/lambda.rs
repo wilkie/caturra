@@ -2613,6 +2613,45 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 desugar_expr(r, None, ctx);
             }
             // `map.forEach((k, v) -> ...)`: the SAM is the erased
+            // `dir.list(filter)` / `dir.listFiles(filter)` — a `FileFilter`
+            // is asked about the FILE and a `FilenameFilter` about the
+            // directory AND the name, so which overload a call means is
+            // decided by how many parameters the lambda was written with.
+            // Neither interface was a functional-interface position at all,
+            // so listing the `.txt` files in a directory — as ordinary as
+            // `java.io` gets — was "a lambda or method reference is only
+            // allowed where a functional-interface type is expected".
+            if matches!(method.as_str(), "list" | "listFiles")
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { .. } | Expr::MethodRef { .. })
+                && let Some(r) = receiver.as_deref()
+                && matches!(static_type_of(r, ctx), Some(TypeRef::Named(ref n)) if n == "File")
+            {
+                let file = TypeRef::Named(String::from("File"));
+                let string = TypeRef::Named(String::from("String"));
+                let two = matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 2);
+                let params: Vec<TypeRef> = if two { vec![file, string] } else { vec![file] };
+                let (iface, sam) = if two {
+                    ("__BiFunction", "apply")
+                } else {
+                    ("__Predicate", "test")
+                };
+                if matches!(&args[0], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from(sam),
+                        params: params.clone(),
+                        ret: TypeRef::Boolean,
+                    };
+                    args[0] = method_ref_to_lambda(&args[0], &synth, ctx);
+                }
+                let ret = if two {
+                    TypeRef::Named(String::from("Object"))
+                } else {
+                    TypeRef::Boolean
+                };
+                args[0] = build_erased_lambda(&mut args[0], iface, sam, &ret, &params, None, ctx);
+                return;
+            }
             // `__BiConsumer`, and the lambda's parameter types come from the
             // RECEIVER's declared type arguments. No other target type in
             // caturra is instantiated from its receiver, so this is its own

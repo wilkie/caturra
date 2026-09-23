@@ -15706,6 +15706,35 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A directory listing takes a filter (2026-09-23)
+
+`dir.list(filter)` and `dir.listFiles(filter)` — how a program lists the
+`.txt` files in a directory, and as ordinary as `java.io` gets. Neither filter
+was a functional-interface position at all, so the lambda was "only allowed
+where a functional-interface type is expected". The behaviour sweep could
+never have found it: no argument in its bank can be typed `FileFilter`.
+
+A `FileFilter` is asked about the FILE and a `FilenameFilter` about the
+directory AND the name, so the two take different lambdas — and which overload
+a call means is decided by how many parameters the lambda was written with,
+in the compiler and again in the VM (the synthesized class's own arity says
+which). The filter is called per ENTRY, so the loop lives in the interpreter
+beside the `Matcher` callback: the intrinsic layer cannot call user code.
+
+One thing the second probe caught: a two-argument lambda answers through the
+ERASED `apply`, so its `boolean` comes back as a boxed `Boolean` — and reading
+that as an int said "true" for false as well, which kept every entry. The same
+rule the callback-boxing unit wrote down, met from the other side.
+
+`implements FilenameFilter` is still refused: caturra models the two
+interfaces only as the lambda a listing takes. The refusal says exactly that
+and names the form that works — a reader who has just used the type as a
+lambda should not be told it does not exist.
+
+Pinned as `a_directory_listing_takes_a_filter` and
+`what_a_file_filter_is_asked`.
+
+
 ### When caturra does not run a program (2026-09-23)
 
 The last unit found an ENGINE ABORT by accident, which is the tell that

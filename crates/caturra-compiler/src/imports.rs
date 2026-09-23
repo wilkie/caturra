@@ -1260,6 +1260,16 @@ pub(crate) fn unsupported_nested_reason(outer: &str, nested: &str) -> Option<Str
 /// Only sound once the name has failed to resolve — a user class called
 /// `Stack` shadows the library one, and would have resolved.
 pub(crate) fn unsupported_class_reason(simple: &str) -> Option<String> {
+    // The two filter interfaces are the only unsupported names a program can
+    // USE without naming: `dir.listFiles(f -> …)` compiles the lambda against
+    // them, so a reader who then writes `implements FilenameFilter` has met
+    // the type working and is told it does not exist. Point at the form that
+    // does work rather than at the subset.
+    if matches!(simple, "FileFilter" | "FilenameFilter") {
+        return Some(String::from(
+            "caturra models java.io.FileFilter and FilenameFilter only as the LAMBDA a              listing takes - write dir.listFiles(f -> …) or dir.list((dir, name) -> …)",
+        ));
+    }
     KNOWN_UNSUPPORTED
         .iter()
         .find(|(_, names)| names.contains(&simple))

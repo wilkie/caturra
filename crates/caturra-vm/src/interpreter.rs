@@ -17277,6 +17277,21 @@ impl<'run> Interpreter<'run> {
             return Ok(None);
         }
 
+        // `dir.list(filter)` / `dir.listFiles(filter)` — the filter is asked
+        // about every entry, so the loop has to call user code, which the
+        // intrinsic layer cannot do. The unfiltered forms stay native.
+        if matches!(method_name, "list" | "listFiles")
+            && matches!(
+                self.heap.get(receiver),
+                Some(crate::value::HeapObject::File(_))
+            )
+            && let [JValue::Ref(Some(filter))] = args[..]
+        {
+            let value = self.file_listing_filtered(receiver, filter, method_name == "list")?;
+            frame.stack.push(value);
+            return Ok(None);
+        }
+
         // User instances already returned above; only intrinsics reach here.
         let result = if is_reflect {
             // Class/Field methods need the class table (superclass,
@@ -18562,6 +18577,110 @@ impl<'run> Interpreter<'run> {
             }
         }
         Ok(())
+    }
+
+    /// `dir.list(filter)` / `dir.listFiles(filter)`: the directory's entries,
+    /// each offered to the filter. A `FileFilter` is handed the FILE and a
+    /// `FilenameFilter` the directory and the NAME — which of the two a call
+    /// means was settled when the lambda was compiled, by how many parameters
+    /// it was written with, so the arity of the synthesized class decides it
+    /// here too. A receiver that is not a directory answers `null`, as the
+    /// unfiltered forms do.
+    fn file_listing_filtered(
+        &mut self,
+        receiver: HeapRef,
+        filter: HeapRef,
+        names_only: bool,
+    ) -> Result<JValue, VmError> {
+        use crate::value::HeapObject;
+        let Some(HeapObject::File(path)) = self.heap.get(receiver) else {
+            return Ok(JValue::NULL);
+        };
+        let path = path.clone();
+        let Ok(children) = self.vfs.list_dir(&path) else {
+            return Ok(JValue::NULL);
+        };
+        let by_name = self.functional_arity(filter) == 2;
+        let mut kept: Vec<JValue> = Vec::new();
+        for child in children {
+            let name = child.rsplit('/').next().unwrap_or_default().to_owned();
+            let full = if path.ends_with('/') {
+                format!("{path}{name}")
+            } else {
+                format!("{path}/{name}")
+            };
+            let entry = self.heap.alloc(HeapObject::File(full.clone()));
+            let answered = if by_name {
+                let text = self.heap.alloc_string(&name);
+                let value = self.call_apply_two(
+                    filter,
+                    JValue::Ref(Some(receiver)),
+                    JValue::Ref(Some(text)),
+                )?;
+                // The erased `apply` answers an `Object`, and a `Boolean`
+                // comes back as a REFERENCE (a bare int cannot say which
+                // int-width wrapper it is), so reading it as an int said
+                // "true" for false as well — and every entry was kept.
+                self.is_true(value)
+            } else {
+                self.call_test(filter, JValue::Ref(Some(entry)))?
+            };
+            if answered {
+                kept.push(if names_only {
+                    JValue::Ref(Some(self.heap.alloc_string(&name)))
+                } else {
+                    JValue::Ref(Some(self.heap.alloc(HeapObject::File(full))))
+                });
+            }
+        }
+        let descriptor = if names_only {
+            "[Ljava/lang/String;"
+        } else {
+            "[Ljava/io/File;"
+        };
+        let array = self
+            .heap
+            .alloc(HeapObject::RefArray(String::from(descriptor), kept));
+        Ok(JValue::Ref(Some(array)))
+    }
+
+    /// Whether a value a lambda ANSWERED is Java's `true`: a raw int from a
+    /// primitive-typed body, or a boxed `Boolean` from an erased one.
+    fn is_true(&self, value: JValue) -> bool {
+        match value {
+            JValue::Int(bits) => bits != 0,
+            JValue::Ref(Some(reference)) => matches!(
+                self.heap.get(reference),
+                Some(crate::value::HeapObject::Boxed {
+                    value: JValue::Int(bits),
+                    ..
+                }) if *bits != 0
+            ),
+            _ => false,
+        }
+    }
+
+    /// How many parameters a synthesized functional class takes — which of two
+    /// filter interfaces a lambda was compiled against.
+    fn functional_arity(&self, function: HeapRef) -> usize {
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(function)
+        else {
+            return 1;
+        };
+        let class_name = class_name.to_string();
+        usize::from(
+            self.classes
+                .get(&class_name)
+                .and_then(|class| {
+                    class.methods.iter().find_map(|m| {
+                        let name = class.constant_pool.get_utf8(m.name_index)?;
+                        let descriptor = class.constant_pool.get_utf8(m.descriptor_index)?;
+                        (name == "apply").then(|| descriptor.matches("Ljava/lang/Object;").count())
+                    })
+                })
+                .unwrap_or(1)
+                >= 2,
+        ) + 1
     }
 
     /// `a.compareTo(b)` on a user object. The erased descriptor finds a

@@ -15576,6 +15576,29 @@ const FILE_METHODS: &[BuiltinMethod] = &[
     // themselves, both `null` when the receiver is not a directory.
     bm("list", &[], BRet::StrArray, "()[Ljava/lang/String;"),
     bm("listFiles", &[], BRet::FileArray, "()[Ljava/io/File;"),
+    // ...and the FILTERED forms, which are how a program lists the `.txt`
+    // files in a directory. A `FileFilter` is asked about the file and a
+    // `FilenameFilter` about the directory AND the name, so the two take
+    // different lambdas — and the overload a call means is decided by how
+    // many parameters the lambda was written with.
+    bm(
+        "list",
+        &[BParam::BiFunction],
+        BRet::StrArray,
+        "(Ljava/io/FilenameFilter;)[Ljava/lang/String;",
+    ),
+    bm(
+        "listFiles",
+        &[BParam::Predicate],
+        BRet::FileArray,
+        "(Ljava/io/FileFilter;)[Ljava/io/File;",
+    ),
+    bm(
+        "listFiles",
+        &[BParam::BiFunction],
+        BRet::FileArray,
+        "(Ljava/io/FilenameFilter;)[Ljava/io/File;",
+    ),
 ];
 
 /// `java.time.LocalDate` — the whole of it that is pure calendar arithmetic:

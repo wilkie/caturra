@@ -58491,3 +58491,95 @@ differential_reject!(
     "RejUE",
     "public class RejUE { public static void main(String[] a) { Object[] o = { Nope.FIELD }; System.out.println(o.length); } }"
 );
+
+// `dir.list(filter)` / `dir.listFiles(filter)` — how a program lists the
+// `.txt` files in a directory. Neither filter interface was a
+// functional-interface position at all, so the lambda was "only allowed where
+// a functional-interface type is expected". A `FileFilter` is asked about the
+// FILE and a `FilenameFilter` about the directory AND the name; which
+// overload a call means is decided by how many parameters the lambda was
+// written with, and the filter is called per entry — so the loop lives in the
+// interpreter, where user code can run.
+differential_test!(
+    a_directory_listing_takes_a_filter,
+    "FF",
+    r#"
+import java.io.*;
+import java.util.*;
+public class FF {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static List<String> names(File[] found) {
+        if (found == null) { return null; }
+        List<String> out = new ArrayList<>();
+        for (File f : found) { out.add(f.getName()); }
+        Collections.sort(out);
+        return out;
+    }
+    public static void main(String[] args) throws Exception {
+        new File("fd").mkdirs();
+        new PrintWriter("fd/a.txt").close();
+        new PrintWriter("fd/b.log").close();
+        new File("fd/sub").mkdirs();
+        File dir = new File("fd");
+        r("list", () -> { String[] s = dir.list(); Arrays.sort(s); return Arrays.toString(s); });
+        r("listFiles", () -> names(dir.listFiles()));
+        r("list-filter", () -> { String[] s = dir.list((d, n) -> n.endsWith(".txt")); Arrays.sort(s); return Arrays.toString(s); });
+        r("listFiles-name-filter", () -> names(dir.listFiles((d, n) -> n.endsWith(".txt"))));
+        r("listFiles-file-filter", () -> names(dir.listFiles(f -> f.isDirectory())));
+        r("listFiles-none", () -> names(dir.listFiles(f -> false)));
+        r("list-on-file", () -> { String[] s = new File("fd/a.txt").list(); return s == null ? "null" : Arrays.toString(s); });
+        r("listFiles-on-file", () -> names(new File("fd/a.txt").listFiles()));
+        r("list-missing", () -> { String[] s = new File("nope").list(); return s == null ? "null" : Arrays.toString(s); });
+    }
+}
+"#
+);
+
+// ...and what the filter is actually handed: the directory as the first
+// argument, a real `File` it can measure, a `null` filter meaning no filter,
+// an exception that propagates, a count of the calls (every entry, once), and
+// a method reference. A receiver that is not a directory still answers
+// `null`.
+differential_test!(
+    what_a_file_filter_is_asked,
+    "FF2",
+    r#"
+import java.io.*;
+import java.util.*;
+public class FF2 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName()); }
+    }
+    static List<String> names(File[] found) {
+        if (found == null) { return null; }
+        List<String> out = new ArrayList<>();
+        for (File f : found) { out.add(f.getName()); }
+        Collections.sort(out);
+        return out;
+    }
+    public static void main(String[] args) throws Exception {
+        new File("g/sub").mkdirs();
+        new PrintWriter("g/a.txt").close();
+        new PrintWriter("g/b.log").close();
+        new PrintWriter("g/c.txt").close();
+        File dir = new File("g");
+        r("lambda-two", () -> names(dir.listFiles((d, n) -> n.endsWith(".txt"))));
+        r("lambda-one", () -> names(dir.listFiles(f -> f.getName().endsWith(".log"))));
+        r("uses-dir-arg", () -> names(dir.listFiles((d, n) -> d.getName().equals("g") && n.startsWith("a"))));
+        r("uses-file-arg", () -> names(dir.listFiles(f -> f.length() == 0 && f.isFile())));
+        r("null-filter-names", () -> { String[] s = dir.list(null); Arrays.sort(s); return Arrays.toString(s); });
+        r("filter-throws", () -> names(dir.listFiles(f -> { throw new IllegalStateException("no"); })));
+        r("on-a-file", () -> names(new File("g/a.txt").listFiles(f -> true)));
+        r("missing", () -> names(new File("nope").listFiles(f -> true)));
+        r("counted", () -> { int[] seen = {0}; dir.listFiles(f -> { seen[0]++; return false; }); return seen[0]; });
+        r("method-ref", () -> names(dir.listFiles(File::isDirectory)));
+    }
+}
+"#
+);
