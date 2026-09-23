@@ -116,7 +116,7 @@ fn main() {
                     continue;
                 }
                 if let Ok(bytes) = std::fs::read(entry.path()) {
-                    let _ = vfs.write_file(&name, bytes);
+                    let _ = vfs.seed_file(&name, bytes);
                 }
             }
         }

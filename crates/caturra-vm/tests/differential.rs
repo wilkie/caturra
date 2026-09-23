@@ -343,7 +343,7 @@ fn run_with_caturra_files(
 
     let mut vfs = VirtualFileSystem::new();
     for (name, contents) in files.iter().filter(|(name, _)| !is_source(name)) {
-        vfs.write_file(name, contents.as_bytes().to_vec())
+        vfs.seed_file(name, contents.as_bytes().to_vec())
             .expect("stage data file");
     }
     let mut console = BufferedConsole::with_input(stdin.lines().map(str::to_owned));
@@ -59013,6 +59013,164 @@ public class NB {
         r("isSameFile", () -> Files.isSameFile(p, p) ? 1 : 0);
         r("probeContentType", () -> Files.probeContentType(p).toUpperCase());
         r("deleteIfExists", () -> Files.deleteIfExists(Path.of("nb/none")) ? 1 : 0);
+    }
+}
+"#
+);
+
+// Where a file call can WRITE. caturra's filesystem made the directories above
+// a path on every write, so `new PrintWriter("out/log.txt")` with no `out`
+// wrote the file and made the folder — and so did `Files.writeString`,
+// `Files.write`, `newBufferedWriter`, `FileWriter`, `copy`, `move` and
+// `File.createNewFile`. A JDK writes only INTO a directory that is already
+// there, so every one of those was a program that "worked" here and failed on
+// a JDK: the dangerous direction. The three ways a path can be unwritable —
+// the directory is missing, the directory is a FILE, the path IS a directory —
+// are three different complaints, and each API words them its own way.
+differential_test!(
+    where_a_file_call_can_write,
+    "FW",
+    r#"
+import java.io.File;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Scanner;
+
+public class FW {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) throws Exception {
+        // A directory that is NOT there: every write refuses, and each API
+        // words it its own way.
+        r("writeString", () -> Files.writeString(Path.of("q/nope/a.txt"), "z").toString());
+        r("write-bytes", () -> Files.write(Path.of("q/nope/b.bin"), new byte[] {65}).toString());
+        r("write-lines", () -> Files.write(Path.of("q/nope/c.txt"), List.of("z")).toString());
+        r("newBufferedWriter", () -> { Files.newBufferedWriter(Path.of("q/nope/d.txt")).close(); return "ok"; });
+        r("printWriter", () -> { new PrintWriter("q/nope/e.txt").close(); return "ok"; });
+        r("fileWriter", () -> { new FileWriter("q/nope/f.txt").close(); return "ok"; });
+        r("createNewFile", () -> new File("q/nope/g.txt").createNewFile());
+        r("mkdir", () -> new File("q/nope/deep").mkdir());
+        r("createDirectory", () -> Files.createDirectory(Path.of("q/nope/inner")).toString());
+        r("nothing-was-made", () -> new File("q").exists() + "/" + new File("q/nope").exists());
+        // ...and once it IS there, every one of them works.
+        r("after-mkdirs", () -> { new File("q/yes").mkdirs(); new FileWriter("q/yes/a.txt").close(); return new File("q/yes/a.txt").exists(); });
+        // A path whose parent is a FILE is a different complaint.
+        r("under-a-file-write", () -> { Files.writeString(Path.of("f.txt"), "x"); return Files.writeString(Path.of("f.txt/child"), "y").toString(); });
+        r("under-a-file-writer", () -> { new PrintWriter("f.txt/c2").close(); return "ok"; });
+        r("under-a-file-create", () -> new File("f.txt/c3").createNewFile());
+        r("under-a-file-read", () -> Files.readString(Path.of("f.txt/c4")));
+        r("under-a-file-mkdir", () -> new File("f.txt/c5").mkdir());
+        // ...and so is a path that IS a directory.
+        r("read-a-directory", () -> Files.readString(Path.of("q/yes")));
+        r("bytes-of-a-directory", () -> Files.readAllBytes(Path.of("q/yes")).length);
+        r("lines-of-a-directory", () -> Files.readAllLines(Path.of("q/yes")).size());
+        r("stream-a-directory", () -> Files.lines(Path.of("q/yes")).count());
+        r("write-a-directory", () -> Files.writeString(Path.of("q/yes"), "x").toString());
+        r("print-to-a-directory", () -> { new PrintWriter("q/yes").close(); return "ok"; });
+        r("scan-a-directory", () -> new Scanner(new File("q/yes")).hasNext());
+        r("copy-from-a-directory", () -> Files.copy(Path.of("q/yes"), Path.of("q/copy")).toString());
+    }
+}
+"#
+);
+
+// What a file call TAKES: the byte-array `write` (the overload a program
+// reaches for after `readAllBytes`, which was "byte[] cannot be converted to
+// List<String>" — a complaint about the argument, for an overload that was not
+// there), the depth-limited `walk`, and the option tails this filesystem
+// cannot differ about — `LinkOption.NOFOLLOW_LINKS` and
+// `FileVisitOption.FOLLOW_LINKS`, which were "cannot find symbol". The charset
+// is read where a JDK's signature puts it, BEFORE the options: with both
+// written, the charset was read as an option and refused as one.
+differential_test!(
+    what_a_file_write_takes,
+    "NF",
+    r#"
+import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+public class NF {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static String show(Path p) throws Exception { return Files.readString(p).replace("\n", "|"); }
+    public static void main(String[] args) throws Exception {
+        Files.createDirectories(Path.of("w/a/b/c"));
+        Files.writeString(Path.of("w/top.txt"), "T\n");
+        Files.writeString(Path.of("w/a/mid.txt"), "M\n");
+        Files.writeString(Path.of("w/a/b/deep.txt"), "D\n");
+        Path f = Path.of("w/bytes.bin");
+        r("write-bytes", () -> { Files.write(f, new byte[] {65, 66}); return show(f); });
+        r("write-bytes-truncates", () -> { Files.write(f, new byte[] {67}); return show(f); });
+        r("write-bytes-append", () -> { Files.write(f, new byte[] {68}, StandardOpenOption.APPEND); return show(f); });
+        r("write-bytes-create-new", () -> { Files.write(f, new byte[] {69}, StandardOpenOption.CREATE_NEW); return show(f); });
+        r("write-bytes-empty", () -> { Files.write(Path.of("w/e.bin"), new byte[0]); return Files.size(Path.of("w/e.bin")); });
+        r("write-bytes-returns", () -> Files.write(Path.of("w/r.bin"), new byte[] {70}).getFileName().toString());
+        r("write-bytes-missing-dir", () -> Files.write(Path.of("w/nope/x.bin"), new byte[] {70}).toString());
+        r("write-bytes-read", () -> Arrays.toString(Files.readAllBytes(f)));
+        r("write-bytes-append-missing", () -> Files.write(Path.of("w/gone.bin"), new byte[] {70}, StandardOpenOption.APPEND).toString());
+        r("walk-0", () -> Files.walk(Path.of("w"), 0).count());
+        r("walk-1", () -> Files.walk(Path.of("w"), 1).count());
+        r("walk-2", () -> Files.walk(Path.of("w"), 2).count());
+        r("walk-max", () -> Files.walk(Path.of("w"), Integer.MAX_VALUE).count());
+        r("walk-negative", () -> Files.walk(Path.of("w"), -1).count());
+        r("walk-names", () -> Files.walk(Path.of("w"), 1).map(p -> p.getFileName().toString()).sorted().collect(java.util.stream.Collectors.toList()));
+        r("walk-option", () -> Files.walk(Path.of("w"), FileVisitOption.FOLLOW_LINKS).count());
+        r("walk-depth-option", () -> Files.walk(Path.of("w"), 1, FileVisitOption.FOLLOW_LINKS).count());
+        r("exists-nofollow", () -> Files.exists(Path.of("w/top.txt"), LinkOption.NOFOLLOW_LINKS));
+        r("notExists-nofollow", () -> Files.notExists(Path.of("w/none"), LinkOption.NOFOLLOW_LINKS));
+        r("isDirectory-nofollow", () -> Files.isDirectory(Path.of("w"), LinkOption.NOFOLLOW_LINKS));
+        r("isRegularFile-nofollow", () -> Files.isRegularFile(Path.of("w/top.txt"), LinkOption.NOFOLLOW_LINKS));
+        r("write-lines-charset-opts", () -> { Files.write(Path.of("w/l.txt"), List.of("x"), StandardCharsets.UTF_8, StandardOpenOption.CREATE); return show(Path.of("w/l.txt")); });
+    }
+}
+"#
+);
+
+// ...and what `copy` and `move` do with a DIRECTORY, which reading one as a
+// file turned into "Is a directory". A JDK's `copy` makes an EMPTY directory
+// at the target — one level, which is why the recursive copy every tutorial
+// writes is a walk — and `move` renames the whole subtree.
+differential_test!(
+    copying_a_directory,
+    "CD",
+    r#"
+import java.io.File;
+import java.nio.file.*;
+import java.util.*;
+public class CD {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static String tree(String at) throws Exception {
+        List<String> out = new ArrayList<>();
+        for (Path p : Files.walk(Path.of(at)).toArray(Path[]::new)) { out.add(p.toString()); }
+        Collections.sort(out);
+        return out.toString();
+    }
+    public static void main(String[] args) throws Exception {
+        Files.createDirectories(Path.of("src/inner"));
+        Files.writeString(Path.of("src/a.txt"), "A");
+        Files.writeString(Path.of("src/inner/b.txt"), "B");
+        r("copy-dir", () -> Files.copy(Path.of("src"), Path.of("dst")).toString());
+        r("copy-dir-tree", () -> tree("dst"));
+        r("copy-dir-onto-existing", () -> Files.copy(Path.of("src"), Path.of("dst")).toString());
+        r("copy-dir-replace", () -> Files.copy(Path.of("src"), Path.of("dst"), StandardCopyOption.REPLACE_EXISTING).toString());
+        r("move-dir", () -> Files.move(Path.of("src"), Path.of("moved")).toString());
+        r("move-dir-tree", () -> tree("moved"));
+        r("src-gone", () -> new File("src").exists());
+        r("move-file-onto-dir", () -> { Files.createDirectories(Path.of("d2")); Files.writeString(Path.of("m.txt"), "m"); return Files.move(Path.of("m.txt"), Path.of("d2")).toString(); });
     }
 }
 "#

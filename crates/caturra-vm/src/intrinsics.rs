@@ -10497,9 +10497,37 @@ fn open_failure(error: &crate::vfs::VfsError, path: &str) -> VmError {
         crate::vfs::VfsError::PermissionDenied(_) => throw(format!(
             "java.io.FileNotFoundException: {path} (Permission denied)"
         )),
+        // A path whose PARENT is a file, which a JDK words differently from
+        // one whose parent is not there at all.
+        crate::vfs::VfsError::NotADirectory(_) => throw(format!(
+            "java.io.FileNotFoundException: {path} (Not a directory)"
+        )),
+        crate::vfs::VfsError::IsDirectory(_) => throw(format!(
+            "java.io.FileNotFoundException: {path} (Is a directory)"
+        )),
         _ => throw(format!(
             "java.io.FileNotFoundException: {path} (No such file or directory)"
         )),
+    }
+}
+
+/// The same failure, as `java.nio.file` words it: the directory above the path
+/// is missing (a `NoSuchFileException` naming the path) or is a FILE (a
+/// `FileSystemException` saying so). Both reach a program as an `IOException`,
+/// which is what a `Files` call declares — but the CLASS and the message are
+/// what a program prints.
+fn nio_open_failure(error: &crate::vfs::VfsError, path: &str) -> VmError {
+    match error {
+        crate::vfs::VfsError::IsDirectory(_) => throw(format!(
+            "java.nio.file.FileSystemException: {path}: Is a directory"
+        )),
+        crate::vfs::VfsError::NotADirectory(_) => throw(format!(
+            "java.nio.file.FileSystemException: {path}: Not a directory"
+        )),
+        crate::vfs::VfsError::NotFound(_) => {
+            throw(format!("java.nio.file.NoSuchFileException: {path}"))
+        }
+        other => throw(format!("java.io.IOException: {other}")),
     }
 }
 
@@ -10573,11 +10601,23 @@ fn file_method(
             boolean(ready && !vfs.exists(&path) && vfs.mkdir(&path).is_ok())
         }
         "mkdirs" => boolean(!vfs.exists(&path) && vfs.mkdir(&path).is_ok()),
+        // `createNewFile` answers whether it MADE the file, and throws when it
+        // could not — a directory that is not there is an IOException, not a
+        // `false`, and the message names the reason rather than the path.
         "createNewFile" => {
             if vfs.exists(&path) {
                 boolean(false)
             } else {
-                boolean(vfs.write_file(&path, Vec::new()).is_ok())
+                match vfs.write_file(&path, Vec::new()) {
+                    Ok(()) => boolean(true),
+                    Err(crate::vfs::VfsError::NotADirectory(_)) => {
+                        Err(throw("java.io.IOException: Not a directory"))
+                    }
+                    Err(crate::vfs::VfsError::NotFound(_)) => {
+                        Err(throw("java.io.IOException: No such file or directory"))
+                    }
+                    Err(_) => boolean(false),
+                }
             }
         }
         // Java returns long; caturra surfaces int (virtual files are small).
@@ -14140,7 +14180,7 @@ fn write_with_options(
         content.extend_from_slice(bytes);
     }
     vfs.write_file(path, content)
-        .map_err(|e| throw(format!("java.io.IOException: {e}")))
+        .map_err(|e| nio_open_failure(&e, path))
 }
 
 /// `java.nio.file.Files` static methods, over the virtual filesystem.
@@ -14154,15 +14194,33 @@ fn files_static(
 ) -> Result<Option<JValue>, VmError> {
     let path = path_arg(heap, &args[0])?;
     let not_found = || throw(format!("java.nio.file.NoSuchFileException: {path}"));
+    // What a READ says when the path is not a file it can read: absent, a
+    // DIRECTORY (`IOException: Is a directory`, a JDK's words), or under a
+    // file. Every read below answered "no such file" for all three, so a
+    // program that handed `Files.readString` a folder was told the folder was
+    // not there.
+    let read_failure = |error: &crate::vfs::VfsError| match error {
+        crate::vfs::VfsError::IsDirectory(_) => throw("java.io.IOException: Is a directory"),
+        crate::vfs::VfsError::NotADirectory(_) => throw(format!(
+            "java.nio.file.FileSystemException: {path}: Not a directory"
+        )),
+        _ => not_found(),
+    };
     match method {
         "readString" => {
-            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            let content = vfs
+                .read_file(&path)
+                .map_err(|error| read_failure(&error))?
+                .to_vec();
             let text = String::from_utf8_lossy(&content).into_owned();
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
         }
         // The same bytes `readString` decodes, handed over raw.
         "readAllBytes" => {
-            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            let content = vfs
+                .read_file(&path)
+                .map_err(|error| read_failure(&error))?
+                .to_vec();
             #[allow(clippy::cast_possible_wrap)]
             let bytes: Vec<i8> = content.iter().map(|b| *b as i8).collect();
             Ok(Some(JValue::Ref(Some(
@@ -14247,12 +14305,29 @@ fn files_static(
         // a program reaches for to count or sift a whole tree, and it is the
         // one recursive walk the filesystem can answer without a visitor.
         "walk" => {
+            // `walk(start, maxDepth)` — how many levels BELOW the start to
+            // read: zero answers the start alone, and a negative depth is a
+            // JDK's IllegalArgumentException, checked before the filesystem
+            // is touched (a missing start with a negative depth complains
+            // about the depth).
+            let max_depth = match args.get(1) {
+                Some(JValue::Int(depth)) => *depth,
+                _ => i32::MAX,
+            };
+            if max_depth < 0 {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: 'maxDepth' is negative",
+                ));
+            }
             if !vfs.exists(&path) {
                 return Err(not_found());
             }
             let mut found = vec![path.clone()];
-            let mut pending = vec![path.clone()];
-            while let Some(dir) = pending.pop() {
+            let mut pending = vec![(path.clone(), 0_i32)];
+            while let Some((dir, depth)) = pending.pop() {
+                if depth >= max_depth {
+                    continue;
+                }
                 let Ok(entries) = vfs.list_dir(&dir) else {
                     continue;
                 };
@@ -14266,7 +14341,7 @@ fn files_static(
                         format!("{}/{tail}", dir.trim_end_matches('/'))
                     };
                     if vfs.is_directory(&written) {
-                        pending.push(written.clone());
+                        pending.push((written.clone(), depth + 1));
                     }
                     found.push(written);
                 }
@@ -14314,7 +14389,10 @@ fn files_static(
         // It reads the file NOW, as every other reader here does; a JDK opens
         // it now too, which is why a missing file fails at this call.
         "newBufferedReader" => {
-            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            let content = vfs
+                .read_file(&path)
+                .map_err(|error| read_failure(&error))?
+                .to_vec();
             let reader = heap.alloc(HeapObject::Reader {
                 buffer: String::from_utf8_lossy(&content).into_owned(),
                 pos: 0,
@@ -14349,7 +14427,7 @@ fn files_static(
                 }
             } else {
                 vfs.write_file(&path, Vec::new())
-                    .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+                    .map_err(|e| nio_open_failure(&e, &path))?;
             }
             let target = heap.alloc(HeapObject::Writer {
                 path: path.clone(),
@@ -14365,7 +14443,10 @@ fn files_static(
             Ok(Some(JValue::Ref(Some(writer))))
         }
         "readAllLines" => {
-            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            let content = vfs
+                .read_file(&path)
+                .map_err(|error| read_failure(&error))?
+                .to_vec();
             let text = String::from_utf8_lossy(&content).into_owned();
             let lines: Vec<JValue> = text
                 .lines()
@@ -14379,7 +14460,18 @@ fn files_static(
         // closeable; this one reads at once, which a program that counts,
         // filters or collects the lines cannot tell apart.
         "lines" => {
-            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            // A JDK opens the file here and reads it as the stream is pulled,
+            // so a directory's failure surfaces WRAPPED — the stream's own
+            // `UncheckedIOException` around the `IOException` a read throws.
+            let content = vfs
+                .read_file(&path)
+                .map_err(|error| match error {
+                    crate::vfs::VfsError::IsDirectory(_) => {
+                        throw("java.io.UncheckedIOException: java.io.IOException: Is a directory")
+                    }
+                    other => read_failure(&other),
+                })?
+                .to_vec();
             let text = String::from_utf8_lossy(&content).into_owned();
             let lines: Vec<JValue> = text
                 .lines()
@@ -14400,6 +14492,17 @@ fn files_static(
             // IMMUTABLE one is the ordinary way to write them inline:
             // reading only a mutable list's vector made
             // `Files.write(p, List.of("a"))` a NullPointerException.
+            // `write(path, bytes)` — the byte-array overload, which is the
+            // one a program reaches for after `readAllBytes`. The same call
+            // name answers both, so what the argument IS decides: an array of
+            // bytes writes those bytes, and anything walkable writes lines.
+            if let Some(JValue::Ref(Some(reference))) = args.get(1)
+                && let Some(HeapObject::ByteArray(bytes)) = heap.get(*reference)
+            {
+                let bytes: Vec<u8> = bytes.iter().map(|b| b.cast_unsigned()).collect();
+                write_with_options(vfs, &path, &bytes, option_mask(args.get(2)))?;
+                return Ok(Some(args[0]));
+            }
             let lines = match args.get(1) {
                 Some(JValue::Ref(Some(reference))) => heap
                     .list_values(heap.unwrapped(*reference))
@@ -14425,20 +14528,54 @@ fn files_static(
         "copy" | "move" => {
             let target = path_arg(heap, args.get(1).unwrap_or(&JValue::NULL))?;
             let mask = option_mask(args.get(2));
-            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            // A DIRECTORY is copied and moved differently, and reading it as
+            // a file said "Is a directory" for a call a JDK takes: `copy`
+            // makes an EMPTY directory at the target (the entries are not
+            // copied — a JDK copies one level, which is why the recursive
+            // copy every tutorial writes is a walk), and `move` renames the
+            // whole subtree.
+            let directory = vfs.is_directory(&path);
+            let content = if directory {
+                Vec::new()
+            } else {
+                vfs.read_file(&path)
+                    .map_err(|error| read_failure(&error))?
+                    .to_vec()
+            };
             // Copying or moving a file onto ITSELF is a JDK no-op that
             // answers the target — it checks `isSameFile` before anything
             // else, so the "already exists" complaint never reaches it.
             if target == path {
                 return Ok(args.get(1).copied());
             }
-            if vfs.exists(&target) && mask & OPTION_REPLACE_EXISTING == 0 {
-                return Err(throw(format!(
-                    "java.nio.file.FileAlreadyExistsException: {target}"
-                )));
+            if vfs.exists(&target) {
+                if mask & OPTION_REPLACE_EXISTING == 0 {
+                    return Err(throw(format!(
+                        "java.nio.file.FileAlreadyExistsException: {target}"
+                    )));
+                }
+                // REPLACE_EXISTING makes room for the new entry, and a
+                // directory with anything in it refuses to be the one
+                // replaced — a JDK's `DirectoryNotEmptyException`.
+                if vfs.remove(&target).is_err() {
+                    return Err(throw(format!(
+                        "java.nio.file.DirectoryNotEmptyException: {target}"
+                    )));
+                }
+            }
+            if directory {
+                if method == "move" {
+                    return vfs
+                        .rename(&path, &target)
+                        .map(|()| args.get(1).copied())
+                        .map_err(|e| nio_open_failure(&e, &target));
+                }
+                vfs.mkdir(&target)
+                    .map_err(|e| nio_open_failure(&e, &target))?;
+                return Ok(args.get(1).copied());
             }
             vfs.write_file(&target, content)
-                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+                .map_err(|e| nio_open_failure(&e, &target))?;
             if method == "move" {
                 let _ = vfs.remove(&path);
             }

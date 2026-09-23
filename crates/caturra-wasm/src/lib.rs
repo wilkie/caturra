@@ -674,7 +674,7 @@ impl JvmSession {
     #[wasm_bindgen(js_name = writeFile)]
     pub fn write_file(&mut self, path: &str, contents: &[u8]) -> Result<(), JsValue> {
         self.vfs
-            .write_file(path, contents.to_vec())
+            .seed_file(path, contents.to_vec())
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 

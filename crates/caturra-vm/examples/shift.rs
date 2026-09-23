@@ -81,7 +81,7 @@ fn main() {
         image.extend_from_slice(&[shade, shade.wrapping_add(85), shade.wrapping_add(170)]);
     }
     let mut vfs = caturra_vm::VirtualFileSystem::new();
-    vfs.write_file("__caturra_image_electricguitars.jpg", image)
+    vfs.seed_file("__caturra_image_electricguitars.jpg", image)
         .expect("write image");
     let mut console = caturra_vm::BufferedConsole::with_input(Vec::<String>::new());
     let mut vm = caturra_vm::Vm::new(caturra_vm::VmOptions::default(), &mut vfs, &mut console);

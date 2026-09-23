@@ -333,7 +333,7 @@ fn run_neighborhood(source: &str, main: &str, grid: &str) -> String {
         compilation.diagnostics
     );
     let mut vfs = VirtualFileSystem::new();
-    vfs.write_file("grid.txt", grid.as_bytes().to_vec())
+    vfs.seed_file("grid.txt", grid.as_bytes().to_vec())
         .expect("seed grid");
     let mut console = BufferedConsole::new();
     let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
@@ -4550,8 +4550,7 @@ fn neighborhood_emits_javabuilder_message_stream() {
     }]);
     assert!(compilation.success(), "{:?}", compilation.diagnostics);
     let mut vfs = VirtualFileSystem::new();
-    vfs.write_file("grid.txt", grid.as_bytes().to_vec())
-        .unwrap();
+    vfs.seed_file("grid.txt", grid.as_bytes().to_vec()).unwrap();
     let mut console = BufferedConsole::new();
     let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
     for class in compilation.classes {
@@ -7420,7 +7419,9 @@ fn vfs_seeded_files_are_visible_to_java() {
     assert!(compilation.success(), "{:?}", compilation.diagnostics);
 
     let mut vfs = VirtualFileSystem::new();
-    vfs.write_file("/data/input.txt", "5 10 15 20".as_bytes().to_vec())
+    // The HOST's door: seeding a file before the program runs makes the
+    // directories above it, because there is no program to have made them.
+    vfs.seed_file("/data/input.txt", "5 10 15 20".as_bytes().to_vec())
         .unwrap();
     let mut console = BufferedConsole::new();
     let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
@@ -12366,7 +12367,7 @@ fn closing_a_file_scanner_leaves_standard_in_open() {
     }]);
     assert!(compilation.success(), "{:?}", compilation.diagnostics);
     let mut vfs = VirtualFileSystem::new();
-    vfs.write_file("d.txt", b"inFile more".to_vec()).unwrap();
+    vfs.seed_file("d.txt", b"inFile more".to_vec()).unwrap();
     let mut console = BufferedConsole::with_input(["fromStdin"]);
     let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
     for class in compilation.classes {
@@ -13271,7 +13272,7 @@ fn image_reads_real_pixels_and_writes_edits_back() {
     bytes.extend_from_slice(&2u32.to_le_bytes());
     bytes.extend_from_slice(&1u32.to_le_bytes());
     bytes.extend_from_slice(&[255, 0, 0, 0, 255, 0]);
-    vfs.write_file("__caturra_image_photo.jpg", bytes).unwrap();
+    vfs.seed_file("__caturra_image_photo.jpg", bytes).unwrap();
 
     let source = r#"
         import org.code.theater.*;

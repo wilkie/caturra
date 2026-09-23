@@ -64,10 +64,10 @@ fn main() {
         .unwrap_or_else(|| find_main(&files).unwrap_or_default());
     let mut vfs = caturra_vm::VirtualFileSystem::new();
     if !grid.is_empty() {
-        vfs.write_file("grid.txt", grid.into_bytes()).unwrap();
+        vfs.seed_file("grid.txt", grid.into_bytes()).unwrap();
     }
     for (name, text) in &data {
-        vfs.write_file(name, text.clone().into_bytes()).unwrap();
+        vfs.seed_file(name, text.clone().into_bytes()).unwrap();
     }
     // Dummy stdin so Scanner-input levels run; a low budget so an infinite
     // loop trips quickly (the playground's real 500M budget stops it just as

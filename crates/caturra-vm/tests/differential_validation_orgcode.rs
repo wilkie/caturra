@@ -902,7 +902,7 @@ fn run_with_caturra(name: &str, level: &Level) -> String {
         .expect("caturra found no tests");
     let mut vfs = VirtualFileSystem::new();
     if let Some(grid) = level.grid {
-        vfs.write_file("grid.txt", grid.trim().to_owned())
+        vfs.seed_file("grid.txt", grid.trim().to_owned())
             .expect("write grid");
     }
     let mut console = BufferedConsole::with_input(Vec::<String>::new());

@@ -6285,6 +6285,23 @@ fn nested_map_entry(elem: ElemType, table: &MethodTable) -> Option<(ElemType, El
 /// day a bundled library declared its own `Runnable` an anonymous class
 /// started implementing `__Runnable` while the method taking it expected the
 /// other one.
+/// `Files.write(path, bytes)` — the BYTE-ARRAY overload beside the `Iterable`
+/// one. Both are spelled `write`, so [`nio_plan`]'s row, which is keyed by the
+/// name alone, cannot say which a call means: the ARGUMENT does. Written
+/// without this the byte form was "incompatible types: byte[] cannot be
+/// converted to List<String>" — a complaint about the argument, for an
+/// overload that simply was not there.
+const WRITE_BYTES_PARAMS: &[(JType, &str)] = &[
+    (JType::Path, "Ljava/nio/file/Path;"),
+    (
+        JType::Array {
+            elem: ElemType::Byte,
+            dims: 1,
+        },
+        "[B",
+    ),
+];
+
 /// One row of [`nio_plan`]: the class the call lands on, the arguments it
 /// takes (each with the descriptor it is passed as), the descriptor it answers
 /// and the type that answer has (`None` for a `void` one).
@@ -6918,7 +6935,7 @@ fn file_option_named(arg: &Expr) -> Option<&str> {
             if path.len() >= 2
                 && matches!(
                     path[path.len() - 2].as_str(),
-                    "StandardOpenOption" | "StandardCopyOption" | "LinkOption"
+                    "StandardOpenOption" | "StandardCopyOption" | "LinkOption" | "FileVisitOption"
                 ) =>
         {
             Some(path[path.len() - 1].as_str())
@@ -6942,7 +6959,9 @@ fn file_option_bit(named: &str) -> Option<u32> {
         // The options that ask for nothing this filesystem can differ about:
         // `WRITE` is what every one of these calls already does, and there
         // are no links to follow and no attributes to copy.
-        "WRITE" | "NOFOLLOW_LINKS" | "COPY_ATTRIBUTES" | "ATOMIC_MOVE" => 0,
+        // ...and there are no links to FOLLOW either, which is what
+        // `Files.walk(start, FileVisitOption.FOLLOW_LINKS)` asks for.
+        "WRITE" | "NOFOLLOW_LINKS" | "COPY_ATTRIBUTES" | "ATOMIC_MOVE" | "FOLLOW_LINKS" => 0,
         _ => return None,
     })
 }
@@ -35177,13 +35196,6 @@ impl BodyGen<'_> {
             // A `Files` method caturra has NOT modelled says so by name: the
             // four below want types it has none of, and "no suitable method
             // found" reads as a bug for methods the documentation shows.
-            if let Some(reason) = unsupported_member(class, method) {
-                self.error(
-                    span,
-                    format!("{class}.{method} exists in Java, but {reason}"),
-                );
-                return None;
-            }
             // A method caturra does not model says SO, rather than letting
             // javac's "no suitable method found" suggest the arguments were
             // the problem.
@@ -35213,13 +35225,96 @@ impl BodyGen<'_> {
         // count honest. (A file WRITTEN in one charset and read back in
         // another is the one shape this cannot model, and no JDK program that
         // uses a single charset can tell.)
-        let original_args = args;
+        // ...and the byte-array `write`, chosen by what the second argument
+        // IS. Everything after it — the charset, the options — reads exactly
+        // as it does for the `Iterable` form. Read BEFORE the tail is split,
+        // because it is what says where the tail starts.
+        let mut params = params;
+        if class == "Files"
+            && method == "write"
+            && matches!(
+                args.get(1).map(|arg| self.type_of(arg)),
+                Some(JType::Array {
+                    elem: ElemType::Byte,
+                    dims: 1
+                })
+            )
+        {
+            params = WRITE_BYTES_PARAMS;
+        }
+        // Everything past the declared parameters, in the order a JDK's
+        // signature writes it: the CHARSET first (`write(path, lines, UTF_8,
+        // CREATE)` is one call, and reading the charset only as the LAST
+        // argument made it an option and the complaint "write it out, as
+        // StandardOpenOption.APPEND" — about a charset), then a walk's DEPTH,
+        // then the options.
         let mut args = args;
-        let trailing_charset = args.len() == params.len() + 1
-            && class == "Files"
-            && matches!(args.last().map(|a| self.type_of(a)), Some(JType::Charset));
-        if trailing_charset {
-            args = &args[..args.len() - 1];
+        let mut charset_arg: Option<&Expr> = None;
+        if class == "Files"
+            && args.len() > params.len()
+            && matches!(self.type_of(&args[params.len()]), JType::Charset)
+        {
+            charset_arg = Some(&args[params.len()]);
+        }
+        // `Files.walk(start, maxDepth)` — the depth-limited form, whose
+        // argument is a real one: it rides to the VM, where a JDK's rule that
+        // a NEGATIVE depth is an IllegalArgumentException lives. Written
+        // without it the depth is `Integer.MAX_VALUE`, which is what a JDK's
+        // one-argument `walk` passes.
+        let mut walk_depth: Option<&Expr> = None;
+        if class == "Files"
+            && method == "walk"
+            && args.len() > params.len()
+            && matches!(self.type_of(&args[params.len()]), JType::Int)
+        {
+            walk_depth = Some(&args[params.len()]);
+        }
+        // The option tails this filesystem cannot differ about: a `LinkOption`
+        // asks about a link rather than its target and a `FileVisitOption`
+        // asks to follow one, and there are no links here — so the option
+        // changes nothing, exactly as it changes nothing for a JDK on a plain
+        // file. The NAME is still read, so one caturra could not honour would
+        // be refused rather than ignored, and it is not passed on: these calls
+        // keep the arity the VM answers.
+        let ignores_options = class == "Files"
+            && matches!(
+                method,
+                "exists" | "notExists" | "isDirectory" | "isRegularFile" | "walk"
+            );
+        // Where the OPTIONS start: past the declared parameters, the charset
+        // and a walk's depth — each of which is read above, and none of which
+        // is one.
+        let tail_at =
+            params.len() + usize::from(charset_arg.is_some()) + usize::from(walk_depth.is_some());
+        if ignores_options && args.len() > params.len() {
+            for option in &args[tail_at.min(args.len())..] {
+                let Some(named) = file_option_named(option) else {
+                    self.error(
+                        option.span(),
+                        String::from(
+                            "caturra reads a file option where it is WRITTEN — write it out, \
+                             as LinkOption.NOFOLLOW_LINKS",
+                        ),
+                    );
+                    return None;
+                };
+                let Some(_) = file_option_bit(named) else {
+                    self.error(
+                        option.span(),
+                        format!(
+                            "Files.{method} exists in Java with {named}, but caturra's \
+                             filesystem cannot answer for that option"
+                        ),
+                    );
+                    return None;
+                };
+            }
+            args = &args[..params.len()];
+        }
+        // A charset with no options after it: the same shortening the option
+        // loops do, for the call that has only the charset in its tail.
+        if charset_arg.is_some() && args.len() > params.len() {
+            args = &args[..params.len()];
         }
         // The VARARGS tail of open and copy options. Each has to be written
         // out, as a `Locale` is: caturra models no value of these types, and
@@ -35234,7 +35329,7 @@ impl BodyGen<'_> {
             );
         let mut option_mask: u32 = 0;
         if takes_options && args.len() > params.len() {
-            for option in &args[params.len()..] {
+            for option in &args[tail_at.min(args.len())..] {
                 let Some(named) = file_option_named(option) else {
                     self.error(
                         option.span(),
@@ -35302,13 +35397,25 @@ impl BodyGen<'_> {
             }
             arg_descriptor.push_str(desc);
         }
-        if trailing_charset {
+        if let Some(charset) = charset_arg {
             // Evaluated for its own failure, then dropped: the call below takes
             // the arguments the VM knows.
-            let charset = &original_args[original_args.len() - 1];
             self.expr(charset);
             self.code.push_op(op::POP, 0);
             self.code.drop_stack(1);
+        }
+        // The walk's depth rides after the path, always — the VM's arity
+        // stays fixed, and "no depth" is the `Integer.MAX_VALUE` a JDK's
+        // one-argument form passes.
+        if class == "Files" && method == "walk" {
+            match walk_depth {
+                Some(depth) => {
+                    let got = self.expr(depth);
+                    self.numeric_conversion(got, JType::Int);
+                }
+                None => self.push_int(i32::MAX),
+            }
+            arg_descriptor.push('I');
         }
         // The mask rides as a trailing `int`, always — the VM's arity stays
         // fixed, and "no options" is the mask every default write already

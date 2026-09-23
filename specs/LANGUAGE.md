@@ -15706,6 +15706,66 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### Where a file call can write (2026-09-23)
+
+The three refusals the last unit wrote down — `Files.write(path, byte[])`,
+`Files.walk(path, depth)`, `LinkOption.NOFOLLOW_LINKS` /
+`FileVisitOption.FOLLOW_LINKS` — are ordinary Java, and they work now. The
+byte-array `write` is the overload a program reaches for after `readAllBytes`
+and was "incompatible types: byte[] cannot be converted to List<String>", a
+complaint about the argument for an overload that was not there. The depth
+rides to the VM, where a JDK's rule that a NEGATIVE depth is an
+`IllegalArgumentException` lives. The two option constants ask for something
+this filesystem has no links to do, so they are read by NAME and change
+nothing — as they change nothing for a JDK on a plain file.
+
+Reading the tail in the order a JDK's SIGNATURE writes it was the third of
+those: `Files.write(path, lines, UTF_8, CREATE)` is one call, and the charset
+was recognised only as the LAST argument — so with an option after it the
+charset was read as an option and refused as one.
+
+**And then the thing the probe was not looking for.** Writing into a directory
+that does not exist: caturra's filesystem MADE the directory, on every write
+path there is. `new PrintWriter("out/log.txt")` with no `out` directory wrote
+the file and made the folder; so did `Files.writeString`, `Files.write`,
+`newBufferedWriter`, `FileWriter` and `File.createNewFile`. A JDK writes only
+into a directory that is already there. Every one of those was a program that
+worked here and failed on a JDK — the dangerous direction, and silent.
+
+A write is strict now (`VirtualFileSystem::write_file`), and a HOST seeding
+the filesystem before a program runs has a door of its own (`seed_file`) —
+the playground's assets and a sweep's inputs have no program to have made
+their directories. The three ways a path can be unwritable are three
+different complaints, each as its own API words them, and they were all one
+before:
+
+- the directory is MISSING — `NoSuchFileException: out/log.txt` (naming the
+  file), `FileNotFoundException: out/log.txt (No such file or directory)`,
+  `IOException: No such file or directory` from `createNewFile`;
+- the directory is a FILE — `FileSystemException: f.txt/child: Not a
+  directory`, `(Not a directory)`, `IOException: Not a directory`;
+- the path IS a directory — `IOException: Is a directory` for every read,
+  wrapped in an `UncheckedIOException` for `Files.lines`,
+  `FileSystemException: d: Is a directory` for a write, `(Is a directory)`
+  for a `PrintWriter` or a `Scanner`.
+
+Reading one of those said "no such file" for all three, so a program handed a
+FOLDER was told the folder was not there — and a write onto a directory
+answered `java.io.IOException: is a directory: /d`, which is neither a JDK's
+class nor its words, and leaked the filesystem's own absolute path.
+
+`copy` and `move` of a DIRECTORY came out of the same probe: reading one as a
+file said "Is a directory" for a call a JDK takes. A JDK's `copy` makes an
+EMPTY directory at the target — one level, which is why the recursive copy
+every tutorial writes is a walk — and `move` renames the whole subtree.
+
+One divergence is left and is deliberate: `Files.size(directory)` answers 0
+here and 4096 on a Linux JDK. That number is the filesystem's block size, not
+a fact about Java, and caturra's directories occupy nothing.
+
+Pinned as `where_a_file_call_can_write`, `what_a_file_write_takes` and
+`copying_a_directory`.
+
 ### What a file call answers (2026-09-23)
 
 The never-compared list left by the last unit had `java.nio.file` all over it,

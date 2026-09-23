@@ -118,7 +118,7 @@ fn one(case: &Path, packed: &Path) -> Option<(String, String)> {
 
     let mut vfs = VirtualFileSystem::new();
     for (file, bytes) in extras.into_iter().chain(assets) {
-        let _ = vfs.write_file(&file, bytes);
+        let _ = vfs.seed_file(&file, bytes);
     }
     let mut console = BufferedConsole::with_input(Vec::<String>::new());
     let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);

@@ -6660,7 +6660,10 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // ...and `Files.list(dir)` / `Files.walk(start)`, whose elements are
     // PATHS, so a lambda over one knows what it is handed.
     if matches!(method.as_str(), "list" | "walk")
-        && args.len() == 1
+        // `walk(start, maxDepth)` and the option tail after it are the same
+        // walk: reading only the one-argument form left the depth-limited one
+        // with no element, so the lambda after it had no position to sit in.
+        && !args.is_empty()
         && names_library_class(prev.as_ref(), "Files")
     {
         return Some(TypeRef::Named(String::from("Path")));

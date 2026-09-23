@@ -512,7 +512,7 @@ fn run_with_caturra(class_name: &str, source: &str, grid: &str) -> String {
         compilation.diagnostics
     );
     let mut vfs = VirtualFileSystem::new();
-    vfs.write_file("grid.txt", grid.trim().to_owned())
+    vfs.seed_file("grid.txt", grid.trim().to_owned())
         .expect("write grid");
     let mut console = BufferedConsole::with_input(Vec::<String>::new());
     let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);

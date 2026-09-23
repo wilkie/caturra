@@ -230,9 +230,46 @@ impl VirtualFileSystem {
         }
     }
 
-    /// Write a file, creating parent directories as needed and
-    /// overwriting any existing file at that path.
+    /// Write a file, overwriting any existing file at that path — INTO a
+    /// directory that already exists, which is the only place a JDK writes
+    /// one. This used to make the parent chain, so every write path here
+    /// silently succeeded where a JDK throws: `new PrintWriter("out/log.txt")`
+    /// with no `out` directory wrote the file and made the directory, and
+    /// `Files.writeString`, `Files.write`, `newBufferedWriter`, `copy`, `move`
+    /// and `File.createNewFile` did the same — a program that "worked" here
+    /// and failed on a JDK, which is the dangerous direction.
+    ///
+    /// [`Self::seed_file`] is the other half: a HOST putting files into the
+    /// filesystem before the program runs has no directories to make them in.
     pub fn write_file(&mut self, path: &str, contents: impl Into<Vec<u8>>) -> Result<(), VfsError> {
+        let path = Self::normalize(path);
+        if matches!(self.nodes.get(&path), Some(e) if e.node == Node::Directory) {
+            return Err(VfsError::IsDirectory(path));
+        }
+        self.check_writable(&path)?;
+        // A JDK tells the two apart: the directory above is MISSING
+        // (`NoSuchFileException: out/log.txt`, naming the file) or it is a
+        // FILE (`FileSystemException: f.txt/child: Not a directory`).
+        match Self::parent_of(&path) {
+            Some(dir) if dir != "/" => match self.nodes.get(dir) {
+                Some(Entry {
+                    node: Node::Directory,
+                    ..
+                }) => {}
+                Some(_) => return Err(VfsError::NotADirectory(dir.to_owned())),
+                None => return Err(VfsError::NotFound(path)),
+            },
+            _ => {}
+        }
+        self.write_entry(path, Node::File(contents.into()));
+        Ok(())
+    }
+
+    /// Write a file and MAKE the directories above it — for a host seeding the
+    /// filesystem before a program runs (the playground's assets, a sweep's
+    /// inputs, a test's fixture). No Java call takes this route: see
+    /// [`Self::write_file`].
+    pub fn seed_file(&mut self, path: &str, contents: impl Into<Vec<u8>>) -> Result<(), VfsError> {
         let path = Self::normalize(path);
         if matches!(self.nodes.get(&path), Some(e) if e.node == Node::Directory) {
             return Err(VfsError::IsDirectory(path));
@@ -258,7 +295,30 @@ impl VirtualFileSystem {
                 node: Node::Directory,
                 ..
             }) => Err(VfsError::IsDirectory(path)),
-            None => Err(VfsError::NotFound(path)),
+            // A path UNDER a file is not merely absent: a JDK says "Not a
+            // directory" about it, on the read side as on the write side.
+            None => Err(self.absent(path)),
+        }
+    }
+
+    /// Why a path is not there: because nothing is at it, or because the
+    /// directory it names is a FILE. One reader, so the read and the write
+    /// answer the same question the same way.
+    fn absent(&self, path: String) -> VfsError {
+        match Self::parent_of(&path) {
+            Some(dir)
+                if dir != "/"
+                    && matches!(
+                        self.nodes.get(dir),
+                        Some(Entry {
+                            node: Node::File(_),
+                            ..
+                        })
+                    ) =>
+            {
+                VfsError::NotADirectory(dir.to_owned())
+            }
+            _ => VfsError::NotFound(path),
         }
     }
 
@@ -480,8 +540,8 @@ mod tests {
     #[test]
     fn rename_moves_a_whole_subtree() {
         let mut vfs = VirtualFileSystem::new();
-        vfs.write_file("/a/deep/one.txt", b"1".to_vec()).unwrap();
-        vfs.write_file("/a/two.txt", b"2".to_vec()).unwrap();
+        vfs.seed_file("/a/deep/one.txt", b"1".to_vec()).unwrap();
+        vfs.seed_file("/a/two.txt", b"2".to_vec()).unwrap();
         vfs.rename("/a", "/b").unwrap();
         assert!(!vfs.exists("/a"));
         assert_eq!(vfs.read_file("/b/deep/one.txt").unwrap(), b"1");
@@ -504,12 +564,22 @@ mod tests {
     }
 
     #[test]
-    fn write_read_round_trip_creates_parents() {
+    fn a_write_needs_the_directory_to_be_there() {
         let mut vfs = VirtualFileSystem::new();
+        // A Java write does NOT make the directory above it, as a JDK's does
+        // not: the complaint names the file.
+        assert_eq!(
+            vfs.write_file("/data/input.txt", "hello".as_bytes().to_vec()),
+            Err(VfsError::NotFound("/data/input.txt".to_owned()))
+        );
+        vfs.mkdir("/data").unwrap();
         vfs.write_file("/data/input.txt", "hello".as_bytes().to_vec())
             .unwrap();
         assert_eq!(vfs.read_file("data/input.txt").unwrap(), b"hello");
-        assert!(vfs.is_directory("/data"));
+        // ...and a HOST seeding the filesystem makes them, because there is
+        // no program to have made them first.
+        vfs.seed_file("/deep/down/here.txt", b"x".to_vec()).unwrap();
+        assert!(vfs.is_directory("/deep/down"));
     }
 
     #[test]
@@ -523,8 +593,8 @@ mod tests {
     #[test]
     fn list_dir_returns_immediate_children_only() {
         let mut vfs = VirtualFileSystem::new();
-        vfs.write_file("/a/one.txt", b"1".to_vec()).unwrap();
-        vfs.write_file("/a/b/two.txt", b"2".to_vec()).unwrap();
+        vfs.seed_file("/a/one.txt", b"1".to_vec()).unwrap();
+        vfs.seed_file("/a/b/two.txt", b"2".to_vec()).unwrap();
         vfs.write_file("/top.txt", b"t".to_vec()).unwrap();
         assert_eq!(vfs.list_dir("/a").unwrap(), vec!["/a/b", "/a/one.txt"]);
         assert_eq!(vfs.list_dir("/").unwrap(), vec!["/a", "/top.txt"]);
@@ -533,7 +603,7 @@ mod tests {
     #[test]
     fn remove_refuses_non_empty_directories() {
         let mut vfs = VirtualFileSystem::new();
-        vfs.write_file("/a/one.txt", b"1".to_vec()).unwrap();
+        vfs.seed_file("/a/one.txt", b"1".to_vec()).unwrap();
         assert_eq!(
             vfs.remove("/a"),
             Err(VfsError::DirectoryNotEmpty("/a".to_owned()))
