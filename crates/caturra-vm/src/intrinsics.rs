@@ -16830,9 +16830,14 @@ fn string_join(
             out.extend_from_slice(&delimiter);
         }
         match value {
-            JValue::Ref(Some(reference)) => match heap.string_units(*reference) {
-                Some(units) => out.extend_from_slice(units),
-                None => out.extend("null".encode_utf16()),
+            // Each element is a `CharSequence`, which a `StringBuilder` is:
+            // reading only a String's units rendered one as "null", the same
+            // answer a genuine null gets, where a JDK writes its text.
+            JValue::Ref(Some(reference)) => match heap.get(*reference) {
+                Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
+                    out.extend_from_slice(units);
+                }
+                _ => out.extend("null".encode_utf16()),
             },
             _ => out.extend("null".encode_utf16()),
         }

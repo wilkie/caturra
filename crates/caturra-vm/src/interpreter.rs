@@ -4835,6 +4835,33 @@ impl<'run> Interpreter<'run> {
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
+            // `Map.ofEntries(e1, e2, …)` — the same immutable map, written as
+            // ENTRIES rather than as alternating keys and values. Flattened
+            // into the pairs the factory above already takes, so the
+            // duplicate-key rule and the read-only result are that one's.
+            ("__mapOfEntries", [JValue::Ref(Some(entries))]) => {
+                let entries = self.array_elements(*entries).unwrap_or_default();
+                let mut items = Vec::with_capacity(entries.len() * 2);
+                for entry in entries {
+                    let JValue::Ref(Some(entry)) = entry else {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.NullPointerException",
+                        )));
+                    };
+                    let Some(HeapObject::MapEntry { map, key, .. }) = self.heap.get(entry) else {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.NullPointerException",
+                        )));
+                    };
+                    let (map, key) = (*map, *key);
+                    let value = self.map_entry_value(map, key)?;
+                    items.push(key);
+                    items.push(value);
+                }
+                let view = self.immutable_collection("__mapOf", items, true)?;
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
             // Java 10's `copyOf(source)`: the same immutable shapes, read out
             // of an existing collection instead of an argument list. It shares
             // the construction above, and differs in exactly one way — a

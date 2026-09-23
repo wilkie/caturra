@@ -6004,6 +6004,21 @@ fn call_body_type(
             args: vec![key, value],
         });
     }
+    // `Map.ofEntries(e, …)` — a map of whatever the ENTRIES hold, which is
+    // the same reading one call further in. Without it the `keySet()` after
+    // one had no element and the lambda over that was refused.
+    if method == "ofEntries"
+        && names_library_class(receiver, "Map")
+        && let Some(first) = args.first()
+        && let Some(TypeRef::Generic { base, args: held }) = body_type(first, bound, ctx)
+        && base.rsplit('.').next() == Some("Entry")
+        && held.len() == 2
+    {
+        return Some(TypeRef::Generic {
+            base: String::from("Map"),
+            args: held,
+        });
+    }
     if method == "of"
         && names_library_class(receiver, "Stream")
         && let Some(first) = args.first()

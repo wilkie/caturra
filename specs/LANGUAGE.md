@@ -15706,6 +15706,40 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The methods no argument could reach (2026-09-23)
+
+Three more from the behaviour sweep's never-compared list, and they are there
+for one reason: no argument in its bank can be typed `Map.Entry`,
+`CharSequence[]` or `StringJoiner`, so it has never called any of them.
+
+`StringJoiner.merge` turned out to be right all along — the prefix and suffix
+of the joiner being merged INTO are kept, the one merged FROM contributes only
+its elements, an empty one contributes nothing, merging a joiner with itself
+doubles it, a null throws, and a set `emptyValue` is not what merging reads.
+Six probes, all already exact.
+
+The other two were not:
+
+- **`Map.ofEntries` had a name and no emitter.** The type-inference path
+  listed it beside `Map.of` and nothing built it, so every call was "cannot
+  find symbol". It rides to the VM as the `Object[]` its sibling uses, and
+  the factory there flattens the entries into the alternating pairs `Map.of`
+  already takes — so the duplicate-key rule (an `IllegalArgumentException`
+  naming the key), the read-only result and the class it answers are all
+  written once. Its two type arguments come from the entries.
+- **`String.join` refused a `CharSequence[]`.** It took a `String[]` and a
+  `StringBuilder[]` — the parameter is `CharSequence...`, so an array of any
+  of them spreads — and the message was about the DELIMITER's type, for an
+  argument in the varargs position. A `CharSequence` element is a NESTED type
+  rather than an element kind of its own, which is why it was not recognised.
+  The array's OWN descriptor is written now, so the class file says
+  `[Ljava/lang/CharSequence;` when that is what was passed. The VM's join also
+  read only a `String`'s units, so a `StringBuilder` element rendered as
+  "null" — the same answer a genuine null gets, where a JDK writes its text.
+
+Pinned as `the_methods_no_argument_could_reach`.
+
+
 ### What a library name answers (2026-09-23)
 
 The open item two units running had named: the table that says what a library

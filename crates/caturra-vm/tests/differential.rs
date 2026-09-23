@@ -58195,3 +58195,63 @@ public class V1 {
 }
 "#
 );
+
+// Three methods the behaviour sweep has never called, because no argument in
+// its bank can be typed `Map.Entry`, `CharSequence[]` or `StringJoiner`.
+// `StringJoiner.merge` turned out to be right all along; the other two were
+// not. `Map.ofEntries` had a name the type-inference path knew and no
+// emitter, so every call was "cannot find symbol"; `String.join` took a
+// `String[]` and a `StringBuilder[]` and refused a `CharSequence[]` — the
+// varargs parameter's own type — with a message about the DELIMITER.
+differential_test!(
+    the_methods_no_argument_could_reach,
+    "Small",
+    r#"
+import java.util.*;
+public class Small {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        // Map.ofEntries — the whole of it: the empty case, one entry, the
+        // duplicate-key rule with the key it names, the read-only result,
+        // a null entry, the class, equality with Map.of, and a copy.
+        r("empty", () -> Map.ofEntries().size());
+        r("one", () -> Map.ofEntries(Map.entry("a", 1)));
+        r("two", () -> { Map<String,Integer> m = Map.ofEntries(Map.entry("a", 1), Map.entry("b", 2));
+            return m.size() + " " + m.get("a") + " " + m.get("b"); });
+        r("dup", () -> Map.ofEntries(Map.entry("a", 1), Map.entry("a", 2)));
+        r("read-only", () -> { Map<String,Integer> m = Map.ofEntries(Map.entry("a", 1)); m.put("b", 2); return m; });
+        r("null-entry", () -> Map.ofEntries((Map.Entry<String,Integer>) null));
+        r("null-key", () -> Map.ofEntries(Map.entry(null, 1)));
+        r("class", () -> Map.ofEntries(Map.entry("a", 1)).getClass().getName());
+        r("equals", () -> Map.ofEntries(Map.entry("a", 1)).equals(Map.of("a", 1)));
+        r("copy", () -> new TreeMap<>(Map.ofEntries(Map.entry("b", 2), Map.entry("a", 1))));
+        r("typed", () -> { Map<String,Integer> m = Map.ofEntries(Map.entry("a", 1)); int v = m.get("a"); return v + 1; });
+        r("streamed", () -> Map.ofEntries(Map.entry("ab", 1)).keySet().stream().map(String::length).count());
+        // String.join over an array of any CharSequence, which is what the
+        // varargs parameter takes.
+        r("join-cs", () -> { CharSequence[] parts = { "a", "b" }; return String.join("-", parts); });
+        r("join-cs-empty", () -> "[" + String.join("-", new CharSequence[0]) + "]");
+        r("join-cs-builder", () -> { CharSequence[] parts = { new StringBuilder("a"), "b" }; return String.join("-", parts); });
+        r("join-cs-null", () -> { CharSequence[] parts = { "a", null }; return String.join("-", parts); });
+        r("join-sb-array", () -> { StringBuilder[] parts = { new StringBuilder("a"), new StringBuilder("b") }; return String.join("-", parts); });
+        r("join-str-array", () -> { String[] parts = { "a", "b" }; return String.join("-", parts); });
+        r("join-list", () -> String.join("-", List.of("a", "b")));
+        r("join-varargs", () -> String.join("-", "a", new StringBuilder("b")));
+        // StringJoiner.merge, which the sweep could never build an argument for
+        r("merge", () -> { StringJoiner one = new StringJoiner(",", "[", "]"); one.add("x");
+            StringJoiner two = new StringJoiner(";"); two.add("y"); two.add("z");
+            return one.merge(two) + " | " + two; });
+        r("merge-empty", () -> { StringJoiner one = new StringJoiner(","); return "[" + one.merge(new StringJoiner(";")) + "]"; });
+        r("merge-self", () -> { StringJoiner one = new StringJoiner(","); one.add("x"); return one.merge(one); });
+        r("merge-null", () -> new StringJoiner(",").merge(null));
+        r("merge-empty-value", () -> { StringJoiner one = new StringJoiner(","); one.add("x");
+            StringJoiner two = new StringJoiner(";"); two.setEmptyValue("NONE");
+            return one.merge(two) + " | " + two; });
+    }
+}
+"#
+);

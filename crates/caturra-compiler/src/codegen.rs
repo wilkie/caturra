@@ -34781,13 +34781,33 @@ impl BodyGen<'_> {
         let mut width: u16 = 1;
         // A single array/list argument is the elements themselves; anything else
         // is a list of individual `CharSequence` elements.
+        // An array of ANY CharSequence spreads, not only a `String[]`: the
+        // parameter is `CharSequence...`, so `String.join("-", parts)` over a
+        // `CharSequence[]` (or a `StringBuilder[]`) is the same call, and was
+        // "incompatible types: CharSequence[] cannot be converted to
+        // CharSequence" — a message about the DELIMITER's type, for an
+        // argument in the varargs position.
+        let spreads_as_char_sequences = |ty: JType, table: &MethodTable| match ty {
+            JType::Array {
+                elem: ElemType::Str | ElemType::Builder,
+                dims: 1,
+            } => true,
+            // A `CharSequence` element is a NESTED type, not an element kind
+            // of its own, so it has to be unfolded to be recognised.
+            JType::Array {
+                elem: ElemType::Nested { inner, .. },
+                dims: 1,
+            } => matches!(
+                table.nested_type(inner),
+                JType::CharSequence | JType::Str | JType::StringBuilder(_)
+            ),
+            _ => false,
+        };
         let elements = if let [single] = rest
-            && matches!(
-                self.type_of(single),
-                JType::Array {
-                    elem: ElemType::Str,
-                    dims: 1
-                } | JType::List { .. }
+            && (spreads_as_char_sequences(self.type_of(single), self.table)
+                || matches!(
+                    self.type_of(single),
+                    JType::List { .. }
                     | JType::Collection(_)
                     // `join(delimiter, Iterable)` takes ANY collection, which is
                     // how a Set reaches it.
@@ -34795,13 +34815,18 @@ impl BodyGen<'_> {
                     | JType::TreeSet(_, _)
                     | JType::Stack(_)
                     | JType::LinkedList { .. }
-            ) {
+                )) {
             let ty = self.expr(single);
             width += 1;
-            if matches!(ty, JType::Array { .. }) {
-                String::from("[Ljava/lang/String;")
-            } else {
-                String::from("Ljava/util/List;")
+            match ty {
+                // The array's OWN descriptor, so the class file says what was
+                // written rather than what the common case happens to be.
+                JType::Array {
+                    elem: ElemType::Str,
+                    ..
+                } => String::from("[Ljava/lang/String;"),
+                JType::Array { .. } => String::from("[Ljava/lang/CharSequence;"),
+                _ => String::from("Ljava/util/List;"),
             }
         } else {
             let mut tags = String::new();
@@ -37529,6 +37554,12 @@ impl BodyGen<'_> {
         {
             return self.emit_immutable_factory(class, args, span);
         }
+        // `Map.ofEntries(e1, e2, …)` — the same immutable map written as
+        // ENTRIES. The type-inference path knew the name and no emitter did,
+        // so every call was "cannot find symbol".
+        if class == "Map" && method == "ofEntries" && !self.table.has_class(class) {
+            return Some(Some(self.emit_map_of_entries(args, span)));
+        }
         // `Map.entry(k, v)` is the same standalone entry as
         // `new AbstractMap.SimpleEntry<>(k, v)`, which caturra already builds
         // — only the spelling differed, and it is the shorter one a program
@@ -39146,6 +39177,55 @@ impl BodyGen<'_> {
     /// ITERATION ORDER of `Set.of`/`Map.of` per JVM run (they are salted), so
     /// printing one does not even agree with itself between two runs of the
     /// same program. caturra iterates in the order written.
+    /// `Map.ofEntries(entry, …)`: every argument is a `Map.Entry`, and the
+    /// map's two type arguments are the join of their keys and of their
+    /// values. The entries ride to the VM as an `Object[]`, exactly as
+    /// `Map.of`'s alternating pairs do, and the factory there flattens them
+    /// into those pairs — so the duplicate-key rule and the read-only result
+    /// are written once.
+    fn emit_map_of_entries(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let object_elem = ElemType::Object(self.table.object_id);
+        let mut key_elem: Option<ElemType> = None;
+        let mut value_elem: Option<ElemType> = None;
+        let mut mixed = false;
+        for arg in args {
+            match self.type_of(arg) {
+                JType::MapEntry { key, value } => {
+                    for (seen, found) in [(&mut key_elem, key), (&mut value_elem, value)] {
+                        match seen {
+                            None => *seen = Some(found),
+                            Some(already) if *already != found => mixed = true,
+                            Some(_) => {}
+                        }
+                    }
+                }
+                _ => mixed = true,
+            }
+        }
+        let (key_elem, value_elem) = if mixed {
+            (object_elem, object_elem)
+        } else {
+            (
+                key_elem.unwrap_or(object_elem),
+                value_elem.unwrap_or(object_elem),
+            )
+        };
+        let array_ty = JType::Array {
+            elem: object_elem,
+            dims: 1,
+        };
+        self.emit_array_literal(args, array_ty, span);
+        let method_ref = intern_method_ref(
+            self.pool,
+            "Collections",
+            "__mapOfEntries",
+            "([Ljava/lang/Object;)Ljava/util/HashMap;",
+        );
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(1);
+        JType::library_map(key_elem, value_elem)
+    }
+
     #[allow(clippy::option_option)] // call-dispatch return shape
     fn emit_immutable_factory(
         &mut self,
