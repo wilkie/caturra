@@ -1760,6 +1760,38 @@ fn literal_collection_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     })
 }
 
+/// A LIBRARY class's PRIMITIVE constant, typed from the same table the emit
+/// side folds it with: `Integer.MAX_VALUE` is an `int`, `Math.PI` a `double`,
+/// `Byte.MIN_VALUE` a `byte` (which a JDK declares and caturra records).
+fn library_primitive_constant(class: &str, field: &str) -> Option<TypeRef> {
+    use crate::codegen::BuiltinConstant as K;
+    Some(
+        match crate::codegen::library_constant_value(class, field)? {
+            K::Int(_) => TypeRef::Int,
+            K::Double(_) => TypeRef::Double,
+            K::Char(_) => TypeRef::Char,
+            K::Bool(_) => TypeRef::Boolean,
+            K::Long(_) => TypeRef::Long,
+            K::Float(_) => TypeRef::Float,
+            K::Byte(_) => TypeRef::Byte,
+            K::Short(_) => TypeRef::Short,
+        },
+    )
+}
+
+/// A LIBRARY class's object-valued constant, typed from the emit side's own
+/// table: `Month.MAY` is a `Month`, `StandardCharsets.UTF_8` a `Charset`. The
+/// last TWO segments are what name it, so the fully qualified spelling
+/// (`java.time.Month.MAY`) answers the same as the simple one — a program
+/// that has not imported the class writes the long form, and it had no type.
+fn library_constant_type(path: &[String]) -> Option<TypeRef> {
+    let [.., class, field] = path else {
+        return None;
+    };
+    crate::codegen::library_constant_field_class(class, field)
+        .map(|named| TypeRef::Named(String::from(named)))
+}
+
 /// The declared type of an expression, for the shapes this pass can see. Used
 /// to pin a type variable from an argument at a call.
 #[allow(clippy::too_many_lines)] // one arm per expression shape
@@ -5856,6 +5888,7 @@ fn flat_element_type(args: &[Expr], ctx: &Ctx) -> Option<TypeRef> {
 /// [`body_type`] for a CALL — the shape a lambda body most often ends in, and
 /// the only one that has to ask every table: the program's own methods, the
 /// library's, a static factory that answers a stream.
+#[allow(clippy::too_many_lines)] // one arm per shape a lambda's body can be
 fn call_body_type(
     expr: &Expr,
     receiver: Option<&Expr>,
@@ -5954,6 +5987,23 @@ fn call_body_type(
         base: String::from("Stream"),
         args: vec![boxed_element(elem)],
     };
+    // `Map.entry(k, v)` — an ENTRY of the two arguments' own types, which is
+    // the one library factory whose answer its arguments decide. Typed as the
+    // raw `Map.Entry` (or as nothing), `map(e -> e.getKey().length())` over
+    // one had an `Object` key.
+    if method == "entry"
+        && names_library_class(receiver, "Map")
+        && let [key, value] = args
+        && let (Some(key), Some(value)) = (
+            body_type(key, bound, ctx).map(boxed_element),
+            body_type(value, bound, ctx).map(boxed_element),
+        )
+    {
+        return Some(TypeRef::Generic {
+            base: String::from("Map.Entry"),
+            args: vec![key, value],
+        });
+    }
     if method == "of"
         && names_library_class(receiver, "Stream")
         && let Some(first) = args.first()
@@ -6060,9 +6110,32 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
                 }
                 _ => None,
             };
-            // A dotted name whose head is not a value is a name a CLASS owns —
-            // `Month.MAY`, a static field — and the general reader knows those.
-            read.or_else(|| static_type_of(expr, ctx))
+            // A dotted name whose head is not a value is a name a CLASS owns,
+            // and there are four kinds of those. The reading above covers a
+            // field read through a VALUE; none of the four had an answer, so
+            // a constant written inline — `Stream.of(Holder.NAME)`,
+            // `List.of(Month.MAY)` — had no type and the lambda after it saw
+            // an `Object`.
+            read
+                // The program's own enum constant: `Kind.RED` is a `Kind`.
+                .or_else(|| (ctx.enums.contains(&path[0])).then(|| TypeRef::Named(path[0].clone())))
+                // ...its own static field, read through the CLASS name rather
+                // than through a value of it.
+                .or_else(|| field_of_class(&path[0], &path[1], ctx))
+                // A LIBRARY class's object-valued constant — `Month.MAY`,
+                // `StandardCharsets.UTF_8`, `BigDecimal.ONE`.
+                .or_else(|| library_constant_type(path))
+                // ...and its PRIMITIVE ones, which the emit side folds to a
+                // literal: `Integer.MAX_VALUE` is an `int`, `Math.PI` a
+                // `double`.
+                .or_else(|| library_primitive_constant(&path[0], &path[1]))
+                .or_else(|| static_type_of(expr, ctx))
+        }
+        // A QUALIFIED constant — `java.time.Month.MAY`, which is how a
+        // program that has not imported the class writes it. No local can be
+        // named that, so the only reading is the library one.
+        Expr::Name { path, .. } if path.len() > 2 && library_constant_type(path).is_some() => {
+            library_constant_type(path)
         }
         Expr::Field { object, name, .. } if !matches!(**object, Expr::This { .. }) => {
             match body_type(object, bound, ctx)? {
@@ -6228,6 +6301,7 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         // `var` reads this table now, so a local holding one of them — a
         // `subList`, a `keySet`, a `toArray`, a stream's `findFirst` — had no
         // type, though the same expression inline had always worked.
+        // A `subList` is the same list.
         (_, "subList", 2) if collection => Some(receiver.clone()),
         (_, "keySet", 0) => map_half(receiver, 0).map(|key| TypeRef::Generic {
             base: String::from("Set"),
@@ -6237,11 +6311,41 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             base: String::from("Collection"),
             args: vec![value],
         }),
+        // A collection's CURSOR and a map's entry set, beside the two views
+        // already here. Left out, `List.of("a").iterator()` and
+        // `map.entrySet()` written inline had no type, though `keySet()` —
+        // the view next to them — had had one all along.
+        (_, "iterator", 0) if collection => {
+            element_of_declared(receiver).map(|elem| TypeRef::Generic {
+                base: String::from("Iterator"),
+                args: vec![elem],
+            })
+        }
+        (_, "entrySet", 0) => match (map_half(receiver, 0), map_half(receiver, 1)) {
+            (Some(key), Some(value)) => Some(TypeRef::Generic {
+                base: String::from("Set"),
+                args: vec![TypeRef::Generic {
+                    base: String::from("Map.Entry"),
+                    args: vec![key, value],
+                }],
+            }),
+            _ => None,
+        },
         (_, "toArray", _) => element_of_declared(receiver).map(|e| TypeRef::Array(Box::new(e))),
+        // The operations that answer the SAME thing they were called on: a
+        // stream's element-preserving stages, and a builder's chaining
+        // methods — which is what makes
+        // `new StringBuilder(s).reverse().toString()` a chain at all.
         (
             "Stream",
             "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" | "onClose" | "parallel"
             | "sequential" | "unordered",
+            _,
+        )
+        | (
+            "StringBuilder" | "StringBuffer",
+            "append" | "insert" | "reverse" | "replace" | "delete" | "deleteCharAt"
+            | "setCharAt" | "appendCodePoint",
             _,
         ) => Some(receiver.clone()),
         // A `Stream` is not in the collection set (its element is not read the
@@ -6821,6 +6925,21 @@ fn library_static_type(class: &str, method: &str, argc: usize) -> Option<TypeRef
     if class == "String" && matches!(method, "valueOf" | "copyValueOf" | "format" | "join") {
         return Some(TypeRef::Named(String::from("String")));
     }
+    // The library factories whose answer is a CONTAINER: their element comes
+    // from the target and not from here, so the answer is the raw type, which
+    // is enough to find a method on it. `Map.entry(k, v)` is the one that
+    // carries its arguments, since they ARE the entry.
+
+    if (class == "Optional" && matches!(method, "empty" | "of" | "ofNullable"))
+        || (class == "Collections" && matches!(method, "emptyList" | "emptySet" | "emptyMap"))
+    {
+        return Some(TypeRef::Named(String::from(match (class, method) {
+            ("Optional", _) => "Optional",
+            (_, "emptySet") => "Set",
+            (_, "emptyMap") => "Map",
+            _ => "List",
+        })));
+    }
     // `Integer.valueOf(3)` is an `Integer` — the wrapper's own name. Read as
     // nothing, `Stream.of(Integer.valueOf(3)).map(Integer::doubleValue)` had
     // an `Object` element, though the bare literal beside it did not.
@@ -6998,12 +7117,32 @@ fn descriptor_type(descriptor: &str) -> Option<TypeRef> {
             }
             let name = other.strip_prefix('L')?.strip_suffix(';')?;
             let simple = name.rsplit('/').next()?;
-            // Only the types this pass can then ASK something of: a
-            // `java.time` value or one of its enums.
-            if !crate::codegen::names_library_value_type(simple) {
+            // The class the descriptor NAMES, whatever it is. This used to
+            // answer only for a `java.time` value or one of its enums, on the
+            // reasoning that an erased container's element would be a wrong
+            // element — but answering nothing does not avoid that: it makes
+            // the whole VALUE an `Object`, which is strictly less true. A raw
+            // `Iterator`, `Map.Entry` or `Optional` is what the descriptor
+            // says and what the program can ask something of; the element it
+            // no longer carries is `Object` either way.
+            //
+            // `Map$Entry` is the one spelling that has to be unfolded: the
+            // descriptor writes a nested class with a `$`, and the name a
+            // program writes for it is `Map.Entry`.
+            let written = match simple {
+                "Map$Entry" | "Entry" => "Map.Entry",
+                other => other,
+            };
+            // ...but only a name the compiler can then RESOLVE. A descriptor
+            // may spell a class caturra does not model at all — a `java.time`
+            // method answers a `TemporalUnit` — and naming one turns a type
+            // this pass simply did not know into a REFUSAL of the whole
+            // program. Unknown is the safe answer there, and is where it
+            // stood.
+            if crate::imports::unsupported_class_reason(written).is_some() {
                 return None;
             }
-            TypeRef::Named(String::from(simple))
+            TypeRef::Named(String::from(written))
         }
     })
 }

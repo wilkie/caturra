@@ -6527,12 +6527,6 @@ fn library_value_type(simple: &str) -> Option<JType> {
     })
 }
 
-/// Whether a name is one of those library VALUE types — the `java.time` ones
-/// and `BigInteger` — which is all the lambda pass needs to know about them.
-pub(crate) fn names_library_value_type(simple: &str) -> bool {
-    library_value_type(simple).is_some()
-}
-
 /// Whether `method` on the library VALUE type `class` is a static rather than
 /// one of its instance methods — asked of the real tables. The lambda pass used
 /// to judge this by NAME against a hand-written list, so `BigInteger::signum`
@@ -6782,6 +6776,52 @@ fn library_enum_type(class: &str) -> Option<JType> {
 pub(crate) fn library_enum_names() -> impl Iterator<Item = &'static str> {
     LIBRARY_ENUMS.iter().map(|(name, _)| *name)
 }
+
+/// The TYPE a library class's object-valued static field has — `Month.MAY` is
+/// a `Month`, `StandardCharsets.UTF_8` a `Charset`, `BigDecimal.ONE` a
+/// `BigDecimal`. The emit side reads each of these already; the lambda pass
+/// had no way to ask, so a constant written inline (`List.of(Month.MAY)`,
+/// `Stream.of(StandardCharsets.UTF_8)`) had no type and the lambda after it
+/// saw an `Object`. The PRIMITIVE constants are `builtin_static_constant`'s;
+/// this is only the ones whose value is an object.
+pub(crate) fn library_constant_field_class(class: &str, field: &str) -> Option<&'static str> {
+    // Every class whose constants `time_constant_names` lists names ITSELF —
+    // a `Month` constant is a `Month` — so the table is that one, read back.
+    if time_constant_names(class).is_some_and(|names| names.contains(&field)) {
+        return LIBRARY_CONSTANT_OWNERS
+            .iter()
+            .find(|owner| **owner == class)
+            .copied();
+    }
+    match (class, field) {
+        ("BigInteger", "ZERO" | "ONE" | "TWO" | "TEN") => Some("BigInteger"),
+        ("BigDecimal", "ZERO" | "ONE" | "TEN") => Some("BigDecimal"),
+        // The one class whose constants are NOT of its own type: every
+        // `StandardCharsets` field is a `Charset`.
+        (
+            "StandardCharsets",
+            "UTF_8" | "US_ASCII" | "ISO_8859_1" | "UTF_16" | "UTF_16BE" | "UTF_16LE",
+        ) => Some("Charset"),
+        _ => None,
+    }
+}
+
+/// The classes `time_constant_names` knows, as `'static` names — so the
+/// answer above can be one.
+const LIBRARY_CONSTANT_OWNERS: &[&str] = &[
+    "LocalTime",
+    "Duration",
+    "Period",
+    "IsoChronology",
+    "TextStyle",
+    "FormatStyle",
+    "RoundingMode",
+    "Month",
+    "DayOfWeek",
+    "ChronoUnit",
+    "ChronoField",
+    "IsoEra",
+];
 
 /// The constants of a library enum, by class name — what `Month.MAY` is one
 /// of, and the lambda pass's way to type it.

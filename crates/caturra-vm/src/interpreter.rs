@@ -22897,7 +22897,14 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         | "java/util/Collections$SingletonSet"
         | "java/util/Collections$EmptySet"
         | "java/util/ImmutableCollections$Set12"
-        | "java/util/ImmutableCollections$SetN" => SET,
+        | "java/util/ImmutableCollections$SetN"
+        // An IMMUTABLE map's two set-shaped views. Their class names were
+        // added when every view learned to name itself, and the faces list
+        // beside them was not: `Map.of("a", 1).keySet()` answered false to
+        // `instanceof Set` and threw on the cast, while the same view of a
+        // `HashMap` — two lines up — did not.
+        | "java/util/AbstractMap$1"
+        | "java/util/ImmutableCollections$MapN$1" => SET,
         // A `TreeSet` — including a range view of one, which IS a `TreeSet`.
         // Its key-set cousin and the unmodifiable wrapper are not `Cloneable`.
         "java/util/TreeSet" => &[
@@ -22911,7 +22918,10 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         "java/util/HashMap$Values"
         | "java/util/LinkedHashMap$LinkedValues"
         | "java/util/TreeMap$Values"
-        | "java/util/AbstractMap$2" => &["java/util/Collection"],
+        | "java/util/AbstractMap$2"
+        // ...and the `values()` of a wrapped map, which is a bare
+        // `Collection` and not a `Set` — the same reading, one wrapper out.
+        | "java/util/Collections$UnmodifiableCollection" => &["java/util/Collection"],
         "java/util/HashMap" | "java/util/Hashtable" => &["java/util/Map", "java/lang/Cloneable"],
         // An `Enumeration` here IS a cursor, so it answers to both names.
         "java/util/Enumeration" => &["java/util/Iterator"],

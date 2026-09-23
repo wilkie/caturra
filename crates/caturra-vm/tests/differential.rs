@@ -58061,3 +58061,137 @@ public class Neg {
 }
 "#
 );
+
+// What a library NAME answers, asked where a lambda's body is typed: a
+// factory, an instance call, a view, a chaining builder, an object-valued
+// constant (`Month.MAY`, `StandardCharsets.UTF_8`, `BigDecimal.ONE`) and a
+// primitive one (`Integer.MAX_VALUE`, `Math.PI`). Fifteen of twenty-six had
+// no type at all, so the lambda after each saw an `Object` — though the same
+// value assigned to a DECLARED variable first had always worked.
+differential_test!(
+    what_a_library_name_answers,
+    "Named",
+    r#"
+public class Named {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName()); }
+    }
+    public static void main(String[] a) {
+        r("Map.entry", () -> java.util.List.of(java.util.Map.entry("a", 1)).stream().map(x -> x.getKey()).collect(java.util.stream.Collectors.toList()));
+        r("Comparator.nat", () -> java.util.List.of(java.util.Comparator.<String>naturalOrder()).stream().map(x -> x.compare("a", "b")).collect(java.util.stream.Collectors.toList()));
+        r("list.iterator", () -> java.util.List.of(java.util.List.of("a").iterator()).stream().map(x -> x.next()).collect(java.util.stream.Collectors.toList()));
+        r("StandardCharsets", () -> java.util.List.of(java.nio.charset.StandardCharsets.UTF_8).stream().map(x -> x.name()).collect(java.util.stream.Collectors.toList()));
+        r("Month.MAY", () -> java.util.List.of(java.time.Month.MAY).stream().map(x -> x.getValue()).collect(java.util.stream.Collectors.toList()));
+        r("DayOfWeek", () -> java.util.List.of(java.time.DayOfWeek.MONDAY).stream().map(x -> x.getValue()).collect(java.util.stream.Collectors.toList()));
+        r("RoundingMode", () -> java.util.List.of(java.math.RoundingMode.HALF_UP).stream().map(x -> x.name()).collect(java.util.stream.Collectors.toList()));
+        r("ChronoUnit", () -> java.util.List.of(java.time.temporal.ChronoUnit.DAYS).stream().map(x -> x.name()).collect(java.util.stream.Collectors.toList()));
+        r("BigDecimal.ONE", () -> java.util.List.of(java.math.BigDecimal.ONE).stream().map(x -> x.scale()).collect(java.util.stream.Collectors.toList()));
+        r("BigInteger.TEN", () -> java.util.List.of(java.math.BigInteger.TEN).stream().map(x -> x.intValue()).collect(java.util.stream.Collectors.toList()));
+        r("map.entrySet", () -> java.util.List.of(java.util.Map.of("a", 1).entrySet()).stream().map(x -> x.size()).collect(java.util.stream.Collectors.toList()));
+        r("map.keySet", () -> java.util.List.of(java.util.Map.of("a", 1).keySet()).stream().map(x -> x.size()).collect(java.util.stream.Collectors.toList()));
+        r("list.subList", () -> java.util.List.of(java.util.List.of("a", "b").subList(0, 1)).stream().map(x -> x.size()).collect(java.util.stream.Collectors.toList()));
+        r("Optional.empty", () -> java.util.List.of(java.util.Optional.<String>empty()).stream().map(x -> x.isPresent()).collect(java.util.stream.Collectors.toList()));
+        r("Pattern.compile", () -> java.util.List.of(java.util.regex.Pattern.compile("a")).stream().map(x -> x.pattern()).collect(java.util.stream.Collectors.toList()));
+        r("pattern.matcher", () -> java.util.List.of(java.util.regex.Pattern.compile("a").matcher("a")).stream().map(x -> x.find()).collect(java.util.stream.Collectors.toList()));
+        r("Path.of", () -> java.util.List.of(java.nio.file.Path.of("a")).stream().map(x -> x.toString()).collect(java.util.stream.Collectors.toList()));
+        r("LocalDate.of", () -> java.util.List.of(java.time.LocalDate.of(2024, 3, 14)).stream().map(x -> x.getYear()).collect(java.util.stream.Collectors.toList()));
+        r("Duration.ofDays", () -> java.util.List.of(java.time.Duration.ofDays(1)).stream().map(x -> x.toHours()).collect(java.util.stream.Collectors.toList()));
+        r("UUID.fromString", () -> java.util.List.of(java.util.UUID.fromString("00000000-0000-0000-0000-000000000000")).stream().map(x -> x.version()).collect(java.util.stream.Collectors.toList()));
+        r("Collections.emptyList", () -> java.util.List.of(java.util.Collections.<String>emptyList()).stream().map(x -> x.size()).collect(java.util.stream.Collectors.toList()));
+        r("Arrays.asList", () -> java.util.List.of(java.util.Arrays.asList("a", "b")).stream().map(x -> x.size()).collect(java.util.stream.Collectors.toList()));
+        r("new Scanner", () -> java.util.List.of(new java.util.Scanner("a")).stream().map(x -> x.next()).collect(java.util.stream.Collectors.toList()));
+        r("String.valueOf", () -> java.util.List.of(String.valueOf(12)).stream().map(x -> x.length()).collect(java.util.stream.Collectors.toList()));
+        r("sb.reverse", () -> java.util.List.of(new StringBuilder("ab").reverse()).stream().map(x -> x.length()).collect(java.util.stream.Collectors.toList()));
+        r("Integer.MAX", () -> java.util.List.of(Integer.MAX_VALUE).stream().map(x -> x - 1).collect(java.util.stream.Collectors.toList()));
+        r("Math.PI", () -> java.util.List.of(Math.PI).stream().map(x -> x * 2).collect(java.util.stream.Collectors.toList()));
+        r("Character.MAX", () -> java.util.List.of(Character.MAX_VALUE).stream().map(x -> (int) x).collect(java.util.stream.Collectors.toList()));
+        r("Byte.MIN", () -> java.util.List.of(Byte.MIN_VALUE).stream().map(x -> x + 1).collect(java.util.stream.Collectors.toList()));
+        r("Long.MAX", () -> java.util.List.of(Long.MAX_VALUE).stream().map(x -> x - 1).collect(java.util.stream.Collectors.toList()));
+        r("Boolean.TRUE", () -> java.util.List.of(Boolean.TRUE).stream().map(x -> !x).collect(java.util.stream.Collectors.toList()));
+    }
+}
+"#
+);
+
+// ...and the negative direction, plus the three kinds of dotted name the
+// PROGRAM owns: its own enum constant, its own static field, and a field read
+// through a value. Each widened reader has to carry the right element through
+// — a cursor's, an entry set's, a builder's chain — and a name that is not a
+// constant at all must still answer nothing.
+differential_test!(
+    the_names_a_program_writes_itself,
+    "N1",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class N1 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName()); }
+    }
+    enum Kind { RED, BLUE }
+    static class Holder { static final String NAME = "h"; String own = "o"; }
+    public static void main(String[] a) {
+        // a PROGRAM's own constants and fields still win
+        r("user-const", () -> Stream.of(Holder.NAME).map(String::length).collect(Collectors.toList()));
+        r("user-enum", () -> Stream.of(Kind.RED).map(Kind::name).collect(Collectors.toList()));
+        r("user-field", () -> Stream.of(new Holder()).map(h -> h.own.length()).collect(Collectors.toList()));
+        // the widened readers still carry the right elements
+        r("iterator-elem", () -> { Iterator<String> it = List.of("ab").iterator(); return it.next().length(); });
+        r("entrySet-elem", () -> Map.of("a", 1).entrySet().stream().map(e -> e.getKey().length() + e.getValue()).collect(Collectors.toList()));
+        r("entry-inline", () -> Stream.of(Map.entry("ab", 1)).map(e -> e.getKey().length() + e.getValue()).collect(Collectors.toList()));
+        r("keySet-elem", () -> Map.of("ab", 1).keySet().stream().map(String::length).collect(Collectors.toList()));
+        r("values-elem", () -> Map.of("a", 5).values().stream().map(v -> v + 1).collect(Collectors.toList()));
+        r("subList-elem", () -> List.of("ab", "c").subList(0, 1).stream().map(String::length).collect(Collectors.toList()));
+        r("builder-chain", () -> new StringBuilder("ab").reverse().append("c").toString());
+        r("builder-len", () -> Stream.of(new StringBuilder("abc").reverse()).map(StringBuilder::length).collect(Collectors.toList()));
+        r("optional-elem", () -> Optional.of("ab").map(String::length).orElse(0));
+        r("empty-target", () -> { List<String> l = Collections.emptyList(); return l.size(); });
+        r("empty-addAll", () -> { List<Integer> l = new ArrayList<>(); l.addAll(Collections.emptyList()); l.add(1); return l.get(0) + 1; });
+        r("month-value", () -> java.time.Month.MAY.getValue() + java.time.Month.JUNE.getValue());
+        r("charset-name", () -> java.nio.charset.StandardCharsets.UTF_8.name());
+        r("bigdec-add", () -> java.math.BigDecimal.ONE.add(java.math.BigDecimal.TEN).toString());
+        // ...and a name that is NOT a library constant is still nothing here
+        r("not-a-const", () -> Stream.of(Integer.MAX_VALUE).map(x -> x - 1).collect(Collectors.toList()));
+        r("math-pi", () -> Stream.of(Math.PI).map(x -> x * 2).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// Every map's three views, and what each answers to `instanceof`. Their class
+// NAMES were added when views learned to name themselves and the faces list
+// beside them was not kept level, so an immutable map's `keySet()` said false
+// to `instanceof Set` and threw on the cast that follows — while the same
+// view of a `HashMap` did not. A `values()` view is a `Collection` and not a
+// `Set`, on every map here, which is the distinction that makes the list
+// worth having.
+differential_test!(
+    a_map_view_wears_its_face,
+    "V1",
+    r#"
+import java.util.*;
+public class V1 {
+    static void s(String l, Object v) { System.out.println(l + " = " + v); }
+    public static void main(String[] a) {
+        Map<String,Integer> hash = new HashMap<>(); hash.put("a", 1);
+        Map<String,Integer> imm = Map.of("a", 1);
+        Map<String,Integer> one = Collections.singletonMap("a", 1);
+        Map<String,Integer> none = Collections.emptyMap();
+        Map<String,Integer> ro = Collections.unmodifiableMap(hash);
+        Map<String,Integer> tree = new TreeMap<>(hash);
+        for (Map<String,Integer> m : List.of(hash, imm, one, none, ro, tree)) {
+            Object k = m.keySet(), e = m.entrySet(), v = m.values();
+            s(k.getClass().getName(), (k instanceof Set) + " " + (k instanceof Collection) + " " + (k instanceof Iterable));
+            s(e.getClass().getName(), (e instanceof Set) + " " + (e instanceof Collection));
+            s(v.getClass().getName(), (v instanceof Set) + " " + (v instanceof Collection));
+            s("cast", ((Set<String>) m.keySet()).size() + " " + ((Collection<Integer>) m.values()).size());
+        }
+        s("map-faces", (imm instanceof Map) + " " + (one instanceof Map) + " " + (none instanceof Map));
+    }
+}
+"#
+);

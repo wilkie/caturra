@@ -15706,6 +15706,57 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### What a library name answers (2026-09-23)
+
+The open item two units running had named: the table that says what a library
+call ANSWERS, asked where a lambda's body is typed. Twenty-six library names
+written inline as a stream's element, each followed by a question only its own
+type can answer — **fifteen had no type at all**, so the lambda after each saw
+an `Object`, while the same value assigned to a declared variable first had
+always worked.
+
+They fell into four kinds, and the fix for each is that the lambda pass now
+asks the table the EMIT side already reads:
+
+- **An object-valued CONSTANT.** `Month.MAY`, `StandardCharsets.UTF_8`,
+  `BigDecimal.ONE`, `RoundingMode.HALF_UP` — the emit side folds each from a
+  table keyed by class and field, and nothing exposed it. Both spellings
+  answer now: the last two segments name it, so the fully qualified
+  `java.time.Month.MAY` — what a program that has not imported the class
+  writes — reads the same as the simple one.
+- **A PRIMITIVE constant.** `Integer.MAX_VALUE`, `Math.PI`, `Byte.MIN_VALUE`
+  — the same table, one variant along, and `Stream.of(Integer.MAX_VALUE)
+  .map(x -> x - 1)` was "bad operand types for binary operator '-'".
+- **The names the PROGRAM owns.** Its own enum constant (`Kind.RED`) and its
+  own static field (`Holder.NAME`) read through the CLASS rather than through
+  a value of it. Both were found by the negative probe, not the positive one.
+- **A call whose answer the reader would not name.** The descriptor reader
+  refused every class outside a short list, on the reasoning that an erased
+  container's element would be a wrong element — but answering nothing does
+  not avoid that, it makes the whole VALUE an `Object`, which is strictly less
+  true. It answers the class the descriptor names now. Beside it, the
+  receiver-keyed reader gained a collection's `iterator()`, a map's
+  `entrySet()`, a builder's chaining methods and the three empty factories,
+  and `Map.entry(k, v)` is typed from its two arguments — as the one library
+  factory whose answer they decide.
+
+**And typing those exposed a VM gap.** With `entrySet()` typed, the lambda
+over one casts, and `Map.of("a", 1).keySet()` answered false to
+`instanceof Set` and threw: the class names for an immutable map's two
+set-shaped views were added when every view learned to name itself, and the
+FACES list beside them was not kept level. Two names, plus the `values()` of a
+wrapped map, which is a `Collection` and not a `Set` — the distinction that
+makes the list worth keeping. Every map's three views are pinned against a JDK
+now, each asked all three questions.
+
+Pinned as `what_a_library_name_answers`,
+`the_names_a_program_writes_itself` and `a_map_view_wears_its_face`.
+
+Still open: `java.util.Locale` is refused outright — its members work written
+out, but no value of the type is modelled, so a `Locale` cannot name a
+variable. That is a modelling gap rather than a typing one.
+
+
 ### A library value a program holds (2026-09-22)
 
 The stream-of-streams the last unit left open, asked as its general question:
