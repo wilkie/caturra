@@ -15706,6 +15706,39 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### When caturra does not run a program (2026-09-23)
+
+The last unit found an ENGINE ABORT by accident, which is the tell that
+nothing was watching for one. caturra may refuse a program — a diagnostic,
+with a line and a reason — and it may fail one at run time — a Java exception,
+which a program could have caught. Those are ANSWERS. "operand stack underflow
+(malformed bytecode)", "unknown native member", "unsupported opcode",
+"malformed class" are not: each says the engine lost its footing, and a reader
+cannot tell whether their program is wrong or caturra is.
+
+Nothing swept for them. `scripts/fuzz/panics.py` catches a Rust PANIC — the
+process dying — and the compile sweeps compare a refusal against javac's
+without reading what the refusal SAYS, so a program both engines turn away
+counts as agreement however badly caturra worded it.
+
+`scripts/sweep/aborts.py` asks the question, of all four corpus populations
+and of any directory of `.java` files (so a fuzz run's output can be swept
+too). **10,189 programs, 0 engine aborts**, plus 240 one-token-broken
+programs, four fuzz corpora and an unresolvable name in twenty syntactic
+positions — all clean.
+
+A clean sweep always raises the question of whether it could report anything
+at all, so `--self-check` answers it: the words the engine actually used are
+recognised, and the two shapes that must NOT be read as aborts (a diagnostic,
+a Java exception) are left alone. The sweep was also checked against the build
+from before the last unit's fix, where it reports the one abort — an
+instrument that cannot fail is not evidence.
+
+Pinned as `reject_unresolvable_argument` and its three siblings: an
+unresolvable name in an argument, an operand and an array element, each
+refused by both engines — the shapes the sweep was built after.
+
+
 ### Every file call either works or says why (2026-09-23)
 
 The rest of `java.nio.file.Files`, asked the way the last unit asked the

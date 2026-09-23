@@ -58464,3 +58464,30 @@ public class Walk {
 }
 "#
 );
+
+// An unresolvable NAME in an argument position. Both engines refuse it — the
+// point is HOW: the refusal path used to read each argument's type, find an
+// error and return without reporting anything, so a class file came out of
+// the silence and the program died with "operand stack underflow (malformed
+// bytecode)". `scripts/sweep/aborts.py` is the sweep that now asks this of
+// every corpus; these are the shapes it was built after.
+differential_reject!(
+    reject_unresolvable_argument,
+    "RejUA",
+    "public class RejUA { public static void main(String[] a) { System.out.println(String.valueOf(Nope.FIELD)); } }"
+);
+differential_reject!(
+    reject_unresolvable_library_argument,
+    "RejULA",
+    "public class RejULA { public static void main(String[] a) { System.out.println(\"abc\".indexOf(Nope.FIELD)); } }"
+);
+differential_reject!(
+    reject_unresolvable_operand,
+    "RejUO",
+    "public class RejUO { public static void main(String[] a) { System.out.println(1 + Nope.FIELD); } }"
+);
+differential_reject!(
+    reject_unresolvable_element,
+    "RejUE",
+    "public class RejUE { public static void main(String[] a) { Object[] o = { Nope.FIELD }; System.out.println(o.length); } }"
+);

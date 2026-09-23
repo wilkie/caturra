@@ -50,6 +50,31 @@ reads `apps/playground/src/csa-units/unit-*.ts`), so it runs anywhere; the
 other three need `artifacts/` or `vendor/sweep-cases/`. A "javac only" line is
 the dangerous direction — a program caturra accepts that a JDK refuses.
 
+`aborts.py` asks a third question of the same populations, and of any
+directory of `.java` files: when caturra does not run a program, does it say
+so as an ANSWER? A diagnostic (a line and a reason) and a Java exception (a
+program could have caught it) are answers. "operand stack underflow (malformed
+bytecode)", "unknown native member", "unsupported opcode" are not: each says
+the engine lost its footing, and a reader cannot tell whether their program is
+wrong or caturra is.
+
+```sh
+scripts/sweep/aborts.py --what all           # every corpus above
+scripts/sweep/aborts.py --dir <dir>          # a fuzz run's output
+scripts/sweep/aborts.py --self-check         # can it report anything at all?
+```
+
+Nothing swept for these. `scripts/fuzz/panics.py` catches a Rust PANIC — the
+process dying — and `compile.py` compares a refusal against javac's without
+reading what the refusal SAYS, so a program both engines turn away counts as
+agreement however badly caturra worded it. One was found by accident: a
+library static call whose argument had an unresolvable name produced malformed
+bytecode, because the refusal path read the argument's type, found an error
+and returned without reporting it. `--self-check` is there because a clean
+sweep always raises the question of whether it could report anything —
+it feeds the words the engine actually used, and the two shapes that must NOT
+be read as aborts.
+
 `stdout.py` is the same corpus asked a different question. It needs no recorded
 reference — it runs `javac`/`java` beside caturra, level by level — and it
 compares the console rather than the verdict: the output a completing `main`
