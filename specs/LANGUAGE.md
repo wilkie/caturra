@@ -15706,6 +15706,40 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A constant folds inside a hoisted body (2026-09-23)
+
+The open item the surrogate unit recorded, and larger than the `==` it was
+spotted through. A lambda's body and an anonymous class's body are HOISTED to
+classes of their own, so while one is being compiled the class that DECLARED a
+constant is no longer `current_class` — and the constant folder asked only
+that class. A field READ already walked the enclosing chain; the FOLD did not.
+
+A name that does not fold is not a constant expression, so this showed up two
+ways:
+
+- **silently**, as a wrong answer: `() -> "ab" == P + "b"` came out FALSE,
+  because the fold that interns both sides never happened;
+- **loudly**, as a refusal of ordinary Java: `case P + "b":` and `case N:`
+  inside a lambda were "constant string expression required" and "constant
+  expression required" for code a JDK compiles.
+
+The fold consults the enclosing chain now — the same walk the read uses, which
+is transitive, so a nested lambda inside a lambda inside a class finds it. A
+nested class's own constant still beats its enclosing one, a shadowed name
+still resolves to the nearest declaration, and a non-constant field still does
+not fold.
+
+Left open, measured: a captured constant LOCAL (`final int K = 7;` then
+`() -> { switch (x) { case K: … } }`) still does not fold. Its value is not in
+any class's constant table — the capture pass turns it into a synthesized
+field assigned in the constructor, and the list it threads carries a name and
+a type and nothing else. Widening that list is the fix, and it is a change to
+the capture pass rather than to the folder.
+
+Pinned as `a_constant_folds_inside_a_hoisted_body` and
+`what_still_does_not_fold`.
+
+
 ### A string keeps its units (2026-09-23)
 
 The moment the behaviour sweep could ask about `Pattern.compile` again, it

@@ -46071,8 +46071,22 @@ impl BodyGen<'_> {
                 {
                     return None;
                 }
+                // ...and the class that lexically ENCLOSES this one. A
+                // lambda or anonymous body is hoisted to a class of its own,
+                // so a constant field of the class that wrote it is no longer
+                // `current_class` — and a name that does not fold is not a
+                // constant expression: `() -> "ab" == P + "b"` came out FALSE
+                // (the fold that interns both sides never happened) and
+                // `case P + "b":` was refused outright as "constant string
+                // expression required". The field READ already walked this
+                // chain; the fold did not.
                 self.table
                     .field(self.current_class, name)
+                    .or_else(|| {
+                        self.enclosing_chain()
+                            .iter()
+                            .find_map(|outer| self.table.field(outer, name))
+                    })
                     .and_then(|(_, f)| f.const_literal.as_ref().and_then(const_from_literal))
             }
             // A user class of that name wins over the library one, as it does

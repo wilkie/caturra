@@ -58756,3 +58756,85 @@ public class Sur {
 }
 "#
 );
+
+// A constant FIELD, folded inside a hoisted body. A lambda's and an anonymous
+// class's bodies are hoisted to classes of their own, so the class that
+// DECLARED the constant is no longer the one being compiled — and a name that
+// does not fold is not a constant expression. `() -> "ab" == P + "b"` came out
+// FALSE (the fold that interns both sides never happened) and `case P + "b":`
+// was refused outright as "constant string expression required", for ordinary
+// Java a JDK compiles. The field READ already walked the enclosing chain; the
+// FOLD did not.
+differential_test!(
+    a_constant_folds_inside_a_hoisted_body,
+    "HB",
+    r#"
+public class HB {
+    static final String P = "a";
+    static final int N = 7;
+    static final char C = 'b';
+    interface Body { Object get(); }
+    static Object run(Body b) { return b.get(); }
+    public static void main(String[] args) {
+        // A constant FIELD folded inside a HOISTED body — a lambda's, an
+        // anonymous class's, a nested lambda's. Outside one it always folded.
+        System.out.println("outside      " + ("ab" == P + "b"));
+        System.out.println("lambda       " + run(() -> "ab" == P + "b"));
+        System.out.println("lambda-int   " + run(() -> "a7" == "a" + N));
+        System.out.println("lambda-char  " + run(() -> "ab" == "a" + C));
+        System.out.println("nested       " + run(() -> run(() -> "ab" == P + "b")));
+        System.out.println("anon         " + run(new Body() { public Object get() { return "ab" == P + "b"; } }));
+        // ...and where a constant is REQUIRED, not merely interned.
+        System.out.println("case-string  " + run(() -> { switch ("ab") { case P + "b": return "matched"; default: return "no"; } }));
+        System.out.println("case-int     " + run(() -> { switch (7) { case N: return "n"; default: return "no"; } }));
+        System.out.println("case-char    " + run(() -> { switch ('b') { case C: return "c"; default: return "no"; } }));
+        // The reads that always worked, beside them.
+        System.out.println("read         " + run(() -> P + N + C));
+        System.out.println("literal      " + run(() -> "ab" == "a" + "b"));
+    }
+}
+"#
+);
+
+// ...and the other direction. A non-constant field must still not fold, the
+// NEAREST declaration of a shadowed name wins rather than the outermost, a
+// nested class's own constant beats its enclosing one, and the expressions
+// that were never constant (an array size, an arithmetic read, a
+// conditional) answer as they always did.
+differential_test!(
+    what_still_does_not_fold,
+    "HB2",
+    r#"
+public class HB2 {
+    static final String P = "a";
+    static final int N = 7;
+    static String mutable = "a";
+    static final String SHADOWED = "outer";
+    interface Body { Object get(); }
+    static Object run(Body b) { return b.get(); }
+    static class Inner {
+        static final String P = "z";
+        static Object peek() { return run(() -> "zb" == P + "b"); }
+        static Object peekOuter() { return run(() -> "ab" == HB2.P + "b"); }
+    }
+    static class Holder { static final String SHADOWED = "inner"; }
+    public static void main(String[] args) {
+        // A constant field of the ENCLOSING class folds inside a hoisted body.
+        System.out.println("field       " + run(() -> "ab" == P + "b"));
+        System.out.println("nested-own  " + Inner.peek());
+        System.out.println("nested-outer " + Inner.peekOuter());
+        // ...and a NON-constant must still not fold.
+        System.out.println("mutable     " + run(() -> "ab" == mutable + "b"));
+        System.out.println("param       " + run(() -> { String s = mutable; return "ab" == s + "b"; }));
+        // The nearest declaration wins, not the outermost.
+        System.out.println("shadowed    " + run(() -> SHADOWED + "/" + Holder.SHADOWED));
+        // A case label that is genuinely NOT constant is still refused.
+        System.out.println("array       " + run(() -> new int[N].length));
+        System.out.println("read        " + run(() -> P + N));
+        System.out.println("arith       " + run(() -> N + 1));
+        System.out.println("case-int    " + run(() -> { switch (8) { case N: return "n"; case N + 1: return "n+1"; default: return "no"; } }));
+        System.out.println("cond        " + run(() -> N > 5 ? P : "z"));
+    }
+}
+"#
+);
