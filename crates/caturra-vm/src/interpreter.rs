@@ -7452,6 +7452,7 @@ impl<'run> Interpreter<'run> {
     /// The list's elements, detached from the heap borrow. An unmodifiable
     /// view reads through to what it wraps.
     fn list_items(&self, receiver: HeapRef) -> Vec<JValue> {
+        let receiver = self.heap.unwrapped(receiver);
         // A `subList` view is a RANGE of another list, so it has no vector of
         // its own to hand back — every read of one is a read of that range.
         if let Some(crate::value::HeapObject::SubList {
@@ -7548,15 +7549,7 @@ impl<'run> Interpreter<'run> {
     }
 
     fn backing_list(&self, reference: HeapRef) -> HeapRef {
-        let mut current = reference;
-        // Views of views are possible; the chain is short and acyclic.
-        for _ in 0..MAX_RENDER_DEPTH {
-            match self.heap.get(current) {
-                Some(crate::value::HeapObject::UnmodifiableList(inner)) => current = *inner,
-                _ => break,
-            }
-        }
-        current
+        self.heap.unwrapped(reference)
     }
 
     /// `list.contains(probe)`: Java asks the *probe*, not the element.
@@ -7598,18 +7591,21 @@ impl<'run> Interpreter<'run> {
     /// wrapper, which delegates every read to the map it holds.
     fn is_map_like(&self, reference: HeapRef) -> bool {
         use crate::value::HeapObject;
-        match self.heap.get(reference) {
+        match self.heap.get(self.heap.unwrapped(reference)) {
             Some(HeapObject::HashMap(_) | HeapObject::TreeMap { .. }) => true,
-            Some(HeapObject::UnmodifiableMap(inner)) => self.is_map_like(*inner),
+            // A sorted map's range views (`headMap`, `subMap`, a descending
+            // one) are maps, and compare as the slice they present.
+            Some(HeapObject::SortedView { face, .. }) => {
+                matches!(face, crate::value::SortedFace::Map)
+            }
             _ => false,
         }
     }
 
     fn is_set_like(&self, reference: HeapRef) -> bool {
         use crate::value::HeapObject;
-        match self.heap.get(reference) {
+        match self.heap.get(self.heap.unwrapped(reference)) {
             Some(HeapObject::HashSet(_) | HeapObject::TreeSet { .. }) => true,
-            Some(HeapObject::UnmodifiableSet(inner)) => self.is_set_like(*inner),
             Some(HeapObject::MapView { kind, .. }) => !matches!(kind, MapViewKind::Values),
             // The two set-shaped faces of a sorted view ARE sets: a
             // `headSet`, a `descendingSet`, a `navigableKeySet`.
@@ -7622,13 +7618,12 @@ impl<'run> Interpreter<'run> {
 
     /// The map behind `reference` when it is an `entrySet()` view.
     fn entry_set_map(&self, reference: HeapRef) -> Option<HeapRef> {
-        match self.heap.get(reference) {
+        match self.heap.get(self.heap.unwrapped(reference)) {
             Some(crate::value::HeapObject::MapView {
                 map,
                 kind: MapViewKind::Entries,
                 ..
             }) => Some(*map),
-            Some(crate::value::HeapObject::UnmodifiableSet(inner)) => self.entry_set_map(*inner),
             _ => None,
         }
     }
@@ -7685,16 +7680,11 @@ impl<'run> Interpreter<'run> {
     /// `AbstractList.equals` compares against. NOT an `ArrayDeque` or a
     /// `PriorityQueue`, whose `equals` is identity (they are not Lists).
     fn is_list_like(&self, reference: HeapRef) -> bool {
-        use crate::value::HeapObject::{
-            ArrayBackedList, ArrayList, LinkedList, Stack, SubList, UnmodifiableList,
-        };
-        match self.heap.get(reference) {
-            Some(ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_) | SubList { .. }) => {
-                true
-            }
-            Some(UnmodifiableList(inner)) => self.is_list_like(*inner),
-            _ => false,
-        }
+        use crate::value::HeapObject::{ArrayBackedList, ArrayList, LinkedList, Stack, SubList};
+        matches!(
+            self.heap.get(self.heap.unwrapped(reference)),
+            Some(ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_) | SubList { .. })
+        )
     }
 
     /// `AbstractList.equals`: two Lists are equal iff they have the same
@@ -7717,12 +7707,7 @@ impl<'run> Interpreter<'run> {
     /// `AbstractMap.equals`: same size, and every mapping of one is present
     /// with an equal value in the other.
     fn maps_equal(&mut self, a: HeapRef, b: HeapRef) -> Result<bool, VmError> {
-        use crate::value::HeapObject::{HashMap, TreeMap, UnmodifiableMap};
-        if !matches!(
-            self.heap.get(b),
-            Some(HashMap(_) | TreeMap { .. } | UnmodifiableMap(_))
-        ) || self.map_len(a) != self.map_len(b)
-        {
+        if !self.is_map_like(b) || self.map_len(a) != self.map_len(b) {
             return Ok(false);
         }
         for (key, value) in self.map_entries(a) {
@@ -7743,27 +7728,36 @@ impl<'run> Interpreter<'run> {
     /// nested `List<List<...>>`, a `Set` of `List`s, or a `Map` with collection
     /// values deep-equal, everywhere `java_equals` reaches.
     fn structural_equals(&mut self, a: HeapRef, b: JValue) -> Result<Option<bool>, VmError> {
-        use crate::value::HeapObject::{
-            ArrayBackedList, ArrayList, HashMap, HashSet, LinkedList, Stack, TreeMap, TreeSet,
-            UnmodifiableList, UnmodifiableMap, UnmodifiableSet,
-        };
-        let equal = match self.heap.get(a) {
-            Some(
-                ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_) | UnmodifiableList(_),
-            ) => match b {
+        // The RECEIVER side asks the same predicate the probe side does. It
+        // spelled the kinds out instead, and the two lists drifted: a
+        // `SubList` was a list to be compared AGAINST and not a list doing
+        // the comparing, so `list.contains(sub)` was false, `map.get(sub)`
+        // null and a `HashSet` kept the sub-list beside the list it equals —
+        // while `sub.equals(list)`, asked directly, was true all along.
+        if self.is_list_like(a) {
+            let equal = match b {
                 JValue::Ref(Some(other)) if self.is_list_like(other) => {
                     self.lists_equal(a, other)?
                 }
                 _ => false,
-            },
-            Some(HashSet(_) | TreeSet { .. } | UnmodifiableSet(_)) => match b {
+            };
+            return Ok(Some(equal));
+        }
+        if self.is_set_like(a) {
+            let equal = match b {
                 JValue::Ref(Some(other)) => self.set_like_equals(a, other)?,
                 _ => false,
-            },
-            Some(HashMap(_) | TreeMap { .. } | UnmodifiableMap(_)) => match b {
+            };
+            return Ok(Some(equal));
+        }
+        if self.is_map_like(a) {
+            let equal = match b {
                 JValue::Ref(Some(other)) => self.maps_equal(a, other)?,
                 _ => false,
-            },
+            };
+            return Ok(Some(equal));
+        }
+        let equal = match self.heap.get(a) {
             // A map's keySet/entrySet is a Set and its entries are entries;
             // both compare structurally, and both were compared by IDENTITY
             // here while their own `equals` compared them properly.
@@ -7818,10 +7812,7 @@ impl<'run> Interpreter<'run> {
     }
 
     fn structural_hash(&mut self, a: HeapRef) -> Result<Option<i32>, VmError> {
-        use crate::value::HeapObject::{
-            self, ArrayBackedList, ArrayList, HashMap, HashSet, LinkedList, Stack, SubList,
-            TreeMap, TreeSet, UnmodifiableList, UnmodifiableMap, UnmodifiableSet,
-        };
+        use crate::value::HeapObject;
         // A VIEW, an ENTRY and a WRAPPED map hash by their contents too, and
         // leaving them out here is not a missing feature but a CONTRADICTION:
         // `hashCode()` called on one answered the structural hash all along,
@@ -7831,49 +7822,34 @@ impl<'run> Interpreter<'run> {
         if let Some(HeapObject::MapEntry { .. }) = self.heap.get(a) {
             return Ok(Some(self.entry_hash(a)?));
         }
-        if self.is_set_like(a) && !matches!(self.heap.get(a), Some(HashSet(_) | TreeSet { .. })) {
+        // The same three predicates the EQUALS beside this asks. Spelling
+        // the kinds out here instead is how the two came apart: a `SubList`
+        // hashed by its contents and compared by identity, and a
+        // `Collections.synchronized*` wrapper did neither.
+        if self.is_list_like(a) {
+            let mut hash = 1i32;
+            for item in self.list_items(a) {
+                hash = hash
+                    .wrapping_mul(31)
+                    .wrapping_add(self.java_hash_code(item)?);
+            }
+            return Ok(Some(hash));
+        }
+        if self.is_set_like(a) {
             let mut sum = 0i32;
             for element in self.collection_elements(a) {
                 sum = sum.wrapping_add(self.java_hash_code(element)?);
             }
             return Ok(Some(sum));
         }
-        let hash = match self.heap.get(a) {
-            Some(
-                ArrayList(_)
-                | LinkedList(_)
-                | Stack(_)
-                | ArrayBackedList(_)
-                | SubList { .. }
-                | UnmodifiableList(_),
-            ) => {
-                let mut hash = 1i32;
-                for item in self.list_items(a) {
-                    hash = hash
-                        .wrapping_mul(31)
-                        .wrapping_add(self.java_hash_code(item)?);
-                }
-                hash
+        if self.is_map_like(a) {
+            let mut sum = 0i32;
+            for (key, value) in self.map_entries(a) {
+                sum = sum.wrapping_add(self.java_hash_code(key)? ^ self.java_hash_code(value)?);
             }
-            Some(HashSet(_) | TreeSet { .. } | UnmodifiableSet(_)) => {
-                let mut sum = 0i32;
-                for element in self.collection_elements(a) {
-                    sum = sum.wrapping_add(self.java_hash_code(element)?);
-                }
-                sum
-            }
-            Some(
-                HashMap(_) | TreeMap { .. } | UnmodifiableMap(_) | HeapObject::SortedView { .. },
-            ) => {
-                let mut sum = 0i32;
-                for (key, value) in self.map_entries(a) {
-                    sum = sum.wrapping_add(self.java_hash_code(key)? ^ self.java_hash_code(value)?);
-                }
-                sum
-            }
-            _ => return Ok(None),
-        };
-        Ok(Some(hash))
+            return Ok(Some(sum));
+        }
+        Ok(None)
     }
 
     /// The methods a `subList` VIEW cannot inherit from the ordinary list path:
@@ -8477,11 +8453,7 @@ impl<'run> Interpreter<'run> {
     /// hashes first and only then `equals`, so a key whose `hashCode`
     /// disagrees with its `equals` goes missing — here exactly as there.
     fn map_find(&mut self, map: HeapRef, key: JValue) -> Result<Option<usize>, VmError> {
-        // An immutable wrapper looks up through the map it wraps.
-        if let Some(crate::value::HeapObject::UnmodifiableMap(inner)) = self.heap.get(map) {
-            let inner = *inner;
-            return self.map_find(inner, key);
-        }
+        let map = self.heap.unwrapped(map);
         // An ENUM-keyed map knows that null is not one of its keys, so a null
         // PROBE answers absent instead of comparing (which is what a JDK's
         // EnumMap does, and why `get(null)` is null there where a TreeMap's
@@ -8701,6 +8673,7 @@ impl<'run> Interpreter<'run> {
     }
 
     fn map_entries(&self, map: HeapRef) -> Vec<(JValue, JValue)> {
+        let map = self.heap.unwrapped(map);
         match self.heap.get(map) {
             Some(
                 crate::value::HeapObject::HashMap(entries)
@@ -8708,10 +8681,6 @@ impl<'run> Interpreter<'run> {
             ) => entries.entries_in_order(),
             // A TreeMap's entries are already stored in key order.
             Some(crate::value::HeapObject::TreeMap { entries, .. }) => entries.clone(),
-            // An immutable WRAPPER is a map too: `new TreeMap<>(
-            // Collections.singletonMap(k, v))` read no entries at all and
-            // built an empty map.
-            Some(crate::value::HeapObject::UnmodifiableMap(inner)) => self.map_entries(*inner),
             // A sorted view's entries are the slice its bounds resolve to, in
             // the view's own direction.
             Some(crate::value::HeapObject::SortedView { .. }) => {
@@ -8722,13 +8691,13 @@ impl<'run> Interpreter<'run> {
     }
 
     fn map_len(&self, map: HeapRef) -> usize {
+        let map = self.heap.unwrapped(map);
         match self.heap.get(map) {
             Some(
                 crate::value::HeapObject::HashMap(entries)
                 | crate::value::HeapObject::HashSet(entries),
             ) => entries.len(),
             Some(crate::value::HeapObject::TreeMap { entries, .. }) => entries.len(),
-            Some(crate::value::HeapObject::UnmodifiableMap(inner)) => self.map_len(*inner),
             Some(crate::value::HeapObject::SortedView { .. }) => {
                 let (from, to) = intrinsics::sorted_view_range(&self.heap, map);
                 to.saturating_sub(from)
@@ -9319,48 +9288,18 @@ impl<'run> Interpreter<'run> {
             }
             // `AbstractMap.equals`: the same entries, in whatever order, with
             // values compared by `equals`.
+            // `AbstractMap.equals` and `hashCode` — the SAME two functions
+            // every other map-shaped receiver answers with. Written out here,
+            // the "is the other side a Map" list knew three kinds, so a
+            // `TreeMap` was unequal to its own `headMap` while the view,
+            // asked the same question, said equal.
             ("equals", [JValue::Ref(other)]) => {
                 let Some(other) = *other else {
                     return Ok(Answered::Value(JValue::Int(0)));
                 };
-                // An immutable WRAPPER is a Map too: `Map.of(k, v)` equals
-                // `singletonMap(k, v)` in a JDK, and comparing only the
-                // concrete map kinds said false.
-                if !matches!(
-                    self.heap.get(other),
-                    Some(
-                        HeapObject::HashMap(_)
-                            | HeapObject::TreeMap { .. }
-                            | HeapObject::UnmodifiableMap(_)
-                    )
-                ) || self.map_len(receiver) != self.map_len(other)
-                {
-                    return Ok(Answered::Value(JValue::Int(0)));
-                }
-                let mut equal = true;
-                for (key, value) in self.map_entries(receiver) {
-                    let Some(at) = self.map_find(other, key)? else {
-                        equal = false;
-                        break;
-                    };
-                    let theirs = self.map_value_at(other, at);
-                    if !self.java_equals(value, theirs)? {
-                        equal = false;
-                        break;
-                    }
-                }
-                JValue::Int(i32::from(equal))
+                JValue::Int(i32::from(self.maps_equal(receiver, other)?))
             }
-            // `AbstractMap.hashCode`: the sum of the entries', and an entry's
-            // is its key's hash XOR its value's.
-            ("hashCode", []) => {
-                let mut sum = 0i32;
-                for (key, value) in self.map_entries(receiver) {
-                    let entry = self.java_hash_code(key)? ^ self.java_hash_code(value)?;
-                    sum = sum.wrapping_add(entry);
-                }
-                JValue::Int(sum)
-            }
+            ("hashCode", []) => JValue::Int(self.structural_hash(receiver)?.unwrap_or_default()),
             // Java's three views are live: a later `put` shows through them.
             ("keySet", []) => self.map_view_of(receiver, receiver, MapViewKind::Keys, false),
             ("values", []) => self.map_view_of(receiver, receiver, MapViewKind::Values, false),
@@ -13776,6 +13715,7 @@ impl<'run> Interpreter<'run> {
     /// fact written twice.
     fn try_collection_elements(&self, reference: HeapRef) -> Option<Vec<JValue>> {
         use crate::value::HeapObject;
+        let reference = self.heap.unwrapped(reference);
         Some(match self.heap.get(reference) {
             Some(
                 HeapObject::ArrayList(_)
@@ -13783,8 +13723,7 @@ impl<'run> Interpreter<'run> {
                 | HeapObject::LinkedList(_)
                 | HeapObject::ArrayDeque(_)
                 | HeapObject::Stack(_)
-                | HeapObject::SubList { .. }
-                | HeapObject::UnmodifiableList(_),
+                | HeapObject::SubList { .. },
             ) => self.list_items(reference),
             Some(HeapObject::TreeSet { values, .. }) => values.clone(),
             Some(HeapObject::PriorityQueue { heap, .. }) => heap.clone(),
@@ -13803,8 +13742,6 @@ impl<'run> Interpreter<'run> {
                     })
                     .collect()
             }
-            // An unmodifiable set view walks its backing set.
-            Some(HeapObject::UnmodifiableSet(inner)) => self.collection_elements(*inner),
             // A sorted view walks the slice its bounds resolve to. The two
             // set-shaped faces answer keys; the MAP face is not a collection,
             // exactly as a `TreeMap` is not.
@@ -13821,6 +13758,7 @@ impl<'run> Interpreter<'run> {
     }
 
     fn map_value_at(&self, map: HeapRef, at: usize) -> JValue {
+        let map = self.heap.unwrapped(map);
         match self.heap.get(map) {
             Some(
                 crate::value::HeapObject::HashMap(entries)
@@ -13829,8 +13767,6 @@ impl<'run> Interpreter<'run> {
             Some(crate::value::HeapObject::TreeMap { entries, .. }) => {
                 entries.get(at).map_or(JValue::NULL, |(_, value)| *value)
             }
-            // An immutable wrapper reads through, as its `map_find` does.
-            Some(crate::value::HeapObject::UnmodifiableMap(inner)) => self.map_value_at(*inner, at),
             // A view answers by position in ITS slice, which is where its
             // `map_find` just looked.
             Some(crate::value::HeapObject::SortedView { .. }) => {

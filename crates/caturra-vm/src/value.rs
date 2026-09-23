@@ -1945,6 +1945,33 @@ impl Heap {
         self.objects.get_mut(reference as usize)
     }
 
+    /// A reference with every PASS-THROUGH wrapper peeled off: the four
+    /// `Collections.unmodifiable*` / `synchronized*` views, which hold no
+    /// contents of their own and answer every read from what they wrap. A
+    /// bounded view (`subList`, `headMap`, a descending one) is NOT one of
+    /// these — it presents a SLICE — and stays.
+    ///
+    /// Every reader of a collection's contents starts here, rather than
+    /// listing the wrapper kinds itself: written once per reader, the list
+    /// was right at one of them and short at the rest.
+    #[must_use]
+    pub fn unwrapped(&self, reference: HeapRef) -> HeapRef {
+        let mut current = reference;
+        // Views of views are possible; the chain is short and acyclic.
+        for _ in 0..64 {
+            match self.get(current) {
+                Some(
+                    HeapObject::UnmodifiableList(inner)
+                    | HeapObject::UnmodifiableSet(inner)
+                    | HeapObject::UnmodifiableMap(inner)
+                    | HeapObject::SynchronizedView(inner),
+                ) => current = *inner,
+                _ => break,
+            }
+        }
+        current
+    }
+
     /// The backing element vector of an `ArrayList` or a `LinkedList` — both
     /// store their elements the same way, so list operations read either.
     #[must_use]

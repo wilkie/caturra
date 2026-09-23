@@ -9556,6 +9556,7 @@ pub(crate) fn iterated_len_of(heap: &Heap, source: HeapRef) -> usize {
 }
 
 fn iterated_len(heap: &Heap, source: HeapRef) -> usize {
+    let source = heap.unwrapped(source);
     if let Some(values) = heap.list_values(source) {
         return values.len();
     }
@@ -9572,17 +9573,6 @@ fn iterated_len(heap: &Heap, source: HeapRef) -> usize {
     if matches!(heap.get(source), Some(HeapObject::SortedView { .. })) {
         let (from, to) = sorted_view_range(heap, source);
         return to.saturating_sub(from);
-    }
-    // An unmodifiable wrapper iterates the collection it wraps. Missing these
-    // made the length read as 0, which the comodification check saw as a
-    // change and turned into a spurious CME on a perfectly ordinary for-each.
-    if let Some(
-        HeapObject::UnmodifiableList(inner)
-        | HeapObject::UnmodifiableSet(inner)
-        | HeapObject::UnmodifiableMap(inner),
-    ) = heap.get(source)
-    {
-        return iterated_len(heap, *inner);
     }
     match heap.get(source) {
         Some(HeapObject::HashSet(entries) | HeapObject::HashMap(entries)) => entries.len(),

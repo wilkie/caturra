@@ -15706,6 +15706,57 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A view is its contents, to every question (2026-09-22)
+
+`equals` and `hashCode` are a CONTRACT, and a collection keeps it through
+every reader that touches its contents: the direct call, `list.contains(x)`
+(which asks the PROBE, `x.equals(element)`), `map.containsKey(x)` (which
+hashes first and compares second), and `set.add(x)` deciding a duplicate. If
+two of those read the collection's contents by different rules, a program can
+watch `a.equals(b)` say true and `set.contains(b)` say false about the same
+pair.
+
+Asked as a cross-product — 21 collection values (lists, three shapes of
+`subList`, the sorted set and map views, the `Collections.synchronized*`
+wrappers, an `EnumSet`, maps and their key sets) against themselves, each
+cell comparing the direct answer with the scanned and the hashed one — a JDK
+disagrees in none of the 441 cells. caturra disagreed in 48.
+
+The cause was the same fact written once per reader. `structural_equals` and
+`structural_hash` spelled out the heap kinds; so did the map's own `equals`;
+so did `map_entries`, `map_len`, `map_value_at`, `map_find`,
+`try_collection_elements` and `iterated_len`. Each list was right about the
+wrappers its author had in mind and short about the rest, so:
+
+- a `SubList` was a list to be compared AGAINST and not a list doing the
+  comparing — `sub.equals(list)` was true all along while
+  `list.contains(sub)` was false and a `HashSet` kept both;
+- a `TreeMap` was unequal to its own `headMap` while the view, asked the same
+  question, said equal (the map's `equals` knew three kinds of Map);
+- a `Collections.synchronized*` wrapper compared by IDENTITY in every
+  direction, and read as empty to anything that walked it.
+
+There is now ONE function, `Heap::unwrapped`, that peels the four
+pass-through wrappers — the three `unmodifiable*` views and the synchronized
+one — and every reader of a collection's contents starts with it. A BOUNDED
+view is not a pass-through and stays: a `subList`, a `headMap`, a descending
+one each present a SLICE, and the readers resolve it as before. The three
+predicates `is_list_like`/`is_set_like`/`is_map_like` lost their wrapper arms
+to the same call, and the map's `equals`/`hashCode` now call the same
+`maps_equal`/`structural_hash` every other map-shaped receiver answers with.
+
+The negative direction is pinned beside it, because unwrapping is exactly the
+change that could make too much equal: a deque and a priority queue still
+compare by identity (`AbstractCollection` overrides neither), a `values()`
+view still does, no List equals a Set or a Map, an unmodifiable wrapper still
+refuses every write, and a synchronized one is still LIVE — a change to the
+collection underneath shows through it, comodification and all.
+
+Pinned as `a_view_is_its_contents_to_every_question`,
+`a_wrapper_is_its_contents_and_nothing_more` and
+`a_wrapper_answers_every_read`.
+
+
 ### The class an array of a collection names (2026-09-22)
 
 The leftover from the last unit, and a larger fact than the name it started

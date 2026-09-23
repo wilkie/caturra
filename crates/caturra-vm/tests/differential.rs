@@ -56936,3 +56936,171 @@ public class Frm {
 }
 "#
 );
+
+// A view is its CONTENTS, to every question and from either side. The same
+// 21 collection values — lists, sub-lists, sorted views, the
+// `Collections.synchronized*` wrappers, maps and their key sets — asked
+// `a.equals(b)`, `list.contains(b)` (which asks `b.equals(a)`) and
+// `map.containsKey(b)` (which hashes first). A JDK's answers agree in every
+// one of the 441 cells; caturra's disagreed in 48, because each reader of a
+// collection's contents listed the wrapper kinds for itself.
+differential_test!(
+    a_view_is_its_contents_to_every_question,
+    "Vw",
+    r#"
+import java.util.*;
+public class Vw {
+  static List<Object> values() {
+    List<Integer> base = new ArrayList<>(List.of(1, 2, 3));
+    TreeSet<Integer> tree = new TreeSet<>(base);
+    TreeMap<String,Integer> treeMap = new TreeMap<>();
+    treeMap.put("a", 1); treeMap.put("b", 2);
+    List<Object> all = new ArrayList<>();
+    all.add(new ArrayList<>(base));
+    all.add(new ArrayList<>(base).subList(0, 3));
+    all.add(new ArrayList<>(List.of(0, 1, 2, 3)).subList(1, 4));
+    all.add(new LinkedList<>(base).subList(0, 3));
+    all.add(Collections.synchronizedList(new ArrayList<>(base)));
+    Stack<Integer> stack = new Stack<>(); stack.addAll(base);
+    all.add(stack);
+    all.add(new HashSet<>(base));
+    all.add(tree);
+    all.add(tree.headSet(4));
+    all.add(tree.tailSet(1));
+    all.add(tree.subSet(1, 4));
+    all.add(tree.descendingSet());
+    all.add(Collections.synchronizedSet(new HashSet<>(base)));
+    all.add(EnumSet.of(java.time.DayOfWeek.MONDAY));
+    all.add(new TreeMap<>(treeMap));
+    all.add(treeMap.headMap("c"));
+    all.add(treeMap.descendingMap());
+    all.add(Collections.synchronizedMap(new TreeMap<>(treeMap)));
+    all.add(treeMap.navigableKeySet());
+    all.add(treeMap.descendingKeySet());
+    all.add(new TreeMap<>(treeMap).keySet());
+    return all;
+  }
+  public static void main(String[] args) {
+    List<Object> all = values();
+    List<Object> probes = values();
+    int bad = 0;
+    for (int i = 0; i < all.size(); i++) {
+      StringBuilder row = new StringBuilder();
+      for (int j = 0; j < all.size(); j++) {
+        Object a = all.get(i), b = probes.get(j);
+        List<Object> holder = new ArrayList<>();
+        holder.add(a);
+        Map<Object,String> keyed = new HashMap<>();
+        keyed.put(a, "k");
+        boolean direct = a.equals(b);
+        boolean scanned = holder.contains(b);
+        boolean hashed = keyed.containsKey(b);
+        boolean agree = direct == scanned && direct == hashed;
+        if (!agree) { bad++; }
+        row.append(agree ? (direct ? 'E' : '.') : '!');
+      }
+      System.out.println(i + " " + all.get(i).getClass().getSimpleName() + " " + row);
+    }
+    System.out.println("disagreeing=" + bad);
+  }
+}
+"#
+);
+
+// The other direction of the same rule: a wrapper of a wrapper is still its
+// contents (and still LIVE), while the collections that do NOT compare by
+// content — a deque, a priority queue, a `values()` view — keep `Object`'s
+// identity `equals`, and no List ever equals a Set or a Map.
+differential_test!(
+    a_wrapper_is_its_contents_and_nothing_more,
+    "Wrp",
+    r#"
+import java.util.*;
+public class Wrp {
+  static void say(String what, Object value) { System.out.println(what + " " + value); }
+  public static void main(String[] args) {
+    List<Integer> base = new ArrayList<>(List.of(1, 2, 3));
+    Set<Integer> set = new LinkedHashSet<>(base);
+    Map<String,Integer> map = new LinkedHashMap<>();
+    map.put("a", 1); map.put("b", 2);
+    List<Integer> wrapped = Collections.unmodifiableList(Collections.synchronizedList(base));
+    say("wrapped==base", wrapped.equals(base) + " " + base.equals(wrapped) + " " + (wrapped.hashCode() == base.hashCode()));
+    Set<Integer> wset = Collections.synchronizedSet(Collections.unmodifiableSet(set));
+    say("wset==set", wset.equals(set) + " " + set.equals(wset) + " " + (wset.hashCode() == set.hashCode()));
+    Map<String,Integer> wmap = Collections.synchronizedMap(Collections.unmodifiableMap(map));
+    say("wmap==map", wmap.equals(map) + " " + map.equals(wmap) + " " + (wmap.hashCode() == map.hashCode()));
+    base.add(4);
+    say("live", wrapped.equals(base) + " " + wrapped.size() + " " + wrapped);
+    base.remove(3);
+    say("list!=set", base.equals(set) + " " + set.equals(base));
+    say("list!=map", base.equals(map));
+    say("deque", new ArrayDeque<>(base).equals(new ArrayDeque<>(base)));
+    say("pq", new PriorityQueue<>(base).equals(new PriorityQueue<>(base)));
+    say("syncDeque", Collections.synchronizedCollection(new ArrayDeque<>(base)).equals(base));
+    say("keySet!=entrySet", map.keySet().equals(map.entrySet()));
+    say("values", map.values().equals(map.values()) + " " + map.values().equals(new ArrayList<>(map.values())));
+    say("null", base.equals(null) + " " + map.equals(null) + " " + set.equals(null));
+    say("string", base.equals("x") + " " + map.equals("x"));
+    say("shorter", base.equals(base.subList(0, 2)) + " " + base.subList(0, 2).equals(base));
+    say("order", base.equals(new ArrayList<>(List.of(3, 2, 1))));
+    say("mapOf", Map.of("a", 1).equals(Collections.singletonMap("a", 1)));
+    say("listOf", List.of(1, 2, 3).equals(base) + " " + base.equals(List.of(1, 2, 3)));
+    say("empty", Collections.emptyList().equals(new ArrayList<>()) + " " + Collections.emptyMap().equals(new HashMap<>()));
+    Set<Object> holder = new HashSet<>();
+    holder.add(base);
+    say("member", holder.contains(wrapped) + " " + holder.size());
+    holder.add(wrapped);
+    say("no dup", holder.size());
+  }
+}
+"#
+);
+
+// A `Collections.synchronized*` wrapper still REFUSES nothing and hides
+// nothing: it mutates, iterates (comodification and all), sorts, streams and
+// copies exactly as the collection it holds, while an unmodifiable one
+// refuses the writes and answers the reads.
+differential_test!(
+    a_wrapper_answers_every_read,
+    "Wrd",
+    r#"
+import java.util.*;
+public class Wrd {
+  static void tried(String what, Runnable body) {
+    try { body.run(); System.out.println(what + " ok"); }
+    catch (Exception e) { System.out.println(what + " " + e.getClass().getName() + ": " + e.getMessage()); }
+  }
+  public static void main(String[] args) {
+    List<Integer> base = new ArrayList<>(List.of(1, 2, 3));
+    Map<String,Integer> map = new HashMap<>();
+    map.put("a", 1);
+    List<Integer> frozen = Collections.unmodifiableList(base);
+    List<Integer> locked = Collections.synchronizedList(base);
+    Map<String,Integer> fmap = Collections.unmodifiableMap(map);
+    Map<String,Integer> lmap = Collections.synchronizedMap(map);
+    tried("frozen.add", () -> frozen.add(9));
+    tried("frozen.set", () -> frozen.set(0, 9));
+    tried("locked.add", () -> { locked.add(9); locked.remove(Integer.valueOf(9)); });
+    tried("fmap.put", () -> fmap.put("z", 9));
+    tried("lmap.put", () -> { lmap.put("z", 9); lmap.remove("z"); });
+    System.out.println("get " + fmap.get("a") + " " + lmap.get("a") + " " + fmap.containsKey("a") + " " + lmap.containsKey("a"));
+    System.out.println("size " + frozen.size() + " " + locked.size() + " " + fmap.size() + " " + lmap.size());
+    StringBuilder seen = new StringBuilder();
+    for (int value : locked) { seen.append(value); }
+    for (int value : frozen) { seen.append(value); }
+    for (Map.Entry<String,Integer> e : lmap.entrySet()) { seen.append(e.getKey()).append(e.getValue()); }
+    for (String key : fmap.keySet()) { seen.append(key); }
+    System.out.println("walk " + seen);
+    tried("cme", () -> { for (int value : locked) { base.add(value); } });
+    base.clear(); base.addAll(List.of(1, 2, 3));
+    System.out.println("text " + frozen + " " + locked + " " + fmap + " " + lmap);
+    System.out.println("iter " + locked.iterator().next() + " " + lmap.keySet().iterator().next());
+    List<Integer> sortable = Collections.synchronizedList(new ArrayList<>(List.of(3, 1, 2)));
+    Collections.sort(sortable);
+    System.out.println("sorted " + sortable + " " + Collections.binarySearch(sortable, 2) + " " + Collections.max(sortable));
+    System.out.println("stream " + locked.stream().mapToInt(Integer::intValue).sum() + " " + lmap.values().stream().count());
+    System.out.println("copy " + new ArrayList<>(locked) + " " + new TreeMap<>(lmap) + " " + new HashSet<>(frozen));
+  }
+}
+"#
+);
