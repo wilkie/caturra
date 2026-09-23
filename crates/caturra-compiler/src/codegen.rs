@@ -6068,6 +6068,38 @@ fn copy_element_of(source: JType, table: &MethodTable) -> Option<ElemType> {
     any_collection_elem(source, table)
 }
 
+/// The class a collection type NAMES, honouring which of its two faces was
+/// written — the fact its ordinary descriptor throws away.
+fn faced_class(ty: JType) -> Option<&'static str> {
+    Some(match ty {
+        JType::List { face, .. } => match face {
+            CollFace::Iface => "java/util/List",
+            CollFace::Concrete => "java/util/ArrayList",
+        },
+        JType::Set { face, .. } => match face {
+            CollFace::Iface => "java/util/Set",
+            CollFace::Concrete => "java/util/HashSet",
+        },
+        JType::Map { face, .. } => match face {
+            CollFace::Iface => "java/util/Map",
+            CollFace::Concrete => "java/util/HashMap",
+        },
+        _ => return None,
+    })
+}
+
+/// The `java.lang` name of an interface caturra models under a BARE one,
+/// because it does not compile it from source. The bare spelling is what the
+/// class file holds and what a signature must keep saying; an ARRAY of one
+/// still has to call itself what a JDK calls it.
+fn bundled_java_lang_name(class: &str) -> Option<&'static str> {
+    Some(match class {
+        "Comparable" => "java/lang/Comparable",
+        "Number" => "java/lang/Number",
+        _ => return None,
+    })
+}
+
 fn elem_type_of(ty: JType) -> Option<ElemType> {
     match ty {
         JType::Int => Some(ElemType::Int),
@@ -7460,6 +7492,17 @@ fn widens_to_iterable(from: JType, to: JType, table: &MethodTable) -> bool {
 }
 
 #[allow(clippy::too_many_lines)] // one arm per conversion the JLS allows
+/// The TYPE an array's element has, which is not always the type it erases
+/// to: a nested element keeps the whole inner type, and only its `read` is
+/// the erasure.
+fn array_component(elem: ElemType, table: &MethodTable) -> JType {
+    match elem {
+        ElemType::Nested { inner, .. } => table.nested_type(inner),
+        other => other.base_type(),
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per widening rule
 fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
     from == to
         || matches!(
@@ -7501,20 +7544,22 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // build such an array at all, since `new List<String>[2]` is illegal
         // generic array creation. The two element types differ only in their
         // type argument, which the array does not carry at run time anyway.
+        // An array widens to an array of whatever its ELEMENT widens to
+        // (JLS §4.10.3): a `String[]` is a `Comparable[]` and an
+        // `ArrayList[]` a `Collection[]`. Comparing the two elements'
+        // DISCRIMINANTS answered for the pairs that happen to share a JType
+        // (`List[]` from `ArrayList[]`) and for no others. A PRIMITIVE
+        // component stays invariant — an `int[]` is not a `long[]`, though an
+        // `int` is a `long`.
         || matches!(
             (from, to),
             (
-                JType::Array {
-                    elem: ElemType::Nested { inner: a, .. },
-                    dims: from_dims,
-                },
-                JType::Array {
-                    elem: ElemType::Nested { inner: b, .. },
-                    dims: to_dims,
-                },
+                JType::Array { elem: a, dims: from_dims },
+                JType::Array { elem: b, dims: to_dims },
             ) if from_dims == to_dims
-                && std::mem::discriminant(&table.nested_type(a))
-                    == std::mem::discriminant(&table.nested_type(b))
+                && array_component(a, table).is_reference()
+                && array_component(b, table).is_reference()
+                && widens(array_component(a, table), array_component(b, table), table)
         )
         // The RAW array of a parameterized type: `Supplier<String>[] a = new
         // Supplier[2]`, which is the only way to build one (generic array
@@ -8367,6 +8412,34 @@ enum WildcardBound {
 }
 
 impl ElemType {
+    /// The class an ARRAY of this element NAMES.
+    ///
+    /// An element's ordinary descriptor is one name per family — a `List` and
+    /// an `ArrayList` share `Ljava/util/ArrayList;`, a `Set` and a `HashSet`
+    /// share `Ljava/util/Set;` — because a value of either is the same object
+    /// here and the descriptor is only a label on it. An array's is not a
+    /// label: it is the array's CLASS, which a program reads back, and there
+    /// the two spellings are two classes. `new List[1]` is a
+    /// `[Ljava.util.List;` and `new ArrayList[1]` a `[Ljava.util.ArrayList;`,
+    /// and naming one for the other was wrong in both directions at once.
+    fn array_descriptor(self, table: &MethodTable) -> String {
+        if let ElemType::Nested { inner, .. } = self {
+            // A nested element erases to `Object` as a VALUE; as an array's
+            // class it is the type that was written.
+            let inner = table.nested_type(inner);
+            return match faced_class(inner) {
+                Some(faced) => format!("L{faced};"),
+                None => inner.descriptor(table),
+            };
+        }
+        if let ElemType::Object(id) = self
+            && let Some(bundled) = bundled_java_lang_name(table.class_name(id))
+        {
+            return format!("L{bundled};");
+        }
+        self.descriptor(table)
+    }
+
     fn descriptor(self, table: &MethodTable) -> String {
         match self {
             // A type variable erases to `Object` in the class file, which is
@@ -9617,7 +9690,7 @@ impl JType {
             JType::Str | JType::Null => String::from("Ljava/lang/String;"),
             JType::Array { elem, dims } => {
                 let mut out = "[".repeat(usize::from(dims));
-                out.push_str(&elem.descriptor(table));
+                out.push_str(&elem.array_descriptor(table));
                 out
             }
             JType::Object(id) => format!("L{};", table.class_name(id)),
@@ -42529,7 +42602,10 @@ impl BodyGen<'_> {
         // by one, each new element kind meant another six identical lines.
         let internal: Option<String> = match element {
             ElemType::Str => Some(String::from("java/lang/String")),
-            ElemType::Object(id) => Some(self.table.class_name(id).to_owned()),
+            ElemType::Object(id) => Some(
+                bundled_java_lang_name(self.table.class_name(id))
+                    .map_or_else(|| self.table.class_name(id).to_owned(), String::from),
+            ),
             ElemType::Field => Some(String::from("java/lang/reflect/Field")),
             ElemType::Method => Some(String::from("java/lang/reflect/Method")),
             ElemType::Constructor => Some(String::from("java/lang/reflect/Constructor")),
@@ -42553,9 +42629,8 @@ impl BodyGen<'_> {
             // `new List[n]` / `new Map[n]` — an array whose element is a
             // COLLECTION. Its descriptor names that collection's class, so the
             // elements read back as one rather than as `Object`.
-            ElemType::Nested { inner, .. } => {
-                let inner = self.table.nested_type(inner);
-                let descriptor = inner.descriptor(self.table);
+            ElemType::Nested { .. } => {
+                let descriptor = element.array_descriptor(self.table);
                 Some(
                     descriptor
                         .strip_prefix('L')
@@ -42579,7 +42654,7 @@ impl BodyGen<'_> {
             // `unreachable` — `new TextStyle[2]` crashed the compiler, and a
             // crash prints no diagnostic at all.
             other if other.base_type().is_reference() => {
-                let descriptor = other.base_type().descriptor(self.table);
+                let descriptor = other.array_descriptor(self.table);
                 Some(
                     descriptor
                         .strip_prefix('L')

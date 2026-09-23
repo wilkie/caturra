@@ -15706,6 +15706,50 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The class an array of a collection names (2026-09-22)
+
+The leftover from the last unit, and a larger fact than the name it started
+as. An element's descriptor is ONE name per family — a `List` and an
+`ArrayList` share `Ljava/util/ArrayList;`, a `Set` and a `HashSet` share
+`Ljava/util/Set;` — because a value of either is the same object here and the
+descriptor is only a label on it. An ARRAY's descriptor is not a label: it is
+the array's CLASS, which a program reads back, and there the two spellings are
+two classes. So `new List[1]` called itself a `[Ljava.util.ArrayList;` and
+`new HashSet[1]` a `[Ljava.util.Set;` — the same defect in both directions at
+once, with `new Map[1]` and `new Comparable[1]` beside them.
+
+An array's element descriptor now honours the face that was WRITTEN
+(`ElemType::array_descriptor`), which is the only place the two spellings have
+to be told apart; a value's descriptor is untouched.
+
+**That made array covariance askable, and it was not answered.** While every
+collection family shared one descriptor, `new ArrayList[1] instanceof List[]`
+compared two identical strings. With the names distinct it is the real
+question (JLS §10.5, §4.10.3) — an `ArrayList[]` IS a `List[]`, a `List[]` is
+not an `ArrayList[]` — and both engines had a rule that could only say "the
+same or `Object[]`":
+
+- The VM's cast and `instanceof` now ask the component, through the same
+  function the `Arrays.copyOf` element check uses — which had to learn that a
+  LIBRARY class's supertypes are the faces table's to say, since an
+  `ArrayList` is a `List` there and in no class file.
+- The compiler compared the two elements' JType DISCRIMINANTS, which answered
+  for the pairs that happen to share a variant (`List[]` from `ArrayList[]`)
+  and for no others: `Comparable[] a = new String[0]` and `Collection<?>[] c =
+  new ArrayList[0]` were both "incompatible types". It recurses on the
+  component now, exactly as the JLS defines it.
+
+A PRIMITIVE component stays invariant in both, which is the whole of why
+`(Object[]) anIntArray` throws where `(Object[]) aStringArray` does not: an
+`int[]` is an `Object`, never an `Object[]`. An existing pin
+(`diff_array_downcast`) caught that the moment the VM's rule was widened —
+the `Object[]` shortcut had been guarded and the new component rule was not.
+Eight illegal assignments (`long[] x = new int[0]`, `String[] x = new
+Object[0]`, `Circle[] x = new Shape[0]`, …) are still refused, checked against
+javac one by one.
+
+Pinned as `the_class_an_array_of_a_collection_names`.
+
 ### The class a view and a cursor name (2026-09-22)
 
 A JDK has a separate class for every cursor and every map view, and a program

@@ -50285,6 +50285,110 @@ public class TP {
 );
 
 differential_test!(
+    the_class_an_array_of_a_collection_names,
+    "AN",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
+public class AN {
+  interface Shape {}
+  static class Circle implements Shape {}
+  static int count(List<?>[] rows) { return rows.length; }
+  static Object first(Object[] any) { return any[0]; }
+  static List<String>[] field = new ArrayList[2];
+  static void n(String label, Object o) {
+    System.out.println(label + " = " + o.getClass().getName());
+  }
+  @SuppressWarnings("unchecked")
+  public static void main(String[] a) {
+    // An array's class is the type that was WRITTEN, and the two faces of a
+    // collection are two classes there — where a VALUE of either is one
+    // object and one descriptor.
+    n("List", new List[1]);
+    n("ArrayList", new ArrayList[1]);
+    n("LinkedList", new LinkedList[1]);
+    n("Set", new Set[1]);
+    n("HashSet", new HashSet[1]);
+    n("TreeSet", new TreeSet[1]);
+    n("Map", new Map[1]);
+    n("HashMap", new HashMap[1]);
+    n("TreeMap", new TreeMap[1]);
+    n("Collection", new Collection[1]);
+    n("Iterator", new Iterator[1]);
+    n("Queue", new Queue[1]);
+    n("Deque", new Deque[1]);
+    n("Optional", new Optional[1]);
+    n("Entry", new Map.Entry[1]);
+    n("Comparable", new Comparable[1]);
+    n("Comparator", new Comparator[1]);
+    n("Object", new Object[1]);
+    n("String", new String[1]);
+    n("rows", new List[1][1]);
+    n("cells", new ArrayList[1][1]);
+    // Java's array covariance (JLS §10.5), which the two names make askable.
+    Object made = new ArrayList[1];
+    System.out.println((made instanceof List[]) + " " + (made instanceof ArrayList[])
+      + " " + (made instanceof Object[]) + " " + (made instanceof Collection[])
+      + " " + (made instanceof Set[]));
+    Object iface = new List[1];
+    System.out.println((iface instanceof List[]) + " " + (iface instanceof ArrayList[])
+      + " " + (iface instanceof Object[]));
+    Object shapes = new Circle[1];
+    System.out.println((shapes instanceof Shape[]) + " " + (shapes instanceof Circle[])
+      + " " + (shapes instanceof Object[]));
+    // ...and a PRIMITIVE component is invariant: an `int[]` is an `Object`,
+    // never an `Object[]`.
+    Object numbers = new int[1];
+    try { Object[] wrong = (Object[]) numbers; System.out.println(wrong.length); }
+    catch (ClassCastException e) { System.out.println("primitive stays put"); }
+    try { long[] wider = (long[]) numbers; System.out.println(wider.length); }
+    catch (ClassCastException e) { System.out.println("and is its own kind"); }
+    System.out.println(((Object[]) new String[] {"a"}).length);
+    // The cast a program actually writes, and the array a method takes.
+    List[] back = (List[]) made;
+    System.out.println(back.length + " " + count(new ArrayList[3]) + " " + count(new List[1]));
+    field[0] = new ArrayList<>(List.of("a"));
+    System.out.println(field[0] + " " + field.getClass().getName());
+    System.out.println(first(new List[] { new ArrayList<>(List.of(1)) }));
+    Object[] widened = new List[2];
+    widened[0] = new ArrayList<String>();
+    System.out.println(widened[0] + " " + widened.getClass().getName());
+    Comparable[] comparables = new String[0];
+    System.out.println(comparables.getClass().getName()
+      + " " + (((Object) comparables) instanceof Comparable[]));
+    // Sorting, copying and wrapping an array of collections.
+    List<Integer>[] lists = new ArrayList[] {
+      new ArrayList<>(List.of(2)), new ArrayList<>(List.of(1)) };
+    Arrays.sort(lists, Comparator.comparing(l -> l.get(0)));
+    System.out.println(Arrays.toString(lists) + " " + Arrays.copyOf(lists, 1).getClass().getName()
+      + " " + Arrays.asList(new List[] { new ArrayList<>() }).size());
+    // ...and the store check, which the two names also make askable.
+    Object[] circles = new Circle[1];
+    try { circles[0] = "not a circle"; System.out.println("stored"); }
+    catch (ArrayStoreException e) { System.out.println("store " + e.getMessage()); }
+    Object[] justLists = new ArrayList[1];
+    justLists[0] = new ArrayList<String>();
+    System.out.println(justLists[0]);
+  }
+}
+"#
+);
+
+differential_test!(
     the_class_a_view_and_a_cursor_name,
     "VC",
     r#"

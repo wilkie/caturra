@@ -2151,8 +2151,25 @@ impl<'run> Interpreter<'run> {
                                 // `[[I`): the reference must be an array whose
                                 // class is assignable to it.
                                 Some(reference) if target.starts_with('[') => {
-                                    intrinsics::array_class_name(&self.heap, reference)
-                                        .is_some_and(|actual| array_cast_ok(&actual, &target))
+                                    intrinsics::array_class_name(&self.heap, reference).is_some_and(
+                                        |actual| {
+                                            // Java's array covariance
+                                            // (JLS §10.5): an `ArrayList[]`
+                                            // IS a `List[]`. While every
+                                            // collection family shared one
+                                            // descriptor the question could
+                                            // not arise; now that an array's
+                                            // class is the type that was
+                                            // WRITTEN, it is the ordinary
+                                            // assignability question one
+                                            // dimension down.
+                                            array_cast_ok(&actual, &target)
+                                                || actual.starts_with('[')
+                                                    && target.starts_with('[')
+                                                    && self
+                                                        .component_fits(&actual[1..], &target[1..])
+                                        },
+                                    )
                                 }
                                 Some(reference) => match self.heap.get(reference) {
                                     Some(crate::value::HeapObject::Instance {
@@ -6658,8 +6675,18 @@ impl<'run> Interpreter<'run> {
     /// which is Java's array covariance, and the reason a `String[][]` copies
     /// into an `Object[][]`.
     fn component_fits(&self, have: &str, want: &str) -> bool {
-        if have == want || want == "Ljava/lang/Object;" {
+        if have == want {
             return true;
+        }
+        // Everything REFERENCE fits an `Object` — and nothing primitive does,
+        // which is the whole of why `(Object[]) anIntArray` throws: an
+        // `int[]` is an `Object`, not an `Object[]`.
+        let reference = have.starts_with('L') || have.starts_with('[');
+        if want == "Ljava/lang/Object;" {
+            return reference;
+        }
+        if !reference {
+            return false;
         }
         if let (Some(inner), Some(outer)) = (have.strip_prefix('['), want.strip_prefix('[')) {
             return self.component_fits(inner, outer);
@@ -6671,7 +6698,11 @@ impl<'run> Interpreter<'run> {
                 .unwrap_or(descriptor)
                 .to_owned()
         };
-        self.is_runtime_subtype(&named(have), &named(want))
+        let (have, want) = (named(have), named(want));
+        // A user class answers through its own class file; a LIBRARY one has
+        // none, and what it wears is the faces table's to say — an
+        // `ArrayList` is a `List` there and nowhere else.
+        self.is_runtime_subtype(&have, &want) || class_is_assignable(&have, &want)
     }
 
     /// Java's `rangeCheck`, shared by the ranged `fill` and `binarySearch`.
@@ -21865,10 +21896,9 @@ fn class_name_of(class: &ClassFile) -> &str {
 /// array — a reference-element `[L…;` or a nested `[[…` — is-a `Object[]`, but
 /// a primitive-element array (`[I`) is not.
 fn array_cast_ok(actual: &str, target: &str) -> bool {
-    if actual == target {
-        return true;
-    }
-    target == "[Ljava/lang/Object;" && (actual.starts_with("[L") || actual.starts_with("[["))
+    actual == target
+        || (target == "[Ljava/lang/Object;"
+            && (actual.starts_with("[L") || actual.starts_with("[[")))
 }
 
 /// The JVM class descriptor of an array whose ELEMENT class is `element`,
