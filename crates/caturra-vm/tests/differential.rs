@@ -58379,3 +58379,88 @@ public class Neg2 {
 }
 "#
 );
+
+// The directory half of `java.nio.file.Files`. `createDirectory` made the
+// whole parent chain silently and never complained about an existing one —
+// which is what `createDirectories` beside it is for, and that did not exist
+// at all. `delete` read every failure as "not found", so a directory with
+// something in it complained about the wrong problem. And
+// `newBufferedWriter` was missing, which is how a program writes a file line
+// by line: it truncates at OPEN, as a JDK's does, unless APPEND says
+// otherwise.
+differential_test!(
+    what_a_directory_call_does,
+    "Dir",
+    r#"
+import java.nio.file.*;
+import java.util.*;
+public class Dir {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) throws Exception {
+        r("createDirectory", () -> { Path p = Path.of("g1"); Files.createDirectory(p); return Files.isDirectory(p); });
+        r("createDirectory-again", () -> { Path p = Path.of("g2"); Files.createDirectory(p); Files.createDirectory(p); return "no throw"; });
+        r("createDirectory-nested", () -> { Path p = Path.of("g3/inner"); Files.createDirectory(p); return Files.isDirectory(p); });
+        r("createDirectories", () -> { Path p = Path.of("g4/a/b"); Files.createDirectories(p); return Files.isDirectory(p) + " " + Files.isDirectory(Path.of("g4/a")); });
+        r("createDirectories-again", () -> { Path p = Path.of("g5"); Files.createDirectories(p); Files.createDirectories(p); return "no throw"; });
+        r("createDirectories-over-file", () -> { Path f = Path.of("g6.txt"); Files.writeString(f, "x"); Files.createDirectories(f); return "no throw"; });
+        r("delete-empty-dir", () -> { Path p = Path.of("g7"); Files.createDirectory(p); Files.delete(p); return Files.exists(p); });
+        r("delete-nonempty-dir", () -> { Path p = Path.of("g8"); Files.createDirectories(p);
+            Files.writeString(Path.of("g8/a.txt"), "x"); Files.delete(p); return "no throw"; });
+        r("delete-missing", () -> { Files.delete(Path.of("g9")); return "no throw"; });
+        r("list-dir", () -> { Files.createDirectories(Path.of("ga"));
+            Files.writeString(Path.of("ga/a.txt"), "x"); Files.writeString(Path.of("ga/b.txt"), "y");
+            return Files.list(Path.of("ga")).map(q -> q.getFileName().toString()).sorted().collect(java.util.stream.Collectors.toList()); });
+        r("list-file", () -> { Path f = Path.of("gb.txt"); Files.writeString(f, "x"); return Files.list(f).count(); });
+        r("list-missing", () -> Files.list(Path.of("gc")).count());
+        r("newBufferedWriter", () -> { Path p = Path.of("gd.txt"); Files.deleteIfExists(p);
+            try (java.io.BufferedWriter w = Files.newBufferedWriter(p)) { w.write("hi"); w.newLine(); w.write("there"); }
+            return Files.readAllLines(p); });
+        r("newBufferedWriter-truncates", () -> { Path p = Path.of("ge.txt"); Files.writeString(p, "aaaa");
+            try (java.io.BufferedWriter w = Files.newBufferedWriter(p)) { w.write("b"); }
+            return Files.readString(p); });
+        r("newBufferedWriter-append", () -> { Path p = Path.of("gf.txt"); Files.writeString(p, "a");
+            try (java.io.BufferedWriter w = Files.newBufferedWriter(p, StandardOpenOption.APPEND)) { w.write("b"); }
+            return Files.readString(p); });
+    }
+}
+"#
+);
+
+// `Files.walk(start)` — the tree under a path, the start included, in a
+// JDK's order. `list` answers one directory and this is what a program
+// reaches for to count or sift a whole tree; it was "no suitable method
+// found". Its elements are PATHS, in the emitter and in the lambda pass, so
+// `walk(dir).filter(Files::isRegularFile)` types.
+differential_test!(
+    a_tree_under_a_path,
+    "Walk",
+    r#"
+import java.nio.file.*;
+import java.util.stream.*;
+public class Walk {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) throws Exception {
+        Files.createDirectories(Path.of("tree/inner/deep"));
+        Files.writeString(Path.of("tree/a.txt"), "x");
+        Files.writeString(Path.of("tree/inner/b.txt"), "y");
+        Files.writeString(Path.of("tree/inner/deep/c.txt"), "z");
+        r("count", () -> Files.walk(Path.of("tree")).count());
+        r("names", () -> Files.walk(Path.of("tree")).map(Path::toString).sorted().collect(Collectors.toList()));
+        r("files-only", () -> Files.walk(Path.of("tree")).filter(Files::isRegularFile).count());
+        r("dirs-only", () -> Files.walk(Path.of("tree")).filter(Files::isDirectory).count());
+        r("leaf", () -> Files.walk(Path.of("tree/inner/deep")).map(Path::toString).sorted().collect(Collectors.toList()));
+        r("on-a-file", () -> Files.walk(Path.of("tree/a.txt")).map(Path::toString).collect(Collectors.toList()));
+        r("missing", () -> Files.walk(Path.of("nope")).count());
+        r("list-vs-walk", () -> Files.list(Path.of("tree")).count() + " " + Files.walk(Path.of("tree")).count());
+    }
+}
+"#
+);

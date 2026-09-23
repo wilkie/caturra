@@ -6556,9 +6556,12 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     if method == "lines" && args.len() == 1 && names_library_class(prev.as_ref(), "Files") {
         return Some(TypeRef::Named(String::from("String")));
     }
-    // ...and `Files.list(dir)`, whose elements are PATHS, so a lambda over one
-    // knows what it is handed.
-    if method == "list" && args.len() == 1 && names_library_class(prev.as_ref(), "Files") {
+    // ...and `Files.list(dir)` / `Files.walk(start)`, whose elements are
+    // PATHS, so a lambda over one knows what it is handed.
+    if matches!(method.as_str(), "list" | "walk")
+        && args.len() == 1
+        && names_library_class(prev.as_ref(), "Files")
+    {
         return Some(TypeRef::Named(String::from("Path")));
     }
     if let Some(elem) = regex_stream_elem(prev, method, ctx) {

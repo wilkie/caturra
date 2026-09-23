@@ -14221,6 +14221,45 @@ fn files_static(
         // `list(dir)` — the directory's entries, each a full path, as a
         // stream. A JDK sorts nothing (the order is the filesystem's), and
         // refuses a path that is not a directory before it reads anything.
+        // `walk(start)` — the tree under a path, the START included and in a
+        // JDK's depth-first order. `list` answers one directory; this is what
+        // a program reaches for to count or sift a whole tree, and it is the
+        // one recursive walk the filesystem can answer without a visitor.
+        "walk" => {
+            if !vfs.exists(&path) {
+                return Err(not_found());
+            }
+            let mut found = vec![path.clone()];
+            let mut pending = vec![path.clone()];
+            while let Some(dir) = pending.pop() {
+                let Ok(entries) = vfs.list_dir(&dir) else {
+                    continue;
+                };
+                let root = VirtualFileSystem::normalize(&dir);
+                for entry in entries {
+                    let tail = entry.strip_prefix(&root).unwrap_or(&entry);
+                    let tail = tail.strip_prefix('/').unwrap_or(tail);
+                    let written = if dir.is_empty() || dir == "/" {
+                        tail.to_owned()
+                    } else {
+                        format!("{}/{tail}", dir.trim_end_matches('/'))
+                    };
+                    if vfs.is_directory(&written) {
+                        pending.push(written.clone());
+                    }
+                    found.push(written);
+                }
+            }
+            found.sort();
+            let items: Vec<JValue> = found
+                .into_iter()
+                .map(|each| JValue::Ref(Some(heap.alloc(HeapObject::Path(each)))))
+                .collect();
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Stream {
+                source: crate::value::StreamSource::Fixed(items),
+                ops: Vec::new(),
+            })))))
+        }
         "list" => {
             let entries = vfs.list_dir(&path).map_err(|_| {
                 if vfs.exists(&path) {
@@ -14264,6 +14303,45 @@ fn files_static(
             });
             heap.set_view_class(reader, "java/io/BufferedReader");
             Ok(Some(JValue::Ref(Some(reader))))
+        }
+        // `newBufferedWriter(path[, options])` — the writer a program opens to
+        // write a file line by line, and the counterpart of the reader above.
+        // A JDK TRUNCATES at open (the default is CREATE | TRUNCATE_EXISTING
+        // | WRITE); with APPEND it does not, and then a missing file is a
+        // NoSuchFileException, exactly as a write with the same option is.
+        "newBufferedWriter" => {
+            let mask = option_mask(args.get(1));
+            if mask & OPTION_READ != 0 {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: READ not allowed",
+                ));
+            }
+            let exists = vfs.exists(&path);
+            if mask & OPTION_CREATE_NEW != 0 && exists {
+                return Err(throw(format!(
+                    "java.nio.file.FileAlreadyExistsException: {path}"
+                )));
+            }
+            if mask & OPTION_APPEND != 0 {
+                if !exists && mask & OPTION_CREATE == 0 {
+                    return Err(not_found());
+                }
+            } else {
+                vfs.write_file(&path, Vec::new())
+                    .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            }
+            let target = heap.alloc(HeapObject::Writer {
+                path: path.clone(),
+                text: None,
+                closed: false,
+            });
+            let writer = heap.alloc(HeapObject::BufferedWriter {
+                target,
+                buffer: Vec::new(),
+                closed: false,
+            });
+            heap.set_view_class(writer, "java/io/BufferedWriter");
+            Ok(Some(JValue::Ref(Some(writer))))
         }
         "readAllLines" => {
             let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
@@ -14352,8 +14430,17 @@ fn files_static(
         "isRegularFile" => Ok(Some(JValue::Int(i32::from(vfs.is_file(&path))))),
         "notExists" => Ok(Some(JValue::Int(i32::from(!vfs.exists(&path))))),
         "isDirectory" => Ok(Some(JValue::Int(i32::from(vfs.is_directory(&path))))),
+        // `delete` names the REASON it could not: a directory with anything
+        // in it is a `DirectoryNotEmptyException`, which reading every
+        // failure as "not found" turned into a sentence about the wrong
+        // problem.
         "delete" => {
-            vfs.remove(&path).map_err(|_| not_found())?;
+            vfs.remove(&path).map_err(|e| match e {
+                crate::vfs::VfsError::DirectoryNotEmpty(_) => {
+                    throw(format!("java.nio.file.DirectoryNotEmptyException: {path}"))
+                }
+                _ => not_found(),
+            })?;
             Ok(None)
         }
         // ...and the form that answers instead of throwing.
@@ -14363,7 +14450,39 @@ fn files_static(
                 .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
             Ok(Some(args[0]))
         }
+        // `createDirectory` makes ONE directory: a missing parent is a
+        // NoSuchFileException and an existing entry a FileAlreadyExists one.
+        // It used to ignore both, creating the whole chain silently — which
+        // is what `createDirectories` beside it is for.
         "createDirectory" => {
+            if vfs.exists(&path) {
+                return Err(throw(format!(
+                    "java.nio.file.FileAlreadyExistsException: {path}"
+                )));
+            }
+            if let Some(parent) = parent_path(&VirtualFileSystem::normalize(&path))
+                && parent != "/"
+                && !vfs.is_directory(&parent)
+            {
+                return Err(not_found());
+            }
+            vfs.mkdir(&path)
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            Ok(Some(args[0]))
+        }
+        // ...and `createDirectories` makes the whole chain, answering quietly
+        // when it is already there — unless the path names a FILE.
+        "createDirectories" => {
+            if vfs.exists(&path) && !vfs.is_directory(&path) {
+                return Err(throw(format!(
+                    "java.nio.file.FileAlreadyExistsException: {path}"
+                )));
+            }
+            vfs.mkdir(&path)
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            Ok(Some(args[0]))
+        }
+        "__unusedCreateDirectory" => {
             let _ = vfs.mkdir(&path);
             Ok(Some(args[0]))
         }

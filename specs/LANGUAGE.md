@@ -15706,6 +15706,52 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### Every file call either works or says why (2026-09-23)
+
+The rest of `java.nio.file.Files`, asked the way the last unit asked the
+options — and the first thing it found was an ENGINE ABORT, which is the one
+answer a program may never get. `Files.readString(p, StandardOpenOption.SYNC)`
+— or any library static call with an argument whose own type could not be
+worked out — produced "operand stack underflow (malformed bytecode)". The
+refusal path read each argument's type and, finding an `Error`, returned
+WITHOUT reporting anything: a class file came out of the silence with a stack
+that does not balance. It emits the offending argument now, so the argument's
+own error is what the reader sees, and the real fault (one unresolvable name)
+is named.
+
+Then the directory half, each rule measured against a JDK:
+
+- **`createDirectory` made the whole parent chain** and never complained about
+  an existing directory. A JDK's makes ONE: a missing parent is a
+  `NoSuchFileException` and an existing entry a `FileAlreadyExistsException`.
+  **`createDirectories` — the one that does make the chain — did not exist**,
+  and is quiet when the directory is already there unless the path names a
+  FILE.
+- **`delete` read every failure as "not found"**, so a directory with
+  something in it complained about the wrong problem. It names the reason now:
+  a `DirectoryNotEmptyException`.
+- **`newBufferedWriter` was missing** — how a program writes a file line by
+  line. It truncates at OPEN, as a JDK's does, unless `APPEND` says otherwise,
+  and honours the same option rules the write calls do.
+- **`Files.walk` was missing**: `list` answers one directory, and this is what
+  a program reaches for to count or sift a whole tree. Its elements are PATHS
+  in the emitter and in the lambda pass, so
+  `walk(dir).filter(Files::isRegularFile)` types.
+
+**And every `Files` method caturra does NOT model now says why.** They read as
+"no suitable method found", which says the ARGUMENTS were wrong about a method
+that is simply not modelled. Each has a reason naming what to write instead:
+the byte streams and channels (the filesystem answers text and bytes
+directly), the temp-file factories (a browser has no system temp directory),
+the link operations, the attribute views (a size, a modified time and the
+three permissions are answered by `Files.size` and `File`), `FileTime`,
+`FileStore`, and the walks that take a visitor. A method that genuinely does
+not exist still says "no suitable method found", and wrong arguments still say
+so — the three cases read differently, which is the point.
+
+Pinned as `what_a_directory_call_does` and `a_tree_under_a_path`.
+
+
 ### What a file option changes (2026-09-23)
 
 The `java.nio.file.Files` cluster of the never-compared list, and the worst

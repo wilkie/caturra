@@ -12867,7 +12867,59 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
         "formatTo",
         "caturra does not model java.lang.Appendable - write format(value) and append the String",
     ),
+    // The `java.nio.file.Files` methods the virtual filesystem cannot answer.
+    // Every one of them used to read as "no suitable method found", which
+    // says the ARGUMENTS were wrong about a method that is simply not
+    // modelled — the difference between a smaller answer and a confusing one.
+    ("Files", "newInputStream", FILE_BYTE_CHANNEL),
+    ("Files", "newOutputStream", FILE_BYTE_CHANNEL),
+    ("Files", "newByteChannel", FILE_BYTE_CHANNEL),
+    ("Files", "createTempFile", FILE_TEMP_DIRECTORY),
+    ("Files", "createTempDirectory", FILE_TEMP_DIRECTORY),
+    ("Files", "createLink", FILE_LINKS),
+    ("Files", "createSymbolicLink", FILE_LINKS),
+    ("Files", "readSymbolicLink", FILE_LINKS),
+    ("Files", "getFileStore", "caturra does not model java.nio.file.FileStore"),
+    ("Files", "readAttributes", FILE_ATTRIBUTE_VIEWS),
+    ("Files", "getAttribute", FILE_ATTRIBUTE_VIEWS),
+    ("Files", "setAttribute", FILE_ATTRIBUTE_VIEWS),
+    ("Files", "getFileAttributeView", FILE_ATTRIBUTE_VIEWS),
+    ("Files", "getPosixFilePermissions", FILE_ATTRIBUTE_VIEWS),
+    ("Files", "setPosixFilePermissions", FILE_ATTRIBUTE_VIEWS),
+    ("Files", "getOwner", FILE_ATTRIBUTE_VIEWS),
+    ("Files", "setOwner", FILE_ATTRIBUTE_VIEWS),
+    ("Files", "getLastModifiedTime", FILE_TIME),
+    ("Files", "setLastModifiedTime", FILE_TIME),
+    ("Files", "find", FILE_WALK),
+    ("Files", "walkFileTree", FILE_WALK),
+    ("Files", "newDirectoryStream", FILE_WALK),
 ];
+
+/// A file's BYTES, rather than its text: caturra's filesystem stores text and
+/// answers `readAllBytes`, and a stream or channel over one is a handle it
+/// does not model.
+const FILE_BYTE_CHANNEL: &str = "caturra's filesystem answers a file's text and bytes directly - read it with \
+     Files.readString, readAllLines or readAllBytes";
+
+/// There is no system temp directory in a browser.
+const FILE_TEMP_DIRECTORY: &str =
+    "caturra's filesystem has no system temp directory - name the file yourself and write it";
+
+const FILE_LINKS: &str = "caturra's filesystem has no symbolic or hard links";
+
+/// The attribute VIEWS. The attributes caturra keeps — a size, a modified
+/// time, the three permissions — are answered by `File` and by the `Files`
+/// predicates beside them.
+const FILE_ATTRIBUTE_VIEWS: &str = "caturra does not model java.nio.file.attribute - a file's size, times and permissions \
+     are answered by Files.size, File.lastModified and File.canRead/canWrite/canExecute";
+
+const FILE_TIME: &str = "caturra does not model java.nio.file.attribute.FileTime - a File answers lastModified() \
+     as a long";
+
+/// The recursive walks. `list` answers one directory and `walk` the tree
+/// under it; the rest take a visitor or a matcher caturra has no type for.
+const FILE_WALK: &str = "caturra answers a directory with Files.list and a tree with Files.walk; it models no \
+     file visitor or directory stream";
 
 /// The reasons shared by several rows above. Written once so that two members
 /// refused for the SAME reason cannot end up explaining it differently.
@@ -34978,7 +35030,7 @@ impl BodyGen<'_> {
                 "Z",
                 Some(JType::Boolean),
             )),
-            ("Files", "delete" | "createFile" | "createDirectory") => Some((
+            ("Files", "delete" | "createFile" | "createDirectory" | "createDirectories") => Some((
                 "java/nio/file/Files",
                 &[(JType::Path, "Ljava/nio/file/Path;")],
                 if method == "delete" {
@@ -35037,11 +35089,22 @@ impl BodyGen<'_> {
             // paths. A JDK's is lazy and closeable; this one reads the
             // directory at once, which a program that collects or counts them
             // cannot tell.
-            ("Files", "list") => Some((
+            ("Files", "walk" | "list") => Some((
                 "java/nio/file/Files",
                 &[(JType::Path, "Ljava/nio/file/Path;")],
                 "Ljava/util/stream/Stream;",
                 Some(JType::Stream(ElemType::Path)),
+            )),
+            // `newBufferedWriter(path[, options])` — the writer a program
+            // opens to write a file line by line, and the counterpart of the
+            // reader beside it. Missing, a call was "no suitable method
+            // found"; with an OPTION it was worse, since the unresolvable
+            // option left a class file whose stack did not balance.
+            ("Files", "newBufferedWriter") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                "Ljava/io/BufferedWriter;",
+                Some(JType::BufferedWriter),
             )),
             ("Files", "newBufferedReader") => Some((
                 "java/nio/file/Files",
@@ -35055,6 +35118,16 @@ impl BodyGen<'_> {
             // A `Files` method caturra has NOT modelled says so by name: the
             // four below want types it has none of, and "no suitable method
             // found" reads as a bug for methods the documentation shows.
+            if let Some(reason) = unsupported_member(class, method) {
+                self.error(
+                    span,
+                    format!("{class}.{method} exists in Java, but {reason}"),
+                );
+                return None;
+            }
+            // A method caturra does not model says SO, rather than letting
+            // javac's "no suitable method found" suggest the arguments were
+            // the problem.
             if let Some(reason) = unsupported_member(class, method) {
                 self.error(
                     span,
@@ -39997,6 +40070,21 @@ impl BodyGen<'_> {
     ) {
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
+            // An argument whose own type could not be worked out: the
+            // overload list below would be about the wrong call, so the
+            // ARGUMENT is the complaint. It has to be emitted for its error
+            // to be reported at all — reading its type and returning said
+            // nothing, and a class file came out of the silence with a stack
+            // that does not balance. `Files.readString(p,
+            // StandardOpenOption.APPEND)` was "operand stack underflow
+            // (malformed bytecode)", which is an engine abort, for a program
+            // whose real fault is one unresolvable name.
+            for arg in args {
+                if self.type_of(arg) == JType::Error {
+                    self.expr(arg);
+                }
+            }
+            self.code.discard();
             return;
         }
         // Every overload of that name, each with its own reason, the way javac
