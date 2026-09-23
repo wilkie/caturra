@@ -25032,6 +25032,18 @@ fn refine_builtin_return(
             _ => JType::Stream(elem),
         });
     }
+    // `collect(supplier, accumulator, combiner)` answers the container the
+    // SUPPLIER made — the table can only say `Nullish`, since no element type
+    // names it. Left at that, the result of the whole call was `null`, so
+    // `collect(StringBuilder::new, …).toString()` was "<null> cannot be
+    // dereferenced" for a program that runs.
+    if method == "collect"
+        && matches!(ret, Some(JType::Null))
+        && let [supplier, _, _] = arg_types
+        && let Some(produced) = lambda_produces(*supplier, table)
+    {
+        return Some(produced);
+    }
     // `flatMap`'s lambda answers a STREAM, so the flattened element is that
     // stream's element — one step further in than `map`'s. Left out, a
     // `flatMap(inner -> inner.stream())` — the whole reason the operation

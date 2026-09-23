@@ -57409,3 +57409,268 @@ public class X4 {
 }
 "#
 );
+
+// The primitive streams' unasked half — `LongStream` and `DoubleStream` end
+// to end, the ops `IntStream` shares with them, the three summary statistics
+// and their `combine`. Most of this was already right; the sweep had simply
+// never called any of it, because no argument in its bank can be typed
+// `LongFunction`.
+differential_test!(
+    the_primitive_streams_unasked_half,
+    "P1",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class P1 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] a) {
+        r("long-range", () -> LongStream.range(1, 5).sum());
+        r("long-rangeClosed", () -> LongStream.rangeClosed(1, 4).boxed().collect(Collectors.toList()));
+        r("long-of", () -> LongStream.of(3L, 1L, 2L).sorted().boxed().collect(Collectors.toList()));
+        r("long-mapToInt", () -> LongStream.of(1L, 2L).mapToInt(x -> (int) x).sum());
+        r("long-mapToDouble", () -> LongStream.of(1L, 2L).mapToDouble(x -> x * 1.5).sum());
+        r("long-mapToObj", () -> LongStream.of(1L, 2L).mapToObj(x -> "v" + x).collect(Collectors.joining(",")));
+        r("long-flatMap", () -> LongStream.of(1L, 2L).flatMap(x -> LongStream.of(x, x)).sum());
+        r("long-concat", () -> LongStream.concat(LongStream.of(1L), LongStream.of(2L)).sum());
+        r("long-stats", () -> LongStream.of(1L, 5L).summaryStatistics().toString());
+        r("long-collect", () -> LongStream.of(1L, 2L).collect(StringBuilder::new, (s, x) -> s.append(x), StringBuilder::append).toString());
+        r("long-asDouble", () -> LongStream.of(1L).asDoubleStream().sum());
+        r("long-reduce", () -> LongStream.of(1L, 2L).reduce(0L, Long::sum));
+        r("double-of", () -> DoubleStream.of(1.5, 0.5).sum());
+        r("double-mapToInt", () -> DoubleStream.of(1.5, 2.5).mapToInt(x -> (int) x).sum());
+        r("double-mapToLong", () -> DoubleStream.of(1.5, 2.5).mapToLong(x -> (long) x).sum());
+        r("double-mapToObj", () -> DoubleStream.of(1.5).mapToObj(x -> "d" + x).collect(Collectors.joining()));
+        r("double-flatMap", () -> DoubleStream.of(1.0, 2.0).flatMap(x -> DoubleStream.of(x, x)).sum());
+        r("double-concat", () -> DoubleStream.concat(DoubleStream.of(1.0), DoubleStream.of(2.0)).sum());
+        r("double-stats", () -> DoubleStream.of(1.0, 5.0).summaryStatistics().toString());
+        r("double-collect", () -> DoubleStream.of(1.0).collect(StringBuilder::new, (s, x) -> s.append(x), StringBuilder::append).toString());
+        r("double-average", () -> DoubleStream.of(1.0, 2.0).average().getAsDouble());
+        r("int-collect", () -> IntStream.of(1, 2).collect(StringBuilder::new, (s, x) -> s.append(x), StringBuilder::append).toString());
+        r("int-asLong", () -> IntStream.of(1, 2).asLongStream().sum());
+        r("int-mapToLong", () -> IntStream.of(1, 2).mapToLong(x -> x * 2L).sum());
+        r("int-flatMap", () -> IntStream.of(1, 2).flatMap(x -> IntStream.of(x, x)).sum());
+        r("stats-combine", () -> { IntSummaryStatistics s = IntStream.of(1, 2).summaryStatistics();
+            s.combine(IntStream.of(9).summaryStatistics()); return s.toString(); });
+        r("lstats-combine", () -> { LongSummaryStatistics s = LongStream.of(1L).summaryStatistics();
+            s.combine(LongStream.of(9L).summaryStatistics()); return s.toString(); });
+        r("dstats-combine", () -> { DoubleSummaryStatistics s = DoubleStream.of(1.0).summaryStatistics();
+            s.combine(DoubleStream.of(9.0).summaryStatistics()); return s.toString(); });
+        r("boxed-long", () -> LongStream.of(1L).boxed().map(Object::getClass).map(Class::getName).collect(Collectors.toList()));
+        r("boxed-double", () -> DoubleStream.of(1.0).boxed().map(Object::getClass).map(Class::getName).collect(Collectors.toList()));
+        r("obj-mapToLong", () -> Stream.of("a", "bb").mapToLong(String::length).sum());
+        r("obj-mapToDouble", () -> Stream.of("a", "bb").mapToDouble(String::length).sum());
+        r("obj-flatMapToLong", () -> Stream.of(1L, 2L).flatMapToLong(LongStream::of).sum());
+        r("obj-flatMapToDouble", () -> Stream.of(1.0).flatMapToDouble(DoubleStream::of).sum());
+    }
+}
+"#
+);
+
+// `boxed()` and the four stream classes' factories. `boxed()` is the one op
+// whose whole purpose is the element's TYPE — a `Stream<Integer>`, not a
+// stream of ints — and caturra passed the primitive through, so
+// `IntStream.of(1).boxed().map(Object::getClass)` was "int cannot be
+// dereferenced". `IntStream::of` and its siblings read as UNBOUND instance
+// references on the element, so `flatMapToInt(IntStream::of)` was "cannot
+// find symbol: method of, location: class Integer".
+differential_test!(
+    what_boxed_and_the_factories_answer,
+    "P2",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class P2 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] a) {
+        // boxed(): the element must know it is a Long / Double / Integer.
+        r("box-int-class", () -> IntStream.of(1).boxed().map(Object::getClass).map(Class::getName).collect(Collectors.toList()));
+        r("box-long-class", () -> LongStream.of(1L).boxed().map(Object::getClass).map(Class::getName).collect(Collectors.toList()));
+        r("box-double-class", () -> DoubleStream.of(1.0).boxed().map(Object::getClass).map(Class::getName).collect(Collectors.toList()));
+        r("box-long-method", () -> LongStream.of(3L).boxed().map(Long::longValue).collect(Collectors.toList()));
+        r("box-double-method", () -> DoubleStream.of(2.5).boxed().map(Double::intValue).collect(Collectors.toList()));
+        r("box-int-method", () -> IntStream.of(3).boxed().map(Integer::intValue).collect(Collectors.toList()));
+        r("box-long-compare", () -> LongStream.of(3L, 1L).boxed().sorted(Long::compare).collect(Collectors.toList()));
+        r("box-long-list", () -> { List<Long> l = LongStream.of(1L).boxed().collect(Collectors.toList()); return l.get(0) + 1L; });
+        r("box-double-list", () -> { List<Double> l = DoubleStream.of(1.5).boxed().collect(Collectors.toList()); return l.get(0) + 1; });
+        r("box-long-toString", () -> LongStream.of(1L).boxed().map(Object::toString).collect(Collectors.joining()));
+        // the flatMapTo* family and the primitive stream method references
+        r("flatMapToInt", () -> Stream.of(1, 2).flatMapToInt(IntStream::of).sum());
+        r("flatMapToLong", () -> Stream.of(1L, 2L).flatMapToLong(LongStream::of).sum());
+        r("flatMapToDouble", () -> Stream.of(1.0).flatMapToDouble(DoubleStream::of).sum());
+        r("flatMapToLong-lambda", () -> Stream.of(1L, 2L).flatMapToLong(x -> LongStream.of(x, x)).sum());
+        r("flatMapToDouble-lambda", () -> Stream.of(1.0).flatMapToDouble(x -> DoubleStream.of(x, x)).sum());
+        r("LongStream-of-ref", () -> { java.util.function.LongFunction<LongStream> f = LongStream::of; return f.apply(4L).sum(); });
+        r("IntStream-of-ref", () -> { java.util.function.IntFunction<IntStream> f = IntStream::of; return f.apply(4).sum(); });
+        // the three-argument collect
+        r("int-collect", () -> IntStream.of(1, 2).collect(StringBuilder::new, StringBuilder::append, StringBuilder::append).toString());
+        r("long-collect", () -> LongStream.of(1L, 2L).collect(StringBuilder::new, StringBuilder::append, StringBuilder::append).toString());
+        r("double-collect", () -> DoubleStream.of(1.0).collect(StringBuilder::new, StringBuilder::append, StringBuilder::append).toString());
+        r("int-collect-list", () -> IntStream.of(1, 2).collect(ArrayList::new, ArrayList::add, ArrayList::addAll).toString());
+        r("obj-collect", () -> Stream.of("a", "b").collect(StringBuilder::new, StringBuilder::append, StringBuilder::append).toString());
+        r("obj-collect-list", () -> Stream.of("a").collect(ArrayList::new, ArrayList::add, ArrayList::addAll).toString());
+    }
+}
+"#
+);
+
+// `collect(supplier, accumulator, combiner)` — the gather with no `Collector`
+// in it, on the object stream and the primitive ones. The container's type is
+// whatever the SUPPLIER makes, and both callbacks are compiled against it: a
+// constructor reference said so outright and a LAMBDA supplier did not, so
+// `collect(() -> new StringBuilder("["), (s, e) -> s.append(e), …)` was
+// "cannot find symbol: method append(String), location: variable s of type
+// Object". The call's own result was typed `null` besides, so
+// `collect(…).toString()` could not be written at all.
+differential_test!(
+    the_three_argument_collect,
+    "P3",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class P3 {
+    public static void main(String[] a) {
+        Object o = IntStream.of(1, 2).collect(StringBuilder::new, StringBuilder::append, StringBuilder::append);
+        System.out.println("int " + o);
+        Object p = Stream.of("a", "b").collect(StringBuilder::new, StringBuilder::append, StringBuilder::append);
+        System.out.println("obj " + p);
+        StringBuilder q = Stream.of("x").collect(StringBuilder::new, StringBuilder::append, StringBuilder::append);
+        System.out.println("typed " + q.length() + " " + q);
+        List<String> l = Stream.of("a", "b").collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
+        System.out.println("list " + l.size() + " " + l);
+        List<Integer> il = IntStream.of(1, 2).collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
+        System.out.println("ilist " + il);
+        StringBuilder r = Stream.of("y").collect(() -> new StringBuilder("["), (s, e) -> s.append(e), (s, t) -> s.append(t));
+        System.out.println("lambda " + r);
+    }
+}
+"#
+);
+
+// What `getClass()` answers, asked where a lambda's body is typed. Every
+// receiver has it and no bundled class declares it, so the per-class tables
+// had no answer and `map(Object::getClass)` produced an element of `Object` —
+// making the `Class::getName` after it "cannot find symbol". The other method
+// references through a `map` were right all along, which is what narrows this
+// to the one method.
+differential_test!(
+    the_type_of_get_class,
+    "P6",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class P6 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] a) {
+        r("ref-ref", () -> Stream.of("ab").map(String::length).map(Integer::doubleValue).collect(Collectors.toList()));
+        r("lam-ref", () -> Stream.of("ab").map(s -> s.length()).map(Integer::doubleValue).collect(Collectors.toList()));
+        r("getClass-lam", () -> Stream.of("ab").map(s -> s.getClass()).map(Class::getName).collect(Collectors.toList()));
+        r("getClass-ref", () -> Stream.of("ab").map(Object::getClass).map(Class::getName).collect(Collectors.toList()));
+        r("getClass-ref2", () -> Stream.of("ab").map(String::getClass).map(Class::getSimpleName).collect(Collectors.toList()));
+        r("toString-ref", () -> Stream.of(1, 2).map(Object::toString).map(String::length).collect(Collectors.toList()));
+        r("hashCode-ref", () -> Stream.of("a").map(Object::hashCode).map(Integer::doubleValue).collect(Collectors.toList()));
+        r("boxed-getClass", () -> IntStream.of(1).boxed().map(Object::getClass).map(Class::getName).collect(Collectors.toList()));
+        r("boxed-lam", () -> IntStream.of(1).boxed().map(x -> x.getClass()).map(Class::getName).collect(Collectors.toList()));
+        r("boxed-toString", () -> LongStream.of(1L).boxed().map(Object::toString).map(String::length).collect(Collectors.toList()));
+        r("equals-ref", () -> Stream.of("a").map(Object::getClass).map(Class::isInterface).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// ...and the same question everywhere else, which was right before this unit
+// and has to stay right: `getClass()` on a literal, a variable, a field, a
+// collection element, inside a lambda and inside a supplier.
+differential_test!(
+    get_class_in_every_position,
+    "P7",
+    r#"
+import java.util.*;
+import java.util.function.*;
+public class P7 {
+    static Object o = "x";
+    public static void main(String[] a) {
+        System.out.println("direct " + "a".getClass().getName());
+        Object v = "b";
+        System.out.println("var " + v.getClass().getSimpleName());
+        System.out.println("field " + o.getClass().getName());
+        Function<String,Class<?>> f = s -> s.getClass();
+        System.out.println("lambda-var " + f.apply("c").getName());
+        List<String> l = List.of("d");
+        System.out.println("elem " + l.get(0).getClass().getName());
+        Supplier<Class<?>> g = () -> "e".getClass();
+        System.out.println("supplier " + g.get().getName());
+        System.out.println("nested " + "f".getClass().getName().length());
+    }
+}
+"#
+);
+
+// The negative direction for the four fixes above. A method reference to a
+// name that is NOT one of the nine stream factories is still an unbound
+// instance reference; a program's own `toString`/`hashCode`/`getClass` and
+// its `equals` OVERLOAD still answer for themselves; a boxed stream is still
+// a stream of numbers that sorts, folds and maps back to a primitive one; and
+// the three-argument `collect` keeps its container's own type — including a
+// MAP, which takes two type arguments that the stream's element does not
+// name.
+differential_test!(
+    the_streams_negative_direction,
+    "P8",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class P8 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static class Pet {
+        String name;
+        Pet(String n) { name = n; }
+        @Override public String toString() { return "Pet(" + name + ")"; }
+        @Override public int hashCode() { return name.hashCode(); }
+        @Override public boolean equals(Object o) { return o instanceof Pet && ((Pet) o).name.equals(name); }
+        public boolean equals(Pet other) { return other != null && other.name.equals(name); }
+        public String describe() { return "a " + name; }
+    }
+    public static void main(String[] a) {
+        // A method reference to a name that is NOT one of the nine factories
+        // must still be an unbound instance reference — on a receiver that
+        // has the method.
+        r("unbound-length", () -> Stream.of("abc").mapToInt(String::length).sum());
+        r("static-of", () -> Stream.of(1, 2).flatMapToInt(IntStream::of).sum());
+        // A program's own overloads still win over the Object shapes.
+        r("user-toString", () -> Stream.of(new Pet("a")).map(Pet::toString).map(String::length).collect(Collectors.toList()));
+        r("user-equals", () -> Stream.of(new Pet("a")).map(p -> p.equals(new Pet("a"))).collect(Collectors.toList()));
+        r("user-equals-overload", () -> { Pet p = new Pet("a"); boolean b = p.equals(new Pet("a")); return b; });
+        r("user-describe", () -> Stream.of(new Pet("b")).map(Pet::describe).map(String::length).collect(Collectors.toList()));
+        r("user-getClass", () -> Stream.of(new Pet("c")).map(Object::getClass).map(Class::getSimpleName).collect(Collectors.toList()));
+        r("user-hash", () -> Stream.of(new Pet("d")).map(Object::hashCode).map(Integer::doubleValue).collect(Collectors.toList()));
+        // boxed() is still a stream of numbers.
+        r("boxed-arith", () -> IntStream.of(1, 2).boxed().map(x -> x + 1).collect(Collectors.toList()));
+        r("boxed-back", () -> IntStream.of(1, 2).boxed().mapToInt(Integer::intValue).sum());
+        r("boxed-sum", () -> LongStream.of(1L, 2L).boxed().mapToLong(Long::longValue).sum());
+        r("boxed-sorted", () -> DoubleStream.of(2.0, 1.0).boxed().sorted().collect(Collectors.toList()));
+        r("boxed-reduce", () -> IntStream.of(1, 2).boxed().reduce(0, Integer::sum));
+        r("boxed-toMap", () -> IntStream.of(1).boxed().collect(Collectors.toMap(x -> x, x -> x * 2)));
+        // the three-argument collect keeps its container's own type
+        r("collect-set", () -> IntStream.of(1, 1, 2).collect(TreeSet::new, TreeSet::add, TreeSet::addAll).first());
+        r("collect-map", () -> Stream.of("a").collect(HashMap::new, (m, s) -> m.put(s, s.length()), HashMap::putAll).size());
+        r("collect-sb-chain", () -> Stream.of("a", "b").collect(StringBuilder::new, StringBuilder::append, StringBuilder::append).reverse().toString());
+    }
+}
+"#
+);

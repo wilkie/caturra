@@ -782,6 +782,7 @@ fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::Hash
 
 /// Whether `method` is a static method of the library type `class`
 /// (a curated set; used only for method-reference disambiguation).
+#[allow(clippy::too_many_lines)] // one arm per class whose statics are named
 fn is_library_static(class: &str, method: &str) -> bool {
     // The statics of the classes a method REFERENCE is written on. Judged by
     // NAME alone below, which is why `Arrays::stream` — the ordinary way to
@@ -792,6 +793,30 @@ fn is_library_static(class: &str, method: &str) -> bool {
     // `Integer::signum` (a static of the same name).
     if let Some(answer) = crate::codegen::library_value_method_is_static(class, method) {
         return answer;
+    }
+    // The four stream classes' FACTORIES, answered OUTRIGHT rather than
+    // through the table below: their nine statics are exactly these (asked of
+    // a JDK, not assumed), and the by-NAME tail after the table — which reads
+    // `sum`, `max`, `min` and `compare` as statics on any class at all —
+    // would otherwise claim `IntStream::sum`, a legal UNBOUND reference on a
+    // stream. Without the list, `Stream.of(1, 2).flatMapToInt(IntStream::of)`
+    // read as an unbound reference and was "cannot find symbol: method of,
+    // location: class Integer".
+    if matches!(
+        class,
+        "Stream" | "IntStream" | "LongStream" | "DoubleStream"
+    ) {
+        return matches!(
+            method,
+            "of" | "ofNullable"
+                | "empty"
+                | "concat"
+                | "iterate"
+                | "generate"
+                | "builder"
+                | "range"
+                | "rangeClosed"
+        );
     }
     let by_class = match class {
         "Arrays" => matches!(
@@ -3133,7 +3158,18 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         qualifier, method, ..
                     } if method == "new" => {
                         let base = qualifier_type_name(qualifier);
-                        if LIBRARY_CONTAINERS.contains(&base.as_str()) {
+                        // A MAP takes two type arguments and the stream's
+                        // element names neither of them, so it stays raw:
+                        // `collect(HashMap::new, (m, s) -> m.put(s, …),
+                        // HashMap::putAll)` was written `HashMap<String>` and
+                        // refused as "wrong number of type arguments;
+                        // required 2".
+                        let one_argument = LIBRARY_CONTAINERS.contains(&base.as_str())
+                            && !matches!(
+                                base.as_str(),
+                                "Map" | "HashMap" | "LinkedHashMap" | "TreeMap" | "Hashtable"
+                            );
+                        if one_argument {
                             // A container holds REFERENCES, so a primitive
                             // stream's element is the wrapper: an
                             // `ArrayList<int>` is not a type, and the
@@ -3145,6 +3181,22 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         } else {
                             TypeRef::Named(base)
                         }
+                    }
+                    // ...and a supplier written as a LAMBDA says it just as
+                    // plainly: `() -> new StringBuilder("[")` makes a
+                    // `StringBuilder`. Only the constructor reference was
+                    // read, so the two consumers after it were compiled
+                    // against an `Object` container and
+                    // `(s, e) -> s.append(e)` was "cannot find symbol: method
+                    // append(String), location: variable s of type Object" —
+                    // the same call that compiled when written
+                    // `StringBuilder::append`.
+                    Expr::Lambda {
+                        params,
+                        body: LambdaBody::Expr(body),
+                        ..
+                    } if params.is_empty() => {
+                        static_type_of(body, ctx).unwrap_or_else(|| object.clone())
                     }
                     other => mapped_element_type(std::slice::from_ref(other), ctx)
                         .unwrap_or_else(|| object.clone()),
@@ -5795,6 +5847,23 @@ fn call_body_type(
     {
         return Some(shape.return_type.clone());
     }
+    // The three NO-ARGUMENT methods every receiver has, whose answers cannot
+    // depend on what the receiver is: `getClass()` is final, and a class that
+    // declares `toString()` or `hashCode()` must give them `Object`'s return
+    // type or it does not compile. Answered here rather than from a per-class
+    // table, which is how `getClass` came to be missing — no bundled class
+    // declares it, so `map(Object::getClass)` produced an element of `Object`
+    // and the `Class::getName` after it was "cannot find symbol".
+    //
+    // `equals` is deliberately NOT here: a program may OVERLOAD it
+    // (`boolean equals(Pet other)`, the classic bug) with any signature and
+    // any return type, so its answer is the receiver's to give.
+    match (method, args.len()) {
+        ("getClass", 0) => return Some(TypeRef::Named(String::from("Class"))),
+        ("toString", 0) => return Some(TypeRef::Named(String::from("String"))),
+        ("hashCode", 0) => return Some(TypeRef::Int),
+        _ => {}
+    }
     let receiver = receiver?;
     // A library STATIC, whose receiver is a class name rather than a
     // value: `String.valueOf(c)` is a `String`, and reading its type
@@ -6406,10 +6475,17 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     if method == "stream" && args.len() == 1 && names_library_class(prev.as_ref(), "Arrays") {
         return array_elem_type(&args[0], ctx);
     }
+    // `boxed()` is the one op whose whole PURPOSE is the element's type: a
+    // `Stream<Integer>`, not a stream of ints. It used to pass the element
+    // through on the reasoning that the VM stores it unboxed either way — but
+    // a program can see the difference the moment it asks the element
+    // anything an `Object` has, and `IntStream.of(1).boxed().map(Object::
+    // getClass)` was "int cannot be dereferenced".
+    if method == "boxed" {
+        return stream_elem_type(prev, ctx).map(boxed_name);
+    }
     match method.as_str() {
-        // `boxed` retypes without changing what the element IS here (the VM
-        // stores it unboxed either way), so it passes the element through too.
-        "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" | "boxed"
+        "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek"
         // `takeWhile`/`dropWhile` pass the element through unchanged, as
         // `filter` does, so a chain after one keeps its type.
         | "takeWhile" | "dropWhile"

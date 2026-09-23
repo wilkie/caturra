@@ -15706,6 +15706,74 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The primitive streams' unasked half (2026-09-22)
+
+The next cluster on the same never-compared list: `LongStream` and
+`DoubleStream` end to end, the three-argument `collect`, and the summary
+statistics' `combine`. Asked one call at a time against a JDK, most of the
+primitive-stream surface was already right — the sweep had simply never called
+any of it, because no argument in its bank can be typed `LongFunction`. Four
+things were not.
+
+**`boxed()` passed the primitive through.** It is the one operation whose
+whole PURPOSE is the element's type — a `Stream<Integer>`, not a stream of
+ints — and the element reader passed it along on the reasoning that the VM
+stores it unboxed either way. A program sees the difference the moment it asks
+the element anything an `Object` has:
+`IntStream.of(1).boxed().map(Object::getClass)` was "int cannot be
+dereferenced".
+
+**`IntStream::of` read as an unbound instance reference.** A `Type::method`
+reference is a static call or an unbound instance call, and the list that
+decides had no entry for the four stream classes — so
+`Stream.of(1, 2).flatMapToInt(IntStream::of)` compiled to `x.of()` and was
+"cannot find symbol: method of, location: class Integer". Their statics are
+exactly nine names, asked of a JDK rather than assumed, and none of the nine
+is also an instance method on any of the four — so the list is exact and it
+RETURNS, rather than falling through to the by-name tail that reads `sum`,
+`max`, `min` and `compare` as statics on any class at all. Without that,
+`IntStream::sum` — a legal unbound reference — would have become
+`IntStream.sum(x)`.
+
+**The three-argument `collect` had no types.** `collect(supplier,
+accumulator, combiner)` gathers without a `Collector`; the container is
+whatever the supplier makes, and both callbacks are compiled against it. A
+constructor reference said so outright and a LAMBDA supplier did not, so
+`collect(() -> new StringBuilder("["), (s, e) -> s.append(e), …)` was "cannot
+find symbol: method append(String), location: variable s of type Object" for
+the same call that compiled when written `StringBuilder::append`. The call's
+own RESULT was typed `null` besides — the method table can only say "nullish",
+since no element type names the container — so `collect(…).toString()` could
+not be written at all. `refine_builtin_return` reads the supplier's answer
+now, beside the `map` and `flatMap` refinements that were already there. A
+MAP container stays raw while it is at it: it takes two type arguments and the
+stream's element names neither, so writing one of them made
+`collect(HashMap::new, …)` "wrong number of type arguments; required 2".
+
+**`getClass()` had no type where a lambda's body is typed.** Every receiver
+has it and no bundled class declares it, so the per-class tables had no answer
+and `map(Object::getClass)` produced an element of `Object`, making the
+`Class::getName` after it "cannot find symbol". It is answered beside
+`toString()` and `hashCode()` now — the three NO-ARGUMENT methods whose answer
+cannot depend on the receiver, since `getClass` is final and a class that
+declares the other two must give them `Object`'s return type or it does not
+compile. `equals` is deliberately not among them: a program may OVERLOAD it
+with any signature and any return type, so its answer is the receiver's to
+give, and the negative pin holds a class that does exactly that.
+
+Left open, measured and not fixed: `Stream.of(aLibraryValue)` has no element
+type — `Stream.of(List.of(1, 2)).map(List::size)` is refused where the same
+list through a declared variable compiles — because the lambda pass types a
+library static's return through a handful of named arms rather than through
+the descriptor table the emit side reads. Falling back to the general type
+reader was tried and broke other typing, so it wants its own measurement.
+
+Pinned as `the_primitive_streams_unasked_half`,
+`what_boxed_and_the_factories_answer`, `the_three_argument_collect`,
+`the_type_of_get_class`, `get_class_in_every_position` and
+`the_streams_negative_direction`.
+
+
 ### The sorted faces, and what a callback leaves behind (2026-09-22)
 
 The unit was chosen by re-reading the behaviour sweep's own blind-spot list —
