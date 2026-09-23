@@ -57674,3 +57674,189 @@ public class P8 {
 }
 "#
 );
+
+// A library value written INLINE as a stream's element, then asked something
+// only its own type has. `List.of(…)`, `Set.of`, `Map.of`, `Arrays.asList`,
+// `copyOf`, `Integer.valueOf`, `Optional.of` — the same values through a
+// DECLARED variable had their type all along, and inline they were `Object`,
+// so `Stream.of(List.of(1, 2)).map(List::size)` was "cannot find symbol:
+// method size(), location: class Object". The call-shaped type reader had no
+// answer and never asked the general one beside it.
+differential_test!(
+    a_library_value_written_inline,
+    "L1",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class L1 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] a) {
+        // A library value written INLINE as a stream's element, then asked
+        // something only its own type has.
+        r("List.of", () -> Stream.of(List.of(1, 2)).map(List::size).collect(Collectors.toList()));
+        r("Set.of", () -> Stream.of(Set.of(1)).map(Set::size).collect(Collectors.toList()));
+        r("Map.of", () -> Stream.of(Map.of("a", 1)).map(Map::size).collect(Collectors.toList()));
+        r("Arrays.asList", () -> Stream.of(Arrays.asList(1, 2)).map(List::size).collect(Collectors.toList()));
+        r("List.copyOf", () -> Stream.of(List.copyOf(List.of(1))).map(List::size).collect(Collectors.toList()));
+        r("String.valueOf", () -> Stream.of(String.valueOf(12)).map(String::length).collect(Collectors.toList()));
+        r("Integer.valueOf", () -> Stream.of(Integer.valueOf(3)).map(Integer::doubleValue).collect(Collectors.toList()));
+        r("LocalDate.of", () -> Stream.of(java.time.LocalDate.of(2024, 3, 14)).map(java.time.LocalDate::getYear).collect(Collectors.toList()));
+        r("Optional.of", () -> Stream.of(Optional.of("x")).map(Optional::get).collect(Collectors.toList()));
+        r("BigInteger", () -> Stream.of(java.math.BigInteger.valueOf(7)).map(java.math.BigInteger::intValue).collect(Collectors.toList()));
+        r("Paths.get", () -> Stream.of(java.nio.file.Paths.get("a")).map(java.nio.file.Path::toString).collect(Collectors.toList()));
+        // ...the same values as a LAMBDA parameter rather than a method ref.
+        r("lam-List.of", () -> Stream.of(List.of(1, 2)).map(x -> x.size()).collect(Collectors.toList()));
+        r("lam-Map.of", () -> Stream.of(Map.of("a", 1)).map(x -> x.keySet()).collect(Collectors.toList()));
+        r("lam-LocalDate", () -> Stream.of(java.time.LocalDate.of(2024, 3, 14)).map(x -> x.getMonth()).collect(Collectors.toList()));
+        // ...and through a declared variable, which already worked.
+        r("var-List", () -> { List<List<Integer>> l = new ArrayList<>(); l.add(List.of(1, 2));
+            return l.stream().map(List::size).collect(Collectors.toList()); });
+        // the same question in the other literal collection factories
+        r("listOf-elem", () -> List.of(List.of(1, 2)).stream().map(List::size).collect(Collectors.toList()));
+        r("arrays-elem", () -> Arrays.asList(List.of(1, 2)).stream().map(List::size).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// ...and the factories whose answer is not one element: `Map.of(k, v, …)`
+// takes its two type arguments from the first KEY and the first VALUE,
+// `copyOf` keeps the argument's under the copy's own name, and a wrapper's
+// `valueOf` is the wrapper. Each asked through a method reference, through a
+// lambda, and with the arithmetic that must still work on the result.
+differential_test!(
+    the_factories_two_type_arguments,
+    "L2",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class L2 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static class Pt {
+        final int x; final int y;
+        Pt(int x, int y) { this.x = x; this.y = y; }
+        int x() { return x; }
+    }
+    public static void main(String[] a) {
+        // The map factories and copyOf, in every position the new reading touches.
+        r("map-of", () -> Stream.of(Map.of("a", 1)).map(Map::size).collect(Collectors.toList()));
+        r("map-of-keys", () -> Stream.of(Map.of("a", 1)).map(m -> m.get("a") + 1).collect(Collectors.toList()));
+        r("map-of-4", () -> Stream.of(Map.of("a", 1, "b", 2)).map(m -> m.keySet().size()).collect(Collectors.toList()));
+        r("map-copyOf", () -> Stream.of(Map.copyOf(Map.of("a", 1))).map(m -> m.get("a")).collect(Collectors.toList()));
+        r("list-copyOf", () -> Stream.of(List.copyOf(List.of("x"))).map(l -> l.get(0).length()).collect(Collectors.toList()));
+        r("set-copyOf", () -> Stream.of(Set.copyOf(Set.of("x"))).map(Set::size).collect(Collectors.toList()));
+        r("nested-map", () -> Stream.of(Map.of("a", List.of(1, 2))).map(m -> m.get("a").size()).collect(Collectors.toList()));
+        // A wrapper's valueOf, and the arithmetic it must still allow.
+        r("int-valueOf", () -> Stream.of(Integer.valueOf(3)).map(Integer::doubleValue).collect(Collectors.toList()));
+        r("int-valueOf-arith", () -> Stream.of(Integer.valueOf(3)).map(x -> x + 1).collect(Collectors.toList()));
+        r("long-valueOf", () -> Stream.of(Long.valueOf(3L)).map(x -> x * 2).collect(Collectors.toList()));
+        r("char-valueOf", () -> Stream.of(Character.valueOf('a')).map(Character::charValue).collect(Collectors.toList()));
+        r("bool-valueOf", () -> Stream.of(Boolean.valueOf(true)).map(x -> !x).collect(Collectors.toList()));
+        r("double-valueOf", () -> Stream.of(Double.valueOf(1.5)).map(x -> x / 2).collect(Collectors.toList()));
+        r("valueOf-sum", () -> Stream.of(Integer.valueOf(1), Integer.valueOf(2)).mapToInt(Integer::intValue).sum());
+        r("valueOf-direct", () -> Integer.valueOf(3) + 1);
+        r("valueOf-list", () -> { List<Integer> l = new ArrayList<>(); l.add(Integer.valueOf(3)); return l; });
+        // A stream FROM these factories still knows its element.
+        r("from-map-keys", () -> Map.of("a", 1).keySet().stream().map(String::length).collect(Collectors.toList()));
+        r("from-copyOf", () -> List.copyOf(List.of("ab")).stream().map(String::length).collect(Collectors.toList()));
+        // ...and a record / user type as an inline element is untouched.
+        r("record", () -> Stream.of(new Pt(1, 2)).map(Pt::x).collect(Collectors.toList()));
+        r("empty-of", () -> Stream.of(List.of()).map(List::size).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// `List.of()` with NO arguments names a container and nothing about an
+// element — its type argument is inferred from the target. Every collection
+// method that takes one accepted it except the ONE-argument `addAll`, which
+// had its own element check (two base types compared) where its
+// two-argument sibling fell through to the general widening. The element
+// question is asked of the one function that answers it now.
+differential_test!(
+    an_empty_factory_fits_anywhere,
+    "L5",
+    r#"
+import java.util.*;
+public class L5 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] a) {
+        r("str-addAll", () -> { List<String> l = new ArrayList<>(); l.addAll(List.of()); return l.size(); });
+        r("str-addAll-i", () -> { List<String> l = new ArrayList<>(); l.addAll(0, List.of()); return l.size(); });
+        r("int-addAll", () -> { List<Integer> l = new ArrayList<>(); l.addAll(List.of()); return l.size(); });
+        r("int-addAll-i", () -> { List<Integer> l = new ArrayList<>(); l.addAll(0, List.of()); return l.size(); });
+        r("dbl-addAll", () -> { List<Double> l = new ArrayList<>(); l.addAll(List.of()); return l.size(); });
+        r("set-addAll", () -> { Set<Integer> s = new HashSet<>(); s.addAll(Set.of()); return s.size(); });
+        r("int-ctor", () -> new ArrayList<Integer>(List.of()).size());
+        r("int-putAll", () -> { Map<String,Integer> m = new HashMap<>(); m.putAll(Map.of()); return m.size(); });
+        r("int-containsAll", () -> { List<Integer> l = new ArrayList<>(); return l.containsAll(List.of()); });
+        r("int-removeAll", () -> { List<Integer> l = new ArrayList<>(); l.add(1); l.removeAll(List.of()); return l; });
+        r("int-retainAll", () -> { List<Integer> l = new ArrayList<>(); l.add(1); l.retainAll(List.of(1)); return l; });
+        r("int-assign", () -> { List<Integer> l = List.of(); return l.size(); });
+    }
+}
+"#
+);
+
+// The negative direction: `addAll` still refuses an element that does not
+// fit and still widens one that does; an empty factory is still EMPTY;
+// the map factories still type both arguments; a wrapper's `valueOf` keeps
+// its class and its cache; and the stream factories still make streams that
+// run.
+differential_test!(
+    the_inline_value_negative_direction,
+    "L6",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class L6 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] a) {
+        // addAll must still REFUSE an element that does not fit.
+        List<String> strings = new ArrayList<>(List.of("a"));
+        List<Integer> ints = new ArrayList<>(List.of(1));
+        r("addAll-ok", () -> { List<String> l = new ArrayList<>(); l.addAll(strings); return l; });
+        r("addAll-widen", () -> { List<Object> l = new ArrayList<>(); l.addAll(strings); return l; });
+        r("addAll-set", () -> { Set<String> s = new HashSet<>(); s.addAll(strings); return s.size(); });
+        r("addAll-num", () -> { List<Number> l = new ArrayList<>(); l.addAll(ints); return l; });
+        // ...and the empty factory is still EMPTY, not a wildcard that changes contents.
+        r("empty-stays", () -> { List<String> l = new ArrayList<>(List.of("a")); l.addAll(List.of()); return l; });
+        r("empty-set", () -> { Set<String> s = new HashSet<>(Set.of("a")); s.addAll(Set.of()); return s.size(); });
+        // the map factories still type their two arguments
+        r("map-get", () -> Map.of("a", 1).get("a") + 1);
+        r("map-nested", () -> Map.of("a", List.of(1, 2)).get("a").size());
+        r("map-keys", () -> Map.of("a", 1).keySet().iterator().next().length());
+        r("map-copyOf-get", () -> Map.copyOf(Map.of("a", 1)).get("a") + 1);
+        r("list-copyOf-get", () -> List.copyOf(List.of("ab")).get(0).length());
+        // a wrapper's valueOf keeps its own class
+        r("valueOf-class", () -> ((Object) Integer.valueOf(3)).getClass().getName());
+        r("valueOf-char", () -> ((Object) Character.valueOf('a')).getClass().getName());
+        r("valueOf-cache", () -> Integer.valueOf(1) == Integer.valueOf(1));
+        r("valueOf-big", () -> Integer.valueOf(1000) == Integer.valueOf(1000));
+        r("valueOf-unbox", () -> { int x = Integer.valueOf(7); return x * 2; });
+        // the stream factories still make streams that run
+        r("stream-of", () -> Stream.of(1, 2).map(x -> x * 2).collect(Collectors.toList()));
+        r("intstream-range", () -> IntStream.range(0, 3).sum());
+        r("stream-concat", () -> Stream.concat(Stream.of("a"), Stream.of("b")).collect(Collectors.joining()));
+        r("stream-empty", () -> Stream.empty().count());
+        r("stream-iterate", () -> Stream.iterate(1, x -> x + 1).limit(3).collect(Collectors.toList()));
+    }
+}
+"#
+);

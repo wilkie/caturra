@@ -15706,6 +15706,61 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A library value written inline (2026-09-22)
+
+The open item the last unit recorded, measured on its own. A library value
+written INLINE — `Stream.of(List.of(1, 2))` — had no type, so the lambda after
+it saw an `Object` and `map(List::size)` was "cannot find symbol: method
+size()". The same list through a DECLARED variable had its type all along, and
+`List.of(List.of(1, 2)).stream()` — the same value one call further on — did
+too. Eleven of eighteen shapes were wrong.
+
+The cause was two readers for one question. The lambda pass types an
+expression with a call-shaped reader and a general one; the general reader
+knows the literal collection factories, and the call-shaped one, which runs
+first for a call, never asked it when it had no answer of its own. It does
+now, and that alone fixed six of the eleven.
+
+The rest were factories the general reader did not know either, each for the
+same reason — it reads ONE element and they do not have one:
+
+- `Map.of(k, v, …)` takes its two type arguments from the first KEY and the
+  first VALUE.
+- `List.copyOf(c)` / `Set.copyOf` / `Map.copyOf` change the FACE and keep the
+  contents, so the answer is the argument's own type arguments under the
+  copy's name.
+- a wrapper's `valueOf` is the wrapper, and the four stream classes' nine
+  factories answer a stream of their own kind — named once, beside the
+  method-reference rule that reads the same list.
+
+An EMPTY `List.of()` is the interesting one. It names a container and nothing
+at all about an element: its type argument is inferred from the TARGET, which
+this reader does not see. Answering `List<Object>` broke the other direction
+immediately — `listOfInteger.addAll(List.of())` became "List<Object> cannot be
+converted to Collection<Integer>" for a call javac infers — so it answers the
+RAW container, which is enough to find `size` and is not a claim about the
+element.
+
+**And that measurement found a defect that predates all of it.** The
+`addAll(c)` above was refused at HEAD too, while `addAll(0, c)`,
+`containsAll`, `removeAll`, `retainAll`, `putAll` and the copy constructor all
+took the same argument. The one-argument form's parameter kind had its own
+element check — the two ELEMENTS' base types compared — where the
+two-argument form's fell through to the general widening; and the function
+that answers the element question properly already knew that a generic
+factory's element is pinned by the target, in a comment naming this exact
+sentence. It is asked now.
+
+Pinned as `a_library_value_written_inline`,
+`the_factories_two_type_arguments`, `an_empty_factory_fits_anywhere` and
+`the_inline_value_negative_direction`.
+
+Still open: `Stream.of(IntStream.of(1, 2))` — a stream of STREAMS. The element
+now types as `IntStream`, and caturra has no way to hold one as a collection
+element, so it refuses rather than mistyping. That is the library-types-in-
+every-position dimension, which never included the primitive streams.
+
+
 ### The primitive streams' unasked half (2026-09-22)
 
 The next cluster on the same never-compared list: `LongStream` and

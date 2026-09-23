@@ -1691,12 +1691,44 @@ fn literal_collection_type(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         return None;
     };
     let owner = path.last().map(String::as_str)?;
-    if args.is_empty()
-        || !matches!(
-            (owner, method.as_str()),
-            ("List" | "Set", "of") | ("Arrays", "asList")
-        )
+    // `Map.of(k, v, …)` — its two type arguments are the first KEY and the
+    // first VALUE, so it cannot ride the single-element reading below.
+    if owner == "Map" && method == "of" && args.len() >= 2 && args.len() % 2 == 0 {
+        let key = boxed_element(static_type_of(&args[0], ctx)?);
+        let value = boxed_element(static_type_of(&args[1], ctx)?);
+        return Some(TypeRef::Generic {
+            base: String::from("Map"),
+            args: vec![key, value],
+        });
+    }
+    // `List.copyOf(c)` / `Set.copyOf(c)` / `Map.copyOf(m)` — the FACE changes
+    // and the contents do not, so the answer is the argument's own type
+    // arguments under the copy's own name.
+    if matches!(owner, "List" | "Set" | "Map")
+        && method == "copyOf"
+        && let [only] = &args[..]
+        && let Some(TypeRef::Generic { args: held, .. }) = static_type_of(only, ctx)
     {
+        return Some(TypeRef::Generic {
+            base: String::from(owner),
+            args: held,
+        });
+    }
+    // An EMPTY factory names its CONTAINER and nothing at all about an
+    // element — its type argument is inferred from the target, which this
+    // reader does not see. So it answers the RAW container: enough for
+    // `Stream.of(List.of()).map(List::size)` to find `size`, and not a claim
+    // about the element. Answering `List<Object>` broke the other direction
+    // at once: `listOfInteger.addAll(List.of())` became "List<Object> cannot
+    // be converted to Collection<Integer>" for a call javac infers.
+    if args.is_empty() {
+        return matches!((owner, method.as_str()), ("List" | "Set" | "Map", "of"))
+            .then(|| TypeRef::Named(String::from(owner)));
+    }
+    if !matches!(
+        (owner, method.as_str()),
+        ("List" | "Set", "of") | ("Arrays", "asList")
+    ) {
         return None;
     }
     let first = static_type_of(&args[0], ctx)?;
@@ -6067,7 +6099,14 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
             method,
             args,
             ..
-        } => call_body_type(expr, receiver.as_deref(), method, args, bound, ctx),
+        } => call_body_type(expr, receiver.as_deref(), method, args, bound, ctx)
+            // ...and where the call-shaped reader has no answer, the GENERAL
+            // one may: it knows the literal collection factories, which are
+            // how a collection is written inline. Without the fallback
+            // `Stream.of(List.of(1, 2)).map(List::size)` had an `Object`
+            // element, though `List.of(List.of(1, 2)).stream()` — the same
+            // list one call along — did not.
+            .or_else(|| static_type_of(expr, ctx)),
         _ => static_type_of(expr, ctx),
     }
 }
@@ -6781,6 +6820,26 @@ fn library_static_type(class: &str, method: &str, argc: usize) -> Option<TypeRef
     );
     if class == "String" && matches!(method, "valueOf" | "copyValueOf" | "format" | "join") {
         return Some(TypeRef::Named(String::from("String")));
+    }
+    // `Integer.valueOf(3)` is an `Integer` — the wrapper's own name. Read as
+    // nothing, `Stream.of(Integer.valueOf(3)).map(Integer::doubleValue)` had
+    // an `Object` element, though the bare literal beside it did not.
+    if wrapper && method == "valueOf" {
+        return Some(TypeRef::Named(String::from(class)));
+    }
+    // ...and the three PRIMITIVE stream classes answer a stream of their own
+    // kind, which carries no element type. The object `Stream` is
+    // deliberately NOT here: its element is the whole answer, and the reader
+    // that types `Stream.of(x)` as a `Stream<x>` runs after this one — named
+    // here, it shadowed that reader and typed the factory as a bare `Stream`,
+    // which is not a type a value can have in caturra at all.
+    if matches!(class, "IntStream" | "LongStream" | "DoubleStream")
+        && matches!(
+            method,
+            "of" | "empty" | "concat" | "iterate" | "generate" | "range" | "rangeClosed"
+        )
+    {
+        return Some(TypeRef::Named(String::from(class)));
     }
     if (wrapper && method == "toString")
         || (matches!(class, "Integer" | "Long")

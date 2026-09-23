@@ -24766,7 +24766,17 @@ fn bparam_matches(
                 | JType::Stack(elem)
                 | JType::LinkedList { elem, .. },
                 Some(want),
-            ) => widens(elem.base_type(), want.base_type(), table),
+            ) => {
+                // The ELEMENT question, asked of the one function that
+                // answers it — which knows that a generic factory's element
+                // is pinned by the target (`List.of()` is a `List<String>`
+                // where one is wanted). Comparing the two BASE types instead
+                // lost exactly that: `list.addAll(List.of())` was
+                // "List<Object> cannot be converted to Collection<String>",
+                // while `list.addAll(0, List.of())` — a parameter kind that
+                // falls through to the general widening — took it.
+                elem_matches(elem, want, table) || widens(elem.base_type(), want.base_type(), table)
+            }
             _ => false,
         },
         other => widens(arg, bparam_type(other, args, table), table),
