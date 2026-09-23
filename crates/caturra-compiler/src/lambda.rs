@@ -1616,6 +1616,46 @@ fn user_method_return(owner: &Expr, method: &str, argc: usize, ctx: &Ctx) -> Opt
     }
 }
 
+/// What a CALL answers, whoever its receiver is: a method of another object
+/// (`store.array()`), or one of the enclosing class written by its simple name
+/// (`words()`). Every reader of a receiver's type below had the first shape
+/// and not the second, so a value a HELPER hands back had no type at all —
+/// `maybe().map(s -> ...)` was refused where `Optional<String> o = maybe();
+/// o.map(...)` compiled, and the same for an array, a stream and a directory.
+fn call_answer(call: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    match call {
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            ..
+        } => user_method_return(owner, method, args.len(), ctx),
+        Expr::Call {
+            receiver: None,
+            method,
+            args,
+            ..
+        } => own_method_return(method, args.len(), ctx),
+        _ => None,
+    }
+}
+
+/// What a method of the ENCLOSING class answers, called by its simple name.
+/// The receiver is `this` (or the class itself for a static one), which is
+/// written nowhere — so [`user_method_return`], which reads the receiver, has
+/// nothing to read.
+fn own_method_return(method: &str, argc: usize, ctx: &Ctx) -> Option<TypeRef> {
+    let (_, answered) = declared_shape(ctx.current_class?, method, argc, ctx)?;
+    // A bare type VARIABLE says nothing without a receiver's argument, and
+    // `void` is not a type a caller can use — the same two answers
+    // `user_method_return` withholds.
+    match &answered {
+        TypeRef::Named(name) if crate::parser::typevar_index(name).is_some() => None,
+        TypeRef::Void => None,
+        _ => Some(answered),
+    }
+}
+
 /// The class that DECLARES `method` at that arity, walking outward from
 /// `class`, and the return type it writes. `Names extends Bag<String>` declares
 /// no `all()` of its own, and looking only at the class named left the call
@@ -1912,15 +1952,10 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // `new Roster().add(s)` answers a `Roster`, which is what a `var`
         // holding a builder chain needs — and without it the lambda in
         // `roster.stream().map(…)` had no element, though the same chain
-        // assigned to a DECLARED variable compiled.
-        Expr::Call {
-            receiver: Some(owner),
-            method,
-            args,
-            ..
-        } if user_method_return(owner, method, args.len(), ctx).is_some() => {
-            user_method_return(owner, method, args.len(), ctx)
-        }
+        // assigned to a DECLARED variable compiled. A method of the ENCLOSING
+        // class, written by its simple name (`dir()`), is the same fact with
+        // no receiver to read it from.
+        Expr::Call { .. } if call_answer(expr, ctx).is_some() => call_answer(expr, ctx),
         // A LIBRARY call whose answer is written on its receiver —
         // `line.split(",")` is a `String[]`, `text.toUpperCase()` a String.
         // A `var` holding one had no type, so the stream over it had no
@@ -2612,7 +2647,6 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             if let Some(r) = receiver {
                 desugar_expr(r, None, ctx);
             }
-            // `map.forEach((k, v) -> ...)`: the SAM is the erased
             // `dir.list(filter)` / `dir.listFiles(filter)` — a `FileFilter`
             // is asked about the FILE and a `FilenameFilter` about the
             // directory AND the name, so which overload a call means is
@@ -2625,7 +2659,16 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 && args.len() == 1
                 && matches!(&args[0], Expr::Lambda { .. } | Expr::MethodRef { .. })
                 && let Some(r) = receiver.as_deref()
-                && matches!(static_type_of(r, ctx), Some(TypeRef::Named(ref n)) if n == "File")
+                // The receiver's type by its LAST segment: a `new
+                // java.io.File(".")` written inline names the class the long
+                // way, and comparing the whole spelling missed it — so the
+                // same call compiled through a variable and not through the
+                // expression.
+                && matches!(
+                    static_type_of(r, ctx),
+                    Some(TypeRef::Named(ref n) | TypeRef::Generic { base: ref n, .. })
+                        if n.rsplit('.').next() == Some("File")
+                )
             {
                 let file = TypeRef::Named(String::from("File"));
                 let string = TypeRef::Named(String::from("String"));
@@ -2652,6 +2695,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 args[0] = build_erased_lambda(&mut args[0], iface, sam, &ret, &params, None, ctx);
                 return;
             }
+            // `map.forEach((k, v) -> ...)`: the SAM is the erased
             // `__BiConsumer`, and the lambda's parameter types come from the
             // RECEIVER's declared type arguments. No other target type in
             // caturra is instantiated from its receiver, so this is its own
@@ -3042,16 +3086,30 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // `Arrays.sort(array, cmp)`: the comparator is over the ARRAY's
             // element type — the same rule as `list.sort`, read from the first
             // argument rather than the receiver.
-            if method == "sort"
-                && args.len() == 2
+            //
+            // Three spellings of one call: `parallelSort` is the same sort on
+            // one thread (the emitter has said so since the primitive
+            // overloads were bundled), and the RANGE form puts the comparator
+            // LAST, after the bounds. Written as `sort` with two arguments
+            // only, the other two were not functional-interface positions at
+            // all — `Arrays.sort(a, 1, 4, (x, y) -> ...)` was "a lambda or
+            // method reference is only allowed where a functional-interface
+            // type is expected", about a comparator the emitter below was
+            // already prepared to take.
+            if matches!(method.as_str(), "sort" | "parallelSort")
+                && matches!(args.len(), 2 | 4)
                 && matches!(receiver.as_deref(), Some(Expr::Name { path, .. })
                         if path.len() == 1 && path[0] == "Arrays")
                 && let Some(elem) = array_elem_type(&args[0], ctx)
             {
-                desugar_expr(&mut args[0], None, ctx);
-                if matches!(&args[1], Expr::Lambda { params, .. } if params.len() == 2) {
-                    args[1] = build_erased_lambda(
-                        &mut args[1],
+                let at = args.len() - 1;
+                let (leading, tail) = args.split_at_mut(at);
+                for arg in leading {
+                    desugar_expr(arg, None, ctx);
+                }
+                if matches!(&tail[0], Expr::Lambda { params, .. } if params.len() == 2) {
+                    tail[0] = build_erased_lambda(
+                        &mut tail[0],
                         "__Comparator",
                         "compare",
                         &TypeRef::Int,
@@ -3064,7 +3122,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         base: String::from("Comparator"),
                         args: vec![elem],
                     };
-                    desugar_expr(&mut args[1], Some(&target), ctx);
+                    desugar_expr(&mut tail[0], Some(&target), ctx);
                 }
                 return;
             }
@@ -6504,6 +6562,10 @@ fn declared_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
             ctx.lookup(name)
         }
+        // A method of the PROGRAM writes its answer's type as plainly as a
+        // variable's declaration does — `flow()` returning a `Stream<String>`
+        // says the element the pipeline after it walks.
+        Expr::Call { .. } => call_answer(expr, ctx),
         _ => None,
     }
 }
@@ -7291,14 +7353,7 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // or a declaration; a class's own method says the array in its return
         // type, and without it the inline form was refused while the same
         // array through a variable compiled.
-        Expr::Call {
-            receiver: Some(owner),
-            method,
-            args,
-            ..
-        } if user_method_return(owner, method, args.len(), ctx).is_some() => {
-            user_method_return(owner, method, args.len(), ctx)?
-        }
+        Expr::Call { .. } if call_answer(receiver, ctx).is_some() => call_answer(receiver, ctx)?,
         // An array written INLINE — `Arrays.stream(new int[]{1, 2, 3})` — is
         // its own declaration. Only a variable was looked up, so the identical
         // call on a literal array had no element type and the lambda after it
@@ -7425,13 +7480,10 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             },
         };
     }
-    let ty = match receiver {
-        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
-        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
-            ctx.lookup(name)?
-        }
-        _ => return None,
-    };
+    // A variable, a `this` field, or a method of the program that answers one
+    // — the three shapes a DECLARATION is written in, asked through the one
+    // reader rather than copied here (this copy had only the first two).
+    let ty = declared_type_of(receiver, ctx)?;
     // A variable declared `OptionalInt` (and its two siblings) carries no type
     // argument at all, so it never reaches the generic reading below.
     if let TypeRef::Named(name) = &ty

@@ -15706,6 +15706,57 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A lambda is a lambda wherever it is written (2026-09-23)
+
+The filtered directory listing added an hour earlier did not work outside its
+own pins. `dir.list((d, n) -> n.endsWith(".txt"))` was "incompatible types:
+lambda expression cannot be converted to BiFunction" in any program that did
+not also mention a comparator or a stream — because the bundled functional
+interfaces a lambda desugars to are INJECTED, and whether to inject them was
+asked as a list of about twenty spellings of the user's text (`.forEach(`,
+`.sort(`, `Comparator`, `Stream`, ...) whose default was "no". Every line of
+that list was added the day a program was refused for a class it never wrote,
+and the next position cost another line.
+
+So the list was the defect, not its length. An arrow or a `::` anywhere is
+the question each of those lines was half-asking, and it subsumes the two
+pairs that had been spelled out (a comparator in a `TreeSet`/`TreeMap`/
+`PriorityQueue` constructor, one handed to `Collections.max`/`min`/
+`binarySearch`). Three ordinary calls were refused before the change and are
+not now, none of them about files: `Optional.flatMap` ("lambda expression
+cannot be converted to Function" — `.flatMap(` does not contain `.map(`),
+`Optional.orElseThrow(() -> ...)`, and `Objects.requireNonNull(x, () -> ...)`,
+which said "cannot find symbol: class \_\_Supplier" — a name no program can
+write.
+
+**Which positions ARE functional ones** then got its own sweep: one minimal
+program per modelled lambda-taking call, 42 of them, each naming nothing the
+position does not need. Two more gaps came out. `Arrays.sort(a, cmp)` is
+three spellings of one call — `parallelSort` is the same sort on one thread,
+and the RANGE form `sort(a, from, to, cmp)` puts the comparator LAST — and the
+comparator position was written for the two-argument `sort` alone. The other
+two were not functional-interface positions at all, about a comparator the
+emitter underneath had been prepared to take since the primitive overloads
+were bundled.
+
+**And what the receiver is.** Every reader of a receiver's type — the array's,
+the stream's, the Optional's, the File's — knew a variable, a `this` field and
+a call on another object, and not a call to a method of the enclosing class
+written by its simple name. So `dir().list((d, n) -> ...)` and
+`maybe().map(s -> ...)` were refused where the identical call through a
+variable compiled, in four separate copies of the same ladder. One reader
+(`call_answer`) answers "what does this call hand back" for both receiver
+shapes now, and the three copies ask it; `optional_elem_type`'s tail, which
+had re-spelled `declared_type_of`'s two arms, asks that instead.
+
+The sweep is `scripts/sweep/lambdas.py`, which the corpus fuzzers cannot
+replace: every program they generate names half the library, which is what
+hid this. Its `--self-check` rejects a case with no arrow and no `::` in it,
+because such a case measures nothing however green it reports.
+
+Pinned as `a_lambda_with_no_word_for_it`, `every_spelling_of_a_sorted_array`
+and `a_lambda_on_what_a_helper_answers`.
+
 ### A constant folds inside a hoisted body (2026-09-23)
 
 The open item the surrogate unit recorded, and larger than the `==` it was

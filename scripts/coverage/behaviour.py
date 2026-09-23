@@ -431,6 +431,113 @@ WRITTEN = {
     "java.time.temporal.ChronoUnit.valueOf(java.lang.Class,java.lang.String)": [
         'java.time.temporal.ChronoUnit.valueOf(java.time.temporal.ChronoUnit.class, "HOURS")',
     ],
+    # The calls whose ARGUMENT the bank cannot build but a program writes
+    # plainly: a `Map.Entry`, a `CharSequence[]`, another `StringJoiner`, a
+    # primitive stream's lambdas, another summary. Each sat on the
+    # never-compared list as though it were unmeasured, beside the genuine
+    # non-goals — so the number could not be read. Written out, they run.
+    "java.util.Map.ofEntries([Ljava.util.Map$Entry;)": [
+        "java.util.Map.ofEntries().size()",
+        'java.util.Map.ofEntries(java.util.Map.entry("a", 1)).toString()',
+        'java.util.Map.ofEntries(java.util.Map.entry("a", 1),'
+        ' java.util.Map.entry("b", 2)).size()',
+    ],
+    "java.lang.String.join(java.lang.CharSequence,[Ljava.lang.CharSequence;)": [
+        'String.join("-", new CharSequence[] {"a", "b"})',
+        'String.join("-", new CharSequence[0])',
+        'String.join("-", new CharSequence[] {new StringBuilder("a"), "b"})',
+    ],
+    "java.util.StringJoiner.merge(java.util.StringJoiner)": [
+        '{r}.merge(new java.util.StringJoiner(";")).toString()',
+        '{r}.merge(new java.util.StringJoiner(";").add("y")).toString()',
+    ],
+    "java.util.Collections.list(java.util.Enumeration)": [
+        "java.util.Collections.list(new java.util.Vector<>("
+        'java.util.List.of("a", "b")).elements()).toString()',
+        "java.util.Collections.list(new java.util.Vector<String>().elements()).toString()",
+    ],
+    "java.io.File.list(java.io.FilenameFilter)": [
+        'java.util.Arrays.toString(new java.io.File(".").list((d, n) -> false))',
+    ],
+    # ...and both `listFiles` filters, which the lambda's parameter COUNT
+    # tells apart.
+    "java.io.File.listFiles(java.io.FileFilter)": [
+        'java.util.Arrays.toString(new java.io.File(".").listFiles(f -> false))',
+    ],
+    "java.io.File.listFiles(java.io.FilenameFilter)": [
+        'java.util.Arrays.toString(new java.io.File(".").listFiles((d, n) -> false))',
+    ],
+    # The three summaries' `combine`, each over another of its own kind.
+    "java.util.IntSummaryStatistics.combine(java.util.IntSummaryStatistics)": [
+        "{ java.util.IntSummaryStatistics a ="
+        " java.util.stream.IntStream.of(1, 5).summaryStatistics();"
+        " a.combine(java.util.stream.IntStream.of(9).summaryStatistics());"
+        " return a.toString(); }",
+    ],
+    "java.util.LongSummaryStatistics.combine(java.util.LongSummaryStatistics)": [
+        "{ java.util.LongSummaryStatistics a ="
+        " java.util.stream.LongStream.of(1L).summaryStatistics();"
+        " a.combine(java.util.stream.LongStream.of(9L).summaryStatistics());"
+        " return a.toString(); }",
+    ],
+    "java.util.DoubleSummaryStatistics.combine(java.util.DoubleSummaryStatistics)": [
+        "{ java.util.DoubleSummaryStatistics a ="
+        " java.util.stream.DoubleStream.of(1.0).summaryStatistics();"
+        " a.combine(java.util.stream.DoubleStream.of(9.0).summaryStatistics());"
+        " return a.toString(); }",
+    ],
+    # The two primitive pipelines' own half: a lambda per method, which no
+    # argument bank can type.
+    "java.util.stream.LongStream.mapToInt(java.util.function.LongToIntFunction)": [
+        "java.util.stream.LongStream.of(1L, 2L).mapToInt(x -> (int) x).sum()",
+    ],
+    "java.util.stream.LongStream.mapToDouble(java.util.function.LongToDoubleFunction)": [
+        "java.util.stream.LongStream.of(1L, 2L).mapToDouble(x -> x * 1.5).sum()",
+    ],
+    "java.util.stream.LongStream.mapToObj(java.util.function.LongFunction)": [
+        'java.util.stream.LongStream.of(1L, 2L).mapToObj(x -> "v" + x)'
+        ".collect(java.util.stream.Collectors.joining(\",\"))",
+    ],
+    "java.util.stream.LongStream.flatMap(java.util.function.LongFunction)": [
+        "java.util.stream.LongStream.of(1L, 2L)"
+        ".flatMap(x -> java.util.stream.LongStream.of(x, x)).sum()",
+    ],
+    "java.util.stream.LongStream.concat(java.util.stream.LongStream,java.util.stream.LongStream)": [
+        "java.util.stream.LongStream.concat(java.util.stream.LongStream.of(1L),"
+        " java.util.stream.LongStream.of(2L)).sum()",
+    ],
+    "java.util.stream.DoubleStream.mapToInt(java.util.function.DoubleToIntFunction)": [
+        "java.util.stream.DoubleStream.of(1.5, 2.5).mapToInt(x -> (int) x).sum()",
+    ],
+    "java.util.stream.DoubleStream.mapToLong(java.util.function.DoubleToLongFunction)": [
+        "java.util.stream.DoubleStream.of(1.5, 2.5).mapToLong(x -> (long) x).sum()",
+    ],
+    "java.util.stream.DoubleStream.mapToObj(java.util.function.DoubleFunction)": [
+        'java.util.stream.DoubleStream.of(1.5).mapToObj(x -> "d" + x)'
+        ".collect(java.util.stream.Collectors.joining())",
+    ],
+    "java.util.stream.DoubleStream.flatMap(java.util.function.DoubleFunction)": [
+        "java.util.stream.DoubleStream.of(1.0, 2.0)"
+        ".flatMap(x -> java.util.stream.DoubleStream.of(x, x)).sum()",
+    ],
+    "java.util.stream.DoubleStream.concat(java.util.stream.DoubleStream,java.util.stream.DoubleStream)": [
+        "java.util.stream.DoubleStream.concat(java.util.stream.DoubleStream.of(1.0),"
+        " java.util.stream.DoubleStream.of(2.0)).sum()",
+    ],
+    # The three-argument `collect`, on the object stream and all three
+    # primitive ones — a supplier, an accumulator and a combiner.
+    "java.util.stream.IntStream.collect(java.util.function.Supplier,java.util.function.ObjIntConsumer,java.util.function.BiConsumer)": [
+        "java.util.stream.IntStream.of(1, 2).collect(StringBuilder::new,"
+        " StringBuilder::append, StringBuilder::append).toString()",
+    ],
+    "java.util.stream.LongStream.collect(java.util.function.Supplier,java.util.function.ObjLongConsumer,java.util.function.BiConsumer)": [
+        "java.util.stream.LongStream.of(1L, 2L).collect(StringBuilder::new,"
+        " StringBuilder::append, StringBuilder::append).toString()",
+    ],
+    "java.util.stream.DoubleStream.collect(java.util.function.Supplier,java.util.function.ObjDoubleConsumer,java.util.function.BiConsumer)": [
+        "java.util.stream.DoubleStream.of(1.0).collect(StringBuilder::new,"
+        " StringBuilder::append, StringBuilder::append).toString()",
+    ],
     # `Arrays`' generic half: every overload that takes a `Comparator` over the
     # array's own element, or the class of the array to make.
     "java.util.Arrays.binarySearch([Ljava.lang.Object;,java.lang.Object,java.util.Comparator)": [

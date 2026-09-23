@@ -58838,3 +58838,124 @@ public class HB2 {
 }
 "#
 );
+
+// A lambda is a lambda WHEREVER it is written. The bundled functional
+// interfaces a lambda desugars to are injected only when the program's text
+// asks for them, and the question was asked as a list of twenty spellings
+// (`.forEach(`, `.sort(`, `Comparator`, …) whose DEFAULT was "no". Every
+// position no line named was refused for a class the program never wrote:
+// `Optional.flatMap` and `orElseThrow` ("lambda expression cannot be
+// converted to Function"), `Objects.requireNonNull(x, () -> …)` ("cannot find
+// symbol: class __Supplier"), and the directory filter added two commits
+// earlier. An arrow or a `::` anywhere is what those lines were each half
+// asking.
+differential_test!(
+    a_lambda_with_no_word_for_it,
+    "LW",
+    r#"
+import java.util.Objects;
+import java.util.Optional;
+
+public class LW {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        Optional<String> some = Optional.of("hi");
+        Optional<String> none = Optional.empty();
+        r("flatMap", () -> some.flatMap(s -> Optional.of(s + "!")).get());
+        r("flatMap-empty", () -> none.flatMap(s -> Optional.of(s + "!")).isPresent());
+        r("orElseThrow", () -> some.orElseThrow(() -> new IllegalStateException("gone")));
+        r("orElseThrow-empty", () -> none.orElseThrow(() -> new IllegalStateException("gone")));
+        r("or", () -> none.or(() -> Optional.of("fallback")).get());
+        r("requireNonNull", () -> Objects.requireNonNull("x", () -> "was null"));
+        r("requireNonNull-null", () -> Objects.requireNonNull(null, () -> "was null"));
+        r("requireNonNullElseGet", () -> Objects.requireNonNullElseGet(null, () -> "made"));
+        r("requireNonNullElseGet-kept", () -> Objects.requireNonNullElseGet("kept", () -> "made"));
+    }
+}
+"#
+);
+
+// `Arrays.sort(a, cmp)` is three spellings of one call: `parallelSort` is the
+// same sort on one thread, and the RANGE form puts the comparator LAST. The
+// comparator position was written for the two-argument `sort` alone, so the
+// other two were not functional-interface positions at all — about a
+// comparator the emitter was already prepared to take. The bounds and their
+// two complaints come with them.
+differential_test!(
+    every_spelling_of_a_sorted_array,
+    "AS",
+    r#"
+import java.util.Arrays;
+import java.util.Comparator;
+
+public class AS {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static String[] words() { return new String[] {"dddd", "ccc", "a", "bb"}; }
+    public static void main(String[] args) {
+        r("sort", () -> { String[] a = words(); Arrays.sort(a, (x, y) -> x.length() - y.length()); return Arrays.toString(a); });
+        r("parallelSort", () -> { String[] a = words(); Arrays.parallelSort(a, (x, y) -> x.length() - y.length()); return Arrays.toString(a); });
+        r("sort-range", () -> { String[] a = words(); Arrays.sort(a, 1, 4, (x, y) -> x.length() - y.length()); return Arrays.toString(a); });
+        r("parallelSort-range", () -> { String[] a = words(); Arrays.parallelSort(a, 0, 2, (x, y) -> x.length() - y.length()); return Arrays.toString(a); });
+        r("sort-method-ref", () -> { String[] a = words(); Arrays.sort(a, String::compareTo); return Arrays.toString(a); });
+        r("parallelSort-factory", () -> { String[] a = words(); Arrays.parallelSort(a, Comparator.comparingInt(s -> s.length())); return Arrays.toString(a); });
+        r("sort-range-null", () -> { String[] a = words(); Arrays.sort(a, 1, 4, null); return Arrays.toString(a); });
+        r("sort-range-bad", () -> { String[] a = words(); Arrays.sort(a, 3, 1, (x, y) -> 0); return Arrays.toString(a); });
+        r("parallelSort-range-past", () -> { String[] a = words(); Arrays.parallelSort(a, 0, 9, (x, y) -> 0); return Arrays.toString(a); });
+        r("sort-boxed", () -> { Integer[] a = {3, 1, 2}; Arrays.parallelSort(a, Comparator.reverseOrder()); return Arrays.toString(a); });
+    }
+}
+"#
+);
+
+// ...and the receiver a lambda position reads its element from may be a
+// HELPER's answer. Every reader of a receiver's type knew a variable, a
+// `this` field and a call on another object, and not a call to a method of
+// the enclosing class written by its simple name — so `dir().list((d, n) ->
+// …)` and `maybe().map(s -> …)` were refused where the identical call through
+// a variable compiled. One reader answers that now, for the array, the
+// stream, the Optional and the File alike.
+differential_test!(
+    a_lambda_on_what_a_helper_answers,
+    "HR",
+    r#"
+import java.io.File;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+
+public class HR {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static File dir() { return new File("hr"); }
+    static String[] words() { return new String[] {"ccc", "a", "bb"}; }
+    static String title() { return "Widgets"; }
+    static Optional<String> maybe() { return Optional.of("here"); }
+    static List<String> names() { return List.of("ada", "bo"); }
+    public static void main(String[] args) throws Exception {
+        new File("hr").mkdirs();
+        new File("hr/a.txt").createNewFile();
+        new File("hr/b.log").createNewFile();
+        r("list-filter", () -> dir().list((d, n) -> n.endsWith(".txt")).length);
+        r("listFiles-filter", () -> dir().listFiles(f -> f.isFile()).length);
+        r("listFiles-method-ref", () -> dir().listFiles(File::isFile).length);
+        r("inline-new", () -> new File("hr").list((d, n) -> n.endsWith(".log")).length);
+        r("inline-qualified", () -> new java.io.File("hr").listFiles(f -> f.getName().endsWith(".txt")).length);
+        r("sort-helper-array", () -> { String[] a = words(); Arrays.sort(a, (x, y) -> x.length() - y.length()); return Arrays.toString(a); });
+        r("chars", () -> title().chars().filter(c -> c == 'i').count());
+        r("optional-map", () -> maybe().map(s -> s.length()).get());
+        r("stream", () -> names().stream().filter(s -> s.length() == 2).count());
+    }
+}
+"#
+);

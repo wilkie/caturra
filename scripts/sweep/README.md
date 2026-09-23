@@ -75,6 +75,25 @@ sweep always raises the question of whether it could report anything —
 it feeds the words the engine actually used, and the two shapes that must NOT
 be read as aborts.
 
+`lambdas.py` asks one question of caturra rather than of a corpus: is each
+position that takes a LAMBDA a functional-interface position, in a program
+that names nothing else? A lambda needs the position to be typed AND the
+bundled interface it desugars to to be injected, and injection is decided by
+scanning the source text — so a pin program, which says far more than the
+feature it pins, can carry a feature that works nowhere else. A filtered
+directory listing passed its own two pins (both call `Collections.sort`) and
+was refused in every program that mentioned no comparator and no stream.
+
+```sh
+scripts/sweep/lambdas.py                     # every position, against a real JDK
+scripts/sweep/lambdas.py list-sort map-merge # only these
+scripts/sweep/lambdas.py --self-check        # does every case write a lambda?
+```
+
+Each case is written to name NOTHING the position does not need: the import,
+the call, the lambda. `--self-check` rejects a case with no arrow and no `::`
+in it, because such a case measures nothing however green it reports.
+
 `stdout.py` is the same corpus asked a different question. It needs no recorded
 reference — it runs `javac`/`java` beside caturra, level by level — and it
 compares the console rather than the verdict: the output a completing `main`

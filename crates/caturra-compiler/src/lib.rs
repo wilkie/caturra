@@ -780,24 +780,22 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // `IntUnaryOperator` and the other primitive specializations spell
             // none of the words above.
             || s.text.contains("Operator")
-            // A comparator in a sorted collection's constructor
-            // (`new PriorityQueue<>((a, b) -> ...)`) needs `__Comparator` too,
-            // without ever naming it — trigger on the pair. A method
-            // REFERENCE is the same comparator with no arrow in it
-            // (`new TreeMap<>(String::compareTo)`), and spelled that way the
-            // bundle was left out: the interface the desugaring targets did
-            // not exist, and the program was refused for a class it never
-            // wrote.
-            || ((s.text.contains("->") || s.text.contains("::"))
-                && (s.text.contains("TreeSet")
-                    || s.text.contains("TreeMap")
-                    || s.text.contains("PriorityQueue")))
-            // …and so does one handed to `Collections.max`/`min`/
-            // `binarySearch`, which name neither the interface nor `sort`.
-            || ((s.text.contains("->") || s.text.contains("::"))
-                && (s.text.contains(".max(")
-                    || s.text.contains(".min(")
-                    || s.text.contains(".binarySearch(")))
+            // ...and, above all the names: a LAMBDA or a METHOD REFERENCE,
+            // wherever it is written. Every line above is one place a lambda
+            // turned out to reach a bundled interface, added the day a
+            // program was refused for a class it never wrote — and the list's
+            // default was the wrong answer, so the next position cost another
+            // line. `dir.list((d, n) -> n.endsWith(".txt"))` was that next
+            // one: a file filter names none of the words, so `__BiFunction`
+            // was not in the table and the filtered listing added two
+            // commits earlier was "lambda expression cannot be converted to
+            // BiFunction". An arrow or a `::` anywhere is the question those
+            // lines were each half-asking, and it subsumes the pairs that
+            // used to be spelled out (a comparator in a `TreeSet`/`TreeMap`/
+            // `PriorityQueue` constructor, and one handed to
+            // `Collections.max`/`min`/`binarySearch`).
+            || s.text.contains("->")
+            || s.text.contains("::")
         }))
         && !units
             .iter()
