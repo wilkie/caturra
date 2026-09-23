@@ -4621,12 +4621,14 @@ impl<'run> Interpreter<'run> {
             JValue::Ref(None) => return Ok(String::from("null")),
             JValue::Ref(Some(reference)) => reference,
         };
-        // An unmodifiable set/map view renders exactly as its backing, so
-        // unwrap to it first.
-        let reference = match self.heap.get(reference) {
-            Some(HeapObject::UnmodifiableSet(inner) | HeapObject::UnmodifiableMap(inner)) => *inner,
-            _ => reference,
-        };
+        // A pass-through wrapper renders exactly as what it wraps, so unwrap
+        // to it first — the same peel every reader of a collection's contents
+        // asks for. Listed by hand here, it knew the two unmodifiable ones
+        // and not the synchronized one, so a `synchronizedSet` reached the
+        // opaque fallback and printed `object@e` wherever the render was
+        // reached through a value (`%s`, `append`, an element of another
+        // collection) rather than through its own `toString`.
+        let reference = self.heap.unwrapped(reference);
         // A `Class` renders as `Class.toString()` — "interface X" for an
         // interface, which only the class table can tell (the heap-only
         // display path always says "class").
@@ -4647,17 +4649,7 @@ impl<'run> Interpreter<'run> {
                 | HeapObject::ArrayDeque(items)
                 | HeapObject::Stack(items),
             ) => Renderable::List(items.clone()),
-            Some(HeapObject::UnmodifiableList(_) | HeapObject::ArrayBackedList(_)) => {
-                Renderable::List(self.list_items(reference))
-            }
-            // ...and the two other wrappers, which print what they WRAP. The
-            // list one was here and its siblings were not, so an unmodifiable
-            // map printed as `object@1f` where the list beside it printed its
-            // entries.
-            Some(HeapObject::UnmodifiableSet(inner) | HeapObject::UnmodifiableMap(inner)) => {
-                let inner = *inner;
-                return self.string_value_of(JValue::Ref(Some(inner)), depth);
-            }
+            Some(HeapObject::ArrayBackedList(_)) => Renderable::List(self.list_items(reference)),
             // Rendering a view iterates it, and iterating one checks that the
             // backing list has not been structurally changed around it — which
             // is where a JDK's `AbstractList.toString` throws.
@@ -9221,10 +9213,11 @@ impl<'run> Interpreter<'run> {
                         let before = self.map_len(receiver);
                         let computed = self.call_apply(*mapping, *key)?;
                         self.check_compute_comodification(receiver, before)?;
+                        let computed = self.as_reference(computed);
                         if computed != JValue::NULL {
                             self.map_put_compute(receiver, *key, computed)?;
                         }
-                        self.as_reference(computed)
+                        computed
                     }
                 }
             }
@@ -9233,6 +9226,7 @@ impl<'run> Interpreter<'run> {
                 let expected = entries.len();
                 for (key, value) in entries {
                     let replaced = self.call_apply_two(*function, key, value)?;
+                    let replaced = self.as_reference(replaced);
                     self.map_put(receiver, key, replaced)?;
                 }
                 if self.map_entries(receiver).len() != expected {
@@ -12360,6 +12354,11 @@ impl<'run> Interpreter<'run> {
         key: JValue,
         value: JValue,
     ) -> Result<JValue, VmError> {
+        // BOXED at rest, which is what an ordinary `put` stores: the compute
+        // family's value comes from a lambda, and `call_apply*` unboxes a
+        // numeric result for the primitive pipelines that want one. Stored
+        // raw, it made the next `setValue`/`get` on that entry a VerifyError.
+        let value = self.as_reference(value);
         if value == JValue::NULL {
             if let Some(at) = self.map_find(map, key)? {
                 self.map_remove_at(map, at);
@@ -12367,7 +12366,7 @@ impl<'run> Interpreter<'run> {
         } else {
             self.map_put_compute(map, key, value)?;
         }
-        Ok(self.as_reference(value))
+        Ok(value)
     }
 
     /// A value about to be RETURNED where the descriptor promises an object.
@@ -12520,15 +12519,24 @@ impl<'run> Interpreter<'run> {
     fn unbox_functional_result(&self, result: Option<JValue>) -> JValue {
         match result {
             Some(JValue::Ref(Some(r))) => match self.heap.get(r) {
-                // A `Character` or a `Boolean` must stay a REFERENCE: a bare
-                // `Int` cannot say which of the three int-width wrappers it is,
-                // so unboxing one turned `map(s -> s.charAt(0))` into a stream
-                // of 97s and `map(String::isEmpty)` into a stream of 0s. The
-                // numeric wrappers unbox as before — the primitive pipelines
+                // A `Character`, a `Boolean`, a `Short` or a `Byte` must
+                // stay a REFERENCE: a bare `Int` cannot say which of the five
+                // int-width wrappers it is, so unboxing one turned
+                // `map(s -> s.charAt(0))` into a stream of 97s and
+                // `map(String::isEmpty)` into a stream of 0s. The two narrow
+                // NUMERIC wrappers were left out of that rule, and a
+                // `Map<String, Short>` whose `compute` answered a `short`
+                // stored a `java.lang.Integer`. `Integer`, `Long`, `Double`
+                // and `Float` unbox as before — the primitive pipelines
                 // (`mapToInt`, `sum`) are built on that representation.
                 Some(crate::value::HeapObject::Boxed { class_name, .. })
-                    if &**class_name == "java/lang/Character"
-                        || &**class_name == "java/lang/Boolean" =>
+                    if matches!(
+                        &**class_name,
+                        "java/lang/Character"
+                            | "java/lang/Boolean"
+                            | "java/lang/Short"
+                            | "java/lang/Byte"
+                    ) =>
                 {
                     JValue::Ref(Some(r))
                 }
@@ -18452,17 +18460,14 @@ impl<'run> Interpreter<'run> {
                 UserDispatch::Call(frame) => self.run_nested(frame)?,
                 UserDispatch::Value(value) => value,
             };
-            // The erased `apply` returns `Object`, so a primitive result comes
-            // back boxed. A caturra list stores wrappers unboxed, so unbox it;
-            // a String or user object stays a reference.
-            let stored = match result {
-                Some(JValue::Ref(Some(r))) => match self.heap.get(r) {
-                    Some(crate::value::HeapObject::Boxed { value, .. }) => *value,
-                    _ => JValue::Ref(Some(r)),
-                },
-                Some(value) => value,
-                None => JValue::NULL,
-            };
+            // The erased `apply` returns `Object`, so a primitive result
+            // comes back BOXED — and boxed is how a list holds it, the same
+            // as the `Integer` an ordinary `list.set(0, 9)` stores. This used
+            // to unbox it on the reasoning that "a caturra list stores
+            // wrappers unboxed", which stopped being true when wrapper arrays
+            // became reference arrays: the raw `int` left here made the very
+            // next `set` on that element die with a VerifyError.
+            let stored = result.unwrap_or(JValue::NULL);
             // Written back ONE AT A TIME, as a JDK's `replaceAll` does: it
             // walks the array assigning `a[i] = operator.apply(a[i])`, so an
             // operator that throws half way leaves the elements before it
@@ -20413,6 +20418,11 @@ fn is_map_mutator(method: &str) -> bool {
             | "compute"
             | "computeIfAbsent"
             | "computeIfPresent"
+            // A `NavigableMap`'s two removals. Left out, an
+            // `unmodifiableNavigableMap` did not refuse them — it took the
+            // entry OUT of the map it was meant to protect.
+            | "pollFirstEntry"
+            | "pollLastEntry"
     )
 }
 

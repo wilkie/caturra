@@ -6084,6 +6084,11 @@ fn faced_class(ty: JType) -> Option<&'static str> {
             CollFace::Iface => "java/util/Map",
             CollFace::Concrete => "java/util/HashMap",
         },
+        // The sorted families have three faces each rather than two, and they
+        // are named the same way: an array of one calls itself what was
+        // written, `[Ljava.util.NavigableMap;` and not the table underneath.
+        JType::TreeSet(_, role) => role.set_internal(),
+        JType::TreeMap { role, .. } => role.map_internal(),
         _ => return None,
     })
 }
@@ -9665,7 +9670,16 @@ impl JType {
             JType::Map { .. } => String::from("Ljava/util/HashMap;"),
             JType::TreeMap { .. } => String::from("Ljava/util/TreeMap;"),
             JType::Set { .. } | JType::EntrySet { .. } => String::from("Ljava/util/Set;"),
-            JType::TreeSet(_, role) => format!("L{};", role.set_internal()),
+            // ONE name per family, as every other collection here has: a
+            // value's descriptor is a label on an object the faces share, and
+            // `faced_class` is where the face that was WRITTEN is remembered
+            // (for an array's class, which is the only place it can be read
+            // back). Spelling the face here instead made a `SortedSet`
+            // parameter unreachable — the declaration registered one
+            // descriptor and the call looked for another — while the MAP arm
+            // beside it, which never spelled the face, could not name
+            // `SortedMap[]`. The same fact in two places, right at one each.
+            JType::TreeSet(..) => String::from("Ljava/util/TreeSet;"),
             JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
             JType::CharSequence => String::from("Ljava/lang/CharSequence;"),
             JType::Collector(_) => String::from("Ljava/util/stream/Collector;"),
@@ -34631,60 +34645,23 @@ impl BodyGen<'_> {
                     self.error_bail(arg.span(), "format argument");
                     return None;
                 }
-                // Anything else rides through as a reference and is rendered
-                // by the VM, which can call a user `toString()`. A PRIMITIVE
-                // array reaches here (a lone reference array was taken as the
-                // varargs array above), and `%s` of one is its default
-                // `toString` — `[I@1b6d3586` — not a refusal.
-                // A `java.time` value rides through too: it is what the
-                // DATE-TIME conversions take.
-                JType::Array { .. }
-                | JType::Class
-                | JType::Type
-                | JType::CharSequence
-                | JType::LocalDate
-                | JType::LocalTime
-                | JType::LocalDateTime
-                | JType::Duration
-                | JType::Period
-                | JType::DayOfWeek
-                | JType::Month
-                | JType::ChronoUnit
-                | JType::ChronoField
-                | JType::Year
-                | JType::YearMonth
-                | JType::MonthDay
-                | JType::ValueRange
-                | JType::BigInteger
-                | JType::BigDecimal
-                | JType::RoundingMode
-                | JType::MathContext
-                | JType::DecimalFormat
-                | JType::NumberFormat
-                | JType::ParsePosition
-                | JType::FieldPosition
-                | JType::StringTokenizer
-                | JType::Uuid
-                | JType::Base64Encoder
-                | JType::Base64Decoder
-                | JType::BitSet
-                | JType::StringWriter
-                | JType::BufferedWriter
-                | JType::WriterFace
-                | JType::IsoEra
-                | JType::TemporalQuery
-                | JType::Chronology
-                | JType::TextStyle
-                | JType::FormatStyle => {
+                // Anything else IS a reference — JType is a primitive, an
+                // error, or a reference — and a reference rides through as an
+                // Object, rendered by the VM, which can call a user
+                // `toString()`. A PRIMITIVE array reaches here (a lone
+                // reference array was taken as the varargs array above), and
+                // `%s` of one is its default `toString` — `[I@1b6d3586` — not
+                // a refusal. A `java.time` value rides through too: it is what
+                // the DATE-TIME conversions take.
+                //
+                // This was a list of thirty-odd names whose DEFAULT was to
+                // refuse, so every type nobody had thought of was "cannot
+                // format X" — `String.format("%s", aSortedSet)` among them,
+                // which is not something a JDK can refuse. The rule is the
+                // complement of the primitives above, and needs no list.
+                _ => {
                     tags.push_str("Ljava/lang/Object;");
                     width += 1;
-                }
-                other => {
-                    self.error(
-                        arg.span(),
-                        format!("cannot format {}", other.describe(self.table)),
-                    );
-                    return None;
                 }
             }
         }

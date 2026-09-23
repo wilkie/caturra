@@ -15706,6 +15706,81 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The sorted faces, and what a callback leaves behind (2026-09-22)
+
+The unit was chosen by re-reading the behaviour sweep's own blind-spot list —
+the overloads it has never compared because no argument in its bank can be
+typed. Eight of them were
+`Collections.{unmodifiable,synchronized}{Sorted,Navigable}{Set,Map}`, and a
+call the instrument cannot make reads exactly like one it made and liked.
+Asked properly — each wrapper's whole face, then every mutator its interface
+declares, with the collection underneath printed after each write so a LEAK
+shows as a difference rather than as a passing refusal — four defects came
+out, and each was the same shape: one fact, written in two places, right at
+one of them.
+
+**`unmodifiableNavigableMap(m).pollFirstEntry()` did not refuse.** It took the
+entry out of the map it was meant to protect. `is_map_mutator` listed eleven
+names and a `NavigableMap` has thirteen; the two polls are the ones a
+`SortedMap` has not got, so the list was complete for the face its author had
+in mind. Both lists are now checked against the interfaces they stand for.
+
+**A synchronized set or map printed `object@e`.** Not always — through
+`toString()`, `String.valueOf` and concatenation it printed its contents, and
+through `%s`, `StringBuilder.append` and as an element of another collection
+it did not. `string_value_of` peeled the two unmodifiable wrappers by name and
+did not know the synchronized one, so those three paths reached the opaque
+fallback. It asks `Heap::unwrapped` now, the same peel the equality rule above
+uses.
+
+**`String.format("%s", aSortedSet)` was a compile error** — "cannot format
+SortedSet<String>". The compiler's format-argument arm listed thirty-odd type
+names that ride through as an `Object` and REFUSED everything else, so every
+type nobody had added to the list was un-formattable. A JType is a primitive,
+an error, or a reference; a reference rides through. That is the whole rule,
+and it needs no list.
+
+**A `SortedSet` parameter could not be called at all** — "no static method
+`f(Ljava/util/SortedSet;)`". A value's descriptor is ONE name per family (the
+faces share the object; the descriptor is a label on it) and an ARRAY's
+element descriptor is the face that was WRITTEN, which is the one place a
+program reads it back. The set arm had those exactly backwards — it spelled
+the face in the value descriptor, so a declaration and its call site disagreed
+— and the map arm had neither, so `new SortedMap[0]` called itself
+`[Ljava.util.TreeMap;`. One rule now serves both: `descriptor` gives the
+family, `faced_class` gives the face.
+
+**What a callback leaves behind.** Pulling on the last of those turned up a
+wrong answer with nothing to do with wrappers: every collection method that
+STORES what a user callback answered — `Map.compute`, `computeIfAbsent`,
+`computeIfPresent`, `merge`, `replaceAll` and `List.replaceAll` — stored it
+UNBOXED. The erased `apply` returns `Object`, so a lambda's `9` arrives boxed;
+`call_apply` unboxes it for the primitive pipelines that want the raw form,
+and the compute family then wrote that raw `int` into a collection that holds
+references at rest. The next `setValue` or `set` on that element died with a
+`VerifyError` on ordinary Java — `m.compute(k, (k, x) -> 9)` followed by
+`e.setValue(5)`. The list path had an explicit comment reasoning that "a
+caturra list stores wrappers unboxed", which stopped being true when wrapper
+arrays became reference arrays.
+
+Fixing it raised the question it always raises: WHICH wrapper. A bare `Int`
+cannot say whether it is an `Integer`, a `Character`, a `Boolean`, a `Short`
+or a `Byte`. `unbox_functional_result` already kept `Character` and `Boolean`
+as references for that reason and had left the two narrow numeric wrappers
+out, so a `Map<String, Short>` whose `compute` answered a `short` held a
+`java.lang.Integer`. All four keep their reference now; `Integer`, `Long`,
+`Double` and `Float` unbox as before, because the primitive pipelines are
+built on that representation.
+
+The sweep can ask about the sorted faces from now on: four entries in its
+argument bank, 7,426 calls to 7,434, and its never-compared list from 128 to
+120.
+
+Pinned as `the_eight_sorted_wrappers`,
+`the_sorted_faces_in_every_position`, `every_wrapper_renders_as_its_contents`,
+`a_callback_stores_boxed_at_rest` and `which_wrapper_a_callback_answers`.
+
+
 ### A view is its contents, to every question (2026-09-22)
 
 `equals` and `hashCode` are a CONTRACT, and a collection keeps it through

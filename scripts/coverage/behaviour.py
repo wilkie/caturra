@@ -73,6 +73,15 @@ BANK = {
     "java.util.List": ['java.util.List.of("a", "b")'],
     "java.util.Set": ['java.util.Set.of("a")'],
     "java.util.Map": ['java.util.Map.of("k", "v")'],
+    # The SORTED faces. Without these the eight
+    # `Collections.{unmodifiable,synchronized}{Sorted,Navigable}{Set,Map}`
+    # wrappers had no argument the sweep could build, so it never called one —
+    # and an `unmodifiableNavigableMap` that answered `pollFirstEntry` by
+    # REMOVING the entry read exactly like a wrapper that refuses it.
+    "java.util.SortedSet": ['new java.util.TreeSet<>(java.util.List.of("a", "b"))'],
+    "java.util.NavigableSet": ['new java.util.TreeSet<>(java.util.List.of("a", "b"))'],
+    "java.util.SortedMap": ['new java.util.TreeMap<>(java.util.Map.of("k", "v"))'],
+    "java.util.NavigableMap": ['new java.util.TreeMap<>(java.util.Map.of("k", "v"))'],
     "java.util.Comparator": ["java.util.Comparator.<String>naturalOrder()"],
     "java.util.Random": ["new java.util.Random(1)"],
     "java.math.BigInteger": ["java.math.BigInteger.valueOf(7)"],

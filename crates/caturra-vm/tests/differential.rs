@@ -57104,3 +57104,308 @@ public class Wrd {
 }
 "#
 );
+
+// The eight `Collections.{unmodifiable,synchronized}{Sorted,Navigable}{Set,Map}`
+// wrappers, each asked its WHOLE face — the ordering, the range views, the
+// navigation, equality, iteration, a copy — and then every mutator its
+// interface declares, with the collection underneath printed after each so a
+// write that LEAKED through a read-only wrapper shows up as a difference
+// rather than as a passing refusal. The behaviour sweep had never called one
+// of these (no argument in its bank could be typed `SortedMap`), and
+// `unmodifiableNavigableMap(m).pollFirstEntry()` did not refuse — it took the
+// entry out of the map it was meant to protect.
+differential_test!(
+    the_eight_sorted_wrappers,
+    "W5",
+    r#"
+import java.util.*;
+
+public class W5 {
+    interface Body { Object get() throws Throwable; }
+    static Object backing;
+    static void r(String label, Body b) {
+        try { System.out.println("  " + label + " = " + b.get()); }
+        catch (Throwable e) { System.out.println("  " + label + " ! " + e.getClass().getName()); }
+    }
+    static void w(String label, Body b) {
+        String before = String.valueOf(backing);
+        String answer;
+        try { answer = "= " + b.get(); }
+        catch (Throwable e) { answer = "! " + e.getClass().getName(); }
+        String after = String.valueOf(backing);
+        System.out.println("  " + label + " " + answer
+            + (before.equals(after) ? "" : "  LEAKED " + before + " -> " + after));
+    }
+    static TreeSet<String> set() { TreeSet<String> s = new TreeSet<>(List.of("a", "b", "c")); backing = s; return s; }
+    static TreeMap<String,Integer> map() {
+        TreeMap<String,Integer> m = new TreeMap<>();
+        m.put("a", 1); m.put("b", 2); m.put("c", 3); backing = m; return m;
+    }
+    static void sortedSet(String name, SortedSet<String> v, TreeSet<String> s) {
+        System.out.println("--- " + name);
+        r("class", () -> v.getClass().getName());
+        r("text", () -> "" + v);
+        r("format", () -> String.format("%s", v));
+        r("nested", () -> List.of(v).toString());
+        r("ends", () -> v.first() + v.last());
+        r("comparator", () -> "" + v.comparator());
+        r("ranges", () -> v.headSet("c") + "" + v.tailSet("b") + v.subSet("a", "c"));
+        r("equals", () -> v.equals(s) + " " + s.equals(v) + " " + (v.hashCode() == s.hashCode()));
+        r("walk", () -> { StringBuilder t = new StringBuilder(); for (String x : v) { t.append(x); } return t; });
+        r("copy", () -> new TreeSet<>(v) + " " + new ArrayList<>(v));
+        w("add", () -> v.add("z"));
+        w("remove", () -> v.remove("a"));
+        w("clear", () -> { v.clear(); return "void"; });
+        w("addAll", () -> v.addAll(List.of("z")));
+        w("removeAll", () -> v.removeAll(List.of("a")));
+        w("retainAll", () -> v.retainAll(List.of("a")));
+        w("removeIf", () -> v.removeIf(x -> true));
+        w("iterRemove", () -> { Iterator<String> it = v.iterator(); it.next(); it.remove(); return "void"; });
+    }
+    static void navSet(String name, NavigableSet<String> v, TreeSet<String> s) {
+        sortedSet(name, v, s);
+        r("near", () -> v.floor("b") + v.ceiling("b") + v.higher("b") + v.lower("b"));
+        r("descending", () -> v.descendingSet() + "" + v.descendingIterator().next());
+        r("bounded", () -> v.headSet("b", true) + "" + v.tailSet("b", false) + v.subSet("a", true, "c", false));
+        w("pollFirst", () -> v.pollFirst());
+        w("pollLast", () -> v.pollLast());
+    }
+    static void sortedMap(String name, SortedMap<String,Integer> v, TreeMap<String,Integer> m) {
+        System.out.println("--- " + name);
+        r("class", () -> v.getClass().getName());
+        r("text", () -> "" + v);
+        r("format", () -> String.format("%s", v));
+        r("nested", () -> List.of(v).toString());
+        r("ends", () -> v.firstKey() + v.lastKey());
+        r("comparator", () -> "" + v.comparator());
+        r("ranges", () -> v.headMap("c") + "" + v.tailMap("b") + v.subMap("a", "c"));
+        r("views", () -> v.keySet() + "" + v.values() + v.entrySet());
+        r("equals", () -> v.equals(m) + " " + m.equals(v) + " " + (v.hashCode() == m.hashCode()));
+        r("walk", () -> { StringBuilder t = new StringBuilder();
+            for (Map.Entry<String,Integer> e : v.entrySet()) { t.append(e.getKey()).append(e.getValue()); } return t; });
+        r("copy", () -> new TreeMap<>(v) + " " + new ArrayList<>(v.keySet()));
+        w("put", () -> v.put("z", 9));
+        w("remove", () -> v.remove("a"));
+        w("clear", () -> { v.clear(); return "void"; });
+        w("putAll", () -> { v.putAll(Map.of("z", 9)); return "void"; });
+        w("putIfAbsent", () -> v.putIfAbsent("z", 9));
+        w("replace", () -> v.replace("a", 9));
+        w("replaceAll", () -> { v.replaceAll((k, x) -> 9); return "void"; });
+        w("merge", () -> v.merge("a", 9, (x, y) -> 9));
+        w("compute", () -> v.compute("a", (k, x) -> 9));
+        w("computeIfAbsent", () -> v.computeIfAbsent("z", k -> 9));
+        w("computeIfPresent", () -> v.computeIfPresent("a", (k, x) -> 9));
+        w("setValue", () -> v.entrySet().iterator().next().setValue(9));
+        w("keySetRemove", () -> v.keySet().remove("a"));
+    }
+    static void navMap(String name, NavigableMap<String,Integer> v, TreeMap<String,Integer> m) {
+        sortedMap(name, v, m);
+        r("nearKey", () -> v.floorKey("b") + v.ceilingKey("b") + v.higherKey("b") + v.lowerKey("b"));
+        r("nearEntry", () -> v.floorEntry("b") + "" + v.ceilingEntry("b") + v.higherEntry("b") + v.lowerEntry("b"));
+        r("ends2", () -> v.firstEntry() + "" + v.lastEntry());
+        r("descending", () -> v.descendingMap() + "" + v.descendingKeySet() + v.navigableKeySet());
+        r("bounded", () -> v.headMap("b", true) + "" + v.tailMap("b", false) + v.subMap("a", true, "c", false));
+        w("pollFirstEntry", () -> v.pollFirstEntry());
+        w("pollLastEntry", () -> v.pollLastEntry());
+    }
+    public static void main(String[] args) {
+        TreeSet<String> s;
+        s = set(); sortedSet("unmodifiableSortedSet", Collections.unmodifiableSortedSet(s), s);
+        s = set(); navSet("unmodifiableNavigableSet", Collections.unmodifiableNavigableSet(s), s);
+        s = set(); sortedSet("synchronizedSortedSet", Collections.synchronizedSortedSet(s), s);
+        s = set(); navSet("synchronizedNavigableSet", Collections.synchronizedNavigableSet(s), s);
+        TreeMap<String,Integer> m;
+        m = map(); sortedMap("unmodifiableSortedMap", Collections.unmodifiableSortedMap(m), m);
+        m = map(); navMap("unmodifiableNavigableMap", Collections.unmodifiableNavigableMap(m), m);
+        m = map(); sortedMap("synchronizedSortedMap", Collections.synchronizedSortedMap(m), m);
+        m = map(); navMap("synchronizedNavigableMap", Collections.synchronizedNavigableMap(m), m);
+    }
+}
+"#
+);
+
+// The four sorted FACES (`SortedSet`, `NavigableSet`, `SortedMap`,
+// `NavigableMap`) as a parameter, an argument, a type argument, an array and
+// an array's class. A value's descriptor is one name per family and an
+// ARRAY's is the face that was written; the set arm had it the other way
+// round (so a `SortedSet` parameter could not be called at all) and the map
+// arm had neither (so `new SortedMap[0]` called itself `[Ljava.util.TreeMap;`).
+differential_test!(
+    the_sorted_faces_in_every_position,
+    "W6",
+    r#"
+import java.util.*;
+public class W6 {
+    static String ss(SortedSet<String> v) { return "ss " + v.first(); }
+    static String ns(NavigableSet<String> v) { return "ns " + v.last(); }
+    static String sm(SortedMap<String,Integer> v) { return "sm " + v.firstKey(); }
+    static String nm(NavigableMap<String,Integer> v) { return "nm " + v.lastKey(); }
+    static String st(Set<String> v) { return "st " + v.size(); }
+    static String mp(Map<String,Integer> v) { return "mp " + v.size(); }
+    public static void main(String[] args) {
+        TreeSet<String> tset = new TreeSet<>(List.of("a", "b"));
+        TreeMap<String,Integer> tmap = new TreeMap<>(); tmap.put("a", 1);
+        SortedSet<String> s1 = tset; NavigableSet<String> s2 = tset;
+        SortedMap<String,Integer> m1 = tmap; NavigableMap<String,Integer> m2 = tmap;
+        System.out.println(ss(tset) + " " + ss(s1) + " " + ss(s2));
+        System.out.println(ns(tset) + " " + ns(s2));
+        System.out.println(sm(tmap) + " " + sm(m1) + " " + sm(m2));
+        System.out.println(nm(tmap) + " " + nm(m2));
+        System.out.println(st(tset) + " " + st(s1) + " " + st(s2) + " " + mp(tmap) + " " + mp(m1) + " " + mp(m2));
+        System.out.println(ss(Collections.unmodifiableSortedSet(tset)) + " " + ns(Collections.unmodifiableNavigableSet(tset)));
+        System.out.println(sm(Collections.synchronizedSortedMap(tmap)) + " " + nm(Collections.synchronizedNavigableMap(tmap)));
+        System.out.println(ss(tset.headSet("b")) + " " + ns(tset.descendingSet()) + " " + sm(tmap.headMap("z")) + " " + nm(tmap.descendingMap()));
+        List<SortedSet<String>> held = new ArrayList<>();
+        held.add(tset); held.add(Collections.unmodifiableSortedSet(tset));
+        System.out.println(held + " " + held.get(0).first());
+        SortedSet<String>[] array = new SortedSet[] { tset };
+        System.out.println(array[0].last() + " " + array.getClass().getName());
+    }
+}
+"#
+);
+
+// Every `Collections` wrapper, rendered six ways: concatenated, through
+// `toString()`, through `String.valueOf`, through `%s`, appended to a
+// builder, and as an element of another collection. They must all agree. A
+// synchronized set or map agreed on the first three and printed `object@e`
+// for the last three, because the renderer's list of pass-through wrappers
+// knew the two unmodifiable ones and not the synchronized one.
+differential_test!(
+    every_wrapper_renders_as_its_contents,
+    "W3",
+    r#"
+import java.util.*;
+public class W3 {
+    static void s(String l, Object v) { System.out.println(l + " = " + v); }
+    public static void main(String[] args) {
+        TreeSet<String> set = new TreeSet<>(List.of("a","b"));
+        TreeMap<String,Integer> map = new TreeMap<>(); map.put("a",1);
+        List<String> list = new ArrayList<>(List.of("a","b"));
+        Collection<String> coll = set;
+        Object[] all = {
+            Collections.synchronizedSet(set), Collections.synchronizedSortedSet(set),
+            Collections.synchronizedNavigableSet(set), Collections.synchronizedMap(map),
+            Collections.synchronizedSortedMap(map), Collections.synchronizedNavigableMap(map),
+            Collections.synchronizedList(list), Collections.synchronizedCollection(coll),
+            Collections.unmodifiableSet(set), Collections.unmodifiableSortedSet(set),
+            Collections.unmodifiableNavigableSet(set), Collections.unmodifiableMap(map),
+            Collections.unmodifiableSortedMap(map), Collections.unmodifiableNavigableMap(map),
+            Collections.unmodifiableList(list), Collections.unmodifiableCollection(coll),
+        };
+        for (int i = 0; i < all.length; i++) {
+            Object v = all[i];
+            System.out.println(i + " concat " + v);
+            System.out.println(i + " toString " + v.toString());
+            System.out.println(i + " valueOf " + String.valueOf(v));
+            System.out.println(i + " format " + String.format("%s", v));
+            System.out.println(i + " join " + new StringBuilder().append(v));
+            System.out.println(i + " nested " + List.of(v));
+            System.out.println(i + " class " + v.getClass().getName());
+        }
+    }
+}
+"#
+);
+
+// Every collection method that STORES what a user callback answered:
+// `Map.compute`, `computeIfAbsent`, `computeIfPresent`, `merge`,
+// `replaceAll`, and `List.replaceAll`. The value a lambda returns is boxed —
+// its erased `apply` returns `Object` — and boxed is how the collection holds
+// it, exactly as an ordinary `put` or `set` does. caturra unboxed it on the
+// way in, so the next `setValue`/`set` on that element died with a
+// VerifyError on perfectly ordinary Java.
+differential_test!(
+    a_callback_stores_boxed_at_rest,
+    "X3",
+    r#"
+import java.util.*;
+public class X3 {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + " " + e.getMessage()); }
+    }
+    static Map<String,Integer> one() { Map<String,Integer> m = new HashMap<>(); m.put("k", 1); return m; }
+    static Object touch(Map<String,Integer> m) {
+        for (Map.Entry<String,Integer> e : m.entrySet()) { if (e.getKey().equals("k")) { return e.setValue(5); } }
+        return "none";
+    }
+    public static void main(String[] a) {
+        r("compute", () -> { Map<String,Integer> m = one(); m.compute("k", (k, x) -> 9); return touch(m); });
+        r("computeIfAbsent", () -> { Map<String,Integer> m = one(); m.computeIfAbsent("z", k -> 9); m.put("k", m.get("z")); return touch(m); });
+        r("computeIfPresent", () -> { Map<String,Integer> m = one(); m.computeIfPresent("k", (k, x) -> 9); return touch(m); });
+        r("merge", () -> { Map<String,Integer> m = one(); m.merge("k", 2, (x, y) -> 9); return touch(m); });
+        r("replaceAll", () -> { Map<String,Integer> m = one(); m.replaceAll((k, x) -> 9); return touch(m); });
+        r("replace", () -> { Map<String,Integer> m = one(); m.replace("k", 9); return touch(m); });
+        r("put", () -> { Map<String,Integer> m = one(); m.put("k", 9); return touch(m); });
+        r("getOrDefault", () -> { Map<String,Integer> m = one(); m.put("k", m.getOrDefault("z", 9)); return touch(m); });
+        r("list-replaceAll", () -> { List<Integer> l = new ArrayList<>(List.of(1)); l.replaceAll(x -> 9); return l.set(0, 5); });
+        r("list-set", () -> { List<Integer> l = new ArrayList<>(List.of(1)); l.set(0, 9); return l.set(0, 5); });
+        r("list-add", () -> { List<Integer> l = new ArrayList<>(); l.add(9); return l.set(0, 5); });
+        r("set-map", () -> { List<Integer> l = new ArrayList<>(List.of(1)); List<Integer> o = new ArrayList<>();
+            for (int v : l) { o.add(v + 8); } return o.set(0, 5); });
+        r("stream", () -> { List<Integer> l = new ArrayList<>(List.of(1));
+            List<Integer> o = new ArrayList<>(); l.stream().map(x -> x + 8).forEach(o::add); return o.set(0, 5); });
+        r("sort-cmp", () -> { List<Integer> l = new ArrayList<>(List.of(2, 1)); l.sort(Comparator.naturalOrder()); return l.set(0, 5); });
+    }
+}
+"#
+);
+
+// ...and WHICH wrapper class it lands as. A bare `int` cannot say whether it
+// is an `Integer`, a `Character`, a `Boolean`, a `Short` or a `Byte`, so a
+// callback's answer keeps its reference for all but the four wrappers whose
+// primitive pipelines are built on the unboxed form. `Short` and `Byte` had
+// been left out of that rule, and a `Map<String, Short>` whose `compute`
+// answered a `short` held a `java.lang.Integer`.
+differential_test!(
+    which_wrapper_a_callback_answers,
+    "X4",
+    r#"
+import java.util.*;
+public class X4 {
+    static <T> void probe(String name, Map<String,T> m, T seed, java.util.function.BiFunction<String,T,T> f) {
+        m.put("k", seed);
+        m.replaceAll(f::apply);
+        Object v = m.get("k");
+        System.out.println(name + " " + v.getClass().getName() + " " + v + " " + m + " " + (m.get("k") == m.get("k")));
+    }
+    public static void main(String[] a) {
+        probe("Integer", new HashMap<String,Integer>(), 1, (k, x) -> x + 1);
+        probe("Long", new HashMap<String,Long>(), 1L, (k, x) -> x + 1);
+        probe("Double", new HashMap<String,Double>(), 1.5, (k, x) -> x + 1);
+        probe("Float", new HashMap<String,Float>(), 1.5f, (k, x) -> x + 1);
+        probe("Short", new HashMap<String,Short>(), (short) 1, (k, x) -> (short) (x + 1));
+        probe("Byte", new HashMap<String,Byte>(), (byte) 1, (k, x) -> (byte) (x + 1));
+        probe("Character", new HashMap<String,Character>(), 'a', (k, x) -> (char) (x + 1));
+        probe("Boolean", new HashMap<String,Boolean>(), true, (k, x) -> !x);
+        probe("String", new HashMap<String,String>(), "s", (k, x) -> x + "!");
+        List<Short> shorts = new ArrayList<>(List.of((short) 1));
+        shorts.replaceAll(x -> (short) (x + 1));
+        List<Character> chars = new ArrayList<>(List.of('a'));
+        chars.replaceAll(x -> (char) (x + 1));
+        List<Boolean> bools = new ArrayList<>(List.of(true));
+        bools.replaceAll(x -> !x);
+        List<Byte> bytes = new ArrayList<>(List.of((byte) 1));
+        bytes.replaceAll(x -> (byte) (x + 1));
+        System.out.println("lists " + shorts + " " + chars + " " + bools + " " + bytes);
+        System.out.println("classes " + ((Object) shorts.get(0)).getClass().getName()
+            + " " + ((Object) chars.get(0)).getClass().getName()
+            + " " + ((Object) bools.get(0)).getClass().getName()
+            + " " + ((Object) bytes.get(0)).getClass().getName());
+        Map<String,Short> cm = new HashMap<>();
+        cm.compute("k", (k, x) -> (short) 3);
+        cm.merge("j", (short) 1, (x, y) -> (short) 4);
+        cm.computeIfAbsent("i", k -> (short) 5);
+        System.out.println("shorts " + cm + " " + ((Object) cm.get("k")).getClass().getName()
+            + " " + ((Object) cm.get("j")).getClass().getName() + " " + ((Object) cm.get("i")).getClass().getName());
+        Map<String,Character> chm = new HashMap<>();
+        chm.compute("k", (k, x) -> 'z');
+        chm.computeIfAbsent("i", k -> 'y');
+        System.out.println("chars " + chm + " " + ((Object) chm.get("k")).getClass().getName()
+            + " " + ((Object) chm.get("i")).getClass().getName());
+    }
+}
+"#
+);
