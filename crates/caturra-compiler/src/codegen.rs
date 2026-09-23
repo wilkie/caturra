@@ -6285,6 +6285,185 @@ fn nested_map_entry(elem: ElemType, table: &MethodTable) -> Option<(ElemType, El
 /// day a bundled library declared its own `Runnable` an anonymous class
 /// started implementing `__Runnable` while the method taking it expected the
 /// other one.
+/// One row of [`nio_plan`]: the class the call lands on, the arguments it
+/// takes (each with the descriptor it is passed as), the descriptor it answers
+/// and the type that answer has (`None` for a `void` one).
+type NioPlan = (
+    &'static str,
+    &'static [(JType, &'static str)],
+    &'static str,
+    Option<JType>,
+);
+
+/// What a `java.nio.file` static call IS: the class it lands on, the
+/// arguments it takes (each with the descriptor it is passed as), the
+/// descriptor it answers, and the type that answer HAS. One table, because
+/// the emitter and `type_of` must agree: a second copy of it lived in
+/// `type_of` and listed eight of the twenty methods, so
+/// `Arrays.toString(Files.readAllBytes(p))` picked the `Object` overload and
+/// printed `[B@c` — an address where a JDK prints the bytes — and
+/// `Files.size(p) + 1` was "bad operand types for binary operator '+'".
+/// The same divergence trap as every other emit/typing mirror.
+#[allow(clippy::too_many_lines)]
+fn nio_plan(class: &str, method: &str) -> Option<NioPlan> {
+    match (class, method) {
+        ("Path", "of") | ("Paths", "get") => Some((
+            if class == "Path" {
+                "java/nio/file/Path"
+            } else {
+                "java/nio/file/Paths"
+            },
+            &[(JType::Str, "Ljava/lang/String;")],
+            "Ljava/nio/file/Path;",
+            Some(JType::Path),
+        )),
+        ("Files", "readString" | "probeContentType") => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            "Ljava/lang/String;",
+            Some(JType::Str),
+        )),
+        ("Files", "writeString") => Some((
+            "java/nio/file/Files",
+            &[
+                (JType::Path, "Ljava/nio/file/Path;"),
+                (JType::Str, "Ljava/lang/CharSequence;"),
+            ],
+            "Ljava/nio/file/Path;",
+            Some(JType::Path),
+        )),
+        ("Files", "readAllLines") => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            "Ljava/util/List;",
+            Some(JType::library_list(ElemType::Str)),
+        )),
+        // `Files.lines(path)` is `readAllLines` as a STREAM. A JDK's is
+        // lazy and closeable; this one reads the file at once, which is
+        // observable only in when the read happens — and a program that
+        // counts or collects the lines cannot tell.
+        ("Files", "lines") => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            "Ljava/util/stream/Stream;",
+            Some(JType::Stream(ElemType::Str)),
+        )),
+        ("Files", "write") => Some((
+            "java/nio/file/Files",
+            &[
+                (JType::Path, "Ljava/nio/file/Path;"),
+                // `JType::library_list(ElemType::Str)` written out: a table
+                // shared by two callers is `'static`, and only a literal is
+                // promoted to that.
+                (
+                    JType::List {
+                        elem: ElemType::Str,
+                        face: CollFace::Iface,
+                    },
+                    "Ljava/lang/Iterable;",
+                ),
+            ],
+            "Ljava/nio/file/Path;",
+            Some(JType::Path),
+        )),
+        // `deleteIfExists` answers whether it deleted anything — the same
+        // shape as the predicates, which is how a program tidies up after
+        // itself without a `try`.
+        (
+            "Files",
+            "exists" | "notExists" | "isDirectory" | "isRegularFile" | "deleteIfExists"
+            | "isReadable" | "isWritable" | "isExecutable" | "isHidden" | "isSymbolicLink",
+        ) => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            "Z",
+            Some(JType::Boolean),
+        )),
+        ("Files", "delete" | "createFile" | "createDirectory" | "createDirectories") => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            if method == "delete" {
+                "V"
+            } else {
+                "Ljava/nio/file/Path;"
+            },
+            if method == "delete" {
+                None
+            } else {
+                Some(JType::Path)
+            },
+        )),
+
+        // `copy`/`move` take a source and a TARGET, and answer the
+        // target. Neither existed, so both were "no suitable method
+        // found" for the two file operations a program reaches for after
+        // reading and writing one.
+        ("Files", "copy" | "move") => Some((
+            "java/nio/file/Files",
+            &[
+                (JType::Path, "Ljava/nio/file/Path;"),
+                (JType::Path, "Ljava/nio/file/Path;"),
+            ],
+            "Ljava/nio/file/Path;",
+            Some(JType::Path),
+        )),
+        ("Files", "isSameFile") => Some((
+            "java/nio/file/Files",
+            &[
+                (JType::Path, "Ljava/nio/file/Path;"),
+                (JType::Path, "Ljava/nio/file/Path;"),
+            ],
+            "Z",
+            Some(JType::Boolean),
+        )),
+        ("Files", "size") => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            "J",
+            Some(JType::Long),
+        )),
+        ("Files", "readAllBytes") => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            "[B",
+            Some(JType::Array {
+                elem: ElemType::Byte,
+                dims: 1,
+            }),
+        )),
+        // `newBufferedReader(path)` — the reader every line-by-line
+        // program opens, and the one shape of `Files` that hands back an
+        // object rather than an answer.
+        // `list(dir)` — the entries of ONE directory, as a stream of
+        // paths. A JDK's is lazy and closeable; this one reads the
+        // directory at once, which a program that collects or counts them
+        // cannot tell.
+        ("Files", "walk" | "list") => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            "Ljava/util/stream/Stream;",
+            Some(JType::Stream(ElemType::Path)),
+        )),
+        // `newBufferedWriter(path[, options])` — the writer a program
+        // opens to write a file line by line, and the counterpart of the
+        // reader beside it. Missing, a call was "no suitable method
+        // found"; with an OPTION it was worse, since the unresolvable
+        // option left a class file whose stack did not balance.
+        ("Files", "newBufferedWriter") => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            "Ljava/io/BufferedWriter;",
+            Some(JType::BufferedWriter),
+        )),
+        ("Files", "newBufferedReader") => Some((
+            "java/nio/file/Files",
+            &[(JType::Path, "Ljava/nio/file/Path;")],
+            "Ljava/io/BufferedReader;",
+            Some(JType::Reader(ReaderFace::Buffered)),
+        )),
+        _ => None,
+    }
+}
 /// The name a DIAGNOSTIC should use for a bundled erased interface: source
 /// says `Comparator`, caturra models `__Comparator`, and a message naming the
 /// internal one reads as caturra's bug rather than the program's.
@@ -34984,7 +35163,7 @@ impl BodyGen<'_> {
     /// read and write it through the VM's virtual filesystem. Each emits an
     /// `INVOKESTATIC` the VM answers, the shape being fixed enough not to need a
     /// method table.
-    #[allow(clippy::option_option, clippy::too_many_lines, clippy::type_complexity)]
+    #[allow(clippy::option_option, clippy::too_many_lines)]
     fn emit_nio_call(
         &mut self,
         class: &str,
@@ -34993,154 +35172,7 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) -> Option<Option<JType>> {
         // (internal name, argument descriptors + types, return descriptor, JType)
-        let plan: Option<(&str, &[(JType, &str)], &str, Option<JType>)> = match (class, method) {
-            ("Path", "of") | ("Paths", "get") => Some((
-                if class == "Path" {
-                    "java/nio/file/Path"
-                } else {
-                    "java/nio/file/Paths"
-                },
-                &[(JType::Str, "Ljava/lang/String;")],
-                "Ljava/nio/file/Path;",
-                Some(JType::Path),
-            )),
-            ("Files", "readString" | "probeContentType") => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                "Ljava/lang/String;",
-                Some(JType::Str),
-            )),
-            ("Files", "writeString") => Some((
-                "java/nio/file/Files",
-                &[
-                    (JType::Path, "Ljava/nio/file/Path;"),
-                    (JType::Str, "Ljava/lang/CharSequence;"),
-                ],
-                "Ljava/nio/file/Path;",
-                Some(JType::Path),
-            )),
-            ("Files", "readAllLines") => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                "Ljava/util/List;",
-                Some(JType::library_list(ElemType::Str)),
-            )),
-            // `Files.lines(path)` is `readAllLines` as a STREAM. A JDK's is
-            // lazy and closeable; this one reads the file at once, which is
-            // observable only in when the read happens — and a program that
-            // counts or collects the lines cannot tell.
-            ("Files", "lines") => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                "Ljava/util/stream/Stream;",
-                Some(JType::Stream(ElemType::Str)),
-            )),
-            ("Files", "write") => Some((
-                "java/nio/file/Files",
-                &[
-                    (JType::Path, "Ljava/nio/file/Path;"),
-                    (JType::library_list(ElemType::Str), "Ljava/lang/Iterable;"),
-                ],
-                "Ljava/nio/file/Path;",
-                Some(JType::Path),
-            )),
-            // `deleteIfExists` answers whether it deleted anything — the same
-            // shape as the predicates, which is how a program tidies up after
-            // itself without a `try`.
-            (
-                "Files",
-                "exists" | "notExists" | "isDirectory" | "isRegularFile" | "deleteIfExists"
-                | "isReadable" | "isWritable" | "isExecutable" | "isHidden" | "isSymbolicLink",
-            ) => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                "Z",
-                Some(JType::Boolean),
-            )),
-            ("Files", "delete" | "createFile" | "createDirectory" | "createDirectories") => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                if method == "delete" {
-                    "V"
-                } else {
-                    "Ljava/nio/file/Path;"
-                },
-                if method == "delete" {
-                    None
-                } else {
-                    Some(JType::Path)
-                },
-            )),
-
-            // `copy`/`move` take a source and a TARGET, and answer the
-            // target. Neither existed, so both were "no suitable method
-            // found" for the two file operations a program reaches for after
-            // reading and writing one.
-            ("Files", "copy" | "move") => Some((
-                "java/nio/file/Files",
-                &[
-                    (JType::Path, "Ljava/nio/file/Path;"),
-                    (JType::Path, "Ljava/nio/file/Path;"),
-                ],
-                "Ljava/nio/file/Path;",
-                Some(JType::Path),
-            )),
-            ("Files", "isSameFile") => Some((
-                "java/nio/file/Files",
-                &[
-                    (JType::Path, "Ljava/nio/file/Path;"),
-                    (JType::Path, "Ljava/nio/file/Path;"),
-                ],
-                "Z",
-                Some(JType::Boolean),
-            )),
-            ("Files", "size") => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                "J",
-                Some(JType::Long),
-            )),
-            ("Files", "readAllBytes") => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                "[B",
-                Some(JType::Array {
-                    elem: ElemType::Byte,
-                    dims: 1,
-                }),
-            )),
-            // `newBufferedReader(path)` — the reader every line-by-line
-            // program opens, and the one shape of `Files` that hands back an
-            // object rather than an answer.
-            // `list(dir)` — the entries of ONE directory, as a stream of
-            // paths. A JDK's is lazy and closeable; this one reads the
-            // directory at once, which a program that collects or counts them
-            // cannot tell.
-            ("Files", "walk" | "list") => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                "Ljava/util/stream/Stream;",
-                Some(JType::Stream(ElemType::Path)),
-            )),
-            // `newBufferedWriter(path[, options])` — the writer a program
-            // opens to write a file line by line, and the counterpart of the
-            // reader beside it. Missing, a call was "no suitable method
-            // found"; with an OPTION it was worse, since the unresolvable
-            // option left a class file whose stack did not balance.
-            ("Files", "newBufferedWriter") => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                "Ljava/io/BufferedWriter;",
-                Some(JType::BufferedWriter),
-            )),
-            ("Files", "newBufferedReader") => Some((
-                "java/nio/file/Files",
-                &[(JType::Path, "Ljava/nio/file/Path;")],
-                "Ljava/io/BufferedReader;",
-                Some(JType::Reader(ReaderFace::Buffered)),
-            )),
-            _ => None,
-        };
+        let plan = nio_plan(class, method);
         let Some((internal, params, ret_desc, ret_ty)) = plan else {
             // A `Files` method caturra has NOT modelled says so by name: the
             // four below want types it has none of, and "no suitable method
@@ -41700,22 +41732,18 @@ impl BodyGen<'_> {
                         _ => {}
                     }
                 }
-                // `java.nio.file` static returns — mirror `emit_nio_call`.
-                if matches!(class.as_str(), "Path" | "Paths" | "Files") {
-                    match (class.as_str(), method.as_str()) {
-                        ("Path", "of")
-                        | ("Paths", "get")
-                        | ("Files", "writeString" | "write" | "createFile" | "createDirectory") => {
-                            return JType::Path;
-                        }
-                        ("Files", "readString") => return JType::Str,
-                        ("Files", "readAllLines") => return JType::library_list(ElemType::Str),
-                        ("Files", "lines") => return JType::Stream(ElemType::Str),
-                        ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => {
-                            return JType::Boolean;
-                        }
-                        _ => {}
-                    }
+                // `java.nio.file` static returns — the emitter's OWN table,
+                // asked here rather than mirrored. The copy that stood here
+                // listed eight of the twenty methods, and the twelve it left
+                // out were typed as nothing: `Arrays.toString(
+                // Files.readAllBytes(p))` picked the `Object` overload and
+                // printed an address where a JDK prints the bytes, and
+                // `Files.size(p) + 1` was "bad operand types for binary
+                // operator '+'" about a `long`.
+                // A call that answers nothing (`Files.delete`) falls through
+                // exactly as it did, to whatever types a `void` here.
+                if let Some((.., Some(answered))) = nio_plan(&class, method) {
+                    return answered;
                 }
                 let table = self.table;
                 // A statically imported member, called unqualified. The EMITTER has

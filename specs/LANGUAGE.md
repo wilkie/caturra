@@ -15706,6 +15706,40 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### What a file call answers (2026-09-23)
+
+The never-compared list left by the last unit had `java.nio.file` all over it,
+so every modelled call there was written INLINE — in the position where its
+TYPE is what decides, rather than assigned to a variable that declares it.
+Two came back wrong, and one of them silently:
+`Arrays.toString(Files.readAllBytes(p))` printed `[B@c`, the array's address,
+where a JDK prints its bytes (`Arrays.hashCode`, `Arrays.equals` and
+`Arrays.copyOf` of the same call went the same way — `equals` answered an
+ARRAY), and `Files.size(p) + 1` was "bad operand types for binary operator
+'+'" about a `long`.
+
+The cause is the emit/typing mirror again. What a `java.nio.file` static call
+answers was written twice: the emitter's table, and a hand-written copy in
+`type_of` headed "mirror `emit_nio_call`" that listed eight of the twenty
+methods. The twelve it left out were typed as nothing, so an argument's
+overload was picked as `Object` and an arithmetic operand had no type. The
+table is one function (`nio_plan`) now, and both paths ask it; a call that
+answers `void` falls through exactly as it did.
+
+What the same sweep confirmed is as much of the finding as the defects: the
+chained forms all worked, because a receiver is typed by the emitter's own
+table — the gap was only where the value is an ARGUMENT or an OPERAND. A
+mirror is invisible from the side the emitter reads.
+
+Still refused, each by name and with what to write instead:
+`Files.write(path, byte[])`, `Files.walk(path, depth)` and the option
+constants `LinkOption.NOFOLLOW_LINKS` / `FileVisitOption.FOLLOW_LINKS` — the
+options a JDK ignores without symlinks, which caturra's filesystem has none
+of. They are ordinary Java and the next unit's, written down here so the
+refusal is a decision rather than an oversight.
+
+Pinned as `what_a_file_call_answers`.
+
 ### A lambda is a lambda wherever it is written (2026-09-23)
 
 The filtered directory listing added an hour earlier did not work outside its

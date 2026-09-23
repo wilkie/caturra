@@ -58959,3 +58959,61 @@ public class HR {
 }
 "#
 );
+
+// What a `java.nio.file` call ANSWERS was written twice: once in the emitter's
+// table, and once as a hand-written mirror in `type_of` that listed eight of
+// the twenty methods. The twelve it left out were typed as nothing, which is
+// silent rather than loud — `Arrays.toString(Files.readAllBytes(p))` picked
+// the `Object` overload and printed `[B@c`, the array's ADDRESS, where a JDK
+// prints its bytes; `Arrays.equals(...)` of two of them answered an array; and
+// `Files.size(p) + 1` was "bad operand types for binary operator '+'" about a
+// `long`. One table, asked by both.
+differential_test!(
+    what_a_file_call_answers,
+    "NB",
+    r#"
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
+
+public class NB {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) throws Exception {
+        Files.createDirectories(Path.of("nb/sub"));
+        Files.writeString(Path.of("nb/a.txt"), "one\n");
+        Path p = Path.of("nb/a.txt");
+        // An array a file call answers, written INLINE: the overload the
+        // argument picks is the whole question.
+        r("toString", () -> Arrays.toString(Files.readAllBytes(p)));
+        r("hashCode", () -> Arrays.hashCode(Files.readAllBytes(p)));
+        r("equals", () -> Arrays.equals(Files.readAllBytes(p), Files.readAllBytes(p)));
+        r("copyOf", () -> Arrays.toString(Arrays.copyOf(Files.readAllBytes(p), 2)));
+        r("chained", () -> Arrays.toString(Files.readAllBytes(p)).length());
+        r("as-string", () -> new String(Files.readAllBytes(p)).trim());
+        r("for-each", () -> { int n = 0; for (byte b : Files.readAllBytes(p)) { n += b; } return n; });
+        // ...and a `long` one answers, in arithmetic rather than a concat.
+        r("size-plus", () -> Files.size(p) + 1);
+        r("size-times", () -> Files.size(p) * 2 + 1);
+        r("size-cast", () -> (int) Files.size(p));
+        r("size-compare", () -> Files.size(p) > 3);
+        // The rest of the table, each used where its type is what decides.
+        r("copy", () -> Files.copy(p, Path.of("nb/b.txt")).getFileName().toString());
+        r("move", () -> Files.move(Path.of("nb/b.txt"), Path.of("nb/c.txt")).getFileName().toString());
+        r("createFile", () -> Files.createFile(Path.of("nb/d.txt")).getFileName().toString());
+        r("createDirectories", () -> Files.createDirectories(Path.of("nb/x/y")).getFileName().toString());
+        r("walk", () -> Files.walk(Path.of("nb")).map(x -> x.getFileName().toString()).sorted().count());
+        r("list", () -> Files.list(Path.of("nb")).map(Path::getFileName).map(Path::toString).sorted().findFirst().get());
+        r("write", () -> Files.write(Path.of("nb/e.txt"), List.of("z")).getFileName().toString());
+        r("reader", () -> Files.newBufferedReader(p).lines().count());
+        r("isSameFile", () -> Files.isSameFile(p, p) ? 1 : 0);
+        r("probeContentType", () -> Files.probeContentType(p).toUpperCase());
+        r("deleteIfExists", () -> Files.deleteIfExists(Path.of("nb/none")) ? 1 : 0);
+    }
+}
+"#
+);
