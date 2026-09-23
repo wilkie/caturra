@@ -58583,3 +58583,176 @@ public class FF2 {
 }
 "#
 );
+
+// What a `Pattern` flag means. The seven this engine models each do what they
+// say; `flags()` reads back what was asked for; and a bit outside the nine a
+// JDK declares is an `IllegalArgumentException` naming the WHOLE value in
+// lowercase hex — "0x1002", not "0x1000". caturra IGNORED every unknown bit,
+// which is a silent wrong answer about a call a JDK refuses outright. The
+// behaviour sweep could not see any of it: one refused `compile` overload
+// dropped every other call with that name, so the class's whole static
+// surface went unasked.
+differential_test!(
+    what_a_pattern_flag_means,
+    "Fl",
+    r#"
+import java.util.regex.*;
+public class Fl {
+    static void f(String l, int flags) {
+        try { System.out.println(l + " = " + Pattern.compile("a", flags).flags()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] a) {
+        // The seven flags this engine models, each doing what it says.
+        r("none", () -> Pattern.compile("ab", 0).matcher("AB").find());
+        r("case-insensitive", () -> Pattern.compile("ab", Pattern.CASE_INSENSITIVE).matcher("AB").find());
+        r("dotall", () -> Pattern.compile("a.b", Pattern.DOTALL).matcher("a\nb").find());
+        r("multiline", () -> Pattern.compile("^b", Pattern.MULTILINE).matcher("a\nb").find());
+        r("comments", () -> Pattern.compile("a b # x\n", Pattern.COMMENTS).matcher("ab").find());
+        r("literal", () -> Pattern.compile("a.b", Pattern.LITERAL).matcher("a.b").find());
+        r("unicode-case", () -> Pattern.compile("a", Pattern.UNICODE_CASE).matcher("a").find());
+        r("unix-lines", () -> Pattern.compile("^b", Pattern.UNIX_LINES | Pattern.MULTILINE).matcher("a\nb").find());
+        r("two-flags", () -> Pattern.compile("A.B", Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher("a\nb").find());
+        // `flags()` reads back exactly what was asked for.
+        f("zero", 0);
+        f("three", 3);
+        f("case", Pattern.CASE_INSENSITIVE);
+        f("known-seven", 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40);
+        // A bit outside the nine a JDK declares names the WHOLE value in
+        // lowercase hex — "0x1002", not "0x1000".
+        f("bit-0x200", 0x200);
+        f("bit-0x1000-with-2", 0x1000 | 2);
+        f("bit-high", 1 << 31);
+        f("negative", -2);
+        f("max-value", Integer.MAX_VALUE);
+        f("min-value", Integer.MIN_VALUE);
+        f("known-plus-unknown", 0x3FF);
+    }
+}
+"#
+);
+
+// Eighteen ways to build a string holding an UNPAIRED SURROGATE — a legal
+// `char`, and a legal part of a `String`, which no Rust string can carry.
+// Three of them lost it to `from_utf16_lossy`: the constant FOLDER (whose
+// `ConstValue::Str` was a Rust `String`, so `"x" + "\uD83D"` folded to a
+// different constant than the same concatenation at run time),
+// `String.valueOf(aString)` (which rebuilt the string instead of answering
+// it), and `Pattern.pattern()`. The behaviour sweep could not see any of it:
+// every `Pattern.compile` call was dropped, and the surrogate is one of the
+// six strings in its argument bank.
+differential_test!(
+    a_string_keeps_its_units,
+    "Sur2",
+    r#"
+public class Sur2 {
+    static void hex(String l, String s) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) { b.append(Integer.toHexString(s.charAt(i))).append(' '); }
+        System.out.println(l + " = [" + b.toString().trim() + "]");
+    }
+    public static void main(String[] a) {
+        String lone = "\uD83D";
+        hex("literal", "\uD83D");
+        hex("folded-two-literals", "x" + "\uD83D");
+        hex("folded-three", "x" + "\uD83D" + "y");
+        hex("runtime-concat", "x" + lone);
+        hex("builder", new StringBuilder("x").append(lone).toString());
+        hex("builder-literal", new StringBuilder("x").append("\uD83D").toString());
+        hex("substring", ("x" + lone + "y").substring(1, 2));
+        hex("valueOf", String.valueOf(lone));
+        hex("format", String.format("%s", lone));
+        hex("pattern", java.util.regex.Pattern.compile(lone).pattern());
+        hex("pattern-toString", java.util.regex.Pattern.compile(lone).toString());
+        hex("concat-method", "x".concat(lone));
+        hex("join", String.join("", "x", lone));
+        hex("char-array", new String(new char[] { '\uD83D' }));
+        hex("repeat", lone.repeat(2));
+        hex("trim", (" " + lone + " ").trim());
+        hex("upper", lone.toUpperCase());
+        hex("replace", ("a" + lone).replace('a', 'b'));
+    }
+}
+"#
+);
+
+// ...and the other direction, which is what a constant FOLD is for: a folded
+// concatenation is one interned constant, so `"ab" == "a" + "b"` — and the
+// same through a constant field, a constant local, a `char`, an `int`, a
+// `long` and a `boolean`. A `double` operand is deliberately not folded (its
+// text is the runtime formatter's to give), a runtime operand is not
+// interned, and a folded constant is still a case label.
+differential_test!(
+    a_folded_constant_is_interned,
+    "Fold",
+    r#"
+public class Fold {
+    static final String P = "a";
+    static final char C = 'b';
+    static final int N = 7;
+    static void s(String l, Object v) { System.out.println(l + " = " + v); }
+    public static void main(String[] a) {
+        // A folded constant is INTERNED, so `==` is true.
+        s("interned", "ab" == "a" + "b");
+        s("const-field", "ab" == P + "b");
+        s("const-char", "ab" == "a" + C);
+        s("const-int", "a7" == "a" + N);
+        s("const-long", "a7" == "a" + 7L);
+        s("const-bool", "atrue" == "a" + true);
+        final String local = "a";
+        s("const-local", "ab" == local + "b");
+        String runtime = new String("b");
+        s("runtime-not-interned", "ab" == "a" + runtime);
+        s("double-not-folded", "a" + 1.5);
+        s("three-way", "abc" == "a" + "b" + "c");
+        s("nested", "abc" == ("a" + "b") + "c");
+        s("empty", "a" == "a" + "");
+        s("escape", "a\nb".length());
+        s("unicode", ("x" + "é").length());
+        s("pair", ("x" + "😀").length());
+        s("lone", ("x" + "\uD83D").length());
+        s("lone-units", Integer.toHexString(("x" + "\uD83D").charAt(1)));
+        s("lone-char", Integer.toHexString(("x" + '\uD83D').charAt(1)));
+        s("text", "hello, " + "world");
+        switch ("ab") { case "a" + "b": s("switch-const", "matched"); break; default: s("switch-const", "no"); }
+    }
+}
+"#
+);
+
+// ...and what the console does with one: a JDK encodes to the platform
+// charset, where an unpaired surrogate has no encoding and becomes `?`.
+// caturra printed U+FFFD wherever the string had been rebuilt through a Rust
+// string — the same three paths, seen from the terminal.
+differential_test!(
+    what_a_console_prints_for_a_surrogate,
+    "Sur",
+    r#"
+public class Sur {
+    static void show(String l, String s) {
+        StringBuilder bytes = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) { bytes.append(Integer.toHexString(s.charAt(i))).append(' '); }
+        System.out.println(l + " len=" + s.length() + " units=[" + bytes.toString().trim() + "] text=" + s);
+    }
+    public static void main(String[] a) {
+        show("lone-high", "\uD83D");
+        show("lone-low", "\uDE00");
+        show("pair", "😀");
+        show("high-then-a", "\uD83Da");
+        show("a-then-low", "a\uDE00");
+        show("plain", "ab");
+        System.out.println("direct: " + "\uD83D");
+        System.out.print("printed:");
+        System.out.print("\uD83D");
+        System.out.println();
+        System.out.println("pattern: " + java.util.regex.Pattern.compile("\uD83D"));
+        System.out.println("concat: " + "x" + "\uD83D" + "y");
+    }
+}
+"#
+);

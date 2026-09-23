@@ -5301,8 +5301,12 @@ fn invoke_virtual_dispatch(
         // A `Pattern`: its own text, a `Matcher` over some input, and the two
         // split forms — the same splitter `String.split` uses.
         (HeapObject::Pattern { source, .. }, "pattern" | "toString") => {
-            let text = String::from_utf16_lossy(source);
-            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+            // The UNITS, not a Rust `String`: a pattern may hold an unpaired
+            // surrogate (it is a legal `char` and a legal regex), and
+            // `from_utf16_lossy` turns one into U+FFFD — so the pattern read
+            // back was not the pattern compiled.
+            let source = source.clone();
+            Ok(Some(JValue::Ref(Some(heap.alloc_string_units(&source)))))
         }
         (HeapObject::Pattern { .. }, "flags") => {
             let flags = match heap.get(receiver) {
@@ -11629,10 +11633,27 @@ fn string_units(heap: &Heap, value: &JValue) -> Result<Vec<u16>, VmError> {
 /// would answer a different question from the one the program asked — so
 /// `compile` says so instead, where a JDK would have compiled.
 fn check_regex_flags(flags: i32) -> Result<(), VmError> {
+    // A bit outside the nine a JDK declares is an
+    // `IllegalArgumentException` naming the WHOLE value in lowercase hex —
+    // `Pattern.compile("a", 0x1000 | 2)` is "Unknown flag 0x1002", not
+    // "0x1000". caturra ignored every unknown bit, which is a silent wrong
+    // answer about a call a JDK refuses outright.
+    const ALL_FLAGS: i32 = 0x1FF;
+    if flags & !ALL_FLAGS != 0 {
+        return Err(throw(format!(
+            "java.lang.IllegalArgumentException: Unknown flag 0x{:x}",
+            flags.cast_unsigned()
+        )));
+    }
     for (bit, name) in [(0x80, "CANON_EQ"), (0x100, "UNICODE_CHARACTER_CLASS")] {
         if flags & bit != 0 {
-            return Err(VmError::UnknownIntrinsic(format!(
-                "Pattern.compile with Pattern.{name}"
+            // A REFUSAL, not an engine abort. This used to be an
+            // `UnknownIntrinsic` — the error the engine raises when it has
+            // lost its footing, which reaches a reader as "unknown native
+            // member" and cannot be told from a bug. The reason is
+            // deliberate and belongs in the sentence.
+            return Err(VmError::Unsupported(format!(
+                "Pattern.{name} changes what ordinary text matches, and caturra's regex engine models no Unicode canonical decomposition - the other seven flags work, and a pattern written without it answers exactly as a JDK does"
             )));
         }
     }
@@ -16903,6 +16924,16 @@ fn string_static(
                 (_, JValue::Long(v)) => v.to_string(),
                 ("(F)Ljava/lang/String;", JValue::Float(v)) => java_float_to_string(*v),
                 (_, JValue::Double(v)) => java_double_to_string(*v),
+                // A STRING is answered as itself — a JDK's
+                // `String.valueOf(String)` hands the same string back — so
+                // its UNITS ride through untouched. Reading it as text and
+                // building a new one turned an unpaired surrogate into
+                // U+FFFD: a legal `char`, and a different string.
+                (_, JValue::Ref(Some(reference)))
+                    if matches!(heap.get(*reference), Some(HeapObject::JavaString(_))) =>
+                {
+                    return Ok(Some(JValue::Ref(Some(*reference))));
+                }
                 (_, JValue::Ref(Some(reference))) => match heap.get(*reference) {
                     Some(HeapObject::IntArray(_, values)) => values
                         .iter()

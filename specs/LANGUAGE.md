@@ -15706,6 +15706,72 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A string keeps its units (2026-09-23)
+
+The moment the behaviour sweep could ask about `Pattern.compile` again, it
+found a divergence — and it was not about patterns. One of the six strings in
+its argument bank is an UNPAIRED SURROGATE: a legal `char`, a legal part of a
+`String`, and a thing no Rust string can carry. Asked eighteen ways to build
+one, caturra lost it in three:
+
+- **The constant FOLDER.** `ConstValue::Str` was a Rust `String`, so a literal
+  entered the folder through `from_utf16_lossy` and `"x" + "\uD83D"` folded to
+  a constant that DIFFERED from the same concatenation performed at run time.
+  It carries units now, and the `char` case — which already declined to fold
+  a lone surrogate because it had no constant string form — simply works.
+- **`String.valueOf(aString)`**, which read the string as text and built a new
+  one. A JDK hands the same string back, so its units ride through untouched.
+- **`Pattern.pattern()` / `toString()`**, so the pattern read back was not the
+  pattern compiled.
+
+Each shows at the terminal, because a JDK encodes to the platform charset
+where an unpaired surrogate has no encoding and becomes `?`, while caturra
+printed U+FFFD — a different character, quietly.
+
+The other fifteen ways were right already: a literal, a builder, a substring,
+`format`, `concat`, `join`, a `char[]`, `repeat`, `trim`, `toUpperCase`,
+`replace`. That is the shape of this defect class — not a missing feature, but
+one path of many that went through a lossy conversion.
+
+Found open, and not this unit's: a constant FIELD does not fold inside a
+LAMBDA body (`() -> "ab" == P + "b"` is false where a JDK says true), because
+the hoisted body is no longer in the class that declares the field. The same
+expression outside a lambda folds and interns correctly, which is what the
+third pin holds.
+
+Pinned as `a_string_keeps_its_units`, `a_folded_constant_is_interned` and
+`what_a_console_prints_for_a_surrogate`.
+
+
+### What a Pattern flag means (2026-09-23)
+
+The behaviour sweep's own list said `java.util.regex.Pattern.compile` was
+"dropped with a sibling overload caturra does not offer" — twelve entries, and
+with them the class's whole STATIC surface. Chasing the drop found the reason
+and two defects behind it.
+
+`Pattern.compile("ab", Integer.MAX_VALUE)` was refused, so the sweep dropped
+every call named `compile`. The refusal itself was right in spirit —
+`CANON_EQ` and `UNICODE_CHARACTER_CLASS` change what ordinary text matches and
+caturra's engine models no Unicode canonical decomposition — but:
+
+- **It was raised as an `UnknownIntrinsic`**, the error the engine uses when
+  it has lost its footing, which reaches a reader as "unknown native member"
+  and cannot be told from a bug. (It is also exactly what the new abort sweep
+  classifies as an engine abort.) A deliberate refusal is `Unsupported`, and
+  says its reason in a sentence.
+- **Every unknown flag BIT was silently ignored.** A JDK validates the mask
+  and throws `IllegalArgumentException: Unknown flag 0x…`, naming the WHOLE
+  value in lowercase hex — `compile("a", 0x1000 | 2)` is "0x1002", not
+  "0x1000". Ignoring the bit is a silent wrong answer about a call a JDK
+  refuses outright.
+
+The seven flags the engine does model are pinned doing what they say, and
+`flags()` reading back what was asked for, beside the ten validation cells.
+
+Pinned as `what_a_pattern_flag_means`.
+
+
 ### A directory listing takes a filter (2026-09-23)
 
 `dir.list(filter)` and `dir.listFiles(filter)` — how a program lists the

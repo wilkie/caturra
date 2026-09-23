@@ -10612,20 +10612,24 @@ fn const_from_literal(lit: &Literal) -> Option<crate::constfold::ConstValue> {
         Literal::Double(v) => ConstValue::Double(*v),
         Literal::Bool(b) => ConstValue::Bool(*b),
         Literal::Char(c) => ConstValue::Char(u16::try_from(u32::from(*c)).ok()?),
-        Literal::Str(s) => ConstValue::Str(String::from_utf16_lossy(s)),
+        Literal::Str(s) => ConstValue::Str(s.clone()),
         Literal::Null => return None,
     })
 }
 
-fn literal_java_string(lit: &Literal) -> Option<String> {
+fn literal_java_string(lit: &Literal) -> Option<Vec<u16>> {
+    // UNITS, not a Rust `String`. A literal may hold an unpaired surrogate —
+    // a legal `char` and a legal part of a `String` — and `from_utf16_lossy`
+    // turned one into U+FFFD, so `"x" + "\uD83D"` folded to a DIFFERENT
+    // constant than the same concatenation performed at run time. The `char`
+    // case below already knew this and declined; the STRING case did not.
     Some(match lit {
-        Literal::Str(s) => String::from_utf16_lossy(s),
-        Literal::Int(v) | Literal::Long(v) => v.to_string(),
-        // The CHARACTER the unit denotes, not the number. A lone surrogate has
-        // no `char` and so no constant string form — folding must not invent
-        // one, and the concatenation is left to run time.
-        Literal::Char(c) => char::from_u32(u32::from(*c))?.to_string(),
-        Literal::Bool(b) => b.to_string(),
+        Literal::Str(s) => s.clone(),
+        Literal::Int(v) | Literal::Long(v) => v.to_string().encode_utf16().collect(),
+        // The CHARACTER the unit denotes, not the number — and a lone
+        // surrogate IS that unit, which the units form can now carry.
+        Literal::Char(c) => vec![*c],
+        Literal::Bool(b) => b.to_string().encode_utf16().collect(),
         Literal::Double(_) | Literal::Float(_) | Literal::Null => return None,
     })
 }
@@ -46091,8 +46095,9 @@ impl BodyGen<'_> {
             self.const_eval(lhs).as_ref().and_then(literal_java_string),
             self.const_eval(rhs).as_ref().and_then(literal_java_string),
         ) {
-            let folded = format!("{l}{r}");
-            let utf8 = self.pool.intern_utf8(&folded);
+            let mut folded = l;
+            folded.extend_from_slice(&r);
+            let utf8 = self.pool.intern_utf8_units(&folded);
             let index = self.pool.intern(Constant::String { string_index: utf8 });
             self.code.push_ldc(index);
             return JType::Str;

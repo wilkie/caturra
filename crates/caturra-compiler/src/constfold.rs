@@ -34,7 +34,12 @@ pub(crate) enum ConstValue {
     Double(f64),
     Bool(bool),
     Char(u16),
-    Str(String),
+    /// A string as UTF-16 UNITS, not a Rust `String`. A Java string may hold
+    /// an unpaired surrogate — a legal `char` — which no Rust string can
+    /// carry: reading one through `from_utf16_lossy` turned it into U+FFFD, so
+    /// `"x" + "\uD83D"` folded to a constant that differed from the same
+    /// concatenation performed at run time.
+    Str(Vec<u16>),
 }
 
 impl ConstValue {
@@ -72,12 +77,15 @@ impl ConstValue {
     /// job of the runtime formatter, so a concatenation involving one is left
     /// un-folded (it then takes the correct runtime path, and simply is not a
     /// constant expression here).
-    pub(crate) fn java_string(&self) -> Option<String> {
+    pub(crate) fn java_string(&self) -> Option<Vec<u16>> {
         Some(match self {
-            ConstValue::Int(v) => v.to_string(),
-            ConstValue::Long(v) => v.to_string(),
-            ConstValue::Bool(b) => b.to_string(),
-            ConstValue::Char(c) => char::from_u32(u32::from(*c)).map(String::from)?,
+            ConstValue::Int(v) => v.to_string().encode_utf16().collect(),
+            ConstValue::Long(v) => v.to_string().encode_utf16().collect(),
+            ConstValue::Bool(b) => b.to_string().encode_utf16().collect(),
+            // A `char` IS one unit, unpaired surrogate or not — which is
+            // exactly what a units answer can carry and a Rust `String`
+            // cannot.
+            ConstValue::Char(c) => vec![*c],
             ConstValue::Str(s) => s.clone(),
             ConstValue::Float(_) | ConstValue::Double(_) => return None,
         })
@@ -92,7 +100,7 @@ impl ConstValue {
             ConstValue::Double(v) => Literal::Double(*v),
             ConstValue::Bool(b) => Literal::Bool(*b),
             ConstValue::Char(c) => Literal::Char(*c),
-            ConstValue::Str(s) => Literal::Str(s.encode_utf16().collect()),
+            ConstValue::Str(s) => Literal::Str(s.clone()),
         }
     }
 }
@@ -249,7 +257,7 @@ fn literal_value(value: &Literal) -> Option<ConstValue> {
         Literal::Double(v) => ConstValue::Double(*v),
         Literal::Bool(b) => ConstValue::Bool(*b),
         Literal::Char(c) => ConstValue::Char(u16::try_from(u32::from(*c)).ok()?),
-        Literal::Str(s) => ConstValue::Str(String::from_utf16_lossy(s)),
+        Literal::Str(s) => ConstValue::Str(s.clone()),
         Literal::Null => return None,
     })
 }
@@ -327,11 +335,9 @@ fn binary(op: BinaryOp, l: &ConstValue, r: &ConstValue) -> Option<ConstValue> {
     // String concatenation: a `+` with a String operand, where the other side
     // is any constant at all.
     if op == BinaryOp::Add && matches!((l, r), (ConstValue::Str(_), _) | (_, ConstValue::Str(_))) {
-        return Some(ConstValue::Str(format!(
-            "{}{}",
-            l.java_string()?,
-            r.java_string()?
-        )));
+        let mut joined = l.java_string()?;
+        joined.extend_from_slice(&r.java_string()?);
+        return Some(ConstValue::Str(joined));
     }
     match op {
         BinaryOp::And => {
