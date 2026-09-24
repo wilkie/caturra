@@ -15709,6 +15709,41 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A view of a view (2026-09-24)
+
+Views compose, and every probe so far took one at a time. Twenty-four
+compositions found three things, each invisible to a single view.
+
+**A sub-range OF a sub-range.** `subSet(2, 5).subSet(3, 5)` was "toKey out of
+range" — about a range plainly inside the one it narrows. A JDK asks two
+different questions of a new bound (`NavigableSubMap.inRange(key,
+inclusive)`): an INCLUSIVE one must be a key the view would admit, exclusivity
+and all, while an EXCLUSIVE one is checked against the CLOSED range, so it may
+sit exactly where the outer view ends. Asking the inclusive question for both
+refused the ordinary way to narrow a range from the front —
+`headSet(3).headSet(3)` and `subMap(1, 3).subMap(2, 3)` too.
+
+**A write through the FACE of a sub-view.** `m.subMap("a", "c").keySet()
+.remove("b")` left the map as it was, and so did the `values()` and
+`entrySet()` faces, a cursor's `remove`, an entry's `setValue` and the face's
+`clear`. A sorted view holds no entries of its own: an index into it is an
+index into its SLICE of the backing, and the three writers that reached it —
+`map_remove_at`, `map_put` and the view's `clear` — each fell through to a
+match on storage the view does not have. The plain `m.values().remove(2)`
+worked throughout, which is what kept this hidden: only a face of a SORTED
+view was affected.
+
+**And a cursor over a view carries the BACKING's modCount.** A JDK's sub-list
+cursor checks the root list's, and a sorted view's checks the tree's — so
+adding to the list a `subList` is a window on, or to the tree under a
+`subMap`, ends a walk of the view with a ConcurrentModificationException. The
+check compared the VIEW's own length, which an add past its end never touches.
+`SortedView` already carried the backing's length for exactly this reason and
+nothing asked it through a map FACE; `SubList` carried one that nothing asked
+at all.
+
+Pinned as `a_view_of_a_view` (twenty-seven calls).
+
 ### When a pipeline's side effects happen (2026-09-24)
 
 The pipeline fuzzer at a larger run size — fifty pipelines a program instead

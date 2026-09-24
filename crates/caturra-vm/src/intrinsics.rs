@@ -9542,8 +9542,23 @@ pub(crate) fn check_comodification(
     // adding a key OUTSIDE the range still ends a walk of the view with a CME,
     // and the view's own length — which that add never touched — could not
     // notice. `seen` is the length stamped when the walk began.
-    if let Some(HeapObject::SortedView { backing, seen, .. }) = heap.get(source) {
+    // ...and the same through a map FACE of one (`subMap(a, c).keySet()`),
+    // whose own length says no more than the view's does.
+    let sorted = view_map(heap, source)
+        .filter(|map| matches!(heap.get(*map), Some(HeapObject::SortedView { .. })))
+        .unwrap_or(source);
+    if let Some(HeapObject::SortedView { backing, seen, .. }) = heap.get(sorted) {
         if sorted_backing_pairs(heap, *backing).len() == *seen {
+            return Ok(());
+        }
+        return Err(throw("java.util.ConcurrentModificationException"));
+    }
+    // A `subList` carries its BACKING's length the same way and for the same
+    // reason: a JDK's sub-list cursor checks the root list's `modCount`, so
+    // adding to the backing ends a walk of the view — which the view's own
+    // length, untouched by an add past its end, could never notice.
+    if let Some(HeapObject::SubList { backing, seen, .. }) = heap.get(source) {
+        if iterated_len(heap, *backing) == *seen {
             return Ok(());
         }
         return Err(throw("java.util.ConcurrentModificationException"));
@@ -9771,6 +9786,32 @@ fn iterated_remove(heap: &mut Heap, source: HeapRef, index: usize) {
         return;
     }
     let target = view_map(heap, source).unwrap_or(source);
+    // Through a SORTED VIEW (a submap's keySet, a headSet): the view holds no
+    // entries of its own, so the index is into its SLICE of the backing. It
+    // resolves the same way `sorted_view_pairs` does — reversed for a
+    // descending view — and falling through removed NOTHING, so a cursor's
+    // `remove` on `m.subMap(a, c).keySet()` left the map as it was.
+    if let Some(HeapObject::SortedView {
+        backing,
+        descending,
+        ..
+    }) = heap.get(target)
+    {
+        let (backing, descending) = (*backing, *descending);
+        let (from, to) = sorted_view_range(heap, target);
+        let within = if descending {
+            to.checked_sub(index + 1)
+        } else {
+            Some(from + index)
+        };
+        if let Some(at) = within
+            && at >= from
+            && at < to
+        {
+            iterated_remove(heap, backing, at);
+        }
+        return;
+    }
     match heap.get_mut(target) {
         Some(HeapObject::HashSet(entries) | HeapObject::HashMap(entries)) => {
             entries.remove_at(index);

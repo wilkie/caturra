@@ -59564,3 +59564,72 @@ public class LZ {
 }
 "#
 );
+
+// A view OF a view. Three things, each invisible to a probe that takes one
+// view at a time.
+//
+// A sub-range of a sub-range: a JDK asks two different questions of a new
+// bound (`NavigableSubMap.inRange(key, inclusive)`) — an INCLUSIVE one must be
+// a key the view would admit, exclusivity and all, while an EXCLUSIVE one is
+// checked against the CLOSED range. Asking the inclusive question for both
+// refused `subSet(2, 5).subSet(3, 5)` and `headSet(3).headSet(3)`, which is
+// the ordinary way to narrow a range from the front.
+//
+// A write through the FACE of a sub-view — `m.subMap("a", "c").keySet()
+// .remove("b")`, its `values()`, its `entrySet()`, a cursor's `remove`, an
+// entry's `setValue`, the face's `clear` — reached a view that holds no
+// entries of its own and quietly did nothing.
+//
+// And a cursor over a view carries the BACKING's modCount, as a JDK's does:
+// adding to the list a `subList` is a window on, or to the tree under a
+// `subMap`, ends a walk of the view with a ConcurrentModificationException —
+// which the view's own length, untouched by an add past its end, could never
+// notice.
+differential_test!(
+    a_view_of_a_view,
+    "VV",
+    r#"
+import java.util.*;
+
+public class VV {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        // A sub-range OF a sub-range. An EXCLUSIVE new bound may sit exactly
+        // where the view it narrows ends; an INCLUSIVE one may not.
+        r("sub-of-sub-same-end", () -> new TreeSet<>(List.of(1,2,3,4,5)).subSet(2,5).subSet(3,5));
+        r("sub-of-sub-same", () -> new TreeSet<>(List.of(1,2,3)).subSet(1,3).subSet(1,3));
+        r("sub-of-sub-inside", () -> new TreeSet<>(List.of(1,2,3,4,5)).subSet(2,5).subSet(3,4));
+        r("head-of-head-same", () -> new TreeSet<>(List.of(1,2,3)).headSet(3).headSet(3));
+        r("tail-of-tail-same", () -> new TreeSet<>(List.of(1,2,3)).tailSet(2).tailSet(2));
+        r("head-of-tail", () -> new TreeSet<>(List.of(1,2,3,4)).tailSet(2).headSet(4));
+        r("submap-of-submap", () -> new TreeMap<>(Map.of(1,1,2,2,3,3)).subMap(1,3).subMap(2,3));
+        r("descending-sub-of-sub", () -> new TreeSet<>(List.of(1,2,3,4)).descendingSet().subSet(4,1).subSet(3,1));
+        r("sub-start-below", () -> new TreeSet<>(List.of(1,2,3)).subSet(2,3).subSet(1,3));
+        r("inclusive-end-at-exclusive", () -> { NavigableSet<Integer> v = new TreeSet<>(List.of(1,2,3,4,5)).subSet(2,true,5,false); return v.subSet(3,true,5,true); });
+        r("inclusive-end-at-inclusive", () -> { NavigableSet<Integer> v = new TreeSet<>(List.of(1,2,3,4,5)).subSet(2,true,5,true); return v.subSet(3,true,5,true); });
+        r("exclusive-start-at-end", () -> { NavigableSet<Integer> v = new TreeSet<>(List.of(1,2,3,4)).subSet(1,true,4,false); return v.subSet(4,false,4,false); });
+        r("add-at-exclusive-end", () -> { NavigableSet<Integer> t = new TreeSet<>(List.of(1,2)); NavigableSet<Integer> v = t.subSet(1,true,3,false); v.add(3); return t; });
+        // A write through the FACE of a sub-view reaches the map underneath.
+        r("submap-keyset-remove", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2,"c",3)); m.subMap("a","c").keySet().remove("b"); return m; });
+        r("submap-values-remove", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2,"c",3)); m.subMap("a","c").values().remove(2); return m; });
+        r("submap-entryset-removeIf", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2)); m.subMap("a","c").entrySet().removeIf(e -> e.getValue() == 2); return m; });
+        r("headmap-values-remove", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2,"c",3)); m.headMap("c").values().remove(1); return m; });
+        r("descending-keyset-remove", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2)); m.descendingMap().keySet().remove("a"); return m; });
+        r("submap-keyset-clear", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2,"c",3)); m.subMap("a","c").keySet().clear(); return m; });
+        r("submap-keyset-cursor-remove", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2,"c",3)); Iterator<String> it = m.subMap("a","c").keySet().iterator(); it.next(); it.remove(); return m; });
+        r("submap-entry-setvalue", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2)); for (Map.Entry<String,Integer> e : m.subMap("a","c").entrySet()) { e.setValue(9); } return m; });
+        r("submap-keyset-remove-outside", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2,"c",3)); return m.subMap("a","c").keySet().remove("c") + "/" + m; });
+        // ...and a cursor over a VIEW carries the BACKING's modCount.
+        r("sublist-cursor-cme", () -> { List<String> l = new ArrayList<>(List.of("a","b","c")); Iterator<String> it = l.subList(0, 2).iterator(); l.add("d"); return it.next(); });
+        r("sublist-cursor-cme-remove", () -> { List<String> l = new ArrayList<>(List.of("a","b","c")); Iterator<String> it = l.subList(0, 2).iterator(); it.next(); l.add("d"); it.remove(); return l; });
+        r("sortedview-cursor-cme", () -> { TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2)); Iterator<String> it = m.subMap("a","c").keySet().iterator(); m.put("z",9); return it.next(); });
+        r("sublist-cursor-ok", () -> { List<String> l = new ArrayList<>(List.of("a","b","c")); List<String> s = l.subList(0, 2); Iterator<String> it = s.iterator(); StringBuilder sb = new StringBuilder(); while (it.hasNext()) { sb.append(it.next()); } return sb; });
+        r("sublist-cursor-own-remove", () -> { List<String> l = new ArrayList<>(List.of("a","b","c")); Iterator<String> it = l.subList(0, 2).iterator(); it.next(); it.remove(); return l; });
+    }
+}
+"#
+);

@@ -8776,6 +8776,15 @@ impl<'run> Interpreter<'run> {
     /// `map.put(key, value)`, returning the previous value (or `null`).
     fn map_put(&mut self, map: HeapRef, key: JValue, value: JValue) -> Result<JValue, VmError> {
         use crate::value::HeapObject;
+        // A SORTED VIEW holds no entries of its own, so a write through one
+        // goes to the map underneath — which is how an ENTRY of a submap's
+        // `entrySet` writes back (`e.setValue(9)` reaches here with the view).
+        // The range is not re-checked: an entry taken OUT of the view is in it
+        // by construction, and an explicit `put` on a view checks before it
+        // calls this.
+        if let Some((backing, ..)) = self.sorted_view_parts(map) {
+            return self.map_put(backing, key, value);
+        }
         if matches!(self.heap.get(map), Some(HeapObject::TreeMap { .. })) {
             return self.tree_map_put(map, key, value);
         }
@@ -10208,13 +10217,15 @@ impl<'run> Interpreter<'run> {
                         "java.lang.UnsupportedOperationException",
                     )));
                 }
-                if !self.sorted_bounds_admit(backing, lo, hi, *element)? {
+                // An ELEMENT, not a new bound: the view's own exclusivity
+                // decides, which is the inclusive question.
+                if !self.sorted_bounds_admit(backing, lo, hi, *element, true)? {
                     return Err(range_error("key out of range"));
                 }
                 JValue::Int(i32::from(self.tree_set_add(backing, *element)?))
             }
             ("put", [key, value]) => {
-                if !self.sorted_bounds_admit(backing, lo, hi, *key)? {
+                if !self.sorted_bounds_admit(backing, lo, hi, *key, true)? {
                     return Err(range_error("key out of range"));
                 }
                 self.map_put(backing, *key, *value)?
@@ -10535,23 +10546,33 @@ impl<'run> Interpreter<'run> {
     /// `inRange`. A value outside is not merely absent from the view: putting
     /// or adding one is an `IllegalArgumentException`, and a nested view may
     /// not name one as its own bound.
+    /// Whether a NEW bound may sit where it is asked to, inside the view being
+    /// narrowed. A JDK asks two different questions (`NavigableSubMap.inRange
+    /// (key, inclusive)`): an INCLUSIVE new bound must be a key the view would
+    /// admit, exclusivity and all, while an EXCLUSIVE one is checked against
+    /// the CLOSED range — so a sub-range may end exactly where the view it
+    /// narrows ends, which is the ordinary way to narrow one from the front.
+    /// Asking the inclusive question for both refused `subSet(2, 5).subSet(3,
+    /// 5)` and `headSet(3).headSet(3)` — "toKey out of range", about a range
+    /// that is plainly inside.
     fn sorted_bounds_admit(
         &mut self,
         backing: HeapRef,
         lo: Option<crate::value::SortedBound>,
         hi: Option<crate::value::SortedBound>,
         value: JValue,
+        inclusive: bool,
     ) -> Result<bool, VmError> {
         let comparator = self.sorted_backing_comparator(backing);
         if let Some(bound) = lo {
             let ordering = self.compare_with(value, bound.value, comparator)?;
-            if ordering < 0 || (ordering == 0 && !bound.inclusive) {
+            if ordering < 0 || (ordering == 0 && inclusive && !bound.inclusive) {
                 return Ok(false);
             }
         }
         if let Some(bound) = hi {
             let ordering = self.compare_with(value, bound.value, comparator)?;
-            if ordering > 0 || (ordering == 0 && !bound.inclusive) {
+            if ordering > 0 || (ordering == 0 && inclusive && !bound.inclusive) {
                 return Ok(false);
             }
         }
@@ -10618,7 +10639,7 @@ impl<'run> Interpreter<'run> {
             // lands on is what the direction decides.
             ("headSet" | "headMap", [end] | [end, _]) => {
                 let inclusive = matches!(args, [_, JValue::Int(1)]);
-                if !self.sorted_bounds_admit(backing, lo, hi, *end)? {
+                if !self.sorted_bounds_admit(backing, lo, hi, *end, inclusive)? {
                     return Err(range_error("toKey out of range"));
                 }
                 if descending {
@@ -10629,7 +10650,7 @@ impl<'run> Interpreter<'run> {
             }
             ("tailSet" | "tailMap", [start] | [start, _]) => {
                 let inclusive = !matches!(args, [_, JValue::Int(0)]);
-                if !self.sorted_bounds_admit(backing, lo, hi, *start)? {
+                if !self.sorted_bounds_admit(backing, lo, hi, *start, inclusive)? {
                     return Err(range_error("fromKey out of range"));
                 }
                 if descending {
@@ -10639,7 +10660,7 @@ impl<'run> Interpreter<'run> {
                 }
             }
             ("subSet" | "subMap", [start, end]) => {
-                self.check_sorted_span(backing, lo, hi, *start, *end, descending)?;
+                self.check_sorted_span(backing, lo, hi, *start, true, *end, false, descending)?;
                 if descending {
                     (bound(*end, false), bound(*start, true), descending)
                 } else {
@@ -10648,7 +10669,9 @@ impl<'run> Interpreter<'run> {
             }
             ("subSet" | "subMap", [start, JValue::Int(start_in), end, JValue::Int(end_in)]) => {
                 let (start_in, end_in) = (*start_in == 1, *end_in == 1);
-                self.check_sorted_span(backing, lo, hi, *start, *end, descending)?;
+                self.check_sorted_span(
+                    backing, lo, hi, *start, start_in, *end, end_in, descending,
+                )?;
                 if descending {
                     (bound(*end, end_in), bound(*start, start_in), descending)
                 } else {
@@ -10665,13 +10688,16 @@ impl<'run> Interpreter<'run> {
     /// The two checks a `subSet`/`subMap` makes before it builds anything: the
     /// ends must be the right way round, and both must lie inside the view
     /// being narrowed.
+    #[allow(clippy::too_many_arguments)] // a range is a pair of (value, inclusive)
     fn check_sorted_span(
         &mut self,
         backing: HeapRef,
         lo: Option<crate::value::SortedBound>,
         hi: Option<crate::value::SortedBound>,
         start: JValue,
+        start_inclusive: bool,
         end: JValue,
+        end_inclusive: bool,
         descending: bool,
     ) -> Result<(), VmError> {
         let comparator = self.sorted_backing_comparator(backing);
@@ -10682,10 +10708,10 @@ impl<'run> Interpreter<'run> {
         if (descending && span < 0) || (!descending && span > 0) {
             return Err(range_error("fromKey > toKey"));
         }
-        if !self.sorted_bounds_admit(backing, lo, hi, start)? {
+        if !self.sorted_bounds_admit(backing, lo, hi, start, start_inclusive)? {
             return Err(range_error("fromKey out of range"));
         }
-        if !self.sorted_bounds_admit(backing, lo, hi, end)? {
+        if !self.sorted_bounds_admit(backing, lo, hi, end, end_inclusive)? {
             return Err(range_error("toKey out of range"));
         }
         Ok(())
@@ -13999,6 +14025,20 @@ impl<'run> Interpreter<'run> {
     }
 
     fn map_remove_at(&mut self, map: HeapRef, at: usize) -> JValue {
+        // A SORTED VIEW has no storage of its own: an index into it is an
+        // index into the SLICE, and removing means removing from the map
+        // underneath. Falling through did nothing at all, so
+        // `m.subMap("a", "c").keySet().remove("b")` left the map as it was.
+        if let Some((backing, ..)) = self.sorted_view_parts(map) {
+            let entries = self.map_entries(map);
+            let Some((key, _)) = entries.get(at).copied() else {
+                return JValue::NULL;
+            };
+            return match self.map_find(backing, key) {
+                Ok(Some(at)) => self.map_remove_at(backing, at),
+                _ => JValue::NULL,
+            };
+        }
         match self.heap.get_mut(map) {
             Some(
                 crate::value::HeapObject::HashMap(entries)
@@ -14249,6 +14289,17 @@ impl<'run> Interpreter<'run> {
             }
             // `remove`/`clear` on a view DO write through to the map, as Java's.
             ("clear", []) => {
+                // ...and the keySet of a SUB-VIEW clears the slice, not the
+                // whole map: `m.subMap("a", "c").keySet().clear()` leaves
+                // everything from "c" on. Falling through cleared NOTHING.
+                if let Some((backing, ..)) = self.sorted_view_parts(map) {
+                    for (key, _) in self.map_entries(map) {
+                        if let Some(at) = self.map_find(backing, key)? {
+                            self.map_remove_at(backing, at);
+                        }
+                    }
+                    return Ok(Answered::Void);
+                }
                 match self.heap.get_mut(map) {
                     Some(HeapObject::HashMap(entries)) => entries.clear(),
                     // A TreeMap's view clears its sorted entry vector — this
