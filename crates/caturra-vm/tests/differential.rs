@@ -60610,3 +60610,139 @@ public class LV {
 }
 "#
 );
+
+// What a library value carries through a lambda's PARAMETER.
+//
+// A new sweep (`scripts/sweep/answers.py`) calls every method caturra answers
+// with the receiver read out of a lambda's parameter, and assigns the answer
+// to the type a JDK declares for it — the assignment is what demands the type,
+// where printing would not. It found four runtime defects that no typing
+// question would have.
+//
+// `asIterator()` RENAMED its receiver. A JDK wraps the enumeration in an
+// anonymous `Enumeration$1` that delegates to it; recorded as a view class on
+// the enumeration instead, every later `e.hasMoreElements()` was a
+// ClassCastException — the value no longer answered to the type it was
+// declared as. It is a transparent alias now, so one cursor still answers both
+// names, each keeps its own class, and the alias prints its own.
+//
+// An enumeration CURSOR did not wear `Enumeration`. Only the interface was
+// listed among the library faces, and the class a value actually wears is
+// `Vector$1` or `Hashtable$Enumerator` — so `Enumeration e = v.elements()`
+// read through a lambda was a ClassCastException about the one interface the
+// value exists to implement.
+//
+// A TYPED `hasNextX` leaves its match behind. `hasNextInt(); match()` is the
+// token in a JDK and was "No match result available" here; the untyped
+// `hasNext()`, `hasNext(pattern)` and `hasNextBoolean()` leave nothing, which
+// the javadoc does not say either way. `hasNextLine()` leaves the LINE.
+//
+// ...and `Scanner.nextFloat()` answered a `double` in a lambda body, which is
+// the one width the method has.
+differential_test!(
+    what_a_value_carries_through_a_lambda,
+    "VC",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class VC {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static String named(Object o) { return o.getClass().getName(); }
+    public static void main(String[] args) {
+        // `asIterator()` leaves its receiver alone.
+        r("tokenizer-class", () -> {
+            StringTokenizer t = new StringTokenizer("a b c");
+            Iterator<Object> it = t.asIterator();
+            return named(t) + "/" + named(it) + "/" + t.countTokens() + "/" + it.next() + "/" + t.nextToken();
+        });
+        r("enumeration-class", () -> {
+            Enumeration<String> e = new Vector<>(List.of("x", "y")).elements();
+            Iterator<String> it = e.asIterator();
+            return named(e) + "/" + named(it) + "/" + e.hasMoreElements() + "/" + it.next();
+        });
+        r("hashtable-keys", () -> {
+            Hashtable<String, Integer> h = new Hashtable<>();
+            h.put("k", 1);
+            Enumeration<String> e = h.keys();
+            return named(e) + "/" + e.hasMoreElements() + "/" + e.nextElement();
+        });
+
+        // ...and a cursor wears `Enumeration`, so it survives a lambda.
+        r("enumeration-through-lambda", () -> {
+            Enumeration<String> e = new Vector<>(List.of("x")).elements();
+            return Stream.of(e).map(x -> x.hasMoreElements()).findFirst().get();
+        });
+        r("enumeration-next", () -> {
+            Enumeration<String> e = new Vector<>(List.of("x")).elements();
+            Object v = Stream.of(e).map(x -> x.nextElement()).findFirst().get();
+            return v;
+        });
+        r("enumeration-instanceof", () -> {
+            Object e = new Vector<>(List.of("x")).elements();
+            return (e instanceof Enumeration) + "/" + (e instanceof Iterator);
+        });
+        // A `Hashtable`'s enumerator implements BOTH interfaces, and an EMPTY
+        // one answers `Collections$EmptyEnumeration`, which implements only
+        // the older. Measured; the names say nothing either way.
+        r("hashtable-enumerator-faces", () -> {
+            Hashtable<String, Integer> h = new Hashtable<>();
+            h.put("k", 1);
+            Object e = h.keys();
+            return e.getClass().getName() + "/" + (e instanceof Iterator) + "/" + (e instanceof Enumeration);
+        });
+        r("empty-hashtable-faces", () -> {
+            Object e = new Hashtable<String, Integer>().keys();
+            return e.getClass().getName() + "/" + (e instanceof Iterator) + "/" + (e instanceof Enumeration);
+        });
+        r("vector-enumerator-faces", () -> {
+            Object e = new Vector<String>().elements();
+            return e.getClass().getName() + "/" + (e instanceof Iterator) + "/" + (e instanceof Enumeration);
+        });
+        r("alias-faces", () -> {
+            Object it = new Vector<>(List.of("x")).elements().asIterator();
+            return it.getClass().getName() + "/" + (it instanceof Iterator);
+        });
+        r("tokenizer-through-lambda", () -> {
+            StringTokenizer t = new StringTokenizer("a b");
+            int v = Stream.of(t).map(x -> x.countTokens()).findFirst().get();
+            return v;
+        });
+        r("tokenizer-instanceof", () -> {
+            Object t = new StringTokenizer("a b");
+            return t instanceof Enumeration;
+        });
+
+        // A typed `hasNextX` leaves its match; the untyped ones do not.
+        r("fresh-match", () -> new Scanner("7 ab").match().group());
+        r("hasNext-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNext(); return s.match().group(); });
+        r("hasNextPattern-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNext("ab"); return s.match().group(); });
+        r("hasNextBoolean-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextBoolean(); return s.match().group(); });
+        r("hasNextInt-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextInt(); return s.match().group(); });
+        r("hasNextLong-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextLong(); return s.match().group(); });
+        r("hasNextDouble-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextDouble(); return s.match().group(); });
+        r("hasNextFloat-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextFloat(); return s.match().group(); });
+        r("hasNextShort-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextShort(); return s.match().group(); });
+        r("hasNextByte-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextByte(); return s.match().group(); });
+        r("hasNextBigInteger-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextBigInteger(); return s.match().group(); });
+        r("hasNextBigDecimal-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextBigDecimal(); return s.match().group(); });
+        r("hasNextLine-match", () -> { Scanner s = new Scanner("7 ab"); s.hasNextLine(); return s.match().group(); });
+        r("failed-hasNextInt-match", () -> { Scanner s = new Scanner("ab 7"); s.hasNextInt(); return s.match().group(); });
+        r("next-match", () -> { Scanner s = new Scanner("7 ab"); s.next(); return s.match().group(); });
+        r("probe-then-read", () -> { Scanner s = new Scanner("7 ab"); s.hasNextInt(); return s.nextInt() + "/" + s.next(); });
+        r("probe-positions", () -> { Scanner s = new Scanner("7 ab"); s.hasNextInt(); return s.match().start() + "-" + s.match().end(); });
+
+        // A scanner's own widths, read through a lambda.
+        r("scanner-float", () -> { Scanner s = new Scanner("2.5"); float v = Stream.of(s).map(x -> x.nextFloat()).findFirst().get(); return v; });
+        r("scanner-double", () -> { Scanner s = new Scanner("2.5"); double v = Stream.of(s).map(x -> x.nextDouble()).findFirst().get(); return v; });
+        r("scanner-short", () -> { Scanner s = new Scanner("4"); short v = Stream.of(s).map(x -> x.nextShort()).findFirst().get(); return v; });
+        r("scanner-byte", () -> { Scanner s = new Scanner("4"); byte v = Stream.of(s).map(x -> x.nextByte()).findFirst().get(); return v; });
+        r("scanner-biginteger", () -> { Scanner s = new Scanner("40"); java.math.BigInteger v = Stream.of(s).map(x -> x.nextBigInteger()).findFirst().get(); return v; });
+    }
+}
+"#
+);

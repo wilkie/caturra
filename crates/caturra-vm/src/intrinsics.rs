@@ -7934,6 +7934,15 @@ fn scanner_method(
         }
         "hasNextLine" => {
             let has = scanner_peek_line(heap, console, receiver)?;
+            // ...and it leaves the LINE as the match, the way the typed token
+            // probes leave their token.
+            if has {
+                let (buffer, pos, _) = scanner_state(heap, receiver);
+                let rest = &buffer[pos..];
+                let line = rest.split('\n').next().unwrap_or(rest);
+                let line = line.strip_suffix('\r').unwrap_or(line).to_owned();
+                scanner_record_match(heap, receiver, &line, pos);
+            }
             Ok(Some(JValue::Int(i32::from(has))))
         }
         "nextLong" => {
@@ -7949,10 +7958,9 @@ fn scanner_method(
         }
         "hasNextLong" => {
             let radix = scanner_radix_arg(heap, receiver, args)?;
-            let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token
-                .and_then(|t| scanner_ungroup(&t))
-                .is_some_and(|t| i64::from_str_radix(&t, radix).is_ok());
+            let ok = scanner_probe(heap, console, receiver, |t| {
+                scanner_ungroup(t).is_some_and(|t| i64::from_str_radix(&t, radix).is_ok())
+            })?;
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         // The two BIG numbers. They were refused with "BigInteger is not
@@ -7978,10 +7986,10 @@ fn scanner_method(
         }
         "hasNextBigInteger" => {
             let radix = scanner_radix_arg(heap, receiver, args)?;
-            let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token
-                .and_then(|t| scanner_ungroup(&t))
-                .is_some_and(|t| crate::bigint::BigInt::parse(&t, radix).is_some());
+            let ok = scanner_probe(heap, console, receiver, |t| {
+                scanner_ungroup(t)
+                    .is_some_and(|t| crate::bigint::BigInt::parse(&t, radix).is_some())
+            })?;
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextBigDecimal" => {
@@ -8004,10 +8012,9 @@ fn scanner_method(
             ))))
         }
         "hasNextBigDecimal" => {
-            let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token
-                .and_then(|t| scanner_ungroup(&t))
-                .is_some_and(|t| crate::decimal::BigDec::parse(&t).is_ok());
+            let ok = scanner_probe(heap, console, receiver, |t| {
+                scanner_ungroup(t).is_some_and(|t| crate::decimal::BigDec::parse(&t).is_ok())
+            })?;
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextFloat" => {
@@ -8018,11 +8025,7 @@ fn scanner_method(
             })?;
             Ok(Some(JValue::Float(value)))
         }
-        "hasNextFloat" => {
-            let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token.is_some_and(|t| is_java_float_token(&t));
-            Ok(Some(JValue::Int(i32::from(ok))))
-        }
+
         // The narrow integers read in the scanner's radix like every other
         // integer read — the argument's, or `useRadix`'s. They parsed base ten
         // whatever the radix was, so `useRadix(16)` then `nextByte()` on "7f"
@@ -8054,11 +8057,11 @@ fn scanner_method(
                 (i32::from(i8::MIN), i32::from(i8::MAX))
             };
             let radix = scanner_radix_arg(heap, receiver, args)?;
-            let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token
-                .and_then(|t| scanner_ungroup(&t))
-                .and_then(|t| i64::from_str_radix(&t, radix).ok())
-                .is_some_and(|v| v >= i64::from(lo) && v <= i64::from(hi));
+            let ok = scanner_probe(heap, console, receiver, |t| {
+                scanner_ungroup(t)
+                    .and_then(|t| i64::from_str_radix(&t, radix).ok())
+                    .is_some_and(|v| v >= i64::from(lo) && v <= i64::from(hi))
+            })?;
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextBoolean" => {
@@ -8152,10 +8155,9 @@ fn scanner_method(
             // is ten until a program says otherwise. It reaches the INTEGER
             // reads only — a JDK's `useRadix(16)` leaves `nextDouble` decimal.
             let radix = scanner_radix_arg(heap, receiver, args)?;
-            let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token
-                .and_then(|t| scanner_ungroup(&t))
-                .is_some_and(|t| i32::from_str_radix(&t, radix).is_ok());
+            let ok = scanner_probe(heap, console, receiver, |t| {
+                scanner_ungroup(t).is_some_and(|t| i32::from_str_radix(&t, radix).is_ok())
+            })?;
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextDouble" => {
@@ -8167,9 +8169,10 @@ fn scanner_method(
             })?;
             Ok(Some(JValue::Double(value)))
         }
-        "hasNextDouble" => {
-            let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token.is_some_and(|t| is_java_float_token(&t));
+        // The two FLOATING reads ask the same question of the token: a JDK's
+        // `Float` and `Double` patterns are the same pattern.
+        "hasNextDouble" | "hasNextFloat" => {
+            let ok = scanner_probe(heap, console, receiver, is_java_float_token)?;
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         _ => Err(VmError::UnknownIntrinsic(format!("Scanner.{method}"))),
@@ -8812,6 +8815,29 @@ fn is_java_float_token(token: &str) -> bool {
 /// Every read that succeeds passes through here — a token's, and a line's with
 /// its terminator — so no path can set the cursor without saying what it just
 /// consumed.
+/// A TYPED `hasNextX` — one that runs a pattern over the token — leaves the
+/// match behind for `match()` to answer, exactly as a `next*` does. The
+/// UNTYPED `hasNext()` and `hasNextBoolean()` do not, and neither does
+/// `hasNext(pattern)`: measured against a JDK, which the javadoc leaves
+/// unsaid. Peeking alone recorded nothing, so `hasNextInt(); match()` was
+/// "No match result available" where a JDK answers the token.
+fn scanner_probe(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+    ok: impl FnOnce(&str) -> bool,
+) -> Result<bool, VmError> {
+    let Some((token, consumed)) = scanner_scan(heap, console, receiver)? else {
+        return Ok(false);
+    };
+    if !ok(&token) {
+        return Ok(false);
+    }
+    let (_, pos, _) = scanner_state(heap, receiver);
+    scanner_record_match(heap, receiver, &token, pos + consumed - token.len());
+    Ok(true)
+}
+
 fn scanner_record_match(heap: &mut Heap, receiver: HeapRef, text: &str, start: usize) {
     if let Some(HeapObject::Scanner { matched, .. }) = heap.get_mut(receiver) {
         *matched = Some((text.to_owned(), start, start + text.len()));
@@ -9566,6 +9592,17 @@ pub(crate) fn begin_walk(heap: &mut Heap, reference: HeapRef) -> Result<(), VmEr
     Ok(())
 }
 
+/// `asIterator()` — Java 9's bridge from an `Enumeration` to an `Iterator`.
+/// A JDK's is an anonymous `Enumeration$1` that DELEGATES to the enumeration,
+/// so the two share one cursor and each keeps its own class. caturra models
+/// the delegation with a transparent alias: every read unwraps to the
+/// enumeration, and the alias alone carries `Enumeration$1`.
+pub(crate) fn enumeration_iterator(heap: &mut Heap, receiver: HeapRef) -> HeapRef {
+    let alias = heap.alloc(HeapObject::SynchronizedView(receiver));
+    heap.set_view_class(alias, "java/util/Enumeration$1");
+    alias
+}
+
 pub(crate) fn check_comodification(
     heap: &Heap,
     source: HeapRef,
@@ -9904,12 +9941,16 @@ fn iterator_method(
     // `asIterator()`, Java 9's bridge between the two names, is that cursor
     // itself. (Its `remove` still refuses: an enumerator writes nothing.)
     if method == "asIterator" {
-        // A JDK WRAPS the enumeration in an anonymous `Enumeration$1`; here
-        // the same cursor answers both names, so the wrapper is recorded as a
-        // view class rather than built — the object is the same, and only its
-        // `getClass()` differs.
-        heap.set_view_class(receiver, "java/util/Enumeration$1");
-        return Ok(Some(JValue::Ref(Some(receiver))));
+        // A JDK WRAPS the enumeration in an anonymous `Enumeration$1` that
+        // delegates to it. Recorded as a view class ON THE RECEIVER instead,
+        // the wrapper renamed the enumeration itself: every later
+        // `e.hasMoreElements()` was a ClassCastException, because the value
+        // no longer answered to the type it was declared as. The wrapper is a
+        // transparent ALIAS — one cursor still answers both names, so the
+        // state is shared — and only the alias carries the new class.
+        return Ok(Some(JValue::Ref(Some(enumeration_iterator(
+            heap, receiver,
+        )))));
     }
     let method = match method {
         "hasMoreElements" => "hasNext",
@@ -17490,7 +17531,23 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
                 "java.util.regex.Matcher$ImmutableMatchResult@{:x}",
                 identity_hash(reference)
             ),
-            _ => format!("object@{reference:x}"),
+            // An object with no text of its own prints what `Object.toString`
+            // prints — its CLASS and its identity hash — and the class is the
+            // one `getClass()` answers, view name and all. A bare "object@…"
+            // named nothing at all, and the one value that reaches here with a
+            // name worth printing is the `asIterator()` alias.
+            _ => crate::interpreter::heap_binary_name(heap, reference)
+                .strip_prefix("java.lang.Object")
+                .map_or_else(
+                    || {
+                        format!(
+                            "{}@{:x}",
+                            crate::interpreter::heap_binary_name(heap, reference),
+                            identity_hash(reference)
+                        )
+                    },
+                    |_| format!("object@{reference:x}"),
+                ),
         },
         other => format!("{other:?}"),
     }
@@ -19031,10 +19088,9 @@ fn tokenizer_method(
         // `hasNext`/`next` read the two names below.
         // The same wrapper an `Enumeration`'s own `asIterator` records: one
         // cursor answers both names here, so only its class differs.
-        "asIterator" => {
-            heap.set_view_class(receiver, "java/util/Enumeration$1");
-            Ok(Some(JValue::Ref(Some(receiver))))
-        }
+        "asIterator" => Ok(Some(JValue::Ref(Some(enumeration_iterator(
+            heap, receiver,
+        ))))),
         "hasMoreTokens" | "hasMoreElements" | "hasNext" => {
             Ok(Some(JValue::Int(i32::from(next(pos).is_some()))))
         }

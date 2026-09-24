@@ -1659,7 +1659,15 @@ fn scanner_answer(read: &str) -> Option<TypeRef> {
         "nextLine" | "next" => TypeRef::Named(String::from("String")),
         "nextInt" => TypeRef::Int,
         "nextLong" => TypeRef::Long,
-        "nextDouble" | "nextFloat" => TypeRef::Double,
+        "nextDouble" => TypeRef::Double,
+        // `nextFloat()` answers a FLOAT, and reading it as a double meant
+        // `float f = in.nextFloat()` inside a lambda was "Double cannot be
+        // converted to float" — about the one width the method has.
+        "nextFloat" => TypeRef::Float,
+        "nextShort" => TypeRef::Short,
+        "nextByte" => TypeRef::Byte,
+        "nextBigInteger" => TypeRef::Named(String::from("BigInteger")),
+        "nextBigDecimal" => TypeRef::Named(String::from("BigDecimal")),
         "nextBoolean" => TypeRef::Boolean,
         _ => return None,
     })

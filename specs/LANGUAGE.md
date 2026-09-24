@@ -15720,6 +15720,58 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### What a value carries through a lambda (2026-09-24)
+
+The ad-hoc probe that found the last unit became an instrument.
+`scripts/sweep/answers.py` calls every method caturra answers with the
+receiver read out of a LAMBDA'S PARAMETER, and ASSIGNS the answer to the type
+a JDK declares for it — the assignment is what demands the type, where
+printing it would not (`println` takes an `Object`, so a lost element type
+prints the right thing). `behaviour.py` asks the other half: it writes the
+receiver out in full, so the call's type comes from the expression.
+
+The first run read a thousand answers and found four runtime defects that no
+typing question would have reached.
+
+**`asIterator()` renamed its receiver.** A JDK wraps the enumeration in an
+anonymous `Enumeration$1` that delegates to it; caturra recorded that wrapper
+as a view class ON THE ENUMERATION, so every later `e.hasMoreElements()` was a
+ClassCastException — the value no longer answered to the type it was declared
+as, and a whole class's sweep died at the first call. It is a transparent
+ALIAS now: one cursor still answers both names, each keeps its own class, and
+the alias prints its own (which took the renderer, the opaque display and the
+wrapper-forwarding rule to agree, because all three peeled it first).
+
+**An enumeration CURSOR did not wear `Enumeration`.** Only the interface was
+listed among the library faces, and the class such a value actually wears is
+`Vector$1`, `Hashtable$Enumerator` or `Collections$EmptyEnumeration` — so
+`Enumeration e = v.elements()` read through a lambda was a ClassCastException
+about the one interface the value exists to implement. The three differ, and
+only a measurement says how: a `Vector`'s is an `Enumeration` and nothing
+else, a `Hashtable`'s implements BOTH, and an EMPTY `Hashtable` answers
+`Collections$EmptyEnumeration`, which is the older interface only.
+
+**A typed `hasNextX` leaves its match behind.** `hasNextInt(); match()` is the
+token in a JDK and was "No match result available" here. The untyped
+`hasNext()`, `hasNext(pattern)` and `hasNextBoolean()` leave nothing, and
+`hasNextLine()` leaves the LINE — measured, because the javadoc says nothing
+either way.
+
+...and `Scanner.nextFloat()` answered a `double` in a lambda body, which is
+the one width the method has.
+
+Pinned as `what_a_value_carries_through_a_lambda` (thirty-five calls).
+
+**What the sweep reports rather than gates.** A REFUSAL — an answer the lambda
+pass has no type for — is a measurement, not a regression: a thousand of them
+say how much of the library's surface a value cannot yet carry through a
+lambda's parameter, which is a backlog to work through unit by unit. The gate
+is the DIVERGENCES: an answer both engines give, differently. Two are declared
+with their reasons — every stream caturra makes is named
+`ReferencePipeline$Head` where a JDK names it by family AND by the op that
+produced it, and a `BitSet` is stored as the words that HOLD bits, so the
+ALLOCATED count `size()` reports is not derivable from it.
+
 ### A library value in a lambda body, and a StringBuffer as an element (2026-09-24)
 
 The `StringBuilder` gap the inference unit ended on was one of a family. A

@@ -4292,15 +4292,29 @@ impl<'run> Interpreter<'run> {
     /// needs.
     fn builtin_iteration_face(&self, reference: HeapRef, target: &str) -> bool {
         use crate::value::HeapObject as H;
+        // The cursor a legacy collection's `elements()`/`keys()` hands back is
+        // an `Enumeration` and NOT an `Iterator`: Java keeps the two apart
+        // however alike they read, and caturra builds ONE cursor for both — so
+        // the recorded class is what tells them apart. (The alias
+        // `asIterator()` answers is the other direction of the same fact.)
+        // The same namer `getClass()` uses: a legacy cursor's class comes from
+        // the KIND it records, not from a view class, so reading the view
+        // class alone found nothing and every enumeration was an `Iterator`.
+        let wears = self.object_class_name(reference);
         let object = self.heap.get(reference);
         match target {
             // A `Scanner` IS an `Iterator<String>` — it implements the
             // interface, which is what `hasNext`/`next`/`remove` on one are —
             // but it is not a cursor OVER a collection, so it is named here
             // rather than caught by the kind test.
-            "java/util/Iterator" | "Iterator" => {
-                matches!(object, Some(H::Iterator { .. } | H::Scanner { .. }))
-            }
+            "java/util/Iterator" | "Iterator" => match wears.as_str() {
+                "java/util/Enumeration$1" => true,
+                // A `Vector`'s is an `Enumeration` and nothing else; a
+                // `Hashtable`'s implements BOTH, which is measured and not
+                // guessable from the pair's names.
+                "java/util/Vector$1" | "java/util/Collections$EmptyEnumeration" => false,
+                _ => matches!(object, Some(H::Iterator { .. } | H::Scanner { .. })),
+            },
             "java/util/ListIterator" | "ListIterator" => {
                 matches!(object, Some(H::Iterator { .. }))
             }
@@ -4628,7 +4642,20 @@ impl<'run> Interpreter<'run> {
         // opaque fallback and printed `object@e` wherever the render was
         // reached through a value (`%s`, `append`, an element of another
         // collection) rather than through its own `toString`.
-        let reference = self.heap.unwrapped(reference);
+        // ...but only where the wrapper has CONTENTS to render. The alias
+        // `asIterator()` hands back delegates to a CURSOR, which has none: a
+        // JDK's `Enumeration$1` prints the default `getClass()@hash`, and
+        // peeling first printed the enumeration's class instead of the
+        // wrapper's.
+        let peeled = self.heap.unwrapped(reference);
+        let reference = if matches!(
+            self.heap.get(peeled),
+            Some(HeapObject::Iterator { .. } | HeapObject::StringTokenizer { .. })
+        ) {
+            reference
+        } else {
+            peeled
+        };
         // A `Class` renders as `Class.toString()` — "interface X" for an
         // interface, which only the class table can tell (the heap-only
         // display path always says "class").
@@ -16503,7 +16530,26 @@ impl<'run> Interpreter<'run> {
         // because naming the wrapper is the one thing the object is for.
         let receiver = match receiver {
             Some(reference) if method_name != "getClass" => {
-                Some(self.unwrap_synchronized(reference))
+                let inner = self.unwrap_synchronized(reference);
+                // ...and `toString` on the alias `asIterator()` hands back.
+                // A JDK's `Enumeration$1` has no text of its own, so it
+                // prints its OWN class and hash; delegating printed the
+                // enumeration's class instead. A synchronized COLLECTION
+                // still delegates, because there its text IS the contents.
+                if method_name == "toString"
+                    && reference != inner
+                    && matches!(
+                        self.heap.get(inner),
+                        Some(
+                            crate::value::HeapObject::Iterator { .. }
+                                | crate::value::HeapObject::StringTokenizer { .. }
+                        )
+                    )
+                {
+                    Some(reference)
+                } else {
+                    Some(inner)
+                }
             }
             _ => receiver,
         };
@@ -23468,8 +23514,29 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         // `Collection` and not a `Set` — the same reading, one wrapper out.
         | "java/util/Collections$UnmodifiableCollection" => &["java/util/Collection"],
         "java/util/HashMap" | "java/util/Hashtable" => &["java/util/Map", "java/lang/Cloneable"],
-        // An `Enumeration` here IS a cursor, so it answers to both names.
+        // An `Enumeration` here IS a cursor, so it answers to both names —
+        // and so do the cursor CLASSES a legacy collection's `elements()` and
+        // `keys()` hand back, which is the name such a value actually wears.
+        // Only the interface was listed, so `Enumeration e = v.elements()`
+        // through a lambda's parameter was a ClassCastException, about the
+        // one interface the value exists to implement.
         "java/util/Enumeration" => &["java/util/Iterator"],
+        // ...and the cursor CLASSES a legacy collection's `elements()` and
+        // `keys()` hand back, which is the name such a value actually wears.
+        // Only the interface was listed, so `Enumeration e = v.elements()`
+        // read through a lambda's parameter was a ClassCastException, about
+        // the one interface the value exists to implement. An `Enumeration`
+        // is NOT an `Iterator` in Java, however alike the two read, and these
+        // classes say so where the interface's own entry cannot.
+        // ...and an EMPTY `Hashtable` answers `Collections$EmptyEnumeration`,
+        // which is an `Enumeration` and not an `Iterator` — the non-empty
+        // one's `Enumerator` is both. Measured; the names say nothing.
+        "java/util/Vector$1" | "java/util/Collections$EmptyEnumeration" => {
+            &["java/util/Enumeration"]
+        }
+        // A `Hashtable`'s enumerator implements BOTH interfaces — measured,
+        // and not guessable from the pair's names.
+        "java/util/Hashtable$Enumerator" => &["java/util/Enumeration", "java/util/Iterator"],
         "java/util/LinkedHashMap" => &["java/util/HashMap", "java/util/Map", "java/lang/Cloneable"],
         "java/util/Collections$UnmodifiableMap"
         | "java/util/Collections$SingletonMap"
