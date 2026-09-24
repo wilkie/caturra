@@ -15709,6 +15709,32 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A type variable is within its own bound (2026-09-24)
+
+The same lens as the views, pointed at the type system: a program that
+composes a bounded generic class, a generic method over it, wildcards in both
+directions, a nested generic registry, an overridden default and a method
+reference. It was refused outright — by one check, with one message: "type
+argument \0Wildcard\0=Shape is not within bounds of type-variable T", which
+is an internal spelling reaching a reader.
+
+`<S extends Shape> Box<S>` for a `Box<T extends Shape>` is within the bound —
+the variable's own bound is what decides, and the check was comparing the
+ERASURE sentinel against the class it had to satisfy. Three rules now, all of
+them javac's: a wildcard argument is taken whatever the bound is (`Box<?>`,
+`Box<? super Sq>` — the check happens where such a value is used); a type
+variable is judged by the bound it carries; and a CLASS's own variable carries
+no bound at all (`Registry<K, R>` inside `Registry<K, V>` is a different
+sentinel), so refusing one would be a guess.
+
+The message loses the variable's NAME, which javac prints ("type argument S is
+not within bounds") — the erasure keeps only the bound by the time this check
+runs, so it says what it knows rather than inventing a name. The verdict is
+javac's in all four shapes: an unbounded `<S>` and an `<S extends
+Comparable<S>>` are still refused.
+
+Pinned as `generics_and_inheritance_composed`.
+
 ### A view of a view (2026-09-24)
 
 Views compose, and every probe so far took one at a time. Twenty-four

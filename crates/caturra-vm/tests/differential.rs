@@ -59633,3 +59633,81 @@ public class VV {
 }
 "#
 );
+
+// Generics, inheritance and lambdas COMPOSED — a bounded generic class that is
+// `Iterable`, a generic method over it, wildcards in both directions, a nested
+// generic registry, an overridden default, a method reference to a generic
+// method. The whole program was refused by one check: a type VARIABLE used as
+// a type argument (`<S extends Shape> Box<S>`, for a `Box<T extends Shape>`)
+// was not within its own bound, and the message leaked the erasure's internal
+// spelling ("type argument \0Wildcard\0=Shape"). A variable is judged by the
+// bound it carries; a CLASS's own variable carries none, so refusing one would
+// be a guess; and a wildcard argument is always taken, as javac takes it.
+differential_test!(
+    generics_and_inheritance_composed,
+    "GB",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class GB {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    interface Shape extends Comparable<Shape> { double area(); default String tag() { return "shape:" + area(); } }
+    static class Sq implements Shape {
+        final double side;
+        Sq(double side) { this.side = side; }
+        public double area() { return side * side; }
+        public int compareTo(Shape o) { return Double.compare(area(), o.area()); }
+        public String toString() { return "Sq" + side; }
+    }
+    static class Big extends Sq { Big(double s) { super(s * 2); } public String tag() { return "big:" + area(); } public String toString() { return "Big" + side; } }
+    static class Box<T extends Shape> implements Iterable<T> {
+        private final List<T> items = new ArrayList<>();
+        Box<T> add(T item) { items.add(item); return this; }
+        public Iterator<T> iterator() { return items.iterator(); }
+        T largest() { return Collections.max(items); }
+        <R> List<R> map(Function<? super T, ? extends R> f) { List<R> out = new ArrayList<>(); for (T t : items) { out.add(f.apply(t)); } return out; }
+        double total(ToDoubleFunction<? super T> f) { double n = 0; for (T t : items) { n += f.applyAsDouble(t); } return n; }
+    }
+    static <T extends Comparable<? super T>> T maxOf(List<? extends T> items) { return Collections.max(items); }
+    static double sum(List<? extends Shape> shapes) { double n = 0; for (Shape s : shapes) { n += s.area(); } return n; }
+    static void fill(List<? super Sq> into) { into.add(new Sq(1)); }
+    static class Registry<K, V> {
+        private final Map<K, List<V>> byKey = new LinkedHashMap<>();
+        void put(K key, V value) { byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(value); }
+        List<V> get(K key) { return byKey.getOrDefault(key, List.of()); }
+        <R> Registry<K, R> mapValues(Function<V, R> f) { Registry<K, R> out = new Registry<>(); byKey.forEach((k, vs) -> vs.forEach(v -> out.put(k, f.apply(v)))); return out; }
+        public String toString() { return byKey.toString(); }
+    }
+    public static void main(String[] args) {
+        r("box-largest", () -> new Box<Sq>().add(new Sq(2)).add(new Sq(3)).largest());
+        r("box-map", () -> new Box<Sq>().add(new Sq(2)).map(Sq::area));
+        r("box-map-method-ref", () -> new Box<Sq>().add(new Sq(2)).map(Object::toString));
+        r("box-total", () -> new Box<Sq>().add(new Sq(2)).add(new Sq(3)).total(Shape::area));
+        r("box-foreach", () -> { StringBuilder sb = new StringBuilder(); for (Shape s : new Box<Sq>().add(new Sq(1))) { sb.append(s.tag()); } return sb; });
+        r("box-of-subclass", () -> new Box<Big>().add(new Big(1)).largest().tag());
+        r("maxOf-wildcard", () -> maxOf(List.of(new Sq(1), new Sq(5))));
+        r("maxOf-subclass", () -> maxOf(new ArrayList<Big>(List.of(new Big(1), new Big(2)))));
+        r("sum-wildcard", () -> sum(List.of(new Sq(2), new Big(1))));
+        r("fill-super", () -> { List<Shape> shapes = new ArrayList<>(); fill(shapes); return shapes.toString(); });
+        r("registry", () -> { Registry<String, Sq> reg = new Registry<>(); reg.put("a", new Sq(1)); reg.put("a", new Sq(2)); return reg.get("a").size() + "/" + reg; });
+        r("registry-mapvalues", () -> { Registry<String, Sq> reg = new Registry<>(); reg.put("a", new Sq(3)); return reg.mapValues(Sq::area).toString(); });
+        r("override-default", () -> new Big(1).tag() + "/" + new Sq(2).tag());
+        r("polymorphic-sort", () -> { List<Shape> l = new ArrayList<>(List.of(new Big(1), new Sq(1))); Collections.sort(l); return l.toString(); });
+        r("comparator-of-super", () -> { Comparator<Shape> byArea = Comparator.comparingDouble(Shape::area); List<Sq> l = new ArrayList<>(List.of(new Sq(3), new Sq(1))); l.sort(byArea); return l.toString(); });
+        r("bounded-stream", () -> new Box<Sq>().add(new Sq(2)).map(Shape::tag).toString());
+        r("nested-generic-call", () -> { Registry<String, List<Sq>> reg = new Registry<>(); reg.put("k", List.of(new Sq(1))); return reg.get("k").get(0).size(); });
+        r("instanceof-generic", () -> { Object o = new Box<Sq>(); return (o instanceof Box) + "/" + (o instanceof Iterable); });
+        r("array-of-generic", () -> { @SuppressWarnings("unchecked") Box<Sq>[] boxes = new Box[1]; boxes[0] = new Box<Sq>().add(new Sq(1)); return boxes[0].largest().toString(); });
+        r("raw-use", () -> { @SuppressWarnings("rawtypes") Box raw = new Box(); raw.add(new Sq(1)); return raw.largest().toString(); });
+        r("wildcard-capture", () -> { List<? extends Shape> l = List.of(new Sq(1)); Shape s = l.get(0); return s.area(); });
+        r("supplier-of-generic", () -> { Supplier<Box<Sq>> f = Box::new; return f.get().add(new Sq(4)).largest().toString(); });
+        r("bifunction-generic", () -> { BiFunction<Box<Sq>, Sq, Box<Sq>> f = Box::add; return f.apply(new Box<>(), new Sq(9)).largest().toString(); });
+    }
+}
+"#
+);

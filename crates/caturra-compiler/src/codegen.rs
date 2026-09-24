@@ -5183,6 +5183,47 @@ fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
                 let Some(bound) = bound else {
                     continue;
                 };
+                // A WILDCARD or a type VARIABLE as the argument. javac takes
+                // `Box<?>` and `Box<? super Sq>` whatever the bound is (the
+                // check happens where such a value is used), and judges a
+                // variable by ITS OWN bound: `<S extends Shape> Box<S>` is
+                // within `T extends Shape` and was refused here — by a message
+                // that leaked the sentinel's spelling, "type argument
+                // \0Wildcard\0=Shape", which reads as an internal error.
+                // A CLASS's own type variable, which is a different sentinel
+                // and carries no bound at all: `Registry<K, R>` inside
+                // `Registry<K, V>`. Nothing here knows what `R` is bounded by,
+                // so refusing would be a guess — and the guess it made leaked
+                // the sentinel too ("type argument \0TypeVar0").
+                if let TypeRef::Named(name) | TypeRef::Generic { base: name, .. } = arg
+                    && crate::parser::typevar_index(name).is_some()
+                {
+                    continue;
+                }
+                if let TypeRef::Named(name) | TypeRef::Generic { base: name, .. } = arg
+                    && let Some((variance, written_bound)) = crate::ast::wildcard_parts(name)
+                {
+                    if matches!(variance, '?' | '-') {
+                        continue;
+                    }
+                    let satisfied = table
+                        .class_id(written_bound)
+                        .zip(table.class_id(bound))
+                        .is_some_and(|(have, want)| table.is_subtype(have, want));
+                    if satisfied {
+                        continue;
+                    }
+                    // The variable's own name is gone by now (the erasure
+                    // keeps only its bound), and javac names it — so this says
+                    // what it knows rather than inventing one.
+                    return Some(format!(
+                        "type argument is not within bounds of type-variable {}",
+                        info.type_param_bounds
+                            .iter()
+                            .position(|b| b.as_deref() == Some(bound.as_str()))
+                            .map_or_else(|| String::from("T"), type_param_letter),
+                    ));
+                }
                 let Some(elem) = elem_from_type_arg(arg, table) else {
                     continue;
                 };
