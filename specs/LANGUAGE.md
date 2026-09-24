@@ -15706,6 +15706,34 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The sweep's two runs shared a directory (2026-09-23)
+
+Writing the option and attribute tails into the behaviour sweep — every
+overload the last two units made reachable, which had been sitting on the
+never-compared list as though the method were unmeasured — turned up a defect
+in the sweep itself. `Files.copy(a, b)` answered the copy on a JDK and
+`FileAlreadyExistsException` here; so did `move`. The calls are right: the
+HARNESS ran both engines in one temporary directory, JDK first, and
+`compatrun` stages every file beside the program into caturra's filesystem —
+so caturra started from whatever the JDK's run had just written. A probe that
+writes a file was comparing two different starting states.
+
+A directory each now. Nothing else moved, which is the useful part of the
+answer: the contamination could only reach a probe that writes files, and
+`java.nio.file.Files` is the only class whose bank does.
+
+`Files.createDirectories` is declared rather than fixed. A JDK answers the
+path AS WRITTEN when nothing above it had to be made, and
+`dir.toAbsolutePath()` when a parent did — so the same call answers `a/b` or
+`/home/…/a/b` depending on what was already there, and the absolute half is
+the host's working directory, which caturra has none of.
+
+The never-compared list is 85 → 60, and 7475 → 7511 calls compared. What is
+left is the genuine non-goals — a `CharBuffer` read, a `Module`, a byte
+channel, a symbolic link, an attribute view, a `DirectoryStream`, a
+`Spliterator`, a `URI`, a `ZoneId` — each of which says so by name when a
+program writes it.
+
 ### Where a file call can write (2026-09-23)
 
 The three refusals the last unit wrote down — `Files.write(path, byte[])`,

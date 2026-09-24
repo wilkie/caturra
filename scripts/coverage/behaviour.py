@@ -284,8 +284,14 @@ KNOWN = [
         "a lambda's class is its address in a JDK, different on every run",
     ),
     (
-        r"^java\.io\.File\.(getAbsolute|getCanonical)|^java\.nio\.file\.Path\.toAbsolutePath",
-        "caturra's filesystem is rooted at / and has no working directory",
+        r"^java\.io\.File\.(getAbsolute|getCanonical)|^java\.nio\.file\.Path\.toAbsolutePath"
+        r"|^java\.nio\.file\.Files\.createDirectories",
+        "caturra's filesystem is rooted at / and has no working directory — and "
+        "`createDirectories` is where that shows through a call that is not "
+        "about paths at all: a JDK answers the path AS WRITTEN when nothing "
+        "above it had to be made, and `dir.toAbsolutePath()` when a parent "
+        "did — so the same call answers `a/b` or `/home/.../a/b` depending on "
+        "what was already there",
     ),
     (
         r"^java\.util\.Comparator\.(naturalOrder|reverseOrder|nullsFirst|nullsLast)",
@@ -713,6 +719,172 @@ WRITTEN = {
     "java.util.stream.IntStream.flatMap(java.util.function.IntFunction)": [
         "{r}.flatMap(v -> java.util.stream.IntStream.of(v, v + 1)).sum()",
     ],
+    # The OPTION and ATTRIBUTE tails. Every one of these is the same call the
+    # bank already exercises with an empty tail, so it sat on the
+    # never-compared list as though the method were unmeasured — and the
+    # options are exactly where a write's behaviour differs. Each writes its
+    # own file, because both engines run the probe in an empty directory.
+    "java.nio.file.Files.exists(java.nio.file.Path,[Ljava.nio.file.LinkOption;)": [
+        "java.nio.file.Files.exists(java.nio.file.Path.of(\"nope-e\"),"
+        " java.nio.file.LinkOption.NOFOLLOW_LINKS)",
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"ex.txt\");"
+        " java.nio.file.Files.writeString(p, \"x\");"
+        " return java.nio.file.Files.exists(p, java.nio.file.LinkOption.NOFOLLOW_LINKS); }",
+    ],
+    "java.nio.file.Files.notExists(java.nio.file.Path,[Ljava.nio.file.LinkOption;)": [
+        "java.nio.file.Files.notExists(java.nio.file.Path.of(\"nope-n\"),"
+        " java.nio.file.LinkOption.NOFOLLOW_LINKS)",
+    ],
+    "java.nio.file.Files.isDirectory(java.nio.file.Path,[Ljava.nio.file.LinkOption;)": [
+        "{ java.nio.file.Files.createDirectory(java.nio.file.Path.of(\"isd\"));"
+        " return java.nio.file.Files.isDirectory(java.nio.file.Path.of(\"isd\"),"
+        " java.nio.file.LinkOption.NOFOLLOW_LINKS); }",
+        "java.nio.file.Files.isDirectory(java.nio.file.Path.of(\"nope-d\"),"
+        " java.nio.file.LinkOption.NOFOLLOW_LINKS)",
+    ],
+    "java.nio.file.Files.isRegularFile(java.nio.file.Path,[Ljava.nio.file.LinkOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"isr.txt\");"
+        " java.nio.file.Files.writeString(p, \"x\");"
+        " return java.nio.file.Files.isRegularFile(p,"
+        " java.nio.file.LinkOption.NOFOLLOW_LINKS); }",
+    ],
+    # The tree walk: how DEEP it goes, and the option that asks to follow
+    # links a JDK has and this filesystem does not.
+    "java.nio.file.Files.walk(java.nio.file.Path,[Ljava.nio.file.FileVisitOption;)": [
+        "{ java.nio.file.Files.createDirectories(java.nio.file.Path.of(\"wa/in\"));"
+        " java.nio.file.Files.writeString(java.nio.file.Path.of(\"wa/in/a.txt\"), \"x\");"
+        " return java.nio.file.Files.walk(java.nio.file.Path.of(\"wa\"),"
+        " java.nio.file.FileVisitOption.FOLLOW_LINKS).count(); }",
+    ],
+    "java.nio.file.Files.walk(java.nio.file.Path,int,[Ljava.nio.file.FileVisitOption;)": [
+        "{ java.nio.file.Files.createDirectories(java.nio.file.Path.of(\"wb/in\"));"
+        " java.nio.file.Files.writeString(java.nio.file.Path.of(\"wb/in/a.txt\"), \"x\");"
+        " return java.nio.file.Files.walk(java.nio.file.Path.of(\"wb\"), 1).count(); }",
+        "{ java.nio.file.Files.createDirectories(java.nio.file.Path.of(\"wc/in\"));"
+        " return java.nio.file.Files.walk(java.nio.file.Path.of(\"wc\"), 0).count(); }",
+        "java.nio.file.Files.walk(java.nio.file.Path.of(\".\"), -1).count()",
+    ],
+    # The writes, each under the option that changes what it does.
+    "java.nio.file.Files.write(java.nio.file.Path,[B,[Ljava.nio.file.OpenOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"wr1.bin\");"
+        " java.nio.file.Files.write(p, new byte[] {65, 66});"
+        " return java.nio.file.Files.readString(p); }",
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"wr2.bin\");"
+        " java.nio.file.Files.write(p, new byte[] {65});"
+        " java.nio.file.Files.write(p, new byte[] {66},"
+        " java.nio.file.StandardOpenOption.APPEND);"
+        " return java.nio.file.Files.readString(p); }",
+        "java.nio.file.Files.write(java.nio.file.Path.of(\"wr3.bin\"), new byte[] {67},"
+        " java.nio.file.StandardOpenOption.APPEND).toString()",
+    ],
+    "java.nio.file.Files.write(java.nio.file.Path,java.lang.Iterable,"
+    "[Ljava.nio.file.OpenOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"wl1.txt\");"
+        " java.nio.file.Files.write(p, java.util.List.of(\"a\", \"b\"));"
+        " return java.nio.file.Files.readAllLines(p).toString(); }",
+    ],
+    "java.nio.file.Files.write(java.nio.file.Path,java.lang.Iterable,"
+    "java.nio.charset.Charset,[Ljava.nio.file.OpenOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"wl2.txt\");"
+        " java.nio.file.Files.write(p, java.util.List.of(\"a\"),"
+        " java.nio.charset.StandardCharsets.UTF_8,"
+        " java.nio.file.StandardOpenOption.CREATE);"
+        " return java.nio.file.Files.readString(p); }",
+    ],
+    "java.nio.file.Files.writeString(java.nio.file.Path,java.lang.CharSequence,"
+    "[Ljava.nio.file.OpenOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"ws1.txt\");"
+        " java.nio.file.Files.writeString(p, \"one\");"
+        " java.nio.file.Files.writeString(p, \"two\","
+        " java.nio.file.StandardOpenOption.APPEND);"
+        " return java.nio.file.Files.readString(p); }",
+    ],
+    "java.nio.file.Files.writeString(java.nio.file.Path,java.lang.CharSequence,"
+    "java.nio.charset.Charset,[Ljava.nio.file.OpenOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"ws2.txt\");"
+        " java.nio.file.Files.writeString(p, \"one\","
+        " java.nio.charset.StandardCharsets.UTF_8,"
+        " java.nio.file.StandardOpenOption.CREATE);"
+        " return java.nio.file.Files.readString(p); }",
+    ],
+    "java.nio.file.Files.newBufferedWriter(java.nio.file.Path,[Ljava.nio.file.OpenOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"nb1.txt\");"
+        " java.io.BufferedWriter w = java.nio.file.Files.newBufferedWriter(p);"
+        " w.write(\"z\"); w.close();"
+        " return java.nio.file.Files.readString(p); }",
+    ],
+    "java.nio.file.Files.newBufferedWriter(java.nio.file.Path,java.nio.charset.Charset,"
+    "[Ljava.nio.file.OpenOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"nb2.txt\");"
+        " java.io.BufferedWriter w = java.nio.file.Files.newBufferedWriter(p,"
+        " java.nio.charset.StandardCharsets.UTF_8);"
+        " w.write(\"z\"); w.close();"
+        " return java.nio.file.Files.readString(p); }",
+    ],
+    "java.nio.file.Files.copy(java.nio.file.Path,java.nio.file.Path,"
+    "[Ljava.nio.file.CopyOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"cp1.txt\");"
+        " java.nio.file.Files.writeString(p, \"x\");"
+        " return java.nio.file.Files.copy(p, java.nio.file.Path.of(\"cp2.txt\"))"
+        ".getFileName().toString(); }",
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"cp3.txt\");"
+        " java.nio.file.Files.writeString(p, \"x\");"
+        " java.nio.file.Files.writeString(java.nio.file.Path.of(\"cp4.txt\"), \"y\");"
+        " java.nio.file.Files.copy(p, java.nio.file.Path.of(\"cp4.txt\"),"
+        " java.nio.file.StandardCopyOption.REPLACE_EXISTING);"
+        " return java.nio.file.Files.readString(java.nio.file.Path.of(\"cp4.txt\")); }",
+    ],
+    "java.nio.file.Files.move(java.nio.file.Path,java.nio.file.Path,"
+    "[Ljava.nio.file.CopyOption;)": [
+        "{ java.nio.file.Path p = java.nio.file.Path.of(\"mv1.txt\");"
+        " java.nio.file.Files.writeString(p, \"x\");"
+        " java.nio.file.Files.move(p, java.nio.file.Path.of(\"mv2.txt\"));"
+        " return java.nio.file.Files.exists(p) + \"/\""
+        " + java.nio.file.Files.readString(java.nio.file.Path.of(\"mv2.txt\")); }",
+    ],
+    "java.nio.file.Files.createFile(java.nio.file.Path,"
+    "[Ljava.nio.file.attribute.FileAttribute;)": [
+        "java.nio.file.Files.createFile(java.nio.file.Path.of(\"cf1.txt\"))"
+        ".getFileName().toString()",
+    ],
+    "java.nio.file.Files.createDirectory(java.nio.file.Path,"
+    "[Ljava.nio.file.attribute.FileAttribute;)": [
+        "java.nio.file.Files.createDirectory(java.nio.file.Path.of(\"cd1\"))"
+        ".getFileName().toString()",
+        "java.nio.file.Files.createDirectory(java.nio.file.Path.of(\"cd2/inner\")).toString()",
+    ],
+    "java.nio.file.Files.createDirectories(java.nio.file.Path,"
+    "[Ljava.nio.file.attribute.FileAttribute;)": [
+        "java.nio.file.Files.createDirectories(java.nio.file.Path.of(\"cx/cy/cz\")).toString()",
+    ],
+    # The wrappers whose `compareTo` takes their OWN type, which the bank
+    # builds as an `int` and javac will not narrow.
+    "java.lang.Byte.compareTo(java.lang.Byte)": [
+        "{r}.compareTo(Byte.valueOf((byte) 2))",
+        "{r}.compareTo(Byte.valueOf((byte) -1))",
+    ],
+    "java.lang.Short.compareTo(java.lang.Short)": [
+        "{r}.compareTo(Short.valueOf((short) 2))",
+        "{r}.compareTo(Short.valueOf((short) -1))",
+    ],
+    "java.lang.Float.compareTo(java.lang.Float)": [
+        "{r}.compareTo(Float.valueOf(2.5f))",
+        "{r}.compareTo(Float.valueOf(Float.NaN))",
+    ],
+    # A `LocalDateTime` compared through the CHRONO interface it implements —
+    # the same call a program writes with two of them.
+    "java.time.LocalDateTime.compareTo(java.time.chrono.ChronoLocalDateTime)": [
+        "{r}.compareTo(java.time.LocalDateTime.of(2026, 2, 1, 0, 0))",
+    ],
+    "java.time.LocalDateTime.isAfter(java.time.chrono.ChronoLocalDateTime)": [
+        "{r}.isAfter(java.time.LocalDateTime.of(2026, 2, 1, 0, 0))",
+    ],
+    "java.time.LocalDateTime.isBefore(java.time.chrono.ChronoLocalDateTime)": [
+        "{r}.isBefore(java.time.LocalDateTime.of(2026, 2, 1, 0, 0))",
+    ],
+    "java.time.LocalDateTime.isEqual(java.time.chrono.ChronoLocalDateTime)": [
+        "{r}.isEqual(java.time.LocalDateTime.of(2026, 2, 1, 0, 0))",
+    ],
     # The one `Files` call whose argument is a set of permissions.
     "java.nio.file.Files.setPosixFilePermissions(java.nio.file.Path,java.util.Set)": [
         "java.nio.file.Files.setPosixFilePermissions(java.nio.file.Paths.get(\"a\"),"
@@ -867,11 +1039,24 @@ def javac_rejected_lines(stderr):
 def run_both(source):
     """(jdk stdout, caturra stdout) for one probe, or (None, reason)."""
     with tempfile.TemporaryDirectory() as directory:
-        path = os.path.join(directory, "Probe.java")
+        # A directory EACH. `compatrun` stages every file beside the program
+        # into caturra's filesystem, so running both engines in one directory
+        # handed caturra whatever the JDK's run had just written: a probe that
+        # copies `a.txt` to `b.txt` found `b.txt` already there and answered
+        # `FileAlreadyExistsException` where the JDK answered the copy. The
+        # two runs have to start from the same state, and the JDK's run cannot
+        # be it.
+        jdk_dir = os.path.join(directory, "jdk")
+        cat_dir = os.path.join(directory, "cat")
+        os.makedirs(jdk_dir)
+        os.makedirs(cat_dir)
+        path = os.path.join(jdk_dir, "Probe.java")
         with open(path, "w") as handle:
             handle.write(source)
+        with open(os.path.join(cat_dir, "Probe.java"), "w") as handle:
+            handle.write(source)
         built = subprocess.run(
-            ["javac", "-d", directory, path], capture_output=True, text=True, timeout=300
+            ["javac", "-d", jdk_dir, path], capture_output=True, text=True, timeout=300
         )
         if built.returncode != 0:
             return None, "javac: " + built.stderr.strip().splitlines()[0]
@@ -884,14 +1069,15 @@ def run_both(source):
         # crash, so the bisect drops the call that caused it.
         try:
             jdk = subprocess.run(
-                ["java", "-cp", directory, "Probe"],
-                capture_output=True, text=True, timeout=120, cwd=directory,
+                ["java", "-cp", jdk_dir, "Probe"],
+                capture_output=True, text=True, timeout=120, cwd=jdk_dir,
             ).stdout
         except subprocess.TimeoutExpired:
             return None, "a JDK did not finish in 120s"
         try:
             result = subprocess.run(
-                [ENGINE, path, "Probe"], capture_output=True, text=True, cwd=REPO, timeout=120
+                [ENGINE, os.path.join(cat_dir, "Probe.java"), "Probe"],
+                capture_output=True, text=True, cwd=REPO, timeout=120,
             )
         except subprocess.TimeoutExpired:
             return None, "caturra did not finish in 120s"
