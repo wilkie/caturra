@@ -9532,6 +9532,40 @@ fn view_map(heap: &Heap, source: HeapRef) -> Option<HeapRef> {
 /// exists so a program that mutates a collection while walking it fails HERE,
 /// loudly, instead of silently skipping an element — before this, removing
 /// during a for-each quietly skipped the next one, and adding looped forever.
+/// A walk of a view that BEGINS here, which the two kinds answer differently:
+/// a SORTED view takes a FRESH stamp (its cursors carry the tree's count and
+/// take it as they are built) while a `subList` is CHECKED against the one it
+/// was born with. A JDK reads a collection it was handed through an iterator,
+/// and a cursor over a stale sub-range throws in its constructor, so every
+/// library call that walks one throws before it answers.
+///
+/// Written here rather than in the interpreter so the two sides — a method on
+/// a collection, and a free function handed one (`String.join`) — ask the same
+/// question.
+pub(crate) fn begin_walk(heap: &mut Heap, reference: HeapRef) -> Result<(), VmError> {
+    use crate::value::HeapObject;
+    let inner = heap.unwrapped(reference);
+    // A face of a sorted view IS the view, for this.
+    let view = match heap.get(inner) {
+        Some(HeapObject::MapView { map, .. }) => *map,
+        _ => inner,
+    };
+    if let Some(HeapObject::SortedView { backing, .. }) = heap.get(view) {
+        let length = sorted_backing_pairs(heap, *backing).len();
+        if let Some(HeapObject::SortedView { seen, .. }) = heap.get_mut(view) {
+            *seen = length;
+        }
+    }
+    if matches!(
+        heap.get(inner),
+        Some(HeapObject::SubList { .. } | HeapObject::SortedView { .. })
+    ) {
+        let length = iterated_len(heap, inner);
+        return check_comodification(heap, inner, length);
+    }
+    Ok(())
+}
+
 pub(crate) fn check_comodification(
     heap: &Heap,
     source: HeapRef,
@@ -17245,11 +17279,16 @@ fn string_join(
         // `join(delimiter, Iterable)` takes ANY collection, so a Set or a
         // Deque reaches here too — `list_values` sees only the sequence kinds.
         match args.get(1) {
-            Some(JValue::Ref(Some(reference))) => match heap.list_values(*reference) {
-                Some(values) => values.clone(),
-                None => set_like_elements(heap, *reference)
-                    .ok_or_else(|| throw("java.lang.NullPointerException"))?,
-            },
+            Some(JValue::Ref(Some(reference))) => {
+                // `join` WALKS what it is handed, so a stale view ends it here
+                // — the same question every other library walk asks.
+                begin_walk(heap, *reference)?;
+                match heap.list_values(*reference) {
+                    Some(values) => values.clone(),
+                    None => set_like_elements(heap, *reference)
+                        .ok_or_else(|| throw("java.lang.NullPointerException"))?,
+                }
+            }
             _ => return Err(throw("java.lang.NullPointerException")),
         }
     } else {

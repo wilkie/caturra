@@ -15709,6 +15709,47 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### Every use of a stale sub-range (2026-09-24)
+
+The other cause the view fuzzer left. A JDK reads a collection it was HANDED
+through an iterator, and a cursor over a stale `subList` throws in its
+constructor — so a library call that walks one throws before it answers
+anything. Twenty-six of them did not: the six copy constructors,
+`addAll`/`removeAll`/`retainAll`, a `containsAll` argument,
+`Collections.max`/`min`/`frequency`/`disjoint`/`binarySearch`/`indexOfSubList`/`copy`,
+`String.join`, `List.copyOf`, `Set.copyOf`, `toArray()`, `toArray(T[])`,
+`equals` from the other side, and `Objects.hash`. Each read the elements
+straight out of the view and answered the window's contents, while
+`view.size()`, `view.get(0)` and a for-each over it all threw — the same
+collection, answering two ways depending on who asked.
+
+**The check belongs where the WALK is.** Spelled out per call it is a list to
+forget to add to, which is how twenty-six of them came to be missing. It is one
+function now, `begin_walk`, and the paths that walk ask it: the element reader
+every copying path already went through (`materialized_elements`, which is the
+CHECKED one now — the unchecked spelling exists for exactly one caller, the
+late-binding stream re-read, and says so), the `Collections` algorithms at
+their single entry, `String.join`, and `lists_equal`, the one place two lists
+are compared.
+
+**A sorted view answers the opposite way, and the same function says so.** It
+keeps no count of its own, so a walk that begins NOW takes a fresh stamp:
+`new TreeSet<>(headSet(k))` after a change to the tree copies rather than
+throwing, and so does every other call above. Written the same way for both
+kinds, either every sorted copy threw or every stale sub-range answered.
+
+**Two calls do not throw**, and both are a JDK's order of business rather than
+a rule about views. `AbstractList.equals` runs its `instanceof` BEFORE either
+cursor, so `stale.equals("x")` is a plain false — which is why the check sits
+in `lists_equal` and not at the receiver. And `ArrayList$SubList.replaceAll`
+writes the range through the root without ever asking the modCount, so
+`stale.replaceAll(f)` succeeds where `stale.removeIf(f)` throws. Measured, not
+derived.
+
+Pinned as `every_use_of_a_stale_range` (fifty-five calls), which pins the
+things that must NOT throw too: a view held as an ELEMENT is never walked, so
+`list.add(stale)`, `Optional.of(stale)` and `map.put(k, stale)` are ordinary.
+
 ### When a walk of a sorted view begins (2026-09-24)
 
 The first of the two causes the view fuzzer left open (see "A view behind a
@@ -15812,8 +15853,10 @@ Pinned as `a_view_behind_a_wrapper` (sixty-two calls). The fuzzer is
 `scripts/fuzz/views.py`, and it went from three divergences a seed to roughly
 one in four seeds.
 
-**What it still finds, named.** Two causes, both measured and left open for
-now rather than guessed at:
+**What it still finds, named.** Two causes, both measured. The second was
+closed the same day (see "When a walk of a sorted view begins" above), and so
+was a third the probes turned up while reducing them ("Every use of a stale
+sub-range"). The first is open:
 
 - **A modCount is a COUNTER, not a length.** caturra stamps a view with the
   backing's SIZE and compares sizes; a JDK compares a counter that every

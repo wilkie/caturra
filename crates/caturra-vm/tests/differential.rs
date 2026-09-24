@@ -60085,3 +60085,132 @@ public class SW {
 }
 "#
 );
+
+// Every use of a stale sub-range.
+//
+// A JDK reads a collection it was HANDED through an iterator, and a cursor
+// over a stale `subList` throws in its constructor. So a library call that
+// walks one throws before it answers anything: the six copy constructors,
+// `addAll`/`removeAll`/`retainAll`, a `containsAll` argument,
+// `Collections.max`/`min`/`frequency`/`disjoint`/`binarySearch`/`copy`,
+// `String.join`, `List.copyOf`, `toArray()`, `equals`, `Objects.hash`. Each of
+// those read the elements straight out of the view and quietly answered the
+// window's contents.
+//
+// The check belongs where the WALK is rather than at each caller — spelled
+// out per call it is a list to forget to add to — so it is one function,
+// `begin_walk`, asked by the reader every copying path already went through,
+// by the `Collections` algorithms, by `String.join` and by the one place two
+// lists are compared.
+//
+// A SORTED view answers the opposite way, and the same function says so: it
+// keeps no count of its own, so a walk that begins now takes a fresh stamp and
+// `new TreeSet<>(headSet(k))` after a change copies rather than throwing.
+//
+// Two calls do NOT throw, and both are a JDK's order of business rather than a
+// rule about views: `equals` runs its `instanceof` before either cursor, so a
+// non-List argument is a plain false; and `ArrayList$SubList.replaceAll`
+// writes the range through the root without ever asking the modCount.
+differential_test!(
+    every_use_of_a_stale_range,
+    "SR",
+    r#"
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class SR {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    // A sub-range whose backing has grown since.
+    static List<String> v() {
+        List<String> back = new ArrayList<>(List.of("a", "b", "c", "d"));
+        List<String> view = back.subList(0, 2);
+        back.add("z");
+        return view;
+    }
+    // A sorted view whose tree has grown since, which keeps no count.
+    static NavigableSet<String> s() {
+        NavigableSet<String> back = new TreeSet<>(List.of("a", "b", "c", "d"));
+        NavigableSet<String> view = back.headSet("c", false);
+        back.add("f");
+        return view;
+    }
+    public static void main(String[] args) {
+        // The copy constructors.
+        r("copy-arraylist", () -> new ArrayList<>(v()));
+        r("copy-linkedlist", () -> new LinkedList<>(v()));
+        r("copy-hashset", () -> new HashSet<>(v()).size());
+        r("copy-treeset", () -> new TreeSet<>(v()));
+        r("copy-arraydeque", () -> new ArrayDeque<>(v()).size());
+        r("copy-priorityqueue", () -> new PriorityQueue<>(v()).size());
+
+        // The bulk methods, with the view as the ARGUMENT.
+        r("addAll", () -> { List<String> t = new ArrayList<>(); t.addAll(v()); return t; });
+        r("addAll-set", () -> { Set<String> t = new HashSet<>(); t.addAll(v()); return t.size(); });
+        r("removeAll", () -> { List<String> t = new ArrayList<>(List.of("a")); t.removeAll(v()); return t; });
+        r("retainAll", () -> { List<String> t = new ArrayList<>(List.of("a")); t.retainAll(v()); return t; });
+        r("containsAll-arg", () -> new ArrayList<>(List.of("a", "b")).containsAll(v()));
+
+        // The algorithms.
+        r("max", () -> Collections.max(v()));
+        r("min", () -> Collections.min(v()));
+        r("frequency", () -> Collections.frequency(v(), "a"));
+        r("disjoint", () -> Collections.disjoint(v(), List.of("q")));
+        r("disjoint-second", () -> Collections.disjoint(List.of("q"), v()));
+        r("binarySearch", () -> Collections.binarySearch(v(), "a"));
+        r("indexOfSubList", () -> Collections.indexOfSubList(v(), List.of("a")));
+        r("copy-into", () -> { List<String> t = new ArrayList<>(List.of("q", "q", "q")); Collections.copy(t, v()); return t; });
+        r("sort", () -> { Collections.sort(v()); return "sorted"; });
+        r("reverse", () -> { Collections.reverse(v()); return "reversed"; });
+        r("fill", () -> { Collections.fill(v(), "x"); return "filled"; });
+        r("unmodifiable", () -> Collections.unmodifiableList(v()).size());
+
+        // The utilities.
+        r("string-join", () -> String.join(",", v()));
+        r("list-copyof", () -> List.copyOf(v()));
+        r("set-copyof", () -> Set.copyOf(v()).size());
+        r("toarray", () -> Arrays.toString(v().toArray()));
+        r("toarray-typed", () -> Arrays.toString(v().toArray(new String[0])));
+        r("objects-hash", () -> Objects.hash(v()) != 0);
+        r("objects-tostring", () -> Objects.toString(v()));
+        r("string-valueof", () -> String.valueOf(v()));
+        r("collect-joining", () -> v().stream().collect(Collectors.joining()));
+        r("forEach", () -> { StringBuilder o = new StringBuilder(); v().forEach(o::append); return o.toString(); });
+
+        // Equality, from both sides — and the `instanceof` that comes first.
+        r("view-equals-list", () -> v().equals(List.of("a", "b")));
+        r("list-equals-view", () -> List.of("a", "b").equals(v()));
+        r("arraylist-equals-view", () -> new ArrayList<>(List.of("a", "b")).equals(v()));
+        r("view-equals-string", () -> v().equals("x"));
+        r("view-equals-set", () -> v().equals(Set.of("a")));
+        r("view-in-set", () -> new HashSet<>(List.of(List.of("a", "b"))).contains(v()));
+        r("view-indexof", () -> new ArrayList<>(List.of(List.of("a", "b"))).indexOf(v()));
+        r("hashcode", () -> v().hashCode());
+
+        // The two that do NOT throw.
+        r("replaceAll", () -> { v().replaceAll(x -> x); return "replaced"; });
+        r("removeIf", () -> v().removeIf(x -> false));
+
+        // ...and a view held as an ELEMENT is never walked.
+        r("as-element", () -> { List<Object> t = new ArrayList<>(); t.add(v()); return t.size(); });
+        r("contains-probe", () -> List.of("a").contains(v()));
+        r("optional-of", () -> Optional.of(v()).isPresent());
+        r("map-value", () -> { Map<String, Object> m = new HashMap<>(); m.put("k", v()); return m.size(); });
+
+        // A SORTED view takes a fresh stamp instead, so none of these throw.
+        r("sorted-copy-treeset", () -> new TreeSet<>(s()));
+        r("sorted-copy-arraylist", () -> new ArrayList<>(s()));
+        r("sorted-addAll", () -> { Set<String> t = new HashSet<>(); t.addAll(s()); return t.size(); });
+        r("sorted-join", () -> String.join(",", s()));
+        r("sorted-max", () -> Collections.max(s()));
+        r("sorted-toarray", () -> Arrays.toString(s().toArray()));
+        r("sorted-stream", () -> s().stream().count());
+        r("sorted-equals", () -> s().equals(Set.of("a", "b")));
+        r("sorted-hashcode", () -> s().hashCode() == Set.of("a", "b").hashCode());
+    }
+}
+"#
+);

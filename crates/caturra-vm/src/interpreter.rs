@@ -3373,7 +3373,7 @@ impl<'run> Interpreter<'run> {
             let capacity = match (descriptor, args.first()) {
                 ("(I)V" | "(II)V", Some(JValue::Int(hint))) => usize::try_from(*hint).unwrap_or(0),
                 ("(Ljava/util/Collection;)V", Some(JValue::Ref(Some(source)))) => {
-                    self.materialized_elements(*source).len()
+                    self.materialized_elements(*source)?.len()
                 }
                 _ => 10,
             };
@@ -3400,7 +3400,7 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NullPointerException",
                 )));
             };
-            let items = self.materialized_elements(source);
+            let items = self.materialized_elements(source)?;
             match self.heap.get_mut(receiver) {
                 Some(
                     HeapObject::ArrayList(target)
@@ -3433,7 +3433,7 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NullPointerException",
                 )));
             };
-            let elements = self.materialized_elements(source);
+            let elements = self.materialized_elements(source)?;
             #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
             let hint = std::cmp::max((elements.len() as f32 / 0.75) as i32 + 1, 16);
             let linked = target_class == "java/util/LinkedHashSet";
@@ -3455,7 +3455,7 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NullPointerException",
                 )));
             };
-            let elements = self.materialized_elements(source);
+            let elements = self.materialized_elements(source)?;
             if let Some(HeapObject::LinkedList(values)) = self.heap.get_mut(receiver) {
                 *values = elements;
             }
@@ -3475,7 +3475,7 @@ impl<'run> Interpreter<'run> {
                         "java.lang.NullPointerException",
                     )));
                 };
-                let elements = self.materialized_elements(source);
+                let elements = self.materialized_elements(source)?;
                 if elements.iter().any(|v| matches!(v, JValue::Ref(None))) {
                     return Err(VmError::UncaughtException(String::from(
                         "java.lang.NullPointerException",
@@ -3520,7 +3520,7 @@ impl<'run> Interpreter<'run> {
                 {
                     *slot = comparator;
                 }
-                for element in self.collection_elements(source) {
+                for element in self.materialized_elements(source)? {
                     self.tree_set_add(receiver, element)?;
                 }
                 return Ok(None);
@@ -3622,7 +3622,7 @@ impl<'run> Interpreter<'run> {
                 {
                     *slot = comparator;
                 }
-                let elements = self.materialized_elements(source);
+                let elements = self.materialized_elements(source)?;
                 self.set_pq_heap(receiver, elements);
                 if !already_heaped {
                     self.pq_heapify(receiver)?;
@@ -4879,7 +4879,7 @@ impl<'run> Interpreter<'run> {
                         .flat_map(|(key, value)| [key, value])
                         .collect()
                 } else {
-                    self.materialized_elements(source)
+                    self.materialized_elements(source)?
                 };
                 let kind = match method_name {
                     "__listCopyOf" => "__listOf",
@@ -5238,6 +5238,21 @@ impl<'run> Interpreter<'run> {
         // Everything below reads, or writes, the list itself.
         let unmodifiable = self.is_unmodifiable_list(list);
         let reference = self.backing_list(list);
+        // Every algorithm below WALKS what it was handed, which is a cursor
+        // over it, which a JDK builds by reading the backing's modCount: so a
+        // stale `subList` ends the call before it answers. The writing
+        // algorithms already reached that through `sublist_range` above; the
+        // reading ones (`max`, `min`, `frequency`, `binarySearch`,
+        // `indexOfSubList`) read the elements straight out and answered.
+        self.begin_walk(reference)?;
+        // ...and the ones that take a SECOND collection walk that one too.
+        if matches!(
+            method_name,
+            "disjoint" | "copy" | "indexOfSubList" | "lastIndexOfSubList"
+        ) && let Some(JValue::Ref(Some(other))) = args.get(1).copied()
+        {
+            self.begin_walk(other)?;
+        }
         // The READ-ONLY algorithms (`max`/`min`/`frequency`/`disjoint`) are
         // declared over `Collection`, so their argument may be a set or any
         // other collection — `list_values` sees only list-shaped ones, and a
@@ -7775,6 +7790,14 @@ impl<'run> Interpreter<'run> {
     /// elements in the same order, each compared with `java_equals` (which
     /// recurses here for a nested collection).
     fn lists_equal(&mut self, a: HeapRef, b: HeapRef) -> Result<bool, VmError> {
+        // BOTH sides are walked — `AbstractList.equals` runs two cursors — and
+        // it is the only place two lists are compared, so both directions ask
+        // here: `stale.equals(l)` threw all along and `l.equals(stale)`
+        // answered true. The `instanceof` comes FIRST in a JDK, which is why
+        // the check belongs here and not at the receiver: `stale.equals("x")`
+        // is a plain false.
+        self.begin_walk(a)?;
+        self.begin_walk(b)?;
         let ours = self.list_items(a);
         let theirs = self.list_items(b);
         if ours.len() != theirs.len() {
@@ -7906,6 +7929,9 @@ impl<'run> Interpreter<'run> {
         if let Some(HeapObject::MapEntry { .. }) = self.heap.get(a) {
             return Ok(Some(self.entry_hash(a)?));
         }
+        // ...and a structural hash walks too, which is how `Objects.hash(v)`
+        // answered a number for a sub-range whose own `hashCode()` throws.
+        self.begin_walk(a)?;
         // The same three predicates the EQUALS beside this asks. Spelling
         // the kinds out here instead is how the two came apart: a `SubList`
         // hashed by its contents and compared by identity, and a
@@ -7995,7 +8021,16 @@ impl<'run> Interpreter<'run> {
             }
             _ => {}
         }
-        self.check_sublist_span(backing, seen)?;
+        // ...except `replaceAll`, which a JDK's `ArrayList$SubList` answers by
+        // writing the range through the root and never asking the modCount at
+        // all — `stale.replaceAll(f)` succeeds where `stale.removeIf(f)`
+        // throws. Measured, not derived.
+        // ...and `equals`, whose `instanceof` runs before either cursor: a
+        // JDK answers a plain false for a non-List argument, comodified or
+        // not. `lists_equal` asks once it knows there are two lists.
+        if !matches!(method, "replaceAll" | "equals") {
+            self.check_sublist_span(backing, seen)?;
+        }
         // Re-agree with the backing after a write THROUGH the view: the range
         // grew or shrank by `delta`, and so did the backing.
         let resize = |vm: &mut Self, delta: isize| {
@@ -8478,7 +8513,7 @@ impl<'run> Interpreter<'run> {
                 // keys and printed `[a, b]` where a JDK prints `[a=3, b=2]` —
                 // the same wrong-answer-with-no-error the copy CONSTRUCTORS
                 // were fixed for, in the paths that add rather than construct.
-                let incoming = self.materialized_elements(collection_argument(*other)?);
+                let incoming = self.materialized_elements(collection_argument(*other)?)?;
                 let changed = !incoming.is_empty();
                 if let Some(values) = self.heap.list_values_mut(receiver) {
                     values.extend(incoming);
@@ -8499,7 +8534,7 @@ impl<'run> Interpreter<'run> {
                         "java.lang.IndexOutOfBoundsException: Index: {index}, Size: {size}"
                     )));
                 }
-                let incoming = self.materialized_elements(collection_argument(*other)?);
+                let incoming = self.materialized_elements(collection_argument(*other)?)?;
                 let changed = !incoming.is_empty();
                 if let Some(values) = self.heap.list_values_mut(receiver) {
                     values.splice(at..at, incoming);
@@ -8510,7 +8545,7 @@ impl<'run> Interpreter<'run> {
             // contains each of the other's elements, so the probe is theirs.
             // The other side may be ANY collection, not only a list.
             ("containsAll", _, [other]) => {
-                let others = self.materialized_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?)?;
                 let mut all = true;
                 for theirs in others {
                     if !self.list_contains(receiver, theirs)? {
@@ -8524,7 +8559,7 @@ impl<'run> Interpreter<'run> {
             // contains each of ours, so here the probe is ours. Both report
             // whether the list changed.
             ("removeAll" | "retainAll", _, [other]) => {
-                let others = self.materialized_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?)?;
                 let keep_when_present = method_name == "retainAll";
                 let ours = self.list_items(receiver);
                 let mut kept = Vec::with_capacity(ours.len());
@@ -9476,7 +9511,7 @@ impl<'run> Interpreter<'run> {
             }
             ("addAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.materialized_elements(*source) {
+                for element in self.materialized_elements(*source)? {
                     changed |= self.set_add(receiver, element)?;
                 }
                 JValue::Int(i32::from(changed))
@@ -9499,7 +9534,7 @@ impl<'run> Interpreter<'run> {
             }
             ("containsAll", [JValue::Ref(Some(source))]) => {
                 let mut all = true;
-                for element in self.materialized_elements(*source) {
+                for element in self.materialized_elements(*source)? {
                     if self.map_find(receiver, element)?.is_none() {
                         all = false;
                         break;
@@ -9509,7 +9544,7 @@ impl<'run> Interpreter<'run> {
             }
             ("removeAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.materialized_elements(*source) {
+                for element in self.materialized_elements(*source)? {
                     if let Some(at) = self.map_find(receiver, element)? {
                         self.map_remove_at(receiver, at);
                         changed = true;
@@ -9518,7 +9553,7 @@ impl<'run> Interpreter<'run> {
                 JValue::Int(i32::from(changed))
             }
             ("retainAll", [JValue::Ref(Some(source))]) => {
-                let keep = self.materialized_elements(*source);
+                let keep = self.materialized_elements(*source)?;
                 let mut changed = false;
                 for element in self.collection_elements(receiver) {
                     let mut found = false;
@@ -9857,14 +9892,14 @@ impl<'run> Interpreter<'run> {
             }
             ("addAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.materialized_elements(*source) {
+                for element in self.materialized_elements(*source)? {
                     changed |= self.tree_set_add(receiver, element)?;
                 }
                 JValue::Int(i32::from(changed))
             }
             ("containsAll", [JValue::Ref(Some(source))]) => {
                 let mut all = true;
-                for element in self.materialized_elements(*source) {
+                for element in self.materialized_elements(*source)? {
                     if self.tree_set_index_of(receiver, element)?.is_none() {
                         all = false;
                         break;
@@ -9876,7 +9911,7 @@ impl<'run> Interpreter<'run> {
             // elements stay in sorted order, so the vector writes back whole.
             ("removeAll" | "retainAll", [other]) => {
                 let keep_when_present = method_name == "retainAll";
-                let others = self.materialized_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?)?;
                 let mut kept = Vec::new();
                 let mut changed = false;
                 for element in self.tree_set_values(receiver) {
@@ -10010,7 +10045,7 @@ impl<'run> Interpreter<'run> {
                 // An entrySet's ELEMENTS are entries; `collection_elements`
                 // gives a view's keys, so comparing them let a TreeSet of the
                 // map's keys equal its entrySet.
-                let theirs = self.materialized_elements(other);
+                let theirs = self.materialized_elements(other)?;
                 let mut equal =
                     self.is_set_like(other) && theirs.len() == self.tree_set_values(receiver).len();
                 if equal {
@@ -10347,7 +10382,7 @@ impl<'run> Interpreter<'run> {
                 } else {
                     // `AbstractSet.equals`: any Set of the same size holding
                     // them all, membership decided by THIS view's ordering.
-                    let theirs = self.materialized_elements(other);
+                    let theirs = self.materialized_elements(other)?;
                     let mut same = self.is_set_like(other) && theirs.len() == pairs.len();
                     if same {
                         for element in theirs {
@@ -10383,7 +10418,7 @@ impl<'run> Interpreter<'run> {
                 }
             }
             ("containsAll", [JValue::Ref(Some(source))]) => {
-                let theirs = self.materialized_elements(*source);
+                let theirs = self.materialized_elements(*source)?;
                 let mut all = true;
                 for element in theirs {
                     let mut found = false;
@@ -11122,7 +11157,7 @@ impl<'run> Interpreter<'run> {
             }
             ("addAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.materialized_elements(*source) {
+                for element in self.materialized_elements(*source)? {
                     self.pq_offer(receiver, element)?;
                     changed = true;
                 }
@@ -11133,7 +11168,7 @@ impl<'run> Interpreter<'run> {
             // the argument as the predicate.
             ("removeAll" | "retainAll", [other]) => {
                 let keep_when_present = method_name == "retainAll";
-                let others = self.materialized_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?)?;
                 let mut survivors = Vec::new();
                 let mut removed = false;
                 for element in self.pq_heap(receiver) {
@@ -11157,7 +11192,7 @@ impl<'run> Interpreter<'run> {
                 JValue::Int(i32::from(removed))
             }
             ("containsAll", [other]) => {
-                let others = self.materialized_elements(collection_argument(*other)?);
+                let others = self.materialized_elements(collection_argument(*other)?)?;
                 let mine = self.pq_heap(receiver);
                 let mut all = true;
                 'others: for candidate in others {
@@ -11270,7 +11305,7 @@ impl<'run> Interpreter<'run> {
             // the pipeline's lambda got a String where it expected a
             // `Map.Entry` and died on the cast. `materialized_elements` is that
             // same walk, and is what a terminal re-reads through.
-            let elements = self.materialized_elements(receiver);
+            let elements = self.materialized_elements(receiver)?;
             let length = iterated_len_of(&self.heap, receiver);
             let stream = self.heap.alloc(HeapObject::Stream {
                 source: crate::value::StreamSource::Fixed(elements),
@@ -11386,7 +11421,7 @@ impl<'run> Interpreter<'run> {
         };
         match self.stream_origins.get(&stream).copied() {
             Some(origin) => {
-                let mut elements = self.materialized_elements(origin.source);
+                let mut elements = self.materialized_elements_unchecked(origin.source);
                 // `Arrays.stream(a, from, to)` fixes its window when the
                 // stream is made and re-reads the ELEMENTS through it, so the
                 // slice is taken here rather than being copied out up front.
@@ -13964,7 +13999,32 @@ impl<'run> Interpreter<'run> {
     /// `new ArrayList<>(map.entrySet())` printed `[a, b]` where a JDK prints
     /// `[a=3, b=2]`. A wrong answer with no error, so the copying paths use
     /// this and the comparing paths keep the cheap one.
-    fn materialized_elements(&mut self, reference: HeapRef) -> Vec<JValue> {
+    /// A JDK reads a collection it was HANDED through an iterator, and a
+    /// cursor over a stale `subList` throws in its constructor — so every
+    /// library call that walks one throws before it answers: the six copy
+    /// constructors, `addAll`/`removeAll`/`retainAll`, a `containsAll`
+    /// argument, `String.join`, `Collections.max`, `toArray()`. Each of those
+    /// read the elements straight out and quietly answered the window's
+    /// contents. The check belongs HERE, where the walk is, rather than at
+    /// each caller — spelled out per call it would be a list to forget to add
+    /// to. ([`Self::materialized_elements_unchecked`] is the one caller that
+    /// must not ask: a stream BINDS at its terminal and does its own.)
+    fn materialized_elements(&mut self, reference: HeapRef) -> Result<Vec<JValue>, VmError> {
+        self.begin_walk(reference)?;
+        Ok(self.materialized_elements_unchecked(reference))
+    }
+
+    /// A walk of a view that BEGINS here, which the two kinds answer
+    /// differently: a sorted view takes a FRESH stamp, because its cursors
+    /// carry the tree's count and take it as they are built, while a sub-list
+    /// is CHECKED against the one it was born with. Written the same way at
+    /// both, either every `new ArrayList<>(headSet(k))` after a change threw
+    /// (a JDK copies it) or every one over a stale `subList` answered.
+    fn begin_walk(&mut self, reference: HeapRef) -> Result<(), VmError> {
+        intrinsics::begin_walk(&mut self.heap, reference)
+    }
+
+    fn materialized_elements_unchecked(&mut self, reference: HeapRef) -> Vec<JValue> {
         use crate::value::{HeapObject, MapViewKind};
         let entries_of = match self.heap.get(reference) {
             Some(HeapObject::MapView {
@@ -13974,7 +14034,7 @@ impl<'run> Interpreter<'run> {
             }) => Some(*map),
             Some(HeapObject::UnmodifiableSet(inner)) => {
                 let inner = *inner;
-                return self.materialized_elements(inner);
+                return self.materialized_elements_unchecked(inner);
             }
             _ => None,
         };
@@ -17337,7 +17397,7 @@ impl<'run> Interpreter<'run> {
             && self.try_collection_elements(receiver).is_some()
         {
             let values: Vec<JValue> = self
-                .materialized_elements(receiver)
+                .materialized_elements(receiver)?
                 .into_iter()
                 .map(|element| match element {
                     JValue::Ref(_) => element,
@@ -17363,7 +17423,7 @@ impl<'run> Interpreter<'run> {
             && let [JValue::Ref(model)] = args[..]
             && self.try_collection_elements(receiver).is_some()
         {
-            let elements = self.materialized_elements(receiver);
+            let elements = self.materialized_elements(receiver)?;
             let Some(model) = model else {
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.NullPointerException",
