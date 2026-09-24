@@ -60306,3 +60306,103 @@ public class CE {
 }
 "#
 );
+
+// A library container written inside a LAMBDA BODY.
+//
+// `x -> List.of(x)` had no type at all, so the stream it fed held `Object` and
+// the next call on it was "cannot find symbol" — about a method every list
+// has. `Optional.of(x)` beside it worked, and `Collections.emptyList()` too:
+// one family, half written down.
+//
+// Three things, each a different half of the same question.
+//
+// **What the factory answers.** The by-NAME table knew `Optional.of` and the
+// three `empty*` and not `List.of`, `Set.of`, `Map.of`, `Arrays.asList`,
+// `nCopies` or `singletonMap`. It also answers the RAW type, which is enough
+// to find `size()` on and not enough to read an element back out — so the
+// argument-typed readers (`Map.entry` already had one) now cover the whole
+// family, and the raw table is asked LAST rather than first, where it shadowed
+// them.
+//
+// **Which names are statics.** `Arrays`, `Collections`, `Objects` and
+// `Collectors` are NAMESPACES — every method each declares is static — so none
+// needs a list to keep current; written as one, `Collections::singletonMap`
+// read as an unbound INSTANCE reference on the stream's element. The three
+// collection interfaces are not namespaces, so `List::of` and its two siblings
+// are named, and `Optional::of` with them.
+//
+// **Where a reference is allowed.** `partitioningBy(String::isEmpty)` was
+// refused as "only allowed where a functional-interface type is expected",
+// about the position the same predicate as a bare lambda was already accepted
+// in: the arm built the erased lambda without first turning the reference into
+// one, which every other collector position does.
+//
+// ...and a diamond in a lambda body — `x -> new ArrayList<>(List.of(x))` —
+// takes its argument from the collection it copies, which is typed from the
+// lambda's PARAMETER and so from nothing the general reader can see.
+differential_test!(
+    a_container_in_a_lambda_body,
+    "CL",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class CL {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static <T, R> R firstOf(List<T> xs, Function<T, R> f) { return f.apply(xs.get(0)); }
+    public static void main(String[] args) {
+        // The factory, written inline, and its element read back OUT.
+        r("listof", () -> Stream.of("a").map(x -> List.of(x)).collect(Collectors.toList()).get(0).get(0).length());
+        r("setof", () -> Stream.of("a").map(x -> Set.of(x)).collect(Collectors.toList()).get(0).iterator().next().length());
+        r("mapof", () -> Stream.of("a").map(x -> Map.of(x, 1)).collect(Collectors.toList()).get(0).get("a") + 1);
+        r("aslist", () -> Stream.of("a").map(x -> Arrays.asList(x)).collect(Collectors.toList()).get(0).get(0).length());
+        r("listcopyof", () -> Stream.of("a").map(x -> List.copyOf(List.of(x))).collect(Collectors.toList()).get(0).get(0).length());
+        r("mapentry", () -> Stream.of("a").map(x -> Map.entry(x, 1)).collect(Collectors.toList()).get(0).getKey().length());
+        r("ofentries", () -> Stream.of("a").map(x -> Map.ofEntries(Map.entry(x, 1))).collect(Collectors.toList()).get(0).get("a") + 1);
+        r("singletonlist", () -> Stream.of("a").map(x -> Collections.singletonList(x)).collect(Collectors.toList()).get(0).get(0).length());
+        r("singletonmap", () -> Stream.of("a").map(x -> Collections.singletonMap(x, 1)).collect(Collectors.toList()).get(0).get("a") + 1);
+        r("ncopies", () -> Stream.of("a").map(x -> Collections.nCopies(2, x)).collect(Collectors.toList()).get(0).get(0).length());
+        r("unmodifiable", () -> Stream.of("a").map(x -> Collections.unmodifiableList(new ArrayList<>(List.of(x)))).collect(Collectors.toList()).get(0).get(0).length());
+        r("optional", () -> Stream.of("a").map(x -> Optional.of(x)).collect(Collectors.toList()).get(0).get().length());
+        r("diamond", () -> Stream.of("a").map(x -> new ArrayList<>(List.of(x))).collect(Collectors.toList()).get(0).get(0).length());
+        r("array", () -> Stream.of("a").map(x -> new String[] {x}).collect(Collectors.toList()).get(0)[0].length());
+        r("emptylist", () -> Stream.of("a").map(x -> Collections.emptyList()).collect(Collectors.toList()).get(0).size());
+
+        // The same factories in three other functional positions.
+        r("tomap-listof", () -> Stream.of("a").collect(Collectors.toMap(y -> y, x -> List.of(x))).get("a").get(0).length());
+        r("tomap-mapof", () -> Stream.of("a").collect(Collectors.toMap(y -> y, x -> Map.of(x, 1))).get("a").get("a") + 1);
+        r("tomap-optional", () -> Stream.of("a").collect(Collectors.toMap(y -> y, x -> Optional.of(x))).get("a").get().length());
+        r("mapping-listof", () -> Stream.of("a").collect(Collectors.groupingBy(y -> y, Collectors.mapping(x -> List.of(x), Collectors.toList()))).get("a").get(0).get(0).length());
+        r("own-helper", () -> firstOf(new ArrayList<>(List.of("a")), x -> List.of(x)).get(0).length());
+        r("flatmap", () -> Stream.of("a").flatMap(x -> List.of(x).stream()).collect(Collectors.toList()).get(0).length());
+        r("reduce", () -> Stream.of("a").map(x -> List.of(x)).reduce((p, q) -> p).get().get(0).length());
+        r("filter-after", () -> Stream.of("a").map(x -> List.of(x)).filter(y -> !y.isEmpty()).collect(Collectors.toList()).get(0).get(0).length());
+        r("peek-after", () -> Stream.of("a").map(x -> Map.of(x, 1)).peek(y -> {}).collect(Collectors.toList()).get(0).size());
+
+        // A method reference to a library static.
+        r("ref-optional", () -> Stream.of("a").map(Optional::of).collect(Collectors.toList()).get(0).get().length());
+        r("ref-listof", () -> Stream.of("a").map(List::of).collect(Collectors.toList()).get(0).get(0).length());
+        r("ref-setof", () -> Stream.of("a").map(Set::of).collect(Collectors.toList()).get(0).size());
+        r("ref-singletonlist", () -> Stream.of("a").map(Collections::singletonList).collect(Collectors.toList()).get(0).get(0).length());
+        r("ref-unmodifiable", () -> Stream.of("a").map(x -> new ArrayList<>(List.of(x))).map(Collections::unmodifiableList).collect(Collectors.toList()).get(0).get(0).length());
+        r("ref-tomap", () -> Stream.of("a").collect(Collectors.toMap(y -> y, List::of)).get("a").get(0).length());
+        r("ref-assigned", () -> { Function<String, Optional<String>> f = Optional::of; return f.apply("b").get().length(); });
+        r("ref-listof-assigned", () -> { Function<String, List<String>> g = List::of; return g.apply("c").get(0).length(); });
+        r("ref-newbuilder", () -> Stream.of("a").map(StringBuilder::new).collect(Collectors.toList()).get(0).length());
+        r("ref-objects", () -> Stream.of("a").map(Objects::toString).collect(Collectors.toList()).get(0).length());
+        r("ref-arrays", () -> Stream.of(new int[] {1, 2}).map(Arrays::toString).collect(Collectors.toList()).get(0).length());
+
+        // A method reference where a PREDICATE is expected.
+        r("partitioning-ref", () -> Stream.of("a").collect(Collectors.partitioningBy(String::isEmpty)).get(false).get(0).length());
+        r("partitioning-lambda", () -> Stream.of("a").collect(Collectors.partitioningBy(x -> x.isEmpty())).get(false).get(0).length());
+        r("partitioning-list", () -> Stream.of(new ArrayList<>(List.of("a"))).collect(Collectors.partitioningBy(List::isEmpty)).get(false).get(0).size());
+        r("filtering-ref", () -> Stream.of("a").collect(Collectors.filtering(String::isEmpty, Collectors.toList())).size());
+    }
+}
+"#
+);

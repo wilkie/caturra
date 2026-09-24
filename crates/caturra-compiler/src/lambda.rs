@@ -819,10 +819,13 @@ fn is_library_static(class: &str, method: &str) -> bool {
         );
     }
     let by_class = match class {
-        "Arrays" => matches!(
-            method,
-            "stream" | "asList" | "toString" | "deepToString" | "hashCode" | "deepHashCode"
-        ),
+        // `Arrays`, `Collections`, `Objects` and `Collectors` are NAMESPACES:
+        // every method each declares is static, so none of them needs a list
+        // to keep current. Written as one, `Arrays::equals` and
+        // `Collections::singletonMap` read as unbound INSTANCE references on
+        // the stream's element and were "cannot find symbol" — about a method
+        // the class plainly has.
+        "Arrays" | "Collections" | "Objects" | "Collectors" => true,
         "Character" => matches!(
             method,
             "isDigit"
@@ -838,44 +841,18 @@ fn is_library_static(class: &str, method: &str) -> bool {
                 | "getNumericValue"
         ),
         "String" => matches!(method, "join" | "format" | "copyValueOf"),
-        "Objects" => matches!(
-            method,
-            "isNull"
-                | "nonNull"
-                | "requireNonNull"
-                | "requireNonNullElse"
-                | "requireNonNullElseGet"
-                | "hash"
-                | "toString"
-        ),
         "Integer" | "Long" | "Short" | "Byte" => matches!(
             method,
             "toBinaryString" | "toHexString" | "toOctalString" | "bitCount" | "signum"
         ),
         "Boolean" => matches!(method, "logicalAnd" | "logicalOr" | "logicalXor"),
-        // The read-only WRAPPERS are here because they are what a
-        // `collectingAndThen` finisher is: `collectingAndThen(toSet(),
-        // Collections::unmodifiableSet)` is how a stream gathers into a set
-        // nobody can change.
-        "Collections" => matches!(
-            method,
-            "reverseOrder"
-                | "emptyList"
-                | "emptySet"
-                | "emptyMap"
-                | "unmodifiableList"
-                | "unmodifiableSet"
-                | "unmodifiableMap"
-                | "unmodifiableCollection"
-                | "unmodifiableSortedSet"
-                | "unmodifiableSortedMap"
-                | "max"
-                | "min"
-                | "nCopies"
-                | "singleton"
-                | "singletonList"
-                | "frequency"
-        ),
+        // The three collection INTERFACES are not namespaces — `size` and
+        // `get` are theirs too — so their Java 9 factories are named. Without
+        // them `Stream.of("a").map(List::of)` read as `x -> x.of()` and was
+        // "cannot find symbol: method of(), location: class String".
+        "List" | "Set" => matches!(method, "of" | "copyOf"),
+        "Map" => matches!(method, "of" | "copyOf" | "ofEntries" | "entry"),
+        "Optional" => matches!(method, "of" | "ofNullable" | "empty"),
         // `Pattern::compile` and `Pattern::quote` are statics; `matcher`,
         // `split` and the predicates beside them are not.
         "Pattern" => matches!(method, "compile" | "quote" | "matches"),
@@ -4767,6 +4744,20 @@ fn desugar_collector_shape(
     // `filtering(p, downstream)` — a predicate of the element, the same
     // shape `partitioningBy` takes in the same position.
     if matches!(method, "partitioningBy" | "filtering") && index == 0 {
+        // A method REFERENCE becomes the equivalent lambda first, exactly as
+        // a supplier, a finisher and a merge do. Without that step it reached
+        // the erasure unconverted and `partitioningBy(String::isEmpty)` was
+        // refused as "only allowed where a functional-interface type is
+        // expected" — about the position a bare lambda was already accepted
+        // in, two lines down.
+        if matches!(&args[index], Expr::MethodRef { .. }) {
+            let synth = Sam {
+                method: String::from("test"),
+                params: vec![elem.clone()],
+                ret: TypeRef::Boolean,
+            };
+            args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+        }
         args[index] = build_erased_lambda(
             &mut args[index],
             "__Predicate",
@@ -6074,6 +6065,96 @@ fn flat_element_type(args: &[Expr], ctx: &Ctx) -> Option<TypeRef> {
     stream_elem_type(answer, ctx)
 }
 
+/// `List.of(a, b)`, `Set.of(...)`, `Arrays.asList(...)` and `Map.of(k, v, …)`
+/// written in a LAMBDA BODY: the container's element is what its arguments
+/// agree on, joined the way a literal stream's is. `copyOf(c)` takes the
+/// element of the collection it copies.
+fn literal_container_type(
+    receiver: &Expr,
+    method: &str,
+    args: &[Expr],
+    bound: &HashMap<String, TypeRef>,
+    ctx: &Ctx,
+) -> Option<TypeRef> {
+    let base = match method {
+        // `Optional.of(x)` is an `Optional<x>`: read as the RAW type it was
+        // enough to find `isPresent()` on and not enough to read `get()`.
+        "of" | "ofNullable" if names_library_class(receiver, "Optional") => "Optional",
+        "of" | "copyOf" if names_library_class(receiver, "List") => "List",
+        "of" | "copyOf" if names_library_class(receiver, "Set") => "Set",
+        "asList" if names_library_class(receiver, "Arrays") => "List",
+        "of" | "copyOf" if names_library_class(receiver, "Map") => "Map",
+        _ => return None,
+    };
+    if args.is_empty() {
+        return None;
+    }
+    if base == "Optional" {
+        let [only] = args else {
+            return None;
+        };
+        return Some(TypeRef::Generic {
+            base: String::from("Optional"),
+            args: vec![boxed_element(body_type(only, bound, ctx)?)],
+        });
+    }
+    // `copyOf(c)` and `Map.copyOf(m)` hand back what the argument holds.
+    if method == "copyOf" {
+        let TypeRef::Generic { args: held, .. } = body_type(&args[0], bound, ctx)? else {
+            return None;
+        };
+        return Some(TypeRef::Generic {
+            base: String::from(base),
+            args: held,
+        });
+    }
+    // `Arrays.asList(array)` is a list of the ARRAY's elements, not of the
+    // array — the one place the varargs pack is spread rather than held.
+    if base == "List"
+        && method == "asList"
+        && let [only] = args
+        && let Some(TypeRef::Array(elem)) = body_type(only, bound, ctx)
+    {
+        return Some(TypeRef::Generic {
+            base: String::from(base),
+            args: vec![boxed_element(*elem)],
+        });
+    }
+    let join = |seen: Option<TypeRef>, this: TypeRef| -> TypeRef {
+        match seen {
+            Some(seen) => join_element_types(&seen, &this, ctx.supers),
+            None => this,
+        }
+    };
+    if base == "Map" {
+        if args.len() % 2 != 0 {
+            return None;
+        }
+        let (mut key, mut value): (Option<TypeRef>, Option<TypeRef>) = (None, None);
+        for (at, arg) in args.iter().enumerate() {
+            let this = boxed_element(body_type(arg, bound, ctx)?);
+            if at % 2 == 0 {
+                key = Some(join(key, this));
+            } else {
+                value = Some(join(value, this));
+            }
+        }
+        return Some(TypeRef::Generic {
+            base: String::from("Map"),
+            args: vec![key?, value?],
+        });
+    }
+    let mut elem: Option<TypeRef> = None;
+    for arg in args {
+        let this = boxed_element(body_type(arg, bound, ctx)?);
+        elem = Some(join(elem, this));
+    }
+    Some(TypeRef::Generic {
+        base: String::from(base),
+        args: vec![elem?],
+    })
+}
+
 /// [`body_type`] for a CALL — the shape a lambda body most often ends in, and
 /// the only one that has to ask every table: the program's own methods, the
 /// library's, a static factory that answers a stream.
@@ -6154,9 +6235,39 @@ fn call_body_type(
             _ => {}
         }
     }
+    // ...and the two-argument one beside them: `nCopies(n, x)` is a list of
+    // `x`, and `singletonMap(k, v)` a map of the pair. Both fell to the table
+    // below, which answers the RAW type.
     if let Expr::Name { path, .. } = receiver
-        && let Some(ty) = library_static_type(path.last()?, method, args.len())
+        && path.last().is_some_and(|name| name == "Collections")
+        && let [first, second] = args
     {
+        match method {
+            "nCopies" => {
+                let elem = boxed_element(body_type(second, bound, ctx)?);
+                return Some(TypeRef::Generic {
+                    base: String::from("List"),
+                    args: vec![elem],
+                });
+            }
+            "singletonMap" => {
+                let key = boxed_element(body_type(first, bound, ctx)?);
+                let value = boxed_element(body_type(second, bound, ctx)?);
+                return Some(TypeRef::Generic {
+                    base: String::from("Map"),
+                    args: vec![key, value],
+                });
+            }
+            _ => {}
+        }
+    }
+    // `List.of(a, b)` and its family — a container of whatever the ARGUMENTS
+    // agree on, which is the same reading `Stream.of(...)` already gets and
+    // which no receiver-keyed table can see. Asked BEFORE that table, which
+    // answers the RAW type: raw is enough to find `size()` on, and not enough
+    // to read an element back out, so `map(x -> List.of(x)).get(0).get(0)`
+    // was "cannot find symbol" on a String's own method.
+    if let Some(ty) = literal_container_type(receiver, method, args, bound, ctx) {
         return Some(ty);
     }
     // An ENUM's own statics, which have no receiver VALUE to type:
@@ -6207,6 +6318,15 @@ fn call_body_type(
             base: String::from("Map"),
             args: held,
         });
+    }
+    // The by-NAME table LAST, because it answers the RAW type: every reader
+    // above carries type arguments, and asking this one first shadowed them —
+    // `Map.ofEntries(...)` came back as a bare `Map` and its values as
+    // `Object`, though the reader three lines down knew better.
+    if let Expr::Name { path, .. } = receiver
+        && let Some(ty) = library_static_type(path.last()?, method, args.len())
+    {
+        return Some(ty);
     }
     if method == "of"
         && names_library_class(receiver, "Stream")
@@ -6371,6 +6491,32 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
                 numeric_join(&l?, &r?)
             }
         },
+        // `new ArrayList<>(List.of(x))` inside a lambda body: the diamond
+        // takes its argument from the collection it copies, and THAT
+        // collection is typed from the lambda's parameter — which
+        // `static_type_of`, the general reader this used to fall through to,
+        // cannot see. So the copy came back raw and `.get(0).length()` on it
+        // was "cannot find symbol".
+        Expr::NewObject {
+            class,
+            type_args,
+            args,
+            ..
+        } if type_args.is_empty() && args.len() == 1 => {
+            let general = static_type_of(expr, ctx);
+            if matches!(&general, Some(TypeRef::Generic { args, .. }) if !args.is_empty()) {
+                return general;
+            }
+            match body_type(&args[0], bound, ctx) {
+                Some(TypeRef::Generic { args: from, .. }) if !from.is_empty() => {
+                    Some(TypeRef::Generic {
+                        base: class.clone(),
+                        args: from,
+                    })
+                }
+                _ => general,
+            }
+        }
         Expr::Call {
             receiver,
             method,
@@ -7167,12 +7313,35 @@ fn library_static_type(class: &str, method: &str, argc: usize) -> Option<TypeRef
     // carries its arguments, since they ARE the entry.
 
     if (class == "Optional" && matches!(method, "empty" | "of" | "ofNullable"))
-        || (class == "Collections" && matches!(method, "emptyList" | "emptySet" | "emptyMap"))
+        || (class == "Collections"
+            && matches!(
+                method,
+                "emptyList"
+                    | "emptySet"
+                    | "emptyMap"
+                    | "singletonList"
+                    | "singleton"
+                    | "singletonMap"
+                    | "nCopies"
+                    | "unmodifiableList"
+                    | "unmodifiableSet"
+                    | "unmodifiableMap"
+                    | "unmodifiableCollection"
+            ))
+        // ...and the Java 9 factories, which a lambda body writes as often as
+        // it writes anything: `x -> List.of(x)` had NO type, so the stream it
+        // fed held `Object` and the next call on it was "cannot find symbol",
+        // about a method every list has. `Optional.of` and the three `empty*`
+        // were named here and the rest were not — one family, half written
+        // down.
+        || (matches!(class, "List" | "Set" | "Map") && matches!(method, "of" | "copyOf"))
+        || (class == "Map" && method == "ofEntries")
+        || (class == "Arrays" && method == "asList")
     {
         return Some(TypeRef::Named(String::from(match (class, method) {
             ("Optional", _) => "Optional",
-            (_, "emptySet") => "Set",
-            (_, "emptyMap") => "Map",
+            ("Set", _) | (_, "emptySet" | "singleton" | "unmodifiableSet") => "Set",
+            ("Map", _) | (_, "emptyMap" | "singletonMap" | "unmodifiableMap") => "Map",
             _ => "List",
         })));
     }

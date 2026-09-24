@@ -15709,6 +15709,49 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A library container in a lambda body (2026-09-24)
+
+The same probe, one step further in. `x -> List.of(x)` had no type at all, so
+the stream it fed held `Object` and the next call on it was "cannot find
+symbol" — about a method every list has. `Optional.of(x)` beside it worked,
+and so did `Collections.emptyList()`: one family, half written down. Fifty-two
+cells of a four-position probe, twenty of them wrong, and the wrongness did
+not depend on the position — the same factory failed in `map`, in a
+`toMap` value, inside `mapping`, and through the program's own generic helper.
+
+**What the factory answers.** The by-NAME table knew `Optional.of` and the
+three `empty*` and not `List.of`, `Set.of`, `Map.of`, `Arrays.asList`,
+`nCopies` or `singletonMap`. It also answers the RAW type, which is enough to
+find `size()` on and not enough to read an element back out — the half that
+made this look fixed when it was not. So the argument-typed readers, of which
+`Map.entry` already had one, now cover the whole family: a container's element
+is what its arguments agree on, joined exactly as a literal stream's is. And
+the raw table is asked LAST rather than first, where it shadowed the precise
+readers below it and turned `Map.ofEntries(...)` back into a bare `Map`.
+
+**Which names are statics.** `Arrays`, `Collections`, `Objects` and
+`Collectors` are NAMESPACES — every method each declares is static — so none
+of them needs a list to keep current. Written as one, `Collections
+::singletonMap` read as an unbound INSTANCE reference on the stream's element
+and was "cannot find symbol: method singletonMap(), location: class String".
+The three collection interfaces are not namespaces (`size` and `get` are
+theirs too), so `List::of` and its siblings are named, and `Optional::of` with
+them.
+
+**Where a reference is allowed.** `partitioningBy(String::isEmpty)` was
+refused as "a lambda or method reference is only allowed where a
+functional-interface type is expected" — about the position the same predicate
+written as a bare lambda was already accepted in. The arm built the erased
+lambda without first turning the reference into one, which every other
+collector position does; `filtering` shared the arm and the bug.
+
+**And a diamond in a lambda body.** `x -> new ArrayList<>(List.of(x))` takes
+its argument from the collection it copies, and that collection is typed from
+the lambda's PARAMETER — so the general reader, which knows the pass's scope
+and not the parameter, could not see it and the copy came back raw.
+
+Pinned as `a_container_in_a_lambda_body` (thirty-nine calls).
+
 ### A container as an element of a factory (2026-09-24)
 
 `Collections.nCopies(2, aList)` came up while probing something else, and
