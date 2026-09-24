@@ -7018,7 +7018,15 @@ fn literal_element_type(args: &[Expr], ctx: &Ctx) -> TypeRef {
             crate::ast::Literal::Long(_) => TypeRef::Named(String::from("Long")),
             crate::ast::Literal::Char(_) => TypeRef::Named(String::from("Character")),
             crate::ast::Literal::Bool(_) => TypeRef::Named(String::from("Boolean")),
-            crate::ast::Literal::Null | crate::ast::Literal::Float(_) => return object,
+            // A written `null` has no type of its own and says nothing about
+            // the element — javac infers the element from the OTHER arguments
+            // and lets the null fit it — so it is SKIPPED rather than read as
+            // an `Object` that erases what the others said. Reading it as one
+            // left `Stream.of("a", null).reduce("", (x, y) -> x + y)` with two
+            // `Object` parameters: "bad operand types for binary operator
+            // '+'", about a concatenation of Strings.
+            crate::ast::Literal::Null => continue,
+            crate::ast::Literal::Float(_) => return object,
         };
         match &kind {
             Some(seen) if *seen != this => return object,

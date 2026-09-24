@@ -15709,6 +15709,39 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A null among the elements (2026-09-23)
+
+The other half of the null question: not a null ARGUMENT but a null INSIDE a
+collection, or flowing through a pipeline. Which collections take one is a
+JDK's own table — a `HashMap` takes a null key and a `TreeMap` does not, the
+immutable factories refuse one outright, a `PriorityQueue` refuses and an
+`ArrayDeque` too, a `Hashtable` refuses a null value where a `HashMap` keeps
+it — and caturra had all of that right: fifty-one probes, one disagreement.
+
+What it did not have is what a null does at the END of a pipeline, where a
+JDK's rules are written in `Optional.of` and `Map.merge` rather than in the
+collection:
+
+- `findFirst()` / `findAny()` wrap what they found in `Optional.of`, which
+  REFUSES a null — so a stream that really holds one answers a
+  NullPointerException. An EMPTY stream is the empty Optional, a different
+  answer, and both used to give it.
+- `Collectors.toMap` puts through `map.merge`, which refuses a null VALUE
+  (a NullPointerException, not a map holding one) and REMOVES the entry when
+  the merge function answers null — which is how a program drops a duplicate.
+- `Collectors.groupingBy` refuses a null group key in its own words:
+  "element cannot be mapped to a null key".
+
+And one typing gap on the way in. A written `null` among `Stream.of`'s
+arguments said the element was `Object`, where javac infers the element from
+the OTHER arguments and lets the null fit it — so `Stream.of("a",
+null).reduce("", (x, y) -> x + y)` was "bad operand types for binary operator
+'+'", about a concatenation of Strings. A null argument is SKIPPED by the
+element join now rather than read as an `Object` that erases what the others
+said.
+
+Pinned as `a_null_among_the_elements` (sixty calls).
+
 ### A null is a value (2026-09-23)
 
 `Collections.addAll(null, "b")` ended the engine: "malformed class

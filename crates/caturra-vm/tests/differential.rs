@@ -59276,3 +59276,96 @@ public class NU {
 }
 "#
 );
+
+// ...and a null INSIDE a collection, or flowing through a pipeline. Which
+// collections take one is a JDK's own table — a HashMap takes a null key and a
+// TreeMap does not, the immutable factories refuse one outright, a PriorityQueue
+// refuses and an ArrayDeque too — and caturra had all of that right. What it
+// did not have is what a null does at the END of a pipeline: `findFirst()`
+// wraps with `Optional.of`, which REFUSES a null (an empty stream is the empty
+// Optional, a different answer); `Collectors.toMap` puts through `map.merge`,
+// which refuses a null VALUE and REMOVES the entry when the merge function
+// answers null; and `groupingBy` refuses a null key in its own words. A `null`
+// written among `Stream.of`'s arguments also said the element was `Object`,
+// where javac infers it from the others — so `Stream.of("a", null).reduce("",
+// (x, y) -> x + y)` was "bad operand types for binary operator '+'", about a
+// concatenation of Strings.
+differential_test!(
+    a_null_among_the_elements,
+    "NE",
+    r#"
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public class NE {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) throws Throwable {
+        r("arraylist-add-null", () -> { List<String> l = new ArrayList<>(); l.add(null); return l.toString(); });
+        r("arraylist-contains-null", () -> { List<String> l = new ArrayList<>(); l.add(null); return l.contains(null) + "/" + l.indexOf(null); });
+        r("listof-contains-null", () -> List.of("a").contains(null));
+        r("listof-with-null", () -> List.of("a", null).size());
+        r("hashset-add-null", () -> { Set<String> s = new HashSet<>(); s.add(null); return s.toString(); });
+        r("treeset-add-null", () -> { Set<String> s = new TreeSet<>(); s.add(null); return s.toString(); });
+        r("treeset-add-then-null", () -> { Set<String> s = new TreeSet<>(); s.add("a"); s.add(null); return s.toString(); });
+        r("setof-with-null", () -> Set.of("a", null).size());
+        r("hashmap-null-key", () -> { Map<String, Integer> m = new HashMap<>(); m.put(null, 1); return m.toString(); });
+        r("hashmap-null-value", () -> { Map<String, Integer> m = new HashMap<>(); m.put("a", null); return m.toString() + m.get("a"); });
+        r("treemap-null-key", () -> { Map<String, Integer> m = new TreeMap<>(); m.put(null, 1); return m.toString(); });
+        r("treemap-null-key-second", () -> { Map<String, Integer> m = new TreeMap<>(); m.put("a", 1); m.put(null, 2); return m.toString(); });
+        r("mapof-null-value", () -> Map.of("a", null).size());
+        r("mapof-get-null", () -> Map.of("a", 1).get(null));
+        r("hashtable-null-value", () -> { Hashtable<String, Integer> h = new Hashtable<>(); h.put("a", null); return h.toString(); });
+        r("priorityqueue-add-null", () -> { Queue<String> q = new PriorityQueue<>(); q.add(null); return q.toString(); });
+        r("arraydeque-add-null", () -> { Deque<String> d = new ArrayDeque<>(); d.add(null); return d.toString(); });
+        r("string-join-null-element", () -> String.join(",", "a", null));
+        r("sort-with-null", () -> { List<String> l = new ArrayList<>(List.of("b")); l.add(null); Collections.sort(l); return l.toString(); });
+        r("max-with-null", () -> { List<String> l = new ArrayList<>(List.of("b")); l.add(null); return Collections.max(l); });
+        r("arrays-sort-null-element", () -> { String[] a = {"b", null}; Arrays.sort(a); return Arrays.toString(a); });
+        r("equals-null-element", () -> new ArrayList<>(Arrays.asList("a", null)).equals(Arrays.asList("a", null)));
+        r("hashcode-null-element", () -> Arrays.asList("a", null).hashCode());
+        r("map-merge-null-arg", () -> { Map<String, Integer> m = new HashMap<>(); m.put("a", 1); m.merge("a", null, (x, y) -> x); return m.toString(); });
+        r("map-computeIfAbsent-null", () -> { Map<String, Integer> m = new HashMap<>(); m.computeIfAbsent("a", k -> null); return m.toString() + m.containsKey("a"); });
+        r("map-computeIfPresent-null", () -> { Map<String, Integer> m = new HashMap<>(); m.put("a", 1); m.computeIfPresent("a", (k, v) -> null); return m.toString(); });
+        r("map-putIfAbsent-null", () -> { Map<String, Integer> m = new HashMap<>(); m.put("a", null); m.putIfAbsent("a", 2); return m.toString(); });
+        r("findFirst-null", () -> Stream.of("a", null).findFirst().isPresent());
+        r("findFirst-null-first", () -> Stream.of((String) null, "a").findFirst().isPresent());
+        r("findFirst-empty", () -> Stream.of("a").filter(x -> false).findFirst().isPresent());
+        r("findAny-null", () -> Stream.of((String) null).findAny().isPresent());
+        r("findFirst-int", () -> java.util.stream.IntStream.of(1).findFirst().getAsInt());
+        r("min-null", () -> Stream.of("b", null).min(Comparator.naturalOrder()).isPresent());
+        r("max-null-cmp", () -> Stream.of("b", null).max(Comparator.nullsFirst(Comparator.naturalOrder())).get());
+        r("reduce-identity", () -> Stream.of("a", null).reduce("", (x, y) -> x + y));
+        r("reduce-null-first", () -> Stream.of(null, "a").reduce("", (x, y) -> x + y));
+        r("reduce-no-identity", () -> Stream.of("a", null).reduce((x, y) -> x).isPresent());
+        r("optional-map-to-null", () -> Optional.of("a").map(x -> (String) null).isPresent());
+        r("toMap-null-value", () -> Stream.of("a").collect(Collectors.toMap(x -> x, x -> (String) null)).toString());
+        r("toMap-merge-null", () -> Stream.of("a", "a").collect(Collectors.toMap(x -> x, x -> x, (p, q) -> null)).toString());
+        r("toMap-merge-null-one", () -> Stream.of("a").collect(Collectors.toMap(x -> x, x -> x, (p, q) -> null)).toString());
+        r("toMap-merge-keeps", () -> Stream.of("a", "a").collect(Collectors.toMap(x -> x, x -> x, (p, q) -> p + q)).toString());
+        r("toMap-duplicate", () -> Stream.of("a", "a").collect(Collectors.toMap(x -> x, x -> x)).toString());
+        r("groupingBy-null-key", () -> Stream.of("a").collect(Collectors.groupingBy(x -> (String) null)).toString());
+        r("groupingBy-ok", () -> Stream.of("a", "bb").collect(Collectors.groupingBy(x -> x.length())).toString());
+        r("groupingBy-downstream-null", () -> Stream.of("a").collect(Collectors.groupingBy(x -> x, Collectors.mapping(x -> (String) null, Collectors.toList()))).toString());
+        r("partitioningBy-null", () -> Stream.of("a").collect(Collectors.partitioningBy(x -> x == null)).toString());
+        r("toList-null", () -> Stream.of("a", null).collect(Collectors.toList()).toString());
+        r("toSet-null", () -> Stream.of("a", null).collect(Collectors.toSet()).size());
+        r("toUnmodifiableList-null", () -> Stream.of("a", null).collect(Collectors.toUnmodifiableList()).toString());
+        r("toCollection-null", () -> Stream.of("a", null).collect(Collectors.toCollection(ArrayList::new)).toString());
+        r("joining-null-element", () -> Stream.of("a", null).collect(Collectors.joining(",")));
+        r("counting-null", () -> Stream.of("a", null).collect(Collectors.counting()));
+        r("sorted-null", () -> Stream.of("b", null).sorted().count());
+        r("sorted-cmp-null", () -> Stream.of("b", null).sorted(Comparator.nullsFirst(Comparator.naturalOrder())).collect(Collectors.toList()).toString());
+        r("distinct-null", () -> Stream.of(null, null).distinct().count());
+        r("peek-null", () -> { StringBuilder sb = new StringBuilder(); Stream.of("a", null).peek(sb::append).count(); return sb.toString(); });
+        r("flatMap-null-stream", () -> Stream.of("a").flatMap(x -> (Stream<String>) null).count());
+        r("anyMatch-null", () -> Stream.of("a", null).anyMatch(x -> x == null));
+        r("map-to-null", () -> Stream.of("a").map(x -> (String) null).count());
+    }
+}
+"#
+);

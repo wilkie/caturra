@@ -13077,6 +13077,16 @@ impl<'run> Interpreter<'run> {
                 let StreamSink::FindFirst(found) = sink else {
                     unreachable!("FindFirst sink");
                 };
+                // A JDK wraps what it found in `Optional.of`, which REFUSES a
+                // null: a stream that really holds one answers a
+                // NullPointerException rather than an Optional of nothing.
+                // (An EMPTY stream is the empty Optional, which is a different
+                // answer and the one this used to give for both.)
+                if found == Some(JValue::NULL) {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                }
                 let kind = optional_kind_of(descriptor);
                 return Ok(Answered::Value(self.alloc_optional(found, kind)));
             }
@@ -13516,6 +13526,15 @@ impl<'run> Interpreter<'run> {
                 let mut groups: Vec<(JValue, Vec<JValue>)> = Vec::new();
                 for element in elements {
                     let key = self.call_apply(classifier, element)?;
+                    // A JDK refuses a null GROUP KEY by name — `groupingBy`
+                    // says so in its own words, where a null value elsewhere
+                    // is a plain NullPointerException.
+                    if key == JValue::NULL {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.NullPointerException: element cannot be mapped to a \
+                             null key",
+                        )));
+                    }
                     let mut found = None;
                     for (index, (seen, _)) in groups.iter().enumerate() {
                         if self.java_equals(*seen, key)? {
@@ -13680,11 +13699,29 @@ impl<'run> Interpreter<'run> {
                 for element in elements {
                     let k = self.call_apply(key, element)?;
                     let v = self.call_apply(value, element)?;
+                    // A JDK's `toMap` puts through `map.merge`, which REFUSES a
+                    // null value — so a value function that answers null is a
+                    // NullPointerException rather than a map holding one.
+                    if v == JValue::NULL {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.NullPointerException",
+                        )));
+                    }
                     let existing = self.map_find(map, k)?;
                     let v = match (existing, merge) {
                         (Some(at), Some(merge)) => {
                             let held = self.map_value_at(map, at);
-                            self.call_apply_two(merge, held, v)?
+                            let merged = self.call_apply_two(merge, held, v)?;
+                            // ...and a merge function that answers null REMOVES
+                            // the entry, which is `merge`'s own rule and the
+                            // one a program uses to drop a duplicate.
+                            if merged == JValue::NULL {
+                                if let Some(at) = self.map_find(map, k)? {
+                                    self.map_remove_at(map, at);
+                                }
+                                continue;
+                            }
+                            merged
                         }
                         // `toMap` with no merge function refuses a duplicate
                         // key, naming the value it already held.
