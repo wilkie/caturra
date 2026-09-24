@@ -15709,6 +15709,48 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### When a pipeline's side effects happen (2026-09-24)
+
+The pipeline fuzzer at a larger run size — fifty pipelines a program instead
+of forty — diverged on seven seeds of eight. Three things, and the first is
+not about side effects at all.
+
+**`sorted(a).limit(2).sorted(b)` answered an EMPTY stream.** When the source
+runs dry each barrier is flushed in turn, feeding what it held into the ops
+below it. A downstream op that CANCELS — the limit, once it has had its fill —
+ended the whole flush, so the second barrier never emitted what it was
+holding. A cancel stops the elements of the barrier being flushed; it says
+nothing about a barrier below it, which may be holding everything the limit
+let through. Carrying on is only safe if a terminal ignores what arrives after
+it has decided, which two of them did not: `findFirst` overwrote its slot (so
+it would have answered the LAST element) and the match sinks re-ran their
+predicate, which is a side effect a JDK does not perform. Both are idempotent
+now, which is what they should have been on their own.
+
+**`flatMap` is an OP.** It ran its function when the pipeline was BUILT,
+which made it the one stage whose side effects happened out of order:
+`peek(a).flatMap(f).peek(b)` printed every `a` and then every `b` where a JDK
+interleaves them (`abbabb`). It is a pipeline stage now — the one that emits
+MANY elements for one — so the function runs when a terminal pulls that
+element. The sub-stream is still materialized, which nothing can observe: it
+is a pipeline of its own. Two divergences went with the change: a function
+that answers something other than a stream throws its `ClassCastException`
+where a JDK throws it (at the pull, not at the call), and the declaration in
+`behaviour.py` that described the eager version is gone.
+
+**And `count()` answers without traversing** only when the size is knowable —
+a JDK's javadoc says as much, and it is why a `peek` in such a pipeline never
+runs. A `flatMap` upstream makes the size unknowable to a JDK; caturra had
+already expanded it, so the length LOOKED knowable and the shortcut skipped a
+`peek` a JDK runs. With `flatMap` as an op the question answers itself: it is
+not one of the ops the shortcut allows.
+
+The fuzzer no longer generates `iterator()` as a terminal, and says why: the
+cursor divergence recorded above would otherwise be reported on most seeds,
+which is how a gate stops being read. Twelve seeds clean afterwards.
+
+Pinned as `when_a_pipelines_side_effects_happen`.
+
 ### A random pipeline, end to end (2026-09-24)
 
 Every probe written by hand asks a question someone thought of. A pipeline is

@@ -99,7 +99,12 @@ OBJECT_TERMINALS = [
     'reduce("", (a, b) -> a + b)',
     "reduce((a, b) -> a + b)",
     "toArray().length",
-    "iterator().hasNext()",
+    # `iterator()` is deliberately NOT here: caturra materializes the pipeline
+    # when a cursor is asked for, where a JDK pulls, so every pipeline with a
+    # `peek` before one differs in what the sink holds — a divergence written
+    # down in specs/LANGUAGE.md ("A random pipeline, end to end") rather than
+    # fixed. Generating it would make this sweep report the same known thing on
+    # most seeds, which is how a gate stops being read.
 ]
 
 INT_TERMINALS = [

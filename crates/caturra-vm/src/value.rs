@@ -87,6 +87,12 @@ pub enum StreamOp {
     Map(HeapRef),
     /// `peek(consumer)` — run the consumer for its side effect, pass through.
     Peek(HeapRef),
+    /// `flatMap(f)` — the one op that emits MANY elements for one, and the
+    /// reason it is an op at all: expanding it when the pipeline was built ran
+    /// the function for every upstream element before any downstream op saw
+    /// one, so `peek(a).flatMap(f).peek(b)` printed every `a` and then every
+    /// `b` where a JDK interleaves them.
+    FlatMap(HeapRef),
     /// `limit(n)` — pass the first `n` elements, then stop the source.
     Limit(usize),
     /// `skip(n)` — drop the first `n` elements.
@@ -1222,6 +1228,7 @@ impl StreamOp {
             StreamOp::Filter(f)
             | StreamOp::Map(f)
             | StreamOp::Peek(f)
+            | StreamOp::FlatMap(f)
             | StreamOp::TakeWhile(f)
             | StreamOp::DropWhile(f) => visit(*f),
             StreamOp::Sorted(comparator) => {

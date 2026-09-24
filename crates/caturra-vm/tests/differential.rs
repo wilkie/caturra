@@ -59495,3 +59495,72 @@ public class PL {
 }
 "#
 );
+
+// When a pipeline's side effects HAPPEN, and how many elements come out the
+// end. Three things, all found by the pipeline fuzzer at a larger run size:
+//
+// `sorted(a).limit(2).sorted(b)` answered an EMPTY stream. At the end of the
+// source each barrier is flushed in turn, and a downstream op that cancels —
+// the limit, once it has had its fill — ended the whole flush, so the second
+// barrier never emitted what it was holding. A cancel stops the elements of
+// the barrier being flushed and says nothing about the one below it; the
+// sinks ignore what arrives after they have decided, which is what makes
+// carrying on safe (`findFirst` kept the FIRST element rather than the last,
+// and a match sink stopped re-running its predicate).
+//
+// `flatMap` is an OP now, not an expansion done when the pipeline is built.
+// Its function runs when a terminal pulls the element, so
+// `peek(a).flatMap(f).peek(b)` interleaves as a JDK's does (`abbabb`, not
+// `aabbbb`), a function that answers something other than a stream throws
+// where a JDK throws, and a `null` sub-stream contributes nothing.
+//
+// ...and `count()` answers without traversing only when the size is knowable.
+// A `flatMap` upstream makes it unknowable to a JDK — the elements are
+// already expanded HERE, which is exactly the difference — so the shortcut
+// skipped a `peek` that a JDK runs.
+differential_test!(
+    when_a_pipelines_side_effects_happen,
+    "LZ",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class LZ {
+    interface Body { Object get() throws Throwable; }
+    static StringBuilder sink = new StringBuilder();
+    static void r(String l, Body b) {
+        sink.setLength(0);
+        try { System.out.println(l + " = " + b.get() + " | " + sink); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage() + " | " + sink); }
+    }
+    public static void main(String[] args) {
+        // A barrier, a limit, and a second barrier: the limit cancels its own
+        // feed and says nothing about what the barrier below it is holding.
+        r("sorted-limit-sorted", () -> Stream.of("the", "quick", "brown", "fox").sorted(Comparator.comparingInt(String::length)).limit(2).sorted(Comparator.reverseOrder()).collect(Collectors.toList()));
+        r("sorted-limit-sorted-min", () -> Stream.of("the", "quick", "brown", "fox").sorted(Comparator.comparingInt(String::length)).limit(2).sorted(Comparator.reverseOrder()).min(Comparator.naturalOrder()));
+        r("sorted-limit-sorted-count", () -> Stream.of("the", "quick", "brown", "fox").sorted(Comparator.comparingInt(String::length)).limit(2).sorted(Comparator.reverseOrder()).count());
+        r("sorted-limit-sorted-first", () -> Stream.of("b", "a", "c").sorted().limit(2).sorted(Comparator.reverseOrder()).findFirst());
+        r("sorted-limit-sorted-any", () -> Stream.of("b", "a", "c").sorted().limit(2).sorted(Comparator.reverseOrder()).anyMatch(s -> s.equals("a")));
+        r("three-barriers", () -> Stream.of("d", "c", "b", "a").sorted().limit(3).sorted(Comparator.reverseOrder()).limit(2).sorted().collect(Collectors.toList()));
+        // flatMap is an OP: its function runs when a terminal pulls, so the
+        // side effects around it interleave.
+        r("flatmap-interleaves", () -> Stream.of("x", "y").peek(s -> sink.append("a")).flatMap(s -> Stream.of(s, s + "2")).peek(s -> sink.append("b")).count());
+        r("flatmap-peek-after", () -> IntStream.of(1, 2).flatMap(v -> IntStream.of(v, -v)).peek(v -> sink.append(v).append(",")).count());
+        r("flatmap-findFirst", () -> Stream.of("x", "y").flatMap(s -> Stream.of(s, s + "2")).peek(sink::append).findFirst());
+        r("flatmap-anyMatch", () -> Stream.of("x", "y").flatMap(s -> Stream.of(s, s + "2")).peek(sink::append).anyMatch(s -> s.endsWith("2")));
+        r("flatmap-limit", () -> Stream.of("x", "y").peek(sink::append).flatMap(s -> Stream.of(s, s + "2")).limit(3).collect(Collectors.toList()));
+        r("flatmap-null-substream", () -> Stream.of("a", "b").flatMap(s -> (Stream<String>) null).count());
+        r("flatmap-not-a-stream", () -> Stream.of("a").flatMap(s -> (Stream<String>) (Object) "nope").count());
+        r("flatmap-nested", () -> Stream.of("x").flatMap(s -> Stream.of(s, s + "2")).flatMap(s -> Stream.of(s, s + "3")).collect(Collectors.toList()));
+        r("flatmap-throws", () -> Stream.of("a", "b").flatMap(s -> { if (s.equals("b")) { throw new IllegalStateException("boom"); } return Stream.of(s); }).count());
+        r("flatmap-reused", () -> { Stream<String> s = Stream.of("a").flatMap(x -> Stream.of(x, x)); s.count(); return s.count(); });
+        // `count()` answers without traversing when the size is knowable —
+        // and a flatMap makes it unknowable, whatever caturra has already done.
+        r("count-skips-peek", () -> Stream.of("a", "b").peek(sink::append).count());
+        r("count-runs-after-flatmap", () -> Stream.of("a").flatMap(s -> Stream.of(s, s)).peek(sink::append).count());
+        r("count-runs-after-filter", () -> Stream.of("a", "b").filter(s -> { sink.append(s); return true; }).count());
+        r("count-skips-sorted", () -> Stream.of("b", "a").sorted(Comparator.comparing(s -> { sink.append(s); return s; })).count());
+    }
+}
+"#
+);

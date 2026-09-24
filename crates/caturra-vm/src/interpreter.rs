@@ -11517,14 +11517,18 @@ impl<'run> Interpreter<'run> {
         // each one is sorted and pushed through the ops BELOW the barrier —
         // which may itself be a second barrier, flushed when the walk reaches
         // it.
-        let mut stopped = false;
+        // EVERY barrier is flushed, in order. A downstream op that cancels —
+        // a `limit` that has had its fill — stops the elements of THIS
+        // barrier, and says nothing about a barrier below it, which may be
+        // holding everything the limit let through: `sorted(a).limit(2)
+        // .sorted(b)` answered an EMPTY stream, because the limit's cancel
+        // ended the whole flush before the second barrier had emitted
+        // anything. The sinks ignore what arrives after they have decided,
+        // which is what makes continuing safe.
         for i in 0..ops.len() {
             let crate::value::StreamOp::Sorted(comparator) = ops[i] else {
                 continue;
             };
-            if stopped {
-                break;
-            }
             let StreamOpState::Buffer(buffered) =
                 std::mem::replace(&mut states[i], StreamOpState::None)
             else {
@@ -11532,7 +11536,6 @@ impl<'run> Interpreter<'run> {
             };
             for element in self.sort_like_jdk(buffered, comparator)? {
                 if !self.stream_feed(ops, states, sink, i + 1, element)? {
-                    stopped = true;
                     break;
                 }
             }
@@ -11668,6 +11671,38 @@ impl<'run> Interpreter<'run> {
                 self.temp_roots.push(value);
                 Ok(true)
             }
+            // The one op that emits MANY elements for one. The SUB-stream is
+            // materialized (it is a pipeline of its own, usually a handful of
+            // elements); the upstream stays lazy, which is what makes the side
+            // effects interleave.
+            StreamOp::FlatMap(function) => {
+                let function = *function;
+                let produced = self.call_apply(function, value)?;
+                let inner = match produced {
+                    JValue::Ref(Some(inner)) if self.is_stream(inner) => {
+                        self.stream_materialize(inner)?
+                    }
+                    // A `null` sub-stream contributes nothing, as the JDK
+                    // documents.
+                    JValue::Ref(None) => Vec::new(),
+                    // A function that answers something that is NOT a stream
+                    // is a ClassCastException, thrown where a JDK throws it:
+                    // when the terminal pulls this element.
+                    JValue::Ref(Some(other)) => {
+                        return Err(VmError::UncaughtException(class_cast_message(
+                            &heap_binary_name(&self.heap, other),
+                            "java.util.stream.Stream",
+                        )));
+                    }
+                    other => vec![other],
+                };
+                for element in inner {
+                    if !self.stream_feed(ops, states, sink, i + 1, element)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
             StreamOp::Box => {
                 let boxed = match value {
                     JValue::Ref(_) => value,
@@ -11722,6 +11757,16 @@ impl<'run> Interpreter<'run> {
     }
 
     /// Deliver one pipeline-output element to the terminal sink.
+    /// Hand one element to the terminal, answering whether the pipeline should
+    /// keep going.
+    ///
+    /// A sink that has DECIDED ignores what comes after, rather than trusting
+    /// nobody to feed it again: the flush of a barrier below a `limit` reaches
+    /// this after a short-circuiting sink has already answered (the limit
+    /// cancels its own feed, not the whole traversal), and overwriting the
+    /// slot there would make `findFirst` answer the LAST element. A match sink
+    /// must not re-run its predicate either — that is a side effect a JDK does
+    /// not perform.
     fn stream_sink(&mut self, sink: &mut StreamSink, value: JValue) -> Result<bool, VmError> {
         Ok(match sink {
             StreamSink::Collect(out) => {
@@ -11729,7 +11774,9 @@ impl<'run> Interpreter<'run> {
                 true
             }
             StreamSink::FindFirst(slot) => {
-                *slot = Some(value);
+                if slot.is_none() {
+                    *slot = Some(value);
+                }
                 false // the first element is enough
             }
             StreamSink::ForEach(consumer) => {
@@ -11738,6 +11785,9 @@ impl<'run> Interpreter<'run> {
                 true
             }
             StreamSink::AnyMatch { pred, matched } => {
+                if *matched {
+                    return Ok(false);
+                }
                 let pred = *pred;
                 if self.call_test(pred, value)? {
                     *matched = true;
@@ -11747,6 +11797,9 @@ impl<'run> Interpreter<'run> {
                 }
             }
             StreamSink::AllMatch { pred, matched } => {
+                if !*matched {
+                    return Ok(false);
+                }
                 let pred = *pred;
                 if self.call_test(pred, value)? {
                     true
@@ -11756,6 +11809,9 @@ impl<'run> Interpreter<'run> {
                 }
             }
             StreamSink::NoneMatch { pred, matched } => {
+                if !*matched {
+                    return Ok(false);
+                }
                 let pred = *pred;
                 if self.call_test(pred, value)? {
                     *matched = false;
@@ -12960,46 +13016,14 @@ impl<'run> Interpreter<'run> {
                 "flatMap" | "flatMapToInt" | "flatMapToLong" | "flatMapToDouble",
                 [JValue::Ref(Some(function))],
             ) => {
-                let function = *function;
-                let elements = self.stream_materialize(receiver)?;
-                // Whether this pipeline carries PRIMITIVES, which decides what
-                // a function that did not answer a stream can be spliced as.
-                let primitive = elements
-                    .iter()
-                    .any(|e| !matches!(e, JValue::Ref(_) | JValue::Int(0)));
-                let mut flat = Vec::new();
-                for element in elements {
-                    let produced = self.call_apply(function, element)?;
-                    match produced {
-                        JValue::Ref(Some(inner)) if self.is_stream(inner) => {
-                            flat.extend(self.stream_materialize(inner)?);
-                        }
-                        // A `null` sub-stream contributes nothing, as the JDK
-                        // documents; anything else is the element itself.
-                        //
-                        // A function that answers something that is NOT a
-                        // stream is a JDK's ClassCastException — but only once
-                        // a TERMINAL pulls, because `flatMap` is lazy there and
-                        // eager here. Refusing it at the call would answer at
-                        // the wrong time, which is the more visible of the two
-                        // differences; the laziness is the fix, and it needs a
-                        // pipeline op that can emit MANY elements per one.
-                        JValue::Ref(None) => {}
-                        // ...and a REFERENCE among primitives cannot be one of
-                        // them: spliced in, it failed a bytecode check further
-                        // down the pipeline, which is an engine error where a
-                        // JDK's is a `ClassCastException` (later than this,
-                        // because its `flatMap` is lazy — see the note above).
-                        JValue::Ref(Some(other)) if primitive => {
-                            return Err(VmError::UncaughtException(class_cast_message(
-                                &heap_binary_name(&self.heap, other),
-                                "java.util.stream.Stream",
-                            )));
-                        }
-                        other => flat.push(other),
-                    }
-                }
-                return Ok(Answered::Value(self.alloc_stream(flat)));
+                // An OP, not an expansion: it emits many elements for one,
+                // and the function runs when a terminal pulls that element —
+                // so `peek(a).flatMap(f).peek(b)` interleaves as a JDK's does,
+                // and a function that answers something other than a stream
+                // throws where a JDK throws.
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::FlatMap(*function)),
+                ));
             }
             // `reduce(identity, accumulator)` folds left to a value;
             // `reduce(accumulator)` answers an `Optional` (empty on no input).

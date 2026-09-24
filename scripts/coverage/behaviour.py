@@ -319,13 +319,6 @@ KNOWN = [
         "OutOfMemoryError here and a list there",
     ),
     (
-        r"^java\.util\.stream\.\w*Stream\.flatMap",
-        "caturra's `flatMap` runs its function when the pipeline is BUILT and "
-        "a JDK's when a terminal pulls, so a function that answers something "
-        "other than a stream is refused at a different moment — the answer is "
-        "the same once anything asks for it",
-    ),
-    (
         r"^java\.util\.(Set|Map)\.(of|copyOf|ofEntries)",
         "a JDK's immutable Set and Map iterate in an order randomized per JVM "
         "run (the SALT), so the same call answers `[a, b]` on one run and "
