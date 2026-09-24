@@ -958,6 +958,36 @@ fn constructor_signatures(
 ///
 /// Deliberately NOT extended to `Function.andThen`, whose result type is the
 /// composed function's, not the receiver's.
+/// The `Predicate<T>` an argument names ITSELF, for a position with no target
+/// type to hand down: a lambda whose parameter is written with a type, and a
+/// method reference on a CLASS, whose receiver is the element it tests.
+fn self_described_predicate(arg: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let element = match arg {
+        Expr::Lambda { params, .. } => match params.as_slice() {
+            [only] => only.ty.clone()?,
+            _ => return None,
+        },
+        // `String::isEmpty` — an UNBOUND reference, whose receiver becomes the
+        // parameter. A bound one (`text::startsWith`) names a value, not a
+        // type, and says nothing about the element.
+        Expr::MethodRef { qualifier, .. } => match qualifier.as_ref() {
+            Expr::Name { path, .. }
+                if path.len() == 1
+                    && ctx.lookup(&path[0]).is_none()
+                    && ctx.class_names.contains(&path[0]) =>
+            {
+                TypeRef::Named(path[0].clone())
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(TypeRef::Generic {
+        base: String::from("Predicate"),
+        args: vec![element],
+    })
+}
+
 fn functional_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     match expr {
         Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0]),
@@ -968,7 +998,19 @@ fn functional_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             ..
         } => {
             if is_negated_predicate(expr) {
-                return functional_type_of(&args[0], ctx);
+                return functional_type_of(&args[0], ctx)
+                    .or_else(|| self_described_predicate(&args[0], ctx));
+            }
+            // `Predicate.not(p)` before the rewrite: the same predicate as `p`,
+            // so a combinator chained onto it (`Predicate.not(String::isEmpty)
+            // .and(s -> …)`) knows its element.
+            if method == "not"
+                && args.len() == 1
+                && matches!(inner.as_ref(), Expr::Name { path, .. }
+                    if path.last().is_some_and(|name| name == "Predicate"))
+            {
+                return functional_type_of(&args[0], ctx)
+                    .or_else(|| self_described_predicate(&args[0], ctx));
             }
             let preserving = (method == "negate" && args.is_empty())
                 || (matches!(method.as_str(), "and" | "or") && args.len() == 1);
@@ -979,14 +1021,26 @@ fn functional_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
                 .then(|| functional_type_of(inner, ctx))
                 .flatten()
                 .filter(|ty| matches!(ty, TypeRef::Generic { base, .. } if simple_base(base) == "Predicate"))
+                // ...and a call that is not one of those preserving shapes is
+                // read like any other expression: a method of the program that
+                // ANSWERS a predicate is a receiver like a variable.
+                .or_else(|| static_type_of(expr, ctx))
         }
         // The receiver may already have been rewritten: the desugaring turns
         // `Predicate.not(p)` into the bundled `__Negate`, and it still stands
         // for a predicate over `p`'s element.
         Expr::NewObject { class, args, .. } if class == "__Negate" && args.len() == 1 => {
-            functional_type_of(&args[0], ctx)
+            // ...and the predicate inside may be one that describes ITSELF —
+            // `Predicate.not(String::isEmpty).and(s -> …)` is a chain whose
+            // element only the method reference names.
+            functional_type_of(&args[0], ctx).or_else(|| self_described_predicate(&args[0], ctx))
         }
-        _ => None,
+        // Every other shape a receiver can take, read by the one reader:
+        // a CAST (`((Predicate<String>) (s -> true)).and(…)`, which is how the
+        // behaviour sweep's own bank writes one), a TERNARY between two
+        // predicates, a field. Reading only a bare name left the lambda in
+        // `.and(s -> …)` with no functional-interface position to sit in.
+        other => static_type_of(other, ctx),
     }
 }
 
@@ -1021,6 +1075,14 @@ fn combinator_argument_type(
     };
     let object = || TypeRef::Named(String::from("Object"));
     match (simple_base(&base), method) {
+        // `compose(before)` runs BEFORE this one, so what it takes is free
+        // (`Function<V, T>`) and only the lambda itself can say — which is why
+        // javac makes you write the parameter type there. `Object` is the
+        // position; a written type wins over it.
+        ("Function" | "UnaryOperator", "compose") => Some(TypeRef::Generic {
+            base: String::from("Function"),
+            args: vec![object(), args.first()?.clone()],
+        }),
         // The result of `this` is what the next function receives.
         ("Function" | "UnaryOperator" | "BiFunction" | "BinaryOperator", "andThen") => {
             let result = args.last()?.clone();
@@ -1956,6 +2018,15 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // class, written by its simple name (`dir()`), is the same fact with
         // no receiver to read it from.
         Expr::Call { .. } if call_answer(expr, ctx).is_some() => call_answer(expr, ctx),
+        // A CONDITIONAL is its branches' type when they AGREE, which is the
+        // half of JLS 15.25 that needs no join — enough to make
+        // `(flag ? p : q).and(s -> …)` a functional-interface position, where
+        // reading nothing left the lambda without one. Two branches that
+        // differ stay unknown rather than guessed at.
+        Expr::Ternary { then, els, .. } => {
+            let then = static_type_of(then, ctx)?;
+            (then == static_type_of(els, ctx)?).then_some(then)
+        }
         // A LIBRARY call whose answer is written on its receiver —
         // `line.split(",")` is a `String[]`, `text.toUpperCase()` a String.
         // A `var` holding one had no type, so the stream over it had no
@@ -2355,7 +2426,15 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
         // constructor parameter is the ERASED `__Predicate`, which carries no
         // element, so leaving this to the generic recursion typed it `Object`.
         if method == "not" {
-            desugar_expr(&mut args[0], expected, ctx);
+            // ...and when nothing above says what the element is, the ARGUMENT
+            // does: an explicitly-typed lambda parameter (`(String s) -> …`)
+            // and an unbound method reference (`String::isEmpty`) each name
+            // the type they take. Without reading them, `Predicate.not(
+            // String::isEmpty).test("a")` — which javac types from the chain —
+            // was "invalid method reference: cannot find symbol isEmpty,
+            // location: class Object".
+            let own = self_described_predicate(&args[0], ctx);
+            desugar_expr(&mut args[0], expected.or(own.as_ref()), ctx);
         }
         *expr = Expr::NewObject {
             class: String::from(if method == "not" {
@@ -5603,6 +5682,19 @@ fn desugar_comparator_chain(
         method,
         "thenComparing" | "thenComparingInt" | "thenComparingLong" | "thenComparingDouble"
     );
+    // The chain's element comes from the target the whole chain sits in — and
+    // when it sits in none, from the RECEIVER, which may say it outright:
+    // `((Comparator<String>) ((a, b) -> 0)).thenComparing(s -> s.length())`
+    // is a comparator over Strings however it is used, and reading only the
+    // target left the key extractor with no element ("cannot find symbol:
+    // method length, location: class Object").
+    let from_receiver = (is_combinator && expected.is_none())
+        .then(|| receiver.as_deref().and_then(|r| static_type_of(r, ctx)))
+        .flatten()
+        .filter(
+            |ty| matches!(ty, TypeRef::Generic { base, .. } if simple_base(base) == "Comparator"),
+        );
+    let expected = expected.or(from_receiver.as_ref());
     // `Comparator.comparing(keyExtractor, keyComparator)`: the extractor is
     // typed exactly as in the one-argument form; the second argument compares
     // the KEYS, whose type nothing here knows, so it desugars on its own.
@@ -8193,7 +8285,23 @@ fn build_erased_lambda(
     // compiler. Binding the parameters that exist builds a class nothing will
     // run — the program is already refused — and reports one mistake instead
     // of a crash.
-    let mut method_body: Vec<Stmt> = elem_types
+    // A parameter WRITTEN with a type says what it is where the POSITION says
+    // only `Object` — which is the whole answer for `Function.compose`, whose
+    // `V` is free (and why javac makes you write the type there). Only then:
+    // a position that names an element has already SUBSTITUTED the method's
+    // type variables, and a lambda written `(T t) -> t.text()` means the
+    // substituted type, not the variable — preferring the written one there
+    // made `t.text()` "cannot find symbol, location: class T".
+    let object_position = TypeRef::Named(String::from("Object"));
+    let declared: Vec<TypeRef> = elem_types
+        .iter()
+        .zip(params.iter())
+        .map(|(ty, param)| match &param.ty {
+            Some(written) if *ty == object_position => written.clone(),
+            _ => ty.clone(),
+        })
+        .collect();
+    let mut method_body: Vec<Stmt> = declared
         .iter()
         .zip(params.iter())
         .enumerate()
@@ -8208,7 +8316,7 @@ fn build_erased_lambda(
     ctx.scope.push(
         params
             .iter()
-            .zip(elem_types)
+            .zip(&declared)
             .map(|(param, ty)| (param.name.clone(), ty.clone()))
             .collect(),
     );

@@ -15709,6 +15709,53 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A functional interface's own combinators (2026-09-23)
+
+`java.util.function` has combinators of its own — `and`, `or`, `andThen`,
+`compose`, and `Comparator`'s `thenComparing` — and each takes a lambda like
+any other position. Through a declared VARIABLE they all worked. Through any
+other receiver they did not: a CAST (`((Predicate<String>) (s -> true)).and(s
+-> …)`), a CALL (`supply().and(…)`) and a TERNARY were all "a lambda or method
+reference is only allowed where a functional-interface type is expected".
+
+The cast is the spelling the behaviour sweep's own bank writes its receivers
+in, which is how this stayed hidden: the sweep exercises the combinators with
+a bank ARGUMENT and never hands one a lambda, so `and` and `or` were measured
+and the position they take was not. `scripts/sweep/lambdas.py` covers them
+now — seven more cases, 42 positions to 49.
+
+The reader is the general one (`static_type_of`) rather than a second ladder:
+a receiver's type is whatever the expression says it is, including a cast and
+a conditional between two branches that AGREE — the half of JLS §15.25 that
+needs no join.
+
+**`Predicate.not`** (Java 11) had the same shape from the other end. Its
+argument is a predicate whose element nothing else says, so
+`Predicate.not(String::isEmpty)` was "invalid method reference: cannot find
+symbol isEmpty, location: class Object" — though the same call inside a
+`filter` worked, because the stream said the element. Two argument shapes
+describe THEMSELVES: a lambda whose parameter is written with a type, and an
+unbound method reference on a class.
+
+That second rule generalizes. A parameter written with a type says what it is
+wherever the POSITION says only `Object` — which is what `Function.compose`
+says, since its `V` is free, and why javac makes you write the type there.
+Only where the position says `Object`: a position that names an element has
+already substituted the method's type variables, and a lambda written
+`(T t) -> t.text()` means the substituted type, not the variable. Preferring
+the written one everywhere made that "cannot find symbol: method text(),
+location: class T" — caught by the pin that had been asking the question since
+the generics work.
+
+One chain is still refused, and is written down rather than fixed:
+`Predicate.not(String::isEmpty).and(s -> …)`. The receiver is rewritten to the
+bundled `__Negate` before the combinator is typed, and by then the method
+reference is a synthesized class with no element left to read. Every other
+spelling works — a variable, a filter position, an explicit lambda, a chain on
+a variable.
+
+Pinned as `a_functional_interfaces_own_combinators` (thirty-six calls).
+
 ### A null among the elements (2026-09-23)
 
 The other half of the null question: not a null ARGUMENT but a null INSIDE a

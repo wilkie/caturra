@@ -411,6 +411,68 @@ case(
 )
 
 
+# The functional interfaces' OWN combinators, which take a lambda like any
+# other position — and whose receiver may be a cast, a call or a ternary rather
+# than a variable. Found because the behaviour sweep's bank writes its
+# receivers as casts, so `((Predicate<String>) (s -> true)).and(s -> …)` is the
+# spelling that was refused.
+case(
+    "predicate-and",
+    ["java.util.function.Predicate"],
+    """
+    Predicate<String> p = s -> s.isEmpty();
+    System.out.println(p.and(s -> s.length() == 1).test("a"));
+    """,
+)
+case(
+    "predicate-and-cast-receiver",
+    ["java.util.function.Predicate"],
+    """
+    System.out.println(((Predicate<String>) (s -> true)).and(s -> s.isEmpty()).test("a"));
+    """,
+)
+case(
+    "predicate-not",
+    ["java.util.function.Predicate"],
+    """
+    System.out.println(Predicate.not(String::isEmpty).test("a"));
+    """,
+)
+case(
+    "function-andThen",
+    ["java.util.function.Function"],
+    """
+    Function<String, String> f = s -> s + "1";
+    System.out.println(f.andThen(s -> s + "2").apply("x"));
+    """,
+)
+case(
+    "function-compose",
+    ["java.util.function.Function"],
+    """
+    Function<String, String> f = s -> s + "1";
+    System.out.println(f.compose((String s) -> s + "0").apply("x"));
+    """,
+)
+case(
+    "consumer-andThen",
+    ["java.util.function.Consumer"],
+    """
+    StringBuilder sb = new StringBuilder();
+    Consumer<String> c = s -> sb.append(s);
+    c.andThen(s -> sb.append(s.length())).accept("x");
+    System.out.println(sb);
+    """,
+)
+case(
+    "comparator-thenComparing-cast-receiver",
+    ["java.util.Comparator"],
+    """
+    System.out.println(((Comparator<String>) ((a, b) -> 0)).thenComparing(s -> s.length()).compare("ab", "b"));
+    """,
+)
+
+
 def jdk(name, source, work):
     """What a real JDK does: the first line of a refusal, or the program's output."""
     here = os.path.join(work, name + ".jdk")

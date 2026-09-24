@@ -59369,3 +59369,73 @@ public class NE {
 }
 "#
 );
+
+// The functional interfaces' OWN combinators — `and`, `or`, `andThen`,
+// `compose`, `thenComparing` — take a lambda like any other position, and the
+// RECEIVER they read their element from may be a cast, a call or a ternary
+// rather than a variable. Every one of those was refused ("a lambda or method
+// reference is only allowed where a functional-interface type is expected"),
+// and the cast is the spelling the behaviour sweep's own bank uses, so the
+// sweep exercised the combinators without ever handing one a lambda.
+// `Predicate.not` (Java 11) had the same shape from the other end: its
+// argument is a predicate whose element nothing said, so
+// `Predicate.not(String::isEmpty)` was "invalid method reference". A lambda
+// parameter WRITTEN with a type says it — which is why javac makes you write
+// one for `Function.compose`, whose `V` is free.
+differential_test!(
+    a_functional_interfaces_own_combinators,
+    "FN",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class FN {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static Comparator<String> byLength() { return (a, b) -> a.length() - b.length(); }
+    static Predicate<String> supply() { return s -> true; }
+    static Predicate<String> HOLDER = s -> true;
+    public static void main(String[] args) throws Throwable {
+        r("cast-predicate-and", () -> ((java.util.function.Predicate<String>) (s -> true)).and(s -> s.isEmpty()).test("a"));
+        r("cast-predicate-or", () -> ((java.util.function.Predicate<String>) (s -> false)).or(s -> s.isEmpty()).test(""));
+        r("cast-predicate-negate", () -> ((java.util.function.Predicate<String>) (s -> s.isEmpty())).negate().test("a"));
+        r("cast-function-andThen", () -> ((java.util.function.Function<String, String>) (s -> s)).andThen(s -> s + "!").apply("x"));
+        r("cast-function-compose", () -> ((java.util.function.Function<String, String>) (s -> s + "1")).compose((String s) -> s + "0").apply("x"));
+        r("cast-consumer-andThen", () -> { StringBuilder sb = new StringBuilder(); ((java.util.function.Consumer<String>) (s -> sb.append(s))).andThen(s -> sb.append(s.length())).accept("x"); return sb.toString(); });
+        r("cast-bipredicate-and", () -> ((java.util.function.BiPredicate<String, String>) ((a, b) -> true)).and((a, b) -> a.equals(b)).test("x", "x"));
+        r("cast-biconsumer-andThen", () -> { StringBuilder sb = new StringBuilder(); ((java.util.function.BiConsumer<String, String>) ((a, b) -> sb.append(a))).andThen((a, b) -> sb.append(b)).accept("x", "y"); return sb.toString(); });
+        r("cast-bifunction-andThen", () -> ((java.util.function.BiFunction<String, String, String>) ((a, b) -> a + b)).andThen(s -> s + "!").apply("x", "y"));
+        r("cast-intpredicate-and", () -> ((java.util.function.IntPredicate) (v -> v > 0)).and(v -> v < 10).test(5));
+        r("call-predicate-and", () -> supply().and(s -> s.isEmpty()).test("a"));
+        r("ternary-predicate-and", () -> { java.util.function.Predicate<String> p = s -> true; java.util.function.Predicate<String> q = s -> false; return (true ? p : q).and(s -> s.isEmpty()).test("a"); });
+        r("field-predicate-and", () -> HOLDER.and(s -> s.isEmpty()).test("a"));
+        r("var-predicate-and", () -> { java.util.function.Predicate<String> p = s -> true; return p.and(s -> s.isEmpty()).test("a"); });
+        r("not-variable", () -> { java.util.function.Predicate<String> empty = String::isEmpty; return java.util.function.Predicate.not(empty).test("a"); });
+        r("not-methodref", () -> java.util.function.Predicate.not(String::isEmpty).test("a"));
+        r("not-lambda-explicit", () -> java.util.function.Predicate.not((String s) -> s.isEmpty()).test("a"));
+        r("not-in-filter", () -> List.of("a", "").stream().filter(java.util.function.Predicate.not(String::isEmpty)).count());
+        r("not-var-chained", () -> { java.util.function.Predicate<String> empty = String::isEmpty; return java.util.function.Predicate.not(empty).and(s -> s.length() == 1).test("a"); });
+        r("not-negate", () -> java.util.function.Predicate.not(String::isEmpty).negate().test("a"));
+        r("not-removeIf", () -> { List<String> l = new ArrayList<>(List.of("a", "")); l.removeIf(java.util.function.Predicate.not(String::isEmpty)); return l.toString(); });
+        r("isEqual", () -> java.util.function.Predicate.isEqual("a").test("a"));
+        r("isEqual-filter", () -> List.of("a", "b").stream().filter(java.util.function.Predicate.isEqual("a")).count());
+        r("identity", () -> java.util.function.Function.identity().apply("a"));
+        r("unary-identity", () -> java.util.function.UnaryOperator.identity().apply("a"));
+        r("minBy", () -> java.util.function.BinaryOperator.minBy(Comparator.<String>naturalOrder()).apply("b", "a"));
+        r("maxBy", () -> java.util.function.BinaryOperator.maxBy(Comparator.<String>naturalOrder()).apply("b", "a"));
+        r("int-identity", () -> java.util.function.IntUnaryOperator.identity().applyAsInt(4));
+        r("cast-comparator-then", () -> ((Comparator<String>) ((a, b) -> 0)).thenComparing(s -> s.length()).compare("ab", "b"));
+        r("cast-comparator-then-int", () -> ((Comparator<String>) ((a, b) -> 0)).thenComparingInt(s -> s.length()).compare("ab", "b"));
+        r("call-comparator-then", () -> byLength().thenComparing(s -> s).compare("ab", "ba"));
+        r("explicit-param-decl", () -> { java.util.function.Predicate<String> p = (String s) -> s.isEmpty(); return p.test("a"); });
+        r("explicit-param-filter", () -> List.of("a").stream().filter((String s) -> s.isEmpty()).count());
+        r("explicit-param-sort", () -> { List<String> l = new ArrayList<>(List.of("b", "a")); l.sort((String a, String b) -> a.compareTo(b)); return l.toString(); });
+        r("var-param", () -> List.of("a").stream().filter((var s) -> s.isEmpty()).count());
+        r("bound-methodref-not", () -> { String text = "abc"; java.util.function.Predicate<String> p = text::startsWith; return java.util.function.Predicate.not(p).test("ab"); });
+    }
+}
+"#
+);
