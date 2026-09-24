@@ -15709,6 +15709,46 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A random pipeline, end to end (2026-09-24)
+
+Every probe written by hand asks a question someone thought of. A pipeline is
+a source, a run of intermediate ops and a terminal, and almost every stream
+defect this engine has had was at a JOIN between two of them — so
+`scripts/fuzz/pipelines.py` composes them at random and compares the answer,
+and what a `peek` wrote, against a real JDK. The first four programs found
+three things.
+
+**An empty stream whose element only a WITNESS says.**
+`Stream.<String>empty().map(s -> s.length())` was "a lambda is only allowed
+where a functional-interface type is expected". The empty factories type as a
+context-adopting `null` and their element comes from the assignment that holds
+them — but a witness is written right there, and a pipeline javac types from
+the witness alone had nothing to read.
+
+**Which END of a bucket a collector links a new key at.** A JDK's `put`
+appends to a bucket's chain and the COMPUTE family prepends (`tab[i] =
+newNode(hash, key, v, first)`) — caturra's HashMap has modelled both since the
+collections work. The collectors reach their map by different routes, and
+building them all with `put` was wrong for two of them: `groupingBy`
+accumulates through `computeIfAbsent` and the merge-taking `toMap` through
+`map.merge`, so both PREPEND, where the two-argument `toMap` (`putIfAbsent`)
+and `toSet` (`add`) append. For two keys that share a bucket — "the" and "bb"
+both land in bucket 0 — a JDK prints `{bb=…, the=…}` from a `groupingBy` and
+`{the=…, bb=…}` from the same keys put by hand.
+
+**And one divergence written down rather than fixed.**
+`stream.iterator()` materializes the whole pipeline, where a JDK's cursor
+pulls one element at a time: after
+`Stream.of("a", "m", "q").peek(sink::append).iterator().hasNext()` a JDK has
+appended `a` and caturra `amq`. Every other short-circuiting terminal —
+`findFirst`, `anyMatch`, `allMatch`, `noneMatch`, `limit`, `takeWhile` — is
+already lazy and measured so. Making the cursor lazy means holding the
+pipeline's state inside it (re-driving would re-run the side effects, which is
+the very thing being compared), and that is a change to the stream model
+rather than a fix; a `peek` before an `iterator()` is the only way to see it.
+
+Pinned as `which_end_of_a_bucket_a_collector_links_at`.
+
 ### A functional interface's own combinators (2026-09-23)
 
 `java.util.function` has combinators of its own — `and`, `or`, `andThen`,

@@ -6787,6 +6787,20 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             }
         }
     }
+    // `Stream.<String>empty()` — an empty stream says nothing about its
+    // element except through a WITNESS, and the witness is written right
+    // there. Reading only the arguments (there are none) left every op after
+    // it without an element: `Stream.<String>empty().map(s -> s.length())`
+    // was "a lambda is only allowed where a functional-interface type is
+    // expected", for a pipeline javac types from the witness alone.
+    if method == "empty"
+        && args.is_empty()
+        && names_library_class(prev.as_ref(), "Stream")
+        && let Expr::Call { type_args, .. } = receiver
+        && let [witness] = &type_args[..]
+    {
+        return Some(witness.clone());
+    }
     // `Stream.iterate(seed, next)` — every element is a `next` of the seed, so
     // the seed's type is the element's. `generate`'s supplier answers a type
     // this pass cannot read, so that one erases.

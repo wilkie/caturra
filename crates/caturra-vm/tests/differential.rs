@@ -59439,3 +59439,59 @@ public class FN {
 }
 "#
 );
+
+// Which END of a bucket a collector's map links a new key at. A JDK's
+// `put` appends and the COMPUTE family prepends (`tab[i] = newNode(hash, key,
+// v, first)`), which caturra's HashMap already models — but the collectors
+// reach their map by different routes: `groupingBy` through
+// `computeIfAbsent`, the merge-taking `toMap` through `map.merge`, and the
+// two-argument `toMap` and `toSet` through `putIfAbsent`/`add`. Building them
+// all with `put` printed `{the=…, bb=…}` where a JDK prints `{bb=…, the=…}`,
+// for two keys that share a bucket. Found by a random pipeline fuzzer.
+//
+// ...and an empty stream whose element only a WITNESS says:
+// `Stream.<String>empty().map(s -> s.length())` was "a lambda is only allowed
+// where a functional-interface type is expected", for a pipeline javac types
+// from the witness alone.
+differential_test!(
+    which_end_of_a_bucket_a_collector_links_at,
+    "PL",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class PL {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static final String[] W = "the quick brown fox a bb".split(" ");
+    public static void main(String[] args) {
+        // "the" and "bb" land in the same bucket, so which comes first says
+        // which end of the chain a new node was linked at.
+        r("put", () -> { Map<String, Integer> m = new HashMap<>(); for (String w : W) { m.put(w, 1); } return m.keySet(); });
+        r("computeIfAbsent", () -> { Map<String, Integer> m = new HashMap<>(); for (String w : W) { m.computeIfAbsent(w, k -> 1); } return m.keySet(); });
+        r("merge", () -> { Map<String, Integer> m = new HashMap<>(); for (String w : W) { m.merge(w, 1, (x, y) -> x + y); } return m.keySet(); });
+        r("putIfAbsent", () -> { Map<String, Integer> m = new HashMap<>(); for (String w : W) { m.putIfAbsent(w, 1); } return m.keySet(); });
+        r("toMap-2", () -> Arrays.stream(W).collect(Collectors.toMap(s -> s, s -> 1)).keySet());
+        r("toMap-3", () -> Arrays.stream(W).collect(Collectors.toMap(s -> s, s -> 1, (a, b) -> a)).keySet());
+        r("toMap-4", () -> Arrays.stream(W).collect(Collectors.toMap(s -> s, s -> 1, (a, b) -> a, HashMap::new)).keySet());
+        r("groupingBy", () -> Arrays.stream(W).collect(Collectors.groupingBy(s -> s)).keySet());
+        r("groupingBy-down", () -> Arrays.stream(W).collect(Collectors.groupingBy(s -> s, Collectors.counting())).keySet());
+        r("groupingBy-factory", () -> Arrays.stream(W).collect(Collectors.groupingBy(s -> s, HashMap::new, Collectors.counting())).keySet());
+        r("toSet", () -> Arrays.stream(W).collect(Collectors.toSet()));
+        r("set-add", () -> { Set<String> s = new HashSet<>(); for (String w : W) { s.add(w); } return s; });
+        r("partitioningBy", () -> Arrays.stream(W).collect(Collectors.partitioningBy(s -> s.length() > 3)).keySet());
+        r("groupingBy-tree", () -> Arrays.stream(W).collect(Collectors.groupingBy(s -> s, TreeMap::new, Collectors.counting())).keySet());
+        // ...and an empty stream whose element only a WITNESS says.
+        r("witness-map", () -> Stream.<String>empty().map(s -> s.length()).count());
+        r("witness-filter", () -> Stream.<String>empty().filter(s -> s.isEmpty()).count());
+        r("witness-reduce", () -> Stream.<String>empty().reduce((a, b) -> a + b).isPresent());
+        r("witness-collect", () -> Stream.<String>empty().collect(Collectors.summingInt(String::length)));
+        r("witness-sorted", () -> Stream.<String>empty().sorted(Comparator.comparingInt(String::length)).count());
+        r("witness-group", () -> Stream.<String>empty().collect(Collectors.groupingBy(s -> s.length())).size());
+    }
+}
+"#
+);

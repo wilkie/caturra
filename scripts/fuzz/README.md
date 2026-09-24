@@ -10,6 +10,9 @@ scripts/fuzz/run.py /tmp/fz/cases
 
 scripts/fuzz/positions.py --out /tmp/pos/cases              # one expression, twelve positions
 scripts/fuzz/run.py /tmp/pos/cases
+
+scripts/fuzz/pipelines.py --out /tmp/pipe/cases             # a random stream pipeline
+scripts/fuzz/run.py /tmp/pipe/cases
 ```
 
 Needs a JDK 11 on `PATH` (`javac`/`java`) and this repo, which `run.py` finds
@@ -26,6 +29,17 @@ divergence lands on the operation that caused it — with each call wrapped, so
 the operations that THROW are compared too. It also walks hash collections
 large enough to resize several times, which is the most detailed claim caturra
 makes about the library. Nine thousand lines over ten seeds, no divergence.
+
+**`pipelines.py` — a random stream pipeline, end to end.** A pipeline is a
+source, a run of intermediate ops and a terminal, and almost every stream
+defect this engine has had was at a JOIN between two of them rather than in any
+one. Each line prints the terminal's answer AND what a `peek` wrote, so an
+ORDER or a LAZINESS difference lands on the pipeline that caused it. Its first
+run found three: `Stream.<String>empty()` lost the element its witness names,
+`groupingBy` and the merge-taking `toMap` linked a new key at the wrong end of
+its bucket (the compute family prepends where `put` appends), and
+`stream.iterator()` materializes the whole pipeline where a JDK pulls — the
+last one is written down in specs/LANGUAGE.md rather than fixed.
 
 **`regex.py` — the regex engine against a JDK's.**
 `crates/caturra-vm/src/regex.rs` is a hand-written backtracking engine, and its

@@ -13552,7 +13552,14 @@ impl<'run> Interpreter<'run> {
                         Some(inner) => self.stream_collect(members, inner)?,
                         None => JValue::Ref(Some(self.heap.alloc(HeapObject::ArrayList(members)))),
                     };
-                    self.map_put(map, key, value)?;
+                    // A JDK's `groupingBy` reaches its map through
+                    // `computeIfAbsent`, which links a new node at the HEAD of
+                    // its bucket (`tab[i] = newNode(hash, key, v, first)`)
+                    // where `put` appends — so two keys that collide come out
+                    // in the reverse of the order they were first seen.
+                    // Putting them the other way round printed
+                    // `{the=…, bb=…}` where a JDK prints `{bb=…, the=…}`.
+                    self.map_put_compute(map, key, value)?;
                 }
                 Ok(JValue::Ref(Some(map)))
             }
@@ -13708,6 +13715,7 @@ impl<'run> Interpreter<'run> {
                         )));
                     }
                     let existing = self.map_find(map, k)?;
+                    let merging = merge.is_some();
                     let v = match (existing, merge) {
                         (Some(at), Some(merge)) => {
                             let held = self.map_value_at(map, at);
@@ -13738,7 +13746,16 @@ impl<'run> Interpreter<'run> {
                         }
                         _ => v,
                     };
-                    self.map_put(map, k, v)?;
+                    // `toMap(k, v)` accumulates with `putIfAbsent` and the
+                    // merge-taking forms with `map.merge` — the compute family,
+                    // which links a new node at the HEAD of its bucket. Two
+                    // colliding keys come out in opposite orders for the two
+                    // spellings, which is a JDK's own answer and not a choice.
+                    if merging {
+                        self.map_put_compute(map, k, v)?;
+                    } else {
+                        self.map_put(map, k, v)?;
+                    }
                 }
                 Ok(JValue::Ref(Some(map)))
             }
