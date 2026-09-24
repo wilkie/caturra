@@ -6744,6 +6744,14 @@ fn library_enum_constants(ty: JType) -> Option<&'static [&'static str]> {
 /// lets the LAMBDA pass ask the same question the emitter's resolver asks.
 fn library_value_type(simple: &str) -> Option<JType> {
     Some(match simple {
+        // A BUILDER is a library value like any other here: its table answers
+        // `length()`, `charAt(i)`, `indexOf(s)` and the rest, none of which
+        // the arms above this reader name. Missing, every one of them had no
+        // type in a lambda body, so `map(b -> b.length())` over builders was
+        // an `Object` element — though `map(b -> b.toString())` beside it,
+        // which every receiver answers, was fine.
+        "StringBuilder" => JType::StringBuilder(BuilderKind::Builder),
+        "StringBuffer" => JType::StringBuilder(BuilderKind::Buffer),
         "BigInteger" => JType::BigInteger,
         "BigDecimal" => JType::BigDecimal,
         "RoundingMode" => JType::RoundingMode,

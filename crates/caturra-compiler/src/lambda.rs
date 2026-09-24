@@ -825,7 +825,13 @@ fn is_library_static(class: &str, method: &str) -> bool {
         // `Collections::singletonMap` read as unbound INSTANCE references on
         // the stream's element and were "cannot find symbol" — about a method
         // the class plainly has.
-        "Arrays" | "Collections" | "Objects" | "Collectors" => true,
+        // The NAMESPACES: every method each declares is static, so none of
+        // them needs a list to keep current. `Files::isDirectory` as a stream
+        // filter is the ordinary way to sift what `Files.list` answers, and
+        // `Collections::singletonList` is what a `collectingAndThen` finisher
+        // is. Written as lists, each read as an unbound INSTANCE reference on
+        // the stream's element.
+        "Arrays" | "Collections" | "Objects" | "Collectors" | "Files" => true,
         "Character" => matches!(
             method,
             "isDigit"
@@ -857,11 +863,8 @@ fn is_library_static(class: &str, method: &str) -> bool {
         // `split` and the predicates beside them are not.
         "Pattern" => matches!(method, "compile" | "quote" | "matches"),
         "Matcher" => method == "quoteReplacement",
-        // `Files` is a NAMESPACE: every method it has is static, so this needs
-        // no list to keep current — `Files::isDirectory` as a stream filter is
-        // the ordinary way to sift what `Files.list` answers. `Path` and
-        // `Paths` are not namespaces, so their one factory is named.
-        "Files" => true,
+        // `Path` and `Paths` are not namespaces, so their one factory each is
+        // named.
         "Path" => method == "of",
         "Paths" => method == "get",
         _ => false,
@@ -1410,9 +1413,53 @@ fn pinned_vars(
             InferSource::Direct(index) => static_type_of(args.get(*index)?, ctx),
             InferSource::Element(index) => list_elem_type(args.get(*index)?, ctx),
             // What a lambda's BODY answers is read in codegen, off the class
-            // this pass synthesizes — by the time it exists, this pass has
-            // already handed out the target types it was asked for.
-            InferSource::LambdaResult(_) => None,
+            // this pass synthesizes. Two shapes can be read HERE, before that
+            // class exists, and they are the ones a program writes: a
+            // SUPPLIER — a lambda with no parameters, so its body depends on
+            // nothing this call has yet to pin — and a method REFERENCE,
+            // whose answer its declaration states. Without them
+            // `run(() -> "x", s -> s.length())` left `T` unpinned and the
+            // second lambda's parameter was `Object`, in a call javac reads
+            // left to right without trouble.
+            InferSource::LambdaResult(index) => supplier_answer(args.get(*index)?, ctx),
+        });
+        if let Some(pinned) = pinned {
+            bound.insert(var.clone(), pinned);
+        }
+    }
+    // A SECOND pass for the lambdas that have parameters: what one answers
+    // depends on what its parameters are, and those are what the first pass
+    // just pinned. `via(() -> new StringBuilder("ab"), b -> b.length())` pins
+    // `T` from the supplier and can only then read `b.length()` as the `int`
+    // that pins `R`.
+    for (var, sources) in &sig.sources {
+        if bound.contains_key(var) {
+            continue;
+        }
+        let pinned = sources.iter().find_map(|source| {
+            let InferSource::LambdaResult(index) = source else {
+                return None;
+            };
+            let Some(Expr::Lambda { params, body, .. }) = args.get(*index) else {
+                return None;
+            };
+            let LambdaBody::Expr(body) = body else {
+                return None;
+            };
+            // The SAM's parameters are every argument of the declared
+            // functional type but the LAST, which is its result.
+            let Some(TypeRef::Generic { args: declared, .. }) = sig.params.get(*index) else {
+                return None;
+            };
+            let sam = declared.get(..declared.len().checked_sub(1)?)?;
+            if sam.len() != params.len() {
+                return None;
+            }
+            let mut inner: HashMap<String, TypeRef> = HashMap::new();
+            for (param, ty) in params.iter().zip(sam) {
+                inner.insert(param.name.clone(), substitute_vars(ty, &bound, &sig.vars)?);
+            }
+            body_type(body, &inner, ctx)
         });
         if let Some(pinned) = pinned {
             bound.insert(var.clone(), pinned);
@@ -1426,6 +1473,36 @@ fn pinned_vars(
         }
     }
     bound
+}
+
+/// What a SUPPLIER-shaped argument answers, read syntactically: a lambda with
+/// no parameters (its body depends on nothing the call has yet to pin), or a
+/// method reference (its declaration states the answer). Every other lambda's
+/// answer depends on its parameter types, which are what this inference is
+/// trying to find — those stay for codegen, which reads them off the class
+/// this pass synthesizes.
+fn supplier_answer(arg: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    match arg {
+        Expr::Lambda { params, body, .. } if params.is_empty() => match body {
+            LambdaBody::Expr(expr) => body_type(expr, &HashMap::new(), ctx),
+            LambdaBody::Block(_) => None,
+        },
+        // `Type::new` answers the type; `Owner::method` answers what that
+        // method declares.
+        Expr::MethodRef {
+            qualifier, method, ..
+        } => {
+            let Expr::Name { path, .. } = qualifier.as_ref() else {
+                return None;
+            };
+            let owner = path.last()?;
+            if method == "new" {
+                return Some(TypeRef::Named(owner.clone()));
+            }
+            declared_shape(owner, method, 0, ctx).map(|(_, answered)| answered)
+        }
+        _ => None,
+    }
 }
 
 /// What a call to a GENERIC method of the program returns, with its type
@@ -6127,7 +6204,7 @@ fn literal_container_type(
         }
     };
     if base == "Map" {
-        if args.len() % 2 != 0 {
+        if !args.len().is_multiple_of(2) {
             return None;
         }
         let (mut key, mut value): (Option<TypeRef>, Option<TypeRef>) = (None, None);
@@ -7295,6 +7372,7 @@ fn literal_element_type(args: &[Expr], ctx: &Ctx) -> TypeRef {
 /// TYPE, which a static call has no value to give — the receiver is a class
 /// name. Kept to the calls a lambda body actually makes; anything else stays
 /// unknown, which is where it was.
+#[allow(clippy::too_many_lines)] // one question per library family
 fn library_static_type(class: &str, method: &str, argc: usize) -> Option<TypeRef> {
     // Written as a sequence of questions rather than one table: the families
     // cut across classes (every wrapper's `toString` is a String, every

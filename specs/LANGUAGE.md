@@ -9190,6 +9190,17 @@ counting catches: a divergence that stopped being one.
   wrong REJECTION would be worse than the missing check. The provable cases —
   a primitive against the one wrapper it boxes to, and one concrete final
   library type against another — ARE refused. (`a_witness_naming_the_wrong_user_class`)
+- `int n = apply("ab", s -> s.charAt(0))` for a `<T, R> R apply(T,
+  Function<T, R>)`. The lambda answers a `char`, which pins `R` to
+  `Character`, and caturra then lets the call's result unbox and widen into an
+  `int` the way an ordinary `Character` value does. javac does not: an
+  inference variable must satisfy every bound at once, and `R = Character`
+  cannot also be `int` — "inference variable R has incompatible bounds". The
+  same lambda answering `s.length()` is fine in both, and the narrower rule is
+  a JLS §18 question this engine does not model. Recorded 2026-09-24 while
+  widening what a call's type variables can be pinned from, though the cell
+  was already loose through the older route.
+  (`an_inferred_variable_unboxes_and_widens`)
 
 - `Collections.sort(new ArrayList<>())` — javac refuses the DIAMOND here
   ("inferred type does not conform to equality constraint(s)") and compiles the
@@ -15708,6 +15719,46 @@ overloads caturra refuses outright — the generic half of that class
 `parallelSort`, and `copyOf`/`copyOfRange` with an array class). They are in
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
+
+### A type variable pinned by what a lambda answers (2026-09-24)
+
+`run(() -> "x", s -> s.length())` — for a `<T> void run(Supplier<T>,
+Consumer<T>)` — left `T` unpinned, so the second lambda's parameter was
+`Object` and `s.length()` was "cannot find symbol". javac reads the call left
+to right without trouble: the supplier says what `T` is, and the consumer is
+typed against it. Nine of a fourteen-case probe, all the same cause.
+
+**A supplier has no element to read.** caturra recorded `Supplier<T> s` as an
+ELEMENT source — the same reading a `List<T>` gets — and a lambda has no
+element, so the source never answered. What pins `T` is what the lambda
+ANSWERS, and two shapes of that can be read syntactically, before the class
+the lambda pass synthesizes exists: a lambda with NO parameters, whose body
+depends on nothing the call has yet to pin, and a method REFERENCE, whose
+declaration states the answer. Everything else still waits for codegen, which
+reads it off that class.
+
+**A lambda with parameters needs two passes.** `<T, R> R via(Supplier<T>,
+Function<T, R>)` pins `T` from the supplier and can only then read `f`'s body
+— `b -> b.length()` says nothing until `b` has a type. So the inference runs
+the value-shaped sources first and the lambda-shaped ones after, with what the
+first pass bound in hand.
+
+**And a `StringBuilder` is a library VALUE like any other.** Its table answers
+`length()`, `charAt(i)` and `indexOf(s)`, and the reader that consults those
+tables did not know the name — so every one of them had no type in a lambda
+body, while `b.toString()` beside them (which every receiver answers) was
+fine. That is what the last of the nine cases turned out to be.
+
+Pinned as `a_variable_pinned_by_a_lambda` (twenty-six calls), which pins the
+routes that already worked — a variable pinned from a VALUE argument, from a
+list's element, from a `BiFunction` — so they cannot be lost to the new one.
+
+**One permissiveness, recorded rather than left to a sweep.** A lambda that
+answers a `char` pins the variable to `Character`, and caturra lets the call's
+result unbox and widen into an `int`; javac refuses, because an inference
+variable must satisfy every bound at once. It is in the looser-than-javac list
+as `an_inferred_variable_unboxes_and_widens`, and it is not new — the same
+cell was already loose through a variable pinned from a value argument.
 
 ### A library container in a lambda body (2026-09-24)
 

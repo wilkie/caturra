@@ -5627,7 +5627,17 @@ fn variable_sources(method: &MethodDecl, var: &str) -> Vec<crate::ast::InferSour
         .filter_map(|(index, p)| match &p.ty {
             TypeRef::Named(name) if name == var => Some(InferSource::Direct(index)),
             // A container OF it (`List<T> xs`): the argument's ELEMENT pins it.
-            TypeRef::Generic { args, .. } => match args.as_slice() {
+            TypeRef::Generic { base, args } => match args.as_slice() {
+                // ...unless the container is a FUNCTIONAL interface whose
+                // single argument is its RESULT — `Supplier<T> s`. There is no
+                // element to read: what pins `T` is what the lambda ANSWERS.
+                // Read as an element, `run(() -> "x", s -> s.length())` left
+                // `T` unpinned and the second lambda's parameter was `Object`.
+                [TypeRef::Named(name)]
+                    if name == var && crate::ast::functional_result_arity(base) == Some(1) =>
+                {
+                    Some(InferSource::LambdaResult(index))
+                }
                 [TypeRef::Named(name)] if name == var => Some(InferSource::Element(index)),
                 // `List<? extends T>` / `Consumer<? super T>`: the variable
                 // is the wildcard's BOUND, and a wildcard is written as an
@@ -5635,7 +5645,18 @@ fn variable_sources(method: &MethodDecl, var: &str) -> Vec<crate::ast::InferSour
                 [TypeRef::Named(name)] => crate::ast::wildcard_parts(name)
                     .filter(|(_, bound)| *bound == var)
                     .map(|_| InferSource::Element(index)),
-                _ => None,
+                // A functional interface whose RESULT is the variable
+                // (`Function<T, R> f`), the same reading `infer_return_plan`
+                // already does for a returned variable.
+                args => crate::ast::functional_result_arity(base)
+                    .filter(|arity| *arity == args.len())
+                    .and_then(|_| args.last())
+                    .and_then(|last| match last {
+                        TypeRef::Named(name) if name == var => {
+                            Some(InferSource::LambdaResult(index))
+                        }
+                        _ => None,
+                    }),
             },
             // `T...` — the ARGUMENT at that position is a `T` itself, not a
             // container of them, so it pins the variable directly.

@@ -60406,3 +60406,111 @@ public class CL {
 }
 "#
 );
+
+// A FOURTH permissiveness, found while widening what a call's type variables
+// can be pinned from. A lambda that answers a `char` pins the variable to
+// `Character`, and caturra then lets the call's result unbox and widen into an
+// `int` the way an ordinary `Character` value does. javac does not: an
+// inference variable must satisfy every bound at once, and `R = Character`
+// cannot also be `int`, so it reports "inference variable R has incompatible
+// bounds" — while the same lambda answering `s.length()` is fine in both.
+//
+// Pinning the variable at all is what the program asked for, and the narrower
+// rule (a boxed inference result may not widen) is a JLS §18 question caturra
+// does not model. It is also not new: the same cell was already loose through
+// a variable pinned from a VALUE argument, which is the older route.
+looser_than_javac!(
+    an_inferred_variable_unboxes_and_widens,
+    "InferWidenChar",
+    r#"
+import java.util.function.Function;
+
+public class InferWidenChar {
+    static <T, R> R apply(T value, Function<T, R> f) {
+        return f.apply(value);
+    }
+
+    public static void main(String[] args) {
+        int n = apply("ab", s -> s.charAt(0));
+        System.out.println(n);
+    }
+}
+"#
+);
+
+// A type variable pinned by what a LAMBDA answers.
+//
+// `run(() -> "x", s -> s.length())` — a `<T> void run(Supplier<T>, Consumer<T>)`
+// — left `T` unpinned, so the second lambda's parameter was `Object` and
+// `s.length()` was "cannot find symbol". javac reads the call left to right
+// without trouble: the supplier says what `T` is, and the consumer is typed
+// against it.
+//
+// caturra recorded `Supplier<T> s` as an ELEMENT source, which is what a
+// `List<T>` is — but a supplier has no element to read. What pins `T` is what
+// the lambda ANSWERS, and two shapes of that can be read syntactically, before
+// the class this pass synthesizes exists: a lambda with no parameters (its
+// body depends on nothing the call has yet to pin) and a method reference (its
+// declaration states the answer).
+//
+// A lambda WITH parameters answers only once its parameters are typed, and
+// those are what the first reading just pinned — so `<T, R> R via(Supplier<T>,
+// Function<T, R>)` takes two passes: `T` from the supplier, then `R` from
+// `f`'s body read with `T` in hand.
+//
+// ...and a StringBuilder is a library VALUE like any other here: its table
+// answers `length()` and `charAt(i)`, which no arm above that reader named, so
+// every one of them had no type in a lambda body.
+differential_test!(
+    a_variable_pinned_by_a_lambda,
+    "PL",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class PL {
+    static void out(Object o) { System.out.println(o); }
+    static String make() { return "made"; }
+    static <T> void run(Supplier<T> s, Consumer<T> c) { c.accept(s.get()); }
+    static <T, R> R via(Supplier<T> s, Function<T, R> f) { return f.apply(s.get()); }
+    static <T> void take(T value, Consumer<T> c) { c.accept(value); }
+    static <T, R> R apply(T value, Function<T, R> f) { return f.apply(value); }
+    static <T, R> R both(Function<T, R> f, Supplier<T> s) { return f.apply(s.get()); }
+    static <A, B, R> R pair(A a, B b, BiFunction<A, B, R> f) { return f.apply(a, b); }
+    static <T> boolean keep(Supplier<T> s, Predicate<T> p) { return p.test(s.get()); }
+    static <T, R> void takeAll(List<T> xs, Function<T, R> f, Consumer<R> c) {
+        for (T x : xs) { c.accept(f.apply(x)); }
+    }
+    public static void main(String[] args) {
+        // A supplier pins the variable the other argument is typed against.
+        run(() -> "x", s -> out(s.length()));
+        run(PL::make, s -> out(s.length()));
+        run(() -> new StringBuilder("ab"), b -> out(b.length()));
+        run(() -> List.of("a", "b"), l -> out(l.get(1).length()));
+        run(() -> new ArrayList<String>(), l -> out(l.size()));
+
+        // ...and the RESULT, read once the parameter is known.
+        int a = via(() -> "x", s -> s.length()); out(a);
+        int b = via(() -> new StringBuilder("ab"), x -> x.length()); out(b);
+        int c = via(() -> List.of("a"), l -> l.get(0).length()); out(c);
+        String d = via(() -> "x", s -> s.toUpperCase()); out(d);
+        int e = via(ArrayList<String>::new, l -> l.size()); out(e);
+        int f = both(s -> s.length(), () -> "abc"); out(f);
+        boolean g = keep(() -> "x", s -> s.isEmpty()); out(g);
+
+        // The routes that already worked, so they keep working.
+        take("x", s -> out(s.length()));
+        take(List.of("x"), l -> out(l.size()));
+        int h = apply("x", s -> s.length()); out(h);
+        int i = pair("x", 1, (s, n) -> s.length() + n); out(i);
+        takeAll(List.of("ab"), s -> s.length(), n -> out(n));
+
+        // A builder's own methods, in a lambda body.
+        out(java.util.stream.Stream.of(new StringBuilder("ab")).map(x -> x.length()).findFirst().get() + 1);
+        out(java.util.stream.Stream.of(new StringBuilder("ab")).map(x -> x.charAt(0)).findFirst().get());
+        out(java.util.stream.Stream.of(new StringBuilder("ab")).map(x -> x.indexOf("b")).findFirst().get() + 1);
+        out(java.util.stream.Stream.of(new StringBuilder("ab")).map(x -> x.reverse().toString()).findFirst().get());
+    }
+}
+"#
+);
