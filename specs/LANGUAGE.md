@@ -15709,6 +15709,42 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A container as an element of a factory (2026-09-24)
+
+`Collections.nCopies(2, aList)` came up while probing something else, and
+caturra refused it: "cannot make a list of List<String>". A JDK builds the
+`List<List<String>>` without comment, and so it refused `singletonList(aMap)`,
+`singleton(aSet)`, `singletonMap(k, aList)` and every array, `Optional` and
+nested map a program might put in one — sixteen cells of a twenty-seven-cell
+probe.
+
+**Two rules stood for "what an element may be", and the four factories read
+the narrower one.** `collection_elem_of` answers for the kinds that have an
+element form of their own — the primitives, `String`, a user class, the
+library enums — and its default is `None`, which each factory turned into a
+refusal. `holdable_elem` is the other: it falls back to interning the whole
+type as a NESTED element, which is what a literal collection, a varargs pack
+and `Arrays.asList` have used all along. The narrow one is right where an
+element must be a storable kind; it was never right for "may a list hold
+this?", where the answer is yes for every reference.
+
+The emit path and `type_of` each read it separately, so both had to be told —
+the emit/typing mirror for the nth time, and the reason a probe that only
+printed the result would have missed half of it.
+
+**The same rule, in the same shape, in the collectors.** `Collectors.toMap(x
+-> x, x -> listFor(x))` is a `Map<String, List<String>>`; `collector_key`, the
+one reader for a collector's key and value function, also took the narrow
+rule, so the map's values came back as `Object` and `.get(k).size()` was
+"cannot find symbol". That one reader is shared by `toMap` (all four
+overloads), `groupingBy`, `partitioningBy` and `mapping`, so fixing it fixed
+all of them.
+
+Pinned as `a_container_as_an_element` (thirty-eight calls), which pins the
+positions that already worked — `List.of`, `Map.of`, `Set.of`,
+`Arrays.asList`, `Optional.of` and a doubly-nested literal — so the two rules
+cannot drift apart again in the other direction.
+
 ### Every use of a stale sub-range (2026-09-24)
 
 The other cause the view fuzzer left. A JDK reads a collection it was HANDED

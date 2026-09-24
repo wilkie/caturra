@@ -60214,3 +60214,95 @@ public class SR {
 }
 "#
 );
+
+// A container as an ELEMENT of a factory.
+//
+// `Collections.singletonList(aList)` is a `List<List<String>>`, which a JDK
+// builds without comment. caturra refused it — "cannot make a list of
+// List<String>" — and so did `singleton`, `singletonMap` (either side) and
+// `nCopies`, for every collection, map and array a program might put in one.
+//
+// Two rules stood for "what an element may be", and the four factories read
+// the narrower: `collection_elem_of`, whose default is a refusal, rather than
+// `holdable_elem`, which interns a whole container as a nested element and is
+// what the literal collections and the varargs packs already use. The emit
+// path and `type_of` each read it separately, so both had to be told — the
+// emit/typing mirror once more.
+//
+// `Collectors.toMap(x -> x, x -> listFor(x))` was the same rule in the same
+// shape: a collector's key and value function answer through one reader, and
+// it too took the narrow one, so the map's values came back as `Object` and
+// `.get(k).size()` was "cannot find symbol".
+differential_test!(
+    a_container_as_an_element,
+    "CE",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class CE {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static List<String> l() { return new ArrayList<>(List.of("a")); }
+    static List<String> l(String s) { return new ArrayList<>(List.of(s)); }
+    static Map<String, Integer> m(String s) { return new HashMap<>(Map.of(s, 1)); }
+    static int[] arr() { return new int[] {7, 8}; }
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>(Map.of("k", 1));
+        Set<String> s = new HashSet<>(Set.of("z"));
+
+        // The four `Collections` factories.
+        r("ncopies-list", () -> Collections.nCopies(2, l()));
+        r("ncopies-map", () -> Collections.nCopies(2, m));
+        r("ncopies-set", () -> Collections.nCopies(2, s));
+        r("ncopies-intarray", () -> Collections.nCopies(2, arr()).size());
+        r("ncopies-optional", () -> Collections.nCopies(2, Optional.of("q")));
+        r("ncopies-null", () -> Collections.nCopies(2, null));
+        r("ncopies-zero", () -> Collections.nCopies(0, l()));
+        r("singletonlist-list", () -> Collections.singletonList(l()));
+        r("singletonlist-map", () -> Collections.singletonList(m));
+        r("singletonlist-array", () -> Collections.singletonList(arr()).size());
+        r("singletonlist-null", () -> Collections.singletonList(null));
+        r("singleton-list", () -> Collections.singleton(l()));
+        r("singleton-map", () -> Collections.singleton(m));
+        r("singletonmap-value", () -> Collections.singletonMap("k", l()));
+        r("singletonmap-key", () -> Collections.singletonMap(l(), "v"));
+        r("singletonmap-null", () -> Collections.singletonMap("k", null));
+
+        // ...read back out, which is what the element type is FOR.
+        r("ncopies-get", () -> Collections.nCopies(3, l()).get(1).get(0));
+        r("ncopies-contains", () -> Collections.nCopies(3, l()).contains(l()));
+        r("ncopies-stream", () -> Collections.nCopies(3, l()).stream().map(List::size).collect(Collectors.toList()));
+        r("singletonlist-get", () -> Collections.singletonList(m).get(0).get("k"));
+        r("singleton-iterate", () -> {
+            StringBuilder out = new StringBuilder();
+            for (List<String> x : Collections.singleton(l())) { out.append(x.size()); }
+            return out.toString();
+        });
+        r("singletonmap-read", () -> Collections.singletonMap("k", l()).get("k").get(0));
+        r("assigned", () -> { List<List<String>> xs = Collections.nCopies(2, l()); return xs.get(0).size(); });
+
+        // A collector's key and value function answer the same way.
+        r("tomap-list-value", () -> Stream.of("a").collect(Collectors.toMap(x -> x, x -> l(x))).get("a").size());
+        r("tomap-list-key", () -> Stream.of("a").collect(Collectors.toMap(x -> l(x), x -> x)).values().iterator().next().length());
+        r("tomap-array-value", () -> Stream.of("a").collect(Collectors.toMap(x -> x, x -> arr())).get("a")[0]);
+        r("tomap-map-helper", () -> Stream.of("a").collect(Collectors.toMap(x -> x, CE::m)).get("a").get("a"));
+        r("tomap-merge-list", () -> Stream.of("a", "a").collect(Collectors.toMap(x -> x, x -> l(x), (p, q) -> p)).get("a").size());
+        r("tomap-sorted", () -> Stream.of("a").collect(Collectors.toMap(x -> x, x -> l(x), (p, q) -> p, TreeMap::new)).get("a").size());
+        r("groupingby-mapping", () -> Stream.of("a").collect(Collectors.groupingBy(x -> x, Collectors.mapping(CE::l, Collectors.toList()))).get("a").get(0).size());
+        r("groupingby-list-key", () -> Stream.of("a").collect(Collectors.groupingBy(x -> l(x), Collectors.counting())).values().iterator().next());
+
+        // The positions that already worked, so they stay working.
+        r("listof-list", () -> List.of(l(), l()).get(0).get(0));
+        r("mapof-list", () -> Map.of("k", l()).get("k").get(0));
+        r("setof-list", () -> Set.of(l()).iterator().next().size());
+        r("aslist-list", () -> Arrays.asList(l(), l()).size());
+        r("optional-list", () -> Optional.of(l()).get().get(0));
+        r("nested-nested", () -> List.of(List.of(l())).get(0).get(0).get(0));
+    }
+}
+"#
+);

@@ -33175,7 +33175,10 @@ impl BodyGen<'_> {
     /// is the WRAPPER, since a map holds references.
     fn collector_key(&mut self, function: &Expr) -> Option<ElemType> {
         let produced = lambda_produces(self.type_of(function), self.table)?;
-        collection_elem_of(produced)
+        // A CONTAINER is a map element too — `toMap(x -> x, x -> listFor(x))`
+        // is a `Map<String, List<String>>`, and reading the narrower rule made
+        // its values `Object`.
+        self.holdable_elem(produced)
     }
 
     /// `iterable.forEach(consumer)` / `iterator.forEachRemaining(consumer)` on
@@ -38446,7 +38449,13 @@ impl BodyGen<'_> {
                 return None;
             };
             let value_ty = self.expr(value);
-            let Some(elem) = collection_elem_of(value_ty) else {
+            // A CONTAINER is an element too — `singletonList(aList)` is a
+            // `List<List<String>>`, which a JDK builds without comment. Asked
+            // of `collection_elem_of`, whose default is a refusal, the four
+            // factories below turned away every collection, map and array a
+            // program wrote into one. `holdable_elem` is the rule the literal
+            // collections and the varargs packs already use.
+            let Some(elem) = self.holdable_elem(value_ty) else {
                 self.error(
                     value.span(),
                     format!(
@@ -38549,7 +38558,7 @@ impl BodyGen<'_> {
                 return None;
             };
             let value_ty = self.expr(value);
-            let Some(elem) = collection_elem_of(value_ty) else {
+            let Some(elem) = self.holdable_elem(value_ty) else {
                 self.error(
                     value.span(),
                     format!(
@@ -38577,7 +38586,7 @@ impl BodyGen<'_> {
                 return None;
             };
             let key_ty = self.expr(key_arg);
-            let Some(key) = collection_elem_of(key_ty) else {
+            let Some(key) = self.holdable_elem(key_ty) else {
                 self.error(
                     key_arg.span(),
                     "Collections.singletonMap key has no element type",
@@ -38587,7 +38596,7 @@ impl BodyGen<'_> {
             };
             self.convert_for_assignment(key_ty, key.base_type(), key_arg.span());
             let value_ty = self.expr(value_arg);
-            let Some(value) = collection_elem_of(value_ty) else {
+            let Some(value) = self.holdable_elem(value_ty) else {
                 self.error(
                     value_arg.span(),
                     "Collections.singletonMap value has no element type",
@@ -38802,7 +38811,7 @@ impl BodyGen<'_> {
             let elem = if value_ty == JType::Null {
                 Some(ElemType::Object(self.table.object_id))
             } else {
-                collection_elem_of(value_ty)
+                self.holdable_elem(value_ty)
             };
             let Some(elem) = elem else {
                 self.error(
@@ -41800,12 +41809,14 @@ impl BodyGen<'_> {
                             if value == JType::Null {
                                 return JType::Null;
                             }
-                            return collection_elem_of(value)
+                            return self
+                                .holdable_elem(value)
                                 .map_or(JType::Error, JType::library_list);
                         }
                         "singletonList" => {
                             let value = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return collection_elem_of(value)
+                            return self
+                                .holdable_elem(value)
                                 .map_or(JType::Error, JType::library_list);
                         }
                         "reverseOrder" => {
@@ -41816,13 +41827,14 @@ impl BodyGen<'_> {
                         }
                         "singleton" => {
                             let value = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return collection_elem_of(value)
+                            return self
+                                .holdable_elem(value)
                                 .map_or(JType::Error, JType::library_set);
                         }
                         "singletonMap" => {
                             let key = args.first().map_or(JType::Error, |a| self.type_of(a));
                             let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
-                            return match (collection_elem_of(key), collection_elem_of(value)) {
+                            return match (self.holdable_elem(key), self.holdable_elem(value)) {
                                 (Some(key), Some(value)) => JType::library_map(key, value),
                                 _ => JType::Error,
                             };
