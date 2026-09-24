@@ -60514,3 +60514,99 @@ public class PL {
 }
 "#
 );
+
+// A library VALUE in a lambda body, and a `StringBuffer` as an element.
+//
+// `map(p -> p.getNameCount())` over a stream of paths produced an `Object`
+// element and the call after it was "cannot find symbol". Three
+// hand-written lists, each with the wrong default:
+//
+// the table of library VALUE types the descriptor reader consults, which knew
+// `BigInteger` and `LocalDate` and not `File`, `Path`, `Pattern`, `Matcher`,
+// `Scanner`, `Charset` or either builder; the COLLECTION face, which knew the
+// lists, sets and maps and not the queues, so `q.size()` had no type; and the
+// static factories, which had no `Path.of`.
+//
+// A CURSOR and an OPTIONAL are neither, and each has two questions a lambda
+// body asks constantly (`hasNext`, `isPresent`).
+//
+// ...and a class written out in FULL — `new java.util.Random(1)` — found
+// nothing, because a bundled class is declared under its simple name.
+//
+// A `StringBuffer` is the other half. caturra stores one in the same heap
+// object a `StringBuilder` uses and told them apart by a recorded class name,
+// but the ELEMENT kind was one for both — so `List<StringBuffer> l; l.add(new
+// StringBuffer("x"))` was "StringBuffer cannot be converted to
+// StringBuilder", about the type the list was written to hold. The element
+// kind carries WHICH builder now, and the array-store check reads the
+// recorded name the way `getClass()` does, so a `StringBuffer[]` takes one.
+differential_test!(
+    a_library_value_in_a_lambda,
+    "LV",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+import java.nio.file.Path;
+import java.util.regex.Pattern;
+
+public class LV {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        // A library value's own methods, read through a lambda.
+        r("builder", () -> Stream.of(new StringBuilder("ab")).map(x -> x.length()).findFirst().get() + 1);
+        r("buffer", () -> Stream.of(new StringBuffer("ab")).map(x -> x.length()).findFirst().get() + 1);
+        r("buffer-charat", () -> Stream.of(new StringBuffer("ab")).map(x -> x.charAt(1)).findFirst().get());
+        r("file", () -> Stream.of(new java.io.File("x/y")).map(x -> x.getName().length()).findFirst().get() + 1);
+        r("path", () -> Stream.of(Path.of("a/b")).map(x -> x.getNameCount()).findFirst().get() + 1);
+        r("path-qualified", () -> Stream.of(java.nio.file.Path.of("a/b/c")).map(x -> x.getNameCount()).findFirst().get() + 1);
+        r("paths-get", () -> Stream.of(java.nio.file.Paths.get("a/b")).map(x -> x.getNameCount()).findFirst().get() + 1);
+        r("pattern", () -> Stream.of(Pattern.compile("a+")).map(x -> x.pattern().length()).findFirst().get() + 1);
+        r("matcher", () -> Stream.of(Pattern.compile("a").matcher("aa")).map(x -> x.groupCount()).findFirst().get() + 1);
+        r("scanner", () -> Stream.of(new Scanner("a b")).map(x -> x.hasNext()).findFirst().get());
+        r("random", () -> Stream.of(new Random(1)).map(x -> x.nextInt(5)).findFirst().get() + 1);
+        r("random-qualified", () -> Stream.of(new java.util.Random(1)).map(x -> x.nextInt(5)).findFirst().get() + 1);
+        r("bigdecimal", () -> Stream.of(new java.math.BigDecimal("1.5")).map(x -> x.scale()).findFirst().get() + 1);
+        r("localdate", () -> Stream.of(java.time.LocalDate.of(2020, 1, 2)).map(x -> x.getDayOfMonth()).findFirst().get() + 1);
+
+        // The QUEUE faces, which share every collection's three questions.
+        r("deque", () -> Stream.of(new ArrayDeque<String>()).map(x -> x.size()).findFirst().get() + 1);
+        r("priorityqueue", () -> Stream.of(new PriorityQueue<String>()).map(x -> x.size()).findFirst().get() + 1);
+        r("deque-empty", () -> Stream.of(new ArrayDeque<String>()).map(x -> x.isEmpty()).findFirst().get());
+        r("linkedhashmap", () -> Stream.of(new LinkedHashMap<String, Integer>()).map(x -> x.size()).findFirst().get() + 1);
+        r("stack", () -> Stream.of(new Stack<String>()).map(x -> x.size()).findFirst().get() + 1);
+
+        // A cursor and an optional.
+        r("iterator", () -> Stream.of(List.of("a").iterator()).map(x -> x.hasNext()).findFirst().get());
+        r("listiterator", () -> Stream.of(List.of("a").listIterator()).map(x -> x.hasPrevious()).findFirst().get());
+        r("optional-present", () -> Stream.of(Optional.of("ab")).map(x -> x.isPresent()).findFirst().get());
+        r("optional-get", () -> Stream.of(Optional.of("ab")).map(x -> x.get().length()).findFirst().get() + 1);
+
+        // A `StringBuffer` as an ELEMENT, in every position.
+        r("buffer-list", () -> { List<StringBuffer> l = new ArrayList<>(); l.add(new StringBuffer("ab")); return l.get(0).length(); });
+        r("buffer-listof", () -> List.of(new StringBuffer("ab")).get(0).length());
+        r("buffer-array", () -> { StringBuffer[] a = new StringBuffer[1]; a[0] = new StringBuffer("ab"); return a[0].length(); });
+        r("buffer-stream", () -> Stream.of(new StringBuffer("ab")).count());
+        r("buffer-map-value", () -> { Map<String, StringBuffer> m = new HashMap<>(); m.put("k", new StringBuffer("ab")); return m.get("k").length(); });
+        r("buffer-set", () -> { Set<StringBuffer> s = new HashSet<>(); s.add(new StringBuffer("ab")); return s.size(); });
+        r("buffer-optional", () -> Optional.of(new StringBuffer("ab")).get().length());
+        r("buffer-class", () -> new StringBuffer("ab").getClass().getName());
+        r("buffer-array-class", () -> new StringBuffer[1].getClass().getName());
+        r("builder-list", () -> { List<StringBuilder> l = new ArrayList<>(); l.add(new StringBuilder("ab")); return l.get(0).length(); });
+        r("builder-into-buffer-array", () -> {
+            Object[] a = new StringBuffer[1];
+            a[0] = new StringBuilder("ab");
+            return a[0];
+        });
+        r("buffer-into-builder-array", () -> {
+            Object[] a = new StringBuilder[1];
+            a[0] = new StringBuffer("ab");
+            return a[0];
+        });
+    }
+}
+"#
+);

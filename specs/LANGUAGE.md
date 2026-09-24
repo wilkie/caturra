@@ -15720,6 +15720,43 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A library value in a lambda body, and a StringBuffer as an element (2026-09-24)
+
+The `StringBuilder` gap the inference unit ended on was one of a family. A
+twenty-eight-type probe — one library value each, a method of its own called
+through a lambda — found nine more, and every one was a hand-written list
+whose default is "no type", which is "cannot find symbol" one call later.
+
+**Three lists.** The table of library VALUE types the descriptor reader
+consults knew `BigInteger` and `LocalDate` and not `File`, `Path`, `Pattern`,
+`Matcher`, `Scanner`, `Charset` or either builder. The COLLECTION face knew
+the lists, sets and maps and not the queues, so `q.size()` over an
+`ArrayDeque` had no type. The static factories had no `Path.of` or
+`Paths.get`, so a path written inline had none either. A CURSOR and an
+`Optional` are in none of the three, and each has two questions a lambda body
+asks constantly — `hasNext`, `isPresent`.
+
+**A class written out in FULL found nothing.** `new java.util.Random(1)`, the
+same value the imported spelling types fine, reached the reader that walks the
+program's own declarations under the name `java.util.Random` — and a bundled
+class is declared under its simple one. `listIterator()` was missing beside
+`iterator()` for the same reason a list keeps them apart: they are separate
+classes, and only one of them has `hasPrevious`.
+
+**A StringBuffer is not a StringBuilder.** caturra stores one in the same heap
+object and tells them apart by a recorded class name, which `getClass()` reads
+— but the ELEMENT kind was one for both, so `List<StringBuffer> l; l.add(new
+StringBuffer("x"))` was refused as one type not converting to the other, about
+the type the list was written to hold. A stream, an array, a map value, a set
+and an `Optional` of one were refused the same way. The element kind carries
+WHICH builder now; and the array-store check, which read the heap object's
+KIND rather than its recorded name, was throwing `ArrayStoreException` on a
+`StringBuffer[]` taking a buffer — it reads the name `getClass()` reads.
+
+Pinned as `a_library_value_in_a_lambda` (thirty-five calls), which pins both
+directions of the array store: a builder into a `StringBuffer[]` throws, and
+so does a buffer into a `StringBuilder[]`.
+
 ### A type variable pinned by what a lambda answers (2026-09-24)
 
 `run(() -> "x", s -> s.length())` — for a `<T> void run(Supplier<T>,

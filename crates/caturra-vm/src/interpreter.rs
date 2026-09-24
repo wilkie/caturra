@@ -24341,12 +24341,16 @@ fn element_class_of(element: &str) -> Option<String> {
     Some(canonical_class_name(inner).to_owned())
 }
 
-/// The runtime class name of a heap value, in internal form.
+/// The runtime class name of a heap value, in internal form. A VIEW class
+/// wins, exactly as it does for `getClass()`: caturra stores a `StringBuffer`
+/// in the same heap object a `StringBuilder` uses and tells them apart by that
+/// recorded name, so reading only the object's kind here made
+/// `new StringBuffer[1]` reject the buffer written into it.
 fn object_class_of(heap: &Heap, reference: HeapRef) -> String {
-    heap.get(reference).map_or_else(
-        || String::from("java/lang/Object"),
-        |object| heap_object_binary_name(object).replace('.', "/"),
-    )
+    if heap.get(reference).is_some() {
+        return object_class_name_of(heap, reference);
+    }
+    String::from("java/lang/Object")
 }
 
 /// Whether a value of runtime class `value_class` fits an element of class

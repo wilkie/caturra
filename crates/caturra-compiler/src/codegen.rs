@@ -4067,7 +4067,7 @@ impl MethodTable {
                         ElemType::Wrapper(_)
                         | ElemType::Str
                         | ElemType::Object(_)
-                        | ElemType::Builder
+                        | ElemType::Builder(_)
                         // A `java.time` value as the argument — `Comparable
                         // <Month>`, which is what an enum of theirs implements.
                         // Dropped, it left the same hole.
@@ -4121,7 +4121,7 @@ impl MethodTable {
                     JType::Char => ElemType::Char,
                     JType::Str => ElemType::Str,
                     // `StringBuilder[]` — an array of ordinary references.
-                    JType::StringBuilder(_) => ElemType::Builder,
+                    JType::StringBuilder(kind) => ElemType::Builder(kind),
                     JType::Object(id) => ElemType::Object(id),
                     // `Throwable[]`/`Exception[]` — a throwable element, so
                     // `getSuppressed()` assigns and its elements reach
@@ -4990,7 +4990,8 @@ fn wrapper_elem(name: &str) -> Option<ElemType> {
 fn wrapper_internal(elem: ElemType) -> &'static str {
     match elem {
         // Not a wrapper at all — a builder IS its own class.
-        ElemType::Builder => "java/lang/StringBuilder",
+        ElemType::Builder(BuilderKind::Buffer) => "java/lang/StringBuffer",
+        ElemType::Builder(BuilderKind::Builder) => "java/lang/StringBuilder",
         ElemType::Int => "java/lang/Integer",
         ElemType::Double => "java/lang/Double",
         ElemType::Long => "java/lang/Long",
@@ -5421,7 +5422,8 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::TextStyle => String::from("TextStyle"),
         ElemType::FormatStyle => String::from("FormatStyle"),
         ElemType::TypeVar(_) => String::from("Object"),
-        ElemType::Builder => String::from("StringBuilder"),
+        ElemType::Builder(BuilderKind::Buffer) => String::from("StringBuffer"),
+        ElemType::Builder(BuilderKind::Builder) => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
         ElemType::Int => String::from("Integer"),
         ElemType::Double => String::from("Double"),
@@ -5569,7 +5571,8 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 // The two builders erase to ONE element type: what they hold
                 // is the same, and the class each reports is recorded on the
                 // object rather than read off the element.
-                "StringBuilder" | "StringBuffer" => Some(ElemType::Builder),
+                "StringBuilder" => Some(ElemType::Builder(BuilderKind::Builder)),
+                "StringBuffer" => Some(ElemType::Builder(BuilderKind::Buffer)),
                 "Object" => Some(ElemType::Object(table.object_id)),
                 // A LIBRARY throwable as an element (`List<RuntimeException>`)
                 // — the same element kind `getSuppressed()`'s array uses.
@@ -5871,7 +5874,7 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
         && matches!(table.nested_type(inner), JType::CharSequence)
         && matches!(
             arg,
-            ElemType::Str | ElemType::Builder | ElemType::Nested { .. }
+            ElemType::Str | ElemType::Builder(_) | ElemType::Nested { .. }
         )
     {
         return !matches!(arg, ElemType::Nested { inner: other, .. }
@@ -6164,7 +6167,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Boolean => Some(ElemType::Boolean),
         JType::Char => Some(ElemType::Char),
         JType::Str => Some(ElemType::Str),
-        JType::StringBuilder(_) => Some(ElemType::Builder),
+        JType::StringBuilder(kind) => Some(ElemType::Builder(kind)),
         JType::Object(id) => Some(ElemType::Object(id)),
         JType::Class => Some(ElemType::Class),
         JType::StackFrame => Some(ElemType::StackFrame),
@@ -6752,6 +6755,18 @@ fn library_value_type(simple: &str) -> Option<JType> {
         // which every receiver answers, was fine.
         "StringBuilder" => JType::StringBuilder(BuilderKind::Builder),
         "StringBuffer" => JType::StringBuilder(BuilderKind::Buffer),
+        // ...and the rest of the library VALUES that have a table of their
+        // own. Each was missing, so every method of it had no type in a
+        // lambda body: `map(p -> p.getFileName())` over `Files.list(dir)`
+        // produced an `Object` element and the call after it was "cannot find
+        // symbol".
+        "File" => JType::File,
+        "Path" => JType::Path,
+        "Pattern" => JType::Pattern,
+        "Matcher" => JType::Matcher,
+        "MatchResult" => JType::MatchResult,
+        "Scanner" => JType::Scanner,
+        "Charset" => JType::Charset,
         "BigInteger" => JType::BigInteger,
         "BigDecimal" => JType::BigDecimal,
         "RoundingMode" => JType::RoundingMode,
@@ -8617,10 +8632,15 @@ fn wrapper_elem_of(ty: JType) -> Option<ElemType> {
 /// via [`JType::Array`]'s `dims`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ElemType {
-    /// `StringBuilder` as an ELEMENT — of a collection, an array, or a
-    /// generic instantiation. The builder is a heap object like any other
-    /// reference, so it can be stored; it simply had no element kind.
-    Builder,
+    /// A BUILDER as an ELEMENT — of a collection, an array, or a generic
+    /// instantiation. The builder is a heap object like any other reference,
+    /// so it can be stored; it simply had no element kind.
+    ///
+    /// It carries WHICH builder: a `StringBuffer` is not a `StringBuilder`,
+    /// and one element kind for both meant `List<StringBuffer> l; l.add(new
+    /// StringBuffer("x"))` was refused as one not converting to the other —
+    /// about the type the list was written to hold.
+    Builder(BuilderKind),
     Int,
     Double,
     Long,
@@ -8827,7 +8847,8 @@ impl ElemType {
             // A type variable erases to `Object` in the class file, which is
             // the whole point: only the STATIC type differs.
             ElemType::TypeVar(_) => String::from("Ljava/lang/Object;"),
-            ElemType::Builder => String::from("Ljava/lang/StringBuilder;"),
+            ElemType::Builder(BuilderKind::Buffer) => String::from("Ljava/lang/StringBuffer;"),
+            ElemType::Builder(BuilderKind::Builder) => String::from("Ljava/lang/StringBuilder;"),
             ElemType::Int => String::from("I"),
             ElemType::Double => String::from("D"),
             ElemType::Long => String::from("J"),
@@ -8908,7 +8929,7 @@ impl ElemType {
     fn base_type(self) -> JType {
         match self {
             ElemType::TypeVar(index) => JType::TypeVar(index),
-            ElemType::Builder => JType::StringBuilder(BuilderKind::Builder),
+            ElemType::Builder(kind) => JType::StringBuilder(kind),
             ElemType::Int => JType::Int,
             ElemType::Double => JType::Double,
             ElemType::Long => JType::Long,
@@ -35204,7 +35225,7 @@ impl BodyGen<'_> {
         // argument in the varargs position.
         let spreads_as_char_sequences = |ty: JType, table: &MethodTable| match ty {
             JType::Array {
-                elem: ElemType::Str | ElemType::Builder,
+                elem: ElemType::Str | ElemType::Builder(_),
                 dims: 1,
             } => true,
             // A `CharSequence` element is a NESTED type, not an element kind
@@ -43252,7 +43273,10 @@ impl BodyGen<'_> {
             ElemType::LocalDate => Some(String::from("java/time/LocalDate")),
             ElemType::IsoEra => Some(String::from("java/time/chrono/IsoEra")),
             ElemType::StackFrame => Some(String::from("java/lang/StackTraceElement")),
-            ElemType::Builder => Some(String::from("java/lang/StringBuilder")),
+            ElemType::Builder(BuilderKind::Buffer) => Some(String::from("java/lang/StringBuffer")),
+            ElemType::Builder(BuilderKind::Builder) => {
+                Some(String::from("java/lang/StringBuilder"))
+            }
             ElemType::Throwable(id) => Some(exception_internal(id).to_owned()),
             // `new List[n]` / `new Map[n]` — an array whose element is a
             // COLLECTION. Its descriptor names that collection's class, so the
@@ -45118,8 +45142,8 @@ impl BodyGen<'_> {
         if matches!(
             (left, right),
             (
-                ElemType::Str | ElemType::Builder,
-                ElemType::Str | ElemType::Builder
+                ElemType::Str | ElemType::Builder(_),
+                ElemType::Str | ElemType::Builder(_)
             )
         ) {
             return Some(ElemType::Nested {
@@ -46478,7 +46502,7 @@ impl BodyGen<'_> {
         let method = match elem {
             ElemType::Int
             | ElemType::Str
-            | ElemType::Builder
+            | ElemType::Builder(_)
             | ElemType::Object(_)
             | ElemType::Field
             | ElemType::Method
@@ -47197,7 +47221,7 @@ impl BodyGen<'_> {
                 JType::Array {
                     elem:
                         ElemType::Str
-                        | ElemType::Builder
+                        | ElemType::Builder(_)
                         | ElemType::Field
                         | ElemType::StackFrame
                         | ElemType::Constructor,

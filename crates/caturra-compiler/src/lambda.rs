@@ -6441,7 +6441,11 @@ fn call_body_type(
     };
     // Walked OUTWARD: a method a class INHERITS is called by its simple name
     // like any other, and `Names extends Bag<String>` declares none of Bag's.
-    let (declarer, answered) = declared_shape(name, method, args.len(), ctx)?;
+    // By its SIMPLE name: a bundled class is declared under one, so
+    // `new java.util.Random(1)` — the same value written out in full — found
+    // nothing and every call on it had no type.
+    let simple = name.rsplit('.').next().unwrap_or(name);
+    let (declarer, answered) = declared_shape(simple, method, args.len(), ctx)?;
     // A method that answers its class's own TYPE VARIABLE — `Box<T>`'s
     // `get()` — answers the RECEIVER's argument. Erasure has already
     // replaced the variable with its positional sentinel, which is
@@ -6629,16 +6633,30 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             | "ArrayList"
             | "LinkedList"
             | "Vector"
+            | "Stack"
             | "Set"
             | "HashSet"
+            | "LinkedHashSet"
             | "TreeSet"
+            | "SortedSet"
+            | "NavigableSet"
             | "Map"
             | "HashMap"
+            | "LinkedHashMap"
             | "Hashtable"
             | "TreeMap"
+            | "SortedMap"
+            | "NavigableMap"
             | "EnumMap"
             | "EnumSet"
             | "Collection"
+            // The queue faces share `size`, `isEmpty` and `contains` with
+            // every other collection; left out, `map(q -> q.size())` over one
+            // had no type at all.
+            | "Deque"
+            | "ArrayDeque"
+            | "Queue"
+            | "PriorityQueue"
     );
     match (base, method, argc) {
         // A SCANNER's accessors, all of them at once. A `var` holding
@@ -6663,7 +6681,15 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             | "matches",
             _,
         )
-        | (_, "equals", 1) => Some(TypeRef::Boolean),
+        | (_, "equals", 1)
+        // A CURSOR and an OPTIONAL are not collections, and each has two
+        // questions of its own that a lambda body asks constantly.
+        | ("Iterator" | "ListIterator", "hasNext" | "hasPrevious", 0)
+        | (
+            "Optional" | "OptionalInt" | "OptionalLong" | "OptionalDouble",
+            "isPresent" | "isEmpty",
+            0,
+        ) => Some(TypeRef::Boolean),
         (
             "String",
             "toUpperCase" | "toLowerCase" | "trim" | "strip" | "substring" | "replace" | "concat"
@@ -6742,9 +6768,16 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         // already here. Left out, `List.of("a").iterator()` and
         // `map.entrySet()` written inline had no type, though `keySet()` —
         // the view next to them — had had one all along.
-        (_, "iterator", 0) if collection => {
+        // `listIterator()` beside it, which is the cursor a list walks
+        // backwards with — a separate CLASS in a JDK, and a separate answer
+        // here, or `hasPrevious()` on one has no type.
+        (_, "iterator" | "listIterator", 0) if collection => {
             element_of_declared(receiver).map(|elem| TypeRef::Generic {
-                base: String::from("Iterator"),
+                base: String::from(if method == "iterator" {
+                    "Iterator"
+                } else {
+                    "ListIterator"
+                }),
                 args: vec![elem],
             })
         }
@@ -7428,6 +7461,11 @@ fn library_static_type(class: &str, method: &str, argc: usize) -> Option<TypeRef
     // an `Object` element, though the bare literal beside it did not.
     if wrapper && method == "valueOf" {
         return Some(TypeRef::Named(String::from(class)));
+    }
+    // The two ways a path is written. Named nowhere, `Path.of(s)` in a lambda
+    // body had no type and every call on it was "cannot find symbol".
+    if (class == "Path" && method == "of") || (class == "Paths" && method == "get") {
+        return Some(TypeRef::Named(String::from("Path")));
     }
     // ...and the three PRIMITIVE stream classes answer a stream of their own
     // kind, which carries no element type. The object `Stream` is
