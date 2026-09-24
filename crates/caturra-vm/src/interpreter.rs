@@ -7541,6 +7541,19 @@ impl<'run> Interpreter<'run> {
     /// structurally changed AROUND the view, which a JDK answers with a
     /// `ConcurrentModificationException` on the next use of one.
     fn sublist_range(&self, view: HeapRef) -> Result<Option<(HeapRef, usize, usize)>, VmError> {
+        let Some((backing, from, len, seen)) = self.sublist_span(view) else {
+            return Ok(None);
+        };
+        self.check_sublist_span(backing, seen)?;
+        Ok(Some((backing, from, len)))
+    }
+
+    /// The same range WITHOUT that check, and the backing length the view was
+    /// stamped with. A JDK checks the INDEX before the modCount — every
+    /// indexed method on a sub-range runs `Objects.checkIndex(index, size)`
+    /// and only then `checkForComodification()` — so the caller that
+    /// range-checks needs the span of a view it may go on to refuse.
+    fn sublist_span(&self, view: HeapRef) -> Option<(HeapRef, usize, usize, usize)> {
         let Some(crate::value::HeapObject::SubList {
             backing,
             from,
@@ -7548,15 +7561,19 @@ impl<'run> Interpreter<'run> {
             seen,
         }) = self.heap.get(view)
         else {
-            return Ok(None);
+            return None;
         };
-        let (backing, from, len, seen) = (*backing, *from, *len, *seen);
+        Some((*backing, *from, *len, *seen))
+    }
+
+    /// The staleness check itself, so the two orders ask one question.
+    fn check_sublist_span(&self, backing: HeapRef, seen: usize) -> Result<(), VmError> {
         if self.list_items(backing).len() != seen {
             return Err(VmError::UncaughtException(String::from(
                 "java.util.ConcurrentModificationException",
             )));
         }
-        Ok(Some((backing, from, len)))
+        Ok(())
     }
 
     /// Whether this collection refuses a mutator BEFORE looking at its
@@ -7931,11 +7948,18 @@ impl<'run> Interpreter<'run> {
         descriptor: &str,
         args: &[JValue],
     ) -> Result<Answered, VmError> {
-        let Some((backing, from, len)) = self.sublist_range(receiver)? else {
+        let Some((backing, from, len, seen)) = self.sublist_span(receiver) else {
             return Ok(Answered::No);
         };
         // An index into the VIEW, checked against the view's own size and
         // shifted onto the backing list. `insert` allows one past the end.
+        //
+        // The two words the failure takes are a JDK's two: a reading index
+        // goes through `Objects.checkIndex`, which says "Index 0 out of bounds
+        // for length 0", and an INSERTING one through the sub-range's own
+        // `rangeCheckForAdd`, which says "Index: 0, Size: 0". Both were
+        // written the second way, so every `get` past the end of a sub-range
+        // named the wrong one — and named it whatever the BACKING would have.
         let translate = |index: i32, insert: bool| -> Result<usize, VmError> {
             let limit = if insert { len } else { len.saturating_sub(1) };
             let at = usize::try_from(index).ok().filter(|at| {
@@ -7947,10 +7971,31 @@ impl<'run> Interpreter<'run> {
             });
             at.map(|at| from + at).ok_or_else(|| {
                 VmError::UncaughtException(format!(
-                    "java.lang.IndexOutOfBoundsException: Index: {index}, Size: {len}"
+                    "java.lang.IndexOutOfBoundsException: {}",
+                    if insert {
+                        format!("Index: {index}, Size: {len}")
+                    } else {
+                        format!("Index {index} out of bounds for length {len}")
+                    }
                 ))
             })
         };
+        // The INDEX first, the modCount second — a JDK's order, and the reason
+        // `l.subList(2, 2).get(0)` on a view whose backing has grown is an
+        // `IndexOutOfBoundsException` and not a `ConcurrentModificationException`.
+        match (method, args) {
+            ("__get" | "get" | "set", [JValue::Int(index), ..]) => {
+                translate(*index, false)?;
+            }
+            ("remove", [JValue::Int(index)]) if descriptor.starts_with("(I)") => {
+                translate(*index, false)?;
+            }
+            ("add", [JValue::Int(index), _]) => {
+                translate(*index, true)?;
+            }
+            _ => {}
+        }
+        self.check_sublist_span(backing, seen)?;
         // Re-agree with the backing after a write THROUGH the view: the range
         // grew or shrank by `delta`, and so did the backing.
         let resize = |vm: &mut Self, delta: isize| {
@@ -10488,6 +10533,12 @@ impl<'run> Interpreter<'run> {
     /// quietly re-sorted the very thing the view existed to reverse.
     fn source_sorted_comparator(&mut self, source: HeapRef) -> Option<HeapRef> {
         use crate::value::{ComparatorSpec, HeapObject};
+        // Through a WRAPPER: `new TreeSet<>(Collections.unmodifiableSortedSet(
+        // d))` copies what `d` holds and must order it the way `d` does. The
+        // wrapper hid the view underneath, so a copy of a DESCENDING set came
+        // out ascending — while the same copy taken straight off the view was
+        // right.
+        let source = self.heap.unwrapped(source);
         let Some(HeapObject::SortedView {
             backing,
             descending,
@@ -11418,7 +11469,12 @@ impl<'run> Interpreter<'run> {
     fn stream_materialize(&mut self, stream: HeapRef) -> Result<Vec<JValue>, VmError> {
         let (source, ops) = self.stream_pipeline(stream);
         let mut sink = StreamSink::Collect(Vec::new());
-        self.stream_drive(&source, &ops, &mut sink)?;
+        // WITH the origin: a collecting terminal fails fast for the same
+        // reasons a short-circuiting one does. Driven with `None`, every
+        // `collect`, `toArray` and `reduce` over a stale VIEW quietly answered
+        // the window's contents where a JDK throws.
+        let origin = self.stream_origins.get(&stream).copied();
+        self.stream_drive_from(origin, &source, &ops, &mut sink)?;
         match sink {
             StreamSink::Collect(out) => Ok(out),
             _ => unreachable!("Collect sink"),
@@ -11427,16 +11483,9 @@ impl<'run> Interpreter<'run> {
 
     /// Pull each source element through `ops`, feeding the survivors to `sink`.
     /// A `sink` (or a `limit`) may STOP the source early — the whole point of
-    /// the lazy model.
-    fn stream_drive(
-        &mut self,
-        source: &crate::value::StreamSource,
-        ops: &[crate::value::StreamOp],
-        sink: &mut StreamSink,
-    ) -> Result<(), VmError> {
-        self.stream_drive_from(None, source, ops, sink)
-    }
-
+    /// the lazy model. `origin` is the collection the stream was opened over,
+    /// which decides when the traversal fails fast; `None` for a source with
+    /// no collection behind it.
     fn stream_drive_from(
         &mut self,
         origin: Option<StreamOrigin>,
@@ -11461,6 +11510,21 @@ impl<'run> Interpreter<'run> {
         // Everything a barrier buffers is rooted while it waits; drop those
         // roots on the way out however this returns.
         let root_base = self.temp_roots.len();
+        // A JDK's spliterator BINDS LATE: it reads the source's modCount when
+        // the terminal starts, not when `stream()` was called. A change made
+        // in between is therefore invisible — the traversal sees the new
+        // contents, which is what `stream_pipeline` already re-reads — and
+        // only a change made DURING the traversal throws. Compared against the
+        // length recorded at stream creation, `list.stream(); list.add(x);
+        // s.forEach(print)` was a ConcurrentModificationException where a JDK
+        // prints the new element. (A VIEW is the exception, and checks its
+        // BACKING instead; that check reads the view's own stamp, not this.)
+        let origin = origin.map(|mut origin| {
+            if self.array_length(origin.source).is_none() {
+                origin.length = iterated_len_of(&self.heap, origin.source);
+            }
+            origin
+        });
         let driven = self.stream_run_source(origin, source, ops, &mut states, sink);
         self.temp_roots.truncate(root_base);
         driven
@@ -11575,6 +11639,31 @@ impl<'run> Interpreter<'run> {
         Ok(())
     }
 
+    /// Throw if `reference` names a VIEW — a `subList` or a sorted view, at
+    /// either end of a chain of `Collections` wrappers — whose backing has
+    /// changed since the view was taken. A JDK's view cursor and view
+    /// spliterator each read the BACKING's modCount before they exist, so
+    /// opening one over a stale view throws before it answers anything, even
+    /// when the view is empty and nothing would be walked.
+    ///
+    /// Asked of the UNWRAPPED reference, because
+    /// `unmodifiableList(l.subList(0, 2))` is still that sub-range. Keyed on
+    /// the wrapper — which is what each of the three callers did, separately —
+    /// a wrapped view quietly answered.
+    fn check_view_source(&self, reference: HeapRef, length: usize) -> Result<(), VmError> {
+        let inner = self.heap.unwrapped(reference);
+        if matches!(
+            self.heap.get(inner),
+            Some(
+                crate::value::HeapObject::SubList { .. }
+                    | crate::value::HeapObject::SortedView { .. }
+            )
+        ) {
+            return check_comodification(&self.heap, inner, length);
+        }
+        Ok(())
+    }
+
     /// Throw `ConcurrentModificationException` if the collection a stream was
     /// opened over has changed length since. `None` for a stream with no
     /// collection behind it (a range, `Stream.of`, a `sorted` barrier).
@@ -11595,7 +11684,11 @@ impl<'run> Interpreter<'run> {
             return Ok(());
         }
         if iterated_len_of(&self.heap, collection) == length {
-            return Ok(());
+            // A stream over a VIEW carries the BACKING's modCount, the same
+            // reason a cursor over one does: a JDK's `subList` spliterator
+            // checks the root list's, so adding past the window's end ends the
+            // traversal — which the window's own length never notices.
+            return self.check_view_source(collection, length);
         }
         Err(VmError::UncaughtException(String::from(
             "java.util.ConcurrentModificationException",
@@ -13224,6 +13317,13 @@ impl<'run> Interpreter<'run> {
             // the source between opening the stream and counting it therefore
             // answers the new size rather than throwing, which is what the
             // late-binding test already pinned.
+            // ...unless the source is a VIEW, whose spliterator a JDK cannot
+            // even BUILD without checking the backing's modCount — so
+            // `l.subList(0, 2).stream().count()` after an add to `l` throws
+            // where the same count over `l` itself answers the new size.
+            if let Some(origin) = self.stream_origins.get(&receiver).copied() {
+                self.check_view_source(origin.source, origin.length)?;
+            }
             let (current, _) = self.stream_pipeline(receiver);
             let known = current.fixed().len();
             return Ok(Answered::Value(JValue::Long(
@@ -16606,10 +16706,20 @@ impl<'run> Interpreter<'run> {
         // delegates those.
         let receiver = if self.is_unmodifiable_list(receiver) && method_name != "getClass" {
             // `Collections.emptyList().sort(cmp)` and `singletonList(x).sort(cmp)`
-            // are fine in a JDK: those classes override `sort` to do nothing,
-            // since nothing can move. Only a longer immutable list refuses.
+            // are fine in a JDK: those two classes OVERRIDE `sort` with an
+            // empty body, since nothing can move in either.
+            //
+            // They are the only two. Every other read-only list inherits
+            // `List.sort`, which refuses however short it is:
+            // `List.of().sort(null)`, `unmodifiableList(new ArrayList<>())`
+            // and `nCopies(1, x)` all throw. Written as "a list of one element
+            // or none", this quietly sorted all three — the class is the rule,
+            // and the length never was.
             let harmless_sort = method_name == "sort"
-                && iterated_len_of(&self.heap, self.backing_list(receiver)) <= 1;
+                && matches!(
+                    self.heap.view_class_of(receiver),
+                    Some("java/util/Collections$EmptyList" | "java/util/Collections$SingletonList")
+                );
             // The wrappers that INHERIT `AbstractCollection`'s mutators —
             // `singletonList`, `emptyList` — reach them and fail (or not)
             // wherever the inherited code does, which is not always at the
@@ -16707,6 +16817,7 @@ impl<'run> Interpreter<'run> {
                 let owner = receiver;
                 let source = self.backing_list(receiver);
                 let expected_len = iterated_len_of(&self.heap, source);
+                self.check_view_source(source, expected_len)?;
                 let index = match args.first() {
                     Some(JValue::Int(at)) => usize::try_from(*at)
                         .ok()

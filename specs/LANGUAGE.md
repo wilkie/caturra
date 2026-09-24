@@ -15709,6 +15709,85 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A view behind a wrapper (2026-09-24)
+
+A view fuzzer — random chains of one to three views over an `ArrayList`,
+`LinkedList`, `TreeSet` or `TreeMap`, with writes interleaved through both
+ends — put a `Collections` wrapper on top of a sub-range, which no probe had
+done. `Collections.unmodifiableList(l.subList(0, 2))` is two views deep, and
+every question about it was answered by reading only the outer one.
+
+**Which complaint comes first.** A read-only wrapper refuses a mutator BEFORE
+it looks at the list inside: `add` through one over a stale sub-range is an
+`UnsupportedOperationException`, not a `ConcurrentModificationException`. That
+much was right. `sort` was not, and for a reason that has nothing to do with
+wrappers over views: it was refused by LENGTH. `Collections.emptyList()` and
+`singletonList(x)` are the only two classes that override `sort` with an empty
+body, since nothing can move in either; every other read-only list inherits
+`List.sort` and throws however short it is. Keyed on "one element or none",
+caturra quietly sorted `List.of()`, `List.of("a")`, `nCopies(1, x)` and
+`unmodifiableList(new ArrayList<>())`. The class is the rule, and the length
+never was.
+
+**A cursor exists before it walks.** A JDK's view cursor and view spliterator
+each read the BACKING's modCount in their constructor, so opening one over a
+stale sub-range throws before it answers anything — even when the view is
+EMPTY and there is nothing to walk. Three places asked that question and each
+asked it of the reference it was handed, which for a wrapped view is the
+wrapper: `unmodifiableList(stale).iterator()` answered `false`, and
+`.stream().collect(...)` answered the window's contents. They ask one function
+now, `check_view_source`, which unwraps first.
+
+**A spliterator binds late.** It reads that modCount when the TERMINAL starts,
+not when `stream()` was called, so a change made in between is simply seen.
+Compared against the length recorded at stream creation, `list.stream();
+list.add(x); s.forEach(print)` threw where a JDK prints the new element — and
+`collect` was driven with no origin at all, so it never checked anything,
+which is what hid the same bug in the other direction. A change made DURING
+the traversal still ends it.
+
+**The index, then the modCount.** Every indexed method on a sub-range runs
+`Objects.checkIndex(index, size)` and only then `checkForComodification()`, so
+`l.subList(2, 2).get(0)` on a stale view is an `IndexOutOfBoundsException`.
+caturra checked staleness at the top of the whole intrinsic, which made all
+four of them a `ConcurrentModificationException`. The two failures also take
+two different words, and neither is the backing's: a reading index goes
+through `Objects.checkIndex` ("Index 0 out of bounds for length 0") and an
+inserting one through the sub-range's own `rangeCheckForAdd` ("Index: 0,
+Size: 0"). Both were written the second way, so a `get` past the end of a
+sub-range of a `LinkedList` answered in the `LinkedList`'s words rather than
+the sub-range's.
+
+**Three more, from the same fuzzer's first run.** An `entrySet()` passed to a
+method of the program's own — `static void show(Collection<?> c)` — was
+"cannot find symbol", about a method plainly declared: an entry set IS a
+`Set<Map.Entry<K, V>>`, and only the two CLASS faces are not one. A
+`new TreeSet<>(Collections.unmodifiableSortedSet(view))` lost the comparator,
+because the reader that finds one stopped at the wrapper rather than the
+sorted set underneath it. And `subList.stream().count()` after an add to the
+backing did not fail fast, which is where `check_view_source` came from.
+
+Pinned as `a_view_behind_a_wrapper` (sixty-two calls). The fuzzer is
+`scripts/fuzz/views.py`, and it went from three divergences a seed to roughly
+one in four seeds.
+
+**What it still finds, named.** Two causes, both measured and left open for
+now rather than guessed at:
+
+- **A modCount is a COUNTER, not a length.** caturra stamps a view with the
+  backing's SIZE and compares sizes; a JDK compares a counter that every
+  structural change increments. Two changes that cancel — `back.remove("e")`
+  then `back.add("c")` — leave the size where it was, so the view goes on
+  answering where a JDK throws. Closing it means a real modification count
+  per collection, incremented wherever one is structurally changed.
+- **A sorted MAP view is stamped when a CURSOR over it is made.** A
+  `NavigableSubMap` stores no modCount of its own — its iterators capture the
+  tree's when they are constructed — so `m.headMap("c"); m.put("f", 9);
+  walk(view.values())` is fine in a JDK, while caturra stamps the view at
+  creation and throws. A sub-LIST is the opposite and does store one, which is
+  why `subList` is right and this is not. (Only a map face is affected: a
+  `headSet` already answers correctly.)
+
 ### A type variable is within its own bound (2026-09-24)
 
 The same lens as the views, pointed at the type system: a program that

@@ -59711,3 +59711,201 @@ public class GB {
 }
 "#
 );
+
+// A view behind a WRAPPER, and which of two complaints comes first.
+//
+// `Collections.unmodifiableList(l.subList(0, 2))` is two views deep, and every
+// question about it was answered by reading only the outer one.
+//
+// A read-only wrapper refuses a mutator BEFORE it looks at the list inside, so
+// `add` through one over a stale sub-range is an UnsupportedOperationException
+// and not a ConcurrentModificationException — but `sort` is refused by CLASS,
+// not by length: `emptyList()` and `singletonList(x)` are the only two that
+// override it with an empty body, while `List.of()`, `nCopies(1, x)` and
+// `unmodifiableList(new ArrayList<>())` all inherit `List.sort` and throw
+// however short they are. Written as "one element or none", caturra quietly
+// sorted all three.
+//
+// A cursor and a spliterator over a view each read the BACKING's modCount
+// before they exist, so opening one over a stale sub-range throws before it
+// answers anything — even when the view is EMPTY and nothing would be walked.
+// Asked of the wrapper instead of the view it wraps, `unmodifiableList(stale)
+// .iterator()` and `.stream().collect(...)` both answered.
+//
+// A spliterator also binds LATE: it reads that modCount when the TERMINAL
+// starts, not when `stream()` was called, so a change made in between is
+// simply seen. Compared against the length recorded at stream creation,
+// `list.stream(); list.add(x); s.forEach(print)` threw where a JDK prints the
+// new element.
+//
+// And a sub-range checks the INDEX before the modCount, in its own words:
+// `Objects.checkIndex` says "Index 0 out of bounds for length 0" where the
+// sub-range's `rangeCheckForAdd` says "Index: 0, Size: 0", and neither is what
+// the backing list would have said.
+differential_test!(
+    a_view_behind_a_wrapper,
+    "VW",
+    r#"
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class VW {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static String walk(Collection<?> c) {
+        StringBuilder out = new StringBuilder();
+        for (Object v : c) { out.append(v); }
+        return "[" + out + "]";
+    }
+    static Object sorted(List<String> l) { l.sort(null); return l.toString(); }
+    static int count(Collection<?> c) { return c.size(); }
+    static int countSet(Set<?> c) { return c.size(); }
+    static int countTyped(Set<Map.Entry<String, Integer>> c) { return c.size(); }
+    static <T> int countVar(Collection<T> c) { return c.size(); }
+    static List<String> stale(int from, int to, int wrappers) {
+        List<String> back = new ArrayList<>(List.of("a", "b", "c", "d"));
+        List<String> view = back.subList(from, to);
+        back.add("z");
+        for (int i = 0; i < wrappers; i++) {
+            view = i % 2 == 0 ? Collections.unmodifiableList(view) : Collections.synchronizedList(view);
+        }
+        return view;
+    }
+    public static void main(String[] args) {
+        // Which complaint a wrapper over a stale sub-range makes.
+        r("wrapped-add", () -> stale(0, 2, 1).add("q"));
+        r("wrapped-set", () -> stale(0, 2, 1).set(0, "q"));
+        r("wrapped-sort", () -> sorted(stale(0, 2, 1)));
+        r("wrapped-size", () -> stale(0, 2, 1).size());
+        r("wrapped-get", () -> stale(0, 2, 1).get(0));
+        r("wrapped-contains", () -> stale(0, 2, 1).contains("a"));
+        r("wrapped-walk", () -> walk(stale(0, 2, 1)));
+        r("wrapped-iterator", () -> stale(0, 2, 1).iterator().hasNext());
+        r("wrapped-stream-count", () -> stale(0, 2, 1).stream().count());
+        r("wrapped-stream-collect", () -> stale(0, 2, 1).stream().collect(Collectors.toList()));
+        r("wrapped-stream-join", () -> stale(0, 2, 1).stream().collect(Collectors.joining(",")));
+        r("twice-wrapped-contains", () -> stale(0, 2, 2).contains("a"));
+        r("twice-wrapped-walk", () -> walk(stale(0, 2, 2)));
+        r("twice-wrapped-add", () -> stale(0, 2, 2).add("q"));
+        r("thrice-wrapped-sort", () -> sorted(stale(0, 2, 3)));
+
+        // An EMPTY stale sub-range: nothing to walk, and it still refuses.
+        r("empty-walk", () -> walk(stale(2, 2, 0)));
+        r("empty-iterator", () -> stale(2, 2, 0).iterator().hasNext());
+        r("empty-wrapped-walk", () -> walk(stale(2, 2, 1)));
+        r("empty-wrapped-iterator", () -> stale(2, 2, 1).iterator().hasNext());
+        r("empty-wrapped-stream", () -> stale(2, 2, 1).stream().count());
+
+        // The index, and then the modCount.
+        r("empty-get", () -> stale(2, 2, 0).get(0));
+        r("empty-set", () -> stale(2, 2, 0).set(0, "q"));
+        r("empty-remove-at", () -> stale(2, 2, 0).remove(0));
+        r("empty-add-at", () -> { stale(2, 2, 0).add(5, "q"); return "added"; });
+        r("empty-wrapped-get", () -> stale(2, 2, 1).get(0));
+        r("stale-get-in-range", () -> stale(0, 2, 0).get(0));
+        r("stale-get-past-end", () -> stale(0, 2, 0).get(9));
+        r("stale-set-past-end", () -> stale(0, 2, 0).set(9, "q"));
+
+        // The wording a sub-range uses, which is not the backing's.
+        r("live-sub-get", () -> new ArrayList<>(List.of("a", "b", "c")).subList(0, 2).get(9));
+        r("live-sub-set", () -> new ArrayList<>(List.of("a", "b", "c")).subList(0, 2).set(9, "q"));
+        r("live-sub-add-at", () -> { new ArrayList<>(List.of("a", "b", "c")).subList(0, 2).add(9, "q"); return "added"; });
+        r("live-sub-empty-get", () -> new ArrayList<>(List.of("a", "b", "c")).subList(1, 1).get(0));
+        r("linked-sub-get", () -> new LinkedList<>(List.of("a", "b", "c")).subList(0, 2).get(9));
+        r("linked-root-get", () -> new LinkedList<>(List.of("a", "b", "c")).get(9));
+        r("array-root-get", () -> new ArrayList<>(List.of("a", "b", "c")).get(9));
+        r("unmod-root-get", () -> Collections.unmodifiableList(new LinkedList<>(List.of("a"))).get(9));
+
+        // `sort` is refused by class, not by length.
+        r("empty-list-sort", () -> sorted(Collections.<String>emptyList()));
+        r("singleton-sort", () -> sorted(Collections.singletonList("a")));
+        r("of-empty-sort", () -> sorted(List.of()));
+        r("of-one-sort", () -> sorted(List.of("a")));
+        r("of-two-sort", () -> sorted(List.of("b", "a")));
+        r("unmod-empty-sort", () -> sorted(Collections.unmodifiableList(new ArrayList<String>())));
+        r("unmod-one-sort", () -> sorted(Collections.unmodifiableList(new ArrayList<>(List.of("a")))));
+        r("ncopies-one-sort", () -> sorted(Collections.nCopies(1, "a")));
+        r("aslist-one-sort", () -> sorted(Arrays.asList("a")));
+        r("sync-one-sort", () -> sorted(Collections.synchronizedList(new ArrayList<>(List.of("a")))));
+        r("sub-one-sort", () -> sorted(new ArrayList<>(List.of("b", "a")).subList(0, 1)));
+
+        // A stream binds LATE: what happens between `stream()` and the
+        // terminal is simply seen, for every terminal.
+        r("late-collect", () -> {
+            List<String> b = new ArrayList<>(List.of("a", "b"));
+            java.util.stream.Stream<String> s = b.stream();
+            b.add("z");
+            return s.collect(Collectors.toList());
+        });
+        r("late-count", () -> {
+            List<String> b = new ArrayList<>(List.of("a", "b"));
+            java.util.stream.Stream<String> s = b.stream();
+            b.add("z");
+            return s.count();
+        });
+        r("late-forEach", () -> {
+            List<String> b = new ArrayList<>(List.of("a", "b"));
+            java.util.stream.Stream<String> s = b.stream();
+            b.add("z");
+            StringBuilder out = new StringBuilder();
+            s.forEach(out::append);
+            return out.toString();
+        });
+        r("late-findFirst", () -> {
+            List<String> b = new ArrayList<>(List.of("a", "b"));
+            java.util.stream.Stream<String> s = b.stream();
+            b.add("z");
+            return s.findFirst().orElse("none");
+        });
+        r("late-anyMatch", () -> {
+            List<String> b = new ArrayList<>(List.of("a", "b"));
+            java.util.stream.Stream<String> s = b.stream();
+            b.add("z");
+            return s.anyMatch("z"::equals);
+        });
+        r("late-toArray", () -> {
+            List<String> b = new ArrayList<>(List.of("a", "b"));
+            java.util.stream.Stream<String> s = b.stream();
+            b.add("z");
+            return Arrays.toString(s.toArray());
+        });
+        r("late-view-collect", () -> {
+            List<String> b = new ArrayList<>(List.of("a", "b", "c"));
+            java.util.stream.Stream<String> s = b.subList(0, 2).stream();
+            b.add("z");
+            return s.collect(Collectors.toList());
+        });
+        // An `entrySet()` IS a `Set<Map.Entry<K, V>>`, so it goes where one
+        // is asked for — a parameter of the program's own, in every spelling.
+        r("entries-as-collection", () -> count(new TreeMap<>(Map.of("a", 1, "b", 2)).entrySet()));
+        r("entries-as-set", () -> countSet(new TreeMap<>(Map.of("a", 1)).entrySet()));
+        r("entries-as-typed", () -> countTyped(new TreeMap<>(Map.of("a", 1)).entrySet()));
+        r("entries-as-var", () -> countVar(new TreeMap<>(Map.of("a", 1)).entrySet()));
+        r("entries-of-submap", () -> count(new TreeMap<>(Map.of("a", 1, "b", 2)).headMap("b").entrySet()));
+
+        // A copy of a read-only SORTED set keeps the comparator underneath the
+        // wrapper, not the natural order the wrapper itself has no say in.
+        r("copy-unmodifiable-sorted", () -> {
+            NavigableSet<String> byLength = new TreeSet<>(Comparator.comparingInt(String::length).thenComparing(s -> s));
+            byLength.addAll(List.of("ccc", "a", "bb"));
+            return new TreeSet<>(Collections.unmodifiableSortedSet(byLength)).toString();
+        });
+        r("copy-descending", () -> {
+            NavigableSet<String> s = new TreeSet<>(List.of("a", "b", "c"));
+            return new TreeSet<>(Collections.unmodifiableSortedSet(s.descendingSet())).toString();
+        });
+
+        // ...but a change DURING the traversal still ends it.
+        r("during-traversal", () -> {
+            List<String> b = new ArrayList<>(List.of("a", "b"));
+            StringBuilder out = new StringBuilder();
+            b.stream().forEach(v -> { out.append(v); b.add("z"); });
+            return out.toString();
+        });
+    }
+}
+"#
+);

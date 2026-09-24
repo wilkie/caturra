@@ -480,12 +480,18 @@ def program(name, seed):
     return (PRELUDE % name) + body + "\n    }\n}\n"
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    out = "cases"
+    # The VALUE of `--out` is not a positional: reading it as `count` made
+    # `programs.py --out DIR` die on `int("/some/dir")` — writing nothing,
+    # which a gate run reads as "0 cases, 0 diverging".
+    skip = set()
+    if "--out" in sys.argv:
+        at = sys.argv.index("--out")
+        out = sys.argv[at + 1]
+        skip = {at, at + 1}
+    args = [a for i, a in enumerate(sys.argv) if i and i not in skip and not a.startswith("--")]
     count = int(args[0]) if args else 100
     base = int(args[1]) if len(args) > 1 else 900
-    out = "cases"
-    if "--out" in sys.argv:
-        out = sys.argv[sys.argv.index("--out") + 1]
     os.makedirs(out, exist_ok=True)
     for i in range(count):
         name = f"Fz{i}"

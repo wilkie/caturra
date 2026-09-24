@@ -8122,6 +8122,31 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (JType::List { elem: a, .. } | JType::Set { elem: a, .. }, JType::Collection(b))
                 if elem_matches(a, b, table)
         )
+        // ...and an `entrySet()` handed to a parameter that asks for a SET or
+        // a COLLECTION of what it holds — `static void show(Collection<?> c)`,
+        // and every wildcard or type-variable spelling of it. An entry set IS
+        // a `Set<Map.Entry<K, V>>`; only the two CLASS faces (a `HashSet`, a
+        // `TreeSet`) are not one, and those keep their refusal below. Without
+        // this, passing one to a method of the program was "cannot find
+        // symbol", about a method plainly declared.
+        || matches!(
+            (from, to),
+            (
+                JType::EntrySet { key, value },
+                JType::Collection(want)
+                    | JType::Set {
+                        elem: want,
+                        face: CollFace::Iface,
+                    },
+            ) if match nested_map_entry(want, table) {
+                Some((want_key, want_value)) => elem_matches(key, want_key, table)
+                    && elem_matches(value, want_value, table),
+                // `Collection<?>` / `Collection<T>` / a raw one: the parameter
+                // says nothing about the element, which is what a wildcard is.
+                None => matches!(want, ElemType::Wildcard { .. } | ElemType::TypeVar(_))
+                    || want == ElemType::Object(table.object_id),
+            }
+        )
         // A DIAMOND whose element the program never wrote, assigned to a
         // variable of the entry-set kind: `Set<Map.Entry<K, V>> s = new
         // HashSet<>()`. The two are the same shape and the element is exactly
