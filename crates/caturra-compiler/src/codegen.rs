@@ -6302,6 +6302,23 @@ const WRITE_BYTES_PARAMS: &[(JType, &str)] = &[
     ),
 ];
 
+/// A WRITTEN `null`, which is not the same thing as a type that is unknown: a
+/// diamond (`new ArrayList<>()`) and the empty factories also type as
+/// `JType::Null` here, and the algorithms read that as "a list of `Object`".
+/// javac tells them apart — `Collections.sort(null)` compiles (the bound is
+/// satisfied vacuously) and `Collections.sort(new ArrayList<>())` does not
+/// ("inferred type does not conform to equality constraint(s)") — so anything
+/// that turns on the difference has to ask the SYNTAX.
+fn is_null_literal(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Literal {
+            value: Literal::Null,
+            ..
+        }
+    )
+}
+
 /// One row of [`nio_plan`]: the class the call lands on, the arguments it
 /// takes (each with the descriptor it is passed as), the descriptor it answers
 /// and the type that answer has (`None` for a `void` one).
@@ -34914,7 +34931,10 @@ impl BodyGen<'_> {
             return None;
         };
         let template_ty = self.expr(template);
-        if template_ty != JType::Str && template_ty != JType::Error {
+        // `null` is a String too, as it is any reference: a JDK compiles
+        // `String.format(null, 1)` and throws a NullPointerException when the
+        // template is read.
+        if template_ty != JType::Str && template_ty != JType::Error && template_ty != JType::Null {
             self.error(
                 template.span(),
                 format!(
@@ -35369,7 +35389,12 @@ impl BodyGen<'_> {
             // `Files.write` declares an ITERABLE, so any collection of lines
             // is one: a `TreeSet` of them was "TreeSet<String> cannot be
             // converted to List<String>" for a call a JDK takes.
+            // `null` fits every reference parameter, as it fits any reference
+            // type: `Files.readString(null)` compiles on a JDK and throws a
+            // NullPointerException where the path is read, and refusing it
+            // was false about Java.
             let ok = got == *want
+                || (got == JType::Null && want.is_reference())
                 || (*want == JType::Str && got == JType::Str)
                 || matches!(
                     (want, got),
@@ -38315,7 +38340,10 @@ impl BodyGen<'_> {
                 [] => {}
                 [comparator] => {
                     let ty = self.expr(comparator);
-                    if !self.is_comparator_type(ty) {
+                    // `reverseOrder(null)` is the reverse of NATURAL ordering
+                    // — a JDK says so in the javadoc, and answers the same
+                    // comparator the no-argument form does.
+                    if ty != JType::Null && !self.is_comparator_type(ty) {
                         self.error(
                             comparator.span(),
                             "Collections.reverseOrder(cmp) takes a Comparator",
@@ -38593,23 +38621,27 @@ impl BodyGen<'_> {
             };
             let collection_ty = self.expr(collection);
             let wants = method.trim_start_matches("synchronized");
-            let ok = match wants {
-                "List" => {
-                    matches!(collection_ty, JType::List { .. } | JType::Vector(_))
-                        || matches!(
-                            collection_ty,
-                            JType::LinkedList {
-                                role: SeqRole::Full,
-                                ..
-                            }
-                        )
-                }
-                "Set" => matches!(collection_ty, JType::Set { .. } | JType::TreeSet(_, _)),
-                "Map" => matches!(collection_ty, JType::Map { .. } | JType::TreeMap { .. }),
-                "SortedSet" | "NavigableSet" => matches!(collection_ty, JType::TreeSet(_, _)),
-                "SortedMap" | "NavigableMap" => matches!(collection_ty, JType::TreeMap { .. }),
-                _ => any_collection_elem(collection_ty, self.table).is_some(),
-            };
+            // `null` fits every one of them, as it fits any reference
+            // parameter: a JDK compiles `unmodifiableSet(null)` and throws
+            // where the view reads it.
+            let ok = collection_ty == JType::Null
+                || match wants {
+                    "List" => {
+                        matches!(collection_ty, JType::List { .. } | JType::Vector(_))
+                            || matches!(
+                                collection_ty,
+                                JType::LinkedList {
+                                    role: SeqRole::Full,
+                                    ..
+                                }
+                            )
+                    }
+                    "Set" => matches!(collection_ty, JType::Set { .. } | JType::TreeSet(_, _)),
+                    "Map" => matches!(collection_ty, JType::Map { .. } | JType::TreeMap { .. }),
+                    "SortedSet" | "NavigableSet" => matches!(collection_ty, JType::TreeSet(_, _)),
+                    "SortedMap" | "NavigableMap" => matches!(collection_ty, JType::TreeMap { .. }),
+                    _ => any_collection_elem(collection_ty, self.table).is_some(),
+                };
             if !ok {
                 self.error(
                     collection.span(),
@@ -38645,7 +38677,11 @@ impl BodyGen<'_> {
             let collection_ty = self.expr(collection);
             let wants_set = method.ends_with("Set");
             let wants_sorted = method != "unmodifiableSet" && method != "unmodifiableMap";
+            // `null` fits any of them — javac takes `unmodifiableSet(null)`,
+            // and a JDK throws where the view reads what it was given.
+            let written_null = collection_ty == JType::Null;
             if wants_sorted
+                && !written_null
                 && !matches!(collection_ty, JType::TreeSet(_, _) | JType::TreeMap { .. })
             {
                 self.error(
@@ -38658,11 +38694,12 @@ impl BodyGen<'_> {
                 self.code.discard();
                 return None;
             }
-            let ok = if wants_set {
-                matches!(collection_ty, JType::Set { .. } | JType::TreeSet(_, _))
-            } else {
-                matches!(collection_ty, JType::Map { .. } | JType::TreeMap { .. })
-            };
+            let ok = written_null
+                || if wants_set {
+                    matches!(collection_ty, JType::Set { .. } | JType::TreeSet(_, _))
+                } else {
+                    matches!(collection_ty, JType::Map { .. } | JType::TreeMap { .. })
+                };
             if !ok {
                 self.error(
                     collection.span(),
@@ -38871,7 +38908,13 @@ impl BodyGen<'_> {
             // `disjoint` is declared over COLLECTION; the others over LIST,
             // which a `LinkedList`- or `Stack`-typed variable also is.
             let first = self.type_of(&args[0]);
-            let elem = if method == "disjoint" {
+            // A `null` (written, or a diamond) stands in for a list of
+            // `Object`, as it does for the algorithms below: javac takes
+            // `Collections.fill(null, "a")` and a JDK throws where it is
+            // dereferenced.
+            let elem = if first == JType::Null {
+                Some(ElemType::Object(self.table.object_id))
+            } else if method == "disjoint" {
                 any_collection_elem(first, self.table)
             } else {
                 match first {
@@ -38955,10 +38998,14 @@ impl BodyGen<'_> {
                 self.no_suitable_library_method("Collections", method, args, span);
                 return None;
             };
-            let is_comparator = matches!(
-                (self.type_of(&args[1]), self.table.class_id("__Comparator")),
-                (JType::Object(id), Some(target)) if self.table.is_subtype(id, target)
-            );
+            // `null` is a comparator too, and means natural ordering — the
+            // same rule `list.sort(null)` already has, which this copy of the
+            // question did not.
+            let is_comparator = self.type_of(&args[1]) == JType::Null
+                || matches!(
+                    (self.type_of(&args[1]), self.table.class_id("__Comparator")),
+                    (JType::Object(id), Some(target)) if self.table.is_subtype(id, target)
+                );
             if !is_comparator {
                 self.no_suitable_library_method("Collections", method, args, span);
                 return None;
@@ -39037,7 +39084,13 @@ impl BodyGen<'_> {
         // says. Only a class whose supertypes we can see is refused: the
         // wrappers and `String` are all `Comparable`, and an erased type
         // variable may well be one at the use site.
+        // ...and only when the argument HAS an element to check. A `null`
+        // first argument (a written one, or a diamond) stands in as a list of
+        // `Object`, which satisfies no bound — so `Collections.sort(null)`,
+        // which javac takes and a JDK fails at run time with a
+        // NullPointerException, was refused outright.
         if matches!(method, "sort" | "max" | "min" | "binarySearch")
+            && !is_null_literal(&args[0])
             && let ElemType::Object(id) = elem
             && let Some(comparable) = self.table.class_id("Comparable")
             && !self.table.is_subtype(id, comparable)

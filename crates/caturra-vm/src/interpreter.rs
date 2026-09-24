@@ -4915,7 +4915,12 @@ impl<'run> Interpreter<'run> {
             // `reverseOrder()` reverses natural ordering; `reverseOrder(cmp)`
             // reverses a given comparator — both a `ComparatorSpec::Reversed`,
             // exactly as `Comparator.reverseOrder()`/`reversed()` build.
-            ("reverseOrder", []) => {
+            // `reverseOrder(null)` is the reverse of NATURAL ordering, which a
+            // JDK's javadoc says in as many words — so it answers exactly what
+            // the no-argument form does, and must not reach the null check
+            // below (every other algorithm here dereferences its argument;
+            // this one is documented to take a null).
+            ("reverseOrder", [] | [JValue::Ref(None)]) => {
                 use crate::value::ComparatorSpec;
                 let natural = self
                     .heap
@@ -5044,8 +5049,20 @@ impl<'run> Interpreter<'run> {
             _ => {}
         }
 
-        let Some(JValue::Ref(Some(list))) = args.first().copied() else {
-            return Ok(false);
+        // Every algorithm below DEREFERENCES its first argument, so a `null`
+        // one is a NullPointerException — which is what a JDK throws, and what
+        // declining here did not do: the call went on to look for a real
+        // method on the bundled `Collections`, found none, and ended in
+        // "malformed class Collections: no static method addAll(...)". An
+        // engine abort, for a program a JDK compiles and fails at run time.
+        let list = match args.first().copied() {
+            Some(JValue::Ref(Some(list))) => list,
+            Some(JValue::Ref(None)) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
+            _ => return Ok(false),
         };
         // A `Collections` algorithm handed a synchronized wrapper works on
         // what it wraps — `Collections.sort(synchronizedList(l))` sorts `l`.
@@ -5245,7 +5262,11 @@ impl<'run> Interpreter<'run> {
                 .then(|| (reference, self.collection_elements(reference)))
             });
         match (method_name, args) {
-            ("sort", [_] | [_, JValue::Ref(Some(_))]) => {
+            // A `null` comparator is natural ordering, which is what a JDK's
+            // `sort(list, null)` means — the pattern took a comparator or no
+            // second argument at all, so the call fell through to look for a
+            // real method and ended in "malformed class Collections".
+            ("sort", [_] | [_, JValue::Ref(_)]) => {
                 let Some((reference, items)) = items else {
                     return Ok(true);
                 };
@@ -5492,6 +5513,14 @@ impl<'run> Interpreter<'run> {
                     None => -(i32::try_from(low).unwrap_or(i32::MAX) + 1),
                 };
                 frame.stack.push(JValue::Int(index));
+            }
+            // ...and a `null` ARRAY of elements is a NullPointerException,
+            // where declining left the call looking for a method that is not
+            // there.
+            ("addAll", [_, JValue::Ref(None)]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
             }
             // `Collections.addAll(list, elements...)`: the compiler packed the
             // varargs into an array of the list's element type.
@@ -5754,6 +5783,25 @@ impl<'run> Interpreter<'run> {
                 prefix: String::new(),
                 suffix: String::new(),
             },
+            // A JDK checks each piece as the collector is BUILT, in the order
+            // the parameters are written, and says which one was null —
+            // reading a null as an empty string made
+            // `Collectors.joining(null)` quietly join with nothing.
+            ("joining", [JValue::Ref(None)] | [JValue::Ref(None), _, _]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException: The delimiter must not be null",
+                )));
+            }
+            ("joining", [_, JValue::Ref(None), _]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException: The prefix must not be null",
+                )));
+            }
+            ("joining", [_, _, JValue::Ref(None)]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException: The suffix must not be null",
+                )));
+            }
             ("joining", [delimiter]) => CollectorKind::Joining {
                 delimiter: text(self, delimiter),
                 prefix: String::new(),
@@ -15029,7 +15077,14 @@ impl<'run> Interpreter<'run> {
                 // "origin(4) > fence(2)" and not "Array index out of range".
                 // A null array is a plain NullPointerException with no message,
                 // thrown before either bound is looked at.
-                ("__ofRange", [JValue::Ref(None), _, _]) => {
+                // ...and a `null` ARRAY to `Stream.of` is the same plain
+                // NullPointerException, where declining left the call looking
+                // for a method that is not there ("unknown native member").
+                // ...and a `null` STREAM handed to `concat`, which a JDK
+                // dereferences before it makes anything.
+                ("of" | "ofNullable", [JValue::Ref(None)])
+                | ("__ofRange", [JValue::Ref(None), _, _])
+                | ("concat", [JValue::Ref(None), _] | [_, JValue::Ref(None)]) => {
                     return Err(VmError::UncaughtException(String::from(
                         "java.lang.NullPointerException",
                     )));

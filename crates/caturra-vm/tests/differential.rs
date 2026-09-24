@@ -37976,22 +37976,24 @@ public class RandomStreams {
 "#
 );
 
-// `Collections.sort(null)` — javac infers the type variable from the null and
-// the `T extends Comparable<? super T>` bound is satisfied vacuously, so it
-// compiles and throws at run time. caturra reads a null argument as an empty
-// `List<Object>` (which is what a DIAMOND argument means here, and javac
-// refuses that: "no suitable method found for sort(ArrayList<Object>)"), so
-// the bound really is unsatisfied and the call is refused. The stricter,
-// safe direction, and only for the bare literal.
-stricter_than_javac!(
-    stricter_a_null_literal_to_a_bounded_collections_method,
-    "SortNull",
+// `Collections.sort(new ArrayList<>())` — javac refuses the DIAMOND here
+// ("inferred type does not conform to equality constraint(s)"), where the same
+// call on a written `null` compiles and throws. caturra takes both: a diamond's
+// context-free element is an erased type variable, which the bound check lets
+// through deliberately — an erased variable may well be `Comparable` at the use
+// site, and refusing it would refuse a generic method's own list. The looser
+// direction, and only for a diamond written INLINE: `List<Object> l = new
+// ArrayList<>(); Collections.sort(l);` is refused by both.
+looser_than_javac!(
+    looser_a_diamond_to_a_bounded_collections_method,
+    "SortDiamond",
     r"
+import java.util.ArrayList;
 import java.util.Collections;
 
-public class SortNull {
+public class SortDiamond {
     public static void main(String[] args) {
-        Collections.sort(null);
+        Collections.sort(new ArrayList<>());
     }
 }
 "
@@ -59171,6 +59173,105 @@ public class CD {
         r("move-dir-tree", () -> tree("moved"));
         r("src-gone", () -> new File("src").exists());
         r("move-file-onto-dir", () -> { Files.createDirectories(Path.of("d2")); Files.writeString(Path.of("m.txt"), "m"); return Files.move(Path.of("m.txt"), Path.of("d2")).toString(); });
+    }
+}
+"#
+);
+
+// `null` is a VALUE, and every reference parameter takes one. Sixty-five
+// library calls handed one, against a JDK: eleven were refused outright
+// (`Collections.sort(null)`, `unmodifiableSet(null)`, `Files.readString(null)`,
+// `String.format(null, 1)` — "incompatible types: <null> cannot be converted
+// to Path", about a null), seven ENDED THE ENGINE ("malformed class
+// Collections: no static method addAll(Ljava/util/ArrayList;...)", "unknown
+// native member: java/util/stream/Stream.of"), and three answered something a
+// JDK does not: `Collectors.joining(null)` joined with nothing where a JDK
+// throws "The delimiter must not be null", `Boolean.parseBoolean(null)` threw
+// where a JDK answers false, and `DayOfWeek.valueOf(null)` complained about a
+// constant called "" where a JDK says the name is null.
+differential_test!(
+    a_null_is_a_value,
+    "NU",
+    r#"
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public class NU {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) throws Throwable {
+        r("collections-addAll-null-coll", () -> { Collections.addAll(null, "b"); return "ok"; });
+        r("collections-addAll-null-array", () -> { List<String> l = new ArrayList<>(); return Collections.addAll(l, (String[]) null); });
+        r("collections-sort-null", () -> { Collections.sort(null); return "ok"; });
+        r("collections-sort-null-cmp", () -> { List<String> l = new ArrayList<>(List.of("b", "a")); Collections.sort(l, null); return l.toString(); });
+        r("collections-max-null", () -> Collections.max(null));
+        r("collections-min-null", () -> Collections.min(null));
+        r("collections-unmodifiableList-null", () -> Collections.unmodifiableList(null));
+        r("collections-unmodifiableSet-null", () -> Collections.unmodifiableSet(null));
+        r("collections-unmodifiableMap-null", () -> Collections.unmodifiableMap(null));
+        r("collections-reverse-null", () -> { Collections.reverse(null); return "ok"; });
+        r("collections-shuffle-null", () -> { Collections.shuffle(null); return "ok"; });
+        r("collections-emptyList-add", () -> { Collections.emptyList().size(); return "ok"; });
+        r("collections-frequency-null", () -> Collections.frequency(null, "a"));
+        r("collections-swap-null", () -> { Collections.swap(null, 0, 1); return "ok"; });
+        r("collections-binarySearch-null", () -> Collections.binarySearch(null, "a"));
+        r("collections-fill-null", () -> { Collections.fill(null, "a"); return "ok"; });
+        r("collections-reverseOrder-null", () -> Collections.reverseOrder(null).compare("a", "b"));
+        r("arrays-asList-null", () -> Arrays.asList((Object[]) null));
+        r("arrays-sort-null", () -> { Arrays.sort((int[]) null); return "ok"; });
+        r("arrays-sort-obj-null", () -> { Arrays.sort((String[]) null); return "ok"; });
+        r("arrays-sort-cmp-null", () -> { String[] a = {"b", "a"}; Arrays.sort(a, null); return Arrays.toString(a); });
+        r("arrays-fill-null", () -> { Arrays.fill((int[]) null, 1); return "ok"; });
+        r("arrays-copyOf-null", () -> Arrays.copyOf((int[]) null, 2));
+        r("arrays-equals-null", () -> Arrays.equals((int[]) null, (int[]) null));
+        r("arrays-stream-null", () -> Arrays.stream((int[]) null).sum());
+        r("arrays-toString-null", () -> Arrays.toString((int[]) null));
+        r("arrays-binarySearch-null", () -> Arrays.binarySearch((int[]) null, 1));
+        r("arrays-hashCode-null", () -> Arrays.hashCode((int[]) null));
+        r("stream-of-array-null", () -> Stream.of((String[]) null).count());
+        r("stream-concat-null", () -> Stream.concat(null, Stream.of("a")).count());
+        r("list-of-null", () -> List.of((String) null));
+        r("list-copyOf-null", () -> List.copyOf(null));
+        r("map-of-null", () -> Map.of("a", null));
+        r("map-entry-null", () -> Map.entry("a", null));
+        r("set-of-null", () -> Set.of((String) null));
+        r("string-join-null-delim", () -> String.join(null, "a", "b"));
+        r("string-join-null-list", () -> String.join(",", (List<String>) null));
+        r("string-format-null", () -> String.format(null, 1));
+        r("string-valueOf-null", () -> String.valueOf((Object) null));
+        r("string-concat-null", () -> "a".concat(null));
+        r("string-equals-null", () -> "a".equals(null));
+        r("string-compareTo-null", () -> "a".compareTo(null));
+        r("string-split-null", () -> Arrays.toString("a".split(null)));
+        r("string-replace-null", () -> "a".replace(null, "b"));
+        r("sb-append-null", () -> new StringBuilder().append((String) null).toString());
+        r("objects-requireNonNull-null", () -> Objects.requireNonNull(null));
+        r("objects-equals-null", () -> Objects.equals(null, null));
+        r("objects-hash-null", () -> Objects.hash((Object[]) null));
+        r("files-writeString-null", () -> Files.writeString(null, "x").toString());
+        r("files-readString-null", () -> Files.readString(null));
+        r("files-exists-null", () -> Files.exists(null));
+        r("path-of-null", () -> Path.of(null).toString());
+        r("new-file-null", () -> new File((String) null).getName());
+        r("collectors-joining-null", () -> Stream.of("a").collect(Collectors.joining(null)));
+        r("collectors-joining-three-null", () -> Stream.of("a").collect(Collectors.joining(",", null, "]")));
+        r("optional-ofNullable-null", () -> Optional.ofNullable(null).isPresent());
+        r("optional-orElse-null", () -> Optional.empty().orElse(null));
+        r("map-getOrDefault-null", () -> new HashMap<String, String>().getOrDefault("a", null));
+        r("scanner-null", () -> new Scanner((String) null).hasNext());
+        r("pattern-compile-null", () -> java.util.regex.Pattern.compile(null).pattern());
+        r("integer-parseInt-null", () -> Integer.parseInt(null));
+        r("integer-valueOf-null", () -> Integer.valueOf((String) null));
+        r("double-parseDouble-null", () -> Double.parseDouble(null));
+        r("boolean-parseBoolean-null", () -> Boolean.parseBoolean(null));
+        r("enum-valueOf-null", () -> java.time.DayOfWeek.valueOf(null));
     }
 }
 "#

@@ -11723,6 +11723,22 @@ fn fold_regex_flags(source: &[u16], flags: i32) -> Vec<u16> {
     out
 }
 
+/// The NAME an enum's `valueOf` was handed. A `null` is a
+/// `NullPointerException` saying so, because a JDK checks the name before it
+/// looks at the class — written out four times, none of which did, so
+/// `DayOfWeek.valueOf(null)` complained about a constant called "".
+///
+/// The DISPLAY form: the name only reaches a message, and a JDK shows `?` for
+/// an unpaired surrogate.
+fn enum_valueof_name(heap: &Heap, args: &[JValue]) -> Result<String, VmError> {
+    match args.first() {
+        Some(JValue::Ref(Some(reference))) => {
+            Ok(heap.string_display(*reference).unwrap_or_default())
+        }
+        _ => Err(throw("java.lang.NullPointerException: Name is null")),
+    }
+}
+
 /// The `byte[]` an argument names, as signed bytes.
 fn byte_array_values(heap: &Heap, value: &JValue) -> Result<Vec<i8>, VmError> {
     match value {
@@ -13254,11 +13270,7 @@ pub fn invoke_static(
                 "valueOf" => {
                     // The DISPLAY form: the name only reaches a message, and
                     // a JDK shows `?` for an unpaired surrogate.
-                    let name = match args.first() {
-                        Some(JValue::Ref(Some(reference))) => heap.string_display(*reference),
-                        _ => None,
-                    }
-                    .unwrap_or_default();
+                    let name = enum_valueof_name(heap, args)?;
                     match names.iter().position(|constant| *constant == name) {
                         Some(at) => Ok(Some(made(heap, u8::try_from(at).unwrap_or(0)))),
                         None => Err(throw(&*format!(
@@ -13291,13 +13303,7 @@ pub fn invoke_static(
                     Ok(Some(JValue::Ref(Some(array))))
                 }
                 "valueOf" => {
-                    // The DISPLAY form: the name only reaches a message, and
-                    // a JDK shows `?` for an unpaired surrogate.
-                    let name = match args.first() {
-                        Some(JValue::Ref(Some(reference))) => heap.string_display(*reference),
-                        _ => None,
-                    }
-                    .unwrap_or_default();
+                    let name = enum_valueof_name(heap, args)?;
                     match name.as_str() {
                         "BCE" => Ok(Some(made(heap, 0))),
                         "CE" => Ok(Some(made(heap, 1))),
@@ -13354,13 +13360,7 @@ pub fn invoke_static(
                     Ok(Some(JValue::Ref(Some(array))))
                 }
                 "valueOf" => {
-                    // The DISPLAY form: the name only reaches a message, and
-                    // a JDK shows `?` for an unpaired surrogate.
-                    let name = match args.first() {
-                        Some(JValue::Ref(Some(reference))) => heap.string_display(*reference),
-                        _ => None,
-                    }
-                    .unwrap_or_default();
+                    let name = enum_valueof_name(heap, args)?;
                     match names.iter().position(|known| *known == name) {
                         Some(ordinal) => Ok(Some(made(heap, u8::try_from(ordinal).unwrap_or(0)))),
                         None => Err(throw(&*format!(
@@ -13435,13 +13435,7 @@ pub fn invoke_static(
                     Ok(Some(JValue::Ref(Some(heap.intern_temporal(made)))))
                 }
                 "valueOf" => {
-                    // The DISPLAY form: the name only reaches a message, and
-                    // a JDK shows `?` for an unpaired surrogate.
-                    let name = match args.first() {
-                        Some(JValue::Ref(Some(reference))) => heap.string_display(*reference),
-                        _ => None,
-                    }
-                    .unwrap_or_default();
+                    let name = enum_valueof_name(heap, args)?;
                     let found = (1..=limit).find(|ordinal| {
                         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                         let ordinal = *ordinal as u8;
@@ -16537,6 +16531,17 @@ fn boolean_static(
     match (method, args) {
         // `valueOf(String)` is `parseBoolean`'s answer (boxed on a JDK, a
         // plain boolean here) — anything but "true", in any case, is false.
+        // A `null` text is FALSE, not a complaint: a JDK's `parseBoolean` is
+        // `"true".equalsIgnoreCase(s)`, which answers false for a null rather
+        // than dereferencing it — where the shared number-parsing path threw
+        // `NumberFormatException: null`.
+        ("parseBoolean" | "valueOf", [JValue::Ref(None)]) => {
+            if method == "valueOf" {
+                let reference = heap.box_wrapper("java/lang/Boolean", JValue::Int(0));
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
+            z(false)
+        }
         ("parseBoolean" | "valueOf", [text @ JValue::Ref(_)]) => {
             // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
             // primitive. Returning the primitive for both made two `valueOf`

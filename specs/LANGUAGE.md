@@ -9109,13 +9109,6 @@ counting catches: a divergence that stopped being one.
   one `var` gets) was tried and is worse — the element is then CHECKED, and
   `list.addAll(Collections.emptyList())` becomes a type error. The lenient
   typing stays. (`stricter_a_context_free_factory_in_an_overload_set`)
-- `Collections.sort(null)` — javac infers the type variable from the null, so
-  `T extends Comparable<? super T>` is satisfied vacuously and the program
-  compiles and throws at run time. A null argument reads here as the empty
-  `List<Object>` a DIAMOND argument means, and javac refuses THAT ("no suitable
-  method found for sort(ArrayList<Object>)"), so the bound really is
-  unsatisfied. Only the bare literal differs.
-  (`stricter_a_null_literal_to_a_bounded_collections_method`)
 - A conditional over two classes that share SEVERAL interfaces, passed as an
   ARGUMENT: `d(flag ? new Sq() : new Ci())` where `Sq` and `Ci` implement both
   `Shape` and `Drawable` and `d` takes a `Drawable`. javac's type for a
@@ -9198,6 +9191,16 @@ counting catches: a divergence that stopped being one.
   a primitive against the one wrapper it boxes to, and one concrete final
   library type against another — ARE refused. (`a_witness_naming_the_wrong_user_class`)
 
+- `Collections.sort(new ArrayList<>())` — javac refuses the DIAMOND here
+  ("inferred type does not conform to equality constraint(s)") and compiles the
+  same call on a written `null`, which throws at run time. caturra takes both:
+  a diamond's context-free element is an erased type VARIABLE, which the
+  `T extends Comparable<? super T>` check lets through deliberately, since an
+  erased variable may well be Comparable at the use site. Only a diamond
+  written INLINE differs — `List<Object> l = new ArrayList<>();
+  Collections.sort(l);` is refused by both. This was the stricter direction
+  until 2026-09-23, when a written `null` started compiling as javac compiles
+  it. (`looser_a_diamond_to_a_bounded_collections_method`)
 - `Optional<ArrayList<Pet>>` assigned to an `Optional<List<Pet>>` between two
   declared VARIABLES. Generics are invariant and javac refuses it; caturra's
   rule — the value written as the class where the variable says the interface
@@ -15705,6 +15708,58 @@ overloads caturra refuses outright — the generic half of that class
 `parallelSort`, and `copyOf`/`copyOfRange` with an array class). They are in
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
+
+### A null is a value (2026-09-23)
+
+`Collections.addAll(null, "b")` ended the engine: "malformed class
+Collections: no static method addAll(Ljava/util/ArrayList;[Ljava/lang/Object;)Z"
+— a link error about a method caturra's own compiler had just written. It
+turned up while widening the behaviour sweep, and one probe is never one
+defect, so sixty-seven library calls were handed a `null` and compared against
+a JDK. Twenty-seven disagreed, in three kinds.
+
+**Seven ended the engine.** Every `Collections` algorithm dereferences its
+first argument, and the VM's intrinsic DECLINED a null one — so the call went
+on to look for a real method on the bundled class, found none, and reported a
+malformed class. `Stream.of((String[]) null)`, `Stream.concat(null, s)` and
+`Arrays.stream((int[]) null)` did the same thing through "unknown native
+member". A null argument is a NullPointerException now, thrown where a JDK
+throws it.
+
+**Eleven were refused outright**, which is a refusal of ordinary Java:
+`Collections.sort(null)`, `max`, `min`, `binarySearch`, `fill`,
+`unmodifiableSet`/`Map`, `sort(list, null)` (a null comparator means natural
+ordering — the rule `list.sort(null)` already had, in a copy of the question
+that did not), `reverseOrder(null)` (the javadoc says it is the reverse of
+natural ordering), `Files.readString(null)`, `Path.of(null)` and
+`String.format(null, 1)` — "incompatible types: <null> cannot be converted to
+Path", about a null, which is a value of every reference type.
+
+**Three answered something a JDK does not.** `Collectors.joining(null)` joined
+with nothing where a JDK throws "The delimiter must not be null" as the
+collector is built (and names the prefix or the suffix when one of those is
+null instead); `Boolean.parseBoolean(null)` threw `NumberFormatException`
+where a JDK answers `false`, because it went through the shared number-parsing
+path rather than `"true".equalsIgnoreCase(s)`; and `DayOfWeek.valueOf(null)`
+complained about a constant called `""` where a JDK says "Name is null" — four
+copies of the same name-reading code, none of which checked.
+
+**What a null is NOT** is a diamond. Both type as `JType::Null` here — a
+context-adopting type — and the algorithms read that as a list of `Object`.
+javac tells them apart: `Collections.sort(null)` compiles and
+`Collections.sort(new ArrayList<>())` does not. Anything that turns on the
+difference asks the SYNTAX now (`is_null_literal`), and the diamond half moved
+from the stricter list to the looser one, where it had always belonged.
+
+Two calls are left as they were, both deliberate: `Optional.of(null)` and
+`Collections.nCopies(2, null)` type as the context-adopting `null`, so
+dereferencing one INLINE is "cannot be dereferenced". Typing them concretely
+is the trade this file already records for the empty factories — it fixes the
+receiver and breaks the assignment — and each of these two calls either throws
+immediately or is written for its value rather than its type.
+
+Pinned as `a_null_is_a_value` (sixty-five calls) and
+`looser_a_diamond_to_a_bounded_collections_method`.
 
 ### The sweep's two runs shared a directory (2026-09-23)
 
