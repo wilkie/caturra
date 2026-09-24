@@ -8975,11 +8975,12 @@ impl<'run> Interpreter<'run> {
             )
         {
             // A cursor over a sorted view carries the TREE's length as its
-            // expectation, taken now.
+            // expectation, taken now — and so does one over a map FACE of
+            // one, which `stamp_sorted_view` resolves.
             if matches!(self.heap.get(receiver), Some(HeapObject::SortedView { .. })) {
                 self.refresh_sorted_view(receiver)?;
-                self.stamp_sorted_view(receiver);
             }
+            self.stamp_sorted_view(receiver);
             let expected_len = iterated_len_of(&self.heap, receiver);
             // A view taken from an unmodifiable map hands out a read-only
             // cursor — `Collections.unmodifiableMap(m).keySet().iterator()`
@@ -10088,24 +10089,7 @@ impl<'run> Interpreter<'run> {
         let keys = |pairs: &[(JValue, JValue)]| -> Vec<JValue> {
             pairs.iter().map(|(key, _)| *key).collect()
         };
-        // A walk STARTS at `size()` — the enhanced-for asks once, and that
-        // answer is what every element fetch is checked against. A mutation
-        // made THROUGH the view re-stamps, which is exactly when a JDK cursor
-        // re-syncs its `expectedModCount`.
-        if matches!(
-            method_name,
-            "size"
-                | "iterator"
-                | "descendingIterator"
-                | "add"
-                | "remove"
-                | "put"
-                | "clear"
-                | "pollFirst"
-                | "pollLast"
-                | "pollFirstEntry"
-                | "pollLastEntry"
-        ) {
+        if starts_a_walk(method_name) {
             self.stamp_sorted_view(receiver);
         }
         let result = match (method_name, args) {
@@ -10515,6 +10499,15 @@ impl<'run> Interpreter<'run> {
     /// catch.
     fn stamp_sorted_view(&mut self, view: HeapRef) {
         use crate::value::HeapObject;
+        // A FACE of a sorted view — `subMap(a, c).keySet()` and its two
+        // siblings — is the view, for this: a cursor built over the face is a
+        // cursor over the view, and takes the same stamp. Resolved HERE rather
+        // than at each caller, which is how `keySet().iterator()` came to be
+        // the one walk that never re-stamped.
+        let view = match self.heap.get(view) {
+            Some(HeapObject::MapView { map, .. }) => *map,
+            _ => view,
+        };
         let Some(HeapObject::SortedView { backing, .. }) = self.heap.get(view) else {
             return;
         };
@@ -11525,6 +11518,7 @@ impl<'run> Interpreter<'run> {
             }
             origin
         });
+        self.bind_stream_source(origin);
         let driven = self.stream_run_source(origin, source, ops, &mut states, sink);
         self.temp_roots.truncate(root_base);
         driven
@@ -11650,7 +11644,7 @@ impl<'run> Interpreter<'run> {
     /// `unmodifiableList(l.subList(0, 2))` is still that sub-range. Keyed on
     /// the wrapper — which is what each of the three callers did, separately —
     /// a wrapped view quietly answered.
-    fn check_view_source(&self, reference: HeapRef, length: usize) -> Result<(), VmError> {
+    fn check_view_source(&self, reference: HeapRef) -> Result<(), VmError> {
         let inner = self.heap.unwrapped(reference);
         if matches!(
             self.heap.get(inner),
@@ -11659,9 +11653,23 @@ impl<'run> Interpreter<'run> {
                     | crate::value::HeapObject::SortedView { .. }
             )
         ) {
+            let length = iterated_len_of(&self.heap, inner);
             return check_comodification(&self.heap, inner, length);
         }
         Ok(())
+    }
+
+    /// The stamp a stream over a SORTED view takes when it BINDS. A sub-list
+    /// remembers when it was made and a sorted view does not — its cursors
+    /// take the tree's count as they are built — so a change between
+    /// `headSet(k)` and the terminal is simply seen, where the same change
+    /// under a `subList` ends the traversal. Taken at the terminal, so a
+    /// change made DURING the traversal still ends it.
+    fn bind_stream_source(&mut self, origin: Option<StreamOrigin>) {
+        if let Some(origin) = origin {
+            let inner = self.heap.unwrapped(origin.source);
+            self.stamp_sorted_view(inner);
+        }
     }
 
     /// Throw `ConcurrentModificationException` if the collection a stream was
@@ -11688,7 +11696,7 @@ impl<'run> Interpreter<'run> {
             // reason a cursor over one does: a JDK's `subList` spliterator
             // checks the root list's, so adding past the window's end ends the
             // traversal — which the window's own length never notices.
-            return self.check_view_source(collection, length);
+            return self.check_view_source(collection);
         }
         Err(VmError::UncaughtException(String::from(
             "java.util.ConcurrentModificationException",
@@ -13322,7 +13330,8 @@ impl<'run> Interpreter<'run> {
             // `l.subList(0, 2).stream().count()` after an add to `l` throws
             // where the same count over `l` itself answers the new size.
             if let Some(origin) = self.stream_origins.get(&receiver).copied() {
-                self.check_view_source(origin.source, origin.length)?;
+                self.bind_stream_source(Some(origin));
+                self.check_view_source(origin.source)?;
             }
             let (current, _) = self.stream_pipeline(receiver);
             let known = current.fixed().len();
@@ -14281,6 +14290,16 @@ impl<'run> Interpreter<'run> {
     ) -> Result<Answered, VmError> {
         use crate::value::HeapObject;
         let read_only = self.is_read_only_view(view);
+        // ...and the same when the walk is over a FACE of a sorted view:
+        // `subMap(a, c).keySet()` asks `size()` here rather than on the view
+        // underneath, so nothing re-stamped and the face answered with the
+        // stamp the view was born with. A JDK's `NavigableSubMap` stores no
+        // modCount of its own — its cursors take the TREE's when they are
+        // built — so `m.headMap("c"); m.put("f", 9); walk(v.keySet())` walks,
+        // where this threw.
+        if starts_a_walk(method_name) {
+            self.stamp_sorted_view(map);
+        }
         // A view of an unmodifiable map writes through to nothing.
         if read_only && is_view_mutator(method_name) {
             return Err(VmError::UncaughtException(String::from(
@@ -16817,7 +16836,7 @@ impl<'run> Interpreter<'run> {
                 let owner = receiver;
                 let source = self.backing_list(receiver);
                 let expected_len = iterated_len_of(&self.heap, source);
-                self.check_view_source(source, expected_len)?;
+                self.check_view_source(source)?;
                 let index = match args.first() {
                     Some(JValue::Int(at)) => usize::try_from(*at)
                         .ok()
@@ -20868,6 +20887,31 @@ fn is_map_mutator(method: &str) -> bool {
 }
 
 /// Which of a map's three views a method name asks for, if any.
+/// The calls that BEGIN a walk of a sorted view, and so take the stamp a JDK
+/// cursor takes in its constructor: the enhanced-for asks `size()` once and
+/// checks every element fetch against that answer, and an explicit cursor asks
+/// for itself. A mutation made THROUGH the view re-stamps for the same reason
+/// a JDK cursor re-syncs its `expectedModCount`.
+///
+/// Asked by the sorted view AND by a map FACE of one — written out at the
+/// first alone, a walk through the face never re-stamped.
+fn starts_a_walk(method: &str) -> bool {
+    matches!(
+        method,
+        "size"
+            | "iterator"
+            | "descendingIterator"
+            | "add"
+            | "remove"
+            | "put"
+            | "clear"
+            | "pollFirst"
+            | "pollLast"
+            | "pollFirstEntry"
+            | "pollLastEntry"
+    )
+}
+
 fn map_view_kind(method: &str) -> Option<MapViewKind> {
     match method {
         "keySet" => Some(MapViewKind::Keys),

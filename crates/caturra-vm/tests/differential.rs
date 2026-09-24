@@ -59909,3 +59909,179 @@ public class VW {
 }
 "#
 );
+
+// When a walk of a SORTED view begins.
+//
+// A sub-list remembers when it was made — `AbstractList.SubList` stores the
+// root's modCount in its constructor — and a sorted view does not. A
+// `NavigableSubMap` holds no count of its own; its cursors take the TREE's as
+// they are built. So `m.headMap("c"); m.put("f", 9); walk(view)` walks in a
+// JDK, where the same shape under a `subList` ends with a
+// ConcurrentModificationException.
+//
+// caturra models that by stamping the view when a walk over it STARTS: the
+// enhanced-for asks `size()` once and checks every element fetch against that
+// answer, and an explicit cursor asks for itself. Two walks never reached the
+// stamp. A map FACE of a sorted view — `subMap(a, c).keySet()`, its `values()`
+// and its `entrySet()` — asks `size()` and `iterator()` of the FACE, so
+// nothing re-stamped and the face answered with the stamp the view was born
+// with. And a STREAM over a sorted view took no stamp at all, so a change made
+// between `headSet(k)` and the terminal ended a count that a JDK answers.
+//
+// A change made DURING the traversal still ends it, which is the half that
+// keeps the check worth making.
+differential_test!(
+    when_a_sorted_walk_begins,
+    "SW",
+    r#"
+import java.util.*;
+
+public class SW {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static String walk(Collection<?> c) {
+        StringBuilder out = new StringBuilder();
+        for (Object v : c) { out.append(v); }
+        return "[" + out + "]";
+    }
+    static NavigableMap<String, Integer> tree() {
+        NavigableMap<String, Integer> m = new TreeMap<>();
+        m.put("a", 1); m.put("b", 2); m.put("c", 3); m.put("d", 4);
+        return m;
+    }
+    static NavigableSet<String> set() { return new TreeSet<>(List.of("a", "b", "c", "d")); }
+    public static void main(String[] args) {
+        // The view is made, the tree changes, and THEN it is walked.
+        r("map-view-first", () -> {
+            NavigableMap<String, Integer> m = tree();
+            NavigableMap<String, Integer> v = m.headMap("c", false);
+            m.put("f", 9);
+            return walk(v.values());
+        });
+        r("map-values-first", () -> {
+            NavigableMap<String, Integer> m = tree();
+            Collection<Integer> v = m.headMap("c", false).values();
+            m.put("f", 9);
+            return walk(v);
+        });
+        r("map-keys-first", () -> {
+            NavigableMap<String, Integer> m = tree();
+            Set<String> v = m.headMap("c", false).keySet();
+            m.put("f", 9);
+            return walk(v);
+        });
+        r("map-entries-first", () -> {
+            NavigableMap<String, Integer> m = tree();
+            Set<Map.Entry<String, Integer>> v = m.headMap("c", false).entrySet();
+            m.put("f", 9);
+            return walk(v);
+        });
+        r("map-keys-cursor-after", () -> {
+            NavigableMap<String, Integer> m = tree();
+            NavigableMap<String, Integer> v = m.headMap("c", false);
+            m.put("f", 9);
+            return v.keySet().iterator().next();
+        });
+        r("map-inside-range", () -> {
+            NavigableMap<String, Integer> m = tree();
+            NavigableMap<String, Integer> v = m.headMap("c", false);
+            m.put("aa", 9);
+            return walk(v.values());
+        });
+        r("map-size-after", () -> {
+            NavigableMap<String, Integer> m = tree();
+            NavigableMap<String, Integer> v = m.headMap("c", false);
+            m.put("f", 9);
+            return v.size() + "/" + v.keySet().size() + "/" + v.values().size();
+        });
+        r("map-stream-after", () -> {
+            NavigableMap<String, Integer> m = tree();
+            NavigableMap<String, Integer> v = m.headMap("c", false);
+            m.put("f", 9);
+            return v.values().stream().count();
+        });
+        r("map-descending-after", () -> {
+            NavigableMap<String, Integer> m = tree();
+            NavigableMap<String, Integer> v = m.descendingMap();
+            m.put("f", 9);
+            return walk(v.keySet());
+        });
+        r("set-view-first", () -> {
+            NavigableSet<String> s = set();
+            NavigableSet<String> v = s.headSet("c", false);
+            s.add("f");
+            return walk(v);
+        });
+        r("set-stream-after", () -> {
+            NavigableSet<String> s = set();
+            NavigableSet<String> v = s.headSet("c", false);
+            s.add("f");
+            return v.stream().count();
+        });
+        r("set-collect-after", () -> {
+            NavigableSet<String> s = set();
+            NavigableSet<String> v = s.headSet("c", false);
+            s.add("f");
+            return v.stream().collect(java.util.stream.Collectors.toList());
+        });
+        r("set-iterator-after", () -> {
+            NavigableSet<String> s = set();
+            NavigableSet<String> v = s.headSet("c", false);
+            s.add("f");
+            return v.iterator().next();
+        });
+
+        // A CURSOR taken first, and only then the change: that one throws.
+        r("map-cursor-first", () -> {
+            NavigableMap<String, Integer> m = tree();
+            Iterator<Integer> it = m.headMap("c", false).values().iterator();
+            m.put("f", 9);
+            return it.next();
+        });
+        r("set-cursor-first", () -> {
+            NavigableSet<String> s = set();
+            Iterator<String> it = s.headSet("c", false).iterator();
+            s.add("f");
+            return it.next();
+        });
+        r("map-change-during", () -> {
+            NavigableMap<String, Integer> m = tree();
+            NavigableMap<String, Integer> v = m.headMap("c", false);
+            StringBuilder out = new StringBuilder();
+            for (String k : v.keySet()) { out.append(k); m.put("f", 9); }
+            return out.toString();
+        });
+        r("set-change-during", () -> {
+            NavigableSet<String> s = set();
+            NavigableSet<String> v = s.headSet("c", false);
+            StringBuilder out = new StringBuilder();
+            for (String k : v) { out.append(k); s.add("f"); }
+            return out.toString();
+        });
+
+        // ...and a sub-LIST, which does remember, still ends every one.
+        r("list-view-first", () -> {
+            List<String> l = new ArrayList<>(List.of("a", "b", "c"));
+            List<String> v = l.subList(0, 2);
+            l.add("z");
+            return walk(v);
+        });
+        r("list-stream-after", () -> {
+            List<String> l = new ArrayList<>(List.of("a", "b", "c"));
+            List<String> v = l.subList(0, 2);
+            l.add("z");
+            return v.stream().count();
+        });
+        r("list-size-after", () -> {
+            List<String> l = new ArrayList<>(List.of("a", "b", "c"));
+            List<String> v = l.subList(0, 2);
+            l.add("z");
+            return v.size();
+        });
+    }
+}
+"#
+);

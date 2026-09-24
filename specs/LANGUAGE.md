@@ -15709,6 +15709,47 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### When a walk of a sorted view begins (2026-09-24)
+
+The first of the two causes the view fuzzer left open (see "A view behind a
+wrapper" below). A sub-list REMEMBERS when it was made — `AbstractList.SubList`
+stores the root's `modCount` in its constructor — and a sorted view does not:
+a `NavigableSubMap` holds no count of its own, and its cursors take the TREE's
+as they are built. So this walks in a JDK:
+
+```java
+NavigableMap<String, Integer> v = m.headMap("c", false);
+m.put("f", 9);
+for (int n : v.values()) { ... }      // fine - the cursor is made now
+```
+
+while the same shape under a `subList` ends with a
+ConcurrentModificationException, and a cursor taken BEFORE the `put` throws
+either way.
+
+caturra already modelled that, by stamping the view when a walk over it
+STARTS: the enhanced-for asks `size()` once and checks every element fetch
+against that answer, and an explicit cursor asks for itself. Two walks never
+reached the stamp, and both were the same omission — the rule was written out
+at one kind of receiver and not asked at the others.
+
+**A map FACE of a sorted view.** `subMap(a, c).keySet()`, its `values()` and
+its `entrySet()` ask `size()` and `iterator()` of the FACE, which has its own
+intrinsic, so nothing re-stamped and every walk through a face answered with
+the stamp the view was born with. The trigger list is now one function,
+`starts_a_walk`, asked by the view and by the face; and `stamp_sorted_view`
+resolves a face to the view it presents, so `keySet().iterator()` takes the
+stamp that `iterator()` on the view itself takes.
+
+**A stream over a sorted view took no stamp at all**, so `headSet(k)`, a
+change, and then `count()` threw where a JDK answers. A stream binds at the
+TERMINAL, so that is where the stamp is taken (`bind_stream_source`) — which
+leaves a change made DURING the traversal still ending it, the half that makes
+the check worth making.
+
+Pinned as `when_a_sorted_walk_begins` (twenty calls), which also pins the
+sub-list side: it remembers, so every one of the same questions still throws.
+
 ### A view behind a wrapper (2026-09-24)
 
 A view fuzzer — random chains of one to three views over an `ArrayList`,
@@ -15780,13 +15821,8 @@ now rather than guessed at:
   then `back.add("c")` — leave the size where it was, so the view goes on
   answering where a JDK throws. Closing it means a real modification count
   per collection, incremented wherever one is structurally changed.
-- **A sorted MAP view is stamped when a CURSOR over it is made.** A
-  `NavigableSubMap` stores no modCount of its own — its iterators capture the
-  tree's when they are constructed — so `m.headMap("c"); m.put("f", 9);
-  walk(view.values())` is fine in a JDK, while caturra stamps the view at
-  creation and throws. A sub-LIST is the opposite and does store one, which is
-  why `subList` is right and this is not. (Only a map face is affected: a
-  `headSet` already answers correctly.)
+- **A sorted MAP view is stamped when a CURSOR over it is made** — fixed the
+  same day; see "When a walk of a sorted view begins" above.
 
 ### A type variable is within its own bound (2026-09-24)
 
