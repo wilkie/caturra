@@ -3842,26 +3842,14 @@ impl MethodTable {
                 } else {
                     CollFace::Concrete
                 };
-                // `List<E>` is the interface form of the ArrayList caturra models.
-                if simple == "List" && !self.has_class("List") {
-                    simple = "ArrayList";
-                }
-                // `Map<K, V>` is the interface form of the HashMap caturra models.
-                // A `LinkedHashMap` is the same TYPE — the two differ only in
-                // iteration order, which the object carries, not the type.
-                // An `EnumMap` is a Map too: what makes it an EnumMap is the
-                // ORDER it iterates (the constants' own), which the object
-                // carries — and the METHODS it does not add, which is what
-                // keeps it a plain map here rather than a sorted one.
-                if matches!(simple, "Map" | "LinkedHashMap" | "EnumMap") && !self.has_class(simple)
-                {
-                    simple = "HashMap";
-                }
-                // `HashSet<E>` is the concrete form of the Set caturra models.
-                if matches!(simple, "HashSet" | "LinkedHashSet" | "EnumSet")
+                // `List<E>` is the interface form of the ArrayList caturra
+                // models, an `EnumMap` is a `HashMap` that iterates in the
+                // constants' order, and so on — one table, asked here and by
+                // the descriptor writer.
+                if let Some(modelled) = modelled_collection_name(simple)
                     && !self.has_class(simple)
                 {
-                    simple = "Set";
+                    simple = modelled;
                 }
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(|elem| JType::List { elem, face })
@@ -4728,6 +4716,15 @@ fn raw_library_internal(name: &str) -> Option<&'static str> {
         "HashSet" => "java/util/HashSet",
         "LinkedHashMap" => "java/util/LinkedHashMap",
         "LinkedHashSet" => "java/util/LinkedHashSet",
+        // The enum-keyed pair. Both are modelled as the SORTED collection
+        // underneath, so neither name appeared here and `(EnumSet<Day>) o`
+        // — the everyday cast back out of an `Object`, and the one an erased
+        // lambda parameter compiles to — was "incompatible types", while
+        // `o instanceof EnumSet` was "instanceof needs a class type".
+        // A JDK's set object is a `RegularEnumSet`; `EnumSet` is the abstract
+        // class above it, which is what a program can name.
+        "EnumSet" => "java/util/EnumSet",
+        "EnumMap" => "java/util/EnumMap",
         "TreeMap" => "java/util/TreeMap",
         "TreeSet" => "java/util/TreeSet",
         "LinkedList" => "java/util/LinkedList",
@@ -6052,6 +6049,28 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
 ///
 /// Only sound once a user class of the name has been ruled out, and only for
 /// types whose parameterized form `resolve_type` already models.
+/// The collection caturra MODELS a written name as. An interface it has only
+/// one class for resolves to that class (`List` is the `ArrayList`), and two
+/// spellings that differ only in what the OBJECT carries are one type here: a
+/// `LinkedHashMap` and an `EnumMap` are a `HashMap` whose iteration order is
+/// its own, and an `EnumSet` is a `Set`.
+///
+/// `None` for a name that needs no renaming. Asked with the name as WRITTEN,
+/// and only once a user class of that name has been ruled out.
+///
+/// Two passes renamed these and they were two lists — `resolve_type` and the
+/// descriptor writer — so `EnumSet` was on the first and not the second: an
+/// `EnumSet<Day>` local was fine and the same type as a PARAMETER was
+/// "unknown generic type '`EnumSet`'".
+fn modelled_collection_name(simple: &str) -> Option<&'static str> {
+    Some(match simple {
+        "List" => "ArrayList",
+        "Map" | "LinkedHashMap" | "EnumMap" => "HashMap",
+        "HashSet" | "LinkedHashSet" | "EnumSet" => "Set",
+        _ => return None,
+    })
+}
+
 fn raw_generic_arity(simple: &str) -> Option<usize> {
     match simple {
         "List" | "ArrayList" | "Set" | "HashSet" | "LinkedHashSet" | "EnumSet" | "TreeSet"
@@ -11547,15 +11566,10 @@ fn method_descriptor(
                 // which splits at the last dot and asks about a package.
                 let lookup = crate::imports::nested_library_class(base).unwrap_or(base.as_str());
                 let mut simple = lookup;
-                if simple == "List" && !table.has_class("List") {
-                    simple = "ArrayList";
-                }
-                if matches!(simple, "Map" | "LinkedHashMap" | "EnumMap") && !table.has_class(simple)
+                if let Some(modelled) = modelled_collection_name(simple)
+                    && !table.has_class(simple)
                 {
-                    simple = "HashMap";
-                }
-                if matches!(simple, "HashSet" | "LinkedHashSet") && !table.has_class(simple) {
-                    simple = "Set";
+                    simple = modelled;
                 }
                 if matches!(
                     simple,

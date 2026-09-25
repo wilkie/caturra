@@ -23630,7 +23630,12 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         // A tokenizer IS the pre-collections cursor, and a UUID orders itself.
         "java/util/StringTokenizer" => &["java/util/Enumeration"],
         "java/util/EnumMap" => &["java/util/Map"],
-        "java/util/RegularEnumSet" => &["java/util/Set", "java/util/Collection"],
+        // ...and `EnumSet` itself: a JDK's set object is a `RegularEnumSet`,
+        // and `EnumSet` is the abstract class above it — the name a program
+        // writes in a cast or an `instanceof`.
+        "java/util/RegularEnumSet" => {
+            &["java/util/EnumSet", "java/util/Set", "java/util/Collection"]
+        }
         "sun/nio/fs/UnixPath" => &[
             "java/nio/file/Path",
             "java/lang/Comparable",

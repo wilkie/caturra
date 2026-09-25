@@ -61198,3 +61198,106 @@ public class LA {
 }
 "#
 );
+
+// An enum-keyed collection as a TYPE. `EnumSet` and `EnumMap` are modelled as
+// the sorted collections underneath — an `EnumMap` is a `HashMap` that
+// iterates in the constants' order — and NEITHER name was in the table that
+// says what class a cast or an `instanceof` names. So `(EnumSet<Day>) o` was
+// "incompatible types: Object cannot be converted to EnumSet<Day>" and
+// `o instanceof EnumSet` was "instanceof needs a class type, got HashSet",
+// which is the model's own rename leaking into a diagnostic.
+//
+// The same two names were renamed by two lists — `resolve_type`'s and the
+// descriptor writer's — and `EnumSet` was on the first and not the second, so
+// an `EnumSet<Day>` LOCAL compiled and the same type as a parameter, a return
+// or a field was "unknown generic type 'EnumSet'". One table now, asked by
+// both, which is what keeps the next name from being on one of them.
+differential_test!(
+    an_enum_collection_as_a_type,
+    "EC",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class EC {
+    enum Day { MON, TUE, WED }
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static int count(EnumSet<Day> s) { return s.size(); }
+    static EnumSet<Day> make() { return EnumSet.of(Day.MON, Day.WED); }
+    static int keys(EnumMap<Day, Integer> m) { return m.size(); }
+    static EnumMap<Day, Integer> map() {
+        EnumMap<Day, Integer> m = new EnumMap<>(Day.class);
+        m.put(Day.TUE, 2);
+        return m;
+    }
+    static EnumSet<Day> field = EnumSet.noneOf(Day.class);
+
+    public static void main(String[] args) {
+        Object set = make();
+        Object plain = new HashSet<Day>();
+        Object emap = map();
+        Object hmap = new HashMap<Day, Integer>();
+
+        // The name a program writes, asked of a value.
+        r("set-is-enumset", () -> set instanceof EnumSet);
+        r("set-is-set", () -> set instanceof Set);
+        r("set-is-collection", () -> set instanceof Collection);
+        r("hashset-is-enumset", () -> plain instanceof EnumSet);
+        r("map-is-enummap", () -> emap instanceof EnumMap);
+        r("map-is-map", () -> emap instanceof Map);
+        r("hashmap-is-enummap", () -> hmap instanceof EnumMap);
+
+        // ...and the cast that names it, both ways round.
+        r("cast-set", () -> ((EnumSet<Day>) set).size());
+        r("cast-map", () -> ((EnumMap<Day, Integer>) emap).size());
+        r("cast-set-wrong", () -> ((EnumSet<Day>) plain).size());
+        r("cast-map-wrong", () -> ((EnumMap<Day, Integer>) hmap).size());
+
+        // The type in every position a type can be written.
+        r("parameter", () -> count(make()));
+        r("return", () -> make().size());
+        r("field", () -> field.size());
+        r("map-parameter", () -> keys(map()));
+        r("local", () -> {
+            EnumSet<Day> s = make();
+            return s.size();
+        });
+        r("raw", () -> {
+            EnumSet raw = make();
+            return raw.size();
+        });
+        r("raw-map", () -> {
+            EnumMap raw = map();
+            return raw.size();
+        });
+        r("element", () -> {
+            List<EnumSet<Day>> holder = new ArrayList<>();
+            holder.add(make());
+            return holder.get(0).size();
+        });
+        r("for-each", () -> {
+            int n = 0;
+            for (EnumSet<Day> s : List.of(make(), EnumSet.allOf(Day.class))) n += s.size();
+            return n;
+        });
+
+        // ...and as a lambda's own parameter, which is that cast erased.
+        r("lambda-parameter", () -> Stream.of(make()).map(x -> x.size()).findFirst().get());
+        r("lambda-map", () -> Stream.of(map()).map(x -> x.size()).findFirst().get());
+        r("function", () -> {
+            Function<EnumSet<Day>, Integer> f = x -> x.size();
+            return f.apply(make());
+        });
+        r("toString", () -> make().toString());
+        r("map-toString", () -> map().toString());
+        r("getClass", () -> make().getClass().getName());
+        r("map-getClass", () -> map().getClass().getName());
+    }
+}
+"#
+);

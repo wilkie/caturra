@@ -15720,6 +15720,37 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### An enum collection as a type (2026-09-25)
+
+`EnumSet` and `EnumMap` are modelled as the sorted collections underneath — an
+`EnumMap` is a `HashMap` that iterates in the constants' own order, an
+`EnumSet` a `Set` — and that rename went further than it should have. Neither
+name was in the table that says which class a cast or an `instanceof` NAMES,
+so `(EnumSet<Day>) o` was "incompatible types: Object cannot be converted to
+EnumSet<Day>" and `o instanceof EnumSet` was "instanceof needs a class type,
+got HashSet", a diagnostic in which the model's own rename is visible to the
+program. Storing an enum collection in an `Object` and taking it back out is
+ordinary Java, and every erased lambda parameter is that same cast.
+
+The table is `raw_library_internal`, which the cast and `instanceof` already
+share; the two names are `java/util/EnumSet` and `java/util/EnumMap`. A JDK's
+set object is a `RegularEnumSet` and `EnumSet` is the abstract class above it,
+so the VM's face list says so too — that is what makes `set instanceof
+EnumSet` true and `plain instanceof EnumSet` false.
+
+The rename itself was written TWICE — once in `resolve_type`, once in the
+descriptor writer — and `EnumSet` was on the first list and not the second. So
+an `EnumSet<Day>` LOCAL compiled, and the same type as a parameter, a return
+or a field was "unknown generic type 'EnumSet'". One `modelled_collection_name`
+now, asked by both, which is what keeps the next name from reaching only one
+of them.
+
+Pinned as `an_enum_collection_as_a_type` (twenty-eight calls): the two
+`instanceof` families, the casts that succeed and the two that throw (down to
+a JDK's `class java.util.HashSet cannot be cast to class java.util.EnumSet`),
+the type as a parameter, a return, a field, a local, a raw declaration, a
+collection's element, a for-each variable and a lambda's own parameter.
+
 ### A stream over an array a library call answers (2026-09-24)
 
 The last item the previous unit left, and the same shape as the three lists
