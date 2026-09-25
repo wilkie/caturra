@@ -7430,6 +7430,18 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
                 Some(TypeRef::Generic { base, args }) if args.len() == 1 => {
                     (base.rsplit('.').next().unwrap_or(&base) == "Stream").then(|| args[0].clone())
                 }
+                // ...and a PRIMITIVE pipeline a method answers, whose element
+                // is in its name. `Random`'s own `ints`/`longs`/`doubles` are
+                // declared that way in the bundled source, so
+                // `new Random().ints(10, 1, 7).filter(v -> …)` — the dice
+                // idiom — was refused for having no functional-interface
+                // position.
+                Some(TypeRef::Named(name)) => match name.rsplit('.').next().unwrap_or(&name) {
+                    "IntStream" => Some(TypeRef::Int),
+                    "LongStream" => Some(TypeRef::Long),
+                    "DoubleStream" => Some(TypeRef::Double),
+                    _ => None,
+                },
                 _ => None,
             }
         }

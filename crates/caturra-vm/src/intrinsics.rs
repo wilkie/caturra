@@ -9577,9 +9577,9 @@ pub(crate) fn begin_walk(heap: &mut Heap, reference: HeapRef) -> Result<(), VmEr
         _ => inner,
     };
     if let Some(HeapObject::SortedView { backing, .. }) = heap.get(view) {
-        let length = sorted_backing_pairs(heap, *backing).len();
+        let stamp = mod_stamp(heap, *backing);
         if let Some(HeapObject::SortedView { seen, .. }) = heap.get_mut(view) {
-            *seen = length;
+            *seen = stamp;
         }
     }
     if matches!(
@@ -9619,7 +9619,7 @@ pub(crate) fn check_comodification(
         .filter(|map| matches!(heap.get(*map), Some(HeapObject::SortedView { .. })))
         .unwrap_or(source);
     if let Some(HeapObject::SortedView { backing, seen, .. }) = heap.get(sorted) {
-        if sorted_backing_pairs(heap, *backing).len() == *seen {
+        if mod_stamp(heap, *backing) == *seen {
             return Ok(());
         }
         return Err(throw("java.util.ConcurrentModificationException"));
@@ -9629,15 +9629,49 @@ pub(crate) fn check_comodification(
     // adding to the backing ends a walk of the view — which the view's own
     // length, untouched by an add past its end, could never notice.
     if let Some(HeapObject::SubList { backing, seen, .. }) = heap.get(source) {
-        if iterated_len(heap, *backing) == *seen {
+        if mod_stamp(heap, *backing) == *seen {
             return Ok(());
         }
         return Err(throw("java.util.ConcurrentModificationException"));
     }
-    if iterated_len(heap, source) == expected_len {
+    if mod_stamp(heap, source) == expected_len {
         return Ok(());
     }
     Err(throw("java.util.ConcurrentModificationException"))
+}
+
+/// The collection whose modification count a cursor over `source` watches: the
+/// one that OWNS the storage. A wrapper is peeled, a map's key set or values
+/// is its map, and a sub-list or a sorted range is the collection it is a
+/// range of — a JDK's view cursor checks the ROOT's `modCount`.
+fn stamp_root(heap: &Heap, source: HeapRef) -> HeapRef {
+    let source = heap.unwrapped(source);
+    if let Some(map) = view_map(heap, source) {
+        return stamp_root(heap, map);
+    }
+    match heap.get(source) {
+        Some(HeapObject::SubList { backing, .. } | HeapObject::SortedView { backing, .. }) => {
+            stamp_root(heap, *backing)
+        }
+        _ => source,
+    }
+}
+
+/// What a fail-fast cursor over `source` records when it starts and compares
+/// on every step: the modification count of the collection it reads. Every
+/// stamp a cursor or a view keeps is one of these — see `Heap::stamps` for
+/// why it is a COUNT and not the length it used to be.
+pub(crate) fn mod_stamp(heap: &Heap, source: HeapRef) -> usize {
+    let root = stamp_root(heap, source);
+    // An `ArrayDeque` is the one collection whose cursor keeps NO count: a
+    // JDK's walks the number of elements it started with and throws only if
+    // the slot it reaches has been emptied, so a `removeLast` followed by an
+    // `addLast` goes unnoticed there too. Its LENGTH is the closer stand-in,
+    // and the one this used to be for every collection.
+    if matches!(heap.get(root), Some(HeapObject::ArrayDeque(_))) {
+        return iterated_len(heap, root);
+    }
+    heap.mod_count(root)
 }
 
 /// `iterated_len` for callers outside this module.
@@ -9711,11 +9745,19 @@ fn sublist_target(heap: &Heap, source: HeapRef) -> Option<(HeapRef, usize, usize
     }
 }
 
-/// Re-agree a view with its backing after a write THROUGH the view.
+/// Re-agree a view with its backing after a write THROUGH the view (a cursor's
+/// `remove`/`add`): the range grows or shrinks by `delta`, and the view takes
+/// the backing's NEW modification count, since the write was its own. The
+/// interpreter's own writes through a view do the same.
 fn sublist_resize(heap: &mut Heap, view: HeapRef, delta: isize) {
+    let backing = match heap.get(view) {
+        Some(HeapObject::SubList { backing, .. }) => *backing,
+        _ => return,
+    };
+    let stamp = mod_stamp(heap, backing);
     if let Some(HeapObject::SubList { len, seen, .. }) = heap.get_mut(view) {
         *len = len.saturating_add_signed(delta);
-        *seen = seen.saturating_add_signed(delta);
+        *seen = stamp;
     }
 }
 
@@ -9927,6 +9969,7 @@ fn iterator_method(
         index,
         last,
         expected_len,
+        expected_mod,
         writes,
         descending,
         ..
@@ -9934,8 +9977,15 @@ fn iterator_method(
     else {
         unreachable!("receiver kind checked by caller");
     };
-    let (source, index, last, expected_len, writes, descending) =
-        (*source, *index, *last, *expected_len, *writes, *descending);
+    let (source, index, last, expected_len, expected_mod, writes, descending) = (
+        *source,
+        *index,
+        *last,
+        *expected_len,
+        *expected_mod,
+        *writes,
+        *descending,
+    );
     // An `Enumeration` is the same cursor under the two names it had before
     // `Iterator` existed, so the answers come from exactly the same code — and
     // `asIterator()`, Java 9's bridge between the two names, is that cursor
@@ -10017,7 +10067,7 @@ fn iterator_method(
         // then read. The index is the position AFTER the element returned, so
         // `remove()` lands on the one just handed out.
         "next" if descending => {
-            check_comodification(heap, source, expected_len)?;
+            check_comodification(heap, source, expected_mod)?;
             if index == 0 {
                 return Err(throw("java.util.NoSuchElementException"));
             }
@@ -10045,7 +10095,7 @@ fn iterator_method(
                     )));
                 }
             } else {
-                check_comodification(heap, source, expected_len)?;
+                check_comodification(heap, source, expected_mod)?;
                 if index >= iterated_len(heap, source) {
                     return Err(throw("java.util.NoSuchElementException"));
                 }
@@ -10102,7 +10152,7 @@ fn iterator_method(
             i32::try_from(index).unwrap_or(i32::MAX) - 1,
         ))),
         "previous" => {
-            check_comodification(heap, source, expected_len)?;
+            check_comodification(heap, source, expected_mod)?;
             if index == 0 {
                 return Err(throw("java.util.NoSuchElementException"));
             }
@@ -10119,7 +10169,7 @@ fn iterator_method(
             let Some(position) = last else {
                 return Err(throw("java.lang.IllegalStateException"));
             };
-            check_comodification(heap, source, expected_len)?;
+            check_comodification(heap, source, expected_mod)?;
             let value = args.first().copied().unwrap_or(JValue::NULL);
             let (target, at) = match sublist_target(heap, source) {
                 Some((backing, from, _)) => (backing, from + position),
@@ -10136,7 +10186,7 @@ fn iterator_method(
         // `add(e)` inserts before the cursor; the cursor advances past it, and
         // there is no element to `set`/`remove` afterward.
         "add" => {
-            check_comodification(heap, source, expected_len)?;
+            check_comodification(heap, source, expected_mod)?;
             let value = args.first().copied().unwrap_or(JValue::NULL);
             match sublist_target(heap, source) {
                 Some((backing, from, len)) => {
@@ -10155,16 +10205,19 @@ fn iterator_method(
                 }
             }
             let len = iterated_len(heap, source);
+            let stamp = mod_stamp(heap, source);
             if let Some(HeapObject::Iterator {
                 index,
                 last,
                 expected_len,
+                expected_mod,
                 ..
             }) = heap.get_mut(receiver)
             {
                 *index += 1;
                 *last = None;
                 *expected_len = len;
+                *expected_mod = stamp;
             }
             Ok(None)
         }
@@ -10173,23 +10226,26 @@ fn iterator_method(
                 return Err(throw("java.lang.IllegalStateException"));
             };
             // A stale iterator cannot remove either (the JDK checks here too).
-            check_comodification(heap, source, expected_len)?;
+            check_comodification(heap, source, expected_mod)?;
             iterated_remove(heap, source, position);
             // The cursor steps back onto the hole so the next element is not
             // skipped, and `remove()` cannot be called twice in a row. This is
             // the ONE legal modification during iteration, so the iterator
             // re-syncs its expectation rather than tripping over itself.
             let len = iterated_len(heap, source);
+            let stamp = mod_stamp(heap, source);
             if let Some(HeapObject::Iterator {
                 index,
                 last,
                 expected_len,
+                expected_mod,
                 ..
             }) = heap.get_mut(receiver)
             {
                 *index = position;
                 *last = None;
                 *expected_len = len;
+                *expected_mod = stamp;
             }
             Ok(None)
         }
@@ -10276,6 +10332,7 @@ fn list_method(
                 index: expected_len,
                 last: None,
                 expected_len,
+                expected_mod: mod_stamp(heap, receiver),
                 writes: IteratorWrites::All,
                 list: false,
                 descending: true,
@@ -10319,6 +10376,7 @@ fn list_method(
                 index,
                 last: None,
                 expected_len,
+                expected_mod: mod_stamp(heap, receiver),
                 writes,
                 list: method != "iterator",
                 descending: false,
@@ -20960,6 +21018,7 @@ fn vector_method(
                 index: 0,
                 last: None,
                 expected_len: size,
+                expected_mod: mod_stamp(heap, receiver),
                 // `Vector.elements()` predates `modCount` and never checks it.
                 writes: IteratorWrites::Enumerator,
                 list: false,

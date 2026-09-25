@@ -940,6 +940,11 @@ pub enum HeapObject {
         index: usize,
         last: Option<usize>,
         expected_len: usize,
+        /// The source's MODIFICATION COUNT when this cursor started (or last
+        /// changed it itself) — a JDK's `expectedModCount`. `expected_len`
+        /// stays beside it because a hash or tree cursor's `hasNext` reads a
+        /// LENGTH; this is what staleness is checked against.
+        expected_mod: usize,
         /// What this cursor may write back through — see [`IteratorWrites`].
         writes: IteratorWrites,
         /// Built by `listIterator()` rather than `iterator()`. Only `getClass`
@@ -1589,6 +1594,31 @@ const HEAP_FLOOR: usize = 1 << 16;
 /// is one slot and forty megabytes.
 const BYTES_PER_COLLECTION: usize = 64 << 20;
 
+/// One collection's modification count, and the length it had when last
+/// counted (see [`Heap::stamps`]).
+#[derive(Debug, Clone, Copy, Default)]
+struct ModStamp {
+    last_len: usize,
+    count: usize,
+}
+
+/// The length of a collection that OWNS its storage — the objects a JDK keeps
+/// a `modCount` on. A view (a sub-list, a sorted range, a map's key set)
+/// answers `None`: it is checked against the collection it is a view of.
+fn owned_len(object: &HeapObject) -> Option<usize> {
+    Some(match object {
+        HeapObject::ArrayList(values)
+        | HeapObject::LinkedList(values)
+        | HeapObject::ArrayDeque(values)
+        | HeapObject::Stack(values)
+        | HeapObject::TreeSet { values, .. }
+        | HeapObject::PriorityQueue { heap: values, .. } => values.len(),
+        HeapObject::HashSet(entries) | HeapObject::HashMap(entries) => entries.len(),
+        HeapObject::TreeMap { entries, .. } => entries.len(),
+        _ => return None,
+    })
+}
+
 /// The per-run object heap.
 /// `new StringBuilder()` starts here, and a `String` seed adds its length.
 pub const DEFAULT_BUILDER_CAPACITY: usize = 16;
@@ -1596,6 +1626,20 @@ pub const DEFAULT_BUILDER_CAPACITY: usize = 16;
 #[derive(Debug)]
 pub struct Heap {
     objects: Vec<HeapObject>,
+    /// Each collection's MODIFICATION COUNT, the way a JDK keeps `modCount`:
+    /// parallel to `objects`, one stamp per slot. A fail-fast cursor records
+    /// it when it starts and compares it on every step.
+    ///
+    /// It used to be the LENGTH that was recorded and compared, which misses
+    /// every pair of changes that cancel — `list.remove(x); list.add(y);`
+    /// inside a for-each leaves the length where it was, and a JDK throws
+    /// `ConcurrentModificationException` where caturra walked on. Counted
+    /// here instead, at the one door every mutation goes through
+    /// (`get_mut`): a collection whose length differs from the length it had
+    /// the last time it was opened for writing has been structurally changed
+    /// since, which is exactly what a JDK counts — a `set` or a `put` over an
+    /// existing key leaves the length alone and is not counted there either.
+    stamps: Vec<ModStamp>,
     /// Slots the collector reclaimed, ready to be handed out again. A
     /// reference is an INDEX, so a swept slot can be reused as it stands —
     /// nothing moves, and every reference the program holds keeps pointing at
@@ -1679,6 +1723,7 @@ impl Default for Heap {
     fn default() -> Self {
         Self {
             objects: Vec::new(),
+            stamps: Vec::new(),
             free: Vec::new(),
             allocated_bytes: 0,
             live_bytes: 0,
@@ -1703,12 +1748,18 @@ impl Heap {
     /// Allocate an object, returning its reference.
     pub fn alloc(&mut self, object: HeapObject) -> HeapRef {
         self.allocated_bytes += object.approximate_bytes();
+        let stamp = ModStamp {
+            last_len: owned_len(&object).unwrap_or(0),
+            count: 0,
+        };
         if let Some(slot) = self.free.pop() {
             self.objects[slot as usize] = object;
+            self.stamps[slot as usize] = stamp;
             return slot;
         }
         let index = u32::try_from(self.objects.len()).expect("heap exhausted");
         self.objects.push(object);
+        self.stamps.push(stamp);
         index
     }
 
@@ -1949,7 +2000,52 @@ impl Heap {
 
     #[must_use]
     pub fn get_mut(&mut self, reference: HeapRef) -> Option<&mut HeapObject> {
-        self.objects.get_mut(reference as usize)
+        let index = reference as usize;
+        // A collection opened for writing whose length moved since the last
+        // time it was opened has been structurally changed in between: count
+        // that change NOW, before this borrow makes the next one.
+        if let (Some(object), Some(stamp)) = (self.objects.get(index), self.stamps.get_mut(index))
+            && let Some(len) = owned_len(object)
+            && len != stamp.last_len
+        {
+            stamp.count += 1;
+            stamp.last_len = len;
+        }
+        self.objects.get_mut(index)
+    }
+
+    /// Count one structural change the LENGTH does not show: an `ArrayList`'s
+    /// or a `Vector`'s `sort` and `replaceAll` rewrite every slot in place,
+    /// and a JDK counts each as a modification — a sort inside a for-each
+    /// over the same list throws there — where the length alone never moves.
+    pub fn bump_mod_count(&mut self, reference: HeapRef) {
+        let index = reference as usize;
+        if let (Some(object), Some(stamp)) = (self.objects.get(index), self.stamps.get_mut(index))
+            && let Some(len) = owned_len(object)
+        {
+            // Settle a pending length change first, so the two are two.
+            if len != stamp.last_len {
+                stamp.count += 1;
+                stamp.last_len = len;
+            }
+            stamp.count += 1;
+        }
+    }
+
+    /// A collection's modification count — what a fail-fast cursor records
+    /// when it starts and compares on every step. It includes a change the
+    /// LAST write made, which no later `get_mut` has counted yet; that is
+    /// what lets it be read through `&self`.
+    #[must_use]
+    pub fn mod_count(&self, reference: HeapRef) -> usize {
+        let index = reference as usize;
+        match (self.objects.get(index), self.stamps.get(index)) {
+            (Some(object), Some(stamp)) => {
+                stamp.count
+                    + usize::from(owned_len(object).is_some_and(|len| len != stamp.last_len))
+            }
+            _ => 0,
+        }
     }
 
     /// A reference with every PASS-THROUGH wrapper peeled off: the four

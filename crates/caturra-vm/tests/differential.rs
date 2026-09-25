@@ -61833,3 +61833,255 @@ public class LT {
 }
 "#
 );
+
+// `java.util.concurrent.ThreadLocalRandom` — what a program writes for
+// `nextInt(lo, hi)`, because `Random` has none until Java 17; one Code.org
+// student project uses it. A bundled subclass of the bundled `Random`, with
+// the JDK's own range methods and refusals. A JDK seeds it per thread and
+// exposes no seed, so its NUMBERS cannot be compared; its ranges, its
+// messages, `setSeed` refusing, and its class can, and are.
+differential_test!(
+    a_thread_local_random,
+    "TR",
+    r#"
+import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.*;
+
+public class TR {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        ThreadLocalRandom t = ThreadLocalRandom.current();
+        // What can be compared: ranges, refusals, and the class.
+        r("same-instance", () -> t == ThreadLocalRandom.current());
+        r("class", () -> t.getClass().getName());
+        r("is-random", () -> t instanceof Random);
+        r("int-range", () -> IntStream.range(0, 2000).map(i -> t.nextInt(5, 9)).allMatch(v -> v >= 5 && v < 9));
+        r("int-range-hits-all", () -> IntStream.range(0, 2000).map(i -> t.nextInt(5, 9)).distinct().count());
+        r("int-bound", () -> IntStream.range(0, 2000).map(i -> t.nextInt(3)).allMatch(v -> v >= 0 && v < 3));
+        r("int-wide", () -> IntStream.range(0, 200).map(i -> t.nextInt(Integer.MIN_VALUE, Integer.MAX_VALUE)).allMatch(v -> v < Integer.MAX_VALUE));
+        r("long-range", () -> LongStream.range(0, 2000).map(i -> t.nextLong(-3L, 3L)).allMatch(v -> v >= -3 && v < 3));
+        r("long-bound", () -> LongStream.range(0, 2000).map(i -> t.nextLong(10L)).allMatch(v -> v >= 0 && v < 10));
+        r("double-range", () -> DoubleStream.generate(() -> t.nextDouble(1.5, 2.5)).limit(2000).allMatch(v -> v >= 1.5 && v < 2.5));
+        r("double-bound", () -> DoubleStream.generate(() -> t.nextDouble(4.0)).limit(2000).allMatch(v -> v >= 0 && v < 4.0));
+        r("plain-double", () -> DoubleStream.generate(t::nextDouble).limit(2000).allMatch(v -> v >= 0 && v < 1));
+        r("ints-stream", () -> t.ints(50, 0, 3).allMatch(v -> v >= 0 && v < 3));
+        r("bad-int-range", () -> t.nextInt(5, 5));
+        r("bad-int-bound", () -> t.nextInt(0));
+        r("bad-long-range", () -> t.nextLong(9L, 2L));
+        r("bad-long-bound", () -> t.nextLong(-1L));
+        r("bad-double-range", () -> t.nextDouble(2.0, 2.0));
+        r("bad-double-bound", () -> t.nextDouble(0.0));
+        r("nan-double-bound", () -> t.nextDouble(Double.NaN));
+        r("set-seed", () -> { t.setSeed(42L); return "reseeded"; });
+        r("qualified", () -> java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 2));
+    }
+}
+"#
+);
+
+// A lambda over a stream `Random` itself answers — `ints`, `longs`,
+// `doubles`, the dice idiom. The bundled source declares those as
+// primitive pipelines, and the stream reader accepted only a `Stream<T>` from
+// a method, so the lambda after one had no functional-interface position.
+differential_test!(
+    a_lambda_over_random_s_streams,
+    "RS",
+    r"
+import java.util.*;
+import java.util.stream.*;
+public class RS {
+    public static void main(String[] args) {
+        Random r = new Random(1);
+        System.out.println(r.ints(5, 0, 3).allMatch(v -> v >= 0 && v < 3));
+        System.out.println(r.doubles(3).map(d -> d * 2).count());
+        System.out.println(r.longs(3, 0, 5).filter(v -> v >= 0).count());
+    }
+}
+"
+);
+
+stricter_than_javac!(
+    strict_no_concurrent_classes,
+    "StrictConcurrentClass",
+    "import java.util.concurrent.ConcurrentHashMap;\npublic class StrictConcurrentClass { static ConcurrentHashMap<String, Integer> m; }"
+);
+
+// A modification count is a COUNT. caturra stamped every fail-fast cursor,
+// every view and every callback check with the collection's LENGTH, so two
+// changes that cancel — `list.remove(x); list.add(y);` inside a for-each, the
+// commonest shape of the classic "changed it while looping" mistake — walked on
+// where a JDK throws ConcurrentModificationException. The collection-view
+// fuzzer, run at scale, found it in 8 of 40 programs; the same flaw was in
+// every iterator, the for-each loop, `forEach`, `removeIf`, `replaceAll`, the
+// map `compute*` family and a stream's source check.
+//
+// The count is kept at the one door every mutation goes through
+// (`Heap::get_mut`): a collection opened for writing whose length moved since
+// the last time counts one structural change. A `set`, a `put` over an existing
+// key and a `setValue` leave the length alone and are not counted, as a JDK
+// does not count them. `ArrayDeque` keeps its length: a JDK's deque cursor
+// counts nothing either — it walks the number of elements it started with.
+differential_test!(
+    a_mod_count_is_a_count,
+    "MC",
+    r#"
+import java.util.*;
+public class MC {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName()); }
+    }
+    public static void main(String[] args) {
+        r("arraylist-iter", () -> { List<String> l = new ArrayList<>(List.of("a","b","c")); Iterator<String> it = l.iterator(); it.next(); l.remove("c"); l.add("z"); return it.next(); });
+        r("linkedlist-iter", () -> { List<String> l = new LinkedList<>(List.of("a","b","c")); Iterator<String> it = l.iterator(); it.next(); l.remove("c"); l.add("z"); return it.next(); });
+        r("hashmap-iter", () -> { Map<String,Integer> m = new HashMap<>(Map.of("a",1,"b",2)); Iterator<String> it = m.keySet().iterator(); it.next(); m.remove("a"); m.put("q",9); return it.hasNext() ? it.next() : "end"; });
+        r("treemap-iter", () -> { Map<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2,"c",3)); Iterator<String> it = m.keySet().iterator(); it.next(); m.remove("c"); m.put("z",9); return it.next(); });
+        r("hashset-iter", () -> { Set<String> s = new HashSet<>(Set.of("a","b")); Iterator<String> it = s.iterator(); it.next(); s.remove("a"); s.add("q"); return it.hasNext() ? it.next() : "end"; });
+        r("treeset-iter", () -> { Set<String> s = new TreeSet<>(Set.of("a","b","c")); Iterator<String> it = s.iterator(); it.next(); s.remove("c"); s.add("z"); return it.next(); });
+        r("arraydeque-iter", () -> { Deque<String> d = new ArrayDeque<>(List.of("a","b","c")); Iterator<String> it = d.iterator(); it.next(); d.removeLast(); d.addLast("z"); return it.next(); });
+        r("foreach", () -> { List<String> l = new ArrayList<>(List.of("a","b","c")); StringBuilder o = new StringBuilder(); for (String x : l) { o.append(x); if (x.equals("a")) { l.remove("c"); l.add("z"); } } return o; });
+        r("sublist", () -> { List<String> l = new ArrayList<>(List.of("a","b","c","d","e")); List<String> v = l.subList(0, 3); l.remove("e"); l.add("c"); return v.contains("b"); });
+        r("headset", () -> { TreeSet<String> s = new TreeSet<>(Set.of("a","b","c","d")); SortedSet<String> v = s.headSet("c"); Iterator<String> it = v.iterator(); it.next(); s.remove("d"); s.add("z"); return it.next(); });
+        r("set-is-not-structural", () -> { List<String> l = new ArrayList<>(List.of("a","b","c")); Iterator<String> it = l.iterator(); it.next(); l.set(2, "z"); return it.next(); });
+        r("put-existing-not-structural", () -> { Map<String,Integer> m = new HashMap<>(Map.of("a",1,"b",2)); Iterator<String> it = m.keySet().iterator(); it.next(); m.put(it.hasNext() ? "a" : "a", 5); return it.hasNext(); });
+    }
+}
+"#
+);
+
+// ...and the other direction, which matters more: every legitimate change
+// during a walk — a cursor's own remove/add/set, a `set` or an existing-key
+// `put` inside a for-each, a sub-list's own writes, a stream bound late — still
+// runs, and the changes a JDK refuses are refused.
+differential_test!(
+    what_a_walk_may_change,
+    "OK",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class OK {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName()); }
+    }
+    public static void main(String[] args) {
+        r("iter-remove-all", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3,4)); Iterator<Integer> it = l.iterator(); while (it.hasNext()) if (it.next() % 2 == 0) it.remove(); return l; });
+        r("linked-iter-remove", () -> { List<Integer> l = new LinkedList<>(List.of(1,2,3,4)); Iterator<Integer> it = l.iterator(); while (it.hasNext()) if (it.next() > 2) it.remove(); return l; });
+        r("set-iter-remove", () -> { Set<Integer> s = new HashSet<>(Set.of(1,2,3)); Iterator<Integer> it = s.iterator(); while (it.hasNext()) if (it.next() == 2) it.remove(); return new TreeSet<>(s); });
+        r("tree-iter-remove", () -> { TreeSet<Integer> s = new TreeSet<>(Set.of(1,2,3)); Iterator<Integer> it = s.iterator(); while (it.hasNext()) if (it.next() == 2) it.remove(); return s; });
+        r("map-iter-remove", () -> { Map<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2)); Iterator<String> it = m.keySet().iterator(); while (it.hasNext()) if (it.next().equals("a")) it.remove(); return m; });
+        r("entry-iter-remove", () -> { Map<String,Integer> m = new HashMap<>(Map.of("a",1,"b",2)); m.entrySet().removeIf(e -> e.getValue() == 1); return m; });
+        r("listiter-add-set", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3)); ListIterator<Integer> it = l.listIterator(); while (it.hasNext()) { int v = it.next(); if (v == 2) { it.set(20); it.add(25); } } return l; });
+        r("linked-listiter-add", () -> { List<Integer> l = new LinkedList<>(List.of(1,2,3)); ListIterator<Integer> it = l.listIterator(); while (it.hasNext()) { if (it.next() == 1) it.add(9); } return l; });
+        r("set-in-foreach", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3)); int i = 0; for (Integer x : l) { l.set(i++, x * 10); } return l; });
+        r("put-existing-in-foreach", () -> { Map<String,Integer> m = new HashMap<>(Map.of("a",1,"b",2)); for (String k : m.keySet()) m.put(k, 7); return new TreeMap<>(m); });
+        r("setvalue-in-foreach", () -> { Map<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2)); for (Map.Entry<String,Integer> e : m.entrySet()) e.setValue(e.getValue() * 3); return m; });
+        r("remove-second-to-last", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3)); for (Integer x : l) if (x == 2) l.remove(x); return l; });
+        r("new-iterator-after", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3)); l.add(4); l.remove(0); int s = 0; for (int x : l) s += x; return s; });
+        r("nested-read", () -> { List<Integer> l = List.of(1,2); int s = 0; for (int a : l) for (int b : l) s += a * b; return s; });
+        r("sort-then-iterate", () -> { List<Integer> l = new ArrayList<>(List.of(3,1,2)); Collections.sort(l); StringBuilder o = new StringBuilder(); for (int x : l) o.append(x); return o; });
+        r("sublist-writes-then-walk", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3,4,5)); List<Integer> v = l.subList(1, 4); v.add(9); v.remove(Integer.valueOf(2)); v.set(0, 7); int s = 0; for (int x : v) s += x; return s + " " + l; });
+        r("sublist-clear-then-walk", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3,4,5)); List<Integer> v = l.subList(1, 3); v.clear(); v.add(8); return v + " " + l; });
+        r("pq-iter-remove", () -> { PriorityQueue<Integer> q = new PriorityQueue<>(List.of(5,1,3)); Iterator<Integer> it = q.iterator(); while (it.hasNext()) if (it.next() == 3) it.remove(); return q.size(); });
+        r("stream-late-binding", () -> { List<Integer> l = new ArrayList<>(List.of(1,2)); Stream<Integer> s = l.stream(); l.add(3); l.remove(0); return s.collect(Collectors.toList()); });
+        r("removeif-plain", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3)); l.removeIf(x -> x > 1); return l; });
+        r("replaceall-then-walk", () -> { List<Integer> l = new ArrayList<>(List.of(1,2)); l.replaceAll(x -> x + 1); int s = 0; for (int x : l) s += x; return s; });
+        r("vector-iter-remove", () -> { Vector<Integer> v = new Vector<>(List.of(1,2,3)); Iterator<Integer> it = v.iterator(); while (it.hasNext()) if (it.next() == 2) it.remove(); return v; });
+        r("deque-foreach-read", () -> { Deque<Integer> d = new ArrayDeque<>(List.of(1,2,3)); int s = 0; for (int x : d) s += x; return s; });
+        r("headset-writes", () -> { TreeSet<Integer> s = new TreeSet<>(Set.of(1,2,3,4)); SortedSet<Integer> h = s.headSet(3); h.add(0); h.remove(1); int t = 0; for (int x : h) t += x; return t + " " + s; });
+        // ...and ones a JDK throws on.
+        r("add-in-foreach", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3)); for (Integer x : l) if (x == 1) l.add(9); return l; });
+        r("put-new-in-foreach", () -> { Map<String,Integer> m = new HashMap<>(Map.of("a",1,"b",2,"c",3)); for (String k : m.keySet()) m.put(k + "x", 1); return m.size(); });
+        r("compute-mutates", () -> { Map<String,Integer> m = new HashMap<>(); m.computeIfAbsent("a", k -> { m.put("b", 2); m.remove("b"); return 1; }); return m; });
+        r("foreach-consumer-cancels", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3)); l.forEach(x -> { if (x == 1) { l.remove(Integer.valueOf(3)); l.add(4); } }); return l; });
+        r("removeif-cancels", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3)); l.removeIf(x -> { if (x == 1) { l.add(5); l.remove(Integer.valueOf(5)); } return x == 2; }); return l; });
+        r("stream-during-cancels", () -> { List<Integer> l = new ArrayList<>(List.of(1,2,3)); return l.stream().peek(x -> { if (x == 1) { l.add(9); l.remove(Integer.valueOf(9)); } }).count(); });
+    }
+}
+"#
+);
+
+// A sub-view's `subSet`/`subMap` checks both ends are INSIDE it before it
+// checks they are the right way round, which is only observable when both
+// complaints apply — the one the view fuzzer's last divergence was.
+differential_test!(
+    a_sub_range_checks_its_ends_first,
+    "SS",
+    r#"
+import java.util.*;
+public class SS {
+    static void t(String l, Runnable r) {
+        try { r.run(); System.out.println(l + " ok"); }
+        catch (RuntimeException e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        TreeSet<String> s = new TreeSet<>(List.of("a","b","c","d","e"));
+        NavigableSet<String> v0 = s.subSet("b", true, "d", true);
+        NavigableSet<String> v1 = v0.descendingSet();
+        t("desc-sub-reversed-inside", () -> v1.subSet("d", true, "e", true));
+        t("desc-sub-ordered", () -> v1.subSet("d", true, "b", true));
+        t("desc-sub-backwards", () -> v1.subSet("b", true, "d", true));
+        t("asc-sub-out", () -> v0.subSet("a", true, "c", true));
+        t("asc-sub-backwards", () -> v0.subSet("d", true, "b", true));
+        t("asc-sub-both-out", () -> v0.subSet("e", true, "a", true));
+        TreeMap<String,Integer> m = new TreeMap<>(Map.of("a",1,"b",2,"c",3,"d",4,"e",5));
+        NavigableMap<String,Integer> mv = m.subMap("b", true, "d", true).descendingMap();
+        t("map-desc-sub", () -> mv.subMap("d", true, "e", true));
+        t("map-desc-backwards", () -> mv.subMap("b", true, "d", true));
+        t("head-out", () -> v0.headSet("e"));
+        t("tail-out", () -> v0.tailSet("a"));
+        t("desc-head-out", () -> v1.headSet("a"));
+        t("desc-tail-out", () -> v1.tailSet("e"));
+    }
+}
+"#
+);
+
+// ...and the one structural change the LENGTH never shows: an `ArrayList`'s or
+// a `Vector`'s `sort` and `replaceAll` rewrite every slot in place, and a JDK
+// counts each — a sort inside a for-each over the same list throws — while a
+// `LinkedList`'s are the interface defaults that `set` through a cursor, and
+// `reverse`/`shuffle`/`swap`/`set` count nothing anywhere. Measured, and
+// counted explicitly (`Heap::bump_mod_count`).
+differential_test!(
+    what_a_rewrite_counts,
+    "SR",
+    r#"
+import java.util.*;
+import java.util.function.*;
+public class SR {
+    static void t(String label, List<Integer> l, Consumer<List<Integer>> op) {
+        try {
+            StringBuilder out = new StringBuilder();
+            for (Integer x : l) { out.append(x); if (out.length() == 1) op.accept(l); }
+            System.out.println(label + " walked " + out);
+        } catch (ConcurrentModificationException e) { System.out.println(label + " CME"); }
+    }
+    public static void main(String[] args) {
+        for (String kind : new String[] {"ArrayList", "LinkedList", "Vector"}) {
+            java.util.function.Supplier<List<Integer>> make = () -> kind.equals("ArrayList") ? new ArrayList<>(List.of(3,1,2)) : kind.equals("LinkedList") ? new LinkedList<>(List.of(3,1,2)) : new Vector<>(List.of(3,1,2));
+            t(kind + ".sort", make.get(), l -> l.sort(null));
+            t(kind + " Collections.sort", make.get(), l -> Collections.sort(l));
+            t(kind + ".replaceAll", make.get(), l -> l.replaceAll(x -> x + 1));
+            t(kind + " Collections.reverse", make.get(), l -> Collections.reverse(l));
+            t(kind + " Collections.shuffle", make.get(), l -> Collections.shuffle(l, new Random(1)));
+            t(kind + " Collections.swap", make.get(), l -> Collections.swap(l, 0, 1));
+            t(kind + ".set", make.get(), l -> l.set(0, 9));
+            t(kind + " removeIf-none", make.get(), l -> l.removeIf(x -> x > 99));
+            t(kind + " clear-empty", new ArrayList<>(List.of(1)), l -> { });
+        }
+        Map<String,Integer> m = new HashMap<>(Map.of("a",1,"b",2));
+        try { for (String k : m.keySet()) m.replaceAll((kk, v) -> v + 1); System.out.println("HashMap.replaceAll walked"); } catch (ConcurrentModificationException e) { System.out.println("HashMap.replaceAll CME"); }
+        Map<String,Integer> t2 = new TreeMap<>(Map.of("a",1,"b",2));
+        try { for (String k : t2.keySet()) t2.replaceAll((kk, v) -> v + 1); System.out.println("TreeMap.replaceAll walked"); } catch (ConcurrentModificationException e) { System.out.println("TreeMap.replaceAll CME"); }
+    }
+}
+"#
+);

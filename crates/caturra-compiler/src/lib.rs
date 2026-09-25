@@ -102,6 +102,7 @@ const REFLECT_LIB: &str = include_str!("stdlib/reflect.java");
 fn jdk_binary_name(simple: &str) -> Option<&'static str> {
     match simple {
         "Random" => Some("java/util/Random"),
+        "ThreadLocalRandom" => Some("java/util/concurrent/ThreadLocalRandom"),
         "StringJoiner" => Some("java/util/StringJoiner"),
         _ => None,
     }

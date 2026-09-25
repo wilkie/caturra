@@ -143,6 +143,12 @@ const JAVA_IO: &[&str] = &[
 /// `Files`. The rest of `java.nio` stays unsupported.
 const JAVA_NIO_FILE: &[&str] = &["Files", "Path", "Paths"];
 
+/// `java.util.concurrent` — one class of it. `ThreadLocalRandom` is a random
+/// source, not a concurrency primitive: it is what a program writes for
+/// `nextInt(lo, hi)` before Java 17 gave `Random` one. Every other class in the
+/// package is refused by name in `KNOWN_UNSUPPORTED`.
+const JAVA_UTIL_CONCURRENT: &[&str] = &["ThreadLocalRandom"];
+
 /// `java.time` — the slice that is pure calendar arithmetic. A date, and the
 /// two enums it answers with. What needs a ZONE (a `ZonedDateTime`, or what
 /// "today" is) is not here: the browser has the IANA database and vendoring a
@@ -417,6 +423,75 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // number it could answer would be fiction about a heap the program cannot
     // influence — and `exec` has nothing to exec.
     ("java.lang", &["Runtime", "Process", "ProcessBuilder"]),
+    // The rest of `java.util.concurrent` — executors, concurrent collections,
+    // latches — is about running on MORE THAN ONE thread, and caturra has one.
+    // The package used to be refused whole; with `ThreadLocalRandom` modelled
+    // it is a package caturra knows, so each of the others is refused by
+    // name here rather than read as a class that does not exist.
+    (
+        "java.util.concurrent",
+        &[
+            "AbstractExecutorService",
+            "ArrayBlockingQueue",
+            "BlockingDeque",
+            "BlockingQueue",
+            "BrokenBarrierException",
+            "Callable",
+            "CancellationException",
+            "CompletableFuture",
+            "CompletionException",
+            "CompletionService",
+            "CompletionStage",
+            "ConcurrentHashMap",
+            "ConcurrentLinkedDeque",
+            "ConcurrentLinkedQueue",
+            "ConcurrentMap",
+            "ConcurrentNavigableMap",
+            "ConcurrentSkipListMap",
+            "ConcurrentSkipListSet",
+            "CopyOnWriteArrayList",
+            "CopyOnWriteArraySet",
+            "CountDownLatch",
+            "CountedCompleter",
+            "CyclicBarrier",
+            "DelayQueue",
+            "Delayed",
+            "Exchanger",
+            "ExecutionException",
+            "Executor",
+            "ExecutorCompletionService",
+            "ExecutorService",
+            "Executors",
+            "Flow",
+            "ForkJoinPool",
+            "ForkJoinTask",
+            "ForkJoinWorkerThread",
+            "Future",
+            "FutureTask",
+            "LinkedBlockingDeque",
+            "LinkedBlockingQueue",
+            "LinkedTransferQueue",
+            "Phaser",
+            "PriorityBlockingQueue",
+            "RecursiveAction",
+            "RecursiveTask",
+            "RejectedExecutionException",
+            "RejectedExecutionHandler",
+            "RunnableFuture",
+            "RunnableScheduledFuture",
+            "ScheduledExecutorService",
+            "ScheduledFuture",
+            "ScheduledThreadPoolExecutor",
+            "Semaphore",
+            "SubmissionPublisher",
+            "SynchronousQueue",
+            "ThreadFactory",
+            "ThreadPoolExecutor",
+            "TimeUnit",
+            "TimeoutException",
+            "TransferQueue",
+        ],
+    ),
     (
         "java.io",
         // `Reader`, `FileWriter` and `Writer` used to sit here: a class
@@ -825,7 +900,6 @@ const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
     "java.sql",
     "java.text.spi",
     "java.time.zone",
-    "java.util.concurrent",
     "java.util.concurrent.atomic",
     "java.util.concurrent.locks",
     "java.util.jar",
@@ -1014,6 +1088,7 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Arrays",
     "Objects",
     "Random",
+    "ThreadLocalRandom",
     "Collections",
     "StringJoiner",
     "EmptyStackException",
@@ -1318,6 +1393,7 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("java.util.stream", JAVA_UTIL_STREAM),
     ("java.util.regex", JAVA_UTIL_REGEX),
     ("java.util.function", JAVA_UTIL_FUNCTION),
+    ("java.util.concurrent", JAVA_UTIL_CONCURRENT),
     ("java.io", JAVA_IO),
     ("java.nio.file", JAVA_NIO_FILE),
     ("java.time", JAVA_TIME),

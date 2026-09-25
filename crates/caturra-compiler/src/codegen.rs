@@ -37773,13 +37773,23 @@ impl BodyGen<'_> {
         };
         let get_ref = intern_method_ref(self.pool, class, checked, "(II)Ljava/lang/Object;");
 
-        // The size when the loop began — what every element fetch is checked
-        // against, standing in for the JDK iterator's `expectedModCount`.
+        // The size when the loop began — the bound a HASH or TREE loop walks
+        // to (below) — and the collection's MODIFICATION COUNT, which every
+        // element fetch is checked against: the JDK iterator's
+        // `expectedModCount`. The size used to stand in for both, so a body
+        // that removed one element and added another walked on where a JDK
+        // throws `ConcurrentModificationException`.
         let expected_slot = self.take_slots(1);
         self.emit_load(list_slot, iterable_ty);
         self.code.push_op_u16(op::INVOKEVIRTUAL, size_ref, 1);
         self.code.drop_stack(1);
         self.emit_store(expected_slot, JType::Int);
+        let mod_ref = intern_method_ref(self.pool, class, "__modCount", "()I");
+        let mod_slot = self.take_slots(1);
+        self.emit_load(list_slot, iterable_ty);
+        self.code.push_op_u16(op::INVOKEVIRTUAL, mod_ref, 1);
+        self.code.drop_stack(1);
+        self.emit_store(mod_slot, JType::Int);
 
         let cond_label = self.code.new_label();
         let continue_label = self.code.new_label();
@@ -37814,7 +37824,7 @@ impl BodyGen<'_> {
 
         self.emit_load(list_slot, iterable_ty);
         self.emit_load(index_slot, JType::Int);
-        self.emit_load(expected_slot, JType::Int);
+        self.emit_load(mod_slot, JType::Int);
         self.code
             .push_op_u16(op::INVOKEVIRTUAL, get_ref, element.width());
         self.code.drop_stack(3);

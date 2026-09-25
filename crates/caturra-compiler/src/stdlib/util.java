@@ -62,7 +62,7 @@ class Random {
     if (streamSize < 0L) throw new IllegalArgumentException("size must be non-negative");
   }
 
-  private void __checkRange(boolean ordered) {
+  void __checkRange(boolean ordered) {
     if (!ordered) throw new IllegalArgumentException("bound must be greater than origin");
   }
 
@@ -131,7 +131,7 @@ class Random {
 
   // `internalNextDouble`: scale one draw into the range, and pull the result
   // back under the bound if rounding pushed it over.
-  private double __boundedDouble(double origin, double bound) {
+  double __boundedDouble(double origin, double bound) {
     double drawn = nextDouble() * (bound - origin) + origin;
     if (drawn >= bound) {
       drawn = Double.longBitsToDouble(Double.doubleToLongBits(bound) - 1L);
@@ -142,7 +142,7 @@ class Random {
   // `internalNextLong`: the JDK draws a whole long, then folds it into the
   // range by repeated modulus — rejecting a draw that would bias the result,
   // which is why the loop is there rather than a single remainder.
-  private long __boundedLong(long origin, long bound) {
+  long __boundedLong(long origin, long bound) {
     long drawn = nextLong();
     long span = bound - origin;
     long limit = span - 1;
@@ -168,7 +168,7 @@ class Random {
 
   // `internalNextInt`: a positive span is one bounded draw shifted, and a span
   // that OVERFLOWS an int is drawn whole and rejected until it lands.
-  private int __boundedInt(int origin, int bound) {
+  int __boundedInt(int origin, int bound) {
     int span = bound - origin;
     if (span > 0) {
       return nextInt(span) + origin;
@@ -220,6 +220,60 @@ class Random {
     __nextGaussian = v2 * factor;
     __haveNextGaussian = true;
     return v1 * factor;
+  }
+}
+
+// `java.util.concurrent.ThreadLocalRandom` — the random source a program reaches
+// for with `ThreadLocalRandom.current().nextInt(lo, hi)`, because `Random` has
+// no two-argument `nextInt` until Java 17. One thread here, so one instance,
+// seeded the way an unseeded `Random` is; a JDK's is seeded per thread and
+// exposes no seed, so its NUMBERS can never be compared — its ranges, its
+// refusals and its class can.
+class ThreadLocalRandom extends Random {
+  private static ThreadLocalRandom __instance;
+  private boolean __initialized;
+
+  private ThreadLocalRandom() {
+    super();
+    __initialized = true;
+  }
+
+  public static ThreadLocalRandom current() {
+    if (__instance == null) __instance = new ThreadLocalRandom();
+    return __instance;
+  }
+
+  // A JDK refuses to be reseeded once it exists (the constructor's own call,
+  // before the flag is set, is the one that is allowed).
+  public void setSeed(long seed) {
+    if (__initialized) throw new UnsupportedOperationException();
+    super.setSeed(seed);
+  }
+
+  public int nextInt(int origin, int bound) {
+    __checkRange(origin < bound);
+    return __boundedInt(origin, bound);
+  }
+
+  public long nextLong(long bound) {
+    if (bound <= 0L) throw new IllegalArgumentException("bound must be positive");
+    return __boundedLong(0L, bound);
+  }
+
+  public long nextLong(long origin, long bound) {
+    __checkRange(origin < bound);
+    return __boundedLong(origin, bound);
+  }
+
+  // `!(bound > 0.0)` rather than `bound <= 0.0`: a NaN bound is refused too.
+  public double nextDouble(double bound) {
+    if (!(bound > 0.0)) throw new IllegalArgumentException("bound must be positive");
+    return __boundedDouble(0.0, bound);
+  }
+
+  public double nextDouble(double origin, double bound) {
+    __checkRange(origin < bound);
+    return __boundedDouble(origin, bound);
   }
 }
 

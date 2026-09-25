@@ -41,7 +41,12 @@ use crate::vm::VmError;
 #[derive(Clone, Copy)]
 struct StreamOrigin {
     source: HeapRef,
-    length: usize,
+    /// The source collection's MODIFICATION COUNT when the stream bound it —
+    /// what a change DURING the traversal is noticed by. (It was the length,
+    /// which a removal and an addition cancel out of.) An array origin keeps
+    /// its length here and is never checked: writing an array's slots is not
+    /// a structural change.
+    stamp: usize,
     /// `Arrays.stream(a, from, to)`'s window. A JDK fixes the two bounds when
     /// the spliterator is made and reads the elements through them lazily, so
     /// the range travels WITH the origin — copying the slice out up front
@@ -5010,6 +5015,7 @@ impl<'run> Interpreter<'run> {
                     index: 0,
                     last: None,
                     expected_len: 0,
+                    expected_mod: intrinsics::mod_stamp(&self.heap, empty),
                     writes: if method_name == "emptyEnumeration" {
                         IteratorWrites::Enumerator
                     } else {
@@ -5114,6 +5120,7 @@ impl<'run> Interpreter<'run> {
                 index: 0,
                 last: None,
                 expected_len,
+                expected_mod: intrinsics::mod_stamp(&self.heap, list),
                 writes: IteratorWrites::None,
                 list: false,
                 descending: false,
@@ -5327,6 +5334,7 @@ impl<'run> Interpreter<'run> {
                 if let Some(slot) = self.heap.list_values_mut(reference) {
                     *slot = sorted;
                 }
+                self.count_in_place_rewrite(reference);
             }
             // `Collections.max`/`min` keep the first of equal elements, because
             // they only replace the candidate on a strict improvement. A second
@@ -7610,7 +7618,7 @@ impl<'run> Interpreter<'run> {
 
     /// The staleness check itself, so the two orders ask one question.
     fn check_sublist_span(&self, backing: HeapRef, seen: usize) -> Result<(), VmError> {
-        if self.list_items(backing).len() != seen {
+        if intrinsics::mod_stamp(&self.heap, backing) != seen {
             return Err(VmError::UncaughtException(String::from(
                 "java.util.ConcurrentModificationException",
             )));
@@ -8059,13 +8067,18 @@ impl<'run> Interpreter<'run> {
             self.check_sublist_span(backing, seen)?;
         }
         // Re-agree with the backing after a write THROUGH the view: the range
-        // grew or shrank by `delta`, and so did the backing.
+        // grew or shrank by `delta`, and the view takes the backing's NEW
+        // modification count — the write is its own, the way a JDK's
+        // sub-list re-reads the root's `modCount` after changing it. Read back
+        // rather than stepped, since a bulk write spliced through a scratch
+        // copy changes the backing more than once.
         let resize = |vm: &mut Self, delta: isize| {
+            let stamp = intrinsics::mod_stamp(&vm.heap, backing);
             if let Some(crate::value::HeapObject::SubList { len, seen, .. }) =
                 vm.heap.get_mut(receiver)
             {
                 *len = len.saturating_add_signed(delta);
-                *seen = seen.saturating_add_signed(delta);
+                *seen = stamp;
             }
         };
         // The operations that rewrite the WHOLE range — a sort, a bulk removal,
@@ -8174,6 +8187,7 @@ impl<'run> Interpreter<'run> {
                     index: start,
                     last: None,
                     expected_len: len,
+                    expected_mod: intrinsics::mod_stamp(&self.heap, receiver),
                     writes: IteratorWrites::All,
                     list: method != "iterator",
                     descending: false,
@@ -8225,7 +8239,7 @@ impl<'run> Interpreter<'run> {
                     backing,
                     from: from + usize::try_from(start).unwrap_or(0),
                     len: usize::try_from(end - start).unwrap_or(0),
-                    seen: self.list_items(backing).len(),
+                    seen: intrinsics::mod_stamp(&self.heap, backing),
                 });
                 JValue::Ref(Some(view))
             }
@@ -8272,7 +8286,7 @@ impl<'run> Interpreter<'run> {
             backing: inner,
             from: usize::try_from(from).unwrap_or(0),
             len: usize::try_from(to - from).unwrap_or(0),
-            seen: self.list_items(inner).len(),
+            seen: intrinsics::mod_stamp(&self.heap, inner),
         });
         if self.is_unmodifiable_list(list) {
             let wrapper = self
@@ -8409,14 +8423,14 @@ impl<'run> Interpreter<'run> {
             // as natural ordering rather than an NPE.
             ("sort", _, [JValue::Ref(comparator)]) => {
                 let items = self.list_items(receiver);
-                let before = items.len();
+                let before = intrinsics::mod_stamp(&self.heap, receiver);
                 let sorted = self.sort_like_jdk(items, *comparator)?;
                 // `List.sort` copies out, sorts, and writes back, checking the
                 // modification count as it goes: a COMPARATOR that adds to the
                 // list being sorted is a ConcurrentModificationException, not a
                 // silent discard of what it added (caturra models modCount as
                 // the length, so a size change is what shows).
-                if self.list_items(receiver).len() != before {
+                if intrinsics::mod_stamp(&self.heap, receiver) != before {
                     return Err(VmError::UncaughtException(String::from(
                         "java.util.ConcurrentModificationException",
                     )));
@@ -8424,6 +8438,7 @@ impl<'run> Interpreter<'run> {
                 if let Some(slot) = self.heap.list_values_mut(receiver) {
                     *slot = sorted;
                 }
+                self.count_in_place_rewrite(receiver);
                 return Ok(Answered::Void);
             }
             ("subList", _, [JValue::Int(from), JValue::Int(to)]) => {
@@ -9057,6 +9072,7 @@ impl<'run> Interpreter<'run> {
                 index: 0,
                 last: None,
                 expected_len,
+                expected_mod: intrinsics::mod_stamp(&self.heap, receiver),
                 writes,
                 list: false,
                 descending: false,
@@ -9102,6 +9118,7 @@ impl<'run> Interpreter<'run> {
                         index: 0,
                         last: None,
                         expected_len,
+                        expected_mod: intrinsics::mod_stamp(&self.heap, inner),
                         writes,
                         list: false,
                         descending: false,
@@ -9316,6 +9333,7 @@ impl<'run> Interpreter<'run> {
                     index: 0,
                     last: None,
                     expected_len: length,
+                    expected_mod: intrinsics::mod_stamp(&self.heap, view),
                     // A `Hashtable`'s `Enumerator` is not fail-fast: it holds
                     // the table array, not a `modCount`.
                     writes: IteratorWrites::Enumerator,
@@ -9364,7 +9382,7 @@ impl<'run> Interpreter<'run> {
                 let merged = if existing == JValue::NULL {
                     *value
                 } else {
-                    let before = self.map_len(receiver);
+                    let before = intrinsics::mod_stamp(&self.heap, receiver);
                     let merged = self.call_apply_two(*remap, existing, *value)?;
                     self.check_compute_comodification(receiver, before)?;
                     merged
@@ -9376,7 +9394,7 @@ impl<'run> Interpreter<'run> {
                     Some(at) => self.map_value_at(receiver, at),
                     None => JValue::NULL,
                 };
-                let before = self.map_len(receiver);
+                let before = intrinsics::mod_stamp(&self.heap, receiver);
                 let computed = self.call_apply_two(*remap, *key, existing)?;
                 self.check_compute_comodification(receiver, before)?;
                 self.map_store_or_remove(receiver, *key, computed)?
@@ -9385,7 +9403,7 @@ impl<'run> Interpreter<'run> {
                 match self.map_find(receiver, *key)? {
                     Some(at) if self.map_value_at(receiver, at) != JValue::NULL => {
                         let existing = self.map_value_at(receiver, at);
-                        let before = self.map_len(receiver);
+                        let before = intrinsics::mod_stamp(&self.heap, receiver);
                         let computed = self.call_apply_two(*remap, *key, existing)?;
                         self.check_compute_comodification(receiver, before)?;
                         self.map_store_or_remove(receiver, *key, computed)?
@@ -9402,7 +9420,7 @@ impl<'run> Interpreter<'run> {
                     // A mapping that returns null leaves the map alone (JDK) —
                     // it does not store a null.
                     _ => {
-                        let before = self.map_len(receiver);
+                        let before = intrinsics::mod_stamp(&self.heap, receiver);
                         let computed = self.call_apply(*mapping, *key)?;
                         self.check_compute_comodification(receiver, before)?;
                         let computed = self.as_reference(computed);
@@ -9415,13 +9433,13 @@ impl<'run> Interpreter<'run> {
             }
             ("replaceAll", [JValue::Ref(Some(function))]) => {
                 let entries = self.map_entries_in_action_order(receiver);
-                let expected = entries.len();
+                let expected = intrinsics::mod_stamp(&self.heap, receiver);
                 for (key, value) in entries {
                     let replaced = self.call_apply_two(*function, key, value)?;
                     let replaced = self.as_reference(replaced);
                     self.map_put(receiver, key, replaced)?;
                 }
-                if self.map_entries(receiver).len() != expected {
+                if intrinsics::mod_stamp(&self.heap, receiver) != expected {
                     return Err(VmError::UncaughtException(String::from(
                         "java.util.ConcurrentModificationException",
                     )));
@@ -9749,7 +9767,7 @@ impl<'run> Interpreter<'run> {
 
     fn set_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
         let elements = self.collection_elements(receiver);
-        let expected = elements.len();
+        let expected = intrinsics::mod_stamp(&self.heap, receiver);
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -9771,7 +9789,7 @@ impl<'run> Interpreter<'run> {
         }
         // Fail-fast in `HashMap.KeySet.forEach`'s shape: walk it all, compare
         // once at the end (see `map_for_each`).
-        if self.collection_elements(receiver).len() != expected {
+        if intrinsics::mod_stamp(&self.heap, receiver) != expected {
             return Err(VmError::UncaughtException(String::from(
                 "java.util.ConcurrentModificationException",
             )));
@@ -10372,6 +10390,7 @@ impl<'run> Interpreter<'run> {
                     index: expected_len,
                     last: None,
                     expected_len,
+                    expected_mod: intrinsics::mod_stamp(&self.heap, receiver),
                     writes: IteratorWrites::All,
                     list: false,
                     descending: true,
@@ -10573,9 +10592,9 @@ impl<'run> Interpreter<'run> {
         let Some(HeapObject::SortedView { backing, .. }) = self.heap.get(view) else {
             return;
         };
-        let length = intrinsics::sorted_backing_pairs(&self.heap, *backing).len();
+        let stamp = intrinsics::mod_stamp(&self.heap, *backing);
         if let Some(HeapObject::SortedView { seen, .. }) = self.heap.get_mut(view) {
-            *seen = length;
+            *seen = stamp;
         }
     }
 
@@ -10791,9 +10810,14 @@ impl<'run> Interpreter<'run> {
         ))
     }
 
-    /// The two checks a `subSet`/`subMap` makes before it builds anything: the
-    /// ends must be the right way round, and both must lie inside the view
-    /// being narrowed.
+    /// The checks a `subSet`/`subMap` makes before it builds anything, in a
+    /// JDK's order: both ends must lie inside the view being narrowed (its
+    /// `subMap` asks `inRange` of each, the FROM key first), and only then —
+    /// in the new view's constructor — must they be the right way round. The
+    /// order was the other way here, which is only observable when both
+    /// complaints apply: `descendingSet().subSet(inside, outside)` is "toKey
+    /// out of range" on a JDK, and was "fromKey > toKey". On a view of the
+    /// whole tree neither range check can fail, so the order is all it asks.
     #[allow(clippy::too_many_arguments)] // a range is a pair of (value, inclusive)
     fn check_sorted_span(
         &mut self,
@@ -10810,15 +10834,15 @@ impl<'run> Interpreter<'run> {
         // "The wrong way round" is decided in the VIEW's order: on a
         // descending set `subSet(7, 3)` is the perfectly ordinary range from 7
         // down to 3, and reading it in the backing's terms refused it.
-        let span = self.compare_with(start, end, comparator)?;
-        if (descending && span < 0) || (!descending && span > 0) {
-            return Err(range_error("fromKey > toKey"));
-        }
         if !self.sorted_bounds_admit(backing, lo, hi, start, start_inclusive)? {
             return Err(range_error("fromKey out of range"));
         }
         if !self.sorted_bounds_admit(backing, lo, hi, end, end_inclusive)? {
             return Err(range_error("toKey out of range"));
+        }
+        let span = self.compare_with(start, end, comparator)?;
+        if (descending && span < 0) || (!descending && span > 0) {
+            return Err(range_error("fromKey > toKey"));
         }
         Ok(())
     }
@@ -11130,6 +11154,7 @@ impl<'run> Interpreter<'run> {
                     index: 0,
                     last: None,
                     expected_len: len,
+                    expected_mod: intrinsics::mod_stamp(&self.heap, receiver),
                     writes: IteratorWrites::All,
                     list: false,
                     descending: false,
@@ -11333,7 +11358,6 @@ impl<'run> Interpreter<'run> {
             // `Map.Entry` and died on the cast. `materialized_elements` is that
             // same walk, and is what a terminal re-reads through.
             let elements = self.materialized_elements(receiver)?;
-            let length = iterated_len_of(&self.heap, receiver);
             let stream = self.heap.alloc(HeapObject::Stream {
                 source: crate::value::StreamSource::Fixed(elements),
                 ops: Vec::new(),
@@ -11342,7 +11366,7 @@ impl<'run> Interpreter<'run> {
                 stream,
                 StreamOrigin {
                     source: receiver,
-                    length,
+                    stamp: intrinsics::mod_stamp(&self.heap, receiver),
                     window: None,
                 },
             );
@@ -11576,7 +11600,7 @@ impl<'run> Interpreter<'run> {
         // BACKING instead; that check reads the view's own stamp, not this.)
         let origin = origin.map(|mut origin| {
             if self.array_length(origin.source).is_none() {
-                origin.length = iterated_len_of(&self.heap, origin.source);
+                origin.stamp = intrinsics::mod_stamp(&self.heap, origin.source);
             }
             origin
         });
@@ -11740,7 +11764,7 @@ impl<'run> Interpreter<'run> {
     fn check_stream_source(&self, origin: Option<StreamOrigin>) -> Result<(), VmError> {
         let Some(StreamOrigin {
             source: collection,
-            length,
+            stamp,
             ..
         }) = origin
         else {
@@ -11753,7 +11777,7 @@ impl<'run> Interpreter<'run> {
         if self.array_length(collection).is_some() {
             return Ok(());
         }
-        if iterated_len_of(&self.heap, collection) == length {
+        if intrinsics::mod_stamp(&self.heap, collection) == stamp {
             // A stream over a VIEW carries the BACKING's modCount, the same
             // reason a cursor over one does: a JDK's `subList` spliterator
             // checks the root list's, so adding past the window's end ends the
@@ -12718,7 +12742,7 @@ impl<'run> Interpreter<'run> {
         receiver: HeapRef,
         before: usize,
     ) -> Result<(), VmError> {
-        if self.map_len(receiver) == before {
+        if intrinsics::mod_stamp(&self.heap, receiver) == before {
             return Ok(());
         }
         Err(VmError::UncaughtException(String::from(
@@ -13425,6 +13449,7 @@ impl<'run> Interpreter<'run> {
                     index: 0,
                     last: None,
                     expected_len: elements.len(),
+                    expected_mod: intrinsics::mod_stamp(&self.heap, backing),
                     writes: IteratorWrites::All,
                     list: false,
                     descending: false,
@@ -15467,7 +15492,7 @@ impl<'run> Interpreter<'run> {
                         stream,
                         StreamOrigin {
                             source: *array,
-                            length: elements.len(),
+                            stamp: elements.len(),
                             window: Some(window),
                         },
                     );
@@ -15501,7 +15526,7 @@ impl<'run> Interpreter<'run> {
                         stream,
                         StreamOrigin {
                             source: *array,
-                            length,
+                            stamp: length,
                             window: None,
                         },
                     );
@@ -16968,6 +16993,7 @@ impl<'run> Interpreter<'run> {
                     index,
                     last: None,
                     expected_len,
+                    expected_mod: intrinsics::mod_stamp(&self.heap, source),
                     writes,
                     list: method_name != "iterator",
                     descending: false,
@@ -17043,6 +17069,17 @@ impl<'run> Interpreter<'run> {
         // Rewriting to the plain accessor here keeps the check in ONE place for
         // every backing (list, set, map view, deque, …) and costs no extra call
         // per iteration: it replaces the accessor rather than adding to it.
+        // ...and the stamp that check compares against, taken once when the
+        // loop starts: the collection's MODIFICATION COUNT, a JDK iterator's
+        // `expectedModCount`. It used to be the SIZE, so a loop body that
+        // removed one element and added another walked on where a JDK throws.
+        if method_name == "__modCount" && args.is_empty() {
+            let stamp = intrinsics::mod_stamp(&self.heap, receiver);
+            frame
+                .stack
+                .push(JValue::Int(i32::try_from(stamp).unwrap_or(i32::MAX)));
+            return Ok(None);
+        }
         let method_name = match method_name {
             "__getChecked" | "__getBoxedChecked" => {
                 let expected = match args.pop() {
@@ -17297,13 +17334,13 @@ impl<'run> Interpreter<'run> {
             && let Some(crate::value::HeapObject::Iterator {
                 source,
                 index,
-                expected_len,
+                expected_mod,
                 ..
             }) = self.heap.get(receiver)
         {
-            let (source, index, expected_len) = (*source, *index, *expected_len);
+            let (source, index, expected_mod) = (*source, *index, *expected_mod);
             if index >= iterated_len_of(&self.heap, source) {
-                check_comodification(&self.heap, source, expected_len)?;
+                check_comodification(&self.heap, source, expected_mod)?;
                 if method_name == "hasNext" {
                     frame.stack.push(JValue::Int(1));
                     return Ok(None);
@@ -17341,10 +17378,15 @@ impl<'run> Interpreter<'run> {
                 self.set_pq_heap(source, queue);
             }
             let length = iterated_len_of(&self.heap, source);
-            if let Some(crate::value::HeapObject::Iterator { expected_len, .. }) =
-                self.heap.get_mut(receiver)
+            let stamp = intrinsics::mod_stamp(&self.heap, source);
+            if let Some(crate::value::HeapObject::Iterator {
+                expected_len,
+                expected_mod,
+                ..
+            }) = self.heap.get_mut(receiver)
             {
                 *expected_len = length;
+                *expected_mod = stamp;
             }
             if let Some(entry) = self.cursor_pending.get_mut(&receiver) {
                 entry.1 = None;
@@ -17389,10 +17431,12 @@ impl<'run> Interpreter<'run> {
                     .push(moved);
             }
             let length = iterated_len_of(&self.heap, source);
+            let stamp = intrinsics::mod_stamp(&self.heap, source);
             if let Some(crate::value::HeapObject::Iterator {
                 index,
                 last,
                 expected_len,
+                expected_mod,
                 ..
             }) = self.heap.get_mut(receiver)
             {
@@ -17401,6 +17445,7 @@ impl<'run> Interpreter<'run> {
                 }
                 *last = None;
                 *expected_len = length;
+                *expected_mod = stamp;
             }
             return Ok(None);
         }
@@ -17431,6 +17476,7 @@ impl<'run> Interpreter<'run> {
                 index: length,
                 last: None,
                 expected_len: length,
+                expected_mod: intrinsics::mod_stamp(&self.heap, receiver),
                 writes: IteratorWrites::All,
                 list: false,
                 descending: true,
@@ -18681,7 +18727,7 @@ impl<'run> Interpreter<'run> {
 
     fn map_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
         let entries = self.map_entries_in_action_order(receiver);
-        let expected = entries.len();
+        let expected = intrinsics::mod_stamp(&self.heap, receiver);
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -18701,7 +18747,7 @@ impl<'run> Interpreter<'run> {
                 self.run_nested(frame)?;
             }
         }
-        if self.map_entries(receiver).len() != expected {
+        if intrinsics::mod_stamp(&self.heap, receiver) != expected {
             return Err(VmError::UncaughtException(String::from(
                 "java.util.ConcurrentModificationException",
             )));
@@ -18765,7 +18811,7 @@ impl<'run> Interpreter<'run> {
 
     fn list_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
         let items = self.list_items(receiver);
-        let expected = items.len();
+        let expected = intrinsics::mod_stamp(&self.heap, receiver);
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -18774,7 +18820,7 @@ impl<'run> Interpreter<'run> {
         };
         let class_name = class_name.clone();
         for element in items {
-            if self.list_items(receiver).len() != expected {
+            if intrinsics::mod_stamp(&self.heap, receiver) != expected {
                 break;
             }
             let dispatched = self.user_virtual_dispatch(
@@ -18788,7 +18834,7 @@ impl<'run> Interpreter<'run> {
                 self.run_nested(frame)?;
             }
         }
-        if self.list_items(receiver).len() != expected {
+        if intrinsics::mod_stamp(&self.heap, receiver) != expected {
             return Err(VmError::UncaughtException(String::from(
                 "java.util.ConcurrentModificationException",
             )));
@@ -18856,7 +18902,10 @@ impl<'run> Interpreter<'run> {
 
     fn list_remove_if(&mut self, receiver: HeapRef, predicate: HeapRef) -> Result<bool, VmError> {
         let items = self.list_items(receiver);
-        let expected_len = items.len();
+        // The list's modification count, not its length: a predicate that
+        // removes one element and adds another leaves the length alone, and a
+        // JDK still abandons the removals.
+        let expected = intrinsics::mod_stamp(&self.heap, receiver);
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(predicate)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -18887,7 +18936,7 @@ impl<'run> Interpreter<'run> {
         // (every side effect lands) and then the removals are abandoned. It is
         // not an early exit, which is why `removeIf(x -> { l.add(9); ... })`
         // leaves five 9s appended and nothing removed.
-        if self.list_items(receiver).len() != expected_len {
+        if intrinsics::mod_stamp(&self.heap, receiver) != expected {
             return Err(VmError::UncaughtException(String::from(
                 "java.util.ConcurrentModificationException",
             )));
@@ -18902,6 +18951,21 @@ impl<'run> Interpreter<'run> {
     /// `list.replaceAll(operator)`: replace each element with `apply(element)`,
     /// in order. The operator's erased SAM returns `Object`, so the result is
     /// already a `JValue` the list stores directly (boxing is a no-op here).
+    /// A whole-list rewrite in place — `sort`, `replaceAll` — is a structural
+    /// change to an `ArrayList` and a `Vector` (each increments `modCount`),
+    /// and NOT to a `LinkedList`, whose `sort` and `replaceAll` are the
+    /// interface defaults that `set` through a list iterator. Measured: a
+    /// sort inside a for-each throws on the first two and walks on over the
+    /// third. The length never moves, so the count is bumped here.
+    fn count_in_place_rewrite(&mut self, list: HeapRef) {
+        if matches!(
+            self.heap.get(list),
+            Some(crate::value::HeapObject::ArrayList(_) | crate::value::HeapObject::Stack(_))
+        ) {
+            self.heap.bump_mod_count(list);
+        }
+    }
+
     fn list_replace_all(&mut self, receiver: HeapRef, operator: HeapRef) -> Result<(), VmError> {
         let items = self.list_items(receiver);
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(operator)
@@ -18911,12 +18975,12 @@ impl<'run> Interpreter<'run> {
             )));
         };
         let class_name = class_name.clone();
-        let expected = items.len();
+        let expected = intrinsics::mod_stamp(&self.heap, receiver);
         for (at, element) in items.into_iter().enumerate() {
             // A JDK's loop is `for (i = 0; modCount == expected && i < size;
             // i++)`: it STOPS as soon as the operator has changed the list,
             // so an operator that adds runs once and not once per element.
-            if self.list_items(receiver).len() != expected {
+            if intrinsics::mod_stamp(&self.heap, receiver) != expected {
                 break;
             }
             let dispatched = self.user_virtual_dispatch(
@@ -18955,11 +19019,12 @@ impl<'run> Interpreter<'run> {
         // ConcurrentModificationException, not a silent extra element.
         // (caturra models modCount as the length, so a size change is what
         // shows — the same reading `List.sort` uses.)
-        if self.list_items(receiver).len() != expected {
+        if intrinsics::mod_stamp(&self.heap, receiver) != expected {
             return Err(VmError::UncaughtException(String::from(
                 "java.util.ConcurrentModificationException",
             )));
         }
+        self.count_in_place_rewrite(receiver);
         Ok(())
     }
 

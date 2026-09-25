@@ -9039,6 +9039,11 @@ counting catches: a divergence that stopped being one.
 - `Collectors.toConcurrentMap(...)` / `groupingByConcurrent(...)` — they collect
   into a `java.util.concurrent` map. On one thread the ordinary ones do the
   same job. (`strict_no_concurrent_collectors`)
+- Every class of `java.util.concurrent` but `ThreadLocalRandom` —
+  `ConcurrentHashMap`, `ExecutorService`, `CountDownLatch` and the rest are
+  about running on more than one thread, and caturra has one. Each is refused
+  by NAME, since the package itself is one caturra knows.
+  (`strict_no_concurrent_classes`)
 - `Character.getName(cp)`, `codePointOf(name)` and `getDirectionality(c)` —
   caturra carries Unicode's character CATEGORIES, which is what `isLetter` and
   its siblings need, not the character database of NAMES.
@@ -15719,6 +15724,79 @@ overloads caturra refuses outright — the generic half of that class
 `parallelSort`, and `copyOf`/`copyOfRange` with an array class). They are in
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
+
+### A modification count is a count (2026-09-25)
+
+The collection-view fuzzer, run at scale (40 programs rather than the gate's
+four), diverged in 9 of 40. Eight were one cause, and it was not only a view
+problem: caturra stamped every fail-fast check with the collection's LENGTH —
+every iterator, the for-each loop, a view's stamp, `forEach`, `removeIf`,
+`replaceAll`, the map `compute*` family and a stream's source check. Two
+changes that CANCEL leave the length where it was, so
+
+```java
+for (String x : list) { if (…) { list.remove(a); list.add(b); } }
+```
+
+— the commonest shape of the classic "changed it while looping over it"
+mistake — walked on where a JDK throws `ConcurrentModificationException`.
+That is the direction that must never be wrong: a program that is broken on a
+JDK ran here.
+
+A JDK keeps a `modCount` per collection, incremented by each structural
+change. caturra keeps one now, at the one door every mutation goes through,
+`Heap::get_mut`: a collection opened for writing whose length moved since the
+last time it was opened counts one change, and a read of the count includes a
+change the last write made. A `set`, a `put` over an existing key and a
+`setValue` leave the length alone and are not counted — and a JDK does not
+count them either, which is what keeps a cursor's `set` and an existing-key
+`put` inside a for-each legal. Every stamp site records `mod_stamp` (the count
+of the collection that OWNS the storage, through any view or wrapper); a
+cursor keeps its length beside it, since a hash or tree cursor's `hasNext`
+reads a length. The for-each loop takes the count at entry through an internal
+`__modCount()`.
+
+`ArrayDeque` keeps its length on purpose: a JDK's deque cursor counts nothing,
+walking the number of elements it started with, so a `removeLast` then an
+`addLast` goes unnoticed there as well.
+
+The ninth was the order of a sub-view's checks. `subSet`/`subMap` on a view
+asks that both ends are inside it, FROM first, before its constructor asks
+that they are the right way round; caturra asked the order first, which shows
+only when both complaints apply.
+
+One structural change leaves the length alone: an `ArrayList`'s or a
+`Vector`'s `sort` and `replaceAll` rewrite every slot in place, and a JDK counts
+each one — a sort inside a for-each over the same list throws. A
+`LinkedList`'s are the interface defaults, which `set` through a cursor and
+count nothing, and `reverse`/`shuffle`/`swap`/`set` count nothing on any list.
+Measured list by list, and counted explicitly (`Heap::bump_mod_count`).
+
+Pinned as `a_mod_count_is_a_count` (cancelling changes under every collection
+kind), `what_a_walk_may_change` (thirty changes during a walk, the legal ones
+and the refused ones), `what_a_rewrite_counts` (every in-place rewrite on each
+list kind) and `a_sub_range_checks_its_ends_first`. The view fuzzer at 40
+programs: 9 diverging → 0.
+
+### `ThreadLocalRandom`, and a lambda over `Random`'s streams (2026-09-25)
+
+`ThreadLocalRandom.current().nextInt(lo, hi)` is how a program gets a number in
+a range before Java 17 gave `Random` one, and a Code.org student project uses
+it. It is a bundled subclass of the bundled `Random` now, with the JDK's own
+range methods, messages ("bound must be positive", "bound must be greater than
+origin") and its refusal to be reseeded. A JDK seeds it per thread and exposes
+no seed, so its numbers can never be compared; its ranges, its refusals and its
+class can. `java.util.concurrent` is a package caturra knows because of it, so
+each of its other classes (`ConcurrentHashMap`, `ExecutorService`, …) is
+refused by name.
+
+Found on the way: a lambda over a stream `Random` itself answers —
+`new Random().ints(10, 1, 7).filter(v -> …)`, the dice idiom — was refused,
+because the stream reader accepted only a `Stream<T>` from a method and the
+bundled source declares `ints` as an `IntStream`.
+
+Pinned as `a_thread_local_random`, `a_lambda_over_random_s_streams` and
+`strict_no_concurrent_classes`.
 
 ### The long tail of what a lambda answers (2026-09-25)
 
