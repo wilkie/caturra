@@ -12990,6 +12990,14 @@ impl<'run> Interpreter<'run> {
             self.spent_streams.insert(receiver);
             return Ok(Answered::Void);
         }
+        // ...and `isParallel()` is not an operation either: it reads a FLAG
+        // the pipeline carries and never touches the elements, so a JDK
+        // answers it on a stream that has already been consumed. Refusing it
+        // made a perfectly ordinary question about a spent stream throw.
+        if method == "isParallel" && args.is_empty() && self.spent_streams.contains(&receiver) {
+            let parallel = self.parallel_streams.contains(&receiver);
+            return Ok(Answered::Value(JValue::Int(i32::from(parallel))));
+        }
         // A stream is SINGLE-USE: once an op has consumed this pipeline, every
         // later one on the same object is an error rather than a second run
         // over the same elements.

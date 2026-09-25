@@ -7669,9 +7669,9 @@ fn library_descriptor_type(
     argc: usize,
     on_class: bool,
 ) -> Option<TypeRef> {
-    descriptor_type(crate::codegen::library_answer_descriptor(
-        class, method, argc, on_class,
-    )?)
+    descriptor_type(
+        crate::codegen::library_answer_descriptor(class, method, argc, on_class)?.as_ref(),
+    )
 }
 
 /// One JVM field descriptor as a type this pass can name. `Ljava/util/…;` and
@@ -7717,6 +7717,15 @@ fn descriptor_type(descriptor: &str) -> Option<TypeRef> {
             // program. Unknown is the safe answer there, and is where it
             // stood.
             if crate::imports::unsupported_class_reason(written).is_some() {
+                return None;
+            }
+            // ...and not the OBJECT stream, which caturra models only WITH an
+            // element: a bare `Stream` is not a type a value can have here,
+            // and naming one turns a call this pass merely did not know into
+            // a refusal of the whole program ("no value of the type is
+            // modelled"). The three PRIMITIVE streams carry no element and
+            // are ordinary names.
+            if written == "Stream" {
                 return None;
             }
             TypeRef::Named(String::from(written))

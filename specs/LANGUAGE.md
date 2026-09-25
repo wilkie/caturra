@@ -15720,6 +15720,43 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The tables a name could not reach (2026-09-24)
+
+Third out of the sweep's backlog, and the last of the shape. `String`'s own
+table was unreachable BY NAME — every other reader knew the class and this one
+did not — so `chars()`, `getBytes()`, `codePointAt` and the rest had no type
+through a lambda's parameter. So were `CharSequence` and the three reflective
+values a program holds.
+
+**And the flavour a name has no kind for.** The three primitive streams share
+ONE table, spelled in the `Int` flavour, and were left out of the by-name
+pairing for exactly that reason — so `s.chars().count()` had no type, though
+`count()` is `()J` in every flavour. The NAME says which flavour it is, so the
+same substitution the emit side makes from the receiver's KIND is made here
+from the name.
+
+**Naming what a descriptor says has a limit**, which the primitive streams do
+not share: a bare `Stream` is not a type a value can have in caturra (it is
+modelled only WITH an element), and naming one turned a call this pass merely
+did not know into a refusal of the whole program — `Collectors.flatMapping(w
+-> w.chars().mapToObj(…))` stopped compiling. The three primitive streams
+carry no element and are ordinary names.
+
+Two more the probes turned up on the way:
+
+- **`isParallel()` reads a FLAG** and never touches the elements, so a JDK
+  answers it on a stream that has already been consumed. caturra refused, on
+  the single-use rule that belongs to the operations.
+- **An OBJECT stream's parallel toggles answered an `IntStream`.**
+  `BRet::SameStream` reads the receiver's element as a PRIMITIVE kind and
+  falls back to `IntStream` — right for the three primitive tables it was
+  written for, and wrong in the object table beside them, where the element IS
+  the answer's argument: `Stream<String> s = Stream.of("x").parallel();` was
+  "IntStream cannot be converted to Stream<String>".
+
+Pinned as `a_table_a_name_could_not_reach` (twenty-four calls). The sweep
+reads 1620 answers where it read 1020 this morning, and the backlog is 440.
+
 ### A container through a lambda (2026-09-24)
 
 The next cause in the sweep's backlog, and the same shape as the throwable

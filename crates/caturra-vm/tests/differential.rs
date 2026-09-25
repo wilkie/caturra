@@ -60906,3 +60906,95 @@ public class CT {
 }
 "#
 );
+
+// The tables a NAME could not reach, and the flavour a name has no kind for.
+//
+// `String`'s own table was unreachable by name — every other reader knew the
+// class and this one did not — so `chars()`, `getBytes()`, `codePointAt` and
+// the rest had no type through a lambda's parameter. So were `CharSequence`
+// and the three reflective values a program holds.
+//
+// The three PRIMITIVE streams share ONE table, spelled in the `Int` flavour,
+// and were left out of the by-name pairing for exactly that reason — so
+// `s.chars().count()` had no type, though `count()` is `()J` in every
+// flavour. The name says which flavour it is, so the same substitution the
+// emit side makes from the receiver's KIND is made here from the NAME.
+//
+// ...and naming what a descriptor says has a limit the primitive streams do
+// not share: a bare `Stream` is not a type a value can have in caturra (it is
+// modelled only WITH an element), and naming one turned a call this pass
+// merely did not know into a refusal of the whole program.
+//
+// `isParallel()` came out of the same probe: it reads a FLAG and never
+// touches the elements, so a JDK answers it on a stream that has already been
+// consumed, where caturra refused.
+differential_test!(
+    a_table_a_name_could_not_reach,
+    "TN",
+    r#"
+import java.util.stream.*;
+
+public class TN {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        String s = "abc";
+        CharSequence cs = "abc";
+
+        // `String`'s own table, through a lambda's parameter.
+        r("codepointat", () -> Stream.of(s).map(x -> x.codePointAt(0)).findFirst().get() + 1);
+        r("codepointcount", () -> Stream.of(s).map(x -> x.codePointCount(0, 2)).findFirst().get() + 1);
+        r("getbytes", () -> Stream.of(s).map(x -> x.getBytes().length).findFirst().get() + 1);
+        r("contentequals", () -> Stream.of(s).map(x -> x.contentEquals("abc")).findFirst().get());
+        r("intern", () -> Stream.of(s).map(x -> x.intern().length()).findFirst().get() + 1);
+        r("charsequence", () -> Stream.of(cs).map(x -> x.charAt(1)).findFirst().get());
+        r("subsequence", () -> Stream.of(cs).map(x -> x.subSequence(0, 2).length()).findFirst().get() + 1);
+
+        // The three primitive streams, each in its own flavour.
+        r("int-sum", () -> Stream.of(IntStream.range(0, 3)).map(x -> x.sum()).findFirst().get() + 1);
+        r("long-sum", () -> Stream.of(LongStream.range(0, 3)).map(x -> x.sum()).findFirst().get() + 1L);
+        r("double-sum", () -> Stream.of(DoubleStream.of(1.5, 2.5)).map(x -> x.sum()).findFirst().get() + 1.0);
+        r("int-count", () -> Stream.of(IntStream.range(0, 3)).map(x -> x.count()).findFirst().get() + 1L);
+        r("long-count", () -> Stream.of(LongStream.range(0, 3)).map(x -> x.count()).findFirst().get() + 1L);
+        r("chars-count", () -> Stream.of(s).map(x -> x.chars().count()).findFirst().get() + 1L);
+        r("chars-max", () -> Stream.of(s).map(x -> x.chars().max().getAsInt()).findFirst().get() + 1);
+        r("long-max", () -> Stream.of(LongStream.range(0, 3)).map(x -> x.max().getAsLong()).findFirst().get() + 1L);
+        r("double-average", () -> Stream.of(DoubleStream.of(1.0, 3.0)).map(x -> x.average().getAsDouble()).findFirst().get() + 1.0);
+
+        // ...and the object stream, which is NOT a nameable type: the chain
+        // below has to keep working, and it is what a bare `Stream` would
+        // have refused.
+        r("flatmapping", () -> Stream.of("ab", "c").collect(
+                Collectors.flatMapping(w -> w.chars().mapToObj(c -> (char) c), Collectors.toList())));
+        r("maptoobj", () -> IntStream.range(0, 3).mapToObj(i -> "n" + i).collect(Collectors.joining(",")));
+        r("boxed", () -> IntStream.range(0, 3).boxed().map(i -> i + 1).collect(Collectors.toList()));
+
+        // `isParallel()` reads a flag, so a consumed stream still answers it.
+        r("parallel-fresh", () -> IntStream.range(0, 3).isParallel());
+        r("parallel-consumed", () -> {
+            IntStream a = IntStream.range(0, 3);
+            a.count();
+            return a.isParallel();
+        });
+        r("parallel-consumed-object", () -> {
+            Stream<String> a = Stream.of("x");
+            a.count();
+            return a.isParallel();
+        });
+        r("parallel-set-consumed", () -> {
+            Stream<String> a = Stream.of("x").parallel();
+            a.count();
+            return a.isParallel();
+        });
+        r("consumed-op-still-throws", () -> {
+            IntStream a = IntStream.range(0, 3);
+            a.count();
+            return a.count();
+        });
+    }
+}
+"#
+);

@@ -6773,6 +6773,17 @@ fn builtin_table_by_name(simple: &str) -> Option<&'static [BuiltinMethod]> {
         "OptionalDouble" => OPTIONALDOUBLE_METHODS,
         "OptionalLong" => OPTIONALLONG_METHODS,
         "Stream" => STREAM_METHODS,
+        // The three PRIMITIVE streams share one table, spelled in the `Int`
+        // flavour; the reader below rewrites what it answers for the other
+        // two, which is the same substitution the emit side makes from the
+        // receiver's kind. Left out entirely, `s.chars().count()` had no type
+        // — and `count()` is `()J` in every flavour.
+        "IntStream" | "LongStream" | "DoubleStream" => INTSTREAM_METHODS,
+        // The three PRIMITIVE streams share one table, spelled in the `Int`
+        // flavour; the reader below rewrites what it answers for the other
+        // two, which is the same substitution the emit side makes from the
+        // receiver's kind. Left out entirely, `s.chars().count()` had no type
+        // — and `count()` is `()J` in every flavour.
         "CharSequence" => CHAR_SEQUENCE_METHODS,
         "Class" => CLASS_METHODS,
         _ => return None,
@@ -6794,6 +6805,16 @@ fn library_value_type(simple: &str) -> Option<JType> {
         // lambda body: `map(p -> p.getFileName())` over `Files.list(dir)`
         // produced an `Object` element and the call after it was "cannot find
         // symbol".
+        // `String` reaches every OTHER reader by name and never reached
+        // this one, so the answers its table holds and the arms above do
+        // not — `chars()`, `getBytes()`, `codePointAt` — had no type.
+        "String" => JType::Str,
+        "CharSequence" => JType::CharSequence,
+        // The reflective values, which a program holds and calls on.
+        "Method" => JType::Method,
+        "Field" => JType::Field,
+        "Constructor" => JType::Constructor,
+        "StackTraceElement" => JType::StackFrame,
         "File" => JType::File,
         "Path" => JType::Path,
         "Pattern" => JType::Pattern,
@@ -6861,7 +6882,7 @@ pub(crate) fn library_answer_descriptor(
     method: &str,
     argc: usize,
     on_class: bool,
-) -> Option<&'static str> {
+) -> Option<std::borrow::Cow<'static, str>> {
     let table = if on_class {
         builtin_static_table(class).map(|(_, table)| table)
     } else {
@@ -6886,7 +6907,15 @@ pub(crate) fn library_answer_descriptor(
             _ => answer = Some(this),
         }
     }
-    answer
+    // ...and the flavour the NAME says, for the one table three receivers
+    // share: a `LongStream.sum()` is `()J` where the `Int` spelling says
+    // `()I`, and `boxed()` a `Stream` of the matching wrapper.
+    let answer = answer?;
+    Some(match class {
+        "LongStream" => prim_stream_descriptor(JType::LongStream, answer),
+        "DoubleStream" => prim_stream_descriptor(JType::DoubleStream, answer),
+        _ => std::borrow::Cow::Borrowed(answer),
+    })
 }
 
 /// Whether a type argument names exactly the type `value` is. A `java.time`
@@ -14894,6 +14923,12 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
 /// `java.util.stream.Stream<E>`. Intermediate ops return a stream; `map` erases
 /// the element to `Object` (its output type is not tracked); `collect` returns
 /// a `null`-typed result that adopts the assignment context, like a diamond.
+// An OBJECT stream's parallel toggles answer a stream of its own ELEMENT,
+// which is what `BRet::Stream` reads. `BRet::SameStream` beside them reads
+// the element as a PRIMITIVE kind and falls back to `IntStream` — right for
+// the three primitive tables it was written for, and wrong here:
+// `Stream<String> s = Stream.of("x").parallel();` was "IntStream cannot be
+// converted to Stream<String>".
 const STREAM_METHODS: &[BuiltinMethod] = &[
     // A stream is an `AutoCloseable`, which is the whole point of
     // `try (Stream<String> lines = Files.lines(path))` — the documented way to
@@ -14911,22 +14946,17 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
     // change nothing about what a stream ANSWERS; `isParallel` reports what a
     // JDK would report, which is the only part a program can see.
     bm("isParallel", &[], BRet::Boolean, "()Z"),
-    bm(
-        "parallel",
-        &[],
-        BRet::SameStream,
-        "()Ljava/util/stream/Stream;",
-    ),
+    bm("parallel", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm(
         "sequential",
         &[],
-        BRet::SameStream,
+        BRet::Stream,
         "()Ljava/util/stream/Stream;",
     ),
     bm(
         "unordered",
         &[],
-        BRet::SameStream,
+        BRet::Stream,
         "()Ljava/util/stream/Stream;",
     ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
