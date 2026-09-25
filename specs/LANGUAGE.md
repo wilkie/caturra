@@ -15720,6 +15720,50 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A raw library type, and the lambda on one (2026-09-25)
+
+JLS §4.8: writing a generic type without its arguments is legal Java. javac
+warns about the unchecked operations that follow and nothing more, and the
+type's members read and write the ERASURE — everything a raw `List` hands out
+is an `Object`. caturra had that for the collections and the maps; three
+families were missing it.
+
+**A raw cursor was not raw.** `Iterator it = list.iterator();` over a
+`List<String>` was "incompatible types: Iterator<String> cannot be converted
+to Iterator<Object>" — a type that does not convert to itself, this
+codebase's tell for one fact in two shapes. The two cursor arms in
+`resolve_type` are reached BEFORE the general raw path (`Iterator` is a
+bundled interface, so that path's `has_class` guard would turn them away) and
+they handed out an `Iterator<Object>`, which is a written type argument, not
+the erasure. They mark raw now, like every other raw name.
+
+**A raw `Stream` could not name a variable.** The refusal said "no value of
+the type is modelled", which is false of a type this engine has modelled all
+along: what it has no value for is a stream with no ELEMENT. `Stream` is in
+`raw_generic_arity` now and `mark_raw` marks it, so `Stream s =
+Stream.of("a");` resolves the way `List l = List.of("a");` always has.
+
+**A lambda on a raw receiver had no target.** The pass reads a callback's
+parameter from a written type ARGUMENT, so a raw receiver answered "no
+element" and `raw.forEach(x -> …)`, `m.forEach((k, v) -> …)` and
+`o.map(x -> …)` were all "a lambda is only allowed where a
+functional-interface type is expected" — about a position that plainly is
+one. `element_of_declared`, `map_key_value_of` and the `Optional` and
+`Stream` readers each answer `Object` for the raw form.
+
+Two things fell out of writing it down. The element rule was spelled out a
+SECOND time at the end of `list_elem_type`, so the raw form reached every
+receiver shape above it and not the commonest of all, a local. And one of the
+four lists that name the maps had no `LinkedHashMap` — so
+`m.forEach((k, v) -> …)` over a `LinkedHashMap<String, Integer>` was refused
+while the same map held as a `Map` compiled, which has nothing to do with raw
+types at all. Both are one function now.
+
+Pinned as `a_raw_library_type` (27 calls) and, for the direction this does
+NOT open, `a_parameterized_cursor_is_not_raw`: `Iterator<Object>` is a
+written argument, not the erasure, so a `List<String>`'s cursor is still not
+one of those.
+
 ### An enum collection as a type (2026-09-25)
 
 `EnumSet` and `EnumMap` are modelled as the sorted collections underneath — an

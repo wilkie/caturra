@@ -5209,17 +5209,44 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
             _ => return None,
         },
     };
-    let TypeRef::Generic { base, args } = ty else {
-        return None;
-    };
-    if !matches!(
-        simple_base(base.as_str()),
-        "Map" | "HashMap" | "Hashtable" | "TreeMap" | "SortedMap" | "NavigableMap" | "EnumMap"
-    ) || args.len() != 2
-    {
-        return None;
+    map_key_value_of(&ty)
+}
+
+/// The library MAP names — every spelling of "keys to values" this pass reads
+/// a key and a value type from.
+///
+/// Four lists spelled this out, and `LinkedHashMap` was missing from the one
+/// `map_type_args` ends with: `m.forEach((k, v) -> …)` over a
+/// `LinkedHashMap<String, Integer>` was refused as not a functional-interface
+/// position, while the same map held as a `Map` compiled.
+fn is_map_class(simple: &str) -> bool {
+    matches!(
+        simple,
+        "Map"
+            | "HashMap"
+            | "LinkedHashMap"
+            | "Hashtable"
+            | "TreeMap"
+            | "SortedMap"
+            | "NavigableMap"
+            | "EnumMap"
+    )
+}
+
+/// The KEY and VALUE of a written map type, the way `element_of_declared`
+/// reads a collection's element — including the RAW form, whose members read
+/// and write the erasure (JLS §4.8), so both are `Object`.
+fn map_key_value_of(ty: &TypeRef) -> Option<(TypeRef, TypeRef)> {
+    match ty {
+        TypeRef::Generic { base, args } if is_map_class(simple_base(base.as_str())) => {
+            (args.len() == 2).then(|| (args[0].clone(), args[1].clone()))
+        }
+        TypeRef::Named(name) if is_map_class(simple_base(name.as_str())) => {
+            let object = TypeRef::Named(String::from("Object"));
+            Some((object.clone(), object))
+        }
+        _ => None,
     }
-    Some((args[0].clone(), args[1].clone()))
 }
 
 /// The simple name of a library type written in full: `java.util.List` is
@@ -7021,11 +7048,14 @@ fn named_stream_elem(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         TypeRef::Generic { base, args } if args.len() == 1 => {
             (base.rsplit('.').next().unwrap_or(base) == "Stream").then(|| args[0].clone())
         }
-        // The primitive pipelines carry their element in their name.
+        // The primitive pipelines carry their element in their name...
         TypeRef::Named(name) => match name.rsplit('.').next().unwrap_or(name) {
             "IntStream" => Some(TypeRef::Int),
             "DoubleStream" => Some(TypeRef::Double),
             "LongStream" => Some(TypeRef::Long),
+            // ...and a RAW `Stream` walks the erasure, like every other raw
+            // type: `Stream s = Stream.of("a"); s.filter(x -> …)`.
+            "Stream" => Some(TypeRef::Named(String::from("Object"))),
             _ => None,
         },
         _ => None,
@@ -7963,10 +7993,19 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     let ty = declared_type_of(receiver, ctx)?;
     // A variable declared `OptionalInt` (and its two siblings) carries no type
     // argument at all, so it never reaches the generic reading below.
-    if let TypeRef::Named(name) = &ty
-        && let Some(elem) = primitive_optional_elem(name.rsplit('.').next().unwrap_or(name))
-    {
-        return Some(elem);
+    if let TypeRef::Named(name) = &ty {
+        let simple = name.rsplit('.').next().unwrap_or(name);
+        if let Some(elem) = primitive_optional_elem(simple) {
+            return Some(elem);
+        }
+        // A RAW `Optional o = Optional.of("a");` holds the erasure, so
+        // `o.map(x -> …)` walks an `Object` — the same rule a raw collection
+        // and a raw stream read. Written as a `Named`, it reached neither the
+        // primitive arm nor the generic one below, and the lambda after it
+        // was refused for having no functional-interface position.
+        if simple == "Optional" {
+            return Some(TypeRef::Named(String::from("Object")));
+        }
     }
     let TypeRef::Generic { base, args } = ty else {
         return None;
@@ -8022,6 +8061,15 @@ fn element_of_declared(ty: &TypeRef) -> Option<TypeRef> {
             if is_collection_class(simple_base(base.as_str())) && args.len() == 1 =>
         {
             Some(args[0].clone())
+        }
+        // ...and a RAW one, which is legal Java (JLS §4.8): its members read
+        // and write the ERASURE, so what walking it yields is `Object`. A raw
+        // type is written `Named`, matched nothing here, and the caller read
+        // that as "this receiver has no element" — so `raw.forEach(x -> …)`
+        // was "a lambda is only allowed where a functional-interface type is
+        // expected", about a position that plainly is one.
+        TypeRef::Named(name) if is_collection_class(simple_base(name.as_str())) => {
+            Some(TypeRef::Named(String::from("Object")))
         }
         _ => None,
     }
@@ -8337,10 +8385,10 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // ordinary as a field gets, and only `this.cards` was read.
         other => static_type_of(other, ctx)?,
     };
-    let TypeRef::Generic { base, args } = ty else {
-        return None;
-    };
-    (is_collection_class(simple_base(base.as_str())) && args.len() == 1).then(|| args[0].clone())
+    // The same question `element_of_declared` answers, and it was written out
+    // a second time here — so the RAW form it learned reached every receiver
+    // shape above and not the commonest one of all, a local.
+    element_of_declared(&ty)
 }
 
 /// The lambda class for `map.forEach((k, v) -> ...)`. `__BiConsumer.accept`

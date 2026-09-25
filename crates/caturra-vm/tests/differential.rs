@@ -61301,3 +61301,136 @@ public class EC {
 }
 "#
 );
+
+// A RAW library type, and the lambda that sits on one. JLS §4.8: writing a
+// generic type without its arguments is legal Java — javac warns about the
+// unchecked operations that follow and nothing more — and its members read
+// and write the ERASURE, so everything it hands out is an `Object`.
+//
+// Three families were missing that. A raw CURSOR resolved to an
+// `Iterator<Object>` instead of a raw one, so `Iterator it =
+// list.iterator();` over a `List<String>` was "incompatible types:
+// Iterator<String> cannot be converted to Iterator<Object>" — a type that
+// does not convert to itself. A raw `Stream` could not name a variable at
+// all ("no value of the type is modelled", which is false of a type this
+// engine has modelled all along: what it has no value for is a stream with
+// no ELEMENT). And the lambda pass read an element only from a written type
+// ARGUMENT, so every callback on a raw receiver — `raw.forEach(x -> …)`,
+// `m.forEach((k, v) -> …)`, `o.map(x -> …)` — was refused as not a
+// functional-interface position.
+//
+// The element rule was also written twice inside `list_elem_type`, so the
+// raw form it learned reached every receiver shape but the commonest, a
+// local; and one of the four lists that name the MAPS had no
+// `LinkedHashMap`, which is the `linked-map` line here and has nothing to do
+// with raw types at all.
+differential_test!(
+    a_raw_library_type,
+    "RW",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class RW {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static List FIELD = List.of("a", "b");
+    static int walk(List raw) { int[] n = {0}; raw.forEach(x -> n[0]++); return n[0]; }
+    static int sizeOf(java.util.List raw) { return raw.size(); }
+
+    public static void main(String[] args) {
+        // A raw CURSOR. `Iterator it = list.iterator();` handed out an
+        // `Iterator<Object>`, which is not the same type as a raw one.
+        r("iterator", () -> {
+            Iterator it = List.of("a", "b").iterator();
+            int n = 0;
+            while (it.hasNext()) { Object o = it.next(); n++; }
+            return n;
+        });
+        r("list-iterator", () -> {
+            ListIterator it = new ArrayList<String>().listIterator();
+            return it.hasNext();
+        });
+        r("iterator-qualified", () -> {
+            java.util.Iterator it = List.of("a").iterator();
+            return it.next();
+        });
+        r("iterator-callback", () -> {
+            Iterator it = List.of("a").iterator();
+            StringBuilder out = new StringBuilder();
+            it.forEachRemaining(x -> out.append(x));
+            return out.toString();
+        });
+
+        // A raw STREAM, which could not name a variable at all.
+        r("stream", () -> { Stream s = Stream.of("a", "b"); return s.count(); });
+        r("stream-chain", () -> { Stream s = Stream.of("a", "b"); return s.filter(x -> true).count(); });
+        r("stream-map", () -> { Stream s = Stream.of("a").map(x -> x); return s.count(); });
+        r("stream-qualified", () -> { java.util.stream.Stream s = Stream.of("a"); return s.count(); });
+
+        // A raw COLLECTION as a lambda's receiver.
+        r("foreach", () -> {
+            List raw = List.of("a", "b");
+            StringBuilder out = new StringBuilder();
+            raw.forEach(x -> out.append(x));
+            return out.toString();
+        });
+        r("removeif", () -> { List l = new ArrayList(); l.add("a"); l.removeIf(x -> true); return l.size(); });
+        r("replaceall", () -> { List l = new ArrayList(); l.add("a"); l.replaceAll(x -> x); return l.size(); });
+        r("sort", () -> { List l = new ArrayList(); l.add("b"); l.add("a"); l.sort((x, y) -> 0); return l.size(); });
+        r("set-foreach", () -> { Set s = Set.of("a"); StringBuilder o = new StringBuilder(); s.forEach(x -> o.append(x)); return o.toString(); });
+        r("deque-foreach", () -> { Deque d = new ArrayDeque(); d.add("a"); StringBuilder o = new StringBuilder(); d.forEach(x -> o.append(x)); return o.toString(); });
+        r("parameter", () -> walk(List.of("a", "b")));
+        r("field", () -> { StringBuilder o = new StringBuilder(); FIELD.forEach(x -> o.append(x)); return o.toString(); });
+        r("qualified-parameter", () -> sizeOf(List.of("a")));
+        r("stream-of-raw", () -> { List raw = List.of("a", "b"); return raw.stream().filter(x -> true).count(); });
+
+        // ...and a raw MAP and a raw OPTIONAL.
+        r("map-foreach", () -> { Map m = Map.of("a", 1); StringBuilder o = new StringBuilder(); m.forEach((k, v) -> o.append(k).append(v)); return o.toString(); });
+        r("map-keyset", () -> { Map m = Map.of("a", 1); StringBuilder o = new StringBuilder(); m.keySet().forEach(k -> o.append(k)); return o.toString(); });
+        r("optional-map", () -> { Optional o = Optional.of("a"); return o.map(x -> x).get(); });
+        r("optional-ifpresent", () -> { Optional o = Optional.of("a"); StringBuilder out = new StringBuilder(); o.ifPresent(x -> out.append(x)); return out.toString(); });
+
+        // The same lambda over a `LinkedHashMap`, which was missing from ONE
+        // of the four lists that name the maps.
+        r("linked-map", () -> {
+            LinkedHashMap<String, Integer> m = new LinkedHashMap<>();
+            m.put("a", 1);
+            StringBuilder o = new StringBuilder();
+            m.forEach((k, v) -> o.append(k).append(v));
+            return o.toString();
+        });
+
+        // A raw type's members read and write the ERASURE, and the raw name
+        // converts both ways — while a PARAMETERIZED target does not.
+        r("element-is-object", () -> { List raw = List.of("a"); Object o = raw.get(0); return o; });
+        r("raw-to-parameterized", () -> { List raw = List.of("a"); List<String> back = raw; return back.size(); });
+        r("instanceof", () -> { Object o = Stream.of("a"); return o instanceof Stream; });
+        r("cast", () -> { Object o = List.of("a"); return ((List) o).size(); });
+    }
+}
+"#
+);
+
+// ...and the direction a raw type does NOT open. `Iterator<Object>` is a
+// written type argument, not the erasure, so a `List<String>`'s cursor is
+// still not one of those — the pin that says the arm above widened what a
+// RAW name means and nothing else.
+differential_wording!(
+    a_parameterized_cursor_is_not_raw,
+    "PC",
+    r#"
+import java.util.*;
+
+public class PC {
+    public static void main(String[] args) {
+        Iterator<Object> it = List.of("a").iterator();
+        System.out.println(it.hasNext());
+    }
+}
+"#
+);

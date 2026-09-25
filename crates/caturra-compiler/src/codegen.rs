@@ -3557,6 +3557,12 @@ impl MethodTable {
             },
             JType::Iterator(_) => JType::Iterator(raw),
             JType::ListIterator(_) => JType::ListIterator(raw),
+            // A raw `Stream s = Stream.of("a");` is legal Java too — javac
+            // warns about the unchecked operations that follow and nothing
+            // more. Refusing it said "no value of the type is modelled",
+            // which is false of a type this engine has modelled all along:
+            // what it has no value for is a stream with no ELEMENT.
+            JType::Stream(_) => JType::Stream(raw),
             other => other,
         }
     }
@@ -3694,13 +3700,28 @@ impl MethodTable {
                 // cursor, not the interface caturra synthesizes for a user
                 // class to implement. (The parameterized form takes the same
                 // route, a few arms below.)
+                //
+                // MARKED raw, like every other raw name. These two arms are
+                // reached before the general raw path (`Iterator` is a bundled
+                // interface, so its `has_class` guard would turn them away)
+                // and they handed out an `Iterator<Object>`, which is not the
+                // same thing: `Iterator it = list.iterator();` over a
+                // `List<String>` was "incompatible types: Iterator<String>
+                // cannot be converted to Iterator<Object>" — a type that
+                // does not convert to itself, where javac only warns.
                 if !self.has_user_class(simple) {
                     match simple {
                         "Iterator" => {
-                            return Some(JType::Iterator(ElemType::Object(self.object_id)));
+                            return Some(
+                                self.mark_raw(JType::Iterator(ElemType::Object(self.object_id))),
+                            );
                         }
                         "ListIterator" => {
-                            return Some(JType::ListIterator(ElemType::Object(self.object_id)));
+                            return Some(
+                                self.mark_raw(JType::ListIterator(ElemType::Object(
+                                    self.object_id,
+                                ))),
+                            );
                         }
                         _ => {}
                     }
@@ -6076,7 +6097,7 @@ fn raw_generic_arity(simple: &str) -> Option<usize> {
         "List" | "ArrayList" | "Set" | "HashSet" | "LinkedHashSet" | "EnumSet" | "TreeSet"
         | "SortedSet" | "NavigableSet" | "Collection" | "LinkedList" | "Queue" | "Deque"
         | "ArrayDeque" | "PriorityQueue" | "Stack" | "Vector" | "Enumeration" | "Iterator"
-        | "Optional" => Some(1),
+        | "Optional" | "Stream" => Some(1),
         // `Collector<T, A, R>` — the type a program names when it factors a
         // collector out into a variable. Its ACCUMULATOR is always written
         // `?`, which is why the arity has to be known here: two arguments is
