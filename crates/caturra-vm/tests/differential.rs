@@ -61130,3 +61130,71 @@ public class LT {
 }
 "#
 );
+
+// A stream over an array a LIBRARY call answers.
+//
+// `Arrays.stream(c.getDeclaredFields()).map(x -> x.getName())` had no
+// functional target at all — the pass did not see a stream there, though the
+// same array through a LOCAL or the program's own method was fine. The reader
+// that types an array-answering call was a hand-written list (`split`,
+// `toCharArray`, `getBytes`, `toArray`, `copyOf`, `listFiles`) and everything
+// outside it had no element.
+//
+// Those six stay: each answers something a descriptor cannot say, because
+// caturra erases the signature a `split` or a `toArray(T[])` carries. Every
+// OTHER call says what it answers in its own table, and reading that is what
+// keeps this from being a list to add to.
+differential_test!(
+    a_stream_over_a_library_array,
+    "LA",
+    r#"
+import java.lang.reflect.*;
+import java.util.*;
+import java.util.stream.*;
+
+public class LA {
+    int n = 1;
+    String s = "x";
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static String[] own() { return new String[] {"ab", "c"}; }
+    public static void main(String[] args) throws Exception {
+        Class<?> c = LA.class;
+
+        // The call whose element only its own descriptor knows.
+        r("declared-fields", () -> Arrays.stream(c.getDeclaredFields()).map(x -> x.getName()).sorted().collect(Collectors.joining(",")));
+        r("declared-fields-literal", () -> Arrays.stream(LA.class.getDeclaredFields()).map(x -> x.getName()).count());
+        r("interfaces", () -> Arrays.stream(c.getInterfaces()).map(x -> x.getName()).count());
+        r("field-count", () -> Arrays.stream(c.getDeclaredFields()).filter(x -> x.getName().length() == 1).count());
+        r("stack-trace", () -> {
+            Throwable t = new RuntimeException("q");
+            return Arrays.stream(t.getStackTrace()).map(x -> x.getMethodName()).count() > 0;
+        });
+        r("suppressed", () -> Arrays.stream(new RuntimeException("q").getSuppressed()).map(x -> x.getMessage()).count());
+        r("method-by-name", () -> {
+            Method m = c.getDeclaredMethod("own");
+            return Arrays.stream(m.getParameterTypes()).map(x -> x.getName()).count();
+        });
+
+        // ...and the six the list still names, which answer through a
+        // signature caturra erases.
+        r("split", () -> Arrays.stream("a b".split(" ")).map(x -> x.length()).count());
+        r("tochararray", () -> Arrays.stream(new String[] {"ab"}).map(x -> x.toCharArray().length).findFirst().get());
+        r("toarray-model", () -> Arrays.stream(List.of("a", "b").toArray(new String[0])).map(x -> x.length()).count());
+        r("copyof", () -> Arrays.stream(Arrays.copyOf(own(), 1)).map(x -> x.length()).count());
+
+        // ...and the shapes that already worked.
+        r("own-method", () -> Arrays.stream(own()).map(x -> x.length()).count());
+        r("local", () -> {
+            String[] a = own();
+            return Arrays.stream(a).map(x -> x.length()).count();
+        });
+        r("literal", () -> Arrays.stream(new String[] {"ab"}).map(x -> x.length()).count());
+        r("enum-values", () -> Arrays.stream(java.time.DayOfWeek.values()).map(x -> x.name()).count());
+    }
+}
+"#
+);

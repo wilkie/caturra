@@ -7832,6 +7832,16 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             }
             return Some(ty);
         }
+        // ...and any OTHER library call that answers an array, read from the
+        // table's own DESCRIPTOR rather than from a list here:
+        // `c.getDeclaredFields()`, `e.getStackTrace()`, `c.getInterfaces()`.
+        // The calls named above are the ones a descriptor cannot answer (a
+        // `split` says `String[]` through a signature caturra erases); every
+        // other one says what it answers, and reading it is what keeps this
+        // reader from being a list to add to. Without it a lambda over
+        // `Arrays.stream(c.getDeclaredFields())` had no functional target at
+        // all, though the same array through a LOCAL was fine.
+        Expr::Call { .. } => body_type(receiver, &HashMap::new(), ctx)?,
         _ => return None,
     };
     match ty {

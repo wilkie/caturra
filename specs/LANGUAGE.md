@@ -15720,6 +15720,32 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A stream over an array a library call answers (2026-09-24)
+
+The last item the previous unit left, and the same shape as the three lists
+under it. `Arrays.stream(c.getDeclaredFields()).map(x -> x.getName())` had no
+functional target at all — the pass did not see a stream there, though the
+same array through a LOCAL or through the program's own method was fine. The
+reader that types an array-answering call was a hand-written list — `split`,
+`toCharArray`, `getBytes`, `toArray`, `copyOf`, `listFiles` — and everything
+outside it had no element, so the lambda after it had nowhere to sit.
+
+Those six stay, and the reason is worth writing down rather than rediscovering:
+each answers something a DESCRIPTOR cannot say, because caturra erases the
+signature a `split` or a `toArray(T[])` carries. Every other call says what it
+answers in its own table, and reading that is what keeps this reader from
+being a list to add to.
+
+Pinned as `a_stream_over_a_library_array` (fifteen calls).
+
+**One difference this made visible**, and it is a modelling choice rather than
+a gap: `getDeclaredMethods()` on a class that contains a LAMBDA answers fewer
+methods here. javac compiles a lambda body to a synthetic method on the
+ENCLOSING class (`lambda$main$0`), where caturra compiles it to a synthesized
+CLASS — so the enclosing class genuinely has no such member to report. The
+fields, the interfaces and every declared method the program wrote agree
+exactly; only the synthetic ones differ, and no program can name one.
+
 ### A library value a lambda takes (2026-09-24)
 
 `Function<OptionalInt, Integer> f = x -> 1;` was "incompatible types: Object
