@@ -60998,3 +60998,135 @@ public class TN {
 }
 "#
 );
+
+// A library VALUE a lambda takes, and the three layers under it.
+//
+// `Function<OptionalInt, Integer> f = x -> 1;` was "incompatible types:
+// Object cannot be converted to OptionalInt" — a lambda could not take one at
+// all, and neither could `Stream.of(anOptionalInt).map(…)` or a stream over a
+// `List<OptionalInt>`. The same shape refused every reflective value.
+//
+// Three hand-written lists, one behind the other, and each had to be found by
+// going one layer further in:
+//
+// 1. The CAST. An erased `Object` reaches a specialized lambda parameter as
+//    `E e = (E) __caturraArg0`, and the list of targets that cast is a single
+//    CLASS had no room for the three primitive optionals or the three
+//    reflective values — so the cast fell through to the arm that reports
+//    "cannot be converted", and (before that arm existed) to the UNBOXING one,
+//    which emitted `intValue()` on the object.
+// 2. The ELEMENT KIND. `elem_type_of` had no arm for `Field`/`Method`/
+//    `Constructor`, though the `ElemType` variants exist and a VALUE of one
+//    takes them — so a written `List<Field>` interned the type while the value
+//    did not, and `List<Field> l = Arrays.asList(c.getDeclaredFields())` was
+//    "List<Field> cannot be converted to List<Field>": a type that does not
+//    convert to itself, which is this codebase's tell for one fact in two
+//    shapes.
+// 3. The CLASS a value answers. A reflective value fell to the
+//    `java.lang.Object` default, so `getClass()` on one lied and the checkcast
+//    the first layer had just started emitting threw "class java.lang.Object
+//    cannot be cast to java.lang.reflect.Field".
+//
+// Each layer alone looks like the whole bug, and fixing one only uncovers the
+// next — which is why the first attempt at layer 2, without layer 1,
+// misdispatched at run time rather than failing to compile.
+differential_test!(
+    a_library_value_a_lambda_takes,
+    "LT",
+    r#"
+import java.lang.reflect.*;
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class LT {
+    int n = 1;
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) throws Exception {
+        OptionalInt oi = IntStream.range(0, 3).max();
+        OptionalLong ol = LongStream.range(0, 3).max();
+        OptionalDouble od = DoubleStream.of(1.5, 2.5).max();
+
+        // A primitive optional as a lambda's PARAMETER.
+        r("function-optionalint", () -> {
+            Function<OptionalInt, Integer> f = x -> x.getAsInt() + 1;
+            return f.apply(oi);
+        });
+        r("consumer-optionallong", () -> {
+            StringBuilder out = new StringBuilder();
+            Consumer<OptionalLong> c = x -> out.append(x.getAsLong());
+            c.accept(ol);
+            return out.toString();
+        });
+        r("predicate-optionaldouble", () -> {
+            Predicate<OptionalDouble> p = x -> x.isPresent();
+            return p.test(od);
+        });
+        r("stream-optionalint", () -> Stream.of(oi).map(x -> x.getAsInt()).findFirst().get() + 1);
+        r("stream-optionallong", () -> Stream.of(ol).map(x -> x.getAsLong()).findFirst().get() + 1L);
+        r("stream-optionaldouble", () -> Stream.of(od).map(x -> x.getAsDouble()).findFirst().get() + 1.0);
+        r("stream-unused-parameter", () -> Stream.of(oi).map(x -> 1).findFirst().get());
+        r("filter-optionalint", () -> Stream.of(oi).filter(x -> x.isPresent()).count());
+        r("list-of-optionalint", () -> {
+            List<OptionalInt> l = new ArrayList<>();
+            l.add(oi);
+            return l.stream().map(x -> x.orElse(9)).findFirst().get() + 1;
+        });
+        r("cast-optionalint", () -> {
+            Object o = IntStream.range(0, 3).max();
+            return ((OptionalInt) o).getAsInt();
+        });
+        r("optionalint-class", () -> IntStream.range(0, 3).max().getClass().getName());
+
+        // ...and the reflective values, in the same three positions.
+        r("reflect-class", () -> LT.class.getDeclaredField("n").getClass().getName());
+        r("reflect-cast", () -> {
+            Object o = LT.class.getDeclaredField("n");
+            return ((Field) o).getName();
+        });
+        r("reflect-stream", () -> {
+            Field f = LT.class.getDeclaredField("n");
+            return Stream.of(f).map(x -> x.getName()).findFirst().get();
+        });
+        r("reflect-list", () -> {
+            List<Field> l = new ArrayList<>();
+            l.add(LT.class.getDeclaredField("n"));
+            return l.get(0).getName();
+        });
+        r("reflect-aslist", () -> {
+            List<Field> l = Arrays.asList(LT.class.getDeclaredFields());
+            return l.get(0).getName();
+        });
+        r("reflect-list-stream", () -> {
+            List<Field> l = Arrays.asList(LT.class.getDeclaredFields());
+            return l.stream().map(x -> x.getName()).collect(Collectors.joining(","));
+        });
+        r("reflect-function", () -> {
+            Function<Field, String> f = x -> x.getName();
+            return f.apply(LT.class.getDeclaredField("n"));
+        });
+        r("method-stream", () -> {
+            Method m = LT.class.getDeclaredMethod("main", String[].class);
+            return Stream.of(m).map(x -> x.getName()).findFirst().get();
+        });
+        r("method-class", () -> LT.class.getDeclaredMethod("main", String[].class).getClass().getName());
+        r("constructor-class", () -> LT.class.getDeclaredConstructors()[0].getClass().getName());
+        r("constructor-list", () -> {
+            List<Constructor<?>> l = new ArrayList<>();
+            l.add(LT.class.getDeclaredConstructors()[0]);
+            return l.size();
+        });
+
+        // The shapes that already worked, which the layers must not disturb.
+        r("optional-object", () -> Stream.of(Optional.of("x")).map(x -> x.get()).findFirst().get());
+        r("duration", () -> Stream.of(java.time.Duration.ofSeconds(5)).map(x -> x.getSeconds()).findFirst().get());
+        r("list-element", () -> Stream.of(new ArrayList<>(List.of("a"))).map(x -> x.size()).findFirst().get());
+        r("own-array", () -> Arrays.stream(new Field[0]).count());
+    }
+}
+"#
+);

@@ -15720,6 +15720,51 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A library value a lambda takes (2026-09-24)
+
+`Function<OptionalInt, Integer> f = x -> 1;` was "incompatible types: Object
+cannot be converted to OptionalInt" — a lambda could not take one at all, and
+neither could `Stream.of(anOptionalInt).map(…)` or a stream over a
+`List<OptionalInt>`. The same shape refused every reflective value, which is
+what the answers sweep had been reporting as two separate clusters.
+
+**Three hand-written lists, one behind the other.** Each looks like the whole
+bug until it is fixed:
+
+1. **The CAST.** An erased `Object` reaches a specialized lambda parameter as
+   `E e = (E) __caturraArg0`, and the list of targets a cast treats as a
+   single CLASS had no room for the three primitive optionals or the three
+   reflective values. So the cast fell through to the arm that reports the
+   conversion as impossible — and, before that arm existed, to the UNBOXING
+   one, which emitted `intValue()` on the object.
+2. **The ELEMENT KIND.** `elem_type_of` had no arm for `Field`, `Method` or
+   `Constructor`, though the `ElemType` variants exist and a VALUE of one
+   takes them — so a written `List<Field>` interned the type while the value
+   did not, and `List<Field> l = Arrays.asList(c.getDeclaredFields())` was
+   "List<Field> cannot be converted to List<Field>": a type that does not
+   convert to itself, this codebase's tell for one fact in two shapes. The
+   comment beside `elem_from_type_arg` already records the same shape for
+   `Class`.
+3. **The CLASS a value answers.** A reflective value fell to the
+   `java.lang.Object` default, so `getClass()` on one lied — and the checkcast
+   layer 1 had just started emitting threw "class java.lang.Object cannot be
+   cast to java.lang.reflect.Field".
+
+The order matters and is worth recording: a first attempt at layer 2 alone
+compiled the program and then MISDISPATCHED at run time, because layer 1 was
+still routing the cast into the unboxing arm. It was reverted rather than
+shipped, and the three were then taken in the order the values flow.
+
+Pinned as `a_library_value_a_lambda_takes` (twenty-six calls), which pins the
+shapes that already worked — an object `Optional`, a `Duration`, a nested
+list — so no layer can quietly trade one for another.
+
+**Still on the sweep's backlog**, and measured: a lambda over
+`Arrays.stream(c.getDeclaredFields())` has no functional target at all — the
+pass does not see a stream over a library call that answers an ARRAY, though
+the same array through a local or the program's own method is fine — and
+`IntStream.toArray().length` has no type.
+
 ### The tables a name could not reach (2026-09-24)
 
 Third out of the sweep's backlog, and the last of the shape. `String`'s own

@@ -6171,6 +6171,17 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Object(id) => Some(ElemType::Object(id)),
         JType::Class => Some(ElemType::Class),
         JType::StackFrame => Some(ElemType::StackFrame),
+        // The three REFLECTIVE values have element kinds of their own, and
+        // this reader did not know them — so a WRITTEN `List<Field>` interned
+        // the type while a VALUE of it took `ElemType::Field`, and the two
+        // spellings of one type argument were different types:
+        // `List<Field> l = Arrays.asList(c.getDeclaredFields())` was
+        // "List<Field> cannot be converted to List<Field>", a type that does
+        // not convert to itself. The comment beside `elem_from_type_arg`
+        // records the same shape for `Class`.
+        JType::Field => Some(ElemType::Field),
+        JType::Method => Some(ElemType::Method),
+        JType::Constructor => Some(ElemType::Constructor),
         JType::MatchResult => Some(ElemType::MatchResult),
         JType::File => Some(ElemType::File),
         JType::Path => Some(ElemType::Path),
@@ -23564,6 +23575,19 @@ fn is_single_class_library_type(ty: JType) -> bool {
             | JType::Class
             | JType::StackFrame
             | JType::SummaryStats(_)
+            // The three PRIMITIVE optionals — each a final class, like the
+            // object `Optional` the list above reaches by name. Missing, the
+            // cast an erased `Object` needs fell through to the UNBOXING arm
+            // and `Function<OptionalInt, …> f = x -> 1` was "Object cannot be
+            // converted to OptionalInt": a lambda could not take one at all.
+            | JType::OptionalInt
+            | JType::OptionalLong
+            | JType::OptionalDouble
+            // ...and the three REFLECTIVE values, also final classes. (A
+            // `java.lang.reflect.Type` is an INTERFACE and stays out.)
+            | JType::Field
+            | JType::Method
+            | JType::Constructor
     )
 }
 

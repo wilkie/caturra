@@ -23830,6 +23830,14 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         Some(HeapObject::ByteStream(_)) => String::from("java/io/ByteArrayOutputStream"),
         Some(HeapObject::StackFrame { .. }) => String::from("java/lang/StackTraceElement"),
         Some(HeapObject::Class { .. }) => String::from("java/lang/Class"),
+        // The three REFLECTIVE values name themselves too. Left out, each fell
+        // to the `java/lang/Object` default — so `getClass()` on one lied, and
+        // a checkcast back down to it (the cast a lambda over
+        // `Arrays.stream(c.getDeclaredFields())` is desugared into) threw
+        // "class java.lang.Object cannot be cast to java.lang.reflect.Field".
+        Some(HeapObject::Field { .. }) => String::from("java/lang/reflect/Field"),
+        Some(HeapObject::Method { .. }) => String::from("java/lang/reflect/Method"),
+        Some(HeapObject::Constructor { .. }) => String::from("java/lang/reflect/Constructor"),
         // A path is the platform's implementation class — caturra's
         // filesystem is the Unix-shaped one whose separator it already prints.
         Some(HeapObject::Path(_)) => String::from("sun/nio/fs/UnixPath"),
