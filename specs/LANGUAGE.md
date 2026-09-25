@@ -15720,6 +15720,32 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A container through a lambda (2026-09-24)
+
+The next cause in the sweep's backlog, and the same shape as the throwable
+one. The reader that answers a library call from its DESCRIPTOR works from a
+`JType`, and a written NAME cannot build the element a collection's carries —
+so every container was missing from it, and `list.stream().map(x ->
+x.indexOf("a"))` had no type for a method every list has. The four questions
+the collection FACE already knew — `size`, `isEmpty`, `contains`, `iterator` —
+were the whole of what a container could answer through a lambda's parameter.
+
+The tables themselves are the authority for the answers; only the pairing from
+a NAME to one of them is new, and it sits beside the one that pairs a `JType`
+to the same table. The three PRIMITIVE streams are deliberately left out: one
+table serves all of them, spelled in the `Int` flavour, and the receiver's own
+kind is what rewrites `sum()` from `int` to `double` — a name has no kind to
+ask.
+
+...and one more, found by the pin: `X.class` had no type either, so
+`Stream.of(String.class).map(x -> x.getName())` had an `Object` element. No
+field can be named `class`, so the name alone decides.
+
+Pinned as `a_container_through_a_lambda` (twenty-two calls). The sweep reads
+1547 answers where it read 1020 this morning, and the backlog is 513. The
+declaration for stream class names now covers any `*Pipeline$` answer rather
+than `Random`'s three, which is the same modelling fact wherever it shows.
+
 ### A throwable through a lambda (2026-09-24)
 
 The first unit worked out of the new sweep's backlog, and the largest single

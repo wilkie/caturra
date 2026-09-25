@@ -6745,6 +6745,40 @@ fn library_enum_constants(ty: JType) -> Option<&'static [&'static str]> {
 /// The `java.time` value types, by the name a program writes. None of them can
 /// be shadowed by a program class, so the answer needs no table — which is what
 /// lets the LAMBDA pass ask the same question the emitter's resolver asks.
+/// The instance table for a class NAMED rather than typed. The reader above
+/// works from a `JType`, and a NAME alone cannot build the element a
+/// collection's carries — so the containers are paired here instead, with the
+/// same tables `builtin_instance_table` answers for them.
+///
+/// The three PRIMITIVE streams are deliberately absent: one table serves all
+/// of them, spelled in the `Int` flavour, and the receiver's own kind is what
+/// rewrites `sum()` from `int` to `double`. A name has no kind to ask.
+fn builtin_table_by_name(simple: &str) -> Option<&'static [BuiltinMethod]> {
+    Some(match simple {
+        "ArrayList" | "List" => LIST_METHODS,
+        "Stack" | "Vector" => STACK_METHODS,
+        "LinkedList" => LINKEDLIST_METHODS,
+        "ArrayDeque" | "Deque" => DEQUE_METHODS,
+        "Queue" | "PriorityQueue" => QUEUE_METHODS,
+        "HashMap" | "LinkedHashMap" | "Map" | "Hashtable" => MAP_METHODS,
+        "TreeMap" | "NavigableMap" | "SortedMap" | "EnumMap" => TREEMAP_METHODS,
+        "HashSet" | "LinkedHashSet" | "Set" => SET_METHODS,
+        "TreeSet" | "NavigableSet" | "SortedSet" | "EnumSet" => TREESET_METHODS,
+        "Collection" => VIEW_METHODS,
+        "Iterator" => ITERATOR_METHODS,
+        "ListIterator" => LIST_ITERATOR_METHODS,
+        "Enumeration" => ENUMERATION_METHODS,
+        "Optional" => OPTIONAL_METHODS,
+        "OptionalInt" => OPTIONALINT_METHODS,
+        "OptionalDouble" => OPTIONALDOUBLE_METHODS,
+        "OptionalLong" => OPTIONALLONG_METHODS,
+        "Stream" => STREAM_METHODS,
+        "CharSequence" => CHAR_SEQUENCE_METHODS,
+        "Class" => CLASS_METHODS,
+        _ => return None,
+    })
+}
+
 fn library_value_type(simple: &str) -> Option<JType> {
     Some(match simple {
         // A BUILDER is a library value like any other here: its table answers
@@ -6831,7 +6865,10 @@ pub(crate) fn library_answer_descriptor(
     let table = if on_class {
         builtin_static_table(class).map(|(_, table)| table)
     } else {
-        builtin_instance_table(library_value_type(class)?).map(|(_, table)| table)
+        library_value_type(class)
+            .and_then(builtin_instance_table)
+            .map(|(_, table)| table)
+            .or_else(|| builtin_table_by_name(class))
     }?;
     // Overloads of the same arity are told apart by their PARAMETER types,
     // which this pass has not resolved — `Math.max(int, int)` and

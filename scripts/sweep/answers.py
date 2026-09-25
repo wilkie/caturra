@@ -120,7 +120,7 @@ IDENTITY = re.compile(r"@[0-9a-f]+")
 # arrangement `behaviour.py` has, for the answers only this sweep reaches.
 DECLARED = [
     (
-        r"^java\.util\.Random\.(ints|longs|doubles)",
+        r"java\.util\.stream\.\w*Pipeline\$|java\.util\.stream\.SliceOps\$",
         "caturra names every stream `ReferencePipeline$Head`; a JDK names it "
         "by family (`IntPipeline`) and by the OP that produced it "
         "(`IntPipeline$9`, `SliceOps$2`), which is its own internal numbering",

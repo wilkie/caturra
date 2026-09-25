@@ -60829,3 +60829,80 @@ public class TL {
 }
 "#
 );
+
+// A CONTAINER's own methods, read through a lambda.
+//
+// The next cause in the answers sweep's backlog, and the same shape as the
+// throwable one: the reader that answers a library call from its DESCRIPTOR
+// works from a `JType`, and a written NAME cannot build the element a
+// collection's carries — so every container was missing from it, and
+// `list.stream().map(x -> x.indexOf("a"))` had no type for a method every
+// list has. The four questions the collection FACE already knew (`size`,
+// `isEmpty`, `contains`, `iterator`) were the whole of it.
+//
+// The tables themselves are the authority for the answers; only the pairing
+// from a name to one of them is new. The three PRIMITIVE streams are
+// deliberately left out: one table serves all of them, spelled in the `Int`
+// flavour, and the receiver's own kind is what rewrites `sum()` from `int` to
+// `double` — a name has no kind to ask.
+differential_test!(
+    a_container_through_a_lambda,
+    "CT",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class CT {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(List.of("a", "b"));
+        Set<String> set = new TreeSet<>(List.of("a", "b"));
+        Map<String, Integer> map = new TreeMap<>(Map.of("a", 1));
+        Deque<String> deque = new ArrayDeque<>(List.of("a"));
+        Stack<String> stack = new Stack<>();
+        stack.push("a");
+
+        r("list-indexof", () -> Stream.of(list).map(x -> x.indexOf("b")).findFirst().get() + 1);
+        r("list-add", () -> Stream.of(new ArrayList<String>()).map(x -> x.add("q")).findFirst().get());
+        r("list-remove-object", () -> Stream.of(new ArrayList<>(List.of("a"))).map(x -> x.remove("a")).findFirst().get());
+        r("list-lastindexof", () -> Stream.of(list).map(x -> x.lastIndexOf("a")).findFirst().get() + 1);
+        r("list-containsall", () -> Stream.of(list).map(x -> x.containsAll(List.of("a"))).findFirst().get());
+        r("set-add", () -> Stream.of(new TreeSet<String>()).map(x -> x.add("q")).findFirst().get());
+        r("set-remove", () -> Stream.of(set).map(x -> x.remove("zz")).findFirst().get());
+        r("map-containskey", () -> Stream.of(map).map(x -> x.containsKey("a")).findFirst().get());
+        r("map-containsvalue", () -> Stream.of(map).map(x -> x.containsValue(1)).findFirst().get());
+        r("deque-offer", () -> Stream.of(deque).map(x -> x.offerLast("z")).findFirst().get());
+        r("stack-empty", () -> Stream.of(stack).map(x -> x.empty()).findFirst().get());
+        r("stack-search", () -> Stream.of(stack).map(x -> x.search("a")).findFirst().get() + 1);
+        r("vector-capacity", () -> Stream.of(new Vector<String>()).map(x -> x.capacity()).findFirst().get() + 1);
+        r("class-name", () -> Stream.of(String.class).map(x -> x.getName()).findFirst().get());
+        r("class-simple", () -> Stream.of(String.class).map(x -> x.getSimpleName().length()).findFirst().get() + 1);
+        r("class-isinterface", () -> Stream.of(String.class).map(x -> x.isInterface()).findFirst().get());
+        r("optional-orelse", () -> Stream.of(Optional.of("ab")).map(x -> x.orElse("z").length()).findFirst().get() + 1);
+        r("charsequence-length", () -> {
+            CharSequence cs = "abc";
+            return Stream.of(cs).map(x -> x.length()).findFirst().get() + 1;
+        });
+        r("iterator-hasnext", () -> Stream.of(list.iterator()).map(x -> x.hasNext()).findFirst().get());
+        r("listiterator-index", () -> Stream.of(list.listIterator()).map(x -> x.nextIndex()).findFirst().get() + 1);
+
+        // ...and through the other positions a written type reaches the
+        // reader from. (A variable pinned from a NESTED element — `<T> T
+        // first(List<T>)` handed a `List<List<String>>` — is a gap of its
+        // own, and still on the sweep's backlog.)
+        r("sorted-by-size", () -> {
+            List<List<String>> rows = new ArrayList<>();
+            rows.add(new ArrayList<>(List.of("a", "b")));
+            rows.add(new ArrayList<>(List.of("a")));
+            rows.sort(Comparator.comparingInt(x -> x.size()));
+            return rows.get(0).size();
+        });
+        r("grouped-by-index", () -> Stream.of(list).collect(Collectors.groupingBy(x -> x.indexOf("b"))).get(1).size());
+    }
+}
+"#
+);

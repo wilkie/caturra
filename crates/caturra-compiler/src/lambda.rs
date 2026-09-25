@@ -6535,6 +6535,18 @@ fn boxed_element(ty: TypeRef) -> TypeRef {
 /// it was before this existed.
 fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option<TypeRef> {
     use crate::ast::BinaryOp as B;
+    // `X.class` is a `Class`, whichever of the two shapes the parser kept it
+    // in — no field can be named `class`, so the name alone decides. Read as
+    // nothing, `Stream.of(String.class).map(x -> x.getName())` had an `Object`
+    // element.
+    let names_class = match expr {
+        Expr::Field { name, .. } => name == "class",
+        Expr::Name { path, .. } => path.len() == 2 && path[1] == "class",
+        _ => false,
+    };
+    if names_class {
+        return Some(TypeRef::Named(String::from("Class")));
+    }
     match expr {
         Expr::Name { path, .. } if path.len() == 1 => bound
             .get(&path[0])
