@@ -215,6 +215,8 @@ def main():
                 re.search(pattern, full) for pattern, _ in DECLARED
             ):
                 known += 1
+                if "--declared" in sys.argv:
+                    print(f"DECLARED {full}")
                 continue
             diverged.append((class_name, want, got))
 

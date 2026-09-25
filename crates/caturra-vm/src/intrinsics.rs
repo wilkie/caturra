@@ -12363,9 +12363,19 @@ fn boxed_virtual(
         JValue::Ref(_) => 0,
     };
     match method {
-        "intValue" | "shortValue" | "byteValue" | "charValue" => {
-            Ok(Some(JValue::Int(as_int(value))))
-        }
+        "intValue" => Ok(Some(JValue::Int(as_int(value)))),
+        // The NARROWING accessors are the cast Java writes them as —
+        // `(short) intValue()`, `(byte) intValue()`, a double going through
+        // d2i first — and they shared `intValue`'s arm, so every one handed
+        // back the whole int: `Integer.valueOf(200).byteValue()` was `200`
+        // where a JDK says `-56`. The behaviour sweep's argument bank only
+        // ever held values that FIT, which is how it never saw it.
+        #[allow(clippy::cast_possible_truncation)]
+        "shortValue" => Ok(Some(JValue::Int(i32::from(as_int(value) as i16)))),
+        #[allow(clippy::cast_possible_truncation)]
+        "byteValue" => Ok(Some(JValue::Int(i32::from(as_int(value) as i8)))),
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        "charValue" => Ok(Some(JValue::Int(i32::from(as_int(value) as u16)))),
         "longValue" => Ok(Some(JValue::Long(as_long(value)))),
         "doubleValue" => Ok(Some(JValue::Double(as_double(value)))),
         #[allow(clippy::cast_possible_truncation)]

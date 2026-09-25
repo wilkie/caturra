@@ -6463,6 +6463,24 @@ fn call_body_type(
     if let Some(ty) = library_return(&on, method, args.len()) {
         return Some(ty);
     }
+    // A stream op that CHANGES the element — `map`, `flatMap`, `mapToObj` —
+    // answers a stream whose element only the lambda says. The table's
+    // descriptor is a bare `Stream`, which is not a type here, so this reader
+    // had nothing while `stream_elem_type` beside it knew the element
+    // exactly: a stream a lambda PRODUCED and a later call took back out
+    // (`.map(x -> x.boxed()).findFirst().get().map(…)`) lost its element,
+    // and the lambda after it was refused. One fact, asked of the one reader
+    // that has it.
+    if matches!(method, "map" | "flatMap" | "mapToObj")
+        && let TypeRef::Named(base) | TypeRef::Generic { base, .. } = &on
+        && matches!(
+            base.rsplit('.').next().unwrap_or(base),
+            "Stream" | "IntStream" | "LongStream" | "DoubleStream"
+        )
+        && let Some(elem) = stream_elem_type(expr, ctx)
+    {
+        return Some(stream_of(elem));
+    }
     // A method of a USER class, on a receiver whose type is known —
     // the lambda's own parameter, usually. `pets.stream().map(p ->
     // p.name())` is as ordinary as a stream gets, and the mapped
@@ -6480,6 +6498,18 @@ fn call_body_type(
     // `new java.util.Random(1)` — the same value written out in full — found
     // nothing and every call on it had no type.
     let simple = name.rsplit('.').next().unwrap_or(name);
+    // A FUNCTIONAL interface is declared under its erased bundled name
+    // (`__IntPredicate`), which no program writes — so `x -> x.negate()` or
+    // `x -> x.applyAsInt(2)` over an `IntPredicate` or an `IntUnaryOperator`
+    // looked for a class called `IntPredicate`, found none, and answered
+    // nothing. The same name map the emit side resolves the type with; a
+    // class the PROGRAM declares under that name is asked first, as it is
+    // everywhere else.
+    let simple = if ctx.shapes.contains_key(simple) {
+        simple
+    } else {
+        crate::codegen::functional_erased(simple).unwrap_or(simple)
+    };
     // A THROWABLE last, after the program's own declarations: every exception
     // class shares `Throwable`'s methods, and no table here held them — so a
     // stream of exceptions, or a `catch` variable read through a lambda, lost
@@ -6746,18 +6776,15 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         // `in.nextLine()` — the first line of half the corpus's programs — had
         // no type, so the split or the stream after it had no element.
         ("Scanner", read, _) if scanner_answer(read).is_some() => scanner_answer(read),
-        ("String", "charAt", 1) | ("Character", "charValue", 0) => Some(TypeRef::Char),
+        ("String", "charAt", 1) => Some(TypeRef::Char),
         (
             "String",
             "length" | "indexOf" | "lastIndexOf" | "compareTo" | "compareToIgnoreCase",
             _,
         )
-        | ("Integer" | "Short" | "Byte", "intValue", 0)
         // A match's own spans, so a lambda over `results()` can chain.
         | ("Matcher" | "MatchResult", "start" | "end" | "groupCount", _)
         | (_, "hashCode", 0) => Some(TypeRef::Int),
-        ("Long", "longValue", 0) => Some(TypeRef::Long),
-        ("Double" | "Float", "doubleValue", 0) => Some(TypeRef::Double),
         (
             "String",
             "isEmpty" | "isBlank" | "contains" | "startsWith" | "endsWith" | "equalsIgnoreCase"
@@ -6907,6 +6934,18 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             }),
             _ => None,
         },
+        // A primitive pipeline BOXED is a stream of its own wrapper — the
+        // element the descriptor erased (`()Ljava/util/stream/Stream;` in all
+        // three flavours) and the one thing a name here can say. The emit side
+        // reads it off `BRet::StreamBoxedElem`.
+        ("IntStream" | "LongStream" | "DoubleStream", "boxed", 0) => Some(TypeRef::Generic {
+            base: String::from("Stream"),
+            args: vec![TypeRef::Named(String::from(match base {
+                "LongStream" => "Long",
+                "DoubleStream" => "Double",
+                _ => "Integer",
+            }))],
+        }),
         // `datesUntil` is the one `java.time` answer a descriptor cannot give:
         // the stream it returns is erased there, and an element it no longer
         // carries is the whole point of the call.

@@ -61544,3 +61544,179 @@ public class FL {
 }
 "#
 );
+
+// A library VALUE a lambda's body calls on, by the NAME the pass holds for it.
+// Four families had a type the emit side knew and the lambda pass did not:
+// a wrapper's conversions (a hand-written arm knew each wrapper's OWN accessor
+// — `intValue` on an `Integer` — and nothing else, where `boxed_method_return`
+// already said every answer), the printers and readers and the three
+// statistics (tables with no NAME in `library_value_type`), and the
+// primitive functional interfaces (declared under their bundled `__` name,
+// which the pass looked up as `IntPredicate` and never found).
+//
+// Reaching those answers turned up three RUNTIME defects none of it depended
+// on: a `LongSummaryStatistics` said it was an `IntSummaryStatistics` from
+// `getClass()` and threw on a cast back to its own type (the namer ignored
+// the kind the object carries; the double one had no arm and was `Object`);
+// `System.out` written inline had no type; and a stream a lambda PRODUCED lost
+// its element once a later call took it back out.
+differential_test!(
+    a_library_value_by_name,
+    "NV",
+    r#"
+import java.io.*;
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class NV {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        // A wrapper's own methods through a lambda — every conversion, not
+        // only the one named after the wrapper.
+        r("double-byte", () -> { byte v = Stream.of(Double.valueOf(300.7)).map(x -> x.byteValue()).findFirst().get(); return v; });
+        r("double-int", () -> { int v = Stream.of(Double.valueOf(-2.9)).map(x -> x.intValue()).findFirst().get(); return v; });
+        r("integer-double", () -> { double v = Stream.of(Integer.valueOf(3)).map(x -> x.doubleValue()).findFirst().get(); return v; });
+        r("long-short", () -> { short v = Stream.of(Long.valueOf(70000L)).map(x -> x.shortValue()).findFirst().get(); return v; });
+        r("float-long", () -> { long v = Stream.of(Float.valueOf(2.5f)).map(x -> x.longValue()).findFirst().get(); return v; });
+        r("byte-float", () -> { float v = Stream.of(Byte.valueOf((byte) 7)).map(x -> x.floatValue()).findFirst().get(); return v; });
+        r("compare", () -> { int v = Stream.of(Integer.valueOf(3)).map(x -> x.compareTo(5)).findFirst().get(); return v; });
+        r("char-compare", () -> { int v = Stream.of(Character.valueOf('b')).map(x -> x.compareTo('a')).findFirst().get(); return v; });
+        r("bool-value", () -> { boolean v = Stream.of(Boolean.TRUE).map(x -> x.booleanValue()).findFirst().get(); return v; });
+        r("nan", () -> { boolean v = Stream.of(Double.valueOf(0.0 / 0.0)).map(x -> x.isNaN()).findFirst().get(); return v; });
+        r("infinite", () -> { boolean v = Stream.of(Float.valueOf(1f / 0f)).map(x -> x.isInfinite()).findFirst().get(); return v; });
+        r("number", () -> {
+            Number n = Integer.valueOf(9);
+            double v = Stream.of(n).map(x -> x.doubleValue()).findFirst().get();
+            return v;
+        });
+
+        // The printers, whose chaining methods answer themselves.
+        r("print-append", () -> {
+            PrintStream ps = new PrintStream(new ByteArrayOutputStream());
+            PrintStream v = Stream.of(ps).map(x -> x.append("a")).findFirst().get();
+            return v == ps;
+        });
+        r("print-error", () -> { boolean v = Stream.of(System.out).map(x -> x.checkError()).findFirst().get(); return v; });
+        r("writer-append", () -> {
+            StringWriter out = new StringWriter();
+            PrintWriter pw = new PrintWriter(out);
+            PrintWriter v = Stream.of(pw).map(x -> x.append("hi")).findFirst().get();
+            v.flush();
+            return out.toString();
+        });
+
+        // The three statistics, and the CLASS each one is — which a cast back
+        // to it needs, and which `getClass()` had wrong.
+        r("int-average", () -> { double v = Stream.of(IntStream.of(1, 2).summaryStatistics()).map(x -> x.getAverage()).findFirst().get(); return v; });
+        r("long-max", () -> { long v = Stream.of(LongStream.of(4L, 9L).summaryStatistics()).map(x -> x.getMax()).findFirst().get(); return v; });
+        r("double-sum", () -> { double v = Stream.of(DoubleStream.of(1.5, 2.0).summaryStatistics()).map(x -> x.getSum()).findFirst().get(); return v; });
+        r("empty-long", () -> { long v = Stream.of(new LongSummaryStatistics()).map(x -> x.getMin()).findFirst().get(); return v; });
+        r("empty-double", () -> { double v = Stream.of(new DoubleSummaryStatistics()).map(x -> x.getMax()).findFirst().get(); return v; });
+        r("class-int", () -> new IntSummaryStatistics().getClass().getName());
+        r("class-long", () -> new LongSummaryStatistics().getClass().getName());
+        r("class-double", () -> new DoubleSummaryStatistics().getClass().getName());
+        r("class-from-stream", () -> LongStream.of(1L).summaryStatistics().getClass().getName());
+        r("cast-back", () -> { Object o = new DoubleSummaryStatistics(); return ((DoubleSummaryStatistics) o).getCount(); });
+        r("cast-wrong", () -> { Object o = new LongSummaryStatistics(); return ((IntSummaryStatistics) o).getCount(); });
+
+        // The primitive functional interfaces' own methods and combinators.
+        r("predicate-negate", () -> {
+            IntPredicate p = y -> y > 0;
+            IntPredicate v = Stream.of(p).map(x -> x.negate()).findFirst().get();
+            return v.test(1);
+        });
+        r("predicate-and", () -> {
+            LongPredicate p = y -> y > 0;
+            LongPredicate v = Stream.of(p).map(x -> x.and(y -> y < 10)).findFirst().get();
+            return v.test(5L) + " " + v.test(50L);
+        });
+        r("predicate-test", () -> {
+            DoublePredicate p = y -> y > 0.5;
+            boolean v = Stream.of(p).map(x -> x.test(0.7)).findFirst().get();
+            return v;
+        });
+        r("unary-then", () -> {
+            IntUnaryOperator f = y -> y + 1;
+            IntUnaryOperator v = Stream.of(f).map(x -> x.andThen(y -> y * 10)).findFirst().get();
+            return v.applyAsInt(2);
+        });
+        r("unary-apply", () -> {
+            LongUnaryOperator f = y -> y * 3;
+            long v = Stream.of(f).map(x -> x.applyAsLong(4L)).findFirst().get();
+            return v;
+        });
+        r("supplier-get", () -> {
+            DoubleSupplier s = () -> 2.5;
+            double v = Stream.of(s).map(x -> x.getAsDouble()).findFirst().get();
+            return v;
+        });
+        r("to-int", () -> {
+            ToIntFunction<String> f = String::length;
+            int v = Stream.of(f).map(x -> x.applyAsInt("four")).findFirst().get();
+            return v;
+        });
+        r("bipredicate", () -> {
+            BiPredicate<String, Integer> p = (a, b) -> a.length() == b;
+            boolean v = Stream.of(p).map(x -> x.test("ab", 2)).findFirst().get();
+            return v;
+        });
+
+        // ...and a primitive pipeline BOXED, the element the descriptor erased.
+        r("boxed-int", () -> Stream.of(IntStream.of(1, 2)).map(x -> x.boxed()).findFirst().get().map(i -> i + 1).collect(Collectors.toList()));
+        r("boxed-double", () -> Stream.of(DoubleStream.of(1.5)).map(x -> x.boxed()).findFirst().get().map(d -> d * 2).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// Every wrapper's NARROWING accessors at values that do not fit. They shared
+// `intValue`'s arm in the VM, so `Integer.valueOf(200).byteValue()` was `200`
+// where a JDK says `-56`, and `Double.valueOf(300.7).byteValue()` was `300`
+// where d2i-then-truncate says `44`. The behaviour sweep called every one of
+// them and agreed — its argument bank only held values that FIT.
+differential_test!(
+    a_wrapper_narrows,
+    "WN",
+    r#"
+public class WN {
+    static String all(Number n) {
+        return n.byteValue() + " " + n.shortValue() + " " + n.intValue() + " " + n.longValue()
+            + " " + n.floatValue() + " " + n.doubleValue();
+    }
+    public static void main(String[] args) {
+        Number[] values = {
+            Integer.valueOf(200), Integer.valueOf(-129), Integer.valueOf(70000), Integer.MIN_VALUE,
+            Long.valueOf(70000L), Long.MAX_VALUE, Long.valueOf(-4294967041L),
+            Double.valueOf(300.7), Double.valueOf(-200.9), Double.NaN, Double.POSITIVE_INFINITY,
+            Double.NEGATIVE_INFINITY, Double.valueOf(1e20),
+            Float.valueOf(300.7f), Float.NaN, Float.NEGATIVE_INFINITY, Float.valueOf(3e10f),
+            Short.valueOf((short) -300), Short.valueOf((short) 128), Byte.valueOf((byte) -128),
+        };
+        for (Number n : values) {
+            System.out.println(n.getClass().getSimpleName() + " " + n + " -> " + all(n));
+        }
+        // ...and the same accessors called on the wrapper's own static type.
+        Integer i = 200;
+        Long l = 70000L;
+        Double d = 300.7;
+        Float f = 1e10f;
+        Short s = -300;
+        System.out.println(i.byteValue() + " " + i.shortValue());
+        System.out.println(l.byteValue() + " " + l.shortValue() + " " + l.intValue());
+        System.out.println(d.byteValue() + " " + d.shortValue() + " " + d.intValue() + " " + d.longValue());
+        System.out.println(f.byteValue() + " " + f.shortValue() + " " + f.intValue());
+        System.out.println(s.byteValue());
+        Character c = 'A';
+        System.out.println(c.charValue() + " " + (int) c.charValue());
+        byte b = d.byteValue();
+        short h = l.shortValue();
+        System.out.println(b + " " + h);
+    }
+}
+"#
+);

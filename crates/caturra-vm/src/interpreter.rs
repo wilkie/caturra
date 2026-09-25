@@ -23867,7 +23867,15 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         }),
         Some(HeapObject::StringWriter(_)) => String::from("java/io/StringWriter"),
         Some(HeapObject::Charset(name)) => format!("sun/nio/cs/{}", name.replace('-', "_")),
-        Some(HeapObject::SummaryStats { .. }) => String::from("java/util/IntSummaryStatistics"),
+        // Named by the KIND the object carries — `SummaryKind::class` already
+        // says which. Named "Int" for all of them, a `LongSummaryStatistics`
+        // reported the wrong class from `getClass()` and failed a plain cast
+        // back to its own type; the double one had no arm at all and was
+        // `java.lang.Object`.
+        Some(HeapObject::SummaryStats { kind, .. }) => String::from(kind.class()),
+        Some(HeapObject::DoubleSummaryStats { .. }) => {
+            String::from(crate::value::SummaryKind::Double.class())
+        }
         // The regex trio. A frozen match is an INNER class of Matcher in a
         // JDK, and that name is what `getClass()` and a default `toString`
         // show, so it is the name here too.

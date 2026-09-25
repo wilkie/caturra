@@ -15720,6 +15720,50 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A library value by name, and a wrapper that narrows (2026-09-25)
+
+The lambda pass types a lambda's parameter by NAME, and asks a table keyed by
+that name what each method answers. Four families of library value had a type
+the emit side knew and no entry the pass could reach:
+
+- **The wrappers.** A hand-written arm knew each wrapper's OWN accessor —
+  `intValue` on an `Integer`, `doubleValue` on a `Double` — and nothing else,
+  so `x -> x.byteValue()`, `x.compareTo(y)` and `x.isNaN()` were all `Object`.
+  `boxed_method_return` already said every answer, for `type_of`; the pass asks
+  it now, and `Number` answers its six conversions.
+- **The printers, readers and statistics.** `PrintStream`, `PrintWriter`, the
+  readers and writers and the three `SummaryStatistics` each had a method table
+  and no NAME in `library_value_type`.
+- **The primitive functional interfaces.** They are declared under their
+  bundled erased name (`__IntPredicate`), which the pass looked up as
+  `IntPredicate` and never found — so `x -> x.negate()` and
+  `x -> x.applyAsInt(2)` had no type. The same name map the emit side resolves
+  the type with is asked now.
+- **A boxed primitive pipeline**, whose element the descriptor erases.
+
+Reaching those answers turned up defects that did not depend on a lambda:
+
+- **A wrapper did not narrow.** `shortValue`, `byteValue` and `charValue`
+  shared `intValue`'s arm in the VM, so `Integer.valueOf(200).byteValue()` was
+  `200` where a JDK says `-56`, and `Double.valueOf(300.7).byteValue()` was
+  `300` where d2i-then-truncate says `44` — in any program, lambda or not. The
+  behaviour sweep calls every one of these and agreed, because its argument
+  bank only ever held values that FIT.
+- **A statistics object named the wrong class.** A `LongSummaryStatistics`
+  said `IntSummaryStatistics` from `getClass()` and threw
+  `ClassCastException` on a cast back to its own type — the namer ignored the
+  kind the object carries — and a `DoubleSummaryStatistics` had no arm and was
+  `java.lang.Object`.
+- **`System.out` written inline** (`Stream.of(System.out)`) had no type.
+- **A stream a lambda produced**, taken back out by a later call
+  (`.map(x -> x.boxed()).findFirst().get().map(…)`), lost its element: the
+  general reader asked the table, whose descriptor is a bare `Stream`, while
+  the stream reader beside it knew the element exactly. The general one asks
+  the stream one now.
+
+Pinned as `a_library_value_by_name` (36 calls) and `a_wrapper_narrows` (every
+wrapper against every accessor at values that do not fit, 27 lines).
+
 ### The flavour a shared table is spelled in (2026-09-25)
 
 One method table serves all three primitive pipelines, spelled in the `Int`

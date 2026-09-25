@@ -6958,6 +6958,25 @@ fn library_value_type(simple: &str) -> Option<JType> {
         "DateTimeFormatter" => JType::DateFormat,
         "DayOfWeek" => JType::DayOfWeek,
         "Month" => JType::Month,
+        // The printers, readers and writers, and the three statistics a
+        // primitive pipeline sums up into. Each has a table of its own and
+        // no NAME here, so a lambda over one had no type for anything it
+        // answers: `x -> x.getAverage()` over `IntSummaryStatistics` values
+        // was an `Object`, and `x -> x.append("")` over a `PrintStream`.
+        "PrintStream" => JType::PrintStream,
+        "PrintWriter" => JType::Writer(WriterKind::Print),
+        "FileWriter" => JType::Writer(WriterKind::File),
+        "Writer" => JType::WriterFace,
+        "BufferedWriter" => JType::BufferedWriter,
+        "ByteArrayOutputStream" => JType::ByteStream,
+        "Reader" => JType::Reader(ReaderFace::Abstract),
+        "BufferedReader" => JType::Reader(ReaderFace::Buffered),
+        "FileReader" => JType::Reader(ReaderFace::File),
+        "InputStreamReader" => JType::Reader(ReaderFace::InputStream),
+        "StringReader" => JType::Reader(ReaderFace::Stringy),
+        "IntSummaryStatistics" => JType::SummaryStats(SummaryFlavour::Int),
+        "LongSummaryStatistics" => JType::SummaryStats(SummaryFlavour::Long),
+        "DoubleSummaryStatistics" => JType::SummaryStats(SummaryFlavour::Double),
         _ => return None,
     })
 }
@@ -6976,6 +6995,46 @@ pub(crate) fn library_value_method_is_static(class: &str, method: &str) -> Optio
     (is_instance || is_static).then_some(is_static && !is_instance)
 }
 
+/// What a WRAPPER's own instance method answers, as a descriptor — read from
+/// `boxed_method_return`, the one list the emitter's `type_of` mirror already
+/// asks. A wrapper has no method table (it is a `JType::Boxed`, emitted by
+/// `boxed_instance_call`), so the lambda pass had a hand-written arm of its
+/// own that knew each wrapper's OWN accessor and nothing else:
+/// `x -> x.intValue()` over `Integer`s was typed and `x -> x.doubleValue()`
+/// was an `Object`, as was every `byteValue`, `compareTo` and `isNaN`.
+///
+/// `Number` answers the six conversions and nothing more — it is the class
+/// that declares them.
+fn wrapper_answer_descriptor(class: &str, method: &str, argc: usize) -> Option<&'static str> {
+    let conversion = matches!(
+        method,
+        "intValue" | "longValue" | "doubleValue" | "floatValue" | "shortValue" | "byteValue"
+    );
+    let wrapper = matches!(
+        class,
+        "Integer" | "Long" | "Double" | "Float" | "Short" | "Byte" | "Boolean" | "Character"
+    );
+    if !(wrapper || (class == "Number" && conversion)) {
+        return None;
+    }
+    let wanted = usize::from(matches!(method, "compareTo" | "equals"));
+    if argc != wanted {
+        return None;
+    }
+    Some(match boxed_method_return(method)? {
+        JType::Int => "I",
+        JType::Long => "J",
+        JType::Double => "D",
+        JType::Float => "F",
+        JType::Short => "S",
+        JType::Byte => "B",
+        JType::Char => "C",
+        JType::Boolean => "Z",
+        JType::Str => "Ljava/lang/String;",
+        _ => return None,
+    })
+}
+
 /// The RETURN descriptor of a library method — the very string the emit side
 /// writes into the call. The lambda pass needs the type a call ANSWERS, and a
 /// table of its own would be this one copied out and left to drift; asking the
@@ -6986,6 +7045,9 @@ pub(crate) fn library_answer_descriptor(
     argc: usize,
     on_class: bool,
 ) -> Option<std::borrow::Cow<'static, str>> {
+    if !on_class && let Some(answer) = wrapper_answer_descriptor(class, method, argc) {
+        return Some(std::borrow::Cow::Borrowed(answer));
+    }
     let table = if on_class {
         builtin_static_table(class).map(|(_, table)| table)
     } else {
@@ -7296,6 +7358,11 @@ pub(crate) fn library_constant_field_class(class: &str, field: &str) -> Option<&
             "StandardCharsets",
             "UTF_8" | "US_ASCII" | "ISO_8859_1" | "UTF_16" | "UTF_16BE" | "UTF_16LE",
         ) => Some("Charset"),
+        // The two standard streams, which are `PrintStream` VALUES a program
+        // hands on like any other: written inline — `Stream.of(System.out)`,
+        // `List.of(System.out, System.err)` — they had no type here, and the
+        // lambda after them saw an `Object`.
+        ("System", "out" | "err") => Some("PrintStream"),
         _ => None,
     }
 }
