@@ -6453,7 +6453,15 @@ fn call_body_type(
     // `new java.util.Random(1)` — the same value written out in full — found
     // nothing and every call on it had no type.
     let simple = name.rsplit('.').next().unwrap_or(name);
-    let (declarer, answered) = declared_shape(simple, method, args.len(), ctx)?;
+    // A THROWABLE last, after the program's own declarations: every exception
+    // class shares `Throwable`'s methods, and no table here held them — so a
+    // stream of exceptions, or a `catch` variable read through a lambda, lost
+    // its type on the first call and `e.getMessage().length()` was "cannot
+    // find symbol". Asked after `declared_shape` so a class the PROGRAM
+    // declares still answers for itself.
+    let Some((declarer, answered)) = declared_shape(simple, method, args.len(), ctx) else {
+        return throwable_answer(simple, method, args.len());
+    };
     // A method that answers its class's own TYPE VARIABLE — `Box<T>`'s
     // `get()` — answers the RECEIVER's argument. Erasure has already
     // replaced the variable with its positional sentinel, which is
@@ -6475,6 +6483,30 @@ fn call_body_type(
         return Some(substituted);
     }
     Some(answered)
+}
+
+/// What a THROWABLE answers, for the methods every exception class shares.
+/// Keyed on the class NAME ending the way an exception's does — a user class
+/// of such a name has already had its own say, above, and one that extends
+/// `Exception` inherits exactly these signatures anyway.
+fn throwable_answer(class: &str, method: &str, argc: usize) -> Option<TypeRef> {
+    let throwable = || TypeRef::Named(String::from("Throwable"));
+    if !(class == "Throwable"
+        || class.ends_with("Exception")
+        || class.ends_with("Error")
+        || class == "StackOverflowError")
+    {
+        return None;
+    }
+    Some(match (method, argc) {
+        ("getMessage" | "getLocalizedMessage", 0) => TypeRef::Named(String::from("String")),
+        ("getCause" | "fillInStackTrace", 0) | ("initCause", 1) => throwable(),
+        ("getStackTrace", 0) => {
+            TypeRef::Array(Box::new(TypeRef::Named(String::from("StackTraceElement"))))
+        }
+        ("getSuppressed", 0) => TypeRef::Array(Box::new(throwable())),
+        _ => return None,
+    })
 }
 
 /// The reference form of a primitive. An OBJECT stream's element is always a
@@ -6555,6 +6587,10 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
                 TypeRef::Named(class) | TypeRef::Generic { base: class, .. } => {
                     field_of_class(&class, name, ctx)
                 }
+                // An ARRAY has one field, and it is an `int`. Left out,
+                // `x.getStackTrace().length` had no type at all, though the
+                // array before it did.
+                TypeRef::Array(_) if name == "length" => Some(TypeRef::Int),
                 _ => None,
             }
         }

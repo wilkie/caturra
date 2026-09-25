@@ -15720,6 +15720,28 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### A throwable through a lambda (2026-09-24)
+
+The first unit worked out of the new sweep's backlog, and the largest single
+cause in it: 284 of the thousand answers the lambda pass had no type for were
+a THROWABLE's own methods. Every exception class shares `Throwable`'s, and the
+pass had a table for none of them — so a stream of exceptions, a list of
+failures, or a `catch` variable read inside a lambda lost its type on the
+first call, and `e.getMessage().length()` was "cannot find symbol" about a
+method every throwable has.
+
+The answer is keyed on the class NAME ending the way an exception's does, and
+it is asked AFTER the program's own declarations — so a class the program
+declares still speaks for itself, and one that extends `Exception` inherits
+exactly these signatures anyway.
+
+...and writing the pin found a second, one call further along: an ARRAY has
+one field and it is an `int`, and `x.getStackTrace().length` had no type at
+all, though the array before it did.
+
+Pinned as `a_throwable_through_a_lambda` (thirteen calls). The sweep now reads
+1304 answers where it read 1020, and the backlog is 758.
+
 ### What a value carries through a lambda (2026-09-24)
 
 The ad-hoc probe that found the last unit became an instrument.

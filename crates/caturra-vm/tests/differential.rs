@@ -60746,3 +60746,86 @@ public class VC {
 }
 "#
 );
+
+// A THROWABLE's own methods, read through a lambda.
+//
+// Every exception class shares `Throwable`'s methods, and the lambda pass had
+// a table for none of them — so a stream of exceptions, a `catch` variable
+// read inside a lambda, or a list of failures lost its type on the first
+// call, and `e.getMessage().length()` was "cannot find symbol" about a method
+// every throwable has. 284 of the answers sweep's thousand were this one gap.
+//
+// Answered AFTER the program's own declarations, so a class the program
+// declares still speaks for itself — and a user class that extends `Exception`
+// inherits exactly these signatures anyway.
+differential_test!(
+    a_throwable_through_a_lambda,
+    "TL",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class TL {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static class Trouble extends RuntimeException {
+        Trouble(String m) { super(m); }
+        int code() { return 7; }
+    }
+    // A class whose NAME ends like an exception's and is not one.
+    static class NotAnException {
+        String getMessage() { return "own"; }
+    }
+    public static void main(String[] args) {
+        r("stream-message", () -> {
+            java.io.IOException e = new java.io.IOException("m");
+            String v = Stream.of(e).map(x -> x.getMessage()).findFirst().get();
+            return v;
+        });
+        r("stream-message-length", () -> Stream.of(new RuntimeException("abc")).map(x -> x.getMessage().length()).findFirst().get() + 1);
+        r("list-of-failures", () -> {
+            List<Exception> failures = new ArrayList<>();
+            failures.add(new IllegalStateException("one"));
+            failures.add(new RuntimeException("two"));
+            return failures.stream().map(x -> x.getMessage()).collect(Collectors.joining(","));
+        });
+        r("localized", () -> Stream.of(new RuntimeException("q")).map(x -> x.getLocalizedMessage()).findFirst().get());
+        r("cause", () -> {
+            RuntimeException e = new RuntimeException("outer", new IllegalStateException("inner"));
+            String v = Stream.of(e).map(x -> x.getCause().getMessage()).findFirst().get();
+            return v;
+        });
+        r("suppressed-count", () -> Stream.of(new RuntimeException("q")).map(x -> x.getSuppressed().length).findFirst().get() + 1);
+        r("trace-kind", () -> Stream.of(new RuntimeException("q")).map(x -> x.getStackTrace().length > 0).findFirst().get());
+        r("user-subclass", () -> Stream.of(new Trouble("boom")).map(x -> x.getMessage()).findFirst().get());
+        r("user-subclass-own", () -> Stream.of(new Trouble("boom")).map(x -> x.code()).findFirst().get() + 1);
+        r("sorted-by-message", () -> {
+            List<Exception> failures = new ArrayList<>();
+            failures.add(new RuntimeException("b"));
+            failures.add(new RuntimeException("a"));
+            failures.sort(Comparator.comparing(x -> x.getMessage()));
+            return failures.get(0).getMessage();
+        });
+        r("grouped-by-class", () -> {
+            List<Exception> failures = new ArrayList<>();
+            failures.add(new RuntimeException("b"));
+            return failures.stream().collect(Collectors.groupingBy(x -> x.getMessage())).get("b").size();
+        });
+        // A class of an exception-shaped NAME that is not one still speaks for
+        // itself: its own declaration is read first.
+        r("not-an-exception", () -> Stream.of(new NotAnException()).map(x -> x.getMessage().length()).findFirst().get() + 1);
+        // ...and a `catch` variable read inside a lambda.
+        r("catch-in-lambda", () -> {
+            try {
+                throw new java.io.IOException("caught");
+            } catch (java.io.IOException e) {
+                return Stream.of("x").map(s -> s + e.getMessage().length()).findFirst().get();
+            }
+        });
+    }
+}
+"#
+);
