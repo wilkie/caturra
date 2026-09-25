@@ -61434,3 +61434,113 @@ public class PC {
 }
 "#
 );
+
+// The FLAVOUR a shared table is spelled in. One method table serves all three
+// primitive pipelines, spelled in the `Int` flavour, and the receiver's own
+// element says which family a call is really in. The emit side knew that from
+// the entry's `BRet`; the lambda pass reads the table's DESCRIPTOR, and the
+// rewrite that respells it knew only half the names in one — so a filtered
+// `LongStream` came back typed as an int one, which is a type the value simply
+// does not have, and every named callback of the receiver's own flavour
+// (`DoubleToIntFunction`, `ObjLongConsumer`) was refused by a check comparing
+// against the `Int` spelling.
+//
+// Found by teaching `signatures.py` to read the RETURN half of a descriptor
+// (it had only ever compared parameters) and to check a shared table against
+// EVERY class it serves rather than the first one that names it. That turned
+// up six returns that were simply wrong, not flavoured: the three primitive
+// `Optional`s' `orElseGet` answered `Object` where a JDK answers the scalar,
+// and `IntStream`'s `parallel`/`sequential`/`unordered` answered the OBJECT
+// stream. A blanket "this class is spelled in the Int flavour" declaration had
+// been excusing all three of those along with the deliberate ones; the sweep
+// now applies the same substitution the compiler does and compares exactly.
+differential_test!(
+    a_shared_table_s_flavour,
+    "FL",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class FL {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        // The flavour a shared table is spelled in, read through a lambda: a
+        // shape-preserving op answers the RECEIVER's own pipeline.
+        r("long-distinct", () -> { LongStream v = Stream.of(LongStream.of(1L, 1L)).map(x -> x.distinct()).findFirst().get(); return v.count(); });
+        r("long-filter", () -> { LongStream v = Stream.of(LongStream.of(1L, -2L)).map(x -> x.filter(d -> d > 0)).findFirst().get(); return v.count(); });
+        r("long-sorted", () -> { LongStream v = Stream.of(LongStream.of(2L, 1L)).map(x -> x.sorted()).findFirst().get(); return v.sum(); });
+        r("long-limit", () -> { LongStream v = Stream.of(LongStream.of(1L, 2L)).map(x -> x.limit(1)).findFirst().get(); return v.count(); });
+        r("long-skip", () -> { LongStream v = Stream.of(LongStream.of(1L, 2L)).map(x -> x.skip(1)).findFirst().get(); return v.sum(); });
+        r("long-map", () -> { LongStream v = Stream.of(LongStream.of(2L)).map(x -> x.map(d -> d * 3)).findFirst().get(); return v.sum(); });
+        r("double-filter", () -> { DoubleStream v = Stream.of(DoubleStream.of(1.0, 2.0)).map(x -> x.filter(d -> d > 1)).findFirst().get(); return v.sum(); });
+        r("double-peek", () -> { DoubleStream v = Stream.of(DoubleStream.of(1.5)).map(x -> x.peek(d -> {})).findFirst().get(); return v.sum(); });
+        r("double-parallel", () -> { DoubleStream v = Stream.of(DoubleStream.of(1.5)).map(x -> x.parallel()).findFirst().get(); return v.sum(); });
+        r("int-parallel", () -> { IntStream v = Stream.of(IntStream.of(1)).map(x -> x.parallel()).findFirst().get(); return v.sum(); });
+        r("int-unordered", () -> { IntStream v = Stream.of(IntStream.of(1)).map(x -> x.unordered()).findFirst().get(); return v.sum(); });
+        r("long-flatmap", () -> { LongStream v = Stream.of(LongStream.of(1L)).map(x -> x.flatMap(d -> LongStream.of(d, d))).findFirst().get(); return v.count(); });
+
+        // ...the answers a NAME fixes, which the same rewrite must leave alone.
+        r("long-maptoint", () -> { IntStream v = Stream.of(LongStream.of(3L)).map(x -> x.mapToInt(d -> (int) d)).findFirst().get(); return v.sum(); });
+        r("double-maptoint", () -> { IntStream v = Stream.of(DoubleStream.of(3.5)).map(x -> x.mapToInt(d -> (int) d)).findFirst().get(); return v.sum(); });
+        r("int-maptolong", () -> { LongStream v = Stream.of(IntStream.of(3)).map(x -> x.mapToLong(d -> d)).findFirst().get(); return v.sum(); });
+
+        // ...the ARRAY, the statistics and the optional each pipeline answers.
+        r("double-toarray", () -> { double[] v = Stream.of(DoubleStream.of(1.5)).map(x -> x.toArray()).findFirst().get(); return v.length; });
+        r("long-toarray", () -> { long[] v = Stream.of(LongStream.of(1L)).map(x -> x.toArray()).findFirst().get(); return v.length; });
+        r("int-toarray", () -> { int[] v = Stream.of(IntStream.of(1)).map(x -> x.toArray()).findFirst().get(); return v.length; });
+        r("long-stats", () -> { LongSummaryStatistics v = Stream.of(LongStream.of(1L, 5L)).map(x -> x.summaryStatistics()).findFirst().get(); return v.getMax(); });
+        r("double-stats", () -> { DoubleSummaryStatistics v = Stream.of(DoubleStream.of(1.5)).map(x -> x.summaryStatistics()).findFirst().get(); return v.getMax(); });
+        r("long-max", () -> { OptionalLong v = Stream.of(LongStream.of(1L, 5L)).map(x -> x.max()).findFirst().get(); return v.getAsLong(); });
+        r("double-min", () -> { OptionalDouble v = Stream.of(DoubleStream.of(1.5, 2.5)).map(x -> x.min()).findFirst().get(); return v.getAsDouble(); });
+        r("long-average", () -> { OptionalDouble v = Stream.of(LongStream.of(1L, 3L)).map(x -> x.average()).findFirst().get(); return v.getAsDouble(); });
+
+        // The primitive optionals: their factory written INLINE, and the
+        // supplier form whose answer the descriptor called an Object.
+        r("optint-inline", () -> Stream.of(OptionalInt.of(3)).map(x -> x.getAsInt()).findFirst().get());
+        r("optint-orelseget", () -> { int v = Stream.of(OptionalInt.empty()).map(x -> x.orElseGet(() -> 7)).findFirst().get(); return v; });
+        r("optlong-orelseget", () -> { long v = Stream.of(OptionalLong.of(3L)).map(x -> x.orElseGet(() -> 7L)).findFirst().get(); return v; });
+        r("optdbl-orelseget", () -> { double v = Stream.of(OptionalDouble.empty()).map(x -> x.orElseGet(() -> 1.5)).findFirst().get(); return v; });
+        r("orelseget-direct", () -> OptionalInt.empty().orElseGet(() -> 7) + 1);
+
+        // ...and a NAMED callback of the receiver's own flavour, which the
+        // descriptor's parameter half decides.
+        r("named-longpredicate", () -> {
+            LongPredicate p = x -> x > 0;
+            return LongStream.of(1L, -2L).filter(p).count();
+        });
+        r("named-doublepredicate", () -> {
+            DoublePredicate p = x -> x > 0;
+            return DoubleStream.of(1.0, -2.0).filter(p).count();
+        });
+        r("named-longunary", () -> {
+            LongUnaryOperator u = x -> x * 2;
+            return LongStream.of(1L).map(u).sum();
+        });
+        r("named-doubletoint", () -> {
+            DoubleToIntFunction g = x -> (int) x;
+            return DoubleStream.of(3.5).mapToInt(g).sum();
+        });
+        r("named-longtoint", () -> {
+            LongToIntFunction g = x -> (int) x;
+            return LongStream.of(3L).mapToInt(g).sum();
+        });
+        r("named-doubleconsumer", () -> {
+            StringBuilder out = new StringBuilder();
+            DoubleConsumer c = x -> out.append(x);
+            DoubleStream.of(1.5).forEach(c);
+            return out.toString();
+        });
+        r("named-objlong", () -> {
+            StringBuilder out = new StringBuilder();
+            ObjLongConsumer<StringBuilder> c = (b, x) -> b.append(x);
+            return LongStream.of(1L, 2L).collect(() -> out, c, (a, b) -> {}).toString();
+        });
+    }
+}
+"#
+);

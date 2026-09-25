@@ -41,10 +41,16 @@ ERASED = ("java.util.function.", "java.time.temporal.Temporal", "java.util.Compa
 
 KNOWN = [
     (
-        r"^java\.util\.stream\.IntStream\.",
-        "one table serves all three primitive streams, so its descriptors are "
-        "spelled in the `Int` flavour and the receiver's element type says "
-        "which family a call is in",
+        r"^java\.util\.stream\.\w*Stream\.iterator\(\)",
+        "a primitive pipeline's cursor is a `PrimitiveIterator.OfX` on a JDK, "
+        "which IS an `Iterator` of the boxed element — the type caturra models "
+        "and the one every use of it needs",
+    ),
+    (
+        r"^java\.util\.stream\.\w*Stream\.onClose\(",
+        "a JDK inherits `onClose` from `BaseStream`, so its descriptor names "
+        "that; caturra models no `BaseStream` and names the stream's own type, "
+        "which is what the call's compile-time type is either way",
     ),
     (
         r"\.__",
@@ -57,6 +63,60 @@ KNOWN = [
         "the call is emitted — the same arrangement the primitive streams have",
     ),
 ]
+
+
+# The substitution `prim_stream_descriptor` makes when the one `Int`-spelled
+# table is read for a `LongStream` or a `DoubleStream`. Applied HERE too, so
+# the two flavours are compared against a JDK exactly like every other class
+# rather than excused by a pattern: a blanket "this class is spelled in the
+# Int flavour" excuses the descriptors that are simply wrong along with the
+# ones that are deliberate, which is how three wrong RETURNS survived.
+FLAVOURS = {
+    "java.util.stream.LongStream": ("Long", "J"),
+    "java.util.stream.DoubleStream": ("Double", "D"),
+}
+
+
+def in_flavour(descriptor, flavour, letter, same_stream=True):
+    """`descriptor`, respelled from the `Int` table for one of the other two."""
+    out, rest = "", descriptor
+    while True:
+        at = rest.find("L")
+        if at < 0:
+            break
+        before, from_class = rest[:at], rest[at:]
+        end = from_class.find(";")
+        if end < 0:
+            break
+        out += before.replace("I", letter)
+        name = from_class[: end + 1]
+        for old, new in (
+            ("java/util/OptionalInt", f"java/util/Optional{flavour}"),
+            (
+                "java/util/IntSummaryStatistics",
+                f"java/util/{flavour}SummaryStatistics",
+            ),
+            # ...and the pipeline itself, ONLY for the ops that answer the
+            # RECEIVER's own stream. A `mapToInt` answers an `IntStream`
+            # whatever it reads, which is why the compiler gates this on the
+            # entry's `BRet::SameStream` and this mirrors it.
+            *(
+                [("java/util/stream/IntStream", f"java/util/stream/{flavour}Stream")]
+                if same_stream
+                else []
+            ),
+            # The functional interfaces a primitive pipeline's callbacks are:
+            # an `IntPredicate` is a `LongPredicate` for a long stream, and
+            # the two-name ones (`IntToLongFunction`, `ObjIntConsumer`) carry
+            # the flavour in the half that names the ELEMENT.
+            ("java/util/function/ObjInt", f"java/util/function/Obj{flavour}"),
+            ("java/util/function/Int", f"java/util/function/{flavour}"),
+            ("ToIntFunction", f"To{flavour}Function"),
+        ):
+            name = name.replace(old, new)
+        out += name
+        rest = from_class[end + 1 :]
+    return out + rest.replace("I", letter)
 
 
 def known_reason(label):
@@ -82,7 +142,14 @@ def tables():
     for internal, const in re.findall(
         r'=>\s*Some\(\(\s*"([\w/$]+)"\s*,\s*(\w+_METHODS)\s*\)\)', source
     ):
-        found.setdefault(const, internal.replace("/", "."))
+        # EVERY class the table is handed to, not the first arm that names it:
+        # `setdefault` meant a shared table was checked against one class and
+        # the others never at all — `INTSTREAM_METHODS` against `IntStream`
+        # and never against the two flavours it also serves, `STACK_METHODS`
+        # against `Stack` and never `Vector`. A shared table has to be right
+        # for every class that wears it, which is what the FACE shape below
+        # already says.
+        found.setdefault(const, set()).add(internal.replace("/", "."))
     # variant -> class, from every `internal()` in the file.
     classes = dict(re.findall(r'(\w+::\w+)\s*=>\s*"([\w/$]+)"', source))
     for variants, const in re.findall(
@@ -125,7 +192,7 @@ def entries(const):
     end = source.find("\nconst ", start + 1)
     block = source[start : end if end > 0 else len(source)]
     return re.findall(
-        r'bm\(\s*"([A-Za-z0-9_]+)",\s*&\[[^\]]*\],\s*BRet::\w+,\s*"([^"]+)"', block
+        r'bm\(\s*"([A-Za-z0-9_]+)",\s*&\[[^\]]*\],\s*BRet::(\w+),\s*"([^"]+)"', block
     )
 
 
@@ -150,6 +217,19 @@ def descriptor_params(descriptor):
             out.append(inner[at])
             at += 1
     return out
+
+
+def descriptor_return(descriptor):
+    """`(I)Ljava/util/stream/IntStream;` -> `java.util.stream.IntStream`.
+
+    Primitives and arrays come back as their descriptor letter, which the
+    caller skips: caturra widens `char` to `int` on purpose, and an array's
+    ELEMENT is the same question one level down.
+    """
+    after = descriptor[descriptor.index(")") + 1 :]
+    if after.startswith("L") and after.endswith(";"):
+        return after[1:-1].replace("/", ".")
+    return after
 
 
 def narrows(pairs, work):
@@ -199,7 +279,7 @@ def jdk_signatures(classes, work):
         if len(parts) < 5:
             continue
         out.setdefault(parts[0], {}).setdefault(parts[1], []).append(
-            [p for p in parts[4].split(",") if p]
+            ([p for p in parts[4].split(",") if p], parts[3])
         )
     return out
 
@@ -223,21 +303,40 @@ def main():
     ):
         if cls not in jdk:
             continue
-        for name, descriptor in entries(const):
+        flavour = FLAVOURS.get(cls)
+        for name, bret, descriptor in entries(const):
             if name not in jdk[cls]:
                 continue
+            if flavour:
+                descriptor = in_flavour(descriptor, *flavour, bret == "SameStream")
             params = descriptor_params(descriptor)
+            answer = descriptor_return(descriptor)
             checked += 1
+            overloads = [w for w, _ in jdk[cls][name]]
             # Only the REFERENCE parameters: caturra widens the primitives on
             # purpose, and the argument check reads the parameter kind there.
-            same_arity = [w for w in jdk[cls][name] if len(w) == len(params)]
+            same_arity = [w for w in overloads if len(w) == len(params)]
+            # The RETURN half, which nothing had ever read. It is not
+            # decoration either: `library_answer_descriptor` hands this very
+            # string to the lambda pass as the type a call ANSWERS, so a wrong
+            # one is a value with the wrong type wherever it is held.
+            returns = {r for w, r in jdk[cls][name] if len(w) == len(params)}
+            if "." in answer and returns and answer not in returns:
+                label = f"{cls}.{name}{descriptor}"
+                reason = known_reason(label)
+                entry = (label, [sorted(returns)], [answer], [sorted(returns)])
+                if reason:
+                    declared.append((label, sorted(returns), reason))
+                else:
+                    wrong.append(entry)
+                continue
             # A VARARGS method's zero-varargs form is a real call, and caturra
             # declares it as its own arity: `getMethod(name)` is `getMethod(name)`
             # on a JDK too, with an empty `Class[]`.
             if any(
                 len(w) == len(params) + 1 and w[-1].startswith("[")
                 and all(p == q for p, q in zip(params, w))
-                for w in jdk[cls][name]
+                for w in overloads
             ):
                 continue
             if any(
@@ -248,9 +347,9 @@ def main():
             label = f"{cls}.{name}{descriptor}"
             reason = known_reason(label)
             if reason:
-                declared.append((label, jdk[cls][name], reason))
+                declared.append((label, overloads, reason))
             else:
-                wrong.append((label, jdk[cls][name], params, same_arity))
+                wrong.append((label, overloads, params, same_arity))
 
     # ...and of what is left, the ones that merely NARROW a JDK's parameter.
     def erased(caturra, wanted):

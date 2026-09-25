@@ -15720,6 +15720,51 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The flavour a shared table is spelled in (2026-09-25)
+
+One method table serves all three primitive pipelines, spelled in the `Int`
+flavour, and the receiver's own element says which family a call is really in.
+The emit side read that off the entry's `BRet`; the lambda pass reads the
+table's DESCRIPTOR, and the rewrite that respells one knew only half the names
+in it. So a `LongStream`'s `filter`, `sorted`, `limit`, `map` and the rest came
+back typed `IntStream` — a type the value simply does not have — and every
+named callback of the receiver's own flavour (`DoubleToIntFunction`,
+`ObjLongConsumer`) was refused by an argument check comparing against the `Int`
+spelling.
+
+**What found it.** `signatures.py` had never read the RETURN half of a
+descriptor: it compared parameters only, which is how a wrong return could sit
+in a table indefinitely. It also paired a shared table with the FIRST class
+that names it and no other, so `INTSTREAM_METHODS` was checked against
+`IntStream` and never against the two flavours that also wear it (and
+`STACK_METHODS` never against `Vector`). Both are fixed, and the sweep now
+applies the same flavour substitution the compiler does and compares exactly,
+in place of a blanket "this class is spelled in the Int flavour" declaration.
+
+That declaration had been excusing six returns that were not flavoured at all,
+just wrong: `OptionalInt`/`OptionalLong`/`OptionalDouble`'s `orElseGet`
+answered `Object` where a JDK answers the scalar (so `x -> x.orElseGet(…)` had
+no type in a lambda), and `IntStream`'s `parallel`/`sequential`/`unordered`
+answered the OBJECT stream. A declaration that excuses a whole class is a
+measurement that has stopped asking.
+
+**One rule, two places.** The flavour substitution now lives in one
+`flavoured_functional_name` that the argument check and the descriptor
+rewriter both ask; the old pair knew only the `Int` PREFIX, so `__IntPredicate`
+was rewritten and `__ObjIntConsumer` was not. And the pipeline half of the
+rewrite is gated on the entry's `BRet::SameStream`: a `mapToInt` answers an
+`IntStream` whatever it reads, and reflavouring that would be the same mistake
+one step further on.
+
+Two more the same probes turned up: a primitive pipeline's `toArray()` had no
+type in a lambda body, because a catch-all `(_, "toArray", _)` arm answered
+from a COLLECTION's written element and returned nothing rather than falling
+through to the descriptor that says `()[I` exactly; and the three primitive
+`Optional` factories written INLINE (`Stream.of(OptionalInt.of(3))`) had no
+type, where the same value through a local was fine.
+
+Pinned as `a_shared_table_s_flavour` (thirty-five calls).
+
 ### A raw library type, and the lambda on one (2026-09-25)
 
 JLS §4.8: writing a generic type without its arguments is legal Java. javac

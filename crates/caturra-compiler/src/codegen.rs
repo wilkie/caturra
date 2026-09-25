@@ -6248,20 +6248,48 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
 /// numeric terminals carry `int` descriptors. Substitute the receiver's own
 /// width, since the descriptor is what tells the VM whether `sum()` adds ints
 /// or doubles and whether `toArray()` builds an `int[]` or a `double[]`.
+/// A functional-interface name respelled for a primitive pipeline's FLAVOUR.
+///
+/// One table serves all three primitive streams and is spelled in the `Int`
+/// flavour, so a `LongStream.filter` reads `IntPredicate` there and really
+/// takes a `LongPredicate`. Only the SOURCE half is the receiver's: a
+/// `ToIntFunction` and the target half of an `IntToLongFunction` name where
+/// the call is GOING, and neither moves.
+///
+/// Two places ask — the argument check, which compares a written value's type
+/// against the parameter, and the descriptor rewriter, which writes the name
+/// into the call — and they were two substitutions: the first knew only the
+/// `Int` PREFIX, so a named `ObjLongConsumer` handed to a `LongStream.collect`
+/// was refused while the `Int` one beside it was taken.
+fn flavoured_functional_name(simple: &str, family: &str) -> String {
+    if let Some(rest) = simple.strip_prefix("ObjInt") {
+        format!("Obj{family}{rest}")
+    } else if let Some(rest) = simple.strip_prefix("Int") {
+        format!("{family}{rest}")
+    } else {
+        simple.to_owned()
+    }
+}
+
 fn prim_stream_descriptor(
     receiver: JType,
     descriptor: &'static str,
+    same_stream: bool,
 ) -> std::borrow::Cow<'static, str> {
-    let (letter, optional, summary) = match receiver {
+    let (letter, optional, summary, pipeline, family) = match receiver {
         JType::DoubleStream => (
             'D',
             "java/util/OptionalDouble",
             "java/util/DoubleSummaryStatistics",
+            "java/util/stream/DoubleStream",
+            "Double",
         ),
         JType::LongStream => (
             'J',
             "java/util/OptionalLong",
             "java/util/LongSummaryStatistics",
+            "java/util/stream/LongStream",
+            "Long",
         ),
         // A `StringBuffer`'s methods are its own: every chaining one answers a
         // `StringBuffer` and `compareTo` takes one, so the shared table's
@@ -6293,11 +6321,35 @@ fn prim_stream_descriptor(
         // double pipeline's `summaryStatistics()` answers a
         // `DoubleSummaryStatistics`, and reading it as the int one truncated
         // every number in it.
-        out.push_str(
-            &class
-                .replace("java/util/OptionalInt", optional)
-                .replace("java/util/IntSummaryStatistics", summary),
-        );
+        let mut class = class
+            .replace("java/util/OptionalInt", optional)
+            .replace("java/util/IntSummaryStatistics", summary)
+            // The CALLBACK interfaces. A primitive pipeline's callbacks are
+            // its own flavour — a `LongStream.filter` takes a `LongPredicate`
+            // — and the shared table spells them all `Int`, so a program that
+            // passes a NAMED one was "DoubleToIntFunction cannot be converted
+            // to Function". Only the SOURCE half is the receiver's: a
+            // `mapToInt` answers an `IntStream` whatever it reads, and its
+            // parameter is a `<flavour>ToIntFunction`.
+            .replace(
+                "java/util/function/ObjInt",
+                &format!("java/util/function/Obj{family}"),
+            )
+            .replace(
+                "java/util/function/Int",
+                &format!("java/util/function/{family}"),
+            );
+        // ...and the PIPELINE itself, for the ops that answer the RECEIVER's
+        // own stream. Every shape-preserving op (`filter`, `sorted`, `limit`,
+        // `parallel`) does, and the shared table spells that `IntStream` — so
+        // a filtered `LongStream` came back typed as an int one, which is a
+        // type the value simply does not have. The emit side reads
+        // `BRet::SameStream` and never saw this; the lambda pass reads the
+        // descriptor, which is why the same flag has to be asked here.
+        if same_stream {
+            class = class.replace("java/util/stream/IntStream", pipeline);
+        }
+        out.push_str(&class);
         rest = after;
     }
     out.push_str(&rest.replace('I', &letter.to_string()));
@@ -6947,6 +6999,7 @@ pub(crate) fn library_answer_descriptor(
     // `Math.max(double, double)` are both two-argument `max`. So the answer is
     // only given when every candidate agrees on it.
     let mut answer: Option<&'static str> = None;
+    let mut same_stream = false;
     for entry in table
         .iter()
         .filter(|entry| entry.name == method && entry.params.len() == argc)
@@ -6957,14 +7010,18 @@ pub(crate) fn library_answer_descriptor(
             Some(seen) if seen != this => return None,
             _ => answer = Some(this),
         }
+        // Whether the answer is the RECEIVER's own pipeline, which is what
+        // decides the flavour rewrite below — the same flag the emit side
+        // reads off this entry.
+        same_stream = matches!(entry.ret, BRet::SameStream);
     }
     // ...and the flavour the NAME says, for the one table three receivers
     // share: a `LongStream.sum()` is `()J` where the `Int` spelling says
     // `()I`, and `boxed()` a `Stream` of the matching wrapper.
     let answer = answer?;
     Some(match class {
-        "LongStream" => prim_stream_descriptor(JType::LongStream, answer),
-        "DoubleStream" => prim_stream_descriptor(JType::DoubleStream, answer),
+        "LongStream" => prim_stream_descriptor(JType::LongStream, answer, same_stream),
+        "DoubleStream" => prim_stream_descriptor(JType::DoubleStream, answer, same_stream),
         _ => std::borrow::Cow::Borrowed(answer),
     })
 }
@@ -15263,19 +15320,19 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
         "parallel",
         &[],
         BRet::SameStream,
-        "()Ljava/util/stream/Stream;",
+        "()Ljava/util/stream/IntStream;",
     ),
     bm(
         "sequential",
         &[],
         BRet::SameStream,
-        "()Ljava/util/stream/Stream;",
+        "()Ljava/util/stream/IntStream;",
     ),
     bm(
         "unordered",
         &[],
         BRet::SameStream,
-        "()Ljava/util/stream/Stream;",
+        "()Ljava/util/stream/IntStream;",
     ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -15326,7 +15383,14 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
         "mapToInt",
         &[BParam::UnaryOperator],
         BRet::IntStream,
-        "(Ljava/util/function/LongToIntFunction;)Ljava/util/stream/IntStream;",
+        // Spelled in the table's own `Int` flavour like every other entry —
+        // the SOURCE half is the receiver's, so this reads
+        // `LongToIntFunction` for a long pipeline and `DoubleToIntFunction`
+        // for a double one. Written `LongToIntFunction` here it was right for
+        // one flavour and refused the other's own callback by name.
+        // `IntStream` itself has no `mapToInt`, so the literal spelling is
+        // never the one a program sees.
+        "(Ljava/util/function/IntToIntFunction;)Ljava/util/stream/IntStream;",
     ),
     bm(
         "mapToLong",
@@ -15735,7 +15799,7 @@ const OPTIONALINT_METHODS: &[BuiltinMethod] = &[
         "orElseGet",
         &[BParam::Supplier],
         BRet::Int,
-        "(Ljava/util/function/IntSupplier;)Ljava/lang/Object;",
+        "(Ljava/util/function/IntSupplier;)I",
     ),
     bm(
         "ifPresentOrElse",
@@ -15778,7 +15842,7 @@ const OPTIONALLONG_METHODS: &[BuiltinMethod] = &[
         "orElseGet",
         &[BParam::Supplier],
         BRet::Long,
-        "(Ljava/util/function/LongSupplier;)Ljava/lang/Object;",
+        "(Ljava/util/function/LongSupplier;)J",
     ),
     bm(
         "ifPresentOrElse",
@@ -15821,7 +15885,7 @@ const OPTIONALDOUBLE_METHODS: &[BuiltinMethod] = &[
         "orElseGet",
         &[BParam::Supplier],
         BRet::Double,
-        "(Ljava/util/function/DoubleSupplier;)Ljava/lang/Object;",
+        "(Ljava/util/function/DoubleSupplier;)D",
     ),
     bm(
         "ifPresentOrElse",
@@ -25279,10 +25343,16 @@ fn bparam_matches(
             // are spelled in the `Int` flavour. A `LongStream`'s `filter`
             // really takes a `LongPredicate`; the receiver's element type says
             // which family this call is in.
-            let flavoured = face.map(|name| match args.first {
-                Some(ElemType::Long) => name.replacen("__Int", "__Long", 1),
-                Some(ElemType::Double) => name.replacen("__Int", "__Double", 1),
-                _ => name.to_owned(),
+            let flavoured = face.map(|name| {
+                let family = match args.first {
+                    Some(ElemType::Long) => "Long",
+                    Some(ElemType::Double) => "Double",
+                    _ => return name.to_owned(),
+                };
+                match name.strip_prefix("__") {
+                    Some(simple) => format!("__{}", flavoured_functional_name(simple, family)),
+                    None => flavoured_functional_name(name, family),
+                }
             });
             arg == JType::Null
                 || [Some(default), face, flavoured.as_deref()]
@@ -34962,7 +35032,11 @@ impl BodyGen<'_> {
             }
             args_width += param_ty.width();
         }
-        let descriptor = prim_stream_descriptor(receiver_ty, chosen.descriptor);
+        let descriptor = prim_stream_descriptor(
+            receiver_ty,
+            chosen.descriptor,
+            matches!(chosen.ret, BRet::SameStream),
+        );
         let method_ref = intern_method_ref(self.pool, class, chosen.name, &descriptor);
         let ret = refine_builtin_return(
             chosen.name,

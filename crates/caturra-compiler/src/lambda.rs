@@ -6874,7 +6874,14 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             }),
             _ => None,
         },
-        (_, "toArray", _) => element_of_declared(receiver).map(|e| TypeRef::Array(Box::new(e))),
+        // A COLLECTION's `toArray()` is erased to its element, which only the
+        // written type says. Everything else that answers an array says so in
+        // its descriptor — an `IntStream`'s is `()[I` — and this arm returned
+        // None for those rather than falling through, so a primitive
+        // pipeline's `toArray()` had no type at all inside a lambda.
+        (_, "toArray", _) => element_of_declared(receiver)
+            .map(|e| TypeRef::Array(Box::new(e)))
+            .or_else(|| library_descriptor_type(base, method, argc, false)),
         // The operations that answer the SAME thing they were called on: a
         // stream's element-preserving stages, and a builder's chaining
         // methods — which is what makes
@@ -7564,6 +7571,16 @@ fn library_static_type(class: &str, method: &str, argc: usize) -> Option<TypeRef
             method,
             "of" | "empty" | "concat" | "iterate" | "generate" | "range" | "rangeClosed"
         )
+    {
+        return Some(TypeRef::Named(String::from(class)));
+    }
+    // ...and the three PRIMITIVE optionals, for the same reason: their
+    // element is in the NAME, so the factory answers the class itself. Named
+    // nowhere, `Stream.of(OptionalInt.of(3)).map(x -> x.getAsInt())` had an
+    // `Object` element where the same value through a LOCAL was fine — which
+    // is the tell a recogniser is missing rather than a type.
+    if matches!(class, "OptionalInt" | "OptionalLong" | "OptionalDouble")
+        && matches!(method, "of" | "empty")
     {
         return Some(TypeRef::Named(String::from(class)));
     }
