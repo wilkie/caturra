@@ -101,6 +101,11 @@ def probe_source(class_name, receiver, calls):
         '            System.out.println(l + " ! " + e.getClass().getName());',
         "        }",
         "    }",
+        # The field `behaviour.RECEIVER_OVERRIDES` reflects on (`Field` is
+        # `Probe.class.getDeclaredField("n")`). Missing here, that receiver
+        # threw NoSuchFieldException on BOTH engines and the whole class was
+        # filed as something caturra could not type.
+        "    int n = 1;",
         "    public static void main(String[] args) throws Throwable {",
         # Declared HERE rather than inside each lambda: a local written inside
         # a lambda body is a scope of its own, and asking about that would be
@@ -134,7 +139,7 @@ DECLARED = [
 ]
 
 # `probe_source`'s preamble, so a line number names a call.
-HEADER_LINES = 11
+HEADER_LINES = 12
 
 
 def javac_refused(source):
@@ -160,7 +165,7 @@ def main():
     classes = [c for c in sorted(receivers) if not wanted or c in wanted]
     api = behaviour.signatures(classes)
 
-    asked, known, refused, diverged = 0, 0, [], []
+    asked, known, refused, diverged, unbuilt = 0, 0, [], [], []
     for class_name in classes:
         receiver = behaviour.RECEIVER_OVERRIDES.get(class_name, receivers.get(class_name))
         if receiver in SKIP or NOISY.search(receiver):
@@ -170,8 +175,14 @@ def main():
         )
         if not calls:
             continue
-        bad = javac_refused(probe_source(class_name, receiver, calls))
-        if bad:
+        # Until javac takes the probe, not once: javac reports FLOW errors
+        # (an unreported checked exception) only after attribution succeeds,
+        # so dropping the first round's lines can reveal more — and those were
+        # then filed as caturra refusing a program javac refuses too.
+        for _ in range(6):
+            bad = javac_refused(probe_source(class_name, receiver, calls))
+            if not bad:
+                break
             calls = [c for at, c in enumerate(calls) if at + HEADER_LINES not in bad]
         # caturra REFUSING a call is the finding this sweep exists for, and a
         # refusal stops the whole program — so the refused lines are recorded
@@ -184,6 +195,14 @@ def main():
             if jdk is not None:
                 break
             reason = str(cat)
+            # A RUN-TIME failure with no line is the receiver itself failing to
+            # build — `new FileReader("f.txt")` with no such file — before any
+            # call is asked. Neither engine can answer a probe like that, so it
+            # is counted as what it is rather than as a type caturra lacked.
+            if reason.startswith("caturra:0: uncaught exception"):
+                unbuilt.append((class_name, reason.split(": ", 2)[-1]))
+                calls = []
+                break
             if not reason.startswith("caturra:"):
                 refused.append((class_name, reason))
                 calls = []
@@ -220,6 +239,17 @@ def main():
                 continue
             diverged.append((class_name, want, got))
 
+    # A refusal whose reason is that the JDK's DECLARED answer is a class
+    # caturra does not model at all — `BaseStream`, `Spliterator`,
+    # `TemporalUnit` — is not a gap in what the lambda pass can type: the call
+    # itself works, held as its compile-time type, and the refusal names the
+    # class. Counted apart, so the backlog is the questions the pass could
+    # still answer.
+    unmodelled = [
+        (c, m) for c, m in refused
+        if re.search(r"is not supported by caturra|cannot find symbol: class \w+ in package", m)
+    ]
+    refused = [r for r in refused if r not in unmodelled]
     if verbose:
         for class_name, message in refused:
             print(f"{class_name}.{message}")
@@ -232,6 +262,9 @@ def main():
     # regression. The gate is the DIVERGENCES — an answer both engines give,
     # differently.
     print(f"{len(refused)} answers caturra has no type for (--verbose lists them)")
+    print(f"{len(unmodelled)} answers whose declared class caturra does not model, refused by name")
+    for class_name, why in unbuilt:
+        print(f"receiver not built: {class_name} — {why}")
     return 1 if diverged else 0
 
 

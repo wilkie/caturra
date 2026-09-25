@@ -866,8 +866,13 @@ fn library_kind_throws(
         }
         // Every I/O method that declares the same one exception, in one arm:
         // a reader's reads, a writer's writes, and `File.createNewFile`.
+        // NOT `lines()`: a JDK's `BufferedReader.lines()` declares nothing,
+        // and wraps a failure in an `UncheckedIOException` when the stream is
+        // walked — which is the whole reason it can sit in a lambda. Listed
+        // here, `long n = reader.lines().count();` in a method with no
+        // `throws` was "unreported exception IOException".
         (Some("StringWriter"), "close") => &["java/io/IOException"],
-        (Some("Reader"), "read" | "readLine" | "ready" | "close" | "lines" | "skip")
+        (Some("Reader"), "read" | "readLine" | "ready" | "close" | "skip")
         | (Some("Writer"), "write" | "append" | "close" | "flush" | "newLine")
         | (Some("File"), "createNewFile" | "getCanonicalPath" | "getCanonicalFile") => {
             &["java/io/IOException"]

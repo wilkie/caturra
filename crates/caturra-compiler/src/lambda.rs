@@ -2050,7 +2050,13 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             args,
             ..
         } if type_args.is_empty() && args.len() == 1 => {
-            let source = static_type_of(&args[0], ctx);
+            // The PRECISE reader first: it types a literal collection by its
+            // arguments (`List.of("a", "b")` is a `List<String>`), where this
+            // one knows only the raw factory — so the commonest copy there is,
+            // `new ArrayList<>(List.of(…))` written inline, had no element.
+            let source = body_type(&args[0], &HashMap::new(), ctx)
+                .filter(|ty| matches!(ty, TypeRef::Generic { .. }))
+                .or_else(|| static_type_of(&args[0], ctx));
             match source {
                 Some(TypeRef::Generic { args: from, .. }) if !from.is_empty() => {
                     Some(TypeRef::Generic {
@@ -6481,6 +6487,43 @@ fn call_body_type(
     {
         return Some(stream_of(elem));
     }
+    // Two overloads of one arity that ANSWER differently — `list.remove("a")`
+    // is a `boolean` and `list.remove(0)` the element — are settled by the
+    // arguments, which this pass can type even where the table reader above,
+    // asked by arity alone, had to give up.
+    if let TypeRef::Named(base) | TypeRef::Generic { base, .. } = &on {
+        let simple = base.rsplit('.').next().unwrap_or(base);
+        // A LITERAL is its primitive here. The general reader boxes one
+        // (`2` is an `Integer`), which is right for pinning a type variable
+        // and wrong for this: `d.dividedBy(2)` is the `long` overload, and read
+        // as a reference it chose `dividedBy(Duration)` and typed a Duration
+        // as a `long`.
+        let typed: Vec<Option<TypeRef>> = args
+            .iter()
+            .map(|a| literal_primitive(a).or_else(|| body_type(a, bound, ctx)))
+            .collect();
+        let kinds: Vec<Option<crate::codegen::ArgKind<'_>>> = typed
+            .iter()
+            .map(|t| t.as_ref().and_then(arg_kind))
+            .collect();
+        if let Some(answer) = crate::codegen::library_answer_descriptor_for(
+            simple,
+            method,
+            args.len(),
+            false,
+            Some(&kinds),
+        ) {
+            // An answer that IS the receiver's element is read off the
+            // receiver's type argument: its descriptor holds the erasure, and
+            // `list.remove(1)` would otherwise be an `Object`.
+            if answer.element {
+                return element_of_declared(&on);
+            }
+            if let Some(ty) = descriptor_type(&answer.descriptor) {
+                return Some(ty);
+            }
+        }
+    }
     // A method of a USER class, on a receiver whose type is known —
     // the lambda's own parameter, usually. `pets.stream().map(p ->
     // p.name())` is as ordinary as a stream gets, and the mapped
@@ -6728,6 +6771,44 @@ fn body_type(expr: &Expr, bound: &HashMap<String, TypeRef>, ctx: &Ctx) -> Option
     }
 }
 
+/// A literal's own primitive type, or `None` for anything else (a string
+/// literal included — it is a reference, and the general reader says so).
+fn literal_primitive(expr: &Expr) -> Option<TypeRef> {
+    use crate::ast::Literal;
+    let Expr::Literal { value, .. } = expr else {
+        return None;
+    };
+    Some(match value {
+        Literal::Int(_) => TypeRef::Int,
+        Literal::Long(_) => TypeRef::Long,
+        Literal::Double(_) => TypeRef::Double,
+        Literal::Float(_) => TypeRef::Float,
+        Literal::Char(_) => TypeRef::Char,
+        Literal::Bool(_) => TypeRef::Boolean,
+        Literal::Str(_) | Literal::Null => return None,
+    })
+}
+
+/// What an argument IS, as far as an overload choice needs: a primitive by its
+/// letter, a reference by its simple name.
+fn arg_kind(ty: &TypeRef) -> Option<crate::codegen::ArgKind<'_>> {
+    use crate::codegen::ArgKind;
+    Some(match ty {
+        TypeRef::Int => ArgKind::Primitive('I'),
+        TypeRef::Long => ArgKind::Primitive('J'),
+        TypeRef::Double => ArgKind::Primitive('D'),
+        TypeRef::Float => ArgKind::Primitive('F'),
+        TypeRef::Boolean => ArgKind::Primitive('Z'),
+        TypeRef::Char => ArgKind::Primitive('C'),
+        TypeRef::Short => ArgKind::Primitive('S'),
+        TypeRef::Byte => ArgKind::Primitive('B'),
+        TypeRef::Named(name) | TypeRef::Generic { base: name, .. } => {
+            ArgKind::Reference(name.rsplit('.').next().unwrap_or(name))
+        }
+        _ => return None,
+    })
+}
+
 /// The result of the library methods a lambda body commonly ends in. A SUBSET,
 /// kept here only to type a mapped element: a method missing from it leaves the
 /// element `Object`, which is where every one of them stood before.
@@ -6784,6 +6865,11 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         )
         // A match's own spans, so a lambda over `results()` can chain.
         | ("Matcher" | "MatchResult", "start" | "end" | "groupCount", _)
+        // ...and three the emit side special-cases with no table to read
+        // (see the comparator arm below).
+        | ("Comparator", "compare", 2)
+        | ("Comparable" | "Enum", "compareTo", 1)
+        | ("Enum", "ordinal", 0)
         | (_, "hashCode", 0) => Some(TypeRef::Int),
         (
             "String",
@@ -6808,6 +6894,12 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         )
         // A match's own text, likewise.
         | ("Matcher" | "MatchResult", "group", _)
+        // ...and the special-cased text answers: a raw `Enum`'s name, a day's
+        // or a month's `getDisplayName(style, locale)` (whose arguments are
+        // read as constants while compiling), a charset's `displayName`.
+        | ("Enum", "name", 0)
+        | ("Month" | "DayOfWeek" | "IsoEra" | "ChronoField", "getDisplayName", 1 | 2)
+        | ("Charset", "displayName", 1)
         | (_, "toString", 0) => Some(string()),
         (_, "size", 0) if collection => Some(TypeRef::Int),
         (_, "isEmpty" | "contains" | "containsKey" | "containsValue", _) if collection => {
@@ -6825,20 +6917,19 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         // A collection's own `stream()`, so a lambda that ANSWERS one carries
         // its element: `flatMap(inner -> inner.stream())` is the whole reason
         // `flatMap` exists, and codegen reads the answer off this class.
-        (_, "stream" | "parallelStream", 0) => match receiver {
-            // An `Optional<E>.stream()` is a stream of at most one `E`
-            // (Java 9); a collection's is a stream of its element.
-            TypeRef::Generic { base, args } if simple_base(base) == "Optional" && args.len() == 1 => {
-                Some(TypeRef::Generic {
-                    base: String::from("Stream"),
-                    args: vec![args[0].clone()],
-                })
-            }
-            _ => element_of_declared(receiver).map(|elem| TypeRef::Generic {
+        //
+        // Only where the element is READ here: anything else falls through to
+        // the table readers below. This arm used to answer every `stream()`
+        // and returned nothing for a receiver it could not read, which is how
+        // a raw `Optional`'s had no type though its `BRet` says exactly what
+        // it is — the same catch-all shape `toArray` had. (An `Optional`'s is
+        // read there too, raw or not.)
+        (_, "stream" | "parallelStream", 0) if element_of_declared(receiver).is_some() => {
+            element_of_declared(receiver).map(|elem| TypeRef::Generic {
                 base: String::from("Stream"),
                 args: vec![elem],
-            }),
-        },
+            })
+        }
         // An `Optional<E>` inside a container: `stream.map(Optional::get)` over
         // a `Stream<Optional<Pet>>` is the shape that noticed — the mapped
         // element was `Object`, so the `Pet` method after it was "cannot find
@@ -6924,7 +7015,18 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             "append" | "insert" | "reverse" | "replace" | "delete" | "deleteCharAt"
             | "setCharAt" | "appendCodePoint",
             _,
-        ) => Some(receiver.clone()),
+        )
+        // ...and two the emit side special-cases with no table to read: a
+        // comparator's combinators build another comparator (the
+        // `instance_call` intercept), and a printer's `printf`/`format` are
+        // VARIADIC and answer the printer, for chaining.
+        | (
+            "Comparator",
+            "reversed" | "thenComparing" | "thenComparingInt" | "thenComparingLong"
+            | "thenComparingDouble",
+            _,
+        )
+        | ("PrintStream" | "PrintWriter", "printf" | "format", _) => Some(receiver.clone()),
         // A `Stream` is not in the collection set (its element is not read the
         // same way), so its single argument is taken directly.
         ("Stream", "findFirst" | "findAny", 0) => match receiver {
@@ -6953,6 +7055,45 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             base: String::from("Stream"),
             args: vec![TypeRef::Named(String::from("LocalDate"))],
         }),
+        // The answers the emit side SPECIAL-CASES, with no table for this
+        // reader to consult — each arm mirrors one: the synthesized
+        // `Comparable` and a raw `Enum` answer their few methods (the scalar
+        // ones sit in the `int` and text arms above), and an `Iterable` hands
+        // out a cursor of its element.
+        ("Enum", "getDeclaringClass", 0) => Some(TypeRef::Named(String::from("Class"))),
+        ("Iterable", "iterator", 0) => match receiver {
+            TypeRef::Generic { args, .. } if args.len() == 1 => Some(TypeRef::Generic {
+                base: String::from("Iterator"),
+                args: vec![args[0].clone()],
+            }),
+            _ => Some(TypeRef::Named(String::from("Iterator"))),
+        },
+        // What the table's `BRet` says where the descriptor has erased it —
+        // `"a\nb".lines()`, `matcher.results()`, `deque.clone()`, an
+        // iterable's `iterator()` — asked before the descriptor itself.
+        _ if let Some(answer) = crate::codegen::library_written_answer(base, method, argc) => {
+            use crate::codegen::WrittenAnswer as W;
+            let generic = |container: &str, elem: TypeRef| TypeRef::Generic {
+                base: String::from(container),
+                args: vec![elem],
+            };
+            match answer {
+                W::Fixed(container, elem) => {
+                    Some(generic(container, TypeRef::Named(String::from(elem))))
+                }
+                W::Receiver => Some(receiver.clone()),
+                W::OfElement(container) => match receiver {
+                    TypeRef::Generic { args, .. } if args.len() == 1 => {
+                        Some(generic(container, args[0].clone()))
+                    }
+                    // A RAW receiver answers the raw container — a raw
+                    // `Optional`'s `stream()` is a raw `Stream`, the erasure
+                    // a JDK types it as too.
+                    TypeRef::Named(_) => Some(TypeRef::Named(String::from(container))),
+                    _ => None,
+                },
+            }
+        }
         // Everything else the EMIT side already knows, read off the descriptor
         // it writes. The arms above are the answers a descriptor has ERASED —
         // an element, a receiver passed through; a hand-written list of the
@@ -7482,7 +7623,13 @@ fn literal_element_type(args: &[Expr], ctx: &Ctx) -> TypeRef {
             continue;
         }
         if let Expr::NewObject { class, .. } = arg {
-            let this = TypeRef::Named(class.clone());
+            // With its type ARGUMENTS where it has any — written, or taken by
+            // a diamond from the collection it copies: `Stream.of(new
+            // ArrayList<>(List.of("a")))` is a stream of `ArrayList<String>`,
+            // and read as the bare class its `get(0)` was an `Object`.
+            let this = body_type(arg, &HashMap::new(), ctx)
+                .filter(|ty| matches!(ty, TypeRef::Generic { .. }))
+                .unwrap_or_else(|| TypeRef::Named(class.clone()));
             kind = Some(match &kind {
                 Some(seen) => join_element_types(seen, &this, supers),
                 None => this,

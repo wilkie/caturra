@@ -7045,46 +7045,187 @@ pub(crate) fn library_answer_descriptor(
     argc: usize,
     on_class: bool,
 ) -> Option<std::borrow::Cow<'static, str>> {
+    library_answer_descriptor_for(class, method, argc, on_class, None)
+        .map(|answer| answer.descriptor)
+}
+
+/// What [`library_answer_descriptor_for`] chose: the descriptor it answers,
+/// and whether that answer is the RECEIVER's element — which a descriptor
+/// cannot say, since it holds the erasure (`remove(int)` is
+/// `(I)Ljava/lang/Object;`), and which the caller reads off the receiver's
+/// own type argument instead.
+#[derive(Debug, Clone)]
+pub(crate) struct LibraryAnswer {
+    pub(crate) descriptor: std::borrow::Cow<'static, str>,
+    pub(crate) element: bool,
+}
+
+/// The instance method table a library class NAME reaches — the one the
+/// lambda pass reads answers from, since it holds names and not `JType`s.
+fn instance_table_by_name(class: &str) -> Option<&'static [BuiltinMethod]> {
+    library_value_type(class)
+        .and_then(builtin_instance_table)
+        .map(|(_, table)| table)
+        .or_else(|| builtin_table_by_name(class))
+        // A library THROWABLE by name: every one of them has its own detail
+        // methods (`getIndex`, `getErrorOffset`, `getWidth`) in a table the
+        // emit side reads, and the pass knew only the ones `Throwable` itself
+        // declares.
+        .or_else(|| {
+            let internal = caturra_classfile::exceptions::internal_name_of(class)?;
+            builtin_instance_table(JType::Exception(exception_id(internal)?))
+                .map(|(_, table)| table)
+        })
+}
+
+/// What a library call answers where its DESCRIPTOR has erased what its
+/// `BRet` still says. A descriptor has no type arguments: `"a\nb".lines()` is
+/// `()Ljava/util/stream/Stream;`, which the lambda pass cannot hold as a type,
+/// while the entry's `BRet::StreamString` says exactly what the emit side
+/// types the call as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WrittenAnswer {
+    /// A container of one fixed element: `Stream<String>`, `Set<String>`.
+    Fixed(&'static str, &'static str),
+    /// The receiver's own written type — `ArrayDeque.clone`, overridden
+    /// covariantly.
+    Receiver,
+    /// A container of the RECEIVER's element: `Iterator<E>`.
+    OfElement(&'static str),
+}
+
+pub(crate) fn library_written_answer(
+    class: &str,
+    method: &str,
+    argc: usize,
+) -> Option<WrittenAnswer> {
+    let table = instance_table_by_name(class)?;
+    let mut rets = table
+        .iter()
+        .filter(|entry| entry.name == method && entry.params.len() == argc)
+        .map(|entry| entry.ret);
+    let first = rets.next()?;
+    if rets.any(|ret| ret != first) {
+        return None;
+    }
+    Some(match first {
+        BRet::StreamString => WrittenAnswer::Fixed("Stream", "String"),
+        BRet::MatchResultStream => WrittenAnswer::Fixed("Stream", "MatchResult"),
+        BRet::DateStream => WrittenAnswer::Fixed("Stream", "LocalDate"),
+        BRet::StringSet => WrittenAnswer::Fixed("Set", "String"),
+        BRet::SelfDeque => WrittenAnswer::Receiver,
+        BRet::Iterator => WrittenAnswer::OfElement("Iterator"),
+        BRet::Stream => WrittenAnswer::OfElement("Stream"),
+        BRet::ListIterator => WrittenAnswer::OfElement("ListIterator"),
+        _ => return None,
+    })
+}
+
+/// What an argument IS, as far as the lambda pass can say — enough to tell
+/// two overloads of one arity apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArgKind<'a> {
+    /// A primitive, by its descriptor letter.
+    Primitive(char),
+    /// A reference, by the simple name it is written with.
+    Reference(&'a str),
+}
+
+/// [`library_answer_descriptor`], told the ARGUMENTS where they are known.
+///
+/// Overloads of one arity are told apart by their parameter types, and this
+/// used to give up the moment two candidates disagreed on an answer. Some of
+/// the commonest calls a program makes are exactly that pair:
+/// `list.remove("a")` is the `boolean` one and `list.remove(0)` the element,
+/// `d.dividedBy(2)` is a `Duration` and `d.dividedBy(other)` a `long`,
+/// `m.appendTail(aStringBuffer)` answers the buffer it was handed. Where the
+/// arguments settle it — a primitive only fits a primitive parameter, a
+/// reference only a reference one, and an exact class name beats a wider one —
+/// the answer is given.
+pub(crate) fn library_answer_descriptor_for(
+    class: &str,
+    method: &str,
+    argc: usize,
+    on_class: bool,
+    arguments: Option<&[Option<ArgKind<'_>>]>,
+) -> Option<LibraryAnswer> {
     if !on_class && let Some(answer) = wrapper_answer_descriptor(class, method, argc) {
-        return Some(std::borrow::Cow::Borrowed(answer));
+        return Some(LibraryAnswer {
+            descriptor: std::borrow::Cow::Borrowed(answer),
+            element: false,
+        });
     }
     let table = if on_class {
         builtin_static_table(class).map(|(_, table)| table)
     } else {
-        library_value_type(class)
-            .and_then(builtin_instance_table)
-            .map(|(_, table)| table)
-            .or_else(|| builtin_table_by_name(class))
+        instance_table_by_name(class)
     }?;
-    // Overloads of the same arity are told apart by their PARAMETER types,
-    // which this pass has not resolved — `Math.max(int, int)` and
-    // `Math.max(double, double)` are both two-argument `max`. So the answer is
-    // only given when every candidate agrees on it.
-    let mut answer: Option<&'static str> = None;
-    let mut same_stream = false;
-    for entry in table
+    let candidates: Vec<&BuiltinMethod> = table
         .iter()
         .filter(|entry| entry.name == method && entry.params.len() == argc)
-    {
-        let at = entry.descriptor.rfind(')')?;
-        let this = &entry.descriptor[at + 1..];
-        match answer {
-            Some(seen) if seen != this => return None,
-            _ => answer = Some(this),
+        .collect();
+    // The answer, when every candidate given agrees on it.
+    let agreed = |pool: &[&BuiltinMethod]| -> Option<(&'static str, bool, bool)> {
+        let mut answer: Option<(&'static str, bool, bool)> = None;
+        for entry in pool {
+            let at = entry.descriptor.rfind(')')?;
+            let this = &entry.descriptor[at + 1..];
+            match answer {
+                Some((seen, ..)) if seen != this => return None,
+                // Whether the answer is the RECEIVER's own pipeline, which is
+                // what decides the flavour rewrite below — the same flag the
+                // emit side reads off this entry — and whether it is the
+                // receiver's ELEMENT.
+                _ => {
+                    answer = Some((
+                        this,
+                        matches!(entry.ret, BRet::SameStream),
+                        matches!(entry.ret, BRet::Elem | BRet::BoxedElem),
+                    ));
+                }
+            }
         }
-        // Whether the answer is the RECEIVER's own pipeline, which is what
-        // decides the flavour rewrite below — the same flag the emit side
-        // reads off this entry.
-        same_stream = matches!(entry.ret, BRet::SameStream);
-    }
+        answer
+    };
+    let (answer, same_stream, element) = agreed(&candidates).or_else(|| {
+        let arguments = arguments?;
+        let fits = |entry: &&BuiltinMethod, exact: bool| {
+            descriptor_param_kinds(entry.descriptor)
+                .enumerate()
+                .zip(arguments)
+                .all(|((at, reference), arg)| match arg {
+                    None => true,
+                    Some(ArgKind::Primitive(_)) => !reference,
+                    Some(ArgKind::Reference(name)) => {
+                        reference
+                            && (!exact
+                                || descriptor_functional_face(entry.descriptor, at)
+                                    .is_some_and(|face| face.strip_prefix("__") == Some(name)))
+                    }
+                })
+        };
+        let shaped: Vec<&BuiltinMethod> = candidates
+            .iter()
+            .copied()
+            .filter(|e| fits(e, false))
+            .collect();
+        agreed(&shaped).or_else(|| {
+            let exact: Vec<&BuiltinMethod> =
+                shaped.iter().copied().filter(|e| fits(e, true)).collect();
+            agreed(&exact)
+        })
+    })?;
     // ...and the flavour the NAME says, for the one table three receivers
     // share: a `LongStream.sum()` is `()J` where the `Int` spelling says
     // `()I`, and `boxed()` a `Stream` of the matching wrapper.
-    let answer = answer?;
-    Some(match class {
+    let descriptor = match class {
         "LongStream" => prim_stream_descriptor(JType::LongStream, answer, same_stream),
         "DoubleStream" => prim_stream_descriptor(JType::DoubleStream, answer, same_stream),
         _ => std::borrow::Cow::Borrowed(answer),
+    };
+    Some(LibraryAnswer {
+        descriptor,
+        element,
     })
 }
 
@@ -12333,6 +12474,9 @@ enum BRet {
     Class,
     /// `java.lang.Throwable` (`Throwable.getCause`).
     Throwable,
+    /// `java.io.IOException` — `UncheckedIOException.getCause`, which a JDK
+    /// declares covariantly.
+    IoException,
     /// `Field[]` (`Class.getDeclaredFields`).
     FieldArray,
     /// `Class[]` (`Method.getParameterTypes`).
@@ -20790,7 +20934,15 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
 /// `PatternSyntaxException`) needs the shared list AND its own, and a static
 /// slice cannot be concatenated at compile time.
 macro_rules! throwable_methods {
+    // Every throwable's `getCause()` answers a `Throwable` — except the ones
+    // that OVERRIDE it covariantly. `UncheckedIOException` declares
+    // `IOException getCause()`, so `IOException c = e.getCause()` is ordinary
+    // Java, and the shared entry refused it; it has to be the FIRST entry of
+    // that name, since the first one that fits is the one chosen.
     ($($extra:expr,)*) => {
+        throwable_methods!(cause = BRet::Throwable, "()Ljava/lang/Throwable;"; $($extra,)*)
+    };
+    (cause = $cause:expr, $cause_descriptor:expr; $($extra:expr,)*) => {
         &[
         bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
         // Every object has one; a throwable's is `Object`'s identity hash.
@@ -20842,8 +20994,8 @@ macro_rules! throwable_methods {
         BuiltinMethod {
             name: "getCause",
             params: &[],
-            ret: BRet::Throwable,
-            descriptor: "()Ljava/lang/Throwable;",
+            ret: $cause,
+            descriptor: $cause_descriptor,
             needs: TableFace::Sorted,
         },
         // `getSuppressed()` — the real suppressed exceptions, typed as `Object[]`
@@ -23987,6 +24139,7 @@ fn detail_exception_methods(internal: &str) -> Option<&'static [BuiltinMethod]> 
         | "java/nio/charset/UnsupportedCharsetException" => CHARSET_NAME_METHODS,
         "java/text/ParseException" => PARSE_EXCEPTION_METHODS,
         "java/time/format/DateTimeParseException" => DATE_PARSE_EXCEPTION_METHODS,
+        "java/io/UncheckedIOException" => UNCHECKED_IO_METHODS,
         _ => return None,
     })
 }
@@ -24027,6 +24180,12 @@ const DATE_PARSE_EXCEPTION_METHODS: &[BuiltinMethod] = throwable_methods![
 /// `ClassNotFoundException.getException()` and
 /// `ExceptionInInitializerError.getException()` — both predate `getCause`, and
 /// both answer exactly what `getCause` answers.
+/// `UncheckedIOException` — whose `getCause()` is declared `IOException`, the
+/// one thing it adds: it exists to carry one across a lambda that may not
+/// throw it.
+const UNCHECKED_IO_METHODS: &[BuiltinMethod] =
+    throwable_methods![cause = BRet::IoException, "()Ljava/io/IOException;";];
+
 const WRAPPED_CAUSE_METHODS: &[BuiltinMethod] = throwable_methods![bm(
     "getException",
     &[],
@@ -24157,6 +24316,17 @@ const MATCHER_METHODS: &[BuiltinMethod] = &[
         &[BParam::AnyBuilder, BParam::Str],
         BRet::Matcher,
         "(Ljava/lang/StringBuilder;Ljava/lang/String;)Ljava/util/regex/Matcher;",
+    ),
+    // ...and `appendTail` answers the builder it was HANDED, which is the one
+    // thing the two overloads differ in. One entry answered the receiver's
+    // builder kind — a Matcher has none, so always `StringBuilder` — and
+    // `StringBuffer sb = m.appendTail(new StringBuffer())`, the pre-Java-9
+    // spelling every regex tutorial uses, was "incompatible types".
+    bm(
+        "appendTail",
+        &[BParam::Buffer],
+        BRet::Buffer,
+        "(Ljava/lang/StringBuffer;)Ljava/lang/StringBuffer;",
     ),
     bm(
         "appendTail",
@@ -26068,6 +26238,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Class => Some(JType::Class),
         // `Throwable` (`getCause`) — exception id 0.
         BRet::Throwable => Some(JType::Exception(0)),
+        BRet::IoException => exception_id("java/io/IOException").map(JType::Exception),
         BRet::FieldArray => Some(JType::Array {
             elem: ElemType::Field,
             dims: 1,

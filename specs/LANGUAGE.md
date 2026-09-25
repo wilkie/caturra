@@ -15720,6 +15720,60 @@ overloads caturra refuses outright — the generic half of that class
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
 
+### The long tail of what a lambda answers (2026-09-25)
+
+The answers sweep's backlog stood at 111 after the unit below. What was left
+was a long tail, each item a different reason the lambda pass had no type, and
+each closed by asking the fact where it already lives:
+
+- **Two overloads of one arity that answer differently** — `remove(Object)`
+  and `remove(int)`, `dividedBy(long)` and `dividedBy(Duration)`,
+  `appendTail(StringBuffer)` and `appendTail(StringBuilder)` — were given up on,
+  because the table reader was asked by arity alone. The pass types the
+  arguments and asks again (`library_answer_descriptor_for`): a primitive fits
+  only a primitive parameter, a reference only a reference one, and an exact
+  class name beats a wider one. A LITERAL is its primitive for that — read
+  boxed, as the general reader types it, `dividedBy(2)` chose the `Duration`
+  overload and typed a Duration as a `long`, the one wrong answer this work
+  produced on the way, caught by its own probe.
+- **An answer that is the receiver's ELEMENT** (`list.remove(1)`) is read off
+  the receiver, since the descriptor holds the erasure.
+- **An exception's own detail methods** (`getIndex`, `getErrorOffset`,
+  `getWidth`) are in tables the pass now reaches by the exception's name.
+- **What a table's `BRet` says where the descriptor erased it** —
+  `String.lines()`, `Matcher.results()`, `ArrayDeque.clone()`,
+  `Optional.stream()` — is read by `library_written_answer`. Two catch-all arms
+  had been shadowing it: `stream()` answered for every receiver and returned
+  nothing for one it could not read, as `toArray` had.
+- **The emit side's special cases with no table** — a comparator's
+  combinators, `Comparable`, a raw `Enum`, `getDisplayName(style, locale)`, a
+  printer's variadic `printf` — each mirrored once, beside the arms of the same
+  answer.
+
+Four were refusals of ordinary Java, lambda or not: `BufferedReader.lines()`
+was said to throw `IOException` (a JDK's declares nothing; it wraps a failure
+in an `UncheckedIOException` when the stream is walked);
+`UncheckedIOException.getCause()` answered `Throwable` where a JDK overrides it
+covariantly as `IOException`; `appendTail(StringBuffer)` answered a
+StringBuilder; and `new ArrayList<>(List.of(…))` written inline lost its
+element.
+
+The sweep itself had three mistakes, now fixed: its probe class lacked the
+field a reflective receiver looks up, so `Field` was filed as untypable; it
+asked javac once, and javac reports a FLOW error only after the rest compiles;
+and a receiver that fails to BUILD on both engines (a `FileReader` of a file
+that is not there) was counted as caturra's refusal. It now also counts apart
+the answers whose declared class caturra deliberately does not model
+(`BaseStream`, `Spliterator`, `TemporalUnit`) — refused by name, and not a gap
+in what the pass can type.
+
+The backlog is two: `EnumSet.clone()` and `EnumMap.clone()`. That one is a
+MODEL limit rather than a missing reader — an `EnumSet<E>` variable is the same
+type here as a `HashSet<E>`, whose `clone()` really does answer `Object`, and
+giving the enum collections a face of their own is its own unit.
+
+Pinned as `the_long_tail_of_answers` (thirty-one calls).
+
 ### A library value by name, and a wrapper that narrows (2026-09-25)
 
 The lambda pass types a lambda's parameter by NAME, and asks a table keyed by

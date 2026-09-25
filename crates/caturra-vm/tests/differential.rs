@@ -61720,3 +61720,116 @@ public class WN {
 }
 "#
 );
+
+// The long tail of what a lambda's parameter answers — each a different
+// reason the pass had no type, closed by asking the fact where it already
+// lives rather than writing it down again:
+//
+// - two overloads of one ARITY that answer differently (`remove(Object)` and
+//   `remove(int)`, `dividedBy(long)` and `dividedBy(Duration)`) are settled by
+//   the argument types, where the pass used to give up — and a LITERAL is its
+//   primitive for that, since read boxed `dividedBy(2)` chose the Duration
+//   overload and typed a Duration as a `long`;
+// - an answer that is the receiver's ELEMENT is read off the receiver, since
+//   the descriptor holds the erasure;
+// - an exception's own detail methods (`getIndex`, `getWidth`) are in a table
+//   the pass can reach by the exception's name;
+// - what a table's `BRet` says where the descriptor erased it
+//   (`String.lines()`, `Matcher.results()`, `ArrayDeque.clone()`,
+//   `Optional.stream()`, raw or not);
+// - the emit side's special cases that have no table (a comparator's
+//   combinators, `Comparable`, a raw `Enum`, `getDisplayName(style, locale)`,
+//   `printf`), each mirrored once.
+//
+// And four refusals of ordinary Java, lambda or not: `BufferedReader.lines()`
+// was said to throw `IOException` (it declares nothing),
+// `UncheckedIOException.getCause()` answered `Throwable` where a JDK overrides
+// it as `IOException`, `appendTail(StringBuffer)` answered a StringBuilder,
+// and `new ArrayList<>(List.of(…))` written inline lost its element.
+differential_test!(
+    the_long_tail_of_answers,
+    "LT",
+    r#"
+import java.io.*;
+import java.time.*;
+import java.time.format.TextStyle;
+import java.util.*;
+import java.util.function.*;
+import java.util.regex.*;
+import java.util.stream.*;
+
+public class LT {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static long lines(BufferedReader reader) { return reader.lines().count(); }
+
+    public static void main(String[] args) {
+        // Two overloads of one arity that ANSWER differently, settled by the
+        // argument — both ways round, so a wrong choice cannot hide.
+        r("remove-object", () -> { boolean v = Stream.of(new ArrayList<>(List.of("a", "b"))).map(x -> x.remove("a")).findFirst().get(); return v; });
+        r("remove-index", () -> { String v = Stream.of(new ArrayList<>(List.of("a", "b"))).map(x -> x.remove(1)).findFirst().get(); return v; });
+        r("divided-by-long", () -> { Duration v = Stream.of(Duration.ofSeconds(10)).map(x -> x.dividedBy(2)).findFirst().get(); return v; });
+        r("divided-by-duration", () -> { long v = Stream.of(Duration.ofSeconds(10)).map(x -> x.dividedBy(Duration.ofSeconds(2))).findFirst().get(); return v; });
+        r("append-tail-buffer", () -> {
+            Matcher m = Pattern.compile("a").matcher("xay");
+            StringBuffer v = Stream.of(m).map(x -> x.appendTail(new StringBuffer())).findFirst().get();
+            return v;
+        });
+        r("append-tail-builder", () -> {
+            Matcher m = Pattern.compile("a").matcher("xay");
+            StringBuilder v = Stream.of(m).map(x -> x.appendTail(new StringBuilder("<"))).findFirst().get();
+            return v;
+        });
+
+        // An exception's OWN detail methods, which only its table knows.
+        r("syntax-description", () -> { String v = Stream.of(new PatternSyntaxException("d", "p", 1)).map(x -> x.getDescription()).findFirst().get(); return v; });
+        r("syntax-index", () -> { int v = Stream.of(new PatternSyntaxException("d", "p", 1)).map(x -> x.getIndex()).findFirst().get(); return v; });
+        r("parse-offset", () -> { int v = Stream.of(new java.text.ParseException("m", 3)).map(x -> x.getErrorOffset()).findFirst().get(); return v; });
+        r("format-width", () -> { int v = Stream.of(new IllegalFormatWidthException(4)).map(x -> x.getWidth()).findFirst().get(); return v; });
+        r("target", () -> {
+            Throwable v = Stream.of(new java.lang.reflect.InvocationTargetException(new RuntimeException("q")))
+                .map(x -> x.getTargetException()).findFirst().get();
+            return v.getMessage();
+        });
+        r("unchecked-cause", () -> {
+            UncheckedIOException e = new UncheckedIOException(new IOException("x"));
+            IOException direct = e.getCause();
+            IOException v = Stream.of(e).map(x -> x.getCause()).findFirst().get();
+            return direct.getMessage() + v.getMessage();
+        });
+
+        // What a table's BRet says where its descriptor erased the element.
+        r("string-lines", () -> { Stream<String> v = Stream.of("a\nb").map(x -> x.lines()).findFirst().get(); return v.count(); });
+        r("reader-lines", () -> { Stream<String> v = Stream.of(new BufferedReader(new StringReader("a\nb"))).map(x -> x.lines()).findFirst().get(); return v.count(); });
+        r("reader-lines-no-throws", () -> lines(new BufferedReader(new StringReader("a\nb\nc"))));
+        r("split-stream", () -> { Stream<String> v = Stream.of(Pattern.compile(",")).map(x -> x.splitAsStream("a,b")).findFirst().get(); return v.count(); });
+        r("results", () -> { Stream<MatchResult> v = Stream.of(Pattern.compile("a").matcher("aa")).map(x -> x.results()).findFirst().get(); return v.count(); });
+        r("deque-clone", () -> { ArrayDeque<String> v = Stream.of(new ArrayDeque<>(List.of("a"))).map(x -> x.clone()).findFirst().get(); return v; });
+        r("optional-stream", () -> { Stream<String> v = Stream.of(Optional.of("v")).map(x -> x.stream()).findFirst().get(); return v.count(); });
+        r("raw-optional-stream", () -> { Optional o = Optional.of("v"); Stream v = Stream.of(o).map(x -> x.stream()).findFirst().get(); return v.count(); });
+        r("optint-stream", () -> { IntStream v = Stream.of(OptionalInt.of(3)).map(x -> x.stream()).findFirst().get(); return v.sum(); });
+        r("bitset-stream", () -> { BitSet b = new BitSet(); b.set(2); b.set(5); IntStream v = Stream.of(b).map(x -> x.stream()).findFirst().get(); return v.sum(); });
+        r("raw-map-keyset", () -> { Map m = new HashMap<>(Map.of("a", 1)); Set v = Stream.of(m).map(x -> x.keySet()).findFirst().get(); return v; });
+        r("raw-stream-first", () -> { Stream s = Stream.of("a"); Optional v = Stream.of(s).map(x -> x.findFirst()).findFirst().get(); return v; });
+
+        // The emit side's special cases, which have no table to read.
+        r("reversed", () -> { Comparator<String> c = Comparator.naturalOrder(); Comparator<String> v = Stream.of(c).map(x -> x.reversed()).findFirst().get(); return v.compare("a", "b"); });
+        r("comparable", () -> { Comparable<String> c = "b"; int v = Stream.of(c).map(x -> x.compareTo("a")).findFirst().get(); return v; });
+        r("iterable", () -> { Iterable<String> c = List.of("a"); Iterator<String> v = Stream.of(c).map(x -> x.iterator()).findFirst().get(); return v.next(); });
+        r("raw-enum", () -> { Enum e = DayOfWeek.MONDAY; String v = Stream.of(e).map(x -> x.name()).findFirst().get(); return v + Stream.of(e).map(x -> x.ordinal()).findFirst().get(); });
+        r("display-name", () -> { String v = Stream.of(DayOfWeek.MONDAY).map(x -> x.getDisplayName(TextStyle.SHORT, Locale.US)).findFirst().get(); return v; });
+        r("charset-name", () -> { String v = Stream.of(java.nio.charset.StandardCharsets.UTF_8).map(x -> x.displayName(Locale.US)).findFirst().get(); return v; });
+        r("printf", () -> {
+            StringWriter out = new StringWriter();
+            PrintWriter w = new PrintWriter(out);
+            PrintWriter v = Stream.of(w).map(x -> x.printf("%d-%s", 7, "x")).findFirst().get();
+            v.flush();
+            return out;
+        });
+    }
+}
+"#
+);
