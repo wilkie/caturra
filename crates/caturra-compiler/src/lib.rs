@@ -1005,10 +1005,20 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // with no `import java.util.regex.Pattern` — made this false, and every
     // other mistake in the file was then truncated away: javac reported four
     // errors for such a program and caturra reported the import's two.
+    // A modifier where it may not stand is a check the parser can make but
+    // javac makes during ATTRIBUTION: it does not stop the file from being
+    // read, and a file with real syntax errors never gets that far, so it
+    // is not reported there.
+    let attribution_check = |d: &Diagnostic| {
+        d.message.starts_with("modifier ") && d.message.ends_with(" not allowed here")
+    };
     let parsed_cleanly = !compilation
         .diagnostics
         .iter()
-        .any(|d| matches!(d.severity, Severity::Error));
+        .any(|d| matches!(d.severity, Severity::Error) && !attribution_check(d));
+    if !parsed_cleanly {
+        compilation.diagnostics.retain(|d| !attribution_check(d));
+    }
     let after_parse = compilation.diagnostics.len();
 
     for (path, unit) in &units {
@@ -1046,12 +1056,22 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // everything after it — and with the truncation gone the order shows.
     // A stable sort by position leaves two complaints about the same place in
     // the order the phases found them.
-    compilation.diagnostics.sort_by_key(|d| {
-        (
-            d.path.clone(),
-            d.span.map_or((0, 0), |s| (s.start.line, s.start.column)),
-        )
-    });
+    //
+    // Only when attribution ran, though. A file that did not PARSE reports
+    // its syntax errors alone, and a parser — javac's and this one — meets
+    // them in reading order, which is not always position order: a `catch`
+    // left inside a `try` block is found before the `try` is known to have
+    // no handler, and javac says so first.
+    if parsed_cleanly {
+        compilation.diagnostics.sort_by_key(|d| {
+            (
+                d.path.clone(),
+                d.span.map_or((0, 0), |s| (s.start.line, s.start.column)),
+            )
+        });
+    } else {
+        compilation.diagnostics.sort_by_key(|d| d.path.clone());
+    }
     let mut seen = std::collections::HashSet::new();
     compilation.diagnostics.retain(|d| {
         let at = d

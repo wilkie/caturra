@@ -63416,6 +63416,69 @@ public class EC {
 "#
 );
 
+// "missing return statement" sits under the body's CLOSING brace — the point
+// the method can fall off, where javac puts it. caturra put it on the method's
+// first line, which a long method makes a different place entirely; the
+// syntax fuzz found it (a `return` deleted from a four-line method).
+differential_wording!(
+    a_missing_return_is_at_the_closing_brace,
+    "MissingReturnAt",
+    r#"
+import java.util.*;
+
+public class MissingReturnAt {
+    static int largest(List<Integer> xs) {
+        int best = Integer.MIN_VALUE;
+        for (int x : xs) {
+            best = Math.max(best, x);
+        }
+        System.out.println(best);
+    }
+
+    public static void main(String[] args) {
+        System.out.println(largest(List.of(3, 1, 2)));
+    }
+}
+"#
+);
+
+// Syntax errors are reported in the order the parser MEETS them, as javac's
+// are: a `catch` left inside a `try` block is found before the `try` is known
+// to have no handler, so javac's first error is the later line. caturra
+// sorted every diagnostic by position, which is right for attribution errors
+// (javac attributes in source order) and wrong for these.
+differential_wording!(
+    a_syntax_error_is_reported_where_it_is_met,
+    "MetOrder",
+    r#"
+public class MetOrder {
+    public static void main(String[] args) {
+        try {
+            System.out.println(80 / 3);
+         catch (ArithmeticException ex) {
+            System.out.println("ae");
+        }
+    }
+}
+"#
+);
+
+// A MEMBER modifier on a top-level class (`static`, `private`, `protected`) is
+// read — the class is still a class — and refused as javac refuses it, with
+// its caret on `class`. caturra could not read the declaration at all, and in
+// a file with a stray closing brace that meant blaming the wrong line.
+differential_wording!(
+    a_top_level_class_is_not_static,
+    "TopStatic",
+    r#"
+static class TopStatic {
+    public static void main(String[] args) {
+        System.out.println(1);
+    }
+}
+"#
+);
+
 // `join()` declares `InterruptedException`, so an unhandled one is javac's own
 // first error — and a `catch` around it is legal rather than "never thrown in
 // body of corresponding try statement". (When `join` was refused, phase 0,

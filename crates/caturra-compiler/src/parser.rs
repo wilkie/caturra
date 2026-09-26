@@ -434,6 +434,10 @@ struct ClassModifiers {
     is_public: bool,
     /// Recorded only to REFUSE it on an enum, which is implicitly final.
     is_final: bool,
+    /// `static`, `private`, `protected` — MEMBER modifiers written on a
+    /// top-level class. Parsed, so the declaration is still read (javac reads
+    /// it too), and refused as javac refuses them.
+    member_only: [bool; 3],
 }
 
 /// One parsed class member.
@@ -990,6 +994,17 @@ impl Parser<'_> {
     fn class_decl(&mut self) -> Parsed<ClassDecl> {
         let start = self.here();
         let modifiers = self.class_modifiers();
+        // A member modifier on a top-level class: javac reads the declaration
+        // and refuses the modifier, with the caret on the keyword after it.
+        let written: Vec<&str> = ["static", "private", "protected"]
+            .iter()
+            .zip(modifiers.member_only)
+            .filter_map(|(name, present)| present.then_some(*name))
+            .collect();
+        if !written.is_empty() {
+            let at = self.here();
+            self.error_at(at, format!("modifier {} not allowed here", written.join(",")));
+        }
         self.type_after_modifiers(
             start,
             modifiers.is_abstract,
@@ -1406,6 +1421,15 @@ impl Parser<'_> {
                     modifiers.is_final = true;
                     self.pos += 1;
                 }
+                Some(TokenKind::Keyword(keyword @ (Keyword::Static | Keyword::Private | Keyword::Protected))) => {
+                    let at = match keyword {
+                        Keyword::Static => 0,
+                        Keyword::Private => 1,
+                        _ => 2,
+                    };
+                    modifiers.member_only[at] = true;
+                    self.pos += 1;
+                }
                 // Modifiers with no effect in caturra's single-threaded VM,
                 // but perfectly ordinary Java that a member may carry:
                 // `transient` (serialization, not modelled),
@@ -1564,6 +1588,7 @@ impl Parser<'_> {
                 }
             }
             let (params, throws, body) = self.method_rest(name_span, false)?;
+            let body_end = body.as_ref().map(|_| self.tokens[self.pos - 1].span);
             return Ok(Member::Method(MethodDecl {
                 name,
                 is_static: false,
@@ -1588,6 +1613,7 @@ impl Parser<'_> {
                 },
                 pre_init: 0,
                 declared_return: None,
+                body_end,
             }));
         }
 
@@ -1647,6 +1673,9 @@ impl Parser<'_> {
         }
 
         let (params, throws, body) = self.method_rest(name_span, true)?;
+        // The closing brace the body ended at: where javac reports a missing
+        // `return`.
+        let body_end = body.as_ref().map(|_| self.tokens[self.pos - 1].span);
         let is_abstract = body.is_none();
         // JLS §8.4.3.1: `abstract` cannot pair with `final`, `static` or
         // `private` — each says the method cannot be overridden, which is the
@@ -1730,6 +1759,7 @@ impl Parser<'_> {
             },
             pre_init: 0,
             declared_return: None,
+            body_end,
         }))
     }
 
@@ -5032,6 +5062,7 @@ fn desugar_enum(
             // stores stand in for `java.lang.Enum`'s constructor.
             pre_init: 2,
             declared_return: None,
+            body_end: None,
         });
     }
 
@@ -5100,6 +5131,7 @@ fn desugar_enum(
         span: zero,
         pre_init: 0,
         declared_return: None,
+        body_end: None,
     });
 
     // `int compareTo(E __other) { return __ordinal - __other.__ordinal; }` —
@@ -5145,6 +5177,7 @@ fn desugar_enum(
         span: zero,
         pre_init: 0,
         declared_return: None,
+        body_end: None,
     });
 
     // `static E[] values() { return new E[]{ A, B, ... }; }`
@@ -5180,6 +5213,7 @@ fn desugar_enum(
             span: zero,
             pre_init: 0,
             declared_return: None,
+            body_end: None,
         });
     }
 
@@ -5290,6 +5324,7 @@ fn desugar_enum(
             span: zero,
             pre_init: 0,
             declared_return: None,
+            body_end: None,
         });
     }
 
@@ -6672,6 +6707,7 @@ fn simple_return_method(
         span,
         pre_init: 0,
         declared_return: None,
+        body_end: None,
     }
 }
 

@@ -609,6 +609,7 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)], supers
         // leading `super(...)` is not counted — codegen strips it first.)
         pre_init: caps.len(),
         declared_return: None,
+        body_end: None,
     });
 }
 
@@ -692,6 +693,7 @@ fn augment_local_ctors(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
             // class's field initializers, so one may read a captured local.
             pre_init: caps.len(),
             declared_return: None,
+            body_end: None,
         });
         return;
     }

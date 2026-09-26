@@ -279,6 +279,7 @@ fn emit_class(
             span: decl.span,
             pre_init: 0,
             declared_return: None,
+            body_end: None,
         };
         let compiled = emit_method(
             path,
@@ -11802,7 +11803,9 @@ fn emit_method(
     if !matches!(body.return_type, None | Some(JType::Error))
         && crate::flow::block_completes_normally(&decl.body)
     {
-        body.error(decl.span, "missing return statement");
+        // Under the body's CLOSING brace, where javac puts it — the point the
+        // method can fall off.
+        body.error(decl.body_end.unwrap_or(decl.span), "missing return statement");
     }
     body.code.push_op(op::RETURN, 0);
 

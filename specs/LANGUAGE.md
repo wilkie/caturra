@@ -15879,6 +15879,30 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
 
+### Where a syntax fuzz still disagreed (2026-09-26)
+
+A second fuzz run at scale (four seeds, about 950 programs) was clean; the
+syntax fuzz's standing "first error on a different line" cases were not, and
+each was a rule rather than a quirk:
+
+- **"missing return statement" sits under the closing brace** — the point the
+  method falls off. caturra put it on the method's first line, so the longer
+  the method the further away it pointed. `MethodDecl::body_end` records the
+  brace.
+- **Syntax errors are listed in the order they are MET**, not by position: a
+  `catch` left inside a `try` block is found before the `try` is known to have
+  no handler, and javac reports it first. Attribution errors are still sorted
+  by position (javac attributes in source order).
+- **A member modifier on a top-level class** (`static class A {}`) is read and
+  refused — "modifier static not allowed here", caret on `class` — where
+  caturra could not read the declaration at all, and so blamed the line
+  after a stray closing brace. Like javac, that refusal is an attribution check:
+  it is not made in a file with real syntax errors.
+
+Pinned as `a_missing_return_is_at_the_closing_brace`,
+`a_syntax_error_is_reported_where_it_is_met` and
+`a_top_level_class_is_not_static`.
+
 ### A longer fuzz run, and a Scanner that searches (2026-09-26)
 
 The fuzzers run at scale — three seeds, 150 random programs and 30 each of

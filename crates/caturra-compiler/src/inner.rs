@@ -143,6 +143,7 @@ fn add_outer_binding(class: &mut ClassDecl, outer: &str) {
             span: zero,
             pre_init: 0,
             declared_return: None,
+            body_end: None,
         });
         return;
     }

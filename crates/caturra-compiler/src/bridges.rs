@@ -339,5 +339,6 @@ fn build_bridge(method: &MethodDecl, inherited: &MethodDecl) -> MethodDecl {
         span: zero,
         pre_init: 0,
         declared_return: None,
+        body_end: None,
     }
 }

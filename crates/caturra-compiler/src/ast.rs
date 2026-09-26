@@ -269,6 +269,9 @@ pub struct MethodDecl {
     /// pins `T`, and the erased form says only that it is a list of some
     /// wildcard. Empty when the method declares no type parameters.
     pub declared_return: Option<TypeRef>,
+    /// The method body's CLOSING BRACE — where javac puts "missing return
+    /// statement". `None` for a synthesized method or one with no body.
+    pub body_end: Option<SourceSpan>,
     /// How to pin each of the method's own type variables from the ARGUMENTS
     /// at a call — the same plan `infer_return` holds for the return type,
     /// computed for every variable rather than just the returned one.

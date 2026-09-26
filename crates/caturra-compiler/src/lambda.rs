@@ -4536,6 +4536,7 @@ fn super_bridge(
         span,
         pre_init: 0,
         declared_return: None,
+        body_end: None,
     }
 }
 
@@ -9378,6 +9379,7 @@ fn build_erased_lambda(
             span,
             pre_init: 0,
             declared_return: None,
+            body_end: None,
         }],
         init_blocks: Vec::new(),
         nested: Vec::new(),
@@ -9677,6 +9679,7 @@ fn build_lambda_class(
         span,
         pre_init: 0,
         declared_return: None,
+        body_end: None,
     };
 
     // The target is known to be a functional interface (it is in `sams`),
