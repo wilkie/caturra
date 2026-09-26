@@ -15883,13 +15883,18 @@ each toward the JDK:
   daemon. `setInitialDelay`, `setCoalesce`, `setActionCommand`,
   `removeActionListener` and `getActionListeners` are in.
 
+Later the same day: a `JOptionPane` dialog stopped holding the host too — other
+threads run while it is up, and dialogs from two threads take turns — and a
+failure on the dispatch thread prints a JDK's whole trace, the dispatch
+machinery beneath the program's frame included (`library_frame_lines` writes a
+bundled frame as the JDK frames it stands for).
+
 A headless JDK runs all of this except a window, so the differential harness
 now passes `-Djava.awt.headless=true` and the thread, `invokeLater`/
 `invokeAndWait` and `Timer` behaviour is pinned against it
 (`the_event_dispatch_thread`, `a_timer_alone_does_not_keep_a_program_alive`,
-`the_dispatch_thread_keeps_a_timer_going`, `an_exception_on_the_dispatch_thread`
-— the last compares the banner and the program's own frame, not a JDK's
-internal dispatch frames).
+`the_dispatch_thread_keeps_a_timer_going` and `an_exception_on_the_dispatch_thread`,
+which compares the whole of standard error).
 
 ### A diamond of two, and a `new` with no brackets (2026-09-26)
 

@@ -294,6 +294,36 @@ impl<'run> Interpreter<'run> {
         }
     }
 
+    /// One thread as the debugger lists it.
+    pub(super) fn snapshot_thread(
+        &self,
+        index: usize,
+        frames: Vec<crate::debug::DebugFrameSnapshot>,
+    ) -> crate::debug::DebugThreadSnapshot {
+        const STATES: [&str; 6] = [
+            "NEW",
+            "RUNNABLE",
+            "BLOCKED",
+            "WAITING",
+            "TIMED_WAITING",
+            "TERMINATED",
+        ];
+        let current = index == self.threads.current;
+        let state = if current {
+            "RUNNABLE"
+        } else {
+            let ordinal = usize::try_from(self.threads.status(index)).unwrap_or(1);
+            STATES.get(ordinal).copied().unwrap_or("RUNNABLE")
+        };
+        crate::debug::DebugThreadSnapshot {
+            name: self.thread_name(index),
+            state,
+            daemon: self.threads.list[index].daemon,
+            current,
+            frames,
+        }
+    }
+
     /// A thread's name as the program last set it, for the uncaught banner.
     pub(super) fn thread_name(&self, index: usize) -> String {
         self.threads.list[index]
@@ -666,6 +696,7 @@ impl<'run> Interpreter<'run> {
                 Flow::Next
             }
             "__uiWait" => return self.ui_wait(frame).map(Some),
+            "__uiDialog" => return self.ui_dialog_wait(frame, addr).map(Some),
             "__yield" => {
                 if self.may_switch() {
                     self.slice_end = u64::MAX;
@@ -677,6 +708,89 @@ impl<'run> Interpreter<'run> {
         Ok(Some(flow))
     }
 
+    /// How long a wait for the window (or a dialog) may hold the host, and
+    /// whether another thread could run right now. Another runnable thread:
+    /// only LOOK (zero). Every other thread parked: until the first of their
+    /// timed waits runs out, or `own`, whichever is first. No other thread
+    /// (or inside a callback, where none can run): `own`.
+    fn host_wait_budget(&mut self, own: Option<u32>) -> (Option<u32>, bool) {
+        let current = self.threads.current;
+        let now = self.console.now_millis();
+        let others: Vec<usize> = (0..self.threads.list.len())
+            .filter(|&index| {
+                index != current
+                    && self.threads.list[index].is_alive()
+                    && !self.threads.list[index].frames.is_empty()
+            })
+            .collect();
+        let can_switch = self.may_switch() && !others.is_empty();
+        let others_ready = can_switch
+            && others
+                .iter()
+                .any(|&index| self.threads.could_run(index, now));
+        let timeout = if others_ready {
+            Some(0)
+        } else if can_switch {
+            let theirs = others
+                .iter()
+                .filter_map(|&index| match self.threads.list[index].park {
+                    Park::Sleeping { until } => Some(until),
+                    Park::Joining { until, .. } | Park::Waiting { until, .. } => until,
+                    _ => None,
+                })
+                .min()
+                .map(|until| u32::try_from((until - now).max(0)).unwrap_or(u32::MAX));
+            match (own, theirs) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        } else {
+            own
+        };
+        (timeout, others_ready)
+    }
+
+    /// `JOptionPane`'s dialog (`System.__uiDialog(kind, message)`): shown once,
+    /// and waited for on the same terms as the window, so other threads run
+    /// while it is up. A wait that runs out parks the thread — for a moment
+    /// if others have work, or just long enough for the one whose wait ran
+    /// out to go first — and the re-executed call asks again; the host does
+    /// not show the same dialog twice.
+    fn ui_dialog_wait(
+        &mut self,
+        frame: &mut Frame<'run>,
+        addr: usize,
+    ) -> Result<Flow<'run>, VmError> {
+        let current = self.threads.current;
+        self.threads.list[current].wake = None;
+        let text_at = |this: &Self, frame: &Frame<'run>, depth: usize| {
+            frame
+                .stack
+                .len()
+                .checked_sub(depth + 1)
+                .and_then(|at| match frame.stack[at] {
+                    JValue::Ref(Some(text)) => this.heap.string_text(text),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        let (kind, message) = (text_at(self, frame, 1), text_at(self, frame, 0));
+        let (timeout, others_ready) = self.host_wait_budget(None);
+        let answer = match self.console.ui_poll_dialog(&kind, &message, timeout) {
+            crate::io::UiPoll::Event(answer) => Some(answer),
+            crate::io::UiPoll::Closed => None,
+            crate::io::UiPoll::TimedOut => {
+                let pause = if others_ready { 20 } else { 0 };
+                let until = self.console.now_millis().saturating_add(pause);
+                return Ok(self.park(frame, addr, Park::Sleeping { until }));
+            }
+        };
+        Self::drop_args(frame, 2)?;
+        let value = answer.map(|answer| self.heap.alloc_string(&answer));
+        frame.stack.push(JValue::Ref(value));
+        Ok(Flow::Next)
+    }
+
     /// `__System.__uiWait(tree, timeout)`: the event-dispatch thread waits for
     /// its window. It never holds the host while another thread could run:
     /// then it only LOOKS (a zero timeout), and with nothing there answers
@@ -686,7 +800,6 @@ impl<'run> Interpreter<'run> {
     /// window says something, the given timeout passes, or the first other
     /// thread's wait runs out — and a wait that ran out answers `"__idle"`.
     fn ui_wait(&mut self, frame: &mut Frame<'run>) -> Result<Flow<'run>, VmError> {
-        let current = self.threads.current;
         let answer = |this: &mut Self, frame: &mut Frame<'run>, text: Option<&str>| {
             Self::drop_args(frame, 2)?;
             let value = text.map(|text| this.heap.alloc_string(text));
@@ -704,39 +817,7 @@ impl<'run> Interpreter<'run> {
             .and_then(|tree| self.heap.string_text(tree))
             .unwrap_or_default();
         let own = u32::try_from(own).ok();
-        let now = self.console.now_millis();
-        let others: Vec<usize> = (0..self.threads.list.len())
-            .filter(|&index| {
-                index != current
-                    && self.threads.list[index].is_alive()
-                    && !self.threads.list[index].frames.is_empty()
-            })
-            .collect();
-        let can_switch = self.may_switch() && !others.is_empty();
-        let others_ready = can_switch
-            && others
-                .iter()
-                .any(|&index| self.threads.could_run(index, now));
-        let timeout = if others_ready {
-            Some(0)
-        } else if can_switch {
-            // The first other thread whose wait runs out ends this one too.
-            let theirs = others
-                .iter()
-                .filter_map(|&index| match self.threads.list[index].park {
-                    Park::Sleeping { until } => Some(until),
-                    Park::Joining { until, .. } | Park::Waiting { until, .. } => until,
-                    _ => None,
-                })
-                .min()
-                .map(|until| u32::try_from((until - now).max(0)).unwrap_or(u32::MAX));
-            match (own, theirs) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            }
-        } else {
-            own
-        };
+        let (timeout, others_ready) = self.host_wait_budget(own);
         match self.console.ui_poll_event(&tree, timeout) {
             crate::io::UiPoll::Event(payload) => answer(self, frame, Some(&payload)),
             crate::io::UiPoll::Closed => answer(self, frame, None),

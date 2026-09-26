@@ -3229,6 +3229,37 @@ test.describe('swing (interactive)', () => {
   });
 });
 
+test.describe('debugger threads', () => {
+  test('a pause lists every thread with its state and where it stands', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'public class Main {', // 1
+        '  public static void main(String[] args) throws InterruptedException {', // 2
+        '    Thread worker = new Thread(() -> {', // 3
+        '      int answer = 42;', // 4
+        '      System.out.println(answer);', // 5
+        '    }, "worker");', // 6
+        '    worker.start();', // 7
+        '    worker.join();', // 8
+        '  }', // 9
+        '}', // 10
+      ].join('\n'),
+    );
+    await toggleBreakpoint(page, 5);
+    await page.getByTestId('debug').click();
+
+    // Paused in the worker; main stands in its join.
+    const threads = page.getByTestId('threads');
+    await expect(threads).toContainText('→ "worker" RUNNABLE');
+    await expect(threads).toContainText('"main" WAITING');
+    await expect(threads).toContainText('at Main.main (Main.java:8)');
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText('42');
+  });
+});
+
 test.describe('swing (debugger)', () => {
   test('a breakpoint inside an event listener pauses when the button is clicked', async ({
     page,

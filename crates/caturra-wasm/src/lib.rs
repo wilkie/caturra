@@ -225,11 +225,42 @@ struct JsWatchResult<'s> {
 }
 
 #[derive(Serialize)]
+struct JsThread<'s> {
+    name: &'s str,
+    state: &'static str,
+    daemon: bool,
+    current: bool,
+    frames: Vec<JsSnapshotFrame<'s>>,
+}
+
+#[derive(Serialize)]
 struct JsSnapshot<'s> {
     reason: &'static str,
     frames: Vec<JsSnapshotFrame<'s>>,
+    threads: Vec<JsThread<'s>>,
     #[serde(rename = "watchResults")]
     watch_results: Vec<JsWatchResult<'s>>,
+}
+
+fn js_frames(frames: &[caturra_vm::DebugFrameSnapshot]) -> Vec<JsSnapshotFrame<'_>> {
+    frames
+        .iter()
+        .map(|f| JsSnapshotFrame {
+            class_name: &f.class_name,
+            method_name: &f.method_name,
+            source_file: &f.source_file,
+            line: f.line,
+            locals: f
+                .locals
+                .iter()
+                .map(|l| JsLocal {
+                    name: &l.name,
+                    type_name: &l.type_name,
+                    value: &l.value,
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 fn snapshot_to_json(
@@ -242,23 +273,16 @@ fn snapshot_to_json(
             caturra_vm::PauseReason::Step => "step",
             caturra_vm::PauseReason::Interrupt => "interrupt",
         },
-        frames: snapshot
-            .frames
+        frames: js_frames(&snapshot.frames),
+        threads: snapshot
+            .threads
             .iter()
-            .map(|f| JsSnapshotFrame {
-                class_name: &f.class_name,
-                method_name: &f.method_name,
-                source_file: &f.source_file,
-                line: f.line,
-                locals: f
-                    .locals
-                    .iter()
-                    .map(|l| JsLocal {
-                        name: &l.name,
-                        type_name: &l.type_name,
-                        value: &l.value,
-                    })
-                    .collect(),
+            .map(|thread| JsThread {
+                name: &thread.name,
+                state: thread.state,
+                daemon: thread.daemon,
+                current: thread.current,
+                frames: js_frames(&thread.frames),
             })
             .collect(),
         watch_results: watch_results
@@ -444,15 +468,37 @@ impl ConsoleIo for JsConsole<'_> {
     }
 
     fn ui_dialog(&mut self, kind: &str, message: &str) -> Option<String> {
-        let result = self
-            .dialog_ui?
-            .call2(
-                &JsValue::NULL,
-                &JsValue::from_str(kind),
-                &JsValue::from_str(message),
-            )
-            .ok()?;
-        result.as_string()
+        match self.ui_poll_dialog(kind, message, None) {
+            caturra_vm::UiPoll::Event(answer) => Some(answer),
+            _ => None,
+        }
+    }
+
+    /// `showDialog(kind, message, timeoutMs)` answers the response, `null` for
+    /// a dismissal, or `undefined` when the time ran out (`-1` waits for as
+    /// long as it takes); the worker shows each dialog once.
+    fn ui_poll_dialog(
+        &mut self,
+        kind: &str,
+        message: &str,
+        timeout_millis: Option<u32>,
+    ) -> caturra_vm::UiPoll {
+        let Some(dialog_ui) = self.dialog_ui else {
+            return caturra_vm::UiPoll::Closed;
+        };
+        let timeout = timeout_millis.map_or(-1.0, f64::from);
+        match dialog_ui.call3(
+            &JsValue::NULL,
+            &JsValue::from_str(kind),
+            &JsValue::from_str(message),
+            &JsValue::from_f64(timeout),
+        ) {
+            Ok(result) if result.is_undefined() => caturra_vm::UiPoll::TimedOut,
+            Ok(result) => result
+                .as_string()
+                .map_or(caturra_vm::UiPoll::Closed, caturra_vm::UiPoll::Event),
+            Err(_) => caturra_vm::UiPoll::Closed,
+        }
     }
 
     fn ui_await_event(&mut self, tree: &str) -> Option<String> {

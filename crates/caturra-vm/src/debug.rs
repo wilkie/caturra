@@ -74,11 +74,29 @@ pub struct DebugFrameSnapshot {
     pub locals: Vec<LocalSnapshot>,
 }
 
+/// One live thread at a pause (specs/CONCURRENCY.md, "The debugger").
+#[derive(Debug, Clone)]
+pub struct DebugThreadSnapshot {
+    pub name: String,
+    /// `Thread.getState()`'s name: `RUNNABLE`, `BLOCKED`, `WAITING`,
+    /// `TIMED_WAITING`.
+    pub state: &'static str,
+    pub daemon: bool,
+    /// The thread the pause happened on (its frames are
+    /// [`DebugSnapshot::frames`]).
+    pub current: bool,
+    /// Its call stack, innermost first.
+    pub frames: Vec<DebugFrameSnapshot>,
+}
+
 /// Everything the host needs to render a paused program.
 #[derive(Debug, Clone)]
 pub struct DebugSnapshot {
     pub reason: PauseReason,
     pub frames: Vec<DebugFrameSnapshot>,
+    /// Every live thread, the paused one first; the others stand where the
+    /// scheduler last left them.
+    pub threads: Vec<DebugThreadSnapshot>,
 }
 
 /// Evaluates watch expressions against the paused program, provided by

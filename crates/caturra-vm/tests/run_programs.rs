@@ -3235,6 +3235,31 @@ impl caturra_vm::ConsoleIo for ScriptedUiConsole {
     fn ui_dialog(&mut self, _kind: &str, _message: &str) -> Option<String> {
         self.dialogs.pop_front().flatten()
     }
+    // The same rules as the window's wait: a look sees nothing, and a
+    // scripted time-out is for a wait that has a time limit.
+    fn ui_poll_dialog(
+        &mut self,
+        _kind: &str,
+        _message: &str,
+        timeout: Option<u32>,
+    ) -> caturra_vm::UiPoll {
+        if timeout == Some(0) {
+            return caturra_vm::UiPoll::TimedOut;
+        }
+        loop {
+            match self.dialogs.pop_front().flatten() {
+                Some(answer) if answer == "__timeout" => {
+                    let Some(waited) = timeout else {
+                        continue;
+                    };
+                    self.clock_millis += i64::from(waited);
+                    return caturra_vm::UiPoll::TimedOut;
+                }
+                Some(answer) => return caturra_vm::UiPoll::Event(answer),
+                None => return caturra_vm::UiPoll::Closed,
+            }
+        }
+    }
 }
 
 fn run_swing_scripted(source: &str, main: &str, events: Vec<Option<String>>) -> String {
@@ -3269,6 +3294,45 @@ fn run_swing_scripted_trees(
         "{result:?}"
     );
     (console.stdout_text(), console.trees)
+}
+
+#[test]
+fn swing_a_dialog_lets_other_threads_run() {
+    // A JOptionPane dialog is a wait like the window's: while `main` waits for
+    // the answer, a worker thread keeps running and printing.
+    let source = r#"
+        import javax.swing.*;
+        public class Main {
+            public static void main(String[] args) throws InterruptedException {
+                Thread worker = new Thread(() -> {
+                    for (int i = 1; i <= 3; i++) {
+                        try { Thread.sleep(100); } catch (InterruptedException e) {}
+                        System.out.println("tick " + i);
+                    }
+                });
+                worker.start();
+                String name = JOptionPane.showInputDialog("Name?");
+                System.out.println("hello " + name);
+                worker.join();
+            }
+        }
+    "#;
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("Main.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    let mut dialogs = vec![Some(String::from("__timeout")); 6];
+    dialogs.push(Some(String::from("Ada")));
+    let mut console = ScriptedUiConsole::new(Vec::new()).with_dialogs(dialogs);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    let result = vm.run_main("Main", &[]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "tick 1\ntick 2\ntick 3\nhello Ada\n");
 }
 
 #[test]
@@ -7925,6 +7989,54 @@ fn debug_run(
     let mut host = ScriptedHost::new(script);
     let result = vm.run_main_debug(class, &[], &breakpoints, &mut host);
     (host, console.stdout_text(), result)
+}
+
+#[test]
+fn debugger_lists_every_thread_at_a_pause() {
+    // A pause shows every live thread: the one that hit the breakpoint first,
+    // with its stack, then the others where the scheduler left them — here
+    // `main` in `join` (WAITING) and a second worker asleep (TIMED_WAITING).
+    let source = r#"public class Threads {
+    public static void main(String[] args) throws InterruptedException {
+        Thread sleeper = new Thread(() -> {
+            try { Thread.sleep(1000); } catch (InterruptedException e) {}
+        }, "sleeper");
+        sleeper.start();
+        Thread worker = new Thread(() -> {
+            int answer = 42;
+            System.out.println(answer);
+        }, "worker");
+        worker.start();
+        worker.join();
+        sleeper.join();
+    }
+}
+"#;
+    let (host, out, result) = debug_run(source, "Threads", &[("Threads.java", 9)], vec![]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(out, "42\n");
+    let pause = host.pauses.first().expect("paused at the breakpoint");
+    let listed: Vec<(&str, &str, bool)> = pause
+        .threads
+        .iter()
+        .map(|thread| (thread.name.as_str(), thread.state, thread.current))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("worker", "RUNNABLE", true),
+            ("main", "WAITING", false),
+            ("sleeper", "TIMED_WAITING", false),
+        ]
+    );
+    assert_eq!(pause.threads[0].frames[0].line, Some(9));
+    let main_top = &pause.threads[1].frames;
+    assert!(
+        main_top
+            .iter()
+            .any(|frame| frame.method_name == "main" && frame.line == Some(12)),
+        "{main_top:?}"
+    );
 }
 
 const DEBUG_PROGRAM: &str = r"public class Dbg {

@@ -98,6 +98,19 @@ pub trait ConsoleIo {
         None
     }
 
+    /// A dialog's BOUNDED wait (specs/CONCURRENCY.md, phase 3): show the dialog
+    /// (once — a later call for the same dialog only waits again), then wait
+    /// at most `timeout_millis` for the answer. [`UiPoll::Event`] is the
+    /// answer, [`UiPoll::Closed`] a dismissal (`null`), [`UiPoll::TimedOut`]
+    /// no answer yet. The default cannot wait on time: it waits as
+    /// [`ConsoleIo::ui_dialog`] does.
+    fn ui_poll_dialog(&mut self, kind: &str, message: &str, _timeout_millis: Option<u32>) -> UiPoll {
+        match self.ui_dialog(kind, message) {
+            Some(answer) => UiPoll::Event(answer),
+            None => UiPoll::Closed,
+        }
+    }
+
     /// Start capturing standard-out messages (for `SystemOutTestRunner`,
     /// which runs the student's `main` and inspects what it printed). While
     /// capturing, standard out is redirected here (`System.setOut` semantics)

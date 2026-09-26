@@ -63866,16 +63866,14 @@ public class TimerOnDispatch {
 );
 
 // What escapes a task on the dispatch thread is the uncaught banner, and the
-// thread carries on with the next task. The trace after the program's own
-// frame is the JDK's internal dispatch machinery (`java.desktop` frames), so
-// only the banner and that frame are compared.
-#[test]
-fn an_exception_on_the_dispatch_thread() {
-    if !jdk_available() {
-        eprintln!("skipping: no JDK on PATH");
-        return;
-    }
-    let source = r#"
+// thread carries on with the next task. The trace is a JDK's to the line: the
+// program's frame, then the dispatch machinery beneath it — an
+// `InvocationEvent` for `invokeLater`, a timer's `DoPostEvent` and
+// `fireActionPerformed` above that for a tick.
+differential_test_stderr!(
+    an_exception_on_the_dispatch_thread,
+    "DispatchFailure",
+    r#"
 import javax.swing.*;
 
 public class DispatchFailure {
@@ -63884,13 +63882,14 @@ public class DispatchFailure {
         SwingUtilities.invokeLater(() -> System.out.println("the dispatch thread carries on: "
             + Thread.currentThread().getName()));
         SwingUtilities.invokeAndWait(() -> {});
+        Timer timer = new Timer(10, e -> { throw new IllegalArgumentException("tick"); });
+        timer.setRepeats(false);
+        timer.start();
+        Thread.sleep(200);
+        java.awt.EventQueue.invokeLater(() -> { throw new RuntimeException("queued"); });
+        Thread.sleep(200);
         System.out.println("main done");
     }
 }
-"#;
-    let (jdk_out, jdk_err) = run_with_jdk_both("DispatchFailure", source, "", &[]);
-    let (out, err) = run_with_caturra_both("DispatchFailure", source, "", &[]);
-    assert_eq!(out, jdk_out);
-    let head = |text: &str| text.lines().take(2).collect::<Vec<_>>().join("\n");
-    assert_eq!(head(&err), head(&jdk_err));
-}
+"#
+);

@@ -28,6 +28,8 @@ export type WorkerRequest =
       stdinBuffer?: SharedArrayBuffer;
       /** Blocking Swing event channel: the worker parks here between UI events. */
       swingBuffer?: SharedArrayBuffer;
+      /** Blocking JOptionPane channel: a dialog's answer comes back here. */
+      dialogBuffer?: SharedArrayBuffer;
     }
   | {
       id: number;
@@ -43,6 +45,8 @@ export type WorkerRequest =
       stdinBuffer?: SharedArrayBuffer;
       /** Blocking Swing event channel, when debugging an interactive UI. */
       swingBuffer?: SharedArrayBuffer;
+      /** Blocking JOptionPane channel, when debugging a program with dialogs. */
+      dialogBuffer?: SharedArrayBuffer;
     }
   | { id: number; type: 'writeFile'; path: string; contents: string | Uint8Array }
   | { id: number; type: 'readFile'; path: string }

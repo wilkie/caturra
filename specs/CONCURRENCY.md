@@ -344,6 +344,14 @@ current thread only, unless it parks — then the others run until it resumes,
 which is what "step over a `join`" has to mean. A breakpoint is hit by
 whichever thread reaches it, and the snapshot says which.
 
+_Built (2026-09-26):_ `DebugSnapshot::threads` — every live thread, the
+paused one first, each with its name, `getState()` name, daemon flag and
+stack (the others' as the scheduler saved them). The playground's paused view
+lists them under the call stack when a program has more than one, leaving out
+the bundled library's own frames. Pinned by
+`debugger_lists_every_thread_at_a_pause` and the browser test "a pause lists
+every thread with its state and where it stands".
+
 ### Library surface, by phase
 
 **Phase 0 — sleep and identity on one thread.** `Thread.sleep(ms)`,
@@ -400,8 +408,7 @@ slice_end`), zero while only one thread is alive.
   trace shows here.
 - The uncaught handlers themselves (`setUncaughtExceptionHandler` and the
   default) stay refused by name; the default behaviour is what runs.
-- Not yet: the debugger's thread list (the snapshot still shows only the
-  running thread's frames).
+- The debugger's thread list came with phase 3 (see "The debugger").
 
 **Phase 2 — `java.util.concurrent`, the course-sized part.** `Executors.
 newFixedThreadPool/newSingleThreadExecutor/newCachedThreadPool`,
@@ -454,9 +461,8 @@ primitives except the one wait:
   JDK's checked exceptions, wraps what the task threw in an
   `InvocationTargetException`, and is an `Error` from the dispatch thread
   itself. `isEventDispatchThread()` is true only there. What escapes a task or
-  a listener prints the uncaught banner and the thread carries on; its trace
-  shows the program's frames but not a JDK's internal `java.desktop` dispatch
-  frames.
+  a listener prints the uncaught banner and the thread carries on (its trace:
+  see "The dispatch thread's traces" below).
 - **`javax.swing.Timer`** has a daemon `TimerQueue` thread, as a JDK's does,
   that posts one tick at a time to the dispatch thread (coalescing), so the
   listeners run there, last-added first. A daemon cannot keep a program alive:
@@ -469,13 +475,26 @@ primitives except the one wait:
   engine is busy waits in the channel for the next look
   (`pollLineBlocking`). The page settles a superseded render with
   `undefined`.
-- **Not yet:** a `JOptionPane` dialog still holds the host (no other thread
-  runs while it is up), and the debugger's thread list.
+- **Dialogs** (a follow-up the same day). A `JOptionPane` waits like the
+  window — `System.__uiDialog` is a scheduler call over the host's
+  `ui_poll_dialog(kind, message, timeout)` — so other threads run while it is
+  up. The dialog is shown once and asked again after each timed-out wait; it
+  has its own channel (`dialogBuffer`), since a dialog on one thread and the
+  window's wait can both be outstanding; and `JOptionPane` shows one dialog
+  at a time (a second thread's waits on a lock), so an answer always belongs
+  to the dialog that is up.
+- **The dispatch thread's traces** are a JDK's to the line for what it can
+  measure headless — a posted task and a timer's tick: the bundled runtime has
+  a JDK's shape (`__EventDispatchThread extends Thread`, posted work wrapped in
+  an `__InvocationEvent`), and the interpreter's `library_frame_lines` writes
+  each bundled frame as the JDK frames it stands for. A listener run by a
+  window event shows the same dispatch frames, but not the component
+  machinery a JDK's click passes through, which needs a display to measure.
 
 Pinned by `the_event_dispatch_thread`,
 `a_timer_alone_does_not_keep_a_program_alive`,
 `the_dispatch_thread_keeps_a_timer_going`, `an_exception_on_the_dispatch_thread`
-(against a headless JDK — the harness now passes `-Djava.awt.headless=true`),
+(whole traces; against a headless JDK — the harness now passes `-Djava.awt.headless=true`),
 the scripted-window tests `swing_a_worker_thread_runs_while_the_window_waits`
 and `swing_main_animates_a_label_while_the_window_is_up`, and the browser test
 "a worker thread updates the window while it stays responsive" (the

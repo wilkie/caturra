@@ -62,6 +62,32 @@ function swingEventPump(
   };
 }
 
+/**
+ * A JOptionPane dialog's wait: shown ONCE, then waited on with a timeout (the
+ * engine asks again while other Java threads run). The bundled JOptionPane
+ * shows one dialog at a time, so an answer always belongs to the dialog
+ * that is up.
+ */
+function dialogPump(
+  dialogBuffer: SharedArrayBuffer,
+  id: number,
+): (kind: string, message: string, timeoutMs: number) => string | null | undefined {
+  let shown = false;
+  return (kind, message, timeoutMs) => {
+    const request = shown
+      ? null
+      : () => {
+          shown = true;
+          scope.postMessage({ id, type: 'swing-dialog', kind, message });
+        };
+    const answer = pollLineBlocking(dialogBuffer, request, timeoutMs);
+    if (answer !== undefined) {
+      shown = false;
+    }
+    return answer;
+  };
+}
+
 async function handle(request: WorkerRequest): Promise<unknown> {
   switch (request.type) {
     case 'version':
@@ -69,7 +95,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
     case 'compile':
       return (await session()).compile(request.sources);
     case 'run': {
-      const { id, stdinBuffer, swingBuffer } = request;
+      const { id, stdinBuffer, swingBuffer, dialogBuffer } = request;
       const readStdin = stdinBuffer
         ? () =>
             readLineBlocking(stdinBuffer, () => {
@@ -80,14 +106,9 @@ async function handle(request: WorkerRequest): Promise<unknown> {
       // render, then park on the shared channel until it supplies the next
       // event or the time runs out (same blocking pattern as stdin/debug).
       const awaitUiEvent = swingBuffer ? swingEventPump(swingBuffer, id) : undefined;
-      // Blocking JOptionPane dialog: same channel (dialogs and events never
-      // overlap — the loop isn't parked while a listener shows a dialog).
-      const showDialog = swingBuffer
-        ? (kind: string, message: string) =>
-            readLineBlocking(swingBuffer, () => {
-              scope.postMessage({ id, type: 'swing-dialog', kind, message });
-            })
-        : undefined;
+      // JOptionPane: its own channel, waited on with a timeout like the
+      // window's, so other Java threads run while a dialog is up.
+      const showDialog = dialogBuffer ? dialogPump(dialogBuffer, id) : undefined;
       return (await session()).run(request.mainClass, {
         args: request.args,
         onStdout: (text) => {
@@ -102,7 +123,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
       });
     }
     case 'runDebug': {
-      const { id, stdinBuffer, debugBuffer, interruptFlag, swingBuffer } = request;
+      const { id, stdinBuffer, debugBuffer, interruptFlag, swingBuffer, dialogBuffer } = request;
       const readStdin = stdinBuffer
         ? () =>
             readLineBlocking(stdinBuffer, () => {
@@ -112,12 +133,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
       // Interactive Swing under the debugger: same event pump as `run`, so
       // a listener runs (and can hit a breakpoint via onPause below).
       const awaitUiEvent = swingBuffer ? swingEventPump(swingBuffer, id) : undefined;
-      const showDialog = swingBuffer
-        ? (kind: string, message: string) =>
-            readLineBlocking(swingBuffer, () => {
-              scope.postMessage({ id, type: 'swing-dialog', kind, message });
-            })
-        : undefined;
+      const showDialog = dialogBuffer ? dialogPump(dialogBuffer, id) : undefined;
       return (await session()).runDebug(request.mainClass, {
         args: request.args,
         breakpoints: request.breakpoints,

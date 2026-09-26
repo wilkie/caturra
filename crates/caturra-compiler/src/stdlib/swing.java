@@ -2675,11 +2675,19 @@ class JMenuBar {
   }
 }
 
-// javax.swing.JOptionPane: standard modal dialogs. Each show* blocks (via the
-// native System.__uiDialog) until the user answers, then returns the result —
-// a message dialog returns nothing, a confirm returns an option code, an input
-// returns the typed text (or null when dismissed).
+// javax.swing.JOptionPane: standard modal dialogs. Each show* waits (via
+// System.__uiDialog, the scheduler's: other threads run meanwhile) until the
+// user answers, then returns the result — a message dialog returns nothing, a
+// confirm returns an option code, an input returns the typed text (or null
+// when dismissed). One dialog is up at a time: a second thread's waits for
+// the first to be answered.
 class JOptionPane {
+  static final Object __dialogLock = new Object();
+  static String __show(String kind, String message) {
+    synchronized (__dialogLock) {
+      return System.__uiDialog(kind, message);
+    }
+  }
   public static final int YES_NO_OPTION = 0;
   public static final int YES_NO_CANCEL_OPTION = 1;
   public static final int OK_CANCEL_OPTION = 2;
@@ -2696,22 +2704,22 @@ class JOptionPane {
   public static final int QUESTION_MESSAGE = 3;
 
   public static void showMessageDialog(Object parent, Object message) {
-    System.__uiDialog("message", "" + message);
+    __show("message", "" + message);
   }
   public static void showMessageDialog(Object parent, Object message, String title, int messageType) {
-    System.__uiDialog("message", "" + message);
+    __show("message", "" + message);
   }
   public static int showConfirmDialog(Object parent, Object message) {
-    return __parse(System.__uiDialog("confirm:" + YES_NO_CANCEL_OPTION, "" + message));
+    return __parse(__show("confirm:" + YES_NO_CANCEL_OPTION, "" + message));
   }
   public static int showConfirmDialog(Object parent, Object message, String title, int optionType) {
-    return __parse(System.__uiDialog("confirm:" + optionType, "" + message));
+    return __parse(__show("confirm:" + optionType, "" + message));
   }
   public static String showInputDialog(Object parent, Object message) {
-    return System.__uiDialog("input", "" + message);
+    return __show("input", "" + message);
   }
   public static String showInputDialog(Object message) {
-    return System.__uiDialog("input", "" + message);
+    return __show("input", "" + message);
   }
   static int __parse(String s) {
     if (s == null) return CLOSED_OPTION;
@@ -2880,7 +2888,7 @@ class __EventQueue {
 
   static void __post(Runnable task) {
     synchronized (__lock) {
-      __tasks.add(task);
+      __tasks.add(new __InvocationEvent(task));
       __ensureRunning();
       __lock.notifyAll();
     }
@@ -2903,7 +2911,7 @@ class __EventQueue {
 
   static void __ensureRunning() {
     if (__edt == null) {
-      __edt = new Thread(new __Pump(), "AWT-EventQueue-0");
+      __edt = new __EventDispatchThread();
       __edt.start();
     }
   }
@@ -3037,8 +3045,18 @@ class __TimerQueue implements Runnable {
   }
 }
 
-class __Pump implements Runnable {
+// The dispatch thread overrides `run`, as a JDK's `EventDispatchThread`
+// does, and what it runs is an `InvocationEvent` — the shapes a trace names
+// (`library_frame_lines` in the interpreter writes them as a JDK's).
+class __EventDispatchThread extends Thread {
+  __EventDispatchThread() { super("AWT-EventQueue-0"); }
   public void run() { __EventQueue.__pump(); }
+}
+
+class __InvocationEvent implements Runnable {
+  Runnable __task;
+  __InvocationEvent(Runnable task) { __task = task; }
+  public void run() { __task.run(); }
 }
 
 class __TimerTick implements Runnable {

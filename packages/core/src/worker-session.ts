@@ -44,6 +44,7 @@ interface Pending {
   onSwingEvent?: ((tree: string) => Promise<string | null | undefined>) | undefined;
   onSwingDialog?: ((kind: string, message: string) => Promise<string | null>) | undefined;
   swingBuffer?: SharedArrayBuffer | undefined;
+  dialogBuffer?: SharedArrayBuffer | undefined;
 }
 
 /**
@@ -111,10 +112,12 @@ export class JvmWorkerSession implements JvmSessionApi {
       );
     }
     const stdinBuffer = isolated ? createStdinBuffer() : undefined;
-    // A separate blocking channel for Swing events and dialogs, only when the
-    // caller wants them and the page can block (cross-origin isolated).
-    const swingBuffer =
-      isolated && (options.onSwingEvent || options.onSwingDialog) ? createStdinBuffer() : undefined;
+    // Separate blocking channels for Swing events and for dialogs, only when
+    // the caller wants them and the page can block (cross-origin isolated).
+    // Two, because a dialog on one thread and the window's wait on the
+    // event-dispatch thread can both be outstanding.
+    const swingBuffer = isolated && options.onSwingEvent ? createStdinBuffer() : undefined;
+    const dialogBuffer = isolated && options.onSwingDialog ? createStdinBuffer() : undefined;
 
     const id = this.#nextId++;
     const promise = new Promise<unknown>((resolve, reject) => {
@@ -128,6 +131,7 @@ export class JvmWorkerSession implements JvmSessionApi {
         onSwingEvent: options.onSwingEvent,
         onSwingDialog: options.onSwingDialog,
         swingBuffer,
+        dialogBuffer,
       });
     });
     const request: WorkerRequest = {
@@ -141,6 +145,9 @@ export class JvmWorkerSession implements JvmSessionApi {
     }
     if (swingBuffer) {
       request.swingBuffer = swingBuffer;
+    }
+    if (dialogBuffer) {
+      request.dialogBuffer = dialogBuffer;
     }
     this.#worker.postMessage(request);
     return promise as Promise<RunResult>;
@@ -165,10 +172,10 @@ export class JvmWorkerSession implements JvmSessionApi {
     const stdinBuffer = createStdinBuffer();
     const debugBuffer = createStdinBuffer();
     const interruptFlag = createInterruptFlag();
-    // A separate blocking channel for Swing events and dialogs, so an
+    // Separate blocking channels for Swing events and for dialogs, so an
     // interactive UI can run — and pause in its listeners — under the debugger.
-    const swingBuffer =
-      options.onSwingEvent || options.onSwingDialog ? createStdinBuffer() : undefined;
+    const swingBuffer = options.onSwingEvent ? createStdinBuffer() : undefined;
+    const dialogBuffer = options.onSwingDialog ? createStdinBuffer() : undefined;
     this.#activeInterruptFlag = interruptFlag;
 
     const id = this.#nextId++;
@@ -185,6 +192,7 @@ export class JvmWorkerSession implements JvmSessionApi {
         onSwingEvent: options.onSwingEvent,
         onSwingDialog: options.onSwingDialog,
         swingBuffer,
+        dialogBuffer,
       });
     });
     this.#worker.postMessage({
@@ -198,6 +206,7 @@ export class JvmWorkerSession implements JvmSessionApi {
       interruptFlag,
       stdinBuffer,
       ...(swingBuffer ? { swingBuffer } : {}),
+      ...(dialogBuffer ? { dialogBuffer } : {}),
     } satisfies WorkerRequest);
     try {
       return (await promise) as RunResult;
@@ -331,7 +340,7 @@ export class JvmWorkerSession implements JvmSessionApi {
   }
 
   async #answerDialog(pending: Pending, kind: string, message: string): Promise<void> {
-    if (!pending.swingBuffer || !pending.onSwingDialog) {
+    if (!pending.dialogBuffer || !pending.onSwingDialog) {
       return;
     }
     let response: string | null;
@@ -340,7 +349,7 @@ export class JvmWorkerSession implements JvmSessionApi {
     } catch {
       response = null;
     }
-    supplyLine(pending.swingBuffer, response);
+    supplyLine(pending.dialogBuffer, response);
   }
 
   async #answerPause(pending: Pending, snapshot: DebugPauseSnapshot): Promise<void> {

@@ -576,15 +576,16 @@ impl<'run> Interpreter<'run> {
         let mut lines = Vec::new();
         // Library frames are left out of a trace — except the few a JDK's
         // trace shows between a thread and a program's task, each with the
-        // line JDK 11's source has there (`library_frame_line`).
+        // line JDK 11's source has there (`library_frame_lines`).
         let library_line = |class: &str, method: &str| {
-            library_frame_line(class, method).map(|line| format!("java.base/{line}"))
+            library_frame_lines(class, method)
+                .iter()
+                .map(|line| (*line).to_owned())
         };
         if let Some(current) = &self.current_location
             && is_injected_library(&current.code.source_file)
-            && let Some(line) = library_line(current.class_name, current.method_name)
         {
-            lines.push(line);
+            lines.extend(library_line(current.class_name, current.method_name));
         }
         if let Some(current) = &self.current_location
             && !is_injected_library(&current.code.source_file)
@@ -978,7 +979,25 @@ impl<'run> Interpreter<'run> {
         for suspended in self.frames.iter().rev() {
             frames.push(self.snapshot_frame(suspended));
         }
-        DebugSnapshot { reason, frames }
+        let current = self.threads.current;
+        let mut threads = vec![self.snapshot_thread(current, frames.clone())];
+        for (index, thread) in self.threads.list.iter().enumerate() {
+            if index == current || thread.frames.is_empty() {
+                continue;
+            }
+            let stack = thread
+                .frames
+                .iter()
+                .rev()
+                .map(|frame| self.snapshot_frame(frame))
+                .collect();
+            threads.push(self.snapshot_thread(index, stack));
+        }
+        DebugSnapshot {
+            reason,
+            frames,
+            threads,
+        }
     }
 
     fn snapshot_frame(&self, frame: &Frame<'run>) -> DebugFrameSnapshot {
@@ -21438,35 +21457,66 @@ enum Flow<'run> {
 }
 
 /// The outcome of dispatching a virtual call on a user object.
-/// The frames of the bundled `Thread` and `java.util.concurrent` a trace
-/// shows, as a JDK 11 writes them — the ones between a thread and a program's
-/// task, and between `Future.get` and the program. Every other library frame
-/// is left out, as it always was; these are what a JDK prints beneath the
-/// program's own frames in every thread's and every pool task's trace, so a
-/// trace without them read as a different program. Measured, lines included.
-fn library_frame_line(class: &str, method: &str) -> Option<&'static str> {
-    Some(match (class, method) {
-        ("java/lang/Thread", "run") => "java.lang.Thread.run(Thread.java:829)",
+/// The frames of the bundled `Thread`, `java.util.concurrent` and Swing
+/// runtime a trace shows, as a JDK 11 writes them — the ones between a thread
+/// and a program's task, between `Future.get` and the program, and beneath
+/// whatever the event-dispatch thread runs. Every other library frame is left
+/// out, as it always was; these are what a JDK prints beneath the program's
+/// own frames, so a trace without them read as a different program. One
+/// bundled frame may stand for several of a JDK's. Measured, lines included.
+fn library_frame_lines(class: &str, method: &str) -> &'static [&'static str] {
+    // What a JDK's event-dispatch thread shows beneath whatever it dispatches
+    // (JDK 11, measured headless): the queue's dispatch, then the pump.
+    const DISPATCH: &[&str] = &[
+        "java.desktop/java.awt.EventQueue.dispatchEventImpl(EventQueue.java:770)",
+        "java.desktop/java.awt.EventQueue$4.run(EventQueue.java:721)",
+        "java.desktop/java.awt.EventQueue$4.run(EventQueue.java:715)",
+        "java.base/java.security.AccessController.doPrivileged(Native Method)",
+        "java.base/java.security.ProtectionDomain$JavaSecurityAccessImpl.doIntersectionPrivilege(ProtectionDomain.java:85)",
+        "java.desktop/java.awt.EventQueue.dispatchEvent(EventQueue.java:740)",
+    ];
+    const PUMP: &[&str] = &[
+        "java.desktop/java.awt.EventDispatchThread.pumpOneEventForFilters(EventDispatchThread.java:203)",
+        "java.desktop/java.awt.EventDispatchThread.pumpEventsForFilter(EventDispatchThread.java:124)",
+        "java.desktop/java.awt.EventDispatchThread.pumpEventsForHierarchy(EventDispatchThread.java:113)",
+        "java.desktop/java.awt.EventDispatchThread.pumpEvents(EventDispatchThread.java:109)",
+        "java.desktop/java.awt.EventDispatchThread.pumpEvents(EventDispatchThread.java:101)",
+        "java.desktop/java.awt.EventDispatchThread.run(EventDispatchThread.java:90)",
+    ];
+    match (class, method) {
+        ("java/lang/Thread", "run") => &["java.base/java.lang.Thread.run(Thread.java:829)"],
         ("java/util/concurrent/FutureTask", "run") => {
-            "java.util.concurrent.FutureTask.run(FutureTask.java:264)"
+            &["java.base/java.util.concurrent.FutureTask.run(FutureTask.java:264)"]
         }
         ("java/util/concurrent/FutureTask", "__report") => {
-            "java.util.concurrent.FutureTask.report(FutureTask.java:122)"
+            &["java.base/java.util.concurrent.FutureTask.report(FutureTask.java:122)"]
         }
         ("java/util/concurrent/FutureTask", "get") => {
-            "java.util.concurrent.FutureTask.get(FutureTask.java:191)"
+            &["java.base/java.util.concurrent.FutureTask.get(FutureTask.java:191)"]
         }
         ("java/util/concurrent/Executors$RunnableAdapter", "call") => {
-            "java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:515)"
+            &["java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:515)"]
         }
-        ("java/util/concurrent/ThreadPoolExecutor", "__runWorker") => {
-            "java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1128)"
+        ("java/util/concurrent/ThreadPoolExecutor", "__runWorker") => &[
+            "java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1128)",
+        ],
+        ("java/util/concurrent/ThreadPoolExecutor$Worker", "run") => &[
+            "java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:628)",
+        ],
+        // The bundled Swing runtime (stdlib/swing.java), mirroring a JDK's
+        // shape: a posted task is an `InvocationEvent`, a timer's tick its
+        // `DoPostEvent`, and the dispatch thread a `Thread` whose `run` pumps.
+        ("__InvocationEvent", "run") => {
+            &["java.desktop/java.awt.event.InvocationEvent.dispatch(InvocationEvent.java:313)"]
         }
-        ("java/util/concurrent/ThreadPoolExecutor$Worker", "run") => {
-            "java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:628)"
+        ("__TimerTick", "run") => &["java.desktop/javax.swing.Timer$DoPostEvent.run(Timer.java:249)"],
+        ("Timer", "__fire") => {
+            &["java.desktop/javax.swing.Timer.fireActionPerformed(Timer.java:317)"]
         }
-        _ => return None,
-    })
+        ("__EventQueue", "__dispatch") => DISPATCH,
+        ("__EventDispatchThread", "run") => PUMP,
+        _ => &[],
+    }
 }
 
 /// One element of an `int[]`, `boolean[]` or `char[]`, printed as Java prints

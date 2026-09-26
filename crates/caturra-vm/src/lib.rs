@@ -27,7 +27,7 @@ pub mod vm;
 
 pub use debug::{
     Breakpoint, DebugCommand, DebugControl, DebugFrameSnapshot, DebugHost, DebugSnapshot,
-    LocalSnapshot, PauseReason, WatchEvaluator,
+    DebugThreadSnapshot, LocalSnapshot, PauseReason, WatchEvaluator,
 };
 pub use io::{BufferedConsole, ConsoleIo, UiPoll};
 pub use value::{Heap, HeapObject, HeapRef, JValue};

@@ -3909,6 +3909,14 @@ export function App(): React.JSX.Element {
             <Box component="pre" id="frames" data-testid="frames" sx={{ m: 0 }}>
               {paused ? renderFrames(paused) : ''}
             </Box>
+            {paused && paused.threads.length > 1 && (
+              <>
+                <Typography variant="subtitle2">Threads</Typography>
+                <Box component="pre" id="threads" data-testid="threads" sx={{ m: 0 }}>
+                  {renderThreads(paused)}
+                </Box>
+              </>
+            )}
             <Typography variant="subtitle2">Watches</Typography>
             <Box className="watch-row" sx={{ display: 'flex', gap: 1, my: 0.5 }}>
               <TextField
@@ -4113,6 +4121,23 @@ function renderFrames(snapshot: DebugPauseSnapshot): string {
     lines.push(`${index === 0 ? '→' : ' '} ${frame.className}.${frame.methodName} (${at})`);
     for (const local of frame.locals) {
       lines.push(`      ${local.name} = ${local.value}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/** Every live thread at a pause: its name and state, then where it stands. */
+function renderThreads(snapshot: DebugPauseSnapshot): string {
+  const lines: string[] = [];
+  for (const thread of snapshot.threads) {
+    const daemon = thread.daemon ? ' (daemon)' : '';
+    lines.push(`${thread.current ? '→' : ' '} "${thread.name}"${daemon} ${thread.state}`);
+    // The bundled library's own frames (`<thread>`, `<swing>`) say nothing
+    // about the program.
+    for (const frame of thread.frames.filter((f) => !f.sourceFile.startsWith('<'))) {
+      const at =
+        frame.line === null ? frame.sourceFile : `${frame.sourceFile}:${String(frame.line)}`;
+      lines.push(`      at ${frame.className}.${frame.methodName} (${at})`);
     }
   }
   return lines.join('\n');

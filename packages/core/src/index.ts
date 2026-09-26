@@ -106,10 +106,24 @@ export interface WatchResult {
   error?: string | null;
 }
 
+/** One live thread at a pause. */
+export interface DebugThread {
+  name: string;
+  /** `Thread.getState()`: RUNNABLE, BLOCKED, WAITING, TIMED_WAITING. */
+  state: string;
+  daemon: boolean;
+  /** The thread that paused (its frames are {@link DebugPauseSnapshot.frames}). */
+  current: boolean;
+  /** Its call stack, innermost first. */
+  frames: DebugFrame[];
+}
+
 /** Everything needed to render a paused program. */
 export interface DebugPauseSnapshot {
   reason: 'breakpoint' | 'step' | 'interrupt';
   frames: DebugFrame[];
+  /** Every live thread, the paused one first. */
+  threads: DebugThread[];
   /** Active watch expressions evaluated against this pause. */
   watchResults: WatchResult[];
 }
@@ -153,13 +167,14 @@ export interface RunOptions {
    */
   awaitUiEvent?: (tree: string, timeoutMs: number) => string | null | undefined;
   /**
-   * Blocking JOptionPane dialog. Called with `(kind, message)` — `kind` is
-   * `message`, `confirm:<optionType>`, or `input` — to show a modal and
+   * JOptionPane dialog. Called with `(kind, message, timeoutMs)` — `kind` is
+   * `message`, `confirm:<optionType>`, or `input` — to show a modal (once:
+   * the engine calls again for the same dialog while other threads run) and
    * return the response (an option code, the typed text, or `null` when
-   * dismissed). In the worker this blocks on the SharedArrayBuffer until the
-   * user answers.
+   * dismissed), or `undefined` when the time ran out first (`-1`: wait for
+   * as long as it takes). In the worker this blocks on a SharedArrayBuffer.
    */
-  showDialog?: (kind: string, message: string) => string | null;
+  showDialog?: (kind: string, message: string, timeoutMs: number) => string | null | undefined;
 }
 
 /** Accepted by {@link initJvm} to override where the .wasm comes from. */
