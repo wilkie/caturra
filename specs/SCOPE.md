@@ -205,7 +205,8 @@ on the first run, and none is now.
 ## Non-goals (for now)
 
 Threads (`synchronized` parses and runs — on one thread a monitor is never
-contended — but nothing is concurrent), class loading of user-supplied
+contended — but nothing is concurrent; a design for real green threads is
+proposed in [CONCURRENCY.md](CONCURRENCY.md)), class loading of user-supplied
 `.class`/`.jar` binaries, JNI, security manager, modules, floating-point
 `strictfp` distinctions, and `java.net`. If one of these becomes needed, it gets
 its own spec first.
