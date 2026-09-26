@@ -193,7 +193,39 @@ pub fn resolve_captures(
                     *next += 1;
                     class.binary_name = Some(format!("{outer}${next}"));
                 }
+
             }
+        }
+    }
+
+    // A LOCAL class is `Enclosing$1Name` — javac takes the first index that
+    // makes the name unique, so two local classes of different names are both
+    // `1`, and a second `Name` is `2`. caturra hoisted it as `Name$Local1`,
+    // which is what every trace frame and `getClass().getName()` reported.
+    // Named after the anonymous classes, since one may enclose it.
+    let binary_names: HashMap<String, String> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .map(|class| {
+            let binary = class.binary_name.clone().unwrap_or_else(|| class.name.clone());
+            (class.name.clone(), binary)
+        })
+        .collect();
+    let mut per_local: HashMap<(String, String), usize> = HashMap::new();
+    for (_, unit) in units.iter_mut() {
+        for class in &mut unit.classes {
+            if !class.is_local || class.binary_name.is_some() {
+                continue;
+            }
+            let Some(owner) = owners.get(&class.name) else {
+                continue;
+            };
+            let outer = binary_names.get(owner).unwrap_or(owner);
+            let simple = crate::codegen::strip_local_suffix(&class.name);
+            let simple = simple.rsplit('$').next().unwrap_or(simple).to_owned();
+            let next = per_local.entry((outer.clone(), simple.clone())).or_insert(0);
+            *next += 1;
+            class.binary_name = Some(format!("{outer}${next}{simple}"));
         }
     }
 

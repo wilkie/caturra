@@ -1356,6 +1356,14 @@ impl MethodTable {
                         accessor("floatValue", JType::Float),
                         accessor("shortValue", JType::Short),
                         accessor("byteValue", JType::Byte),
+                        // `Number()`, for the implicit `super()` of a class
+                        // that extends it.
+                        MethodSig {
+                            name: String::from("<init>"),
+                            ret: None,
+                            is_abstract: false,
+                            ..accessor("<init>", JType::Int)
+                        },
                     ],
                     fields: Vec::new(),
                 },
@@ -4051,7 +4059,15 @@ impl MethodTable {
                         "Method" => JType::Method,
                         _ => JType::Class,
                     })
-                } else if let Some(id) = self.class_id(base) {
+                } else if let Some(id) = self.class_id(base).or_else(|| {
+                    // A BUNDLED class written by its qualified name —
+                    // `java.util.concurrent.FutureTask<Object>` — is the class
+                    // its simple name is. (A class the program declares is
+                    // never reached by a package-qualified name.)
+                    self.class_id(simple)
+                        .filter(|_| simple != base.as_str())
+                        .filter(|id| self.info_by_id(*id).is_some_and(|info| info.is_bundled))
+                }) {
                     // A user class tracks its type arguments when the count
                     // matches what it declares (`Box<String>`,
                     // `Pair<String, Integer>`); otherwise it is raw. A
@@ -6821,7 +6837,7 @@ fn source_type_name(described: &str) -> String {
 
 /// `A$Local1` — and `A$Local1$Local2` for one nested inside another — is the
 /// hoisted name of a LOCAL class `A`. Trims every such suffix.
-fn strip_local_suffix(name: &str) -> &str {
+pub(crate) fn strip_local_suffix(name: &str) -> &str {
     let mut current = name;
     loop {
         let Some((head, tail)) = current.rsplit_once('$') else {
@@ -7944,6 +7960,22 @@ fn functional_value_produces(arg: JType, table: &MethodTable) -> Option<JType> {
     Some(elem_value_type(produced, table))
 }
 
+/// What a functional interface VALUE of a generic type answers, by the
+/// position of its result argument — the ELEMENT of a `List<Callable<String>>`
+/// answers `String`.
+fn element_result(element: ElemType, position: usize, table: &MethodTable) -> Option<JType> {
+    // A generic element is interned (`Nested`), and reads back whole.
+    let element = match element {
+        ElemType::Nested { inner, .. } => table.nested_type(inner),
+        other => other.base_type(),
+    };
+    let JType::Generic { arg, rest, .. } = element else {
+        return None;
+    };
+    let produced = table.type_arg(arg, rest, u8::try_from(position).ok()?)?;
+    Some(elem_value_type(produced, table))
+}
+
 /// Which of a CONSTRUCTOR's parameters pin the class's single type variable,
 /// so a diamond can infer its argument the way javac does: `new Node<>(5)` on
 /// a `class Node<T> { Node(T v) }` is a `Node<Integer>`, not a raw `Node`.
@@ -8006,7 +8038,8 @@ fn join_sources(
     for &source in sources {
         let (InferSource::Direct(index)
         | InferSource::Element(index)
-        | InferSource::LambdaResult(index)) = source;
+        | InferSource::LambdaResult(index)
+        | InferSource::ElementResult(index, _)) = source;
         let &arg = arg_types.get(index)?;
         // For a container parameter it is the ELEMENT that pins the variable:
         // `max(List<String>)` returns a String, not a `List<String>`.
@@ -8018,6 +8051,9 @@ fn join_sources(
             // thing that still knows it here — the same field a mapped
             // stream's element is read from.
             InferSource::LambdaResult(_) => lambda_produces(arg, table)?,
+            InferSource::ElementResult(_, position) => {
+                element_result(TypeArgs::of(arg).first?, position, table)?
+            }
         };
         let reference = match boxable_primitive(arg) {
             Some(elem) => JType::Boxed(elem),
@@ -13169,6 +13205,10 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
     },
 ];
 
+/// Why a scheduling executor is refused.
+const NO_SCHEDULER: &str = "caturra does not model java.util.concurrent.ScheduledExecutorService \
+     yet; a Thread that sleeps between runs does the same job";
+
 /// What stands in for a program's own uncaught-exception handler: the
 /// default one, which prints the trace, is what runs.
 const NO_HANDLERS: &str =
@@ -13181,6 +13221,17 @@ const NO_HANDLERS: &str =
 #[rustfmt::skip]
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // `java.lang.Thread`: what the scheduler does not model.
+    // `java.util.concurrent` (phase 2): the executors a program can make are
+    // the three plain pools; scheduling, fork/join and the security manager's
+    // wrappers are not modelled.
+    ("Executors", "newScheduledThreadPool", NO_SCHEDULER),
+    ("Executors", "newSingleThreadScheduledExecutor", NO_SCHEDULER),
+    ("Executors", "unconfigurableScheduledExecutorService", NO_SCHEDULER),
+    ("Executors", "newWorkStealingPool", "caturra does not model java.util.concurrent.ForkJoinPool"),
+    ("Executors", "privilegedCallable", NO_SECURITY_MANAGER),
+    ("Executors", "privilegedCallableUsingCurrentClassLoader", NO_SECURITY_MANAGER),
+    ("Executors", "privilegedThreadFactory", NO_SECURITY_MANAGER),
+    ("Condition", "awaitUntil", "caturra does not model java.util.Date; await(time, unit) waits the same way"),
     ("Thread", "getUncaughtExceptionHandler", NO_HANDLERS),
     ("Thread", "setUncaughtExceptionHandler", NO_HANDLERS),
     ("Thread", "getDefaultUncaughtExceptionHandler", NO_HANDLERS),
@@ -26120,6 +26171,37 @@ fn pick_builtin_in<'m>(
                 })
         })
         .collect();
+    // A TYPE VARIABLE's value is known only to be what its bound is — an
+    // `Object`, where caturra keeps no bound. An overload for something
+    // narrower (`String.valueOf(char[])`) applies to it only by an unchecked
+    // assumption, and javac chooses the `Object` one: `String.valueOf(value)`
+    // in a `Box<V>` called `valueOf(char[])` here, and threw
+    // ClassCastException at run time for every value that was not a char[].
+    let at_type_vars: Vec<usize> = args
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| matches!(arg, JType::TypeVar(_)))
+        .map(|(at, _)| at)
+        .collect();
+    let applicable = if at_type_vars.is_empty() {
+        applicable
+    } else {
+        let takes_object: Vec<&BuiltinMethod> = applicable
+            .iter()
+            .copied()
+            .filter(|m| {
+                let params = descriptor_params(m.descriptor);
+                at_type_vars
+                    .iter()
+                    .all(|at| params.get(*at).is_some_and(|p| *p == "Ljava/lang/Object;"))
+            })
+            .collect();
+        if takes_object.is_empty() {
+            applicable
+        } else {
+            takes_object
+        }
+    };
     if let Some(exact) = applicable.iter().find(|m| {
         m.params
             .iter()
@@ -26169,6 +26251,35 @@ fn pick_builtin_in<'m>(
         return Some(most);
     }
     pool.first().copied()
+}
+
+/// The parameter types of a method descriptor, as written:
+/// `(I[CLjava/lang/Object;)V` yields `["I", "[C", "Ljava/lang/Object;"]`.
+fn descriptor_params(descriptor: &str) -> Vec<&str> {
+    let params = descriptor
+        .strip_prefix('(')
+        .and_then(|rest| rest.split_once(')'))
+        .map_or("", |(params, _)| params);
+    let mut out = Vec::new();
+    let mut start = 0;
+    let bytes = params.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'[' => at += 1,
+            b'L' => {
+                at = params[at..].find(';').map_or(bytes.len(), |end| at + end + 1);
+                out.push(&params[start..at]);
+                start = at;
+            }
+            _ => {
+                at += 1;
+                out.push(&params[start..at]);
+                start = at;
+            }
+        }
+    }
+    out
 }
 
 /// Whether each parameter of a method descriptor is a REFERENCE type, in
@@ -32096,12 +32207,16 @@ impl BodyGen<'_> {
         for &source in &plan.sources {
             let (InferSource::Direct(index)
             | InferSource::Element(index)
-            | InferSource::LambdaResult(index)) = source;
+            | InferSource::LambdaResult(index)
+            | InferSource::ElementResult(index, _)) = source;
             let &arg = arg_types.get(index)?;
             let arg = match source {
                 InferSource::Direct(_) => arg,
                 InferSource::Element(_) => TypeArgs::of(arg).first?.base_type(),
                 InferSource::LambdaResult(_) => lambda_produces(arg, self.table)?,
+                InferSource::ElementResult(_, position) => {
+                    element_result(TypeArgs::of(arg).first?, position, self.table)?
+                }
             };
             let reference = match boxable_primitive(arg) {
                 Some(elem) => JType::Boxed(elem),

@@ -62438,6 +62438,501 @@ public class NestedJoin {
     "cannot wait for \"Thread-0\" inside a callback"
 );
 
+// `java.util.concurrent`, phase 2 of specs/CONCURRENCY.md — bundled Java over
+// phase 1's threads and monitors. A fixed pool starts a thread per task until
+// it is full (so the second task runs on `pool-1-thread-2`); a future answers
+// its value, `null` for a Runnable, and an ExecutionException whose message is
+// its cause; a shut-down pool refuses; the latch, the atomics, the lock, the
+// TimeUnit conversions, `invokeAll`/`invokeAny`, a cached pool's naming (the
+// third pool made), a timed `get` running out and a cancelled one.
+differential_test!(
+    a_pool_runs_its_tasks,
+    "C1",
+    r#"
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+import java.util.concurrent.locks.*;
+public class C1 {
+    public static void main(String[] args) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        Future<Integer> f = pool.submit(() -> 6 * 7);
+        System.out.println(f.get() + " " + f.isDone() + " " + f.isCancelled());
+        Future<?> r = pool.submit(() -> System.out.println("runnable on " + Thread.currentThread().getName()));
+        System.out.println(r.get());
+        Future<Integer> bad = pool.submit(() -> { if (true) throw new IllegalStateException("boom"); return 1; });
+        try { bad.get(); } catch (ExecutionException e) { System.out.println("EE: " + e.getMessage() + " | cause " + e.getCause()); }
+        AtomicInteger n = new AtomicInteger();
+        List<Future<?>> fs = new ArrayList<>();
+        for (int i = 0; i < 10; i++) fs.add(pool.submit(() -> { for (int j = 0; j < 1000; j++) n.incrementAndGet(); }));
+        for (Future<?> x : fs) x.get();
+        System.out.println(n + " " + n.get());
+        pool.execute(() -> System.out.println("execute"));
+        pool.shutdown();
+        System.out.println(pool.isShutdown() + " " + pool.awaitTermination(1, TimeUnit.SECONDS) + " " + pool.isTerminated());
+        try { pool.submit(() -> 1); } catch (RejectedExecutionException e) { System.out.println("rejected " + (e.getMessage() != null)); }
+        CountDownLatch latch = new CountDownLatch(3);
+        for (int i = 0; i < 3; i++) { new Thread(latch::countDown).start(); }
+        latch.await();
+        System.out.println("latch " + latch.getCount());
+        System.out.println(latch.await(10, TimeUnit.MILLISECONDS));
+        try { new CountDownLatch(-1); } catch (IllegalArgumentException e) { System.out.println("latch-1 " + e.getMessage()); }
+        AtomicLong al = new AtomicLong(5);
+        System.out.println(al.getAndAdd(3) + " " + al.addAndGet(2) + " " + al.compareAndSet(10, 1) + " " + al + " " + al.updateAndGet(x -> x * 7) + " " + al.accumulateAndGet(3, Long::sum));
+        AtomicBoolean ab = new AtomicBoolean();
+        System.out.println(ab.getAndSet(true) + " " + ab.get() + " " + ab.compareAndSet(false, true) + " " + ab);
+        AtomicInteger ai = new AtomicInteger(10);
+        System.out.println(ai.getAndIncrement() + " " + ai.decrementAndGet() + " " + ai.getAndUpdate(x -> x + 5) + " " + ai.intValue() + " " + ai.doubleValue());
+        ReentrantLock lock = new ReentrantLock();
+        lock.lock(); lock.lock();
+        System.out.println(lock.isLocked() + " " + lock.isHeldByCurrentThread() + " " + lock.getHoldCount() + " " + lock.tryLock());
+        lock.unlock(); lock.unlock(); lock.unlock();
+        System.out.println(lock.isLocked());
+        try { lock.unlock(); } catch (IllegalMonitorStateException e) { System.out.println("unlock " + e.getMessage()); }
+        System.out.println(TimeUnit.SECONDS.toMillis(3) + " " + TimeUnit.MILLISECONDS.toSeconds(4500) + " " + TimeUnit.MINUTES + " " + TimeUnit.valueOf("HOURS").toMinutes(2) + " " + TimeUnit.values().length + " " + TimeUnit.SECONDS.convert(3, TimeUnit.MINUTES));
+        ExecutorService single = Executors.newSingleThreadExecutor();
+        List<Callable<String>> tasks = new ArrayList<>(); tasks.add(() -> "a"); tasks.add(() -> "b");
+        for (Future<String> x : single.invokeAll(tasks)) System.out.print(x.get());
+        System.out.println();
+        System.out.println(single.invokeAny(tasks));
+        System.out.println(single.shutdownNow());
+        ExecutorService cached = Executors.newCachedThreadPool();
+        cached.submit(() -> System.out.println("cached " + Thread.currentThread().getName())).get();
+        cached.shutdown();
+        Future<String> slow = Executors.newSingleThreadExecutor(r2 -> { Thread t = new Thread(r2); t.setDaemon(true); return t; }).submit(() -> { Thread.sleep(1000); return "late"; });
+        try { slow.get(10, TimeUnit.MILLISECONDS); } catch (TimeoutException e) { System.out.println("timeout " + e.getMessage()); }
+        System.out.println(slow.cancel(true) + " " + slow.isCancelled() + " " + slow.isDone());
+        try { slow.get(); } catch (CancellationException e) { System.out.println("cancelled " + e.getMessage()); }
+    }
+}
+"#
+);
+
+// A task that throws inside `execute` ends its pool thread and the pool makes
+// another; the classes a program sees (a single-thread executor is the JDK's
+// wrapper); `toString` of a pool, a future, a lock, a semaphore and a latch;
+// a condition awaited and signalled; a semaphore's permits; `TimeUnit` at its
+// edges (saturating); `AtomicReference`, compared by identity.
+differential_test!(
+    the_concurrent_toolkit,
+    "C2",
+    r#"
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+import java.util.concurrent.locks.*;
+public class C2 {
+    static String strip(Object o) { return String.valueOf(o).replaceAll("@[0-9a-f]+", "@H"); }
+    public static void main(String[] args) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(1);
+        pool.execute(() -> { throw new IllegalStateException("in task"); });
+        pool.submit(() -> System.out.println("after on " + Thread.currentThread().getName())).get();
+        System.out.println(pool.getClass().getName() + " " + Executors.newSingleThreadExecutor().getClass().getName());
+        Future<Integer> f = pool.submit(() -> 1);
+        f.get();
+        System.out.println(strip(f));
+        pool.shutdown();
+        pool.awaitTermination(1, TimeUnit.SECONDS);
+        System.out.println(strip(pool));
+        ReentrantLock lock = new ReentrantLock();
+        Condition ready = lock.newCondition();
+        List<String> log = new ArrayList<>();
+        Thread waiter = new Thread(() -> {
+            lock.lock();
+            try { log.add("waiting"); ready.await(); log.add("signalled"); }
+            catch (InterruptedException e) { log.add("interrupted"); }
+            finally { lock.unlock(); }
+        });
+        waiter.start();
+        while (true) { lock.lock(); try { if (!log.isEmpty()) break; } finally { lock.unlock(); } Thread.sleep(1); }
+        lock.lock(); try { ready.signal(); } finally { lock.unlock(); }
+        waiter.join();
+        System.out.println(log + " " + strip(lock));
+        try { ready.signal(); } catch (IllegalMonitorStateException e) { System.out.println("signal " + e.getMessage()); }
+        Semaphore sem = new Semaphore(2);
+        System.out.println(sem.tryAcquire() + " " + sem.tryAcquire() + " " + sem.tryAcquire() + " " + sem.availablePermits() + " " + strip(sem));
+        sem.release(3);
+        System.out.println(sem.availablePermits());
+        CountDownLatch l = new CountDownLatch(2);
+        System.out.println(strip(l));
+        System.out.println(TimeUnit.NANOSECONDS.toMillis(1999999) + " " + TimeUnit.DAYS.toNanos(Long.MAX_VALUE) + " " + TimeUnit.MILLISECONDS.convert(-5, TimeUnit.SECONDS) + " " + TimeUnit.SECONDS.ordinal());
+        AtomicReference<String> ref = new AtomicReference<>("a");
+        System.out.println(ref.compareAndSet("a", "b") + " " + ref + " " + ref.updateAndGet(s -> s + "!") + " " + new AtomicReference<>());
+        ExecutorService cached = Executors.newCachedThreadPool();
+        cached.submit(() -> {}).get();
+        System.out.println(((ThreadPoolExecutor) cached).getLargestPoolSize());
+        cached.shutdown();
+        System.out.println("main done");
+    }
+}
+"#
+);
+
+// A pool task's trace, as a JDK prints it: beneath the program's frames, the
+// few library frames between the pool thread and the task (`FutureTask.run`,
+// `ThreadPoolExecutor.runWorker`, `Worker.run`, `Thread.run` — and
+// `Executors$RunnableAdapter.call` for a Runnable), and above the program's
+// `get` the future's own `report`/`get`. What escapes `execute` is the pool
+// thread's uncaught exception.
+differential_test_stderr!(
+    a_pool_task_s_trace,
+    "C3",
+    r#"
+import java.util.concurrent.*;
+public class C3 {
+    static void boom() { throw new IllegalStateException("x"); }
+    public static void main(String[] args) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(1);
+        try { pool.submit(() -> { boom(); return 1; }).get(); } catch (ExecutionException e) { e.printStackTrace(System.out); }
+        try { pool.submit(() -> boom()).get(); } catch (ExecutionException e) { e.getCause().printStackTrace(System.out); }
+        try { pool.submit(() -> boom(), "r").get(); } catch (ExecutionException e) { e.getCause().printStackTrace(System.out); }
+        ExecutorService single = Executors.newSingleThreadExecutor();
+        single.execute(() -> boom());
+        single.shutdown(); single.awaitTermination(1, TimeUnit.SECONDS);
+        ExecutorService cached = Executors.newCachedThreadPool();
+        cached.execute(() -> boom());
+        cached.shutdown(); cached.awaitTermination(1, TimeUnit.SECONDS);
+        pool.shutdown();
+    }
+}
+"#
+);
+
+// The rest of the measured surface: `TimeUnit` as a `ChronoUnit` and back,
+// the unconfigurable wrapper's class, who is queued on a semaphore and a lock,
+// a condition's waiters, `awaitNanos` running out, and the lock's two
+// refusals (not held: no message; another lock's condition: "Not owner").
+differential_test!(
+    concurrent_odds_and_ends,
+    "C6",
+    r#"
+import java.time.temporal.ChronoUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.locks.*;
+public class C6 {
+    public static void main(String[] args) throws Exception {
+        for (TimeUnit u : TimeUnit.values()) System.out.print(u.toChronoUnit() + " " + (TimeUnit.of(u.toChronoUnit()) == u) + "; ");
+        System.out.println();
+        try { TimeUnit.of(ChronoUnit.WEEKS); } catch (IllegalArgumentException e) { System.out.println(e.getMessage()); }
+        try { TimeUnit.of(null); } catch (NullPointerException e) { System.out.println("npe " + e.getMessage()); }
+        ExecutorService u = Executors.unconfigurableExecutorService(Executors.newFixedThreadPool(1));
+        System.out.println(u.getClass().getName());
+        u.shutdown();
+        Semaphore sem = new Semaphore(0);
+        Thread t = new Thread(() -> { try { sem.acquire(); } catch (InterruptedException e) {} });
+        t.start();
+        while (!sem.hasQueuedThreads()) Thread.sleep(1);
+        System.out.println(sem.getQueueLength());
+        sem.release(); t.join();
+        System.out.println(sem.hasQueuedThreads());
+        ReentrantLock lock = new ReentrantLock();
+        Condition c = lock.newCondition();
+        lock.lock();
+        Thread w = new Thread(() -> { lock.lock(); lock.unlock(); });
+        w.start();
+        while (!lock.hasQueuedThread(w)) Thread.sleep(1);
+        System.out.println(lock.hasQueuedThreads() + " " + lock.getQueueLength() + " " + lock.hasWaiters(c) + " " + lock.getWaitQueueLength(c));
+        long left = c.awaitNanos(5_000_000);
+        System.out.println(left <= 0);
+        lock.unlock(); w.join();
+        try { lock.hasWaiters(c); } catch (IllegalMonitorStateException e) { System.out.println("imse " + e.getMessage()); }
+        try { new ReentrantLock().hasWaiters(c); } catch (IllegalArgumentException e) { System.out.println("iae " + e.getMessage()); }
+    }
+}
+"#
+);
+
+// Two overloads that both take a functional interface — `submit(Callable<T>)`
+// beside `submit(Runnable)` — are told apart by the lambda's BODY (JLS
+// 15.12.2.1): one that gives a value cannot be a Runnable, a `println` cannot
+// be a Callable, and one that fits both (`c[0]++`) is the value-returning
+// interface's, the most specific (15.12.2.5).
+differential_test!(
+    a_lambda_chooses_its_overload_by_its_body,
+    "P1",
+    r#"
+import java.util.*;
+interface Call<V> { V call() throws Exception; }
+interface Fut<V> { V get() throws Exception; }
+class Exec {
+    <T> Fut<T> submit(Call<T> task) { return () -> task.call(); }
+    Fut<?> submit(Runnable task) { return () -> { task.run(); return null; }; }
+}
+public class P1 {
+    public static void main(String[] args) throws Exception {
+        Exec e = new Exec();
+        Fut<Integer> f = e.submit(() -> 6 * 7);
+        int v = f.get() + 1;
+        System.out.println(v);
+        Fut<?> r = e.submit(() -> System.out.println("run"));
+        System.out.println(r.get());
+        List<Fut<String>> l = new ArrayList<>();
+        l.add(e.submit(() -> "s"));
+        System.out.println(l.get(0).get().length());
+        int[] c = {0};
+        e.submit(() -> c[0]++).get();
+        System.out.println(c[0]);
+    }
+}
+"#
+);
+
+// A lambda whose target is written with wildcards — `Fut<?>`, `Supplier<?
+// extends Number>`, `Function<? super String, ? extends Object>` — is its
+// non-wildcard parameterization (JLS 9.9): `?` is Object, a bounded wildcard
+// its bound.
+differential_test!(
+    a_lambda_for_a_wildcard_target,
+    "W1",
+    r#"
+import java.util.function.*;
+interface Fut<V> { V get() throws Exception; }
+public class W1 {
+    static Fut<?> make() { return () -> null; }
+    public static void main(String[] args) throws Exception {
+        Fut<?> f = () -> "x";
+        System.out.println(f.get() + " " + make().get());
+        Supplier<? extends Number> s = () -> 5;
+        System.out.println(s.get());
+        Function<? super String, ? extends Object> g = t -> t.length();
+        System.out.println(g.apply("abc"));
+    }
+}
+"#
+);
+
+// A class that extends `Number` writes the four abstract accessors and
+// inherits `byteValue`/`shortValue`, which narrow `intValue()` — concrete in a
+// JDK's `Number`; and `Number()` itself is the implicit `super()`.
+differential_test!(
+    a_class_that_extends_number,
+    "N1",
+    r#"
+public class N1 {
+    static class Counter extends Number {
+        int v = 3;
+        public int intValue() { return v; }
+        public long longValue() { return v; }
+        public float floatValue() { return v; }
+        public double doubleValue() { return v; }
+        public String toString() { return Integer.toString(v); }
+    }
+    public static void main(String[] args) {
+        Number n = new Counter();
+        System.out.println(n.intValue() + " " + n.byteValue() + " " + n);
+        RuntimeException e = new RuntimeException(new IllegalStateException("boom"));
+        System.out.println(e.getMessage() + " | " + e.getCause());
+    }
+}
+"#
+);
+
+// `String.valueOf(v)` where `v` is typed by a CLASS's type variable is
+// `valueOf(Object)`: all that is known of `V` is its bound. caturra chose the
+// first overload the unknown type fit — `valueOf(char[])` — and threw
+// ClassCastException for every value that was not one.
+differential_test!(
+    string_value_of_a_type_variable,
+    "R4",
+    r#"
+class Holder<V> { V v; Holder(V v) { this.v = v; } String show() { return String.valueOf(v); } }
+public class R4 {
+    static <T> String s(T t) { return String.valueOf(t); }
+    public static void main(String[] args) {
+        System.out.println(s("x") + " " + s(5) + " " + s(null));
+        System.out.println(new Holder<>("a").show() + " " + new Holder<Integer>(null).show());
+    }
+}
+"#
+);
+
+// A bundled class written by its QUALIFIED name, with type arguments —
+// `java.util.concurrent.FutureTask<Object>`, a cast to
+// `java.util.concurrent.Callable<Object>` — and a lambda into a qualified
+// constructor, `new java.util.concurrent.FutureTask<Object>(() -> "g")`.
+differential_test!(
+    qualified_bundled_names,
+    "Q1",
+    r#"
+import java.util.concurrent.*;
+public class Q1 {
+    public static void main(String[] args) throws Exception {
+        Object o = (Callable<Object>) () -> "c";
+        System.out.println(((Callable<Object>) o).call());
+        FutureTask<Object> f = new FutureTask<Object>(() -> "f");
+        f.run(); System.out.println(f.get());
+        java.util.concurrent.FutureTask<Object> g = new java.util.concurrent.FutureTask<Object>(() -> "g");
+        g.run(); System.out.println(g.get());
+        Object p = (java.util.concurrent.Callable<Object>) () -> "q";
+        System.out.println(((java.util.concurrent.Callable<Object>) p).call());
+        java.util.List<String> l = (java.util.List<String>) (Object) new java.util.ArrayList<String>();
+        System.out.println(l);
+    }
+}
+"#
+);
+
+// The same for `new java.lang.Thread(() -> {})`, and a qualified atomic.
+differential_test!(
+    a_qualified_thread,
+    "Q2",
+    r#"
+public class Q2 {
+    public static void main(String[] args) throws Exception {
+        java.util.Random r = new java.util.Random(1);
+        java.lang.Thread t = new java.lang.Thread(() -> {});
+        java.util.concurrent.atomic.AtomicInteger a = new java.util.concurrent.atomic.AtomicInteger(3);
+        Object o = a;
+        System.out.println(((java.util.concurrent.atomic.AtomicInteger) o).get() + " " + (o instanceof java.util.concurrent.atomic.AtomicInteger));
+        java.util.function.Supplier<String> s = () -> "s";
+        Object p = (java.util.function.Supplier<String>) () -> "q";
+        System.out.println(s.get() + t.getName());
+    }
+}
+"#
+);
+
+// A pool that is never shut down keeps its threads waiting for work, and a JDK
+// never exits; here the run ends with the thread dump, and says why.
+refused_at_run!(
+    refused_a_pool_never_shut_down,
+    "C4",
+    r#"
+import java.util.concurrent.*;
+public class C4 {
+    public static void main(String[] args) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        pool.submit(() -> System.out.println("task"));
+        System.out.println("main ends without shutdown");
+    }
+}
+"#,
+    "call shutdown() once every task is submitted"
+);
+
+// A LOCAL class's binary name is javac's, `Outer$1Name` — the first index
+// that makes the name unique in its enclosing class (two `Same`s are `1Same`
+// and `2Same`), and inside a nested or an anonymous class that class's name
+// before it (`L2$Inner$1Deep`, `L2$1$1InAnon`). caturra hoisted it as
+// `Name$Local1`, which every trace frame, `getName()` and default `toString`
+// reported. `getSimpleName`, `isLocalClass`, `getCanonicalName` (null) read
+// the same name, and a local class's `.class` literal resolves.
+differential_test!(
+    a_local_class_s_binary_name,
+    "L2",
+    r#"
+public class L2 {
+    static class Inner {
+        Object make() { class Deep {} return new Deep(); }
+    }
+    static Object a() { class Same { } return new Same(); }
+    static Object b() { class Same { } return new Same(); }
+    static Object c() { class Other { public String toString() { return "other"; } } return new Other(); }
+    public static void main(String[] args) {
+        Object[] all = { a(), b(), c(), new Inner().make(),
+            new Runnable() { public void run() {} Object in() { class InAnon {} return new InAnon(); } }.in() };
+        for (Object o : all) {
+            Class<?> k = o.getClass();
+            System.out.println(k.getName() + " | " + k.getSimpleName() + " | " + k.isLocalClass() + " " + k.isAnonymousClass() + " " + k.isMemberClass() + " | " + String.valueOf(o).replaceAll("@[0-9a-f]+", "@H"));
+        }
+        class Late { }
+        System.out.println(Late.class.getName() + " " + new Late().getClass().getCanonicalName());
+    }
+}
+"#
+);
+
+// ...and in a stack trace, beside an anonymous class's.
+differential_test!(
+    a_local_class_in_a_trace,
+    "L1",
+    r#"
+public class L1 {
+    public static void main(String[] args) {
+        class W { void go() { throw new IllegalStateException("x"); } }
+        System.out.println(new W().getClass().getName());
+        Runnable r = new Runnable() { public void run() { throw new IllegalStateException("y"); } };
+        System.out.println(r.getClass().getName());
+        try { new W().go(); } catch (Exception e) { e.printStackTrace(System.out); }
+        try { r.run(); } catch (Exception e) { e.printStackTrace(System.out); }
+    }
+}
+"#
+);
+
+// A generic method's RESULT pinned only by a lambda, where the functional
+// interface is the PROGRAM's own (or a bundled one, `Callable<T>`) rather than
+// the library's: `pool.submit(() -> 20).get() + 1`, `call(() -> { ... })` with
+// a block body whose answer names a local, an interface whose result is NOT
+// its last type argument (`Maker<R, A>`), a method reference, and `invokeAny`
+// — where `T` is the result of the list's ELEMENT type. Only the library's
+// interfaces were known to have a result argument, so every one of these was
+// `Object` ("bad operand types", "Object cannot be converted to String").
+differential_test!(
+    a_result_pinned_through_a_program_s_interface,
+    "P8",
+    r#"
+import java.util.*;
+import java.util.concurrent.*;
+public class P8 {
+    static <R, A> R apply(Maker<R, A> m, A a) { return m.make(a); }
+    static <T> T call(Call<T> c) throws Exception { return c.call(); }
+    static String shout(String s) { return s.toUpperCase(); }
+    public static void main(String[] args) throws Exception {
+        int n = apply(s -> s.length(), "four") + 1;
+        String t = apply(P8::shout, "abc").toLowerCase();
+        double d = call(() -> { double x = 2; return x * 1.5; }) + 1;
+        System.out.println(n + " " + t + " " + d + " " + call(() -> List.of(1, 2)).size());
+        ExecutorService single = Executors.newSingleThreadExecutor();
+        List<Callable<String>> tasks = new ArrayList<>();
+        tasks.add(() -> "first");
+        String any = single.invokeAny(tasks);
+        List<Future<String>> fs = single.invokeAll(tasks);
+        System.out.println(any.length() + " " + single.submit(() -> "x").get().length() + " " + fs.get(0).get().length());
+        single.shutdown();
+    }
+}
+interface Maker<R, A> { R make(A a); }
+interface Call<T> { T call() throws Exception; }
+"#
+);
+
+differential_test!(
+    a_future_s_value_used_at_once,
+    "P7",
+    r#"
+import java.util.concurrent.*;
+public class P7 {
+    public static void main(String[] args) throws Exception {
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        int x = pool.submit(() -> 20).get() + 1;
+        String s = pool.submit(() -> "abc").get().toUpperCase();
+        Integer y = pool.submit(() -> 5).get();
+        System.out.println(x + " " + s + " " + y);
+        pool.shutdown();
+    }
+}
+"#
+);
+
+differential_test!(
+    a_result_pinned_by_an_element_s_answer,
+    "P9",
+    r#"
+import java.util.*;
+public class P9 {
+    static <T> T first(List<Call<T>> cs) throws Exception { return cs.get(0).call(); }
+    public static void main(String[] args) throws Exception {
+        List<Call<String>> l = new ArrayList<>();
+        l.add(() -> "abc");
+        String s = first(l);
+        System.out.println(s.length());
+    }
+}
+interface Call<T> { T call() throws Exception; }
+"#
+);
+
 // `join()` declares `InterruptedException`, so an unhandled one is javac's own
 // first error — and a `catch` around it is legal rather than "never thrown in
 // body of corresponding try statement". (When `join` was refused, phase 0,

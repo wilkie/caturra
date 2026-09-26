@@ -568,12 +568,11 @@ impl<'run> Interpreter<'run> {
             })
         };
         let mut lines = Vec::new();
-        // Library frames are left out of a trace — except `Thread.run`, which
-        // a JDK's trace shows beneath every thread's target (and beneath a
-        // direct `run()` call), with the line JDK 11's source has there.
+        // Library frames are left out of a trace — except the few a JDK's
+        // trace shows between a thread and a program's task, each with the
+        // line JDK 11's source has there (`library_frame_line`).
         let library_line = |class: &str, method: &str| {
-            (class == "java/lang/Thread" && method == "run")
-                .then(|| String::from("java.base/java.lang.Thread.run(Thread.java:829)"))
+            library_frame_line(class, method).map(|line| format!("java.base/{line}"))
         };
         if let Some(current) = &self.current_location
             && is_injected_library(&current.code.source_file)
@@ -15858,7 +15857,9 @@ impl<'run> Interpreter<'run> {
             .arg_widths(descriptor)
             .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
 
-        let target = if target_class == "java/lang/Object"
+        // `Number()` is as empty as `Object()`: the implicit `super()` of a
+        // class that extends `Number` does nothing either.
+        let target = if matches!(target_class, "java/lang/Object" | "java/lang/Number")
             && method_name == "<init>"
             && descriptor == "()V"
         {
@@ -19701,13 +19702,13 @@ impl<'run> Interpreter<'run> {
                             };
                             return Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&simple)))));
                         }
-                        // A LOCAL class is hoisted under `Name$LocalN`; its
-                        // simple name is what the source called it.
-                        let unmangled = name
-                            .split_once("$Local")
-                            .filter(|(_, suffix)| suffix.chars().all(|c| c.is_ascii_digit()))
-                            .map_or(name.as_str(), |(base, _)| base);
-                        let name = unmangled.to_owned();
+                        // A LOCAL class's simple name is what the source
+                        // called it: `Outer$1Name` is `Name`.
+                        if let Some(simple) = local_simple_name(&name) {
+                            let simple = simple.to_owned();
+                            return Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&simple)))));
+                        }
+                        let name = name.clone();
                         let simple = if is_synthesized_anonymous(&name) {
                             ""
                         } else {
@@ -21144,6 +21145,37 @@ enum Flow<'run> {
 }
 
 /// The outcome of dispatching a virtual call on a user object.
+/// The frames of the bundled `Thread` and `java.util.concurrent` a trace
+/// shows, as a JDK 11 writes them — the ones between a thread and a program's
+/// task, and between `Future.get` and the program. Every other library frame
+/// is left out, as it always was; these are what a JDK prints beneath the
+/// program's own frames in every thread's and every pool task's trace, so a
+/// trace without them read as a different program. Measured, lines included.
+fn library_frame_line(class: &str, method: &str) -> Option<&'static str> {
+    Some(match (class, method) {
+        ("java/lang/Thread", "run") => "java.lang.Thread.run(Thread.java:829)",
+        ("java/util/concurrent/FutureTask", "run") => {
+            "java.util.concurrent.FutureTask.run(FutureTask.java:264)"
+        }
+        ("java/util/concurrent/FutureTask", "__report") => {
+            "java.util.concurrent.FutureTask.report(FutureTask.java:122)"
+        }
+        ("java/util/concurrent/FutureTask", "get") => {
+            "java.util.concurrent.FutureTask.get(FutureTask.java:191)"
+        }
+        ("java/util/concurrent/Executors$RunnableAdapter", "call") => {
+            "java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:515)"
+        }
+        ("java/util/concurrent/ThreadPoolExecutor", "__runWorker") => {
+            "java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1128)"
+        }
+        ("java/util/concurrent/ThreadPoolExecutor$Worker", "run") => {
+            "java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:628)"
+        }
+        _ => return None,
+    })
+}
+
 /// One element of an `int[]`, `boolean[]` or `char[]`, printed as Java prints
 /// it. The three share a representation, so only the kind tells them apart.
 fn int_element_text(kind: crate::value::IntKind, value: i32) -> String {
@@ -22411,12 +22443,27 @@ fn is_synthesized_anonymous(name: &str) -> bool {
     })
 }
 
-/// A LOCAL class, hoisted under `Name$LocalN`. Like an anonymous one, it has
-/// NO canonical name in Java (JLS §6.7) — `getCanonicalName()` is null for
-/// both, which is what distinguishes them from an ordinary nested class.
+/// A LOCAL class. Like an anonymous one, it has NO canonical name in Java
+/// (JLS §6.7) — `getCanonicalName()` is null for both, which is what
+/// distinguishes them from an ordinary nested class.
 fn is_hoisted_local(name: &str) -> bool {
-    name.split_once("$Local")
-        .is_some_and(|(_, suffix)| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
+    local_simple_name(name).is_some()
+}
+
+/// The source name of a LOCAL class, read off its binary name the way javac
+/// writes it: `Outer$1Name` — an index, then the name — since no source name
+/// can start with a digit. (A class the compiler could not place keeps its
+/// hoisted `Name$LocalN`, which is read too.)
+fn local_simple_name(name: &str) -> Option<&str> {
+    if let Some((base, suffix)) = name.split_once("$Local")
+        && !suffix.is_empty()
+        && suffix.chars().all(|c| c.is_ascii_digit())
+    {
+        return Some(base.rsplit(['$', '/', '.']).next().unwrap_or(base));
+    }
+    let (_, last) = name.rsplit_once('$')?;
+    let rest = last.trim_start_matches(|c: char| c.is_ascii_digit());
+    (rest.len() < last.len() && !rest.is_empty()).then_some(rest)
 }
 
 /// The simple name of a (possibly `/`- or `.`-qualified) class name.

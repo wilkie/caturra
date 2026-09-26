@@ -720,26 +720,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     if let Ok(class) = self.class_decl() {
-                        let first = classes.len();
                         flatten_nested(class, &mut classes);
-                        let mut synthesized = Vec::new();
-                        for class in &mut classes[first..] {
-                            for (message, span) in check_erasure_clashes(class) {
-                                self.error_at(span, message);
-                            }
-                            for (name, span) in check_static_type_variable_use(class) {
-                                self.error_at(
-                                    span,
-                                    format!(
-                                        "non-static type variable {name} cannot be \
-                                         referenced from a static context"
-                                    ),
-                                );
-                            }
-                            erase_type_vars(class, &mut synthesized);
-                        }
-                        // Interfaces synthesized for intersection bounds.
-                        classes.extend(synthesized);
                     } else {
                         self.recover_to_statement_boundary();
                         // A stray `}` from a broken class body would stall
@@ -749,6 +730,30 @@ impl Parser<'_> {
                 }
             }
         }
+        // Types are erased once the WHOLE file is read, as javac attributes
+        // only after parsing: a generic method's inference plan may name a
+        // functional interface declared further down (`Call<T>` beside a
+        // `<T> Fut<T> submit(Call<T> task)`), and what that interface's
+        // method answers is read from its declaration.
+        crate::ast::set_unit_functional_results(unit_functional_results(&classes));
+        let mut synthesized = Vec::new();
+        for class in &mut classes {
+            for (message, span) in check_erasure_clashes(class) {
+                self.error_at(span, message);
+            }
+            for (name, span) in check_static_type_variable_use(class) {
+                self.error_at(
+                    span,
+                    format!(
+                        "non-static type variable {name} cannot be \
+                         referenced from a static context"
+                    ),
+                );
+            }
+            erase_type_vars(class, &mut synthesized);
+        }
+        // Interfaces synthesized for intersection bounds.
+        classes.extend(synthesized);
         // Hoist synthesized anonymous classes to the top level.
         let anon = std::mem::take(&mut self.anon_classes);
         let mut synthesized = Vec::new();
@@ -760,6 +765,7 @@ impl Parser<'_> {
             }
         }
         classes.extend(synthesized);
+        crate::ast::set_unit_functional_results(std::collections::HashMap::new());
         CompilationUnit { imports, classes }
     }
 
@@ -5687,6 +5693,53 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
 /// type of the parameters at `indices`. The call site joins those arguments'
 /// types to recover the type argument. A type variable that constrains no
 /// parameter (`<T> T empty()`) cannot be inferred, so it yields `None`.
+/// A container parameter whose ELEMENT is a functional interface answering
+/// `var` — `Collection<Callable<T>>` pins `T` from what the argument's
+/// elements answer.
+fn element_result_source(
+    index: usize,
+    element: &TypeRef,
+    var: &str,
+) -> Option<crate::ast::InferSource> {
+    let TypeRef::Generic { base, args } = element else {
+        return None;
+    };
+    let position = crate::ast::functional_result_position(base, args.len())?;
+    match args.get(position)? {
+        TypeRef::Named(name) if name == var => {
+            Some(crate::ast::InferSource::ElementResult(index, position))
+        }
+        _ => None,
+    }
+}
+
+/// The file's own FUNCTIONAL interfaces whose method answers one of their
+/// type parameters — `interface Call<V> { V call(); }` — by name: how many
+/// type parameters each takes, and which one is the result.
+fn unit_functional_results(
+    classes: &[ClassDecl],
+) -> std::collections::HashMap<String, (usize, usize)> {
+    classes
+        .iter()
+        .filter(|class| class.is_interface && !class.type_params.is_empty())
+        .filter_map(|class| {
+            let mut abstract_methods = class
+                .methods
+                .iter()
+                .filter(|m| m.is_abstract && !m.is_static && !m.is_constructor);
+            let method = abstract_methods.next()?;
+            if abstract_methods.next().is_some() {
+                return None;
+            }
+            let TypeRef::Named(result) = &method.return_type else {
+                return None;
+            };
+            let position = class.type_params.iter().position(|tp| &tp.name == result)?;
+            Some((class.name.clone(), (class.type_params.len(), position)))
+        })
+        .collect()
+}
+
 /// Where a method's own type VARIABLE is pinned by its parameters: the same
 /// reading `infer_return_plan` does for the returned variable, for any one.
 fn variable_sources(method: &MethodDecl, var: &str) -> Vec<crate::ast::InferSource> {
@@ -5705,11 +5758,14 @@ fn variable_sources(method: &MethodDecl, var: &str) -> Vec<crate::ast::InferSour
                 // Read as an element, `run(() -> "x", s -> s.length())` left
                 // `T` unpinned and the second lambda's parameter was `Object`.
                 [TypeRef::Named(name)]
-                    if name == var && crate::ast::functional_result_arity(base) == Some(1) =>
+                    if name == var && crate::ast::functional_result_position(base, 1) == Some(0) =>
                 {
                     Some(InferSource::LambdaResult(index))
                 }
                 [TypeRef::Named(name)] if name == var => Some(InferSource::Element(index)),
+                [element] if crate::ast::functional_result_position(base, 1).is_none() => {
+                    element_result_source(index, element, var)
+                }
                 // `List<? extends T>` / `Consumer<? super T>`: the variable
                 // is the wildcard's BOUND, and a wildcard is written as an
                 // encoded name rather than a type of its own.
@@ -5719,10 +5775,9 @@ fn variable_sources(method: &MethodDecl, var: &str) -> Vec<crate::ast::InferSour
                 // A functional interface whose RESULT is the variable
                 // (`Function<T, R> f`), the same reading `infer_return_plan`
                 // already does for a returned variable.
-                args => crate::ast::functional_result_arity(base)
-                    .filter(|arity| *arity == args.len())
-                    .and_then(|_| args.last())
-                    .and_then(|last| match last {
+                args => crate::ast::functional_result_position(base, args.len())
+                    .and_then(|position| args.get(position))
+                    .and_then(|result| match result {
                         TypeRef::Named(name) if name == var => {
                             Some(InferSource::LambdaResult(index))
                         }
@@ -5760,12 +5815,12 @@ fn infer_return_plan(
             // nothing, and the stream it mapped had no element.
             args => {
                 let simple = base.rsplit('.').next().unwrap_or(base);
-                match crate::ast::functional_result_arity(simple) {
+                match crate::ast::functional_result_position(simple, args.len()) {
                     // A FUNCTIONAL interface: caturra models such a type by
                     // its RESULT alone, so that is the argument the erased
                     // return keeps and the one to pin. The parameter side is
                     // not modelled and cannot be.
-                    Some(arity) if arity == args.len() => match args.last()? {
+                    Some(position) => match args.get(position)? {
                         TypeRef::Named(name) => (name, true),
                         _ => return None,
                     },
@@ -5791,9 +5846,11 @@ fn infer_return_plan(
     // put both back.
     let second_var = match &method.return_type {
         TypeRef::Generic { base, args } if args.len() == 2 => {
-            let functional =
-                crate::ast::functional_result_arity(base.rsplit('.').next().unwrap_or(base))
-                    .is_some();
+            let functional = crate::ast::functional_result_position(
+                base.rsplit('.').next().unwrap_or(base),
+                args.len(),
+            )
+            .is_some();
             match (&args[0], &args[1]) {
                 (TypeRef::Named(first), TypeRef::Named(second))
                     if !functional
@@ -5818,17 +5875,21 @@ fn infer_return_plan(
             // type argument is read: with two, which one is `T` depends on
             // the container, and guessing would be worse than erasing.
             TypeRef::Generic { base, args } => match args.as_slice() {
-                [TypeRef::Named(name)] if name == ret_var && base != "Supplier" => {
+                [TypeRef::Named(name)]
+                    if name == ret_var && crate::ast::functional_result_position(base, 1).is_none() =>
+                {
                     Some(InferSource::Element(index))
+                }
+                [element] if crate::ast::functional_result_position(base, 1).is_none() => {
+                    element_result_source(index, element, ret_var)
                 }
                 // A functional interface whose RESULT is the variable
                 // (`Function<T, R> f`): the lambda's own body is the only
                 // thing that pins it, and the lambda pass records what that
                 // body answers. Without this a `<T, R> R conv(T, Function<T,
                 // R>)` had no source at all and its result stayed `Object`.
-                args => crate::ast::functional_result_arity(base)
-                    .filter(|arity| *arity == args.len())
-                    .and_then(|_| args.last())
+                args => crate::ast::functional_result_position(base, args.len())
+                    .and_then(|position| args.get(position))
                     .and_then(|last| match last {
                         TypeRef::Named(name) if name == ret_var => {
                             Some(InferSource::LambdaResult(index))
@@ -6487,6 +6548,15 @@ fn rename_class_in_expr(expr: &mut Expr, from: &str, to: &str) {
         Expr::Binary { lhs, rhs, .. } => {
             rename_class_in_expr(lhs, from, to);
             rename_class_in_expr(rhs, from, to);
+        }
+        // `C.class` — the one place a BARE name is the class, not a value.
+        Expr::Field { object, name, .. }
+            if name == "class"
+                && matches!(object.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == from) =>
+        {
+            if let Expr::Name { path, .. } = object.as_mut() {
+                to.clone_into(&mut path[0]);
+            }
         }
         Expr::Unary { operand, .. }
         | Expr::Field {

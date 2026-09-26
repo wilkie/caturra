@@ -158,6 +158,11 @@ pub enum InferSource {
     /// `R` — what pins it is the lambda's own body, whose type the lambda pass
     /// leaves on the synthesized class.
     LambdaResult(usize),
+    /// The parameter is a container of FUNCTIONAL interfaces whose result is
+    /// the variable: `<T> T invokeAny(Collection<Callable<T>> tasks)`. What pins
+    /// it is the argument's ELEMENT type's argument at that position — a
+    /// `List<Callable<String>>` answers `String`.
+    ElementResult(usize, usize),
 }
 
 /// The functional interfaces whose RESULT is their last type argument, and how
@@ -171,6 +176,38 @@ pub fn functional_result_arity(base: &str) -> Option<usize> {
         "Function" => 2,
         "BiFunction" => 3,
         _ => return None,
+    })
+}
+
+thread_local! {
+    /// The functional interfaces of the file being parsed, by name: how many
+    /// type parameters each takes and which is its method's result (see
+    /// [`functional_result_position`]). Set for the span of one file's erasure.
+    static UNIT_FUNCTIONAL_RESULTS: std::cell::RefCell<std::collections::HashMap<String, (usize, usize)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Record the functional interfaces of the file being erased.
+pub fn set_unit_functional_results(results: std::collections::HashMap<String, (usize, usize)>) {
+    UNIT_FUNCTIONAL_RESULTS.with(|cell| *cell.borrow_mut() = results);
+}
+
+/// Which type argument of a functional interface written with `argc` of them
+/// is its RESULT: the last, for the library's (`Function<T, R>`), and whichever
+/// the method answers for one the same file declares (`interface Call<V> { V
+/// call(); }`, the bundled `Callable<V>`). Reading only the library's list, a
+/// generic method over a program's own interface — `<T> Fut<T> submit(Call<T>
+/// task)` — could not infer its result from the lambda it was given.
+pub fn functional_result_position(base: &str, argc: usize) -> Option<usize> {
+    let simple = base.rsplit('.').next().unwrap_or(base);
+    if let Some(arity) = functional_result_arity(simple) {
+        return (arity == argc).then(|| arity - 1);
+    }
+    UNIT_FUNCTIONAL_RESULTS.with(|cell| {
+        cell.borrow()
+            .get(simple)
+            .filter(|(arity, _)| *arity == argc)
+            .map(|(_, position)| *position)
     })
 }
 

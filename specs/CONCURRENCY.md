@@ -1,6 +1,6 @@
 # CONCURRENCY — Java threads on a single-threaded engine
 
-- **Status:** accepted — phases 0 and 1 implemented 2026-09-25; phases 2–3 pending
+- **Status:** accepted — phases 0 and 1 implemented 2026-09-25, phase 2 2026-09-26; phase 3 pending
 - **Date:** 2026-09-25
 - **Refines:** [EXECUTION.md](EXECUTION.md), [RUNTIME.md](RUNTIME.md)
 - **Amends:** the "Threads" non-goal in [SCOPE.md](SCOPE.md)
@@ -410,6 +410,15 @@ newFixedThreadPool/newSingleThreadExecutor/newCachedThreadPool`,
 `ReentrantLock`. Written as **bundled Java** on top of `Thread`,
 `synchronized` and `wait/notify`, which is how a JDK writes them too — so
 they are mostly source, and each is measured against a JDK as it lands.
+
+_Done (2026-09-26)._ As built: `stdlib/concurrent.java`, injected when a
+source names the package. The executors, futures, `TimeUnit`, `CountDownLatch`,
+`Semaphore`, `ReentrantLock`/`Condition` and the four single-value atomics.
+`ConcurrentHashMap` is NOT among them — caturra's collections are native, not
+Java a bundled class could extend — so it and the other concurrent collections
+stay refused by name, as do `CyclicBarrier`, `CompletableFuture`, the
+scheduled and fork/join executors. A pool the program never shuts down ends in
+the everything-parked report, with a line naming `shutdown()`.
 
 **Phase 3 — Swing under threads.** The event pump as a parkable wait, so a
 worker thread runs while the window waits; `SwingUtilities.invokeLater`

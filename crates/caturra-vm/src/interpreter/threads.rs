@@ -406,6 +406,19 @@ impl<'run> Interpreter<'run> {
             };
             let _ = write!(report, "\n  \"{}\" {what}", self.thread_name(index));
         }
+        // The commonest way to get here: a pool's threads wait for work until
+        // the pool is shut down, and a program that never calls `shutdown()`
+        // leaves them waiting — a JDK does not exit either.
+        let idle_pool = self.threads.list.iter().any(|thread| {
+            matches!(thread.park, Park::Waiting { monitor, .. }
+                if self.object_class_name(monitor).ends_with("ThreadPoolExecutor"))
+        });
+        if idle_pool {
+            report.push_str(
+                "\n(an ExecutorService's threads wait for more work until it is shut down: \
+                 call shutdown() once every task is submitted)",
+            );
+        }
         report
     }
 

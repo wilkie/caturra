@@ -11730,7 +11730,7 @@ fn real_jdk_packages_caturra_lacks_name_themselves() {
         "java.security",
         "java.util.zip",
         "java.util.logging",
-        "java.util.concurrent.atomic",
+        "java.util.jar",
         "java.awt.geom",
         "java.lang.annotation",
         "java.lang.invoke",

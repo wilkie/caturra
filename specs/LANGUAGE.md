@@ -9034,11 +9034,12 @@ counting catches: a divergence that stopped being one.
 - `Collectors.toConcurrentMap(...)` / `groupingByConcurrent(...)` — they collect
   into a `java.util.concurrent` map. On one thread the ordinary ones do the
   same job. (`strict_no_concurrent_collectors`)
-- Every class of `java.util.concurrent` but `ThreadLocalRandom` —
-  `ConcurrentHashMap`, `ExecutorService`, `CountDownLatch` and the rest are
-  phase 2 of specs/CONCURRENCY.md, to be written as bundled Java over the
-  threads and monitors phase 1 built. Until then each is refused by NAME,
-  since the package itself is one caturra knows.
+- The concurrent COLLECTIONS (`ConcurrentHashMap`, `CopyOnWriteArrayList`,
+  the blocking queues), the fork/join and scheduling executors, `CyclicBarrier`
+  and the rarer synchronizers of `java.util.concurrent`, and the array/adder
+  atomics and read-write locks of its two subpackages. The executors, futures,
+  latches, semaphores, reentrant lock and single-value atomics are modelled
+  (phase 2 of specs/CONCURRENCY.md); each of the rest is refused by NAME.
   (`strict_no_concurrent_classes`)
 - `Character.getName(cp)`, `codePointOf(name)` and `getDirectionality(c)` —
   caturra carries Unicode's character CATEGORIES, which is what `isLetter` and
@@ -9085,6 +9086,11 @@ counting catches: a divergence that stopped being one.
   code is on the host stack, so the thread cannot be set aside while another
   runs, and the wait could never end; the refusal says to move it outside the
   callback. A `sleep` there still sleeps. (`refused_join_inside_a_callback`)
+- An `ExecutorService` that is never shut down. Its threads wait for more work
+  and a JDK never exits; here every thread is then parked with none waiting on
+  time, so the run ends with the thread dump and a line saying to call
+  `shutdown()`. (A cached pool's idle threads retire after a minute, as a
+  JDK's do.) (`refused_a_pool_never_shut_down`)
 - `aFormat.getCurrency()` / `setCurrency(c)` — caturra does not model
   `java.util.Currency`; the pattern's currency sign is what it draws.
   (`strict_a_format_names_no_currency`)
@@ -15822,6 +15828,94 @@ Pinned as `a_second_thread_runs`, `a_parked_thread_s_state`,
 `an_uncaught_exception_ends_only_its_thread` (standard error compared too — a
 new `differential_test_stderr!`), `refused_every_thread_blocked` and
 `refused_join_inside_a_callback`.
+
+### `java.util.concurrent`, phase 2 (2026-09-26)
+
+Bundled Java (`stdlib/concurrent.java`) over phase 1's threads and monitors —
+which is how a JDK writes the package too; nothing in it is an intrinsic.
+`Executors` (fixed, single-thread and cached pools, the default thread
+factory's `pool-N-thread-M` names, `callable`, `unconfigurableExecutorService`),
+`ExecutorService`/`ThreadPoolExecutor` (a thread per task until the pool is
+full, then a queue; `shutdown`, `shutdownNow`, `awaitTermination`, `invokeAll`,
+`invokeAny`, and the pool's `toString`), `Future`/`FutureTask` (a failure is an
+`ExecutionException` whose message is its cause), `Callable`, `TimeUnit`,
+`CountDownLatch`, `Semaphore`, `ReentrantLock` with its `Condition`s, and
+`AtomicInteger`/`AtomicLong`/`AtomicBoolean`/`AtomicReference`. A task that
+throws inside `execute` ends its pool thread with the JDK's banner and the pool
+makes another; a trace shows the few library frames a JDK's shows between a
+pool thread and a task. Measured: 21 classes, every name either answered or
+refused with a reason.
+
+Writing it as ordinary Java found five gaps in the COMPILER, each a shape any
+program can have:
+
+- **Two overloads that both take a functional interface** — `submit(Callable<T>)`
+  beside `submit(Runnable)` — were an overload question the lambda pass would
+  not answer. It asks javac's two questions now: whether the lambda's BODY can
+  complete each interface (a body that gives a value cannot be a `Runnable`, a
+  `println` cannot be a `Callable`), then which remaining one is most specific
+  (a value-returning interface over a `void` one).
+- **A lambda whose target has wildcards** — `Future<?>`, `Supplier<? extends
+  Number>` — was "a functional interface parameterized on a method's own type
+  variable". It is the non-wildcard parameterization now (JLS 9.9).
+- **A class that extends `Number`** had to write `byteValue`/`shortValue`,
+  which a JDK's `Number` supplies, and had no `Number()` to call.
+- **`String.valueOf(v)` where `v` is typed by a class's type variable** chose
+  `valueOf(char[])` and threw ClassCastException at run time: a builtin
+  overload for a type variable now prefers the `Object` one, as javac does.
+- **A bundled class by its qualified name with type arguments**
+  (`java.util.concurrent.FutureTask<Object>`) did not resolve, and a lambda into
+  a qualified constructor (`new java.lang.Thread(() -> …)`) had no target.
+
+Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
+`a_pool_task_s_trace` (standard error too), `concurrent_odds_and_ends`,
+`a_lambda_chooses_its_overload_by_its_body`, `a_lambda_for_a_wildcard_target`,
+`a_class_that_extends_number`, `string_value_of_a_type_variable`,
+`qualified_bundled_names`, `a_qualified_thread` and
+`refused_a_pool_never_shut_down`.
+
+### A result pinned through a program's own interface (2026-09-26)
+
+`pool.submit(() -> 20).get() + 1` was "bad operand types … T and int". A
+generic method's result pinned only by what a lambda answers was inferred for
+the library's functional interfaces alone — `ast::functional_result_arity`
+was a hand-written list of them — so over a program's own `interface Call<T>
+{ T call(); }`, or the bundled `Callable<T>`, the result stayed erased. Three
+pieces:
+
+- **Which argument is the result** is read from the declaration now: while a
+  file is parsed, its interfaces with one abstract method that answers a type
+  parameter are recorded with that parameter's POSITION (`Maker<R, A>`'s is
+  first, not last). A file is erased only once it is read whole — as javac
+  attributes after parsing — so an interface declared below the method counts.
+- **A lambda over a program's interface records what it answers**, as one over
+  a library interface already did; and a BLOCK body's answer is read through
+  the block its `return` is rewritten into, with its locals' declared types.
+- **A result pinned by a list's ELEMENT's answer** —
+  `invokeAny(List<Callable<String>>)` — is a new inference source. (The bundled
+  `invokeAll`/`invokeAny` take `Collection<Callable<T>>` where a JDK writes `?
+  extends`: a wildcard keeps only its bound's name here.)
+
+Not done: `invokeAll(tasks).get(0).get()` CHAINED — a container of a generic
+type (`List<Future<T>>`) erases whole; assigning it to a declared
+`List<Future<String>>` works. Pinned as
+`a_result_pinned_through_a_program_s_interface`, `a_future_s_value_used_at_once`
+and `a_result_pinned_by_an_element_s_answer`.
+
+### A local class's name (2026-09-26)
+
+A class declared inside a method was hoisted as `Name$Local1`, and that was the
+name its stack-trace frames, `getClass().getName()` and default `toString`
+reported — where javac names it `Outer$1Name`: the enclosing class's binary
+name, then the first index that makes the name unique there (two local classes
+called `Same` are `1Same` and `2Same`; `Same` and `Other` are both `1`). A local
+class inside a nested or anonymous class takes that class's name before it
+(`L2$Inner$1Deep`, `L2$1$1InAnon`), so locals are named after the anonymous
+classes are. The reflective questions that read the name — `getSimpleName`,
+`isLocalClass`, `isMemberClass`, `getCanonicalName` (null) — read javac's shape
+now. Found on the way: a local class's `.class` literal was "cannot find
+symbol", because the scope rewrite skipped a bare name. Pinned as
+`a_local_class_s_binary_name` and `a_local_class_in_a_trace`.
 
 ### A modification count is a count (2026-09-25)
 

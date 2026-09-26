@@ -204,6 +204,19 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
     // even before there is a second one to do it (specs/CONCURRENCY.md).
     ("java/lang/InterruptedException", "java/lang/Exception"),
     ("java/lang/IllegalMonitorStateException", "java/lang/RuntimeException"),
+    // `java.util.concurrent`'s own (specs/CONCURRENCY.md, phase 2). A
+    // future's failure, a timed wait that ran out, a cancelled task's `get`,
+    // and a task a shut-down pool will not take.
+    ("java/util/concurrent/ExecutionException", "java/lang/Exception"),
+    ("java/util/concurrent/TimeoutException", "java/lang/Exception"),
+    (
+        "java/util/concurrent/CancellationException",
+        "java/lang/IllegalStateException",
+    ),
+    (
+        "java/util/concurrent/RejectedExecutionException",
+        "java/lang/RuntimeException",
+    ),
     // `setDaemon` on a thread that is already running, and (phase 1) a second
     // `start()`. A JDK's carries no message either way.
     (

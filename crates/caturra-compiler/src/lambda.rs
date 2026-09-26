@@ -1353,22 +1353,262 @@ fn applicable_to_lambdas<'s>(
     args: &[Expr],
     ctx: &Ctx,
 ) -> Option<&'s Vec<TypeRef>> {
-    let mut same_arity = signatures
-        .iter()
-        .filter(|params| params.len() == args.len());
-    let first = same_arity.next()?;
-    if same_arity.next().is_none() {
+    choose_for_lambdas(signatures.iter(), args, ctx)
+}
+
+/// Of the overloads of a call's arity, the one its LAMBDA and method
+/// reference arguments choose — javac's two cuts. First applicability (JLS
+/// 15.12.2.1): a lambda lands only on a functional interface, of its arity,
+/// whose result its body can give — a body that returns a value cannot be a
+/// `Runnable`, and `() -> System.out.println()` cannot be a `Callable`.
+/// Then, when a lambda fits both, the most specific (15.12.2.5): an interface
+/// that RETURNS something beats one that returns `void` — so
+/// `submit(() -> n.incrementAndGet())` is the `Callable` overload, on a JDK
+/// as here. Overloads that agree on every parameter are one answer.
+fn choose_for_lambdas<'s>(
+    signatures: impl Iterator<Item = &'s Vec<TypeRef>>,
+    args: &[Expr],
+    ctx: &Ctx,
+) -> Option<&'s Vec<TypeRef>> {
+    let same_arity: Vec<&Vec<TypeRef>> = signatures
+        .filter(|params| params.len() == args.len())
+        .collect();
+    let first = *same_arity.first()?;
+    if same_arity.iter().all(|params| *params == first) {
         return Some(first);
     }
-    let mut fitting = signatures.iter().filter(|params| {
-        params.len() == args.len()
-            && params.iter().zip(args).all(|(param, arg)| {
-                !matches!(arg, Expr::Lambda { .. } | Expr::MethodRef { .. })
-                    || sam_target(param, ctx).is_some()
+    let fitting: Vec<&Vec<TypeRef>> = same_arity
+        .into_iter()
+        .filter(|params| {
+            params
+                .iter()
+                .zip(args)
+                .all(|(param, arg)| functional_argument_fits(param, arg, ctx))
+        })
+        .collect();
+    let first = *fitting.first()?;
+    if fitting.iter().all(|params| *params == first) {
+        return Some(first);
+    }
+    // The most specific: at every lambda position, a value-returning
+    // interface over a void one, and never the reverse.
+    let returns_value = |params: &Vec<TypeRef>, index: usize| {
+        sam_target(&params[index], ctx).map(|(_, sam)| !matches!(sam.ret, TypeRef::Void))
+    };
+    let lambda_positions: Vec<usize> = args
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| matches!(arg, Expr::Lambda { .. } | Expr::MethodRef { .. }))
+        .map(|(index, _)| index)
+        .collect();
+    let beats = |a: &Vec<TypeRef>, b: &Vec<TypeRef>| {
+        a != b
+            && lambda_positions.iter().all(|&index| {
+                a[index] == b[index]
+                    || (returns_value(a, index) == Some(true)
+                        && returns_value(b, index) == Some(false))
             })
-    });
-    let only = fitting.next()?;
-    fitting.next().is_none().then_some(only)
+            && a.iter()
+                .zip(b)
+                .enumerate()
+                .all(|(index, (x, y))| x == y || lambda_positions.contains(&index))
+    };
+    let best: Vec<&&Vec<TypeRef>> = fitting
+        .iter()
+        .filter(|a| fitting.iter().all(|b| *a == b || beats(a, b)))
+        .collect();
+    match best.as_slice() {
+        [only] => Some(only),
+        _ => None,
+    }
+}
+
+/// Whether one argument can land on one parameter, as far as a LAMBDA or a
+/// method reference decides it; any other argument is left to codegen.
+fn functional_argument_fits(param: &TypeRef, arg: &Expr, ctx: &Ctx) -> bool {
+    match arg {
+        Expr::Lambda { params, body, .. } => {
+            let Some((_, sam)) = sam_target(param, ctx) else {
+                return false;
+            };
+            if sam.params.len() != params.len() {
+                return false;
+            }
+            let (void_ok, value_ok) = lambda_body_shape(body, ctx);
+            if matches!(sam.ret, TypeRef::Void) {
+                void_ok
+            } else {
+                value_ok
+            }
+        }
+        Expr::MethodRef { .. } => {
+            let Some((_, sam)) = sam_target(param, ctx) else {
+                return false;
+            };
+            // A reference to a `void` method cannot give a value.
+            !(method_ref_is_void(arg, ctx) == Some(true) && !matches!(sam.ret, TypeRef::Void))
+        }
+        _ => true,
+    }
+}
+
+/// What a lambda body can complete (JLS 15.27.2): `(void-compatible,
+/// value-compatible)`. An expression body is void-compatible when it is a
+/// statement expression, and value-compatible unless it calls a `void`
+/// method; a block is value-compatible when every `return` carries a value
+/// and it cannot fall off its end, void-compatible when none does.
+fn lambda_body_shape(body: &LambdaBody, ctx: &Ctx) -> (bool, bool) {
+    match body {
+        LambdaBody::Expr(expr) => {
+            let statement = matches!(
+                expr.as_ref(),
+                Expr::Call { .. }
+                    | Expr::SuperMethodCall { .. }
+                    | Expr::Assign { .. }
+                    | Expr::IncDec { .. }
+                    | Expr::NewObject { .. }
+            );
+            (statement, call_is_void(expr, ctx) != Some(true))
+        }
+        LambdaBody::Block(stmts) => {
+            let (mut valued, mut bare) = (false, false);
+            for stmt in stmts {
+                returns_in(stmt, &mut valued, &mut bare);
+            }
+            if valued {
+                (false, !bare)
+            } else {
+                (true, !bare && stmts.last().is_some_and(ends_abruptly))
+            }
+        }
+    }
+}
+
+/// Every `return` of a block's own statements (a nested lambda or class
+/// body is an expression, and not walked): whether one carries a value, and
+/// whether one does not.
+fn returns_in(stmt: &Stmt, valued: &mut bool, bare: &mut bool) {
+    match stmt {
+        Stmt::Return { value: Some(_), .. } => *valued = true,
+        Stmt::Return { value: None, .. } => *bare = true,
+        Stmt::Block(body) => body.iter().for_each(|s| returns_in(s, valued, bare)),
+        Stmt::If { then, els, .. } => {
+            returns_in(then, valued, bare);
+            if let Some(els) = els {
+                returns_in(els, valued, bare);
+            }
+        }
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::ForEach { body, .. }
+        | Stmt::Labeled { body, .. } => returns_in(body, valued, bare),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            body.iter().for_each(|s| returns_in(s, valued, bare));
+            for c in catches {
+                c.body.iter().for_each(|s| returns_in(s, valued, bare));
+            }
+            if let Some(f) = finally_body {
+                f.iter().for_each(|s| returns_in(s, valued, bare));
+            }
+        }
+        Stmt::Switch { arms, .. } => {
+            for arm in arms {
+                arm.body.iter().for_each(|s| returns_in(s, valued, bare));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A block's last statement cannot complete normally: a `throw`, or a loop
+/// with no condition to end it — `{ throw e; }` gives a value as well as
+/// none.
+fn ends_abruptly(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Throw { .. } => true,
+        Stmt::While { cond, .. } => matches!(
+            cond,
+            Expr::Literal {
+                value: crate::ast::Literal::Bool(true),
+                ..
+            }
+        ),
+        Stmt::For { cond: None, .. } => true,
+        Stmt::Block(body) => body.last().is_some_and(ends_abruptly),
+        _ => false,
+    }
+}
+
+/// Whether a call gives no value, where that is knowable here: printing, or a
+/// method of a class of the program.
+fn call_is_void(expr: &Expr, ctx: &Ctx) -> Option<bool> {
+    let Expr::Call {
+        receiver, method, args, ..
+    } = expr
+    else {
+        return None;
+    };
+    if let Some(receiver) = receiver.as_deref()
+        && is_standard_stream(receiver)
+    {
+        return Some(matches!(method.as_str(), "print" | "println" | "write" | "flush" | "close"));
+    }
+    let class = match receiver.as_deref() {
+        None => ctx.current_class.map(str::to_owned),
+        Some(owner) => declared_class_name(owner, ctx).or_else(|| match owner {
+            Expr::Name { path, .. } if path.len() == 1 && ctx.class_names.contains(&path[0]) => {
+                Some(path[0].clone())
+            }
+            _ => None,
+        }),
+    }?;
+    let (_, answered) = declared_shape(&class, method, args.len(), ctx)?;
+    Some(matches!(answered, TypeRef::Void))
+}
+
+/// `System.out` / `System.err`, however it is spelled.
+fn is_standard_stream(expr: &Expr) -> bool {
+    match expr {
+        Expr::Field { object, name, .. } => {
+            matches!(name.as_str(), "out" | "err")
+                && matches!(object.as_ref(), Expr::Name { path, .. } if path.last().is_some_and(|p| p == "System"))
+        }
+        Expr::Name { path, .. } => {
+            path.len() >= 2
+                && path[path.len() - 2] == "System"
+                && matches!(path[path.len() - 1].as_str(), "out" | "err")
+        }
+        _ => false,
+    }
+}
+
+/// Whether a method reference names a `void` method, where the program
+/// declares it.
+fn method_ref_is_void(reference: &Expr, ctx: &Ctx) -> Option<bool> {
+    let Expr::MethodRef {
+        qualifier, method, ..
+    } = reference
+    else {
+        return None;
+    };
+    let class = declared_class_name(qualifier, ctx).or_else(|| match qualifier.as_ref() {
+        Expr::Name { path, .. } if path.len() == 1 && ctx.class_names.contains(&path[0]) => {
+            Some(path[0].clone())
+        }
+        _ => None,
+    })?;
+    let shape = ctx
+        .shapes
+        .get(&class)?
+        .iter()
+        .find(|shape| shape.name == *method)?;
+    Some(matches!(shape.return_type, TypeRef::Void))
 }
 
 fn diamond_arguments(class: &str, args: &[Expr], ctx: &Ctx) -> Option<Vec<TypeRef>> {
@@ -1456,6 +1696,12 @@ fn pinned_vars(
             // second lambda's parameter was `Object`, in a call javac reads
             // left to right without trouble.
             InferSource::LambdaResult(index) => supplier_answer(args.get(*index)?, ctx),
+            InferSource::ElementResult(index, position) => {
+                match list_elem_type(args.get(*index)?, ctx)? {
+                    TypeRef::Generic { args, .. } => args.get(*position).cloned(),
+                    _ => None,
+                }
+            }
         });
         if let Some(pinned) = pinned {
             bound.insert(var.clone(), pinned);
@@ -1577,10 +1823,14 @@ fn generic_argument_targets(
     receiver: Option<&Expr>,
     args: &[Expr],
     witness: &[TypeRef],
+    chosen: Option<&Vec<TypeRef>>,
     ctx: &Ctx,
 ) -> Option<Vec<Option<TypeRef>>> {
     let sigs = ctx.generics.get(method)?;
-    let mut matching = sigs.iter().filter(|sig| sig.params.len() == args.len());
+    // When the lambdas chose an overload, only that one is this call.
+    let mut matching = sigs.iter().filter(|sig| {
+        sig.params.len() == args.len() && chosen.is_none_or(|chosen| *chosen == sig.erased)
+    });
     let sig = matching.next()?;
     // More than one generic method of this name and arity: which one applies
     // is an overload question this pass cannot answer, so it answers none.
@@ -2427,6 +2677,26 @@ fn assign_target_type(target: &crate::ast::AssignTarget, ctx: &Ctx) -> Option<Ty
 
 #[allow(clippy::too_many_lines)] // one arm per expression kind
 fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
+    // A lambda's target written with WILDCARDS (`Future<?>`, `Supplier<?
+    // extends Number>`) is its non-wildcard parameterization (JLS 9.9): `?` is
+    // `Object` and a bounded wildcard is its bound. Left standing, the
+    // synthesized class declared a method over a type nothing resolves.
+    let grounded;
+    let expected = match expected {
+        Some(TypeRef::Generic { base, args })
+            if matches!(expr, Expr::Lambda { .. } | Expr::MethodRef { .. })
+                && args.iter().any(|arg| {
+                    matches!(arg, TypeRef::Named(name) if crate::ast::wildcard_parts(name).is_some())
+                }) =>
+        {
+            grounded = TypeRef::Generic {
+                base: base.clone(),
+                args: args.iter().cloned().map(readable_elem).collect(),
+            };
+            Some(&grounded)
+        }
+        _ => expected,
+    };
     // A collector assigned to a VARIABLE — `Collector<String, ?, List<String>>
     // c = Collectors.toMap(x -> x, String::length);`. Its lambdas see the
     // element the declared type names, exactly as a `collect` receiver's would;
@@ -3891,21 +4161,22 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             let sigs_for_call = owner
                 .and_then(|class| ctx.methods_in_class.get(&(class, method.clone())))
                 .or_else(|| ctx.methods.get(method));
-            let param_types = sigs_for_call.and_then(|sigs| {
-                let mut matching = sigs.iter().filter(|params| params.len() == args.len());
-                let first = matching.next()?;
-                matching
-                    .all(|params| params == first)
-                    .then(|| first.clone())
-            });
+            let param_types =
+                sigs_for_call.and_then(|sigs| choose_for_lambdas(sigs.iter(), args, ctx).cloned());
             // A GENERIC method's lambda argument is target-typed by its
             // declared parameter with the type variables PUT BACK: erasure
             // turned `Box<T>` into a wildcard that no longer says which
             // variable it held, so `pick("abc", s -> s.length())` had no
             // element for `s` and was refused outright.
             let witness = type_args.clone();
-            let substituted =
-                generic_argument_targets(method, receiver.as_deref(), args, &witness, ctx);
+            let substituted = generic_argument_targets(
+                method,
+                receiver.as_deref(),
+                args,
+                &witness,
+                param_types.as_ref(),
+                ctx,
+            );
             // A witness is a claim about the arguments, not just about the
             // result: `W.<String>id(5)` states that `5` is a String, and javac
             // says so. Without the witness the same call INFERS `T` from the
@@ -3980,9 +4251,14 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             }
             // Target-type a lambda constructor argument (`new Timer(40, e -> …)`)
             // from the one constructor that can take it.
+            // A qualified `new java.lang.Thread(() -> …)` is the same class.
             let param_types = ctx
                 .constructors
                 .get(class)
+                .or_else(|| {
+                    crate::imports::canonical_library_class(class)
+                        .and_then(|simple| ctx.constructors.get(simple))
+                })
                 .and_then(|sigs| applicable_to_lambdas(sigs, args, ctx).cloned());
             for (index, arg) in args.iter_mut().enumerate() {
                 let expected = param_types.as_ref().map(|types| types[index].clone());
@@ -6123,7 +6399,19 @@ fn lambda_answer(decl: &ClassDecl) -> Option<(&Expr, HashMap<String, TypeRef>)> 
     // name gives that erasure and nothing else, so the initializer is the
     // answer: `conv("abc", s -> s.length())` produces an `int`, not an Object.
     let mut result_init = None;
-    for stmt in &body.body {
+    // A block body's `return x;` is rewritten into a BLOCK that parks the
+    // value first, so the statements are read with their blocks opened.
+    fn opened<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Stmt>) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Block(inner) => opened(inner, out),
+                other => out.push(other),
+            }
+        }
+    }
+    let mut statements = Vec::new();
+    opened(&body.body, &mut statements);
+    for stmt in statements {
         match stmt {
             Stmt::LocalDecl {
                 ty, declarators, ..
@@ -6138,10 +6426,13 @@ fn lambda_answer(decl: &ClassDecl) -> Option<(&Expr, HashMap<String, TypeRef>)> 
                                     if path.len() == 1 && path[0].starts_with("__caturraArg")
                             )
                     );
-                    if unwraps {
-                        bound.insert(declarator.name.clone(), ty.clone());
-                    } else if declarator.name == "__caturraResult" {
+                    if declarator.name == "__caturraResult" {
                         result_init = declarator.init.as_ref();
+                    } else if unwraps || !matches!(ty, TypeRef::Var) {
+                        // A parameter unwrapped to its declared type — or a
+                        // LOCAL of a block body, whose declared type is what
+                        // `{ double x = 2; return x * 1.5; }` answers through.
+                        bound.insert(declarator.name.clone(), ty.clone());
                     }
                 }
             }
@@ -9415,7 +9706,7 @@ fn build_lambda_class(
     } else {
         Some(String::new())
     };
-    ctx.new_classes.push(ClassDecl {
+    let mut decl = ClassDecl {
         name: name.clone(),
         outer_type_params: Vec::new(),
         is_public: false,
@@ -9439,7 +9730,32 @@ fn build_lambda_class(
         init_blocks: Vec::new(),
         nested: Vec::new(),
         span,
-    });
+    };
+    // What it ANSWERS, as `build_erased_lambda` records it: a generic method
+    // over a program's own interface — `<T> Fut<T> submit(Call<T> task)` —
+    // reads its result from here. Only where the interface's result IS a type
+    // variable: nothing else asks, and the field declares the answer's type,
+    // which for some library values (`new AbstractMap.SimpleEntry<>(…)`) is
+    // not a spelling a declaration resolves.
+    let result_is_variable = matches!(&sam.ret,
+        TypeRef::Named(name) if crate::ast::wildcard_parts(name).is_some()
+            || crate::parser::typevar_index(name).is_some());
+    if result_is_variable && let Some(produces) = produced_type(&decl, ctx) {
+        decl.fields.push(crate::ast::FieldDecl {
+            name: String::from(PRODUCES_FIELD),
+            ty: produces,
+            is_static: true,
+            is_private: false,
+            is_public: true,
+            is_protected: false,
+            is_enum_constant: false,
+            is_final: false,
+            init: None,
+            order: 0,
+            span,
+        });
+    }
+    ctx.new_classes.push(decl);
 
     Expr::NewObject {
         class: name,

@@ -2380,6 +2380,50 @@ public class Threads {
 }
 ''',
     ),
+    dict(
+        id="executors",
+        category="Library",
+        title="Executors, futures and atomics",
+        summary="`java.util.concurrent` as a course uses it: thread pools named and sized as a JDK's, futures (a failure arrives as an ExecutionException), `TimeUnit`, `CountDownLatch`, `ReentrantLock` and the atomics — bundled Java over caturra's own threads and monitors.",
+        main="Pool",
+        source='''
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class Pool {
+    public static void main(String[] args) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        Future<Integer> answer = pool.submit(() -> 6 * 7);
+        System.out.println(answer.get());
+
+        AtomicInteger hits = new AtomicInteger();
+        List<Future<?>> jobs = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            jobs.add(pool.submit(() -> {
+                for (int n = 0; n < 500; n++) {
+                    hits.incrementAndGet();
+                }
+            }));
+        }
+        for (Future<?> job : jobs) {
+            job.get();
+        }
+        System.out.println(hits.get());
+
+        Future<Integer> broken = pool.submit(() -> Integer.parseInt("x"));
+        try {
+            broken.get();
+        } catch (ExecutionException e) {
+            System.out.println(e.getMessage());
+        }
+        pool.shutdown();
+        System.out.println(pool.awaitTermination(1, TimeUnit.SECONDS));
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -2418,20 +2462,19 @@ public class Skeleton {
 ''',
     ),
     dict(
-        id="concurrent",
+        id="concurrent-collections",
         category="Library",
-        title="java.util.concurrent",
-        summary="Executors, futures, latches, atomics and the concurrent collections. Threads, `synchronized` and `wait`/`notify` run; the package built on them is phase 2 of specs/CONCURRENCY.md, and each class is refused by name until then.",
-        main="Pool",
+        title="The concurrent collections",
+        summary="ConcurrentHashMap, CopyOnWriteArrayList and the blocking queues. Executors, futures, latches, locks and atomics run; caturra's collections are native rather than Java, so the concurrent ones are refused by name.",
+        main="Counts",
         source='''
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
 
-public class Pool {
-    public static void main(String[] args) throws Exception {
-        ExecutorService pool = Executors.newFixedThreadPool(2);
-        Future<Integer> answer = pool.submit(() -> 6 * 7);
-        System.out.println(answer.get());
-        pool.shutdown();
+public class Counts {
+    public static void main(String[] args) {
+        ConcurrentHashMap<String, Integer> counts = new ConcurrentHashMap<>();
+        counts.merge("a", 1, Integer::sum);
+        System.out.println(counts);
     }
 }
 ''',

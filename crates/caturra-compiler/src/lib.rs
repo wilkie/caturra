@@ -107,6 +107,35 @@ fn jdk_binary_name(simple: &str) -> Option<&'static str> {
         // `Thread.State`, which lives at the top level here (see thread.java).
         "__ThreadState" => Some("java/lang/Thread$State"),
         "StringJoiner" => Some("java/util/StringJoiner"),
+        // `java.util.concurrent` and its two subpackages (concurrent.java).
+        "Callable" => Some("java/util/concurrent/Callable"),
+        "Executor" => Some("java/util/concurrent/Executor"),
+        "ThreadFactory" => Some("java/util/concurrent/ThreadFactory"),
+        "Future" => Some("java/util/concurrent/Future"),
+        "RunnableFuture" => Some("java/util/concurrent/RunnableFuture"),
+        "ExecutorService" => Some("java/util/concurrent/ExecutorService"),
+        "TimeUnit" => Some("java/util/concurrent/TimeUnit"),
+        "FutureTask" => Some("java/util/concurrent/FutureTask"),
+        "__RunnableAdapter" => Some("java/util/concurrent/Executors$RunnableAdapter"),
+        "Executors" => Some("java/util/concurrent/Executors"),
+        "__DefaultThreadFactory" => Some("java/util/concurrent/Executors$DefaultThreadFactory"),
+        "__Worker" => Some("java/util/concurrent/ThreadPoolExecutor$Worker"),
+        "ThreadPoolExecutor" => Some("java/util/concurrent/ThreadPoolExecutor"),
+        "__SignallingTask" => Some("java/util/concurrent/ExecutorCompletionService$QueueingFuture"),
+        "__DelegatedExecutorService" => Some("java/util/concurrent/Executors$DelegatedExecutorService"),
+        "__FinalizableDelegatedExecutorService" => {
+            Some("java/util/concurrent/Executors$FinalizableDelegatedExecutorService")
+        }
+        "CountDownLatch" => Some("java/util/concurrent/CountDownLatch"),
+        "Semaphore" => Some("java/util/concurrent/Semaphore"),
+        "Lock" => Some("java/util/concurrent/locks/Lock"),
+        "Condition" => Some("java/util/concurrent/locks/Condition"),
+        "ReentrantLock" => Some("java/util/concurrent/locks/ReentrantLock"),
+        "__ConditionObject" => Some("java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject"),
+        "AtomicInteger" => Some("java/util/concurrent/atomic/AtomicInteger"),
+        "AtomicLong" => Some("java/util/concurrent/atomic/AtomicLong"),
+        "AtomicBoolean" => Some("java/util/concurrent/atomic/AtomicBoolean"),
+        "AtomicReference" => Some("java/util/concurrent/atomic/AtomicReference"),
         _ => None,
     }
 }
@@ -118,6 +147,10 @@ const UTIL_LIB: &str = include_str!("stdlib/util.java");
 /// The bundled `java.lang.Thread` (specs/CONCURRENCY.md), injected when a
 /// source mentions `Thread`.
 const THREAD_LIB: &str = include_str!("stdlib/thread.java");
+
+/// The bundled `java.util.concurrent`, `.atomic` and `.locks`
+/// (specs/CONCURRENCY.md, phase 2), injected when a source names the package.
+const CONCURRENT_LIB: &str = include_str!("stdlib/concurrent.java");
 
 /// The erased `__BiConsumer` target type of a `Map.forEach` lambda,
 /// injected when a source calls `forEach`.
@@ -521,6 +554,54 @@ pub(crate) fn is_lambda_class(name: &str) -> bool {
     name.starts_with(LAMBDA_CLASS_PREFIX) || name.starts_with(METHOD_REF_CLASS_PREFIX)
 }
 
+/// `java.lang.Number`'s two CONCRETE methods. Four of its six accessors are
+/// abstract; `byteValue` and `shortValue` narrow `intValue()`, so a subclass
+/// that writes the four is complete. caturra's `Number` is a signature list
+/// with no code to inherit, so each direct subclass is given the two bodies a
+/// JDK's `Number` has, unless it writes its own. (A class that extends
+/// `Number` — an `AtomicInteger`, a fraction — was refused as "does not
+/// override abstract method shortValue()".)
+fn number_defaults(units: &mut [(String, ast::CompilationUnit)]) {
+    if units
+        .iter()
+        .any(|(_, unit)| unit.classes.iter().any(|class| class.name == "Number"))
+    {
+        return;
+    }
+    let extends_number = |class: &ast::ClassDecl| {
+        matches!(class.superclass.as_deref(), Some("Number" | "java.lang.Number"))
+    };
+    if !units
+        .iter()
+        .any(|(_, unit)| unit.classes.iter().any(extends_number))
+    {
+        return;
+    }
+    let (tokens, _) = lexer::lex(
+        "<number>",
+        "class __NumberDefaults {\n\
+         public byte byteValue() { return (byte) intValue(); }\n\
+         public short shortValue() { return (short) intValue(); }\n}",
+    );
+    let (template, _) = parser::parse("<number>", tokens);
+    let Some(defaults) = template.classes.first() else {
+        return;
+    };
+    for (_, unit) in units.iter_mut() {
+        for class in unit.classes.iter_mut().filter(|class| extends_number(class)) {
+            for method in &defaults.methods {
+                if !class
+                    .methods
+                    .iter()
+                    .any(|own| own.name == method.name && own.params.is_empty())
+                {
+                    class.methods.push(method.clone());
+                }
+            }
+        }
+    }
+}
+
 /// order.
 #[must_use]
 #[allow(clippy::too_many_lines)] // the bundle-injection pipeline
@@ -746,6 +827,35 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         // It implements `Runnable`, which is the bundled `__Runnable`.
         needs_function_lib = true;
     }
+    // `java.util.concurrent` — every class of it needs an import (or its
+    // qualified name), so the package's name in the text is the trigger. It is
+    // written over `Thread`, which comes with it.
+    if sources.iter().any(|s| s.text.contains("java.util.concurrent"))
+        && !units
+            .iter()
+            .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "ExecutorService"))
+    {
+        for (path, library) in [("<concurrent>", CONCURRENT_LIB), ("<thread>", THREAD_LIB)] {
+            let present = units.iter().any(|(existing, _)| existing == path)
+                || (path == "<thread>"
+                    && units
+                        .iter()
+                        .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "Thread")));
+            if present {
+                continue;
+            }
+            let (tokens, _) = lexer::lex(path, library);
+            let (mut unit, mut errs) = parser::parse(path, tokens);
+            compilation.diagnostics.append(&mut errs);
+            for class in &mut unit.classes {
+                if let Some(binary) = jdk_binary_name(&class.name) {
+                    class.binary_name = Some(String::from(binary));
+                }
+            }
+            units.push((String::from(path), unit));
+        }
+        needs_function_lib = true;
+    }
     if (needs_function_lib
         || sources.iter().any(|s| {
             s.text.contains(".forEach(")
@@ -908,6 +1018,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
     }
 
+    number_defaults(&mut units);
     bridges::add_bridge_methods(&mut units);
     inner::bind_inner_classes(&mut units);
     compilation

@@ -147,7 +147,37 @@ const JAVA_NIO_FILE: &[&str] = &["Files", "Path", "Paths"];
 /// source, not a concurrency primitive: it is what a program writes for
 /// `nextInt(lo, hi)` before Java 17 gave `Random` one. Every other class in the
 /// package is refused by name in `KNOWN_UNSUPPORTED`.
-const JAVA_UTIL_CONCURRENT: &[&str] = &["ThreadLocalRandom"];
+const JAVA_UTIL_CONCURRENT: &[&str] = &[
+    "ThreadLocalRandom",
+    // Phase 2 of specs/CONCURRENCY.md: bundled Java (concurrent.java).
+    "Callable",
+    "Executor",
+    "ExecutorService",
+    "Executors",
+    "ThreadFactory",
+    "Future",
+    "RunnableFuture",
+    "FutureTask",
+    "ThreadPoolExecutor",
+    "TimeUnit",
+    "CountDownLatch",
+    "Semaphore",
+    "ExecutionException",
+    "TimeoutException",
+    "CancellationException",
+    "RejectedExecutionException",
+];
+
+/// `java.util.concurrent.atomic` — the four single-value atomics.
+const JAVA_UTIL_CONCURRENT_ATOMIC: &[&str] = &[
+    "AtomicInteger",
+    "AtomicLong",
+    "AtomicBoolean",
+    "AtomicReference",
+];
+
+/// `java.util.concurrent.locks` — a reentrant lock and its conditions.
+const JAVA_UTIL_CONCURRENT_LOCKS: &[&str] = &["Lock", "Condition", "ReentrantLock"];
 
 /// `java.time` — the slice that is pure calendar arithmetic. A date, and the
 /// two enums it answers with. What needs a ZONE (a `ZonedDateTime`, or what
@@ -427,11 +457,11 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // number it could answer would be fiction about a heap the program cannot
     // influence — and `exec` has nothing to exec.
     ("java.lang", &["Runtime", "Process", "ProcessBuilder"]),
-    // The rest of `java.util.concurrent` — executors, concurrent collections,
-    // latches — is about running on MORE THAN ONE thread, and caturra has one.
-    // The package used to be refused whole; with `ThreadLocalRandom` modelled
-    // it is a package caturra knows, so each of the others is refused by
-    // name here rather than read as a class that does not exist.
+    // The rest of `java.util.concurrent` and its two subpackages: the
+    // concurrent collections, the fork/join and scheduling machinery, and the
+    // rarer synchronizers. The packages are ones caturra knows (phase 2 of
+    // specs/CONCURRENCY.md modelled their core), so each of the others is
+    // refused by name here rather than read as a class that does not exist.
     (
         "java.util.concurrent",
         &[
@@ -440,8 +470,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "BlockingDeque",
             "BlockingQueue",
             "BrokenBarrierException",
-            "Callable",
-            "CancellationException",
             "CompletableFuture",
             "CompletionException",
             "CompletionService",
@@ -455,23 +483,16 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "ConcurrentSkipListSet",
             "CopyOnWriteArrayList",
             "CopyOnWriteArraySet",
-            "CountDownLatch",
             "CountedCompleter",
             "CyclicBarrier",
             "DelayQueue",
             "Delayed",
             "Exchanger",
-            "ExecutionException",
-            "Executor",
             "ExecutorCompletionService",
-            "ExecutorService",
-            "Executors",
             "Flow",
             "ForkJoinPool",
             "ForkJoinTask",
             "ForkJoinWorkerThread",
-            "Future",
-            "FutureTask",
             "LinkedBlockingDeque",
             "LinkedBlockingQueue",
             "LinkedTransferQueue",
@@ -479,21 +500,43 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "PriorityBlockingQueue",
             "RecursiveAction",
             "RecursiveTask",
-            "RejectedExecutionException",
             "RejectedExecutionHandler",
-            "RunnableFuture",
             "RunnableScheduledFuture",
             "ScheduledExecutorService",
             "ScheduledFuture",
             "ScheduledThreadPoolExecutor",
-            "Semaphore",
             "SubmissionPublisher",
             "SynchronousQueue",
-            "ThreadFactory",
-            "ThreadPoolExecutor",
-            "TimeUnit",
-            "TimeoutException",
             "TransferQueue",
+        ],
+    ),
+    (
+        "java.util.concurrent.atomic",
+        &[
+            "AtomicIntegerArray",
+            "AtomicLongArray",
+            "AtomicReferenceArray",
+            "AtomicMarkableReference",
+            "AtomicStampedReference",
+            "AtomicIntegerFieldUpdater",
+            "AtomicLongFieldUpdater",
+            "AtomicReferenceFieldUpdater",
+            "DoubleAccumulator",
+            "DoubleAdder",
+            "LongAccumulator",
+            "LongAdder",
+        ],
+    ),
+    (
+        "java.util.concurrent.locks",
+        &[
+            "AbstractOwnableSynchronizer",
+            "AbstractQueuedLongSynchronizer",
+            "AbstractQueuedSynchronizer",
+            "LockSupport",
+            "ReadWriteLock",
+            "ReentrantReadWriteLock",
+            "StampedLock",
         ],
     ),
     (
@@ -896,8 +939,6 @@ const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
     "java.sql",
     "java.text.spi",
     "java.time.zone",
-    "java.util.concurrent.atomic",
-    "java.util.concurrent.locks",
     "java.util.jar",
     "java.util.logging",
     "java.util.prefs",
@@ -1394,6 +1435,8 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("java.util.regex", JAVA_UTIL_REGEX),
     ("java.util.function", JAVA_UTIL_FUNCTION),
     ("java.util.concurrent", JAVA_UTIL_CONCURRENT),
+    ("java.util.concurrent.atomic", JAVA_UTIL_CONCURRENT_ATOMIC),
+    ("java.util.concurrent.locks", JAVA_UTIL_CONCURRENT_LOCKS),
     ("java.io", JAVA_IO),
     ("java.nio.file", JAVA_NIO_FILE),
     ("java.time", JAVA_TIME),

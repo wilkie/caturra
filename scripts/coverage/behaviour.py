@@ -273,6 +273,29 @@ RECEIVER_OVERRIDES = {
     # call after it. The probe's own class is the representative receiver
     # anyway: reflection here answers about the classes a program declares.
     "java.lang.Class": "Probe.class",
+    # What BLOCKS. A pool's threads keep a program alive, and a future, a
+    # latch, a semaphore or a condition asked with the bank's arguments waits
+    # for ever — on a JDK as here, where it ends as the everything-parked
+    # refusal instead. Their presence is measured; their behaviour is pinned by
+    # hand in differential.rs (`a_pool_runs_its_tasks` and beside it).
+    **{
+        name: "SKIP"
+        for name in [
+            "java.util.concurrent.Executor",
+            "java.util.concurrent.ExecutorService",
+            "java.util.concurrent.Executors",
+            "java.util.concurrent.ThreadFactory",
+            "java.util.concurrent.Future",
+            "java.util.concurrent.RunnableFuture",
+            "java.util.concurrent.FutureTask",
+            "java.util.concurrent.ThreadPoolExecutor",
+            "java.util.concurrent.CountDownLatch",
+            "java.util.concurrent.Semaphore",
+            "java.util.concurrent.locks.Lock",
+            "java.util.concurrent.locks.Condition",
+            "java.util.concurrent.locks.ReentrantLock",
+        ]
+    },
 }
 
 # Divergences that are DECLARED, with the reason, rather than found. Each is a
