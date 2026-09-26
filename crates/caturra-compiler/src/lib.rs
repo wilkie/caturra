@@ -732,6 +732,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     }
     // javax.swing / java.awt (accessible DOM Swing): the component tree
     // serializes to `swing.json` on `setVisible(true)`.
+    let mut swing_injected = false;
     if reaches_package(&units, &chains, &["javax", "swing"])
         || reaches_package(&units, &chains, &["javax", "swing", "event"])
         || reaches_package(&units, &chains, &["javax", "swing", "border"])
@@ -744,6 +745,8 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         let (unit, mut errs) = parser::parse("<swing>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<swing>"), unit));
+        // Its event-dispatch thread is a `Thread` (CONCURRENCY.md, phase 3).
+        swing_injected = true;
     }
     let mut validation_entry = None;
     if sources.iter().any(|s| s.text.contains("Arrays."))
@@ -810,7 +813,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // of type `Thread` all need the class, and spelling `ThreadLocalRandom`
     // costs only an unused class. A program's own `Thread` shadows it, as it
     // shadows every bundled class.
-    if sources.iter().any(|s| s.text.contains("Thread"))
+    if (swing_injected || sources.iter().any(|s| s.text.contains("Thread")))
         && !units
             .iter()
             .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "Thread"))

@@ -5,6 +5,17 @@
 //! [`ConsoleIo`] trait; the WASM boundary implements it by forwarding to
 //! JavaScript callbacks, and tests use [`BufferedConsole`].
 
+/// How a bounded wait for the window ended ([`ConsoleIo::ui_poll_event`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UiPoll {
+    /// The user did something: the event's payload.
+    Event(String),
+    /// The time given ran out with nothing from the window.
+    TimedOut,
+    /// The host ended the UI session (Stop, or there is no interactive host).
+    Closed,
+}
+
 /// Host hooks for the running program's standard streams.
 pub trait ConsoleIo {
     /// Milliseconds since the Unix epoch (`System.currentTimeMillis`).
@@ -62,6 +73,20 @@ pub trait ConsoleIo {
     /// without a UI (tests) use the default, which ends the loop at once.
     fn ui_await_event(&mut self, _tree: &str) -> Option<String> {
         None
+    }
+
+    /// The event-dispatch thread's wait (specs/CONCURRENCY.md, phase 3):
+    /// present `tree`, then wait for the next UI event for at most
+    /// `timeout_millis` — `None` for as long as it takes, `Some(0)` to only
+    /// look. A host that answers [`ConsoleIo::now_millis`] from a clock of its
+    /// own should move that clock by the time a [`UiPoll::TimedOut`] waited.
+    /// The default cannot wait on time: it waits as [`ConsoleIo::ui_await_event`]
+    /// does, whatever the timeout.
+    fn ui_poll_event(&mut self, tree: &str, _timeout_millis: Option<u32>) -> UiPoll {
+        match self.ui_await_event(tree) {
+            Some(payload) => UiPoll::Event(payload),
+            None => UiPoll::Closed,
+        }
     }
 
     /// Show a modal dialog (bundled `JOptionPane`): `kind` is `message`,

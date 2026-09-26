@@ -1581,6 +1581,7 @@ static JAVA_AWT: &[&str] = &[
     "Insets",
     "Container",
     "Component",
+    "EventQueue",
 ];
 /// java.awt.event (listeners): the functional interfaces students attach
 /// (addActionListener / addItemListener), the mouse listener/adapter, plus

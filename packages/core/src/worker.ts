@@ -9,7 +9,7 @@
 import { initJvm, JvmSession, jvmVersion } from './index.js';
 import type { DebugControlResponse } from './index.js';
 import type { WorkerRequest, WorkerResponse } from './protocol.js';
-import { consumeInterrupt, readLineBlocking } from './stdin-channel.js';
+import { consumeInterrupt, pollLineBlocking, readLineBlocking } from './stdin-channel.js';
 
 /**
  * Minimal typing for the dedicated-worker global scope. (The full
@@ -33,6 +33,35 @@ async function session(): Promise<JvmSession> {
   return sessionPromise;
 }
 
+/**
+ * The Swing event-dispatch thread's wait (specs/CONCURRENCY.md, phase 3): the
+ * engine asks for the next event with a timeout, often, while other Java
+ * threads run. The tree is posted for the main thread to render only when it
+ * CHANGED since the render the main thread is still answering — an unchanged
+ * look costs nothing but the wait — and after an event is taken, the next
+ * wait always posts, since that answer is spent.
+ */
+function swingEventPump(
+  swingBuffer: SharedArrayBuffer,
+  id: number,
+): (tree: string, timeoutMs: number) => string | null | undefined {
+  let posted: string | null = null;
+  return (tree, timeoutMs) => {
+    const request =
+      tree === posted
+        ? null
+        : () => {
+            posted = tree;
+            scope.postMessage({ id, type: 'swing-render', tree });
+          };
+    const event = pollLineBlocking(swingBuffer, request, timeoutMs);
+    if (event !== undefined) {
+      posted = null;
+    }
+    return event;
+  };
+}
+
 async function handle(request: WorkerRequest): Promise<unknown> {
   switch (request.type) {
     case 'version':
@@ -48,14 +77,9 @@ async function handle(request: WorkerRequest): Promise<unknown> {
             })
         : () => null;
       // Swing event pump: post the current tree for the main thread to
-      // render, then park on the shared channel until it supplies the
-      // next event (same blocking pattern as stdin/debug). `null` = closed.
-      const awaitUiEvent = swingBuffer
-        ? (tree: string) =>
-            readLineBlocking(swingBuffer, () => {
-              scope.postMessage({ id, type: 'swing-render', tree });
-            })
-        : undefined;
+      // render, then park on the shared channel until it supplies the next
+      // event or the time runs out (same blocking pattern as stdin/debug).
+      const awaitUiEvent = swingBuffer ? swingEventPump(swingBuffer, id) : undefined;
       // Blocking JOptionPane dialog: same channel (dialogs and events never
       // overlap — the loop isn't parked while a listener shows a dialog).
       const showDialog = swingBuffer
@@ -87,12 +111,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
         : () => null;
       // Interactive Swing under the debugger: same event pump as `run`, so
       // a listener runs (and can hit a breakpoint via onPause below).
-      const awaitUiEvent = swingBuffer
-        ? (tree: string) =>
-            readLineBlocking(swingBuffer, () => {
-              scope.postMessage({ id, type: 'swing-render', tree });
-            })
-        : undefined;
+      const awaitUiEvent = swingBuffer ? swingEventPump(swingBuffer, id) : undefined;
       const showDialog = swingBuffer
         ? (kind: string, message: string) =>
             readLineBlocking(swingBuffer, () => {

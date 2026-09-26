@@ -143,14 +143,15 @@ export interface RunOptions {
    */
   readStdin?: () => string | null;
   /**
-   * Swing event pump. Called with the current component tree (JSON) each
-   * time an interactive `JFrame` needs the next event: render the tree and
-   * return the next event's payload — the activated component's id, then
-   * newline-separated `id=value` field states — or `null` to close the
-   * window. In the worker this blocks on a SharedArrayBuffer until the
-   * user interacts (see `JvmWorkerSession.run`).
+   * Swing event pump. Called by the event-dispatch thread with the current
+   * component tree (JSON) and how long it may wait (`-1`: as long as it
+   * takes): render the tree and return the next event's payload — the
+   * activated component's id, then newline-separated `id=value` field
+   * states — `null` to end the UI session, or `undefined` when the time ran
+   * out with no event. In the worker this blocks on a SharedArrayBuffer (see
+   * `JvmWorkerSession.run`).
    */
-  awaitUiEvent?: (tree: string) => string | null;
+  awaitUiEvent?: (tree: string, timeoutMs: number) => string | null | undefined;
   /**
    * Blocking JOptionPane dialog. Called with `(kind, message)` — `kind` is
    * `message`, `confirm:<optionType>`, or `input` — to show a modal and

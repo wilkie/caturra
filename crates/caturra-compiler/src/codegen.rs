@@ -22422,6 +22422,18 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;Z)Z",
     ),
     bm("__yield", &[], BRet::Void, "()V"),
+    // The event-dispatch thread's wait for the window (bundled
+    // `__EventQueue`): present the tree, and answer the next event's payload,
+    // `"__idle"` when the thread should look around again first (a timer, a
+    // task, another thread's change), or null when the host ended the UI.
+    // The long is how long the dispatch thread's own timers let it wait; -1
+    // for as long as it takes.
+    bm(
+        "__uiWait",
+        &[S, L],
+        BRet::Str,
+        "(Ljava/lang/String;J)Ljava/lang/String;",
+    ),
     bm("__holdsLock", &[BParam::Object], BRet::Boolean, "(Ljava/lang/Object;)Z"),
     bm("__monitorEnter", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),
     bm("__monitorExit", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),

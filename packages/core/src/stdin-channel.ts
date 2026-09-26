@@ -70,7 +70,14 @@ export function readLineBlocking(
   // If the main thread already responded, wait() sees a non-WAITING
   // value and returns immediately ('not-equal') — no missed wakeups.
   Atomics.wait(state, STATE_INDEX, STATE_WAITING);
-  if (Atomics.load(state, STATE_INDEX) === STATE_EOF) {
+  return takeLine(buffer, state);
+}
+
+/** Read the supplied line out of the channel and re-arm it. */
+function takeLine(buffer: SharedArrayBuffer, state: Int32Array): string | null {
+  const supplied = Atomics.load(state, STATE_INDEX);
+  if (supplied === STATE_EOF) {
+    Atomics.store(state, STATE_INDEX, STATE_WAITING);
     return null;
   }
   const length = Atomics.load(state, LENGTH_INDEX);
@@ -78,7 +85,37 @@ export function readLineBlocking(
   // SharedArrayBuffer-backed views.
   const bytes = new Uint8Array(length);
   bytes.set(new Uint8Array(buffer, HEADER_BYTES, length));
+  Atomics.store(state, STATE_INDEX, STATE_WAITING);
   return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Worker thread: a BOUNDED wait on the channel (the Swing event-dispatch
+ * thread's, specs/CONCURRENCY.md phase 3). A line the main thread supplied
+ * while the worker was busy is answered at once; otherwise `requestLine` (when
+ * given) prompts the main thread, and the wait lasts at most `timeoutMs` (`-1`
+ * for as long as it takes). Returns the line, `null` on EOF, or `undefined`
+ * when the time ran out — the channel stays armed, so a line supplied later
+ * is kept for the next wait rather than lost.
+ */
+export function pollLineBlocking(
+  buffer: SharedArrayBuffer,
+  requestLine: (() => void) | null,
+  timeoutMs: number,
+): string | null | undefined {
+  const state = new Int32Array(buffer, 0, 2);
+  if (Atomics.load(state, STATE_INDEX) === STATE_WAITING) {
+    requestLine?.();
+    if (timeoutMs < 0) {
+      Atomics.wait(state, STATE_INDEX, STATE_WAITING);
+    } else if (timeoutMs > 0) {
+      Atomics.wait(state, STATE_INDEX, STATE_WAITING, timeoutMs);
+    }
+    if (Atomics.load(state, STATE_INDEX) === STATE_WAITING) {
+      return undefined;
+    }
+  }
+  return takeLine(buffer, state);
 }
 
 // ----- Interrupt flag (debugger pause button) -----

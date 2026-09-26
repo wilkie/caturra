@@ -36,7 +36,12 @@ interface Pending {
     | ((snapshot: DebugPauseSnapshot) => DebugControlResponse | Promise<DebugControlResponse>)
     | undefined;
   debugBuffer?: SharedArrayBuffer | undefined;
-  onSwingEvent?: ((tree: string) => Promise<string | null>) | undefined;
+  /**
+   * Render the tree and resolve with the next event's payload, `null` to end
+   * the UI session — or `undefined` when a newer tree SUPERSEDED this one
+   * before any event came (nothing is sent back for it).
+   */
+  onSwingEvent?: ((tree: string) => Promise<string | null | undefined>) | undefined;
   onSwingDialog?: ((kind: string, message: string) => Promise<string | null>) | undefined;
   swingBuffer?: SharedArrayBuffer | undefined;
 }
@@ -312,11 +317,15 @@ export class JvmWorkerSession implements JvmSessionApi {
     if (!pending.swingBuffer || !pending.onSwingEvent) {
       return;
     }
-    let payload: string | null;
+    let payload: string | null | undefined;
     try {
       payload = await pending.onSwingEvent(tree);
     } catch {
       payload = null;
+    }
+    // Superseded by a newer render: that one answers instead.
+    if (payload === undefined) {
+      return;
     }
     supplyLine(pending.swingBuffer, payload);
   }

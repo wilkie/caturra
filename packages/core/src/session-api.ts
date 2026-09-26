@@ -53,9 +53,12 @@ export interface WorkerRunOptions {
    * render the tree, then resolve with the next event's payload (the
    * activated component's id, then newline-separated `id=value` field
    * states) or `null` to close the window. May be async — the engine
-   * stays parked until it resolves. Needs a cross-origin isolated page.
+   * stays parked until it resolves. A newer tree may arrive before an event
+   * does (the event-dispatch thread re-renders what other threads changed);
+   * resolve the superseded call with `undefined`. Needs a cross-origin
+   * isolated page.
    */
-  onSwingEvent?: (tree: string) => Promise<string | null>;
+  onSwingEvent?: (tree: string) => Promise<string | null | undefined>;
   /**
    * Blocking JOptionPane dialog. Called with `(kind, message)`; show a modal
    * and resolve with the response (option code / typed text) or `null` when

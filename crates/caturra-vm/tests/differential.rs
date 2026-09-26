@@ -276,7 +276,11 @@ fn run_with_jdk_both(
     );
 
     let launch = || {
+        // Headless: the event-dispatch thread, `invokeLater` and a Swing
+        // `Timer` run without a display, and a JDK without one (a server
+        // build) refuses to load AWT at all otherwise.
         let mut child = Command::new("java")
+            .arg("-Djava.awt.headless=true")
             .arg(class_name)
             .current_dir(&dir)
             .stdin(std::process::Stdio::piped())
@@ -62787,7 +62791,10 @@ public class C2 {
         System.out.println(strip(f));
         pool.shutdown();
         pool.awaitTermination(1, TimeUnit.SECONDS);
-        System.out.println(strip(pool));
+        // A JDK's last worker may not have left the pool's count yet when
+        // termination is signalled ("pool size = 1" about one run in twelve),
+        // so the size is not compared.
+        System.out.println(strip(pool).replaceAll("pool size = \\d+, ", ""));
         ReentrantLock lock = new ReentrantLock();
         Condition ready = lock.newCondition();
         List<String> log = new ArrayList<>();
@@ -63749,3 +63756,141 @@ public class RefusedJoin {
 }
 "#
 );
+
+// The event-dispatch thread (specs/CONCURRENCY.md, phase 3). `invokeLater`
+// returns at once and its tasks run in order on "AWT-EventQueue-0";
+// `invokeAndWait` waits, and wraps what the task threw; calling it FROM that
+// thread is an Error. A Swing Timer fires on the same thread — its listeners
+// last-added first — and a non-repeating one stops after one tick. All of it
+// runs on a headless JDK.
+differential_test!(
+    the_event_dispatch_thread,
+    "DispatchThread",
+    r#"
+import javax.swing.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+public class DispatchThread {
+    public static void main(String[] args) throws Exception {
+        System.out.println("main on EDT? " + SwingUtilities.isEventDispatchThread());
+        SwingUtilities.invokeLater(() -> System.out.println("later 1 on " + Thread.currentThread().getName()
+            + " " + SwingUtilities.isEventDispatchThread()));
+        SwingUtilities.invokeLater(() -> System.out.println("later 2"));
+        System.out.println("after invokeLater");
+        SwingUtilities.invokeAndWait(() -> System.out.println("and wait"));
+        System.out.println("after invokeAndWait");
+        try {
+            SwingUtilities.invokeAndWait(() -> { throw new IllegalStateException("inside"); });
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            System.out.println("ITE " + e.getMessage() + " cause " + e.getCause());
+        }
+        CountDownLatch done = new CountDownLatch(1);
+        AtomicInteger ticks = new AtomicInteger();
+        Timer timer = new Timer(30, null);
+        timer.addActionListener(e -> {
+            int n = ticks.incrementAndGet();
+            System.out.println("tick " + n + " " + Thread.currentThread().getName() + " " + (e.getSource() == timer));
+            if (n == 3) { timer.stop(); done.countDown(); }
+        });
+        System.out.println(timer.isRunning() + " " + timer.getDelay() + " " + timer.getInitialDelay() + " " + timer.isRepeats());
+        timer.start();
+        done.await();
+        System.out.println("running " + timer.isRunning());
+        Timer once = new Timer(10, e -> System.out.println("once"));
+        once.setRepeats(false);
+        once.start();
+        Thread.sleep(100);
+        System.out.println("once running " + once.isRunning());
+        SwingUtilities.invokeAndWait(() -> {
+            try { SwingUtilities.invokeAndWait(() -> {}); }
+            catch (Throwable t) { System.out.println(t); }
+        });
+        eventQueue();
+        System.out.println("main done");
+    }
+    static void eventQueue() throws Exception {
+        java.awt.EventQueue.invokeAndWait(() -> System.out.println("EQ " + java.awt.EventQueue.isDispatchThread()));
+    }
+}
+"#
+);
+
+// A Swing Timer's thread is a DAEMON: a program whose `main` returns before
+// the first tick simply ends. Once the dispatch thread is running, it keeps
+// the program alive between ticks — it lingers a second after going idle, as
+// AWT's auto-shutdown does — and the program ends a second after the last
+// timer stops.
+differential_test!(
+    a_timer_alone_does_not_keep_a_program_alive,
+    "TimerDaemon",
+    r#"
+import javax.swing.Timer;
+
+public class TimerDaemon {
+    public static void main(String[] args) {
+        Timer timer = new Timer(20, e -> System.out.println("tick"));
+        timer.setInitialDelay(300);
+        timer.start();
+        System.out.println("main returns");
+    }
+}
+"#
+);
+
+differential_test!(
+    the_dispatch_thread_keeps_a_timer_going,
+    "TimerOnDispatch",
+    r#"
+import javax.swing.SwingUtilities;
+import javax.swing.Timer;
+
+public class TimerOnDispatch {
+    static int ticks = 0;
+
+    public static void main(String[] args) throws Exception {
+        SwingUtilities.invokeAndWait(() -> System.out.println("dispatch thread up"));
+        Timer timer = new Timer(20, null);
+        timer.addActionListener(e -> {
+            ticks++;
+            System.out.println("tick " + ticks + " " + SwingUtilities.isEventDispatchThread());
+            if (ticks == 3) {
+                timer.stop();
+                System.out.println("stopped " + timer.isRunning());
+            }
+        });
+        timer.start();
+        System.out.println("main returns");
+    }
+}
+"#
+);
+
+// What escapes a task on the dispatch thread is the uncaught banner, and the
+// thread carries on with the next task. The trace after the program's own
+// frame is the JDK's internal dispatch machinery (`java.desktop` frames), so
+// only the banner and that frame are compared.
+#[test]
+fn an_exception_on_the_dispatch_thread() {
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    let source = r#"
+import javax.swing.*;
+
+public class DispatchFailure {
+    public static void main(String[] args) throws Exception {
+        SwingUtilities.invokeLater(() -> { throw new IllegalStateException("boom"); });
+        SwingUtilities.invokeLater(() -> System.out.println("the dispatch thread carries on: "
+            + Thread.currentThread().getName()));
+        SwingUtilities.invokeAndWait(() -> {});
+        System.out.println("main done");
+    }
+}
+"#;
+    let (jdk_out, jdk_err) = run_with_jdk_both("DispatchFailure", source, "", &[]);
+    let (out, err) = run_with_caturra_both("DispatchFailure", source, "", &[]);
+    assert_eq!(out, jdk_out);
+    let head = |text: &str| text.lines().take(2).collect::<Vec<_>>().join("\n");
+    assert_eq!(head(&err), head(&jdk_err));
+}

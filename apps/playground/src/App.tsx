@@ -701,8 +701,8 @@ public class Main {
   static boolean shown = true;
 
   public static void main(String[] args) {
-    // The idiomatic bootstrap: build the UI on the event thread. caturra runs
-    // it right away (there is no separate thread).
+    // The idiomatic bootstrap: build the UI on the event-dispatch thread.
+    // main returns at once; the window lives on that thread.
     SwingUtilities.invokeLater(() -> { Main.buildUi(); });
   }
 
@@ -722,6 +722,61 @@ public class Main {
     // getContentPane() returns the frame's content area (the frame itself here).
     frame.getContentPane().add(toggle, BorderLayout.NORTH);
     frame.getContentPane().add(secret, BorderLayout.CENTER);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
+    name: 'Background worker',
+    group: 'Getting started',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel status = new JLabel("Idle");
+  static JLabel pings = new JLabel("Pings: 0");
+  static int pingCount = 0;
+
+  public static void main(String[] args) {
+    SwingUtilities.invokeLater(() -> Main.buildUi());
+  }
+
+  static void buildUi() {
+    JFrame frame = new JFrame("Background worker");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new GridLayout(4, 1));
+
+    // Slow work runs on its OWN thread, so the window stays responsive:
+    // Ping still answers while the worker counts.
+    JButton start = new JButton("Start work");
+    start.addActionListener(e -> {
+      Thread worker = new Thread(() -> {
+        for (int step = 1; step <= 5; step++) {
+          try {
+            Thread.sleep(400);
+          } catch (InterruptedException ex) {
+            return;
+          }
+          int done = step;
+          // Hand each update back to the event-dispatch thread.
+          SwingUtilities.invokeLater(() -> Main.status.setText("Step " + done + " of 5"));
+        }
+        SwingUtilities.invokeLater(() -> Main.status.setText("Done"));
+      });
+      worker.start();
+    });
+
+    JButton ping = new JButton("Ping");
+    ping.addActionListener(e -> {
+      Main.pingCount++;
+      Main.pings.setText("Pings: " + Main.pingCount);
+    });
+
+    frame.add(start);
+    frame.add(status);
+    frame.add(ping);
+    frame.add(pings);
     frame.setVisible(true);
   }
 }
@@ -2600,16 +2655,6 @@ function parseTestResults(output: string): TestResult[] {
   return results;
 }
 
-/** Running Swing timers from a serialized component tree (for wakeups). */
-function parseSwingTimers(tree: string): { id: string; delay: number }[] {
-  try {
-    const root = JSON.parse(tree) as { timers?: { id: string; delay: number }[] };
-    return root.timers ?? [];
-  } catch {
-    return [];
-  }
-}
-
 function formatDiagnostic(diagnostic: Diagnostic): string {
   const location = diagnostic.start
     ? `${diagnostic.path}:${String(diagnostic.start.line)}:${String(diagnostic.start.column)}`
@@ -2708,7 +2753,7 @@ export function App(): React.JSX.Element {
   const watchesRef = useRef<string[]>([]);
   // Settles the pending Swing event promise when the user activates a
   // control; the engine's event loop is parked until it resolves.
-  const swingEventResolverRef = useRef<((payload: string | null) => void) | null>(null);
+  const swingEventResolverRef = useRef<((payload: string | null | undefined) => void) | null>(null);
   // The newest drag payload seen while the loop was busy — coalesced so the
   // flood of mousemove events becomes at most one dispatch per render.
   const swingPendingMotionRef = useRef<string | null>(null);
@@ -3196,35 +3241,25 @@ export function App(): React.JSX.Element {
   };
 
   // Interactive Swing: render the live tree (wiring controls to dispatch),
-  // then park until the user activates a control OR a Timer fires. The
-  // engine's event loop stays blocked in the worker until this resolves.
-  const awaitSwingEvent = (tree: string): Promise<string | null> =>
+  // then park until the user activates a control. The engine's
+  // event-dispatch thread asks again — with a newer tree — whenever other
+  // threads or its own timers changed something, so an earlier call that no
+  // event answered is SUPERSEDED: it settles with `undefined`, and only the
+  // newest one carries the user's next event back.
+  const awaitSwingEvent = (tree: string): Promise<string | null | undefined> =>
     new Promise((resolve) => {
+      swingEventResolverRef.current?.(undefined);
       swingRenderedLiveRef.current = true;
-      const timeouts: ReturnType<typeof setTimeout>[] = [];
-      const settle = (payload: string | null): void => {
-        for (const timeout of timeouts) {
-          clearTimeout(timeout);
+      const settle = (payload: string | null | undefined): void => {
+        if (swingEventResolverRef.current === settle) {
+          swingEventResolverRef.current = null;
         }
-        swingEventResolverRef.current = null;
         resolve(payload);
       };
       // A control activation resolves through this ref (via dispatchSwingEvent).
       swingEventResolverRef.current = settle;
       setView('swing');
       swingVizRef.current?.render(tree, dispatchSwingEvent);
-      // Race the running timers: whichever fires first wakes the loop; the
-      // next iteration re-reads the tree and reschedules them.
-      for (const timer of parseSwingTimers(tree)) {
-        timeouts.push(
-          setTimeout(
-            () => {
-              settle(`__timer:${timer.id}`);
-            },
-            Math.max(timer.delay, 1),
-          ),
-        );
-      }
       // If a drag arrived while the loop was busy, dispatch its latest
       // position now instead of waiting for the next event.
       if (swingPendingMotionRef.current !== null) {

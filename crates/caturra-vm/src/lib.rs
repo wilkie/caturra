@@ -29,7 +29,7 @@ pub use debug::{
     Breakpoint, DebugCommand, DebugControl, DebugFrameSnapshot, DebugHost, DebugSnapshot,
     LocalSnapshot, PauseReason, WatchEvaluator,
 };
-pub use io::{BufferedConsole, ConsoleIo};
+pub use io::{BufferedConsole, ConsoleIo, UiPoll};
 pub use value::{Heap, HeapObject, HeapRef, JValue};
 pub use vfs::{VfsError, VirtualFileSystem};
 pub use vm::{ExitStatus, Vm, VmError, VmOptions};

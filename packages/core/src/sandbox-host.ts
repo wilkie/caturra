@@ -164,7 +164,8 @@ function runOptions(endpoint: RpcEndpoint, p: RunCallParams): WorkerRunOptions {
     options.stdin = () => endpoint.request<string | null>('stdin', { runId });
   }
   if (p.wants.swingEvent) {
-    options.onSwingEvent = (tree) => endpoint.request<string | null>('swingEvent', { runId, tree });
+    options.onSwingEvent = (tree) =>
+      endpoint.request<string | null | undefined>('swingEvent', { runId, tree });
   }
   if (p.wants.swingDialog) {
     options.onSwingDialog = (kind, message) =>

@@ -2722,48 +2722,336 @@ class JOptionPane {
 // javax.swing.Timer: fires its ActionListener every `delay` ms. The host
 // schedules the wakeup (see App.awaitSwingEvent); the loop dispatches the
 // tick. A running timer keeps the app alive (like any animation).
+// javax.swing.Timer, as a JDK's works: a daemon "TimerQueue" thread
+// (`__TimerQueue`) keeps the running timers' deadlines and POSTS a tick to the
+// event-dispatch thread when one comes due; the listeners run there. The
+// initial delay defaults to the delay. A coalescing timer (the default) keeps
+// at most one tick queued, and one that falls behind moves its next deadline
+// on rather than firing every tick it missed. Being a daemon, the timer
+// thread alone does not keep a program alive — the dispatch thread does, once
+// a tick has started it.
 class Timer {
   String __tid;
   int __delay;
+  int __initialDelay;
   boolean __running = false;
   boolean __repeats = true;
-  ActionListener __listener;
+  boolean __coalesce = true;
+  long __next = 0;
+  // A tick is queued on the dispatch thread and has not run yet.
+  boolean __pending = false;
+  String __command = null;
+  java.util.ArrayList<ActionListener> __listeners = new java.util.ArrayList<ActionListener>();
   public Timer(int delay, ActionListener listener) {
     __tid = "t" + Component.__nextId();
     __delay = delay;
-    __listener = listener;
+    __initialDelay = delay;
+    if (listener != null) __listeners.add(listener);
   }
   public void start() {
-    __running = true;
+    // A running timer makes a shown window live, as a listener does.
     __SwingRuntime.__interactive = true;
-    __SwingRuntime.__addTimer(this);
+    synchronized (__TimerQueue.__lock) {
+      __running = true;
+      __next = System.currentTimeMillis() + __initialDelay;
+      __SwingRuntime.__addTimer(this);
+      __TimerQueue.__wake();
+    }
   }
-  public void stop() { __running = false; }
+  // Stopping also cancels a tick already queued, as a JDK's does.
+  public void stop() {
+    synchronized (__TimerQueue.__lock) {
+      __running = false;
+      __pending = false;
+    }
+  }
   public void restart() { start(); }
   public boolean isRunning() { return __running; }
-  public void setDelay(int delay) { __delay = delay; }
+  public void setDelay(int delay) {
+    if (delay < 0) throw new IllegalArgumentException("Invalid delay: " + delay);
+    __delay = delay;
+  }
   public int getDelay() { return __delay; }
+  public void setInitialDelay(int initialDelay) {
+    if (initialDelay < 0) throw new IllegalArgumentException("Invalid initial delay: " + initialDelay);
+    __initialDelay = initialDelay;
+  }
+  public int getInitialDelay() { return __initialDelay; }
   public void setRepeats(boolean repeats) { __repeats = repeats; }
-  public void addActionListener(ActionListener l) { __listener = l; }
+  public boolean isRepeats() { return __repeats; }
+  public void setCoalesce(boolean coalesce) { __coalesce = coalesce; }
+  public boolean isCoalesce() { return __coalesce; }
+  public void setActionCommand(String command) { __command = command; }
+  public String getActionCommand() { return __command; }
+  public void addActionListener(ActionListener l) { if (l != null) __listeners.add(l); }
+  public void removeActionListener(ActionListener l) { __listeners.remove(l); }
+  public ActionListener[] getActionListeners() {
+    ActionListener[] all = new ActionListener[__listeners.size()];
+    for (int i = 0; i < all.length; i++) all[i] = __listeners.get(i);
+    return all;
+  }
+  // On the timer thread, holding its lock: the deadline has come. Move it on
+  // (or retire a one-shot timer) and queue a tick — one at a time, when
+  // coalescing.
+  void __due(long now) {
+    if (__repeats) {
+      __next = __next + __delay;
+      if (__coalesce && __next <= now) __next = now + __delay;
+    } else {
+      __running = false;
+    }
+    if (__coalesce && __pending) return;
+    __pending = true;
+    __EventQueue.__post(new __TimerTick(this));
+  }
+
+  // On the dispatch thread. Listeners run LAST-added first, as a JDK's event
+  // lists fire.
   void __fire() {
-    if (__listener != null) __listener.actionPerformed(new ActionEvent(this));
-    if (!__repeats) stop();
+    synchronized (__TimerQueue.__lock) {
+      if (!__pending) return;
+      __pending = false;
+    }
+    for (int i = __listeners.size() - 1; i >= 0; i--) {
+      __listeners.get(i).actionPerformed(new ActionEvent(this, __command));
+    }
   }
 }
 
-// java.lang.Runnable — the target of SwingUtilities.invokeLater and friends.
-interface Runnable {
-  void run();
+// javax.swing.SwingUtilities and java.awt.EventQueue: work handed to the
+// EVENT-DISPATCH thread (`__EventQueue`). `invokeLater` returns at once and
+// the task runs on that thread in the order posted; `invokeAndWait` waits for
+// it, and hands back what it threw wrapped in an InvocationTargetException.
+class SwingUtilities {
+  public static void invokeLater(Runnable r) { __EventQueue.__post(r); }
+  public static void invokeAndWait(Runnable r)
+      throws InterruptedException, java.lang.reflect.InvocationTargetException {
+    __EventQueue.__invokeAndWait(r);
+  }
+  public static boolean isEventDispatchThread() { return __EventQueue.__isDispatchThread(); }
 }
 
-// javax.swing.SwingUtilities. caturra runs single-threaded and synchronously,
-// so there is no separate event-dispatch thread: invokeLater / invokeAndWait
-// simply run the task now (the common pattern is to build the UI and call
-// setVisible inside it, which then enters the event loop as usual).
-class SwingUtilities {
-  public static void invokeLater(Runnable r) { if (r != null) r.run(); }
-  public static void invokeAndWait(Runnable r) { if (r != null) r.run(); }
-  public static boolean isEventDispatchThread() { return true; }
+class EventQueue {
+  public static void invokeLater(Runnable r) { __EventQueue.__post(r); }
+  public static void invokeAndWait(Runnable r)
+      throws InterruptedException, java.lang.reflect.InvocationTargetException {
+    __EventQueue.__invokeAndWait(r);
+  }
+  public static boolean isDispatchThread() { return __EventQueue.__isDispatchThread(); }
+}
+
+// The task `invokeAndWait` posts: it runs the program's task, keeps what it
+// threw, and lets the waiting thread go.
+class __InvokeAndWait implements Runnable {
+  Runnable __task;
+  boolean __done = false;
+  Throwable __failure = null;
+  __InvokeAndWait(Runnable task) { __task = task; }
+  public void run() {
+    try {
+      __task.run();
+    } catch (Throwable thrown) {
+      __failure = thrown;
+    }
+    synchronized (this) {
+      __done = true;
+      notifyAll();
+    }
+  }
+}
+
+// The event-dispatch thread, "AWT-EventQueue-0" (specs/CONCURRENCY.md,
+// phase 3). Started by the first thing that needs it — a shown interactive
+// window, `invokeLater`, a timer's first tick — and a thread like any other,
+// so `main` returns while the window stays up, and a worker thread runs while
+// the window waits for the user. Its loop: posted tasks (a timer's ticks
+// among them) in order, then the window's next event. The wait for that
+// event is the scheduler's (`__uiWait`), which never holds the host while
+// another thread could run. With no window and nothing posted for a second,
+// it ends — which is how the program ends.
+class __EventQueue {
+  static final Object __lock = new Object();
+  static java.util.ArrayList<Runnable> __tasks = new java.util.ArrayList<Runnable>();
+  static Thread __edt = null;
+  // The interactive window on screen, and whether the host has ended the UI
+  // session (Stop, or no interactive host at all).
+  static JFrame __frame = null;
+  static boolean __hostGone = false;
+
+  static void __post(Runnable task) {
+    synchronized (__lock) {
+      __tasks.add(task);
+      __ensureRunning();
+      __lock.notifyAll();
+    }
+  }
+
+  static void __wake() {
+    synchronized (__lock) {
+      __ensureRunning();
+      __lock.notifyAll();
+    }
+  }
+
+  static void __show(JFrame frame) {
+    synchronized (__lock) {
+      __frame = frame;
+      __ensureRunning();
+      __lock.notifyAll();
+    }
+  }
+
+  static void __ensureRunning() {
+    if (__edt == null) {
+      __edt = new Thread(new __Pump(), "AWT-EventQueue-0");
+      __edt.start();
+    }
+  }
+
+  static boolean __isDispatchThread() {
+    return __edt != null && Thread.currentThread() == __edt;
+  }
+
+  static void __invokeAndWait(Runnable r)
+      throws InterruptedException, java.lang.reflect.InvocationTargetException {
+    if (__isDispatchThread()) {
+      throw new Error("Cannot call invokeAndWait from the event dispatcher thread");
+    }
+    __InvokeAndWait job = new __InvokeAndWait(r);
+    __post(job);
+    synchronized (job) {
+      while (!job.__done) job.wait();
+    }
+    if (job.__failure != null) {
+      throw new java.lang.reflect.InvocationTargetException(job.__failure);
+    }
+  }
+
+  // What escapes a task or a listener is reported as a JDK's dispatch thread
+  // reports it — the uncaught banner — and the thread carries on.
+  static void __dispatch(Runnable task) {
+    try {
+      task.run();
+    } catch (Throwable thrown) {
+      System.err.print("Exception in thread \"" + Thread.currentThread().getName() + "\" ");
+      thrown.printStackTrace();
+    }
+  }
+
+  // The host ended the UI session: nothing more will arrive from the window,
+  // and with no window the timers it drove stop too.
+  static void __hostEnded() {
+    __hostGone = true;
+    __frame = null;
+    for (int i = 0; i < __SwingRuntime.__timers.size(); i++) {
+      __SwingRuntime.__timers.get(i).stop();
+    }
+  }
+
+  static void __pump() {
+    while (true) {
+      Runnable task = null;
+      synchronized (__lock) {
+        if (!__tasks.isEmpty()) task = __tasks.remove(0);
+      }
+      if (task != null) {
+        __dispatch(task);
+        continue;
+      }
+      JFrame frame = __frame;
+      if (frame != null) {
+        String payload = System.__uiWait(frame.__jsonTree(), -1);
+        if (payload == null) {
+          __hostEnded();
+        } else if (payload.equals("__busy")) {
+          // Other threads have work: let them run, and look again soon — at
+          // once if one of them posts a task.
+          synchronized (__lock) {
+            if (__tasks.isEmpty()) {
+              try {
+                __lock.wait(20);
+              } catch (InterruptedException e) {
+              }
+            }
+          }
+        } else if (!payload.equals("__idle")) {
+          __dispatch(new __UiEvent(frame, payload));
+        }
+        continue;
+      }
+      // Nothing to do and no window: a JDK's dispatch thread shuts down after
+      // a second of this (AWT's auto-shutdown), which is what keeps a
+      // repeating timer's program alive between ticks — and ends it once the
+      // timers stop.
+      synchronized (__lock) {
+        long until = System.currentTimeMillis() + 1000;
+        while (__tasks.isEmpty() && __frame == null) {
+          long left = until - System.currentTimeMillis();
+          if (left <= 0) {
+            __edt = null;
+            return;
+          }
+          try {
+            __lock.wait(left);
+          } catch (InterruptedException e) {
+          }
+        }
+      }
+    }
+  }
+}
+
+// The daemon "TimerQueue" thread: sleeps until the next running timer's
+// deadline and posts its tick to the dispatch thread.
+class __TimerQueue implements Runnable {
+  static final Object __lock = new Object();
+  static Thread __thread = null;
+
+  // Called holding `__lock`.
+  static void __wake() {
+    if (__thread == null) {
+      __thread = new Thread(new __TimerQueue(), "TimerQueue");
+      __thread.setDaemon(true);
+      __thread.start();
+    }
+    __lock.notifyAll();
+  }
+
+  public void run() {
+    synchronized (__lock) {
+      while (true) {
+        long now = System.currentTimeMillis();
+        Timer due = __SwingRuntime.__dueTimer(now);
+        if (due != null) {
+          due.__due(now);
+          continue;
+        }
+        long next = __SwingRuntime.__nextTimerDelay(now);
+        try {
+          if (next < 0) __lock.wait();
+          else __lock.wait(next == 0 ? 1 : next);
+        } catch (InterruptedException e) {
+        }
+      }
+    }
+  }
+}
+
+class __Pump implements Runnable {
+  public void run() { __EventQueue.__pump(); }
+}
+
+class __TimerTick implements Runnable {
+  Timer __timer;
+  __TimerTick(Timer timer) { __timer = timer; }
+  public void run() { __timer.__fire(); }
+}
+
+class __UiEvent implements Runnable {
+  JFrame __frame;
+  String __payload;
+  __UiEvent(JFrame frame, String payload) { __frame = frame; __payload = payload; }
+  public void run() { __SwingRuntime.__handle(__frame, __payload); }
 }
 
 class JFrame extends Container {
@@ -2802,13 +3090,19 @@ class JFrame extends Container {
   public static final int DO_NOTHING_ON_CLOSE = 0;
 
   public void setVisible(boolean visible) {
-    if (!visible) return;
+    if (!visible) {
+      if (__EventQueue.__frame == this) {
+        __EventQueue.__frame = null;
+        __EventQueue.__wake();
+      }
+      return;
+    }
     __render();
-    // If any listener was registered, hand control to the event loop; it
-    // blocks on the host, dispatching events until the window closes. With
-    // no listeners (or no interactive host) this returns and the static
-    // swing.json is the whole story (Phase 1 batch render).
-    if (__SwingRuntime.__interactive) __SwingRuntime.__loop(this);
+    // If anything listens, the window goes to the event-dispatch thread,
+    // which shows it and dispatches its events; this returns at once, as a
+    // JDK's does. With nothing listening the static swing.json is the whole
+    // story (the batch render).
+    if (__SwingRuntime.__interactive) __EventQueue.__show(this);
   }
 
   String __jsonTree() {
@@ -2818,7 +3112,7 @@ class JFrame extends Container {
     return "{\"type\":\"frame\",\"title\":\"" + Component.__esc(__title) + "\",\"width\":" + __w
         + ",\"height\":" + __h + ",\"layout\":" + __layoutJson()
         + ",\"children\":" + __kidsJson() + menubar + focus
-        + ",\"timers\":" + __SwingRuntime.__timersJson() + "," + __commonJson() + "}";
+        + "," + __commonJson() + "}";
   }
 
   void __render() {
@@ -3188,12 +3482,12 @@ class KeyAdapter implements KeyListener {
   public void keyTyped(KeyEvent e) {}
 }
 
-// The event pump. setVisible enters __loop, which renders the current tree
-// and blocks on System.__uiAwait for the next event. The host returns the
-// clicked component's id plus newline-separated "id=value" field states;
-// we sync those into the widgets, then fire the clicked component's
-// listener. All Swing dispatch stays here in Java — the VM only provides
-// the one blocking native hook.
+// What the window's events do. The dispatch thread (`__EventQueue`) renders
+// the current tree and waits on System.__uiWait for the next event; the host
+// returns the clicked component's id plus newline-separated "id=value" field
+// states, and `__handle` syncs those into the widgets, then fires the clicked
+// component's listener. All Swing dispatch stays here in Java — the VM only
+// provides the one wait.
 class __SwingRuntime {
   static boolean __interactive = false;
   static java.util.ArrayList<Component> __live = new java.util.ArrayList<Component>();
@@ -3224,26 +3518,27 @@ class __SwingRuntime {
     __timers.add(t);
   }
 
-  static Timer __findTimer(String tid) {
+  // The running timer whose deadline has come, earliest first; null if none.
+  static Timer __dueTimer(long now) {
+    Timer due = null;
     for (int i = 0; i < __timers.size(); i++) {
-      if (__timers.get(i).__tid.equals(tid)) return __timers.get(i);
+      Timer t = __timers.get(i);
+      if (t.__running && t.__next <= now && (due == null || t.__next < due.__next)) due = t;
     }
-    return null;
+    return due;
   }
 
-  // Running timers only (a stopped timer stays in the list but drops out
-  // of the JSON so the host stops scheduling it).
-  static String __timersJson() {
-    StringBuilder s = new StringBuilder("[");
-    boolean first = true;
+  // Milliseconds until the next running timer is due; -1 with none running.
+  static long __nextTimerDelay(long now) {
+    long best = -1;
     for (int i = 0; i < __timers.size(); i++) {
       Timer t = __timers.get(i);
       if (!t.__running) continue;
-      if (!first) s.append(",");
-      first = false;
-      s.append("{\"id\":\"").append(t.__tid).append("\",\"delay\":").append(t.__delay).append("}");
+      long left = t.__next - now;
+      if (left < 0) left = 0;
+      if (best < 0 || left < best) best = left;
     }
-    return s.append("]").toString();
+    return best;
   }
 
   static Component __find(String cid) {
@@ -3254,45 +3549,36 @@ class __SwingRuntime {
     return null;
   }
 
-  static void __loop(JFrame frame) {
-    while (true) {
-      String payload = System.__uiAwait(frame.__jsonTree());
-      if (payload == null) return; // host ended the session (Stop / no host)
-      int nl = payload.indexOf("\n");
-      String cid = nl < 0 ? payload : payload.substring(0, nl);
-      // The window's close button: end the program for EXIT/DISPOSE (the
-      // usual EXIT_ON_CLOSE), otherwise keep running (HIDE/DO_NOTHING).
-      if (cid.equals("__close")) {
-        if (frame.__closeOp == JFrame.EXIT_ON_CLOSE
-            || frame.__closeOp == JFrame.DISPOSE_ON_CLOSE) {
-          return;
-        }
-        continue;
-      }
-      String body = nl < 0 ? "" : payload.substring(nl + 1);
-      __applyFields(body);
-      // A timer tick: "__timer:<id>" — fire that timer's ActionListener.
-      if (cid.startsWith("__timer:")) {
-        Timer t = __findTimer(cid.substring(8));
-        if (t != null && t.__running) t.__fire();
-        continue;
-      }
-      Component c = __find(cid);
-      if (c != null) {
-        // A "__key=type,code,char" line is a keyboard event; "__drag=x,y" a
-        // mouse drag; "__mouse=x,y" a click; a component with none of these is
-        // a control activation (button/checkbox/…).
-        int[] key = __keyOf(body);
-        int[] drag = __coordOf(body, "__drag=");
-        int[] click = __coordOf(body, "__mouse=");
-        // A "__doc=" line marks a per-keystroke DocumentListener edit (fires
-        // insert/remove) vs a normal control activation (button/Enter/...).
-        if (__hasLine(body, "__doc=")) c.__onDoc();
-        else if (key != null) c.__onKey(key[0], key[1], (char) key[2]);
-        else if (drag != null) c.__onDrag(drag[0], drag[1]);
-        else if (click != null) c.__onMouse(click[0], click[1]);
-        else c.__onEvent();
-      }
+  // One event from the window, on the dispatch thread: the clicked
+  // component's id, then its live `id=value` field states.
+  static void __handle(JFrame frame, String payload) {
+    int nl = payload.indexOf("\n");
+    String cid = nl < 0 ? payload : payload.substring(0, nl);
+    // The window's close button: EXIT_ON_CLOSE ends the program (System.exit,
+    // as a JDK's does), DISPOSE_ON_CLOSE takes the window away, and the
+    // others keep it.
+    if (cid.equals("__close")) {
+      if (frame.__closeOp == JFrame.EXIT_ON_CLOSE) System.exit(0);
+      if (frame.__closeOp == JFrame.DISPOSE_ON_CLOSE) __EventQueue.__frame = null;
+      return;
+    }
+    String body = nl < 0 ? "" : payload.substring(nl + 1);
+    __applyFields(body);
+    Component c = __find(cid);
+    if (c != null) {
+      // A "__key=type,code,char" line is a keyboard event; "__drag=x,y" a
+      // mouse drag; "__mouse=x,y" a click; a component with none of these is
+      // a control activation (button/checkbox/…).
+      int[] key = __keyOf(body);
+      int[] drag = __coordOf(body, "__drag=");
+      int[] click = __coordOf(body, "__mouse=");
+      // A "__doc=" line marks a per-keystroke DocumentListener edit (fires
+      // insert/remove) vs a normal control activation (button/Enter/...).
+      if (__hasLine(body, "__doc=")) c.__onDoc();
+      else if (key != null) c.__onKey(key[0], key[1], (char) key[2]);
+      else if (drag != null) c.__onDrag(drag[0], drag[1]);
+      else if (click != null) c.__onMouse(click[0], click[1]);
+      else c.__onEvent();
     }
   }
 

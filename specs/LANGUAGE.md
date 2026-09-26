@@ -15859,6 +15859,38 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
 
+### Swing under threads (2026-09-26)
+
+Phase 3 of specs/CONCURRENCY.md. Swing gets a real event-dispatch thread,
+`AWT-EventQueue-0`, and the window's wait no longer holds the host, so a
+worker thread runs while the window waits and `main` can keep changing the
+window after showing it. Three things a program can see changed with it,
+each toward the JDK:
+
+- **`setVisible(true)` returns.** It used to enter the event loop on the
+  calling thread, so a line after it ran only once the window closed; on a
+  JDK it runs at once, and the window's events are the dispatch thread's.
+  `EXIT_ON_CLOSE` is `System.exit(0)`.
+- **`invokeLater` is LATER.** It ran the task on the spot; now the task runs
+  on the dispatch thread after the caller moves on, `invokeAndWait` waits for
+  it (and wraps what it threw in an `InvocationTargetException`), and
+  `isEventDispatchThread()` is true only on that thread. `java.awt.EventQueue`
+  offers the same three.
+- **A Swing `Timer` ticks on the dispatch thread**, posted by a daemon
+  `TimerQueue` thread: listeners run last-added first, a coalescing timer
+  queues one tick at a time, `stop()` cancels a queued one, and a timer whose
+  first tick comes after `main` returns never fires — the timer thread is a
+  daemon. `setInitialDelay`, `setCoalesce`, `setActionCommand`,
+  `removeActionListener` and `getActionListeners` are in.
+
+A headless JDK runs all of this except a window, so the differential harness
+now passes `-Djava.awt.headless=true` and the thread, `invokeLater`/
+`invokeAndWait` and `Timer` behaviour is pinned against it
+(`the_event_dispatch_thread`, `a_timer_alone_does_not_keep_a_program_alive`,
+`the_dispatch_thread_keeps_a_timer_going`, `an_exception_on_the_dispatch_thread`
+— the last compares the banner and the program's own frame, not a JDK's
+internal dispatch frames).
+
 ### A diamond of two, and a `new` with no brackets (2026-09-26)
 
 Closing two `stricter_` pins that were ordinary Java a student writes:

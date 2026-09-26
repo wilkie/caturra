@@ -56,7 +56,7 @@ interface ActiveRun {
   onStdout?: ((text: string) => void) | undefined;
   onStderr?: ((text: string) => void) | undefined;
   nextLine?: (() => Promise<string | null>) | undefined;
-  onSwingEvent?: ((tree: string) => Promise<string | null>) | undefined;
+  onSwingEvent?: ((tree: string) => Promise<string | null | undefined>) | undefined;
   onSwingDialog?: ((kind: string, message: string) => Promise<string | null>) | undefined;
   onPause?:
     | ((snapshot: DebugPauseSnapshot) => DebugControlResponse | Promise<DebugControlResponse>)
@@ -313,7 +313,7 @@ export class RemoteJvmSession implements JvmSessionApi {
     }
   }
 
-  async #answerSwing(runId: RunId, tree: string): Promise<string | null> {
+  async #answerSwing(runId: RunId, tree: string): Promise<string | null | undefined> {
     const run = this.#runs.get(runId);
     if (!run?.onSwingEvent) {
       return null;

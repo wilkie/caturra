@@ -456,11 +456,32 @@ impl ConsoleIo for JsConsole<'_> {
     }
 
     fn ui_await_event(&mut self, tree: &str) -> Option<String> {
-        let result = self
-            .await_ui?
-            .call1(&JsValue::NULL, &JsValue::from_str(tree))
-            .ok()?;
-        result.as_string()
+        match self.ui_poll_event(tree, None) {
+            caturra_vm::UiPoll::Event(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    /// The event-dispatch thread's bounded wait: `awaitUiEvent(tree,
+    /// timeoutMs)` answers the event's payload, `null` when the session
+    /// ended, or `undefined` when the time ran out (`-1` waits for as long
+    /// as it takes).
+    fn ui_poll_event(&mut self, tree: &str, timeout_millis: Option<u32>) -> caturra_vm::UiPoll {
+        let Some(await_ui) = self.await_ui else {
+            return caturra_vm::UiPoll::Closed;
+        };
+        let timeout = timeout_millis.map_or(-1.0, f64::from);
+        match await_ui.call2(
+            &JsValue::NULL,
+            &JsValue::from_str(tree),
+            &JsValue::from_f64(timeout),
+        ) {
+            Ok(result) if result.is_undefined() => caturra_vm::UiPoll::TimedOut,
+            Ok(result) => result
+                .as_string()
+                .map_or(caturra_vm::UiPoll::Closed, caturra_vm::UiPoll::Event),
+            Err(_) => caturra_vm::UiPoll::Closed,
+        }
     }
 
     fn begin_capture(&mut self) {

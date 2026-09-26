@@ -1,6 +1,6 @@
 # CONCURRENCY — Java threads on a single-threaded engine
 
-- **Status:** accepted — phases 0 and 1 implemented 2026-09-25, phase 2 2026-09-26; phase 3 pending
+- **Status:** accepted — phases 0 and 1 implemented 2026-09-25, phases 2 and 3 2026-09-26
 - **Date:** 2026-09-25
 - **Refines:** [EXECUTION.md](EXECUTION.md), [RUNTIME.md](RUNTIME.md)
 - **Amends:** the "Threads" non-goal in [SCOPE.md](SCOPE.md)
@@ -241,10 +241,11 @@ fn wait_millis(&mut self, millis: u32) -> u32;
   `wait_millis` advances instantly. A sleep-heavy program runs in no time and
   every timing pin is deterministic; `nanoTime` advances with it. This is the
   same arrangement the tests already have for `Math.random` (a fixed seed).
-- **Swing** (`ui_await_event`, `ui_dialog`) keeps blocking the host in phase 1:
-  a background thread cannot run while the UI waits for a click. Phase 3 gives
-  those calls a timeout so the pump becomes a parkable wait like the others,
-  which is what a worker thread updating a label under a running UI needs.
+- **Swing** kept blocking the host in phase 1: a background thread could not
+  run while the UI waited for a click. Phase 3 gave the wait a timeout
+  (`ui_poll_event`), so the event pump never holds the host while another
+  thread could run. `ui_dialog` (a `JOptionPane`) still blocks: nothing else
+  runs while a dialog is up.
 
 `System.currentTimeMillis` and `nanoTime` keep reading the host clock, so a
 program that times its own sleep sees the pause it asked for.
@@ -426,6 +427,59 @@ the everything-parked report, with a line naming `shutdown()`.
 worker thread runs while the window waits; `SwingUtilities.invokeLater`
 and `javax.swing.Timer` as threads that post to the pump. This is what a
 student's animated Swing program actually is.
+
+_Done (2026-09-26)._ As built, all of it bundled Java over phase 1's
+primitives except the one wait:
+
+- **The event-dispatch thread** is a bundled `Thread` named
+  `AWT-EventQueue-0` (`__EventQueue` in `stdlib/swing.java`, which now brings
+  `Thread` with it). It starts with the first thing that needs it — a shown
+  interactive window, `invokeLater`/`invokeAndWait`, a timer's first tick — and
+  runs posted tasks in order, then the window's next event. `setVisible(true)`
+  RETURNS, as a JDK's does: before this, it entered the event loop on the
+  calling thread, so code after it ran only once the window closed.
+  `EXIT_ON_CLOSE` is `System.exit(0)`, ending every thread; `DISPOSE_ON_CLOSE`
+  takes the window away. With no window and nothing posted for a second the
+  thread ends, as AWT's auto-shutdown does — which is how a Swing program ends.
+- **The wait for the window** is `__System.__uiWait(tree, timeout)`, a
+  scheduler call over the host's `ui_poll_event(tree, timeout)`. When another
+  thread could run it only LOOKS (a zero timeout) and answers `__busy`; the
+  dispatch thread then waits 20 ms on its own queue — a posted task wakes it
+  at once — and looks again, re-rendering whatever the others changed. When
+  every other thread is parked the host waits until the window says
+  something or the first of their timed waits runs out. Nothing here parks
+  natively: the dispatch thread's own `Object.wait` does.
+- **`invokeLater`/`invokeAndWait`** (on `SwingUtilities` and
+  `java.awt.EventQueue`) post to that thread. `invokeAndWait` declares the
+  JDK's checked exceptions, wraps what the task threw in an
+  `InvocationTargetException`, and is an `Error` from the dispatch thread
+  itself. `isEventDispatchThread()` is true only there. What escapes a task or
+  a listener prints the uncaught banner and the thread carries on; its trace
+  shows the program's frames but not a JDK's internal `java.desktop` dispatch
+  frames.
+- **`javax.swing.Timer`** has a daemon `TimerQueue` thread, as a JDK's does,
+  that posts one tick at a time to the dispatch thread (coalescing), so the
+  listeners run there, last-added first. A daemon cannot keep a program alive:
+  a timer whose first tick comes after `main` returns never fires, on a JDK as
+  here. Timers are no longer the host's to schedule (the tree's `timers` list
+  is gone).
+- **The host.** The worker's `awaitUiEvent(tree, timeoutMs)` answers the
+  event, `null` for an ended session, or `undefined` when the time ran out;
+  it posts the tree only when it changed, and an event that arrives while the
+  engine is busy waits in the channel for the next look
+  (`pollLineBlocking`). The page settles a superseded render with
+  `undefined`.
+- **Not yet:** a `JOptionPane` dialog still holds the host (no other thread
+  runs while it is up), and the debugger's thread list.
+
+Pinned by `the_event_dispatch_thread`,
+`a_timer_alone_does_not_keep_a_program_alive`,
+`the_dispatch_thread_keeps_a_timer_going`, `an_exception_on_the_dispatch_thread`
+(against a headless JDK — the harness now passes `-Djava.awt.headless=true`),
+the scripted-window tests `swing_a_worker_thread_runs_while_the_window_waits`
+and `swing_main_animates_a_label_while_the_window_is_up`, and the browser test
+"a worker thread updates the window while it stays responsive" (the
+"Background worker" demo).
 
 ## Alternatives rejected
 

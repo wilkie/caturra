@@ -3162,10 +3162,20 @@ fn swing_interactive_program_compiles_and_renders_initial_frame() {
 /// event loop and window-close handling can be exercised headlessly. Each
 /// `__uiAwait` returns the next scripted event; `Some(None)` and running out
 /// both yield `None` (the loop's end-of-session signal).
+/// A scripted window. Each event is what the next wait for the window
+/// answers; `"__timeout"` is a wait whose time ran out with nothing from the
+/// window (the virtual clock moves by that time), and the end of the script
+/// is the host closing the session. The scripted user acts only while the
+/// program is WAITING: a zero-timeout look (other threads have work) always
+/// finds nothing, and an untimed wait skips a scripted time-out, so a script
+/// may offer more of them than a run needs. Every tree the window was shown
+/// is kept.
 struct ScriptedUiConsole {
     events: std::collections::VecDeque<Option<String>>,
     dialogs: std::collections::VecDeque<Option<String>>,
     stdout: Vec<u8>,
+    clock_millis: i64,
+    trees: Vec<String>,
 }
 
 impl ScriptedUiConsole {
@@ -3174,6 +3184,8 @@ impl ScriptedUiConsole {
             events: events.into_iter().collect(),
             dialogs: std::collections::VecDeque::new(),
             stdout: Vec::new(),
+            clock_millis: 0,
+            trees: Vec::new(),
         }
     }
     /// Script the responses to `JOptionPane` dialogs, in order.
@@ -3194,8 +3206,31 @@ impl caturra_vm::ConsoleIo for ScriptedUiConsole {
     fn read_line(&mut self) -> Option<String> {
         None
     }
-    fn ui_await_event(&mut self, _tree: &str) -> Option<String> {
-        self.events.pop_front().flatten()
+    fn now_millis(&mut self) -> i64 {
+        self.clock_millis
+    }
+    fn wait_millis(&mut self, millis: u32) -> u32 {
+        self.clock_millis += i64::from(millis);
+        millis
+    }
+    fn ui_poll_event(&mut self, tree: &str, timeout: Option<u32>) -> caturra_vm::UiPoll {
+        self.trees.push(tree.to_owned());
+        if timeout == Some(0) {
+            return caturra_vm::UiPoll::TimedOut;
+        }
+        loop {
+            match self.events.pop_front().flatten() {
+                Some(event) if event == "__timeout" => {
+                    let Some(waited) = timeout else {
+                        continue;
+                    };
+                    self.clock_millis += i64::from(waited);
+                    return caturra_vm::UiPoll::TimedOut;
+                }
+                Some(event) => return caturra_vm::UiPoll::Event(event),
+                None => return caturra_vm::UiPoll::Closed,
+            }
+        }
     }
     fn ui_dialog(&mut self, _kind: &str, _message: &str) -> Option<String> {
         self.dialogs.pop_front().flatten()
@@ -3203,6 +3238,15 @@ impl caturra_vm::ConsoleIo for ScriptedUiConsole {
 }
 
 fn run_swing_scripted(source: &str, main: &str, events: Vec<Option<String>>) -> String {
+    run_swing_scripted_trees(source, main, events).0
+}
+
+/// The same, with every tree the window was shown.
+fn run_swing_scripted_trees(
+    source: &str,
+    main: &str,
+    events: Vec<Option<String>>,
+) -> (String, Vec<String>) {
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
         path: format!("{main}.java"),
         text: source.to_owned(),
@@ -3219,12 +3263,101 @@ fn run_swing_scripted(source: &str, main: &str, events: Vec<Option<String>>) -> 
         vm.load_class(class.class_file).expect("load");
     }
     let result = vm.run_main(main, &[]);
-    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
-    console.stdout_text()
+    // EXIT_ON_CLOSE ends a program through System.exit(0), as a JDK's does.
+    assert!(
+        matches!(result, Ok(ExitStatus::Completed | ExitStatus::Exited(0))),
+        "{result:?}"
+    );
+    (console.stdout_text(), console.trees)
+}
+
+#[test]
+fn swing_a_worker_thread_runs_while_the_window_waits() {
+    // specs/CONCURRENCY.md, phase 3: the window waits on the event-dispatch
+    // thread, which parks instead of holding the host, so a worker thread
+    // runs meanwhile — its change to a label is RENDERED before the user does
+    // anything, and the listener the next click runs reads it. `main` returned
+    // long before. Ids: frame c0, button c1, label c2.
+    let (out, trees) = run_swing_scripted_trees(
+        r#"
+        import javax.swing.*;
+        public class Main {
+            static JLabel label;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("W");
+                JButton read = new JButton("Read");
+                label = new JLabel("start");
+                read.addActionListener(e -> System.out.println("label: " + label.getText()
+                    + " on " + Thread.currentThread().getName()));
+                frame.add(read);
+                frame.add(label);
+                frame.setVisible(true);
+                new Thread(() -> {
+                    try { Thread.sleep(100); } catch (InterruptedException e) {}
+                    label.setText("worked");
+                }).start();
+                System.out.println("main returns");
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("__timeout")),
+            Some(String::from("__timeout")),
+            Some(String::from("c1")),
+        ],
+    );
+    assert_eq!(out, "main returns\nlabel: worked on AWT-EventQueue-0\n");
+    let shown = trees
+        .iter()
+        .position(|tree| tree.contains("worked"))
+        .expect("the worker's change was rendered");
+    assert!(trees[..shown].iter().all(|tree| tree.contains("start")));
+}
+
+#[test]
+fn swing_main_animates_a_label_while_the_window_is_up() {
+    // The commonest student shape: `main` keeps changing the window after
+    // setVisible, pacing itself with Thread.sleep. Each change is rendered in
+    // turn while `main` sleeps.
+    let (out, trees) = run_swing_scripted_trees(
+        r#"
+        import javax.swing.*;
+        public class Main {
+            public static void main(String[] args) throws InterruptedException {
+                JFrame frame = new JFrame("Count");
+                JLabel label = new JLabel("n=0");
+                JButton stop = new JButton("Stop");
+                stop.addActionListener(e -> System.exit(0));
+                frame.add(label);
+                frame.add(stop);
+                frame.setVisible(true);
+                for (int n = 1; n <= 3; n++) {
+                    label.setText("n=" + n);
+                    Thread.sleep(100);
+                }
+                System.out.println("counted");
+            }
+        }
+        "#,
+        "Main",
+        vec![Some(String::from("__timeout")); 10],
+    );
+    assert_eq!(out, "counted\n");
+    let seen: Vec<usize> = (1..=3)
+        .map(|n| {
+            trees
+                .iter()
+                .position(|tree| tree.contains(&format!("n={n}")))
+                .unwrap_or_else(|| panic!("n={n} was never rendered"))
+        })
+        .collect();
+    assert!(seen.windows(2).all(|pair| pair[0] < pair[1]), "{seen:?}");
 }
 
 /// Construction order fixes ids: frame c0, button c1. A shared program that
-/// prints on a click and again after the event loop returns.
+/// prints on a click, and after `setVisible` — which returns at once, as a
+/// JDK's does: the window's events are the event-dispatch thread's.
 const SWING_CLOSE_PROGRAM: &str = r#"
     import javax.swing.*;
     import java.awt.*;
@@ -3243,28 +3376,33 @@ const SWING_CLOSE_PROGRAM: &str = r#"
 
 #[test]
 fn swing_close_with_exit_on_close_ends_the_program() {
-    // The close button (EXIT_ON_CLOSE) ends the event loop: setVisible
-    // returns and the rest of main runs — without dispatching the click.
+    // The close button (EXIT_ON_CLOSE) ends the program (System.exit): the
+    // click scripted after it is never dispatched. `main` printed its line
+    // long before — setVisible does not wait for the window.
     let source = SWING_CLOSE_PROGRAM.replace(
         "CLOSE_OP",
         "frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);",
     );
-    let out = run_swing_scripted(&source, "Main", vec![Some(String::from("__close"))]);
-    assert_eq!(out, "after close\n", "close should end the loop cleanly");
+    let out = run_swing_scripted(
+        &source,
+        "Main",
+        vec![Some(String::from("__close")), Some(String::from("c1"))],
+    );
+    assert_eq!(out, "after close\n", "close should end the program");
 }
 
 #[test]
 fn swing_close_with_default_hide_keeps_running() {
-    // The default (HIDE_ON_CLOSE) ignores the close, so the loop keeps
+    // The default (HIDE_ON_CLOSE) ignores the close, so the window keeps
     // going: the next event (a click on button c1) fires its listener, and
-    // only the end-of-session signal (None) finally returns.
+    // only the end-of-session signal (None) finally ends it.
     let out = run_swing_scripted(
         &SWING_CLOSE_PROGRAM.replace("CLOSE_OP", ""),
         "Main",
         vec![Some(String::from("__close")), Some(String::from("c1"))],
     );
     assert_eq!(
-        out, "clicked\nafter close\n",
+        out, "after close\nclicked\n",
         "close was ignored, click ran"
     );
 }
@@ -3328,8 +3466,8 @@ fn swing_timer_ticks_fire_the_action_listener() {
         "#,
         "Main",
         vec![
-            Some(String::from("__timer:t1")),
-            Some(String::from("__timer:t1")),
+            Some(String::from("__timeout")),
+            Some(String::from("__timeout")),
         ],
     );
     assert_eq!(out, "tick 1\ntick 2\n");
@@ -3358,7 +3496,7 @@ fn swing_lambda_as_constructor_argument_is_target_typed() {
         }
         "#,
         "Main",
-        vec![Some(String::from("__timer:t1"))],
+        vec![Some(String::from("__timeout"))],
     );
     assert_eq!(out, "tick 1\n");
 }

@@ -2420,6 +2420,26 @@ test.describe('swing (interactive)', () => {
     await expect(secret).toBeVisible();
   });
 
+  test('a worker thread updates the window while it stays responsive', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Background worker' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    await expect(root.getByText('Idle')).toBeVisible();
+    await root.getByRole('button', { name: 'Start work' }).click();
+
+    // The worker is running (it sleeps between steps) — the window still
+    // answers a click, and the worker's invokeLater updates arrive.
+    const ping = root.getByRole('button', { name: 'Ping' });
+    await ping.click();
+    await expect(root.getByText('Pings: 1')).toBeVisible();
+    await expect(root.getByText(/Step [1-4] of 5/)).toBeVisible();
+    await ping.click();
+    await expect(root.getByText('Pings: 2')).toBeVisible();
+    await expect(root.getByText('Done')).toBeVisible({ timeout: 10_000 });
+  });
+
   test('setLayout(null) positions children absolutely with setBounds', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Absolute layout' });

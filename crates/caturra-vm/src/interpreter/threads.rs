@@ -237,6 +237,28 @@ impl<'run> Threads<'run> {
         true
     }
 
+    /// Whether thread `index` could run now — `try_wake`'s question, asked
+    /// without settling anything.
+    fn could_run(&self, index: usize, now: i64) -> bool {
+        let thread = &self.list[index];
+        let due = |until: Option<i64>| until.is_some_and(|until| now >= until);
+        match thread.park {
+            Park::Runnable => true,
+            Park::Terminated => false,
+            Park::Sleeping { until } => thread.interrupted || now >= until,
+            Park::Joining { target, until } => {
+                thread.interrupted || !self.list[target].is_alive() || due(until)
+            }
+            Park::Blocked { monitor } => self.free(monitor),
+            Park::Waiting {
+                monitor,
+                until,
+                notified,
+                ..
+            } => (notified || thread.interrupted || due(until)) && self.free(monitor),
+        }
+    }
+
     /// The earliest moment a parked thread's wait runs out, if any is timed.
     fn next_deadline(&self) -> Option<i64> {
         self.list
@@ -643,6 +665,7 @@ impl<'run> Interpreter<'run> {
                 frame.stack.push(JValue::Int(i32::from(answer)));
                 Flow::Next
             }
+            "__uiWait" => return self.ui_wait(frame).map(Some),
             "__yield" => {
                 if self.may_switch() {
                     self.slice_end = u64::MAX;
@@ -652,6 +675,74 @@ impl<'run> Interpreter<'run> {
             _ => return Ok(None),
         };
         Ok(Some(flow))
+    }
+
+    /// `__System.__uiWait(tree, timeout)`: the event-dispatch thread waits for
+    /// its window. It never holds the host while another thread could run:
+    /// then it only LOOKS (a zero timeout), and with nothing there answers
+    /// `"__busy"` — the dispatch thread waits a moment on its own queue, where
+    /// a posted task wakes it, and looks again, re-rendering what the others
+    /// changed. When every other thread is parked the host waits — until the
+    /// window says something, the given timeout passes, or the first other
+    /// thread's wait runs out — and a wait that ran out answers `"__idle"`.
+    fn ui_wait(&mut self, frame: &mut Frame<'run>) -> Result<Flow<'run>, VmError> {
+        let current = self.threads.current;
+        let answer = |this: &mut Self, frame: &mut Frame<'run>, text: Option<&str>| {
+            Self::drop_args(frame, 2)?;
+            let value = text.map(|text| this.heap.alloc_string(text));
+            frame.stack.push(JValue::Ref(value));
+            Ok(Flow::Next)
+        };
+        let stack_len = frame.stack.len();
+        let (Some(JValue::Ref(tree)), Some(JValue::Long(own))) = (
+            stack_len.checked_sub(2).map(|at| frame.stack[at]),
+            stack_len.checked_sub(1).map(|at| frame.stack[at]),
+        ) else {
+            return Err(VmError::UnknownIntrinsic(String::from("__uiWait")));
+        };
+        let tree = tree
+            .and_then(|tree| self.heap.string_text(tree))
+            .unwrap_or_default();
+        let own = u32::try_from(own).ok();
+        let now = self.console.now_millis();
+        let others: Vec<usize> = (0..self.threads.list.len())
+            .filter(|&index| {
+                index != current
+                    && self.threads.list[index].is_alive()
+                    && !self.threads.list[index].frames.is_empty()
+            })
+            .collect();
+        let can_switch = self.may_switch() && !others.is_empty();
+        let others_ready = can_switch
+            && others
+                .iter()
+                .any(|&index| self.threads.could_run(index, now));
+        let timeout = if others_ready {
+            Some(0)
+        } else if can_switch {
+            // The first other thread whose wait runs out ends this one too.
+            let theirs = others
+                .iter()
+                .filter_map(|&index| match self.threads.list[index].park {
+                    Park::Sleeping { until } => Some(until),
+                    Park::Joining { until, .. } | Park::Waiting { until, .. } => until,
+                    _ => None,
+                })
+                .min()
+                .map(|until| u32::try_from((until - now).max(0)).unwrap_or(u32::MAX));
+            match (own, theirs) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        } else {
+            own
+        };
+        match self.console.ui_poll_event(&tree, timeout) {
+            crate::io::UiPoll::Event(payload) => answer(self, frame, Some(&payload)),
+            crate::io::UiPoll::Closed => answer(self, frame, None),
+            crate::io::UiPoll::TimedOut if others_ready => answer(self, frame, Some("__busy")),
+            crate::io::UiPoll::TimedOut => answer(self, frame, Some("__idle")),
+        }
     }
 
     /// Give up one hold on `monitor`.
